@@ -6,6 +6,7 @@
 //#include <threepp/math/quaternion.hpp>
 //#include <threepp/math/euler.hpp>
 #include <iostream>
+#include <threepp/math/box2.hpp>
 #include <threepp/math/matrix4.hpp>
 #include <vector>
 
@@ -27,13 +28,13 @@ int main() {
 
     std::cout << "x=" << v << std::endl;
 
-    std::vector<double> a{1, 2, 3};
+    std::vector<float> a{1, 2, 3};
 
     v.fromArray(a);
 
     std::cout << v << std::endl;
 
-    std::vector<double> arr(3);
+    std::vector<float> arr(3);
 
     v.toArray(arr);
 
@@ -47,9 +48,9 @@ int main() {
     auto copy = m4;
     copy[0] = -99;
 
-    std::cout << m4[0] << ":" << copy[0];
+    std::cout << m4[0] << ":" << copy[0] << std::endl;
 
-    //    triangle t;
-    //
-    //    euler e;
+    box2 b2;
+    //b2.makeEmpty();
+    std::cout << "empty box: " << (b2.isEmpty() ? "true" : "false") << std::endl;
 }

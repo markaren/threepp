@@ -1,6 +1,8 @@
 set(publicHeaderDir ${CMAKE_SOURCE_DIR}/include)
 
 set(publicHeaders
+        "threepp/math/box2.hpp"
+        "threepp/math/box3.hpp"
         "threepp/math/color.hpp"
         "threepp/math/euler.hpp"
         "threepp/math/matrix3.hpp"
@@ -21,6 +23,8 @@ endforeach ()
 ### MATH
 
 set(sources
+        "threepp/math/box2.cpp"
+        "threepp/math/box3.cpp"
         "threepp/math/color.cpp"
         "threepp/math/euler.cpp"
         "threepp/math/matrix3.cpp"
