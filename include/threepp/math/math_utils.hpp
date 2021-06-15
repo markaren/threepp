@@ -6,8 +6,7 @@
 #include <random>
 #include <sstream>
 
-
-namespace threepp::math {
+namespace threepp {
 
     static std::random_device rd;
     static std::mt19937 gen(rd());
@@ -19,7 +18,7 @@ namespace threepp::math {
     const double DEG2RAD = PI / 180.0;
     const double RAD2DEG = 180.0 / PI;
 
-//https://stackoverflow.com/questions/24365331/how-can-i-generate-uuid-in-c-without-using-boost-library/58467162
+    //https://stackoverflow.com/questions/24365331/how-can-i-generate-uuid-in-c-without-using-boost-library/58467162
     std::string generateUUID() {
 
         std::stringstream ss;
@@ -46,22 +45,19 @@ namespace threepp::math {
             ss << dis(gen);
         };
         return ss.str();
-
     }
 
 
-    double degToRad( const double degrees ) {
+    double degToRad(const double degrees) {
 
         return degrees * DEG2RAD;
-
     }
 
-    double radToDeg( const double radians ) {
+    double radToDeg(const double radians) {
 
         return radians * RAD2DEG;
-
     }
 
-}
+}// namespace threepp
 
-#endif //THREEPP_MATH_UTILS_HPP
+#endif//THREEPP_MATH_UTILS_HPP
