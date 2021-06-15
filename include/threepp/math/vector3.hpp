@@ -16,43 +16,43 @@ namespace threepp {
     class vector3 {
 
     public:
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
+        float x = 0.0;
+        float y = 0.0;
+        float z = 0.0;
 
         vector3() = default;
 
-        vector3(double x, double y, double z);;
+        vector3(float x, float y, float z);
 
-        vector3 &set(double x, double y, double z);
+        vector3 &set(float x, float y, float z);
 
-        vector3 &setScalar(double value);
+        vector3 &setScalar(float value);
 
-        vector3 &setX(double value);
+        vector3 &setX(float value);
 
-        vector3 &setY(double value);
+        vector3 &setY(float value);
 
-        vector3 &setZ(double value);
+        vector3 &setZ(float value);
 
-        double &operator[](unsigned int index);
+        float &operator[](unsigned int index);
 
         vector3 &add(const vector3 &v);
 
-        vector3 &add(double s);
+        vector3 &add(float s);
 
         vector3 &addVectors(const vector3 &a, const vector3 &b);
 
-        vector3 &addScaledVector(const vector3 &v, double s);
+        vector3 &addScaledVector(const vector3 &v, float s);
 
         vector3 &sub(const vector3 &v);
 
-        vector3 &sub(double s);
+        vector3 &sub(float s);
 
         vector3 &subVectors(const vector3 &a, const vector3 &b);
 
         vector3 &multiply(const vector3 &v);
 
-        vector3 &multiply(double scalar);
+        vector3 &multiply(float scalar);
 
         vector3 &multiplyVectors(const vector3 &a, const vector3 &b);
 
@@ -64,7 +64,7 @@ namespace threepp {
 
         vector3 &divide(const vector3 &v);
 
-        vector3 &divide(const double &v);
+        vector3 &divide(const float &v);
 
         vector3 &min(const vector3 &v);
 
@@ -82,33 +82,33 @@ namespace threepp {
 
         vector3 &negate();
 
-        [[nodiscard]] double dot(const vector3 &v) const;
+        [[nodiscard]] float dot(const vector3 &v) const;
 
-        [[nodiscard]] double lengthSq() const;
+        [[nodiscard]] float lengthSq() const;
 
-        [[nodiscard]] double length() const;
+        [[nodiscard]] float length() const;
 
-        [[nodiscard]] double manhattanLength() const;
+        [[nodiscard]] float manhattanLength() const;
 
         vector3 &normalize();
 
-        vector3 &setLength(double length);
+        vector3 &setLength(float length);
 
-        vector3 &lerp(const vector3 &v, double alpha);
+        vector3 &lerp(const vector3 &v, float alpha);
 
-        vector3 &lerpVectors(const vector3 &v1, const vector3 &v2, double alpha);
+        vector3 &lerpVectors(const vector3 &v1, const vector3 &v2, float alpha);
 
         vector3 &cross(const vector3 &v);
 
         vector3 &crossVectors(const vector3 &a, const vector3 &b);
 
-        [[nodiscard]] double angleTo(const vector3 &v) const;
+        [[nodiscard]] float angleTo(const vector3 &v) const;
 
-        [[nodiscard]] double distanceTo(const vector3 &v) const;
+        [[nodiscard]] float distanceTo(const vector3 &v) const;
 
-        [[nodiscard]] double distanceToSquared(const vector3 &v) const;
+        [[nodiscard]] float distanceToSquared(const vector3 &v) const;
 
-        [[nodiscard]] double manhattanDistanceTo(const vector3 &v) const;
+        [[nodiscard]] float manhattanDistanceTo(const vector3 &v) const;
 
         vector3 &setFromMatrixPosition(const matrix4 &m);
 

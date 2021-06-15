@@ -15,31 +15,31 @@ namespace threepp {
     public:
         quaternion() = default;
 
-        quaternion(double x, double y, double z, double w);
+        quaternion(float x, float y, float z, float w);
 
-        [[nodiscard]] double x() const {
+        [[nodiscard]] float x() const {
             return x_;
         }
 
-        [[nodiscard]] double y() const {
+        [[nodiscard]] float y() const {
             return y_;
         }
 
-        [[nodiscard]] double z() const {
+        [[nodiscard]] float z() const {
             return z_;
         }
 
-        [[nodiscard]] double w() const {
+        [[nodiscard]] float w() const {
             return w_;
         }
 
-        quaternion &set(double x, double y, double z, double w);
+        quaternion &set(float x, float y, float z, float w);
 
-        quaternion &setFromAxisAngle(const vector3 &axis, double angle);
+        quaternion &setFromAxisAngle(const vector3 &axis, float angle);
 
         quaternion &setFromRotationMatrix( const matrix4 &m );
 
-        [[nodiscard]] double angleTo( const quaternion &q ) const;
+        [[nodiscard]] float angleTo( const quaternion &q ) const;
 
         quaternion &identity();
 
@@ -47,11 +47,11 @@ namespace threepp {
 
         quaternion &conjugate();
 
-        [[nodiscard]] double dot(const quaternion &v) const;
+        [[nodiscard]] float dot(const quaternion &v) const;
 
-        [[nodiscard]] double lengthSq() const;
+        [[nodiscard]] float lengthSq() const;
 
-        [[nodiscard]] double length() const;
+        [[nodiscard]] float length() const;
 
         quaternion &normalize();
 
@@ -80,10 +80,10 @@ namespace threepp {
         }
 
     private:
-        double x_ = 0.0;
-        double y_ = 0.0;
-        double z_ = 0.0;
-        double w_ = 1.0;
+        float x_ = 0.0;
+        float y_ = 0.0;
+        float z_ = 0.0;
+        float w_ = 1.0;
 
         std::function<void()> onChangeCallback_ = [] {};
     };

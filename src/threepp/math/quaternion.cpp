@@ -9,9 +9,9 @@
 
 using namespace threepp;
 
-quaternion::quaternion(double x, double y, double z, double w) : x_(x), y_(y), z_(z), w_(w) {}
+quaternion::quaternion(float x, float y, float z, float w) : x_(x), y_(y), z_(z), w_(w) {}
 
-quaternion &quaternion::set(double x, double y, double z, double w) {
+quaternion &quaternion::set(float x, float y, float z, float w) {
 
     this->x_ = x;
     this->y_ = y;
@@ -23,7 +23,7 @@ quaternion &quaternion::set(double x, double y, double z, double w) {
     return *this;
 }
 
-quaternion &quaternion::setFromAxisAngle(const vector3 &axis, double angle) {
+quaternion &quaternion::setFromAxisAngle(const vector3 &axis, float angle) {
 
     // http://www.euclideanspace.com/maths/geometry/rotations/conversions/angleToQuaternion/index.htm
 
@@ -57,39 +57,39 @@ quaternion &quaternion::setFromRotationMatrix(const matrix4 &m) {
 
     if (trace > 0) {
 
-        const auto s = 0.5 / std::sqrt(trace + 1.0);
+        const auto s = 0.5f / std::sqrt(trace + 1.0f);
 
-        this->w_ = 0.25 / s;
+        this->w_ = 0.25f / s;
         this->x_ = (m32 - m23) * s;
         this->y_ = (m13 - m31) * s;
         this->z_ = (m21 - m12) * s;
 
     } else if (m11 > m22 && m11 > m33) {
 
-        const auto s = 2.0 * std::sqrt(1.0 + m11 - m22 - m33);
+        const auto s = 2.0f * std::sqrt(1.0f + m11 - m22 - m33);
 
         this->w_ = (m32 - m23) / s;
-        this->x_ = 0.25 * s;
+        this->x_ = 0.25f * s;
         this->y_ = (m12 + m21) / s;
         this->z_ = (m13 + m31) / s;
 
     } else if (m22 > m33) {
 
-        const auto s = 2.0 * std::sqrt(1.0 + m22 - m11 - m33);
+        const auto s = 2.0f * std::sqrt(1.0f + m22 - m11 - m33);
 
         this->w_ = (m13 - m31) / s;
         this->x_ = (m12 + m21) / s;
-        this->y_ = 0.25 * s;
+        this->y_ = 0.25f * s;
         this->z_ = (m23 + m32) / s;
 
     } else {
 
-        const auto s = 2.0 * std::sqrt(1.0 + m33 - m11 - m22);
+        const auto s = 2.f * std::sqrt(1.0f + m33 - m11 - m22);
 
         this->w_ = (m21 - m12) / s;
         this->x_ = (m13 + m31) / s;
         this->y_ = (m23 + m32) / s;
-        this->z_ = 0.25 * s;
+        this->z_ = 0.25f * s;
     }
 
     this->onChangeCallback_();
@@ -120,17 +120,17 @@ quaternion &quaternion::conjugate() {
     return *this;
 }
 
-double quaternion::dot(const quaternion &v) const {
+float quaternion::dot(const quaternion &v) const {
 
     return this->x_ * v.x_ + this->y_ * v.y_ + this->z_ * v.z_ + this->w_ * v.w_;
 }
 
-double quaternion::lengthSq() const {
+float quaternion::lengthSq() const {
 
     return this->x_ * this->x_ + this->y_ * this->y_ + this->z_ * this->z_ + this->w_ * this->w_;
 }
 
-double quaternion::length() const {
+float quaternion::length() const {
 
     return std::sqrt(this->x_ * this->x_ + this->y_ * this->y_ + this->z_ * this->z_ + this->w_ * this->w_);
 }
@@ -148,7 +148,7 @@ quaternion &quaternion::normalize() {
 
     } else {
 
-        l = 1.0 / l;
+        l = 1.0f / l;
 
         this->x_ = this->x_ * l;
         this->y_ = this->y_ * l;
@@ -161,9 +161,9 @@ quaternion &quaternion::normalize() {
     return *this;
 }
 
-double quaternion::angleTo(const quaternion &q) const{
+float quaternion::angleTo(const quaternion &q) const{
 
-    return 2 * std::acos( std::abs( std::clamp( this->dot( q ), - 1.0, 1.0 ) ) );
+    return 2 * std::acos( std::abs( std::clamp( this->dot( q ), - 1.0f, 1.0f ) ) );
 
 }
 

@@ -13,9 +13,9 @@ namespace threepp {
     public:
         matrix3() = default;
 
-        double &operator[](unsigned int index);
+        float &operator[](unsigned int index);
 
-        matrix3 &set(double n11, double n12, double n13, double n21, double n22, double n23, double n31, double n32, double n33);
+        matrix3 &set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33);
 
         matrix3 &identity();
 
@@ -35,9 +35,9 @@ namespace threepp {
 
         matrix3 &multiplyMatrices(const matrix3 &a, const matrix3 &b);
 
-        matrix3 &multiplyScalar(double s);
+        matrix3 &multiplyScalar(float s);
 
-        [[nodiscard]] double determinant() const;
+        [[nodiscard]] float determinant() const;
 
         matrix3 &invert();
 
@@ -63,13 +63,13 @@ namespace threepp {
             return *this;
         }
 
-        matrix3 &setUvTransform(double tx, double ty, double sx, double sy, double rotation, double cx, double cy);
+        matrix3 &setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy);
 
-        matrix3 &scale(double sx, double sy);
+        matrix3 &scale(float sx, float sy);
 
-        matrix3 &rotate(double theta);
+        matrix3 &rotate(float theta);
 
-        matrix3 &translate(double tx, double ty);
+        matrix3 &translate(float tx, float ty);
 
         template<class ArrayLike>
         matrix3 &fromArray(ArrayLike &array, unsigned int offset = 0) {
@@ -103,7 +103,7 @@ namespace threepp {
         }
 
     private:
-        double elements_[9] = {
+        float elements_[9] = {
                 1, 0, 0,
                 0, 1, 0,
                 0, 0, 1};

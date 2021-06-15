@@ -29,15 +29,15 @@ namespace threepp {
 
         euler() = default;
 
-        [[nodiscard]] double x() const {
+        [[nodiscard]] float x() const {
             return x_;
         }
 
-        [[nodiscard]] double y() const {
+        [[nodiscard]] float y() const {
             return y_;
         }
 
-        [[nodiscard]] double z() const {
+        [[nodiscard]] float z() const {
             return z_;
         }
 
@@ -45,7 +45,7 @@ namespace threepp {
             return order_;
         }
 
-        euler &set(double x, double y, double z, const std::optional<RotationOrders> &order = std::nullopt);
+        euler &set(float x, float y, float z, const std::optional<RotationOrders> &order = std::nullopt);
 
         euler &setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrders> order = std::nullopt, bool update = true);
 
@@ -54,9 +54,9 @@ namespace threepp {
         euler &setFromVector3(const vector3 &v, std::optional<RotationOrders> order = std::nullopt);
 
     private:
-        double x_ = 0.0;
-        double y_ = 0.0;
-        double z_ = 0.0;
+        float x_ = 0.0;
+        float y_ = 0.0;
+        float z_ = 0.0;
         RotationOrders order_ = default_order;
 
         std::function<void()> onChangeCallback_ = [] {};

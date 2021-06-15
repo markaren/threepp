@@ -13,7 +13,7 @@ using namespace threepp;
 matrix4 euler::_matrix = matrix4();
 quaternion euler::_quaternion = quaternion();
 
-euler &euler::set(double x, double y, double z, const std::optional<RotationOrders> &order) {
+euler &euler::set(float x, float y, float z, const std::optional<RotationOrders> &order) {
 
     this->x_ = x;
     this->y_ = y;
@@ -40,9 +40,9 @@ euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrde
 
         case XYZ:
 
-            this->y_ = std::asin(std::clamp(m13, -1.0, 1.0));
+            this->y_ = std::asin(std::clamp(m13, -1.0f, 1.0f));
 
-            if (std::abs(m13) < 0.9999999) {
+            if (std::abs(m13) < 0.9999999f) {
 
                 this->x_ = std::atan2(-m23, m33);
                 this->z_ = std::atan2(-m12, m11);
@@ -57,9 +57,9 @@ euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrde
 
         case YXZ:
 
-            this->x_ = std::asin(-std::clamp(m23, -1.0, 1.0));
+            this->x_ = std::asin(-std::clamp(m23, -1.0f, 1.0f));
 
-            if (std::abs(m23) < 0.9999999) {
+            if (std::abs(m23) < 0.9999999f) {
 
                 this->y_ = std::atan2(m13, m33);
                 this->z_ = std::atan2(m21, m22);
@@ -74,9 +74,9 @@ euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrde
 
         case ZXY:
 
-            this->x_ = std::asin(std::clamp(m32, -1.0, 1.0));
+            this->x_ = std::asin(std::clamp(m32, -1.0f, 1.0f));
 
-            if (std::abs(m32) < 0.9999999) {
+            if (std::abs(m32) < 0.9999999f) {
 
                 this->y_ = std::atan2(-m31, m33);
                 this->z_ = std::atan2(-m12, m22);
@@ -91,9 +91,9 @@ euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrde
 
         case ZYX:
 
-            this->y_ = std::asin(-std::clamp(m31, -1.0, 1.0));
+            this->y_ = std::asin(-std::clamp(m31, -1.0f, 1.0f));
 
-            if (std::abs(m31) < 0.9999999) {
+            if (std::abs(m31) < 0.9999999f) {
 
                 this->x_ = std::atan2(m32, m33);
                 this->z_ = std::atan2(m21, m11);
@@ -108,9 +108,9 @@ euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrde
 
         case YZX:
 
-            this->z_ = std::asin(std::clamp(m21, -1.0, 1.0));
+            this->z_ = std::asin(std::clamp(m21, -1.0f, 1.0f));
 
-            if (std::abs(m21) < 0.9999999) {
+            if (std::abs(m21) < 0.9999999f) {
 
                 this->x_ = std::atan2(-m23, m22);
                 this->y_ = std::atan2(-m31, m11);
@@ -125,9 +125,9 @@ euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrde
 
         case XZY:
 
-            this->z_ = std::asin(-std::clamp(m12, -1.0, 1.0));
+            this->z_ = std::asin(-std::clamp(m12, -1.0f, 1.0f));
 
-            if (std::abs(m12) < 0.9999999) {
+            if (std::abs(m12) < 0.9999999f) {
 
                 this->x_ = std::atan2(m32, m22);
                 this->y_ = std::atan2(m13, m11);

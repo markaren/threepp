@@ -101,7 +101,7 @@ triangle &triangle::set(const vector3 &a, const vector3 &b, const vector3 &c) {
     return *this;
 }
 
-double triangle::getArea() const {
+float triangle::getArea() const {
 
     _v0.subVectors(this->c_, this->b_);
     _v1.subVectors(this->a_, this->b_);
@@ -142,7 +142,7 @@ bool triangle::isFrontFacing(const vector3 &direction) {
 void triangle::closestPointToPoint(const vector3 &p, vector3 &target) {
 
     const auto a = this->a_, b = this->b_, c = this->c_;
-    double v, w;
+    float v, w;
 
     // algorithm thanks to Real-Time Collision Detection by Christer Ericson,
     // published by Morgan Kaufmann Publishers, (c) 2005 Elsevier Inc.,

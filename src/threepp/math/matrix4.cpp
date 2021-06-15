@@ -19,12 +19,12 @@ vector3 matrix4::_x = vector3(1, 0, 0);
 vector3 matrix4::_y = vector3(0, 1, 0);
 vector3 matrix4::_z = vector3(0, 1, 0);
 
-double &matrix4::operator[](unsigned int index) {
+float &matrix4::operator[](unsigned int index) {
     if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     return elements_[index];
 }
 
-matrix4 &matrix4::set(double n11, double n12, double n13, double n14, double n21, double n22, double n23, double n24, double n31, double n32, double n33, double n34, double n41, double n42, double n43, double n44) {
+matrix4 &matrix4::set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31, float n32, float n33, float n34, float n41, float n42, float n43, float n44) {
 
     auto te = this->elements_;
 
@@ -352,7 +352,7 @@ matrix4 &matrix4::multiplyMatrices(const matrix4 &a, const matrix4 &b) {
     return *this;
 }
 
-matrix4 &matrix4::multiplyScalar(double s) {
+matrix4 &matrix4::multiplyScalar(float s) {
 
     auto te = this->elements_;
 
@@ -366,7 +366,7 @@ matrix4 &matrix4::multiplyScalar(double s) {
     return *this;
 }
 
-double matrix4::determinant() const {
+float matrix4::determinant() const {
 
     const auto te = this->elements_;
 
@@ -390,7 +390,7 @@ double matrix4::determinant() const {
 matrix4 &matrix4::transpose() {
 
     auto te = this->elements_;
-    double tmp;
+    float tmp;
 
     //clang-format off
     tmp = te[1];
@@ -424,7 +424,7 @@ matrix4 &matrix4::setPosition(const vector3 &v) {
     return *this;
 }
 
-matrix4 &matrix4::setPosition(double x, double y, double z) {
+matrix4 &matrix4::setPosition(float x, float y, float z) {
 
     auto te = this->elements_;
 
@@ -495,7 +495,7 @@ matrix4 &matrix4::scale(const vector3 &v) {
     return *this;
 }
 
-double matrix4::getMaxScaleOnAxis() const {
+float matrix4::getMaxScaleOnAxis() const {
 
     const auto te = this->elements_;
 
@@ -506,7 +506,7 @@ double matrix4::getMaxScaleOnAxis() const {
     return std::sqrt(std::max(scaleXSq, std::max(scaleYSq, scaleZSq)));
 }
 
-matrix4 &matrix4::makeTranslation(double x, double y, double z) {
+matrix4 &matrix4::makeTranslation(float x, float y, float z) {
 
     this->set(
 
@@ -520,7 +520,7 @@ matrix4 &matrix4::makeTranslation(double x, double y, double z) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationX(double theta) {
+matrix4 &matrix4::makeRotationX(float theta) {
 
     const auto c = std::cos(theta), s = std::sin(theta);
 
@@ -536,7 +536,7 @@ matrix4 &matrix4::makeRotationX(double theta) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationY(double theta) {
+matrix4 &matrix4::makeRotationY(float theta) {
 
     const auto c = std::cos(theta), s = std::sin(theta);
 
@@ -552,7 +552,7 @@ matrix4 &matrix4::makeRotationY(double theta) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationZ(double theta) {
+matrix4 &matrix4::makeRotationZ(float theta) {
 
     const auto c = std::cos(theta), s = std::sin(theta);
 
@@ -568,7 +568,7 @@ matrix4 &matrix4::makeRotationZ(double theta) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationAxis(const vector3 &axis, double angle) {
+matrix4 &matrix4::makeRotationAxis(const vector3 &axis, float angle) {
 
     // Based on http://www.gamedev.net/reference/articles/article1199.asp
 
@@ -590,7 +590,7 @@ matrix4 &matrix4::makeRotationAxis(const vector3 &axis, double angle) {
     return *this;
 }
 
-matrix4 &matrix4::makeScale(double x, double y, double z) {
+matrix4 &matrix4::makeScale(float x, float y, float z) {
 
     this->set(
 
@@ -604,7 +604,7 @@ matrix4 &matrix4::makeScale(double x, double y, double z) {
     return *this;
 }
 
-matrix4 &matrix4::makeShear(double xy, double xz, double yx, double yz, double zx, double zy) {
+matrix4 &matrix4::makeShear(float xy, float xz, float yx, float yz, float zx, float zy) {
 
     this->set(
 
@@ -698,7 +698,7 @@ matrix4 &matrix4::decompose(vector3 &position, quaternion &quaternion, vector3 &
 
 }
 
-matrix4 &matrix4::makePerspective(double left, double right, double top, double bottom, double near, double far) {
+matrix4 &matrix4::makePerspective(float left, float right, float top, float bottom, float near, float far) {
 
     auto te = this->elements_;
     const auto x = 2 * near / ( right - left );
@@ -718,7 +718,7 @@ matrix4 &matrix4::makePerspective(double left, double right, double top, double 
 
 }
 
-matrix4 &matrix4::makeOrthographic(double left, double right, double top, double bottom, double near, double far) {
+matrix4 &matrix4::makeOrthographic(float left, float right, float top, float bottom, float near, float far) {
 
     auto te = this->elements_;
     const auto w = 1.0 / ( right - left );

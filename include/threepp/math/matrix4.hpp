@@ -15,9 +15,9 @@ namespace threepp {
     public:
         matrix4() = default;
 
-        double &operator[](unsigned int index);
+        float &operator[](unsigned int index);
 
-        matrix4 &set(double n11, double n12, double n13, double n14, double n21, double n22, double n23, double n24, double n31, double n32, double n33, double n34, double n41, double n42, double n43, double n44);
+        matrix4 &set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31, float n32, float n33, float n34, float n41, float n42, float n43, float n44);
 
         matrix4 &identity();
 
@@ -43,43 +43,43 @@ namespace threepp {
 
         matrix4 &multiplyMatrices(const matrix4 &a, const matrix4 &b);
 
-        matrix4 &multiplyScalar(double s);
+        matrix4 &multiplyScalar(float s);
 
-        [[nodiscard]] double determinant() const;
+        [[nodiscard]] float determinant() const;
 
         matrix4 &transpose();
 
         matrix4 &setPosition(const vector3 &v);
 
-        matrix4 &setPosition(double x, double y, double z);
+        matrix4 &setPosition(float x, float y, float z);
 
         matrix4 &invert();
 
         matrix4 &scale(const vector3 &v);
 
-        [[nodiscard]] double getMaxScaleOnAxis() const;
+        [[nodiscard]] float getMaxScaleOnAxis() const;
 
-        matrix4 &makeTranslation(double x, double y, double z);
+        matrix4 &makeTranslation(float x, float y, float z);
 
-        matrix4 &makeRotationX(double theta);
+        matrix4 &makeRotationX(float theta);
 
-        matrix4 &makeRotationY(double theta);
+        matrix4 &makeRotationY(float theta);
 
-        matrix4 &makeRotationZ(double theta);
+        matrix4 &makeRotationZ(float theta);
 
-        matrix4 &makeRotationAxis(const vector3 &axis, double angle);
+        matrix4 &makeRotationAxis(const vector3 &axis, float angle);
 
-        matrix4 &makeScale(double x, double y, double z);
+        matrix4 &makeScale(float x, float y, float z);
 
-        matrix4 &makeShear(double xy, double xz, double yx, double yz, double zx, double zy);
+        matrix4 &makeShear(float xy, float xz, float yx, float yz, float zx, float zy);
 
         matrix4 &compose(const vector3 &position, const quaternion &quaternion, const vector3 &scale);
 
         matrix4 &decompose( vector3 &position, quaternion &quaternion, vector3 &scale );
 
-        matrix4 &makePerspective( double left, double right, double top, double bottom, double near, double far );
+        matrix4 &makePerspective( float left, float right, float top, float bottom, float near, float far );
 
-        matrix4 &makeOrthographic( double left, double right, double top, double bottom, double near, double far );
+        matrix4 &makeOrthographic( float left, float right, float top, float bottom, float near, float far );
 
         template<class ArrayLike>
         matrix4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
@@ -119,7 +119,7 @@ namespace threepp {
         }
 
     private:
-        double elements_[16] = {
+        float elements_[16] = {
                 1, 0, 0, 0,
                 0, 1, 0, 0,
                 0, 0, 1, 0,

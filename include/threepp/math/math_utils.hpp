@@ -13,10 +13,10 @@ namespace threepp {
     static std::uniform_int_distribution<> dis(0, 15);
     static std::uniform_int_distribution<> dis2(8, 11);
 
-    const double PI = 2 * std::acos(0.0);
+    const float PI = 2.0f * std::acos(0.0f);
 
-    const double DEG2RAD = PI / 180.0;
-    const double RAD2DEG = 180.0 / PI;
+    const float DEG2RAD = PI / 180.0f;
+    const float RAD2DEG = 180.0f / PI;
 
     //https://stackoverflow.com/questions/24365331/how-can-i-generate-uuid-in-c-without-using-boost-library/58467162
     std::string generateUUID() {
@@ -48,12 +48,12 @@ namespace threepp {
     }
 
 
-    double degToRad(const double degrees) {
+    float degToRad(const float degrees) {
 
         return degrees * DEG2RAD;
     }
 
-    double radToDeg(const double radians) {
+    float radToDeg(const float radians) {
 
         return radians * RAD2DEG;
     }

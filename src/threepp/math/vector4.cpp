@@ -6,9 +6,9 @@
 
 using namespace threepp;
 
-vector4::vector4(double x, double y, double z, double w) : x(x), y(y), z(z), w(w) {}
+vector4::vector4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
 
-vector4 &vector4::set(double x, double y, double z, double w) {
+vector4 &vector4::set(float x, float y, float z, float w) {
 
     this->x = x;
     this->y = y;
@@ -18,7 +18,7 @@ vector4 &vector4::set(double x, double y, double z, double w) {
     return *this;
 }
 
-vector4 &vector4::setScalar(double value) {
+vector4 &vector4::setScalar(float value) {
 
     this->x = value;
     this->y = value;

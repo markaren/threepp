@@ -12,31 +12,30 @@ namespace threepp {
     class vector2 {
 
     public:
-        double x = 0.0;
-        double y = 0.0;
+        float x = 0.0;
+        float y = 0.0;
 
         vector2() = default;
 
-        vector2(double x, double y);
-        ;
+        vector2(float x, float y);
 
-        vector2 &set(double x, double y);
+        vector2 &set(float x, float y);
 
-        vector2 &setScalar(double value);
+        vector2 &setScalar(float value);
 
-        vector2 &setX(double value);
+        vector2 &setX(float value);
 
-        vector2 &setY(double value);
+        vector2 &setY(float value);
 
-        double &operator[](unsigned int index);
+        float &operator[](unsigned int index);
 
         vector2 &add(const vector2 &v);
 
-        vector2 &add(double s);
+        vector2 &add(float s);
 
         vector2 &addVectors(const vector2 &a, const vector2 &b);
 
-        vector2 &addScaledVector(const vector2 &v, double s);
+        vector2 &addScaledVector(const vector2 &v, float s);
 
         template<class ArrayLike>
         vector2 &fromArray(const ArrayLike &array, unsigned int offset = 0) {

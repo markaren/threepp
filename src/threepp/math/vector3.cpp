@@ -12,9 +12,9 @@
 
 using namespace threepp;
 
-vector3::vector3(double x, double y, double z) : x(x), y(y), z(z) {}
+vector3::vector3(float x, float y, float z) : x(x), y(y), z(z) {}
 
-vector3 &vector3::set(double x, double y, double z) {
+vector3 &vector3::set(float x, float y, float z) {
 
     this->x = x;
     this->y = y;
@@ -23,7 +23,7 @@ vector3 &vector3::set(double x, double y, double z) {
     return *this;
 }
 
-vector3 &vector3::setScalar(double value) {
+vector3 &vector3::setScalar(float value) {
 
     this->x = value;
     this->y = value;
@@ -32,28 +32,28 @@ vector3 &vector3::setScalar(double value) {
     return *this;
 }
 
-vector3 &vector3::setX(double value) {
+vector3 &vector3::setX(float value) {
 
     this->x = value;
 
     return *this;
 }
 
-vector3 &vector3::setY(double value) {
+vector3 &vector3::setY(float value) {
 
     y = value;
 
     return *this;
 }
 
-vector3 &vector3::setZ(double value) {
+vector3 &vector3::setZ(float value) {
 
     z = value;
 
     return *this;
 }
 
-double &vector3::operator[](unsigned int index) {
+float &vector3::operator[](unsigned int index) {
     if (index >= 3) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     switch (index) {
         case 0: return x;
@@ -72,7 +72,7 @@ vector3 &vector3::add(const vector3 &v) {
     return *this;
 }
 
-vector3 &vector3::add(double s) {
+vector3 &vector3::add(float s) {
 
     this->x += s;
     this->y += s;
@@ -90,7 +90,7 @@ vector3 &vector3::addVectors(const vector3 &a, const vector3 &b) {
     return *this;
 }
 
-vector3 &vector3::addScaledVector(const vector3 &v, double s) {
+vector3 &vector3::addScaledVector(const vector3 &v, float s) {
 
     this->x += v.x * s;
     this->y += v.y * s;
@@ -108,7 +108,7 @@ vector3 &vector3::sub(const vector3 &v) {
     return *this;
 }
 
-vector3 &vector3::sub(double s) {
+vector3 &vector3::sub(float s) {
 
     this->x -= s;
     this->y -= s;
@@ -135,7 +135,7 @@ vector3 &vector3::multiply(const vector3 &v) {
     return *this;
 }
 
-vector3 &vector3::multiply(double scalar) {
+vector3 &vector3::multiply(float scalar) {
 
     this->x *= scalar;
     this->y *= scalar;
@@ -192,7 +192,7 @@ vector3 &vector3::divide(const vector3 &v) {
     return *this;
 }
 
-vector3 &vector3::divide(const double &v) {
+vector3 &vector3::divide(const float &v) {
     this->x /= v;
     this->y /= v;
     this->z /= v;
@@ -274,22 +274,22 @@ vector3 &vector3::negate() {
     return *this;
 }
 
-double vector3::dot(const vector3 &v) const {
+float vector3::dot(const vector3 &v) const {
 
     return x * v.x + y * v.y + z * v.z;
 }
 
-double vector3::lengthSq() const {
+float vector3::lengthSq() const {
 
     return x * x + y * y + z * z;
 }
 
-double vector3::length() const {
+float vector3::length() const {
 
     return std::sqrt(x * x + y * y + z * z);
 }
 
-double vector3::manhattanLength() const {
+float vector3::manhattanLength() const {
 
     return std::abs(x) + std::abs(y) + std::abs(z);
 }
@@ -300,12 +300,12 @@ vector3 &vector3::normalize() {
     return divide(isnan(l) ? 0 : l);
 }
 
-vector3 &vector3::setLength(double length) {
+vector3 &vector3::setLength(float length) {
 
     return normalize().multiply(length);
 }
 
-vector3 &vector3::lerp(const vector3 &v, double alpha) {
+vector3 &vector3::lerp(const vector3 &v, float alpha) {
 
     this->x += (v.x - x) * alpha;
     this->y += (v.y - y) * alpha;
@@ -314,7 +314,7 @@ vector3 &vector3::lerp(const vector3 &v, double alpha) {
     return *this;
 }
 
-vector3 &vector3::lerpVectors(const vector3 &v1, const vector3 &v2, double alpha) {
+vector3 &vector3::lerpVectors(const vector3 &v1, const vector3 &v2, float alpha) {
 
     this->x = v1.x + (v2.x - v1.x) * alpha;
     this->y = v1.y + (v2.y - v1.y) * alpha;
@@ -340,7 +340,7 @@ vector3 &vector3::crossVectors(const vector3 &a, const vector3 &b) {
     return *this;
 }
 
-double vector3::angleTo(const vector3 &v) const {
+float vector3::angleTo(const vector3 &v) const {
 
     const auto denominator = std::sqrt(lengthSq() * v.lengthSq());
 
@@ -350,22 +350,22 @@ double vector3::angleTo(const vector3 &v) const {
 
     // clamp, to handle numerical problems
 
-    return std::acos(std::clamp(theta, -1.0, 1.0));
+    return std::acos(std::clamp(theta, -1.0f, 1.0f));
 }
 
-double vector3::distanceTo(const vector3 &v) const {
+float vector3::distanceTo(const vector3 &v) const {
 
     return std::sqrt(distanceToSquared(v));
 }
 
-double vector3::distanceToSquared(const vector3 &v) const {
+float vector3::distanceToSquared(const vector3 &v) const {
 
     const auto dx = this->x - v.x, dy = this->y - v.y, dz = this->z - v.z;
 
     return dx * dx + dy * dy + dz * dz;
 }
 
-double vector3::manhattanDistanceTo(const vector3 &v) const {
+float vector3::manhattanDistanceTo(const vector3 &v) const {
 
     return std::abs(this->x - v.x) + std::abs(this->y - v.y) + std::abs(this->z - v.z);
 }

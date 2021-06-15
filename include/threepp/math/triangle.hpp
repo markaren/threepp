@@ -41,7 +41,7 @@ namespace threepp {
             return *this;
         }
 
-        [[nodiscard]] double getArea() const;
+        [[nodiscard]] float getArea() const;
 
         void getMidpoint(vector3 &target);
 

@@ -15,19 +15,19 @@ namespace threepp {
     class vector4 {
 
     public:
-        double x = 0.0;
-        double y = 0.0;
-        double z = 0.0;
-        double w = 1.0;
+        float x = 0.0;
+        float y = 0.0;
+        float z = 0.0;
+        float w = 1.0;
 
         vector4() = default;
 
-        vector4(double x, double y, double z, double w);
+        vector4(float x, float y, float z, float w);
         ;
 
-        vector4 &set(double x, double y, double z, double w);
+        vector4 &set(float x, float y, float z, float w);
 
-        vector4 &setScalar(double value);
+        vector4 &setScalar(float value);
 
         vector4 &applyMatrix4(const matrix4 &m);
 

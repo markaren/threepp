@@ -9,12 +9,12 @@
 
 using namespace threepp;
 
-double &matrix3::operator[](unsigned int index) {
+float &matrix3::operator[](unsigned int index) {
     if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     return elements_[index];
 }
 
-matrix3 &matrix3::set(double n11, double n12, double n13, double n21, double n22, double n23, double n31, double n32, double n33) {
+matrix3 &matrix3::set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33) {
 
     auto te = this->elements_;
 
@@ -93,7 +93,7 @@ matrix3 &matrix3::multiplyMatrices(const matrix3 &a, const matrix3 &b) {
     return *this;
 }
 
-matrix3 &matrix3::multiplyScalar(double s) {
+matrix3 &matrix3::multiplyScalar(float s) {
 
     auto te = this->elements_;
 
@@ -106,7 +106,7 @@ matrix3 &matrix3::multiplyScalar(double s) {
     return *this;
 }
 
-double matrix3::determinant() const {
+float matrix3::determinant() const {
 
     auto te = this->elements_;
 
@@ -154,7 +154,7 @@ matrix3 &matrix3::invert() {
 
 matrix3 &matrix3::transpose() {
 
-    double tmp;
+    float tmp;
     auto m = this->elements_;
 
     // clang-format off
@@ -171,7 +171,7 @@ matrix3 &matrix3::getNormalMatrix(const matrix4 &m) {
     return this->setFromMatrix4(m).invert().transpose();
 }
 
-matrix3 &matrix3::setUvTransform(double tx, double ty, double sx, double sy, double rotation, double cx, double cy) {
+matrix3 &matrix3::setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy) {
 
     const auto c = std::cos(rotation);
     const auto s = std::sin(rotation);
@@ -184,7 +184,7 @@ matrix3 &matrix3::setUvTransform(double tx, double ty, double sx, double sy, dou
     return *this;
 }
 
-matrix3 &matrix3::scale(double sx, double sy) {
+matrix3 &matrix3::scale(float sx, float sy) {
 
     auto te = this->elements_;
 
@@ -196,7 +196,7 @@ matrix3 &matrix3::scale(double sx, double sy) {
     return *this;
 }
 
-matrix3 &matrix3::rotate(double theta) {
+matrix3 &matrix3::rotate(float theta) {
 
     const auto c = std::cos(theta);
     const auto s = std::sin(theta);
@@ -217,7 +217,7 @@ matrix3 &matrix3::rotate(double theta) {
     return *this;
 }
 
-matrix3 &matrix3::translate(double tx, double ty) {
+matrix3 &matrix3::translate(float tx, float ty) {
 
     const auto te = this->elements_;
 
