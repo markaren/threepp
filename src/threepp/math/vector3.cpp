@@ -175,7 +175,7 @@ vector3 &vector3::applyMatrix4(const matrix4 &m) {
     const auto x_ = this->x, y_ = this->y, z_ = this->z;
     const auto e = m.elements_;
 
-    const auto w = 1.0 / (e[3] * x + e[7] * y + e[11] * z + e[15]);
+    const auto w = 1.0f / (e[3] * x + e[7] * y + e[11] * z + e[15]);
 
     this->x = (e[0] * x_ + e[4] * y_ + e[8] * z_ + e[12]) * w;
     this->y = (e[1] * x_ + e[5] * y_ + e[9] * z_ + e[13]) * w;

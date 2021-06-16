@@ -135,7 +135,7 @@ matrix3 &matrix3::invert() {
         return this->set(0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
-    const auto detInv = 1.0 / det;
+    const auto detInv = 1.0f / det;
 
     te[0] = t11 * detInv;
     te[1] = (n31 * n23 - n33 * n21) * detInv;

@@ -8,7 +8,9 @@
 #include <iostream>
 #include <threepp/math/box2.hpp>
 #include <threepp/math/matrix4.hpp>
+#include <threepp/core/clock.hpp>
 #include <vector>
+#include <thread>
 
 
 using namespace threepp;
@@ -53,4 +55,10 @@ int main() {
     box2 b2;
     //b2.makeEmpty();
     std::cout << "empty box: " << (b2.isEmpty() ? "true" : "false") << std::endl;
+
+    threepp::clock c;
+    c.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds (500));
+    std::cout << "Elapsed=" << c.getElapsedTime() << std::endl;
+
 }

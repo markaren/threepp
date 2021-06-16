@@ -24,7 +24,8 @@ float &matrix4::operator[](unsigned int index) {
     return elements_[index];
 }
 
-matrix4 &matrix4::set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31, float n32, float n33, float n34, float n41, float n42, float n43, float n44) {
+matrix4 &matrix4::set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31,
+                      float n32, float n33, float n34, float n41, float n42, float n43, float n44) {
 
     auto te = this->elements_;
 
@@ -107,9 +108,9 @@ matrix4 &matrix4::extractRotation(const matrix4 &m) {
     auto te = this->elements_;
     const auto me = m.elements_;
 
-    const auto scaleX = 1.0 / _v1.setFromMatrixColumn(m, 0).length();
-    const auto scaleY = 1.0 / _v1.setFromMatrixColumn(m, 1).length();
-    const auto scaleZ = 1.0 / _v1.setFromMatrixColumn(m, 2).length();
+    const auto scaleX = 1.0f / _v1.setFromMatrixColumn(m, 0).length();
+    const auto scaleY = 1.0f / _v1.setFromMatrixColumn(m, 1).length();
+    const auto scaleZ = 1.0f / _v1.setFromMatrixColumn(m, 2).length();
 
     te[0] = me[0] * scaleX;
     te[1] = me[1] * scaleX;
@@ -253,6 +254,7 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
 
     return *this;
 }
+
 matrix4 &matrix4::makeRotationFromQuaternion(const quaternion &q) {
 
     return this->compose(_zero, q, _one);
@@ -280,11 +282,11 @@ matrix4 &matrix4::lookAt(const vector3 &eye, const vector3 &target, const vector
 
         if (std::abs(up.z) == 1) {
 
-            _z.x += 0.0001;
+            _z.x += 0.0001f;
 
         } else {
 
-            _z.z += 0.0001;
+            _z.z += 0.0001f;
         }
 
         _z.normalize();
@@ -379,10 +381,14 @@ float matrix4::determinant() const {
     //( based on http://www.euclideanspace.com/maths/algebra/matrix/functions/inverse/fourD/index.htm )
 
     return (
-            n41 * (+n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34) +
-            n42 * (+n11 * n23 * n34 - n11 * n24 * n33 + n14 * n21 * n33 - n13 * n21 * n34 + n13 * n24 * n31 - n14 * n23 * n31) +
-            n43 * (+n11 * n24 * n32 - n11 * n22 * n34 - n14 * n21 * n32 + n12 * n21 * n34 + n14 * n22 * n31 - n12 * n24 * n31) +
-            n44 * (-n13 * n22 * n31 - n11 * n23 * n32 + n11 * n22 * n33 + n13 * n21 * n32 - n12 * n21 * n33 + n12 * n23 * n31)
+            n41 * (+n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 -
+                   n12 * n23 * n34) +
+            n42 * (+n11 * n23 * n34 - n11 * n24 * n33 + n14 * n21 * n33 - n13 * n21 * n34 + n13 * n24 * n31 -
+                   n14 * n23 * n31) +
+            n43 * (+n11 * n24 * n32 - n11 * n22 * n34 - n14 * n21 * n32 + n12 * n21 * n34 + n14 * n22 * n31 -
+                   n12 * n24 * n31) +
+            n44 *
+                    (-n13 * n22 * n31 - n11 * n23 * n32 + n11 * n22 * n33 + n13 * n21 * n32 - n12 * n21 * n33 + n12 * n23 * n31)
 
     );
 }
@@ -393,25 +399,13 @@ matrix4 &matrix4::transpose() {
     float tmp;
 
     //clang-format off
-    tmp = te[1];
-    te[1] = te[4];
-    te[4] = tmp;
-    tmp = te[2];
-    te[2] = te[8];
-    te[8] = tmp;
-    tmp = te[6];
-    te[6] = te[9];
-    te[9] = tmp;
+    tmp = te[ 1 ]; te[ 1 ] = te[ 4 ]; te[ 4 ] = tmp;
+    tmp = te[ 2 ]; te[ 2 ] = te[ 8 ]; te[ 8 ] = tmp;
+    tmp = te[ 6 ]; te[ 6 ] = te[ 9 ]; te[ 9 ] = tmp;
 
-    tmp = te[3];
-    te[3] = te[12];
-    te[12] = tmp;
-    tmp = te[7];
-    te[7] = te[13];
-    te[13] = tmp;
-    tmp = te[11];
-    te[11] = te[14];
-    te[14] = tmp;
+    tmp = te[ 3 ]; te[ 3 ] = te[ 12 ]; te[ 12 ] = tmp;
+    tmp = te[ 7 ]; te[ 7 ] = te[ 13 ]; te[ 13 ] = tmp;
+    tmp = te[ 11 ]; te[ 11 ] = te[ 14 ]; te[ 14 ] = tmp;
     //clang-format on
 
     return *this;
@@ -446,36 +440,64 @@ matrix4 &matrix4::invert() {
                n13 = te[8], n23 = te[9], n33 = te[10], n43 = te[11],
                n14 = te[12], n24 = te[13], n34 = te[14], n44 = te[15],
 
-               t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44,
-               t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44,
-               t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44,
-               t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
+               t11 =
+                       n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44,
+               t12 =
+                       n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44,
+               t13 =
+                       n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44,
+               t14 =
+                       n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
 
     const auto det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
 
     if (det == 0) return this->set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
-    const auto detInv = 1.0 / det;
+    const auto detInv = 1.0f / det;
 
     te[0] = t11 * detInv;
-    te[1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44) * detInv;
-    te[2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44) * detInv;
-    te[3] = (n23 * n32 * n41 - n22 * n33 * n41 - n23 * n31 * n42 + n21 * n33 * n42 + n22 * n31 * n43 - n21 * n32 * n43) * detInv;
+    te[1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 -
+             n21 * n33 * n44) *
+            detInv;
+    te[2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 +
+             n21 * n32 * n44) *
+            detInv;
+    te[3] = (n23 * n32 * n41 - n22 * n33 * n41 - n23 * n31 * n42 + n21 * n33 * n42 + n22 * n31 * n43 -
+             n21 * n32 * n43) *
+            detInv;
 
     te[4] = t12 * detInv;
-    te[5] = (n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 + n11 * n33 * n44) * detInv;
-    te[6] = (n14 * n32 * n41 - n12 * n34 * n41 - n14 * n31 * n42 + n11 * n34 * n42 + n12 * n31 * n44 - n11 * n32 * n44) * detInv;
-    te[7] = (n12 * n33 * n41 - n13 * n32 * n41 + n13 * n31 * n42 - n11 * n33 * n42 - n12 * n31 * n43 + n11 * n32 * n43) * detInv;
+    te[5] = (n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 +
+             n11 * n33 * n44) *
+            detInv;
+    te[6] = (n14 * n32 * n41 - n12 * n34 * n41 - n14 * n31 * n42 + n11 * n34 * n42 + n12 * n31 * n44 -
+             n11 * n32 * n44) *
+            detInv;
+    te[7] = (n12 * n33 * n41 - n13 * n32 * n41 + n13 * n31 * n42 - n11 * n33 * n42 - n12 * n31 * n43 +
+             n11 * n32 * n43) *
+            detInv;
 
     te[8] = t13 * detInv;
-    te[9] = (n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 - n11 * n23 * n44) * detInv;
-    te[10] = (n12 * n24 * n41 - n14 * n22 * n41 + n14 * n21 * n42 - n11 * n24 * n42 - n12 * n21 * n44 + n11 * n22 * n44) * detInv;
-    te[11] = (n13 * n22 * n41 - n12 * n23 * n41 - n13 * n21 * n42 + n11 * n23 * n42 + n12 * n21 * n43 - n11 * n22 * n43) * detInv;
+    te[9] = (n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 -
+             n11 * n23 * n44) *
+            detInv;
+    te[10] = (n12 * n24 * n41 - n14 * n22 * n41 + n14 * n21 * n42 - n11 * n24 * n42 - n12 * n21 * n44 +
+              n11 * n22 * n44) *
+             detInv;
+    te[11] = (n13 * n22 * n41 - n12 * n23 * n41 - n13 * n21 * n42 + n11 * n23 * n42 + n12 * n21 * n43 -
+              n11 * n22 * n43) *
+             detInv;
 
     te[12] = t14 * detInv;
-    te[13] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34) * detInv;
-    te[14] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 - n11 * n22 * n34) * detInv;
-    te[15] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 + n11 * n22 * n33) * detInv;
+    te[13] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 +
+              n11 * n23 * n34) *
+             detInv;
+    te[14] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 -
+              n11 * n22 * n34) *
+             detInv;
+    te[15] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 +
+              n11 * n22 * n33) *
+             detInv;
 
     return *this;
 }
@@ -657,83 +679,84 @@ matrix4 &matrix4::decompose(vector3 &position, quaternion &quaternion, vector3 &
 
     const auto te = this->elements_;
 
-    auto sx = _v1.set( te[ 0 ], te[ 1 ], te[ 2 ] ).length();
-    const auto sy = _v1.set( te[ 4 ], te[ 5 ], te[ 6 ] ).length();
-    const auto sz = _v1.set( te[ 8 ], te[ 9 ], te[ 10 ] ).length();
+    auto sx = _v1.set(te[0], te[1], te[2]).length();
+    const auto sy = _v1.set(te[4], te[5], te[6]).length();
+    const auto sz = _v1.set(te[8], te[9], te[10]).length();
 
     // if determine is negative, we need to invert one scale
     const auto det = this->determinant();
-    if ( det < 0 ) sx = - sx;
+    if (det < 0) sx = -sx;
 
-    position.x = te[ 12 ];
-    position.y = te[ 13 ];
-    position.z = te[ 14 ];
+    position.x = te[12];
+    position.y = te[13];
+    position.z = te[14];
 
     // scale the rotation part
     _m1 = *this;
 
-    const auto invSX = 1.0 / sx;
-    const auto invSY = 1.0 / sy;
-    const auto invSZ = 1.0 / sz;
+    const auto invSX = 1.0f / sx;
+    const auto invSY = 1.0f / sy;
+    const auto invSZ = 1.0f / sz;
 
-    _m1.elements_[ 0 ] *= invSX;
-    _m1.elements_[ 1 ] *= invSX;
-    _m1.elements_[ 2 ] *= invSX;
+    _m1.elements_[0] *= invSX;
+    _m1.elements_[1] *= invSX;
+    _m1.elements_[2] *= invSX;
 
-    _m1.elements_[ 4 ] *= invSY;
-    _m1.elements_[ 5 ] *= invSY;
-    _m1.elements_[ 6 ] *= invSY;
+    _m1.elements_[4] *= invSY;
+    _m1.elements_[5] *= invSY;
+    _m1.elements_[6] *= invSY;
 
-    _m1.elements_[ 8 ] *= invSZ;
-    _m1.elements_[ 9 ] *= invSZ;
-    _m1.elements_[ 10 ] *= invSZ;
+    _m1.elements_[8] *= invSZ;
+    _m1.elements_[9] *= invSZ;
+    _m1.elements_[10] *= invSZ;
 
-    quaternion.setFromRotationMatrix( _m1 );
+    quaternion.setFromRotationMatrix(_m1);
 
     scale.x = sx;
     scale.y = sy;
     scale.z = sz;
 
     return *this;
-
 }
 
 matrix4 &matrix4::makePerspective(float left, float right, float top, float bottom, float near, float far) {
 
     auto te = this->elements_;
-    const auto x = 2 * near / ( right - left );
-    const auto y = 2 * near / ( top - bottom );
+    const auto x = 2 * near / (right - left);
+    const auto y = 2 * near / (top - bottom);
 
-    const auto a = ( right + left ) / ( right - left );
-    const auto b = ( top + bottom ) / ( top - bottom );
-    const auto c = - ( far + near ) / ( far - near );
-    const auto d = - 2 * far * near / ( far - near );
+    const auto a = (right + left) / (right - left);
+    const auto b = (top + bottom) / (top - bottom);
+    const auto c = -(far + near) / (far - near);
+    const auto d = -2 * far * near / (far - near);
 
+    // clang-format off
     te[ 0 ] = x;	te[ 4 ] = 0;	te[ 8 ] = a;	te[ 12 ] = 0;
     te[ 1 ] = 0;	te[ 5 ] = y;	te[ 9 ] = b;	te[ 13 ] = 0;
     te[ 2 ] = 0;	te[ 6 ] = 0;	te[ 10 ] = c;	te[ 14 ] = d;
     te[ 3 ] = 0;	te[ 7 ] = 0;	te[ 11 ] = - 1;	te[ 15 ] = 0;
+    // clang-format on
 
     return *this;
-
 }
 
 matrix4 &matrix4::makeOrthographic(float left, float right, float top, float bottom, float near, float far) {
 
     auto te = this->elements_;
-    const auto w = 1.0 / ( right - left );
-    const auto h = 1.0 / ( top - bottom );
-    const auto p = 1.0 / ( far - near );
+    const auto w = 1.0f / (right - left);
+    const auto h = 1.0f / (top - bottom);
+    const auto p = 1.0f / (far - near);
 
-    const auto x = ( right + left ) * w;
-    const auto y = ( top + bottom ) * h;
-    const auto z = ( far + near ) * p;
+    const auto x = (right + left) * w;
+    const auto y = (top + bottom) * h;
+    const auto z = (far + near) * p;
 
+    // clang-format off
     te[ 0 ] = 2 * w;	te[ 4 ] = 0;	te[ 8 ] = 0;	te[ 12 ] = - x;
     te[ 1 ] = 0;	te[ 5 ] = 2 * h;	te[ 9 ] = 0;	te[ 13 ] = - y;
     te[ 2 ] = 0;	te[ 6 ] = 0;	te[ 10 ] = - 2 * p;	te[ 14 ] = - z;
     te[ 3 ] = 0;	te[ 7 ] = 0;	te[ 11 ] = 0;	te[ 15 ] = 1;
+    // clang-format on
 
     return *this;
-
 }

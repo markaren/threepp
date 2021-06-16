@@ -3,7 +3,7 @@
 #ifndef THREEPP_OBJECT3D_HPP
 #define THREEPP_OBJECT3D_HPP
 
-#include "../math/vector3.hpp"
+#include "threepp/math/vector3.hpp"
 
 namespace threepp {
 
