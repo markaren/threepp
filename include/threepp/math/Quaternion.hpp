@@ -39,7 +39,6 @@ namespace threepp {
 
         Quaternion &setFromEuler( const Euler &euler, bool update = true );
 
-
         Quaternion &setFromAxisAngle(const Vector3 &axis, float angle);
 
         Quaternion &setFromRotationMatrix( const Matrix4 &m );

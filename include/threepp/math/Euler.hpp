@@ -33,16 +33,40 @@ namespace threepp {
             return x_;
         }
 
+        void x(float value) {
+
+            this->x_ = value;
+            onChangeCallback_();
+        }
+
         [[nodiscard]] float y() const {
             return y_;
+        }
+
+        void y(float value) {
+
+            this->y_ = value;
+            onChangeCallback_();
         }
 
         [[nodiscard]] float z() const {
             return z_;
         }
 
+        void z(float value) {
+
+            this->z_ = value;
+            onChangeCallback_();
+        }
+
         [[nodiscard]] RotationOrders order() const {
             return order_;
+        }
+
+        void order(RotationOrders value) {
+
+            this->order_ = value;
+            onChangeCallback_();
         }
 
         Euler &set(float x, float y, float z, const std::optional<RotationOrders> &order = std::nullopt);
@@ -52,6 +76,29 @@ namespace threepp {
         Euler &setFromQuaternion(const Quaternion &q, std::optional<RotationOrders> order = std::nullopt, bool update = true);
 
         Euler &setFromVector3(const Vector3 &v, std::optional<RotationOrders> order = std::nullopt);
+
+        Euler &_onChange(std::function<void()> callback);
+
+        template<class ArrayLike>
+        Euler &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+
+            this->x_ = array[offset];
+            this->y_ = array[offset + 1];
+            this->z_ = array[offset + 2];
+
+            this->onChangeCallback_();
+
+            return *this;
+        }
+
+        template<class ArrayLike>
+        void toArray(ArrayLike &array, unsigned int offset = 0) const {
+
+            array[offset] = this->x_;
+            array[offset + 1] = this->y_;
+            array[offset + 2] = this->z_;
+        }
+
 
     private:
         float x_ = 0.0;

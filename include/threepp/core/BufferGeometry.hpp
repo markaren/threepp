@@ -6,6 +6,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/core/Group.hpp"
+#include "threepp/core/BufferAttribute.hpp"
 
 #include <utility>
 #include <vector>
@@ -26,7 +27,7 @@ namespace threepp {
 
         std::vector<Group> groups;
 
-        std::any &getAttribute(const std::string &name) {
+        auto &getAttribute(const std::string &name) {
             return attributes_[name];
         }
 
@@ -48,11 +49,9 @@ namespace threepp {
 
         BufferGeometry &applyMatrix4( const Matrix4 &matrix ) {
 
-
-
             if ( this->attributes_.count("position") ) {
 
-                //auto position = std::any_cast<Vector3>(this->attributes_["position"]);
+                auto position = std::any_cast<BufferAttribute<float>>(this->attributes_["position"]);
 
 //                position.applyMatrix4( matrix );
 //

@@ -158,3 +158,10 @@ Euler &Euler::setFromVector3(const Vector3 &v, std::optional<RotationOrders> ord
 
     return this->set(v.x, v.y, v.z, order);
 }
+
+Euler &Euler::_onChange(std::function<void()> callback) {
+
+    this->onChangeCallback_ = std::move(callback);
+
+    return *this;
+}
