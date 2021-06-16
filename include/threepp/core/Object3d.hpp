@@ -15,11 +15,11 @@ public:
 
 private:
 
-  static vector3 _v1;
+  static Vector3 _v1;
 
 };
 
-vector3 Object3d::_v1 = vector3d();
+Vector3 Object3d::_v1 = Vector3();
 
 }
 

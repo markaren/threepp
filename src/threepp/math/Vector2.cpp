@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <string>
+#include <algorithm>
 
 using namespace threepp;
 
@@ -90,7 +91,6 @@ Vector2 &Vector2::sub(const Vector2 &v) {
     this->y -= v.y;
 
     return *this;
-
 }
 
 Vector2 &Vector2::sub(float s) {
@@ -99,7 +99,6 @@ Vector2 &Vector2::sub(float s) {
     this->y -= s;
 
     return *this;
-
 }
 
 Vector2 &Vector2::subVectors(const Vector2 &a, const Vector2 &b) {
@@ -108,7 +107,6 @@ Vector2 &Vector2::subVectors(const Vector2 &a, const Vector2 &b) {
     this->y = a.y - b.y;
 
     return *this;
-
 }
 
 Vector2 &Vector2::multiply(const Vector2 &v) {
@@ -166,4 +164,3 @@ Vector2 &Vector2::max(const Vector2 &v) {
 
     return *this;
 }
-

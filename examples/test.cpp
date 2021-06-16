@@ -10,6 +10,8 @@
 #include <threepp/core/Clock.hpp>
 #include <threepp/math/Box2.hpp>
 #include <threepp/math/Matrix4.hpp>
+#include <threepp/math/Color.hpp>
+#include <threepp/lights/AmbientLight.hpp>
 
 #include <threepp/core/Uniform.hpp>
 
@@ -92,10 +94,15 @@ int main() {
 
     Uniform uniform(m4);
     m4[0] = 98;
-    Matrix4 m = std::any_cast<Matrix4>(uniform.value());
+    auto m = std::any_cast<Matrix4>(uniform.value());
     std::cout << m4[0] << ":" << m[0] << std::endl;
 
-    Fog f(0xff00ff);
+    Fog f( Color::aliceblue);
+
+    std::cout << AmbientLight(0xffffff).type << std::endl;
+
+
+
 
     return 0;
 

@@ -1,5 +1,6 @@
 [requires]
-opengl/system
+glfw/3.3.4
+glad/0.1.34
 
 [generators]
 cmake
