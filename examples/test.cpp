@@ -15,7 +15,6 @@
 #include <threepp/core/EventDispatcher.hpp>
 #include <vector>
 
-
 using namespace threepp;
 
 namespace {
@@ -77,14 +76,27 @@ int main() {
     evt.addEventListener("per", &l);
     evt.addEventListener("truls", &l1);
 
-    evt.dispatchEvent("per", 1);
-    evt.dispatchEvent("per", 1);
+    evt.dispatchEvent("per");
+    evt.dispatchEvent("per");
 
     evt.removeEventListener("per", &l);
 
-    evt.dispatchEvent("per", 1);
+    evt.dispatchEvent("per");
 
     std::cout << "has evt:" << evt.hasEventListener("per", &l) << std::endl;
+
+    std::string vogon_poem(R"V0G0N(
+uniform sampler2D t2D;
+varying vec2 vUv;
+void main() {
+	vec4 texColor = texture2D( t2D, vUv );
+	gl_FragColor = mapTexelToLinear( texColor );
+	#include <tonemapping_fragment>
+	#include <encodings_fragment>
+}
+)V0G0N");
+
+    std::cout << vogon_poem << std::endl;
 
     return 0;
 

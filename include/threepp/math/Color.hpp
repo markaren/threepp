@@ -13,9 +13,15 @@ namespace threepp {
 
         Color() = default;
 
+        Color(int hex);
+
         Color(float r, float g, float b);
 
+        Color &setScalar(float scalar);
+
         Color &setRGB(float r, float g, float b);
+
+        Color &setHex(int hex);
 
         template<class ArrayLike>
         Color &fromArray(const ArrayLike &array, unsigned int offset = 0) {

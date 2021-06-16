@@ -45,7 +45,7 @@ namespace threepp {
             }
         }
 
-        void dispatchEvent(const std::string &type, const std::any &target) {
+        void dispatchEvent(const std::string &type, const std::any &target = {}) {
 
             if (listeners_.count(type)) {
                 Event e{type, target};
