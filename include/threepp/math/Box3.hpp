@@ -5,7 +5,7 @@
 
 namespace threepp {
 
-    class box3 {
+    class Box3 {
     };
 
 }// namespace threepp

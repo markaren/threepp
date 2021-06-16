@@ -1,13 +1,13 @@
-
+// https://github.com/mrdoob/three.js/blob/r129/src/core/Object3D.js
 
 #ifndef THREEPP_OBJECT3D_HPP
 #define THREEPP_OBJECT3D_HPP
 
-#include "threepp/math/vector3.hpp"
+#include "threepp/math/Vector3.hpp"
 
 namespace threepp {
 
-class object3d {
+class Object3d {
 
 public:
 
@@ -19,7 +19,7 @@ private:
 
 };
 
-vector3 object3d::_v1 = vector3d();
+vector3 Object3d::_v1 = vector3d();
 
 }
 

@@ -1,23 +1,23 @@
 
-#include "threepp/math/triangle.hpp"
+#include "threepp/math/Triangle.hpp"
 
 using namespace threepp;
 
-vector3 triangle::_v0 = vector3();
-vector3 triangle::_v1 = vector3();
-vector3 triangle::_v2 = vector3();
-vector3 triangle::_v3 = vector3();
+Vector3 Triangle::_v0 = Vector3();
+Vector3 Triangle::_v1 = Vector3();
+Vector3 Triangle::_v2 = Vector3();
+Vector3 Triangle::_v3 = Vector3();
 
-vector3 triangle::_vab = vector3();
-vector3 triangle::_vac = vector3();
-vector3 triangle::_vbc = vector3();
-vector3 triangle::_vap = vector3();
-vector3 triangle::_vbp = vector3();
-vector3 triangle::_vcp = vector3();
+Vector3 Triangle::_vab = Vector3();
+Vector3 Triangle::_vac = Vector3();
+Vector3 Triangle::_vbc = Vector3();
+Vector3 Triangle::_vap = Vector3();
+Vector3 Triangle::_vbp = Vector3();
+Vector3 Triangle::_vcp = Vector3();
 
-triangle::triangle(vector3 a, vector3 b, vector3 c) : a_(a), b_(b), c_(c){}
+Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c) : a_(a), b_(b), c_(c){}
 
-void triangle::getNormal(const vector3 &a, const vector3 &b, const vector3 &c, vector3 &target) {
+void Triangle::getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target) {
 
     target.subVectors(c, b);
     _v0.subVectors(a, b);
@@ -34,7 +34,7 @@ void triangle::getNormal(const vector3 &a, const vector3 &b, const vector3 &c, v
     }
 }
 
-void triangle::getBarycoord(const vector3 &point, const vector3 &a, const vector3 &b, const vector3 &c, vector3 &target) {
+void Triangle::getBarycoord(const Vector3 &point, const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target) {
 
     _v0.subVectors(c, a);
     _v1.subVectors(b, a);
@@ -48,16 +48,16 @@ void triangle::getBarycoord(const vector3 &point, const vector3 &a, const vector
 
     const auto denom = (dot00 * dot11 - dot01 * dot01);
 
-    // collinear or singular triangle
+    // collinear or singular Triangle
     if (denom == 0) {
 
-        // arbitrary location outside of triangle?
+        // arbitrary location outside of Triangle?
         // not sure if this is the best idea, maybe should be returning undefined
         target.set(-2, -1, -1);
 
     } else {
 
-        const auto invDenom = 1.0 / denom;
+        const auto invDenom = 1.0f / denom;
         const auto u = (dot11 * dot02 - dot01 * dot12) * invDenom;
         const auto v = (dot00 * dot12 - dot01 * dot02) * invDenom;
 
@@ -66,14 +66,14 @@ void triangle::getBarycoord(const vector3 &point, const vector3 &a, const vector
     }
 }
 
-bool triangle::containsPoint(const vector3 &point, const vector3 &a, const vector3 &b, const vector3 &c) {
+bool Triangle::containsPoint(const Vector3 &point, const Vector3 &a, const Vector3 &b, const Vector3 &c) {
 
     getBarycoord(point, a, b, c, _v3);
 
     return (_v3.x >= 0) && (_v3.y >= 0) && ((_v3.x + _v3.y) <= 1);
 }
 
-void triangle::getUV(const vector3 &point, const vector3 &p1, const vector3 &p2, const vector3 &p3, const vector2 &uv1, const vector2 &uv2, const vector2 &uv3, vector2 &target) {
+void Triangle::getUV(const Vector3 &point, const Vector3 &p1, const Vector3 &p2, const Vector3 &p3, const Vector2 &uv1, const Vector2 &uv2, const Vector2 &uv3, Vector2 &target) {
 
     getBarycoord(point, p1, p2, p3, _v3);
 
@@ -83,7 +83,7 @@ void triangle::getUV(const vector3 &point, const vector3 &p1, const vector3 &p2,
     target.addScaledVector(uv3, _v3.z);
 }
 
-bool triangle::isFrontFacing(const vector3 &a, const vector3 &b, const vector3 &c, const vector3 &direction) {
+bool Triangle::isFrontFacing(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &direction) {
 
     _v0.subVectors(c, b);
     _v1.subVectors(a, b);
@@ -92,7 +92,7 @@ bool triangle::isFrontFacing(const vector3 &a, const vector3 &b, const vector3 &
     return (_v0.cross(_v1).dot(direction) < 0) ? true : false;
 }
 
-triangle &triangle::set(const vector3 &a, const vector3 &b, const vector3 &c) {
+Triangle &Triangle::set(const Vector3 &a, const Vector3 &b, const Vector3 &c) {
 
     this->a_ = (a);
     this->b_ = (b);
@@ -101,45 +101,45 @@ triangle &triangle::set(const vector3 &a, const vector3 &b, const vector3 &c) {
     return *this;
 }
 
-float triangle::getArea() const {
+float Triangle::getArea() const {
 
     _v0.subVectors(this->c_, this->b_);
     _v1.subVectors(this->a_, this->b_);
 
-    return _v0.cross(_v1).length() * 0.5;
+    return _v0.cross(_v1).length() * 0.5f;
 }
 
-void triangle::getMidpoint(vector3 &target) {
+void Triangle::getMidpoint(Vector3 &target) {
 
-    target.addVectors(this->a_, this->b_).add(this->c_).multiply(1.0 / 3);
+    target.addVectors(this->a_, this->b_).add(this->c_).multiply(1.0f / 3);
 }
 
-void triangle::getNormal(vector3 &target) {
+void Triangle::getNormal(Vector3 &target) {
 
-    return triangle::getNormal(this->a_, this->b_, this->c_, target);
+    return Triangle::getNormal(this->a_, this->b_, this->c_, target);
 }
 
-void triangle::getBarycoord(vector3 &point, vector3 &target) {
+void Triangle::getBarycoord(Vector3 &point, Vector3 &target) {
 
-    return triangle::getBarycoord(point, this->a_, this->b_, this->c_, target);
+    return Triangle::getBarycoord(point, this->a_, this->b_, this->c_, target);
 }
 
-void triangle::getUV(const vector3 &point, const vector2 &uv1, const vector2 &uv2, const vector2 &uv3, vector2 &target) {
+void Triangle::getUV(const Vector3 &point, const Vector2 &uv1, const Vector2 &uv2, const Vector2 &uv3, Vector2 &target) {
 
-    return triangle::getUV(point, this->a_, this->b_, this->c_, uv1, uv2, uv3, target);
+    return Triangle::getUV(point, this->a_, this->b_, this->c_, uv1, uv2, uv3, target);
 }
 
-bool triangle::containsPoint(const vector3 &point) {
+bool Triangle::containsPoint(const Vector3 &point) {
 
-    return triangle::containsPoint(point, this->a_, this->b_, this->c_);
+    return Triangle::containsPoint(point, this->a_, this->b_, this->c_);
 }
 
-bool triangle::isFrontFacing(const vector3 &direction) {
+bool Triangle::isFrontFacing(const Vector3 &direction) {
 
-    return triangle::isFrontFacing(this->a_, this->b_, this->c_, direction);
+    return Triangle::isFrontFacing(this->a_, this->b_, this->c_, direction);
 }
 
-void triangle::closestPointToPoint(const vector3 &p, vector3 &target) {
+void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
 
     const auto a = this->a_, b = this->b_, c = this->c_;
     float v, w;
@@ -147,7 +147,7 @@ void triangle::closestPointToPoint(const vector3 &p, vector3 &target) {
     // algorithm thanks to Real-Time Collision Detection by Christer Ericson,
     // published by Morgan Kaufmann Publishers, (c) 2005 Elsevier Inc.,
     // under the accompanying license; see chapter 5.1.5 for detailed explanation.
-    // basically, we're distinguishing which of the voronoi regions of the triangle
+    // basically, we're distinguishing which of the voronoi regions of the Triangle
     // the point lies in with the minimum amount of redundant computation.
 
     _vab.subVectors(b, a);
@@ -214,7 +214,7 @@ void triangle::closestPointToPoint(const vector3 &p, vector3 &target) {
     }
 
     // face region
-    const auto denom = 1.0 / (va + vb + vc);
+    const auto denom = 1.0f / (va + vb + vc);
     // u = va * denom
     v = vb * denom;
     w = vc * denom;

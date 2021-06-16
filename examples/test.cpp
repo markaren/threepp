@@ -1,31 +1,35 @@
 
-//#include <threepp/math/vector2.hpp>
-#include <threepp/math/vector3.hpp>
-//#include <threepp/math/vector4.hpp>
-//#include <threepp/math/triangle.hpp>
-//#include <threepp/math/quaternion.hpp>
-//#include <threepp/math/euler.hpp>
+//#include <threepp/math/Vector2.hpp>
+#include <threepp/math/Vector3.hpp>
+//#include <threepp/math/Vector4.hpp>
+//#include <threepp/math/Triangle.hpp>
+//#include <threepp/math/Quaternion.hpp>
+//#include <threepp/math/Euler.hpp>
 #include <iostream>
-#include <threepp/math/box2.hpp>
-#include <threepp/math/matrix4.hpp>
-#include <threepp/core/clock.hpp>
-#include <vector>
 #include <thread>
+#include <threepp/core/Clock.hpp>
+#include <threepp/math/Box2.hpp>
+#include <threepp/math/Matrix4.hpp>
+
+
+#include <threepp/core/EventDispatcher.hpp>
+#include <vector>
 
 
 using namespace threepp;
 
 namespace {
-    std::ostream &operator<<(std::ostream &os, const vector3 &v) {
-        os << "vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
+    std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
+        os << "Vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
                         ")";
         return os;
     }
+
 }// namespace
 
 int main() {
 
-    vector3 v;
+    Vector3 v;
     v[1] = 2;
 
     std::cout << "x=" << v << std::endl;
@@ -42,7 +46,7 @@ int main() {
 
     std::cout << arr[0] << std::endl;
 
-    matrix4 m4;
+    Matrix4 m4;
     m4.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     m4[0] = 3;
     std::cout << m4[0] << std::endl;
@@ -52,13 +56,36 @@ int main() {
 
     std::cout << m4[0] << ":" << copy[0] << std::endl;
 
-    box2 b2;
-    //b2.makeEmpty();
+    Box2 b2;
     std::cout << "empty box: " << (b2.isEmpty() ? "true" : "false") << std::endl;
 
-    threepp::clock c;
+    threepp::Clock c;
     c.start();
     std::this_thread::sleep_for(std::chrono::milliseconds (500));
     std::cout << "Elapsed=" << c.getElapsedTime() << std::endl;
+
+    EventDispatcher evt;
+
+    EventListener l = [](auto e){
+      std::cout << "Event type:" << e.type << std::endl;
+    };
+
+    EventListener l1 = [](auto e){
+      std::cout << "Event type:" << e.type << std::endl;
+    };
+
+    evt.addEventListener("per", &l);
+    evt.addEventListener("truls", &l1);
+
+    evt.dispatchEvent("per", 1);
+    evt.dispatchEvent("per", 1);
+
+    evt.removeEventListener("per", &l);
+
+    evt.dispatchEvent("per", 1);
+
+    std::cout << "has evt:" << evt.hasEventListener("per", &l) << std::endl;
+
+    return 0;
 
 }

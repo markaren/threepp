@@ -1,20 +1,20 @@
 
-#include "threepp/math/matrix3.hpp"
+#include "threepp/math/Matrix3.hpp"
 
-#include "threepp/math/matrix4.hpp"
-#include "threepp/math/vector3.hpp"
+#include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <stdexcept>
 #include <string>
 
 using namespace threepp;
 
-float &matrix3::operator[](unsigned int index) {
+float &Matrix3::operator[](unsigned int index) {
     if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     return elements_[index];
 }
 
-matrix3 &matrix3::set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33) {
+Matrix3 &Matrix3::set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33) {
 
     auto te = this->elements_;
 
@@ -27,7 +27,7 @@ matrix3 &matrix3::set(float n11, float n12, float n13, float n21, float n22, flo
     return *this;
 }
 
-matrix3 &matrix3::identity() {
+Matrix3 &Matrix3::identity() {
 
     this->set(
 
@@ -40,7 +40,7 @@ matrix3 &matrix3::identity() {
     return *this;
 }
 
-matrix3 &matrix3::extractBasis(vector3 &xAxis, vector3 &yAxis, vector3 &zAxis) {
+Matrix3 &Matrix3::extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis) {
 
     xAxis.setFromMatrix3Column(*this, 0);
     yAxis.setFromMatrix3Column(*this, 1);
@@ -49,7 +49,7 @@ matrix3 &matrix3::extractBasis(vector3 &xAxis, vector3 &yAxis, vector3 &zAxis) {
     return *this;
 }
 
-matrix3 &matrix3::setFromMatrix4(const matrix4 &m) {
+Matrix3 &Matrix3::setFromMatrix4(const Matrix4 &m) {
 
     auto me = m.elements_;
 
@@ -64,7 +64,7 @@ matrix3 &matrix3::setFromMatrix4(const matrix4 &m) {
     return *this;
 }
 
-matrix3 &matrix3::multiplyMatrices(const matrix3 &a, const matrix3 &b) {
+Matrix3 &Matrix3::multiplyMatrices(const Matrix3 &a, const Matrix3 &b) {
 
     const auto ae = a.elements_;
     const auto be = b.elements_;
@@ -93,7 +93,7 @@ matrix3 &matrix3::multiplyMatrices(const matrix3 &a, const matrix3 &b) {
     return *this;
 }
 
-matrix3 &matrix3::multiplyScalar(float s) {
+Matrix3 &Matrix3::multiplyScalar(float s) {
 
     auto te = this->elements_;
 
@@ -106,7 +106,7 @@ matrix3 &matrix3::multiplyScalar(float s) {
     return *this;
 }
 
-float matrix3::determinant() const {
+float Matrix3::determinant() const {
 
     auto te = this->elements_;
 
@@ -117,7 +117,7 @@ float matrix3::determinant() const {
     return a * e * i - a * f * h - b * d * i + b * f * g + c * d * h - c * e * g;
 }
 
-matrix3 &matrix3::invert() {
+Matrix3 &Matrix3::invert() {
 
     auto te = this->elements_;
 
@@ -152,7 +152,7 @@ matrix3 &matrix3::invert() {
     return *this;
 }
 
-matrix3 &matrix3::transpose() {
+Matrix3 &Matrix3::transpose() {
 
     float tmp;
     auto m = this->elements_;
@@ -166,12 +166,12 @@ matrix3 &matrix3::transpose() {
     return *this;
 }
 
-matrix3 &matrix3::getNormalMatrix(const matrix4 &m) {
+Matrix3 &Matrix3::getNormalMatrix(const Matrix4 &m) {
 
     return this->setFromMatrix4(m).invert().transpose();
 }
 
-matrix3 &matrix3::setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy) {
+Matrix3 &Matrix3::setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy) {
 
     const auto c = std::cos(rotation);
     const auto s = std::sin(rotation);
@@ -184,7 +184,7 @@ matrix3 &matrix3::setUvTransform(float tx, float ty, float sx, float sy, float r
     return *this;
 }
 
-matrix3 &matrix3::scale(float sx, float sy) {
+Matrix3 &Matrix3::scale(float sx, float sy) {
 
     auto te = this->elements_;
 
@@ -196,7 +196,7 @@ matrix3 &matrix3::scale(float sx, float sy) {
     return *this;
 }
 
-matrix3 &matrix3::rotate(float theta) {
+Matrix3 &Matrix3::rotate(float theta) {
 
     const auto c = std::cos(theta);
     const auto s = std::sin(theta);
@@ -217,7 +217,7 @@ matrix3 &matrix3::rotate(float theta) {
     return *this;
 }
 
-matrix3 &matrix3::translate(float tx, float ty) {
+Matrix3 &Matrix3::translate(float tx, float ty) {
 
     const auto te = this->elements_;
 

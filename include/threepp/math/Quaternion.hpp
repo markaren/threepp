@@ -7,15 +7,15 @@
 
 namespace threepp {
 
-    class vector3;
-    class matrix4;
+    class Vector3;
+    class Matrix4;
 
-    class quaternion {
+    class Quaternion {
 
     public:
-        quaternion() = default;
+        Quaternion() = default;
 
-        quaternion(float x, float y, float z, float w);
+        Quaternion(float x, float y, float z, float w);
 
         [[nodiscard]] float x() const {
             return x_;
@@ -33,32 +33,32 @@ namespace threepp {
             return w_;
         }
 
-        quaternion &set(float x, float y, float z, float w);
+        Quaternion &set(float x, float y, float z, float w);
 
-        quaternion &setFromAxisAngle(const vector3 &axis, float angle);
+        Quaternion &setFromAxisAngle(const Vector3 &axis, float angle);
 
-        quaternion &setFromRotationMatrix( const matrix4 &m );
+        Quaternion &setFromRotationMatrix( const Matrix4 &m );
 
-        [[nodiscard]] float angleTo( const quaternion &q ) const;
+        [[nodiscard]] float angleTo( const Quaternion &q ) const;
 
-        quaternion &identity();
+        Quaternion &identity();
 
-        quaternion &invert();
+        Quaternion &invert();
 
-        quaternion &conjugate();
+        Quaternion &conjugate();
 
-        [[nodiscard]] float dot(const quaternion &v) const;
+        [[nodiscard]] float dot(const Quaternion &v) const;
 
         [[nodiscard]] float lengthSq() const;
 
         [[nodiscard]] float length() const;
 
-        quaternion &normalize();
+        Quaternion &normalize();
 
-        quaternion &_onChange( std::function<void()> callback );
+        Quaternion &_onChange( std::function<void()> callback );
 
         template<class ArrayLike>
-        quaternion &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Quaternion &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
             this->x_ = array[offset];
             this->y_ = array[offset + 1];

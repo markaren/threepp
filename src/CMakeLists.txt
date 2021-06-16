@@ -1,18 +1,23 @@
 set(publicHeaderDir ${CMAKE_SOURCE_DIR}/include)
 
 set(publicHeaders
-        "threepp/math/box2.hpp"
-        "threepp/math/box3.hpp"
-        "threepp/math/color.hpp"
-        "threepp/math/euler.hpp"
-        "threepp/math/matrix3.hpp"
-        "threepp/math/matrix4.hpp"
-        "threepp/math/plane.hpp"
-        "threepp/math/vector2.hpp"
-        "threepp/math/vector3.hpp"
-        "threepp/math/vector4.hpp"
-        "threepp/math/triangle.hpp"
-        "threepp/math/quaternion.hpp"
+        "threepp/core/BufferAttribute.hpp"
+        "threepp/core/BufferGeometry.hpp"
+        "threepp/core/Clock.hpp"
+        "threepp/core/Object3d.hpp"
+
+        "threepp/math/Box2.hpp"
+        "threepp/math/Box3.hpp"
+        "threepp/math/Color.hpp"
+        "threepp/math/Euler.hpp"
+        "threepp/math/Matrix3.hpp"
+        "threepp/math/Matrix4.hpp"
+        "threepp/math/Plane.hpp"
+        "threepp/math/Vector2.hpp"
+        "threepp/math/Vector3.hpp"
+        "threepp/math/Vector4.hpp"
+        "threepp/math/Triangle.hpp"
+        "threepp/math/Quaternion.hpp"
         )
 
 set(publicHeadersFull)
@@ -20,21 +25,24 @@ foreach (header IN LISTS publicHeaders)
   list(APPEND publicHeadersFull "${publicHeaderDir}/${header}")
 endforeach ()
 
+### CORE
+
+
 ### MATH
 
 set(sources
-        "threepp/math/box2.cpp"
-        "threepp/math/box3.cpp"
-        "threepp/math/color.cpp"
-        "threepp/math/euler.cpp"
-        "threepp/math/matrix3.cpp"
-        "threepp/math/matrix4.cpp"
-        "threepp/math/plane.cpp"
-        "threepp/math/triangle.cpp"
-        "threepp/math/vector2.cpp"
-        "threepp/math/vector3.cpp"
-        "threepp/math/vector4.cpp"
-        "threepp/math/quaternion.cpp"
+        "threepp/math/Box2.cpp"
+        "threepp/math/Box3.cpp"
+        "threepp/math/Color.cpp"
+        "threepp/math/Euler.cpp"
+        "threepp/math/Matrix3.cpp"
+        "threepp/math/Matrix4.cpp"
+        "threepp/math/Plane.cpp"
+        "threepp/math/Triangle.cpp"
+        "threepp/math/Vector2.cpp"
+        "threepp/math/Vector3.cpp"
+        "threepp/math/Vector4.cpp"
+        "threepp/math/Quaternion.cpp"
         )
 
 set(privateHeaders

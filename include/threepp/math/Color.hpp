@@ -4,21 +4,21 @@
 
 namespace threepp {
 
-    class color {
+    class Color {
 
     public:
         float r = 1.0;
         float g = 1.0;
         float b = 1.0;
 
-        color() = default;
+        Color() = default;
 
-        color(float r, float g, float b);
+        Color(float r, float g, float b);
 
-        color &setRGB(float r, float g, float b);
+        Color &setRGB(float r, float g, float b);
 
         template<class ArrayLike>
-        color &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Color &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
             this->r = array[offset];
             this->g = array[offset + 1];

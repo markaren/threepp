@@ -1,19 +1,19 @@
 
-#include "threepp/math/euler.hpp"
+#include "threepp/math/Euler.hpp"
 
-#include "threepp/math/vector3.hpp"
-#include "threepp/math/matrix3.hpp"
-#include "threepp/math/matrix4.hpp"
-#include "threepp/math/quaternion.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Quaternion.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
 
 using namespace threepp;
 
-matrix4 euler::_matrix = matrix4();
-quaternion euler::_quaternion = quaternion();
+Matrix4 Euler::_matrix = Matrix4();
+Quaternion Euler::_quaternion = Quaternion();
 
-euler &euler::set(float x, float y, float z, const std::optional<RotationOrders> &order) {
+Euler &Euler::set(float x, float y, float z, const std::optional<RotationOrders> &order) {
 
     this->x_ = x;
     this->y_ = y;
@@ -25,7 +25,7 @@ euler &euler::set(float x, float y, float z, const std::optional<RotationOrders>
     return *this;
 }
 
-euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrders> order, bool update) {
+Euler &Euler::setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrders> order, bool update) {
 
     // assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)
 
@@ -146,7 +146,7 @@ euler &euler::setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrde
     return *this;
 }
 
-euler &euler::setFromQuaternion(const quaternion &q, std::optional<RotationOrders> order, bool update) {
+Euler &Euler::setFromQuaternion(const Quaternion &q, std::optional<RotationOrders> order, bool update) {
 
     _matrix.makeRotationFromQuaternion( q );
 
@@ -154,7 +154,7 @@ euler &euler::setFromQuaternion(const quaternion &q, std::optional<RotationOrder
 
 }
 
-euler &euler::setFromVector3(const vector3 &v, std::optional<RotationOrders> order) {
+Euler &Euler::setFromVector3(const Vector3 &v, std::optional<RotationOrders> order) {
 
     return this->set(v.x, v.y, v.z, order);
 }

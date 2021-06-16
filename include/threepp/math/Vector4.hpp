@@ -9,10 +9,10 @@
 
 namespace threepp {
 
-    class matrix3;
-    class matrix4;
+    class Matrix3;
+    class Matrix4;
 
-    class vector4 {
+    class Vector4 {
 
     public:
         float x = 0.0;
@@ -20,19 +20,19 @@ namespace threepp {
         float z = 0.0;
         float w = 1.0;
 
-        vector4() = default;
+        Vector4() = default;
 
-        vector4(float x, float y, float z, float w);
+        Vector4(float x, float y, float z, float w);
         ;
 
-        vector4 &set(float x, float y, float z, float w);
+        Vector4 &set(float x, float y, float z, float w);
 
-        vector4 &setScalar(float value);
+        Vector4 &setScalar(float value);
 
-        vector4 &applyMatrix4(const matrix4 &m);
+        Vector4 &applyMatrix4(const Matrix4 &m);
 
         template<class ArrayLike>
-        vector4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Vector4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
             this->x = array[offset + 0];
             this->y = array[offset + 1];
@@ -52,8 +52,8 @@ namespace threepp {
         }
     };
 
-    //    std::ostream &operator<<(std::ostream &os, const vector4 &v) {
-    //        return os << "vector4(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
+    //    std::ostream &operator<<(std::ostream &os, const Vector4 &v) {
+    //        return os << "Vector4(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
     //                     ", w=" + std::to_string(v.w) + +")";
     //    }
 

@@ -1,17 +1,17 @@
 
-#include "threepp/math/quaternion.hpp"
+#include "threepp/math/Quaternion.hpp"
 
-#include "threepp/math/matrix4.hpp"
-#include "threepp/math/vector3.hpp"
+#include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <cmath>
 #include <algorithm>
 
 using namespace threepp;
 
-quaternion::quaternion(float x, float y, float z, float w) : x_(x), y_(y), z_(z), w_(w) {}
+Quaternion::Quaternion(float x, float y, float z, float w) : x_(x), y_(y), z_(z), w_(w) {}
 
-quaternion &quaternion::set(float x, float y, float z, float w) {
+Quaternion &Quaternion::set(float x, float y, float z, float w) {
 
     this->x_ = x;
     this->y_ = y;
@@ -23,7 +23,7 @@ quaternion &quaternion::set(float x, float y, float z, float w) {
     return *this;
 }
 
-quaternion &quaternion::setFromAxisAngle(const vector3 &axis, float angle) {
+Quaternion &Quaternion::setFromAxisAngle(const Vector3 &axis, float angle) {
 
     // http://www.euclideanspace.com/maths/geometry/rotations/conversions/angleToQuaternion/index.htm
 
@@ -41,7 +41,7 @@ quaternion &quaternion::setFromAxisAngle(const vector3 &axis, float angle) {
     return *this;
 }
 
-quaternion &quaternion::setFromRotationMatrix(const matrix4 &m) {
+Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
 
     // http://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/index.htm
 
@@ -97,19 +97,19 @@ quaternion &quaternion::setFromRotationMatrix(const matrix4 &m) {
     return *this;
 }
 
-quaternion &quaternion::identity() {
+Quaternion &Quaternion::identity() {
 
     return this->set(0, 0, 0, 1);
 }
 
-quaternion &quaternion::invert() {
+Quaternion &Quaternion::invert() {
 
-    // quaternion is assumed to have unit length
+    // Quaternion is assumed to have unit length
 
     return this->conjugate();
 }
 
-quaternion &quaternion::conjugate() {
+Quaternion &Quaternion::conjugate() {
 
     this->x_ *= -1;
     this->y_ *= -1;
@@ -120,22 +120,22 @@ quaternion &quaternion::conjugate() {
     return *this;
 }
 
-float quaternion::dot(const quaternion &v) const {
+float Quaternion::dot(const Quaternion &v) const {
 
     return this->x_ * v.x_ + this->y_ * v.y_ + this->z_ * v.z_ + this->w_ * v.w_;
 }
 
-float quaternion::lengthSq() const {
+float Quaternion::lengthSq() const {
 
     return this->x_ * this->x_ + this->y_ * this->y_ + this->z_ * this->z_ + this->w_ * this->w_;
 }
 
-float quaternion::length() const {
+float Quaternion::length() const {
 
     return std::sqrt(this->x_ * this->x_ + this->y_ * this->y_ + this->z_ * this->z_ + this->w_ * this->w_);
 }
 
-quaternion &quaternion::normalize() {
+Quaternion &Quaternion::normalize() {
 
     auto l = length();
 
@@ -161,13 +161,13 @@ quaternion &quaternion::normalize() {
     return *this;
 }
 
-float quaternion::angleTo(const quaternion &q) const{
+float Quaternion::angleTo(const Quaternion &q) const{
 
     return 2 * std::acos( std::abs( std::clamp( this->dot( q ), - 1.0f, 1.0f ) ) );
 
 }
 
-quaternion &quaternion::_onChange(std::function<void()> callback) {
+Quaternion &Quaternion::_onChange(std::function<void()> callback) {
 
     this->onChangeCallback_ = std::move(callback);
 

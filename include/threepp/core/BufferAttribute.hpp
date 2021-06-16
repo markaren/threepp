@@ -3,8 +3,8 @@
 #ifndef THREEPP_BUFFER_ATTRIBUTE_HPP
 #define THREEPP_BUFFER_ATTRIBUTE_HPP
 
-#include "threepp/math/vector2.hpp"
-#include "threepp/math/vector3.hpp"
+#include "threepp/math/Vector2.hpp"
+#include "threepp/math/Vector3.hpp"
 
 namespace threepp {
 

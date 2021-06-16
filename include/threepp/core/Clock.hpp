@@ -7,10 +7,10 @@
 
 namespace threepp {
 
-    class clock {
+    class Clock {
 
     public:
-        explicit clock(bool autoStart = true): autoStart_(autoStart){}
+        explicit Clock(bool autoStart = true): autoStart_(autoStart){}
 
         void start() {
 

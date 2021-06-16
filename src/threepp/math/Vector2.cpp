@@ -1,14 +1,14 @@
 
-#include "threepp/math/vector2.hpp"
+#include "threepp/math/Vector2.hpp"
 
 #include <iostream>
 #include <string>
 
 using namespace threepp;
 
-vector2::vector2(float x, float y) : x(x), y(y) {}
+Vector2::Vector2(float x, float y) : x(x), y(y) {}
 
-vector2 &vector2::set(float x, float y) {
+Vector2 &Vector2::set(float x, float y) {
 
     this->x = x;
     this->y = y;
@@ -16,7 +16,7 @@ vector2 &vector2::set(float x, float y) {
     return *this;
 }
 
-vector2 &vector2::setScalar(float value) {
+Vector2 &Vector2::setScalar(float value) {
 
     this->x = value;
     this->y = value;
@@ -24,21 +24,21 @@ vector2 &vector2::setScalar(float value) {
     return *this;
 }
 
-vector2 &vector2::setX(float value) {
+Vector2 &Vector2::setX(float value) {
 
     this->x = value;
 
     return *this;
 }
 
-vector2 &vector2::setY(float value) {
+Vector2 &Vector2::setY(float value) {
 
     y = value;
 
     return *this;
 }
 
-float &vector2::operator[](unsigned int index) {
+float &Vector2::operator[](unsigned int index) {
     if (index >= 2) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     switch (index) {
         case 0: return x;
@@ -47,7 +47,7 @@ float &vector2::operator[](unsigned int index) {
     }
 }
 
-vector2 &vector2::add(const vector2 &v) {
+Vector2 &Vector2::add(const Vector2 &v) {
 
     this->x += v.x;
     this->y += v.y;
@@ -55,7 +55,7 @@ vector2 &vector2::add(const vector2 &v) {
     return *this;
 }
 
-vector2 &vector2::add(float s) {
+Vector2 &Vector2::add(float s) {
 
     this->x += s;
     this->y += s;
@@ -63,7 +63,7 @@ vector2 &vector2::add(float s) {
     return *this;
 }
 
-vector2 &vector2::addVectors(const vector2 &a, const vector2 &b) {
+Vector2 &Vector2::addVectors(const Vector2 &a, const Vector2 &b) {
 
     this->x = a.x + b.x;
     this->y = a.y + b.y;
@@ -71,7 +71,7 @@ vector2 &vector2::addVectors(const vector2 &a, const vector2 &b) {
     return *this;
 }
 
-vector2 &vector2::addScaledVector(const vector2 &v, float s) {
+Vector2 &Vector2::addScaledVector(const Vector2 &v, float s) {
 
     this->x += v.x * s;
     this->y += v.y * s;

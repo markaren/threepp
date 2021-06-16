@@ -5,7 +5,7 @@
 
 namespace threepp {
 
-    class box_geometry {
+    class BoxGeometry {
 
     };
 

@@ -1,9 +1,9 @@
 
-#include "threepp/math/matrix4.hpp"
+#include "threepp/math/Matrix4.hpp"
 
-#include "threepp/math/euler.hpp"
-#include "threepp/math/quaternion.hpp"
-#include "threepp/math/vector3.hpp"
+#include "threepp/math/Euler.hpp"
+#include "threepp/math/Quaternion.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <algorithm>
 #include <stdexcept>
@@ -11,20 +11,20 @@
 
 using namespace threepp;
 
-vector3 matrix4::_v1 = vector3();
-matrix4 matrix4::_m1 = matrix4();
-vector3 matrix4::_zero = vector3();
-vector3 matrix4::_one = vector3(1, 1, 1);
-vector3 matrix4::_x = vector3(1, 0, 0);
-vector3 matrix4::_y = vector3(0, 1, 0);
-vector3 matrix4::_z = vector3(0, 1, 0);
+Vector3 Matrix4::_v1 = Vector3();
+Matrix4 Matrix4::_m1 = Matrix4();
+Vector3 Matrix4::_zero = Vector3();
+Vector3 Matrix4::_one = Vector3(1, 1, 1);
+Vector3 Matrix4::_x = Vector3(1, 0, 0);
+Vector3 Matrix4::_y = Vector3(0, 1, 0);
+Vector3 Matrix4::_z = Vector3(0, 1, 0);
 
-float &matrix4::operator[](unsigned int index) {
+float &Matrix4::operator[](unsigned int index) {
     if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     return elements_[index];
 }
 
-matrix4 &matrix4::set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31,
+Matrix4 &Matrix4::set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31,
                       float n32, float n33, float n34, float n41, float n42, float n43, float n44) {
 
     auto te = this->elements_;
@@ -39,7 +39,7 @@ matrix4 &matrix4::set(float n11, float n12, float n13, float n14, float n21, flo
     return *this;
 }
 
-matrix4 &matrix4::identity() {
+Matrix4 &Matrix4::identity() {
 
     this->set(
 
@@ -53,7 +53,7 @@ matrix4 &matrix4::identity() {
     return *this;
 }
 
-matrix4 &matrix4::copyPosition(const matrix4 &m) {
+Matrix4 &Matrix4::copyPosition(const Matrix4 &m) {
 
     auto te = this->elements_;
     const auto me = m.elements_;
@@ -65,7 +65,7 @@ matrix4 &matrix4::copyPosition(const matrix4 &m) {
     return *this;
 }
 
-matrix4 &matrix4::setFromMatrix3(const matrix4 &m) {
+Matrix4 &Matrix4::setFromMatrix3(const Matrix4 &m) {
 
     const auto me = m.elements_;
 
@@ -81,7 +81,7 @@ matrix4 &matrix4::setFromMatrix3(const matrix4 &m) {
     return *this;
 }
 
-matrix4 &matrix4::extractBasis(vector3 &xAxis, vector3 &yAxis, vector3 &zAxis) {
+Matrix4 &Matrix4::extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis) {
 
     xAxis.setFromMatrixColumn(*this, 0);
     yAxis.setFromMatrixColumn(*this, 1);
@@ -90,7 +90,7 @@ matrix4 &matrix4::extractBasis(vector3 &xAxis, vector3 &yAxis, vector3 &zAxis) {
     return *this;
 }
 
-matrix4 &matrix4::makeBasis(const vector3 &xAxis, const vector3 &yAxis, const vector3 &zAxis) {
+Matrix4 &Matrix4::makeBasis(const Vector3 &xAxis, const Vector3 &yAxis, const Vector3 &zAxis) {
 
     this->set(
             xAxis.x, yAxis.x, zAxis.x, 0,
@@ -101,7 +101,7 @@ matrix4 &matrix4::makeBasis(const vector3 &xAxis, const vector3 &yAxis, const ve
     return *this;
 }
 
-matrix4 &matrix4::extractRotation(const matrix4 &m) {
+Matrix4 &Matrix4::extractRotation(const Matrix4 &m) {
 
     // this method does not support reflection matrices
 
@@ -135,7 +135,7 @@ matrix4 &matrix4::extractRotation(const matrix4 &m) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
+Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
 
     auto te = this->elements_;
 
@@ -144,7 +144,7 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
     const auto c = std::cos(y), d = std::sin(y);
     const auto e = std::cos(z), f = std::sin(z);
 
-    if (ee.order() == euler::XYZ) {
+    if (ee.order() == Euler::XYZ) {
 
         const auto ae = a * e, af = a * f, be = b * e, bf = b * f;
 
@@ -160,7 +160,7 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
         te[6] = be + af * d;
         te[10] = a * c;
 
-    } else if (ee.order() == euler::YXZ) {
+    } else if (ee.order() == Euler::YXZ) {
 
         const auto ce = c * e, cf = c * f, de = d * e, df = d * f;
 
@@ -176,7 +176,7 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
         te[6] = df + ce * b;
         te[10] = a * c;
 
-    } else if (ee.order() == euler::ZXY) {
+    } else if (ee.order() == Euler::ZXY) {
 
         const auto ce = c * e, cf = c * f, de = d * e, df = d * f;
 
@@ -192,7 +192,7 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
         te[6] = b;
         te[10] = a * c;
 
-    } else if (ee.order() == euler::ZYX) {
+    } else if (ee.order() == Euler::ZYX) {
 
         const auto ae = a * e, af = a * f, be = b * e, bf = b * f;
 
@@ -208,7 +208,7 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
         te[6] = b * c;
         te[10] = a * c;
 
-    } else if (ee.order() == euler::YZX) {
+    } else if (ee.order() == Euler::YZX) {
 
         const auto ac = a * c, ad = a * d, bc = b * c, bd = b * d;
 
@@ -224,7 +224,7 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
         te[6] = ad * f + bc;
         te[10] = ac - bd * f;
 
-    } else if (ee.order() == euler::XZY) {
+    } else if (ee.order() == Euler::XZY) {
 
         const auto ac = a * c, ad = a * d, bc = b * c, bd = b * d;
 
@@ -255,12 +255,12 @@ matrix4 &matrix4::makeRotationFromEuler(const euler &ee) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationFromQuaternion(const quaternion &q) {
+Matrix4 &Matrix4::makeRotationFromQuaternion(const Quaternion &q) {
 
     return this->compose(_zero, q, _one);
 }
 
-matrix4 &matrix4::lookAt(const vector3 &eye, const vector3 &target, const vector3 &up) {
+Matrix4 &Matrix4::lookAt(const Vector3 &eye, const Vector3 &target, const Vector3 &up) {
 
     auto te = this->elements_;
 
@@ -305,17 +305,17 @@ matrix4 &matrix4::lookAt(const vector3 &eye, const vector3 &target, const vector
     return *this;
 }
 
-matrix4 &matrix4::multiply(const matrix4 &m) {
+Matrix4 &Matrix4::multiply(const Matrix4 &m) {
 
     return this->multiplyMatrices(*this, m);
 }
 
-matrix4 &matrix4::premultiply(const matrix4 &m) {
+Matrix4 &Matrix4::premultiply(const Matrix4 &m) {
 
     return this->multiplyMatrices(m, *this);
 }
 
-matrix4 &matrix4::multiplyMatrices(const matrix4 &a, const matrix4 &b) {
+Matrix4 &Matrix4::multiplyMatrices(const Matrix4 &a, const Matrix4 &b) {
 
     const auto ae = a.elements_;
     const auto be = b.elements_;
@@ -354,7 +354,7 @@ matrix4 &matrix4::multiplyMatrices(const matrix4 &a, const matrix4 &b) {
     return *this;
 }
 
-matrix4 &matrix4::multiplyScalar(float s) {
+Matrix4 &Matrix4::multiplyScalar(float s) {
 
     auto te = this->elements_;
 
@@ -368,7 +368,7 @@ matrix4 &matrix4::multiplyScalar(float s) {
     return *this;
 }
 
-float matrix4::determinant() const {
+float Matrix4::determinant() const {
 
     const auto te = this->elements_;
 
@@ -393,7 +393,7 @@ float matrix4::determinant() const {
     );
 }
 
-matrix4 &matrix4::transpose() {
+Matrix4 &Matrix4::transpose() {
 
     auto te = this->elements_;
     float tmp;
@@ -411,14 +411,14 @@ matrix4 &matrix4::transpose() {
     return *this;
 }
 
-matrix4 &matrix4::setPosition(const vector3 &v) {
+Matrix4 &Matrix4::setPosition(const Vector3 &v) {
 
     this->setPosition(v.x, v.y, v.z);
 
     return *this;
 }
 
-matrix4 &matrix4::setPosition(float x, float y, float z) {
+Matrix4 &Matrix4::setPosition(float x, float y, float z) {
 
     auto te = this->elements_;
 
@@ -430,7 +430,7 @@ matrix4 &matrix4::setPosition(float x, float y, float z) {
     return *this;
 }
 
-matrix4 &matrix4::invert() {
+Matrix4 &Matrix4::invert() {
 
     // based on http://www.euclideanspace.com/maths/algebra/matrix/functions/inverse/fourD/index.htm
     auto te = this->elements_;
@@ -502,7 +502,7 @@ matrix4 &matrix4::invert() {
     return *this;
 }
 
-matrix4 &matrix4::scale(const vector3 &v) {
+Matrix4 &Matrix4::scale(const Vector3 &v) {
 
     auto te = this->elements_;
     const auto x = v.x, y = v.y, z = v.z;
@@ -517,7 +517,7 @@ matrix4 &matrix4::scale(const vector3 &v) {
     return *this;
 }
 
-float matrix4::getMaxScaleOnAxis() const {
+float Matrix4::getMaxScaleOnAxis() const {
 
     const auto te = this->elements_;
 
@@ -528,7 +528,7 @@ float matrix4::getMaxScaleOnAxis() const {
     return std::sqrt(std::max(scaleXSq, std::max(scaleYSq, scaleZSq)));
 }
 
-matrix4 &matrix4::makeTranslation(float x, float y, float z) {
+Matrix4 &Matrix4::makeTranslation(float x, float y, float z) {
 
     this->set(
 
@@ -542,7 +542,7 @@ matrix4 &matrix4::makeTranslation(float x, float y, float z) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationX(float theta) {
+Matrix4 &Matrix4::makeRotationX(float theta) {
 
     const auto c = std::cos(theta), s = std::sin(theta);
 
@@ -558,7 +558,7 @@ matrix4 &matrix4::makeRotationX(float theta) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationY(float theta) {
+Matrix4 &Matrix4::makeRotationY(float theta) {
 
     const auto c = std::cos(theta), s = std::sin(theta);
 
@@ -574,7 +574,7 @@ matrix4 &matrix4::makeRotationY(float theta) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationZ(float theta) {
+Matrix4 &Matrix4::makeRotationZ(float theta) {
 
     const auto c = std::cos(theta), s = std::sin(theta);
 
@@ -590,7 +590,7 @@ matrix4 &matrix4::makeRotationZ(float theta) {
     return *this;
 }
 
-matrix4 &matrix4::makeRotationAxis(const vector3 &axis, float angle) {
+Matrix4 &Matrix4::makeRotationAxis(const Vector3 &axis, float angle) {
 
     // Based on http://www.gamedev.net/reference/articles/article1199.asp
 
@@ -612,7 +612,7 @@ matrix4 &matrix4::makeRotationAxis(const vector3 &axis, float angle) {
     return *this;
 }
 
-matrix4 &matrix4::makeScale(float x, float y, float z) {
+Matrix4 &Matrix4::makeScale(float x, float y, float z) {
 
     this->set(
 
@@ -626,7 +626,7 @@ matrix4 &matrix4::makeScale(float x, float y, float z) {
     return *this;
 }
 
-matrix4 &matrix4::makeShear(float xy, float xz, float yx, float yz, float zx, float zy) {
+Matrix4 &Matrix4::makeShear(float xy, float xz, float yx, float yz, float zx, float zy) {
 
     this->set(
 
@@ -640,7 +640,7 @@ matrix4 &matrix4::makeShear(float xy, float xz, float yx, float yz, float zx, fl
     return *this;
 }
 
-matrix4 &matrix4::compose(const vector3 &position, const quaternion &quaternion, const vector3 &scale) {
+Matrix4 &Matrix4::compose(const Vector3 &position, const Quaternion &quaternion, const Vector3 &scale) {
 
     auto te = this->elements_;
 
@@ -675,7 +675,7 @@ matrix4 &matrix4::compose(const vector3 &position, const quaternion &quaternion,
     return *this;
 }
 
-matrix4 &matrix4::decompose(vector3 &position, quaternion &quaternion, vector3 &scale) {
+Matrix4 &Matrix4::decompose(Vector3 &position, Quaternion &quaternion, Vector3 &scale) {
 
     const auto te = this->elements_;
 
@@ -719,7 +719,7 @@ matrix4 &matrix4::decompose(vector3 &position, quaternion &quaternion, vector3 &
     return *this;
 }
 
-matrix4 &matrix4::makePerspective(float left, float right, float top, float bottom, float near, float far) {
+Matrix4 &Matrix4::makePerspective(float left, float right, float top, float bottom, float near, float far) {
 
     auto te = this->elements_;
     const auto x = 2 * near / (right - left);
@@ -740,7 +740,7 @@ matrix4 &matrix4::makePerspective(float left, float right, float top, float bott
     return *this;
 }
 
-matrix4 &matrix4::makeOrthographic(float left, float right, float top, float bottom, float near, float far) {
+Matrix4 &Matrix4::makeOrthographic(float left, float right, float top, float bottom, float near, float far) {
 
     auto te = this->elements_;
     const auto w = 1.0f / (right - left);

@@ -1,14 +1,14 @@
 
-#include "threepp/math/vector4.hpp"
+#include "threepp/math/Vector4.hpp"
 
-#include "threepp/math/matrix4.hpp"
+#include "threepp/math/Matrix4.hpp"
 
 
 using namespace threepp;
 
-vector4::vector4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
+Vector4::Vector4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
 
-vector4 &vector4::set(float x, float y, float z, float w) {
+Vector4 &Vector4::set(float x, float y, float z, float w) {
 
     this->x = x;
     this->y = y;
@@ -18,7 +18,7 @@ vector4 &vector4::set(float x, float y, float z, float w) {
     return *this;
 }
 
-vector4 &vector4::setScalar(float value) {
+Vector4 &Vector4::setScalar(float value) {
 
     this->x = value;
     this->y = value;
@@ -28,7 +28,7 @@ vector4 &vector4::setScalar(float value) {
     return *this;
 }
 
-vector4 &vector4::applyMatrix4(const matrix4 &m) {
+Vector4 &Vector4::applyMatrix4(const Matrix4 &m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z, w_ = this->w;
     auto e = m.elements_;

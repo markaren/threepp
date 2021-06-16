@@ -1,6 +1,6 @@
 
-#ifndef THREEPP_MATH_UTILS_HPP
-#define THREEPP_MATH_UTILS_HPP
+#ifndef THREEPP_MATHUTILS_HPP
+#define THREEPP_MATHUTILS_HPP
 
 #include <cmath>
 #include <random>
@@ -60,4 +60,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_MATH_UTILS_HPP
+#endif//THREEPP_MATHUTILS_HPP

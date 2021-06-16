@@ -8,12 +8,12 @@
 
 namespace threepp {
 
-    class vector3;
-    class matrix3;
-    class matrix4;
-    class quaternion;
+    class Vector3;
+    class Matrix3;
+    class Matrix4;
+    class Quaternion;
 
-    class euler {
+    class Euler {
 
     public:
         enum RotationOrders {
@@ -27,7 +27,7 @@ namespace threepp {
 
         const static RotationOrders default_order = XYZ;
 
-        euler() = default;
+        Euler() = default;
 
         [[nodiscard]] float x() const {
             return x_;
@@ -45,13 +45,13 @@ namespace threepp {
             return order_;
         }
 
-        euler &set(float x, float y, float z, const std::optional<RotationOrders> &order = std::nullopt);
+        Euler &set(float x, float y, float z, const std::optional<RotationOrders> &order = std::nullopt);
 
-        euler &setFromRotationMatrix(const matrix4 &m, std::optional<RotationOrders> order = std::nullopt, bool update = true);
+        Euler &setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrders> order = std::nullopt, bool update = true);
 
-        euler &setFromQuaternion(const quaternion &q, std::optional<RotationOrders> order = std::nullopt, bool update = true);
+        Euler &setFromQuaternion(const Quaternion &q, std::optional<RotationOrders> order = std::nullopt, bool update = true);
 
-        euler &setFromVector3(const vector3 &v, std::optional<RotationOrders> order = std::nullopt);
+        Euler &setFromVector3(const Vector3 &v, std::optional<RotationOrders> order = std::nullopt);
 
     private:
         float x_ = 0.0;
@@ -61,8 +61,8 @@ namespace threepp {
 
         std::function<void()> onChangeCallback_ = [] {};
 
-        static quaternion _quaternion;
-        static matrix4 _matrix;
+        static Quaternion _quaternion;
+        static Matrix4 _matrix;
     };
 
 
