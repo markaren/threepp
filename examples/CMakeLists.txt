@@ -3,4 +3,10 @@
 add_executable(test test.cpp)
 target_link_libraries(test PUBLIC math)
 
+add_executable(gl_test gl_test.cpp)
+target_link_libraries(gl_test
+        PRIVATE
+        CONAN_PKG::glfw
+        CONAN_PKG::glad)
+
 
