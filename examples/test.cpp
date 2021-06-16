@@ -11,6 +11,8 @@
 #include <threepp/math/Box2.hpp>
 #include <threepp/math/Matrix4.hpp>
 
+#include <threepp/core/Uniform.hpp>
+
 
 #include <threepp/core/EventDispatcher.hpp>
 #include <vector>
@@ -85,18 +87,10 @@ int main() {
 
     std::cout << "has evt:" << evt.hasEventListener("per", &l) << std::endl;
 
-    std::string vogon_poem(R"V0G0N(
-uniform sampler2D t2D;
-varying vec2 vUv;
-void main() {
-	vec4 texColor = texture2D( t2D, vUv );
-	gl_FragColor = mapTexelToLinear( texColor );
-	#include <tonemapping_fragment>
-	#include <encodings_fragment>
-}
-)V0G0N");
-
-    std::cout << vogon_poem << std::endl;
+    Uniform uniform(m4);
+    m4[0] = 98;
+    Matrix4 m = std::any_cast<Matrix4>(uniform.value());
+    std::cout << m4[0] << ":" << m[0] << std::endl;
 
     return 0;
 
