@@ -16,7 +16,7 @@ namespace threepp {
 
         std::string uuid = generateUUID();
 
-        std::string name = "";
+        std::string name;
         std::string type = "Material";
 
         bool fog = true;
@@ -82,9 +82,9 @@ namespace threepp {
 
         }
 
-        void needsUpdate(bool value) {
+        void needsUpdate() {
 
-            if (value) this->version++;
+            this->version++;
 
         }
 

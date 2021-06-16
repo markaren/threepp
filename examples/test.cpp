@@ -13,6 +13,7 @@
 
 #include <threepp/core/Uniform.hpp>
 
+#include <threepp/scenes/Fog.hpp>
 
 #include <threepp/core/EventDispatcher.hpp>
 #include <vector>
@@ -91,6 +92,8 @@ int main() {
     m4[0] = 98;
     Matrix4 m = std::any_cast<Matrix4>(uniform.value());
     std::cout << m4[0] << ":" << m[0] << std::endl;
+
+    Fog f(0xff00ff);
 
     return 0;
 
