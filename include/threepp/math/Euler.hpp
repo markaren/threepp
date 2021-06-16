@@ -63,6 +63,8 @@ namespace threepp {
 
         static Quaternion _quaternion;
         static Matrix4 _matrix;
+
+        friend class Quaternion;
     };
 
 

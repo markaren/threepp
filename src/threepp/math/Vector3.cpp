@@ -3,8 +3,13 @@
 
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Quaternion.hpp"
 
 #include "threepp/math/MathUtils.hpp"
+
+#include "threepp/cameras/Camera.hpp"
+
+#include "threepp/core/BufferAttribute.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -182,6 +187,54 @@ Vector3 &Vector3::applyMatrix4(const Matrix4 &m) {
     this->z = (e[2] * x_ + e[6] * y_ + e[10] * z_ + e[14]) * w;
 
     return *this;
+}
+
+Vector3 &Vector3::applyQuaternion(const Quaternion &q) {
+
+    const auto x = this->x, y = this->y, z = this->z;
+    const auto qx = q.x_, qy = q.y_, qz = q.z_, qw = q.w_;
+
+    // calculate quat * vector
+
+    const auto ix = qw * x + qy * z - qz * y;
+    const auto iy = qw * y + qz * x - qx * z;
+    const auto iz = qw * z + qx * y - qy * x;
+    const auto iw = - qx * x - qy * y - qz * z;
+
+    // calculate result * inverse quat
+
+    this->x = ix * qw + iw * - qx + iy * - qz - iz * - qy;
+    this->y = iy * qw + iw * - qy + iz * - qx - ix * - qz;
+    this->z = iz * qw + iw * - qz + ix * - qy - iy * - qx;
+
+    return *this;
+
+}
+Vector3 &Vector3::project(const Camera &camera) {
+
+    return this->applyMatrix4( camera.matrixWorldInverse ).applyMatrix4( camera.projectionMatrix );
+
+}
+Vector3 &Vector3::unproject(const Camera &camera) {
+
+    return this->applyMatrix4( camera.projectionMatrixInverse ).applyMatrix4( camera.matrixWorld );
+
+}
+
+Vector3 &Vector3::transformDirection(const Matrix4 &m) {
+
+    // input: THREE.Matrix4 affine matrix
+    // vector interpreted as a direction
+
+    const auto x = this->x, y = this->y, z = this->z;
+    const auto e = m.elements_;
+
+    this->x = e[ 0 ] * x + e[ 4 ] * y + e[ 8 ] * z;
+    this->y = e[ 1 ] * x + e[ 5 ] * y + e[ 9 ] * z;
+    this->z = e[ 2 ] * x + e[ 6 ] * y + e[ 10 ] * z;
+
+    return this->normalize();
+
 }
 
 Vector3 &Vector3::divide(const Vector3 &v) {
@@ -403,6 +456,17 @@ Vector3 &Vector3::setFromMatrix3Column(const Matrix3 &m, unsigned int index) {
 
     return this->fromArray(m.elements_, index * 3);
 }
+
+Vector3 &Vector3::fromBufferAttribute( const BufferAttribute<float> &attribute, int index ) {
+
+this->x = attribute.getX( index );
+this->y = attribute.getY( index );
+this->z = attribute.getZ( index );
+
+return *this;
+
+}
+
 
 //std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
 //    os << "Vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +

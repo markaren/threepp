@@ -3,16 +3,14 @@
 #ifndef THREEPP_CAMERA_HPP
 #define THREEPP_CAMERA_HPP
 
+#include "threepp/core/Object3D.hpp"
 #include "threepp/math/Matrix4.hpp"
-#include "threepp/core/Object3d.hpp"
 
 namespace threepp {
 
-    class Camera: public Object3d {
+    class Camera: public Object3D {
 
     public:
-
-        virtual Camera() = 0;
 
         std::string type = "Camera";
 

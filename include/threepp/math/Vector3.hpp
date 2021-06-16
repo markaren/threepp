@@ -5,13 +5,17 @@
 #ifndef THREEPP_VECTOR3_HPP
 #define THREEPP_VECTOR3_HPP
 
-#include <iostream>
 #include <string>
 
 namespace threepp {
 
     class Matrix3;
     class Matrix4;
+    class Quaternion;
+    class Camera;
+
+    template <typename T=float>
+    class BufferAttribute;
 
     class Vector3 {
 
@@ -61,6 +65,14 @@ namespace threepp {
         Vector3 &applyNormalMatrix(const Matrix3 &m);
 
         Vector3 &applyMatrix4(const Matrix4 &m);
+
+        Vector3 &applyQuaternion( const Quaternion &q );
+
+        Vector3 &project( const Camera &camera );
+
+        Vector3 &unproject( const Camera &camera );
+
+        Vector3 &transformDirection( const Matrix4 &m );
 
         Vector3 &divide(const Vector3 &v);
 
@@ -136,6 +148,8 @@ namespace threepp {
             array[offset + 1] = this->y;
             array[offset + 2] = this->z;
         }
+
+        Vector3 &fromBufferAttribute( const BufferAttribute<float> &attribute, int index );
 
     };
 

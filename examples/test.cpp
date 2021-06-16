@@ -20,6 +20,7 @@
 #include <threepp/core/EventDispatcher.hpp>
 
 #include <threepp/core/BufferGeometry.hpp>
+#include <threepp/core/BufferAttribute.hpp>
 #include <vector>
 
 using namespace threepp;
@@ -101,8 +102,14 @@ int main() {
 
     std::cout << AmbientLight(0xffffff).type << std::endl;
 
+    std::vector<float> vec {1,2};
+    std::vector<float> vec2 {-1, -1};
+
+    BufferAttribute<float> b(vec, 2);
+    b.copyArray(vec2);
 
 
+    std::cout << b.getX(0) << std::endl;
 
     return 0;
 

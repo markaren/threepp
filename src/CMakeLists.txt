@@ -4,7 +4,7 @@ set(publicHeaders
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
-        "threepp/core/Object3d.hpp"
+        "threepp/core/Object3D.hpp"
 
         "threepp/math/Box2.hpp"
         "threepp/math/Box3.hpp"
@@ -18,6 +18,7 @@ set(publicHeaders
         "threepp/math/Vector4.hpp"
         "threepp/math/Triangle.hpp"
         "threepp/math/Quaternion.hpp"
+        "threepp/math/MathUtils.hpp"
         )
 
 set(publicHeadersFull)
@@ -25,12 +26,9 @@ foreach (header IN LISTS publicHeaders)
   list(APPEND publicHeadersFull "${publicHeaderDir}/${header}")
 endforeach ()
 
-### CORE
-
-
-### MATH
-
 set(sources
+        "threepp/core/Object3D.cpp"
+
         "threepp/math/Box2.cpp"
         "threepp/math/Box3.cpp"
         "threepp/math/Color.cpp"
@@ -43,13 +41,14 @@ set(sources
         "threepp/math/Vector3.cpp"
         "threepp/math/Vector4.cpp"
         "threepp/math/Quaternion.cpp"
+        "threepp/math/MathUtils.cpp"
         )
 
 set(privateHeaders
         )
 
-add_library(math ${sources} ${privateHeaders} ${publicHeadersFull})
-target_include_directories(math
+add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
+target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"
         private

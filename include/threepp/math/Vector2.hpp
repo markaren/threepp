@@ -11,6 +11,9 @@ namespace threepp {
 
     class Matrix3;
 
+    template <typename T>
+    class BufferAttribute;
+
     class Vector2 {
 
     public:
@@ -74,6 +77,9 @@ namespace threepp {
             array[offset] = this->x;
             array[offset + 1] = this->y;
         }
+
+        Vector2 &fromBufferAttribute( const BufferAttribute<float> &attribute, int index );
+
     };
 
     //    std::ostream &operator<<(std::ostream &os, const Vector2 &v) {

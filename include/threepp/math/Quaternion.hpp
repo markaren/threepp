@@ -10,6 +10,8 @@ namespace threepp {
     class Vector3;
     class Matrix4;
 
+    class Euler;
+
     class Quaternion {
 
     public:
@@ -35,6 +37,9 @@ namespace threepp {
 
         Quaternion &set(float x, float y, float z, float w);
 
+        Quaternion &setFromEuler( const Euler &euler, bool update = true );
+
+
         Quaternion &setFromAxisAngle(const Vector3 &axis, float angle);
 
         Quaternion &setFromRotationMatrix( const Matrix4 &m );
@@ -54,6 +59,12 @@ namespace threepp {
         [[nodiscard]] float length() const;
 
         Quaternion &normalize();
+
+        Quaternion &multiply( const Quaternion &q );
+
+        Quaternion &premultiply( const Quaternion &q );
+
+        Quaternion &multiplyQuaternions( const Quaternion &a, const Quaternion &b );
 
         Quaternion &_onChange( std::function<void()> callback );
 
@@ -86,6 +97,8 @@ namespace threepp {
         float w_ = 1.0;
 
         std::function<void()> onChangeCallback_ = [] {};
+
+        friend class Vector3;
     };
 
 }// namespace threepp

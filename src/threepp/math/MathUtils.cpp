@@ -10,7 +10,7 @@ namespace {
     static std::uniform_int_distribution<> dis2(8, 11);
 }
 
-std::string generateUUID() {
+std::string threepp::generateUUID() {
 
     std::stringstream ss;
     int i;
@@ -38,12 +38,12 @@ std::string generateUUID() {
     return ss.str();
 }
 
-float degToRad(const float degrees) {
+float threepp::degToRad(const float degrees) {
 
     return degrees * DEG2RAD;
 }
 
-float radToDeg(const float radians) {
+float threepp::radToDeg(const float radians) {
 
     return radians * RAD2DEG;
 }

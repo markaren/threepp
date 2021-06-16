@@ -1,7 +1,7 @@
 include_directories(test ${CMAKE_SOURCE_DIR}/include)
 
 add_executable(test test.cpp)
-target_link_libraries(test PUBLIC math)
+target_link_libraries(test PUBLIC threepp)
 
 add_executable(gl_test gl_test.cpp)
 target_link_libraries(gl_test
