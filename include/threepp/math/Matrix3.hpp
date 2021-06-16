@@ -108,6 +108,7 @@ namespace threepp {
                 0, 1, 0,
                 0, 0, 1};
 
+        friend class Vector2;
         friend class Vector3;
         friend class Euler;
     };

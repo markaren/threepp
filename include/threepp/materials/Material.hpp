@@ -12,7 +12,7 @@ namespace threepp {
     class Material: public EventDispatcher  {
 
     public:
-        unsigned int id = materialId++;
+        const unsigned int id = materialId++;
 
         std::string uuid = generateUUID();
 

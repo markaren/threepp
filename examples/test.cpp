@@ -16,6 +16,8 @@
 #include <threepp/scenes/Fog.hpp>
 
 #include <threepp/core/EventDispatcher.hpp>
+
+#include <threepp/core/BufferGeometry.hpp>
 #include <vector>
 
 using namespace threepp;

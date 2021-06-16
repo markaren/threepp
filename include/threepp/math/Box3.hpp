@@ -6,6 +6,8 @@
 namespace threepp {
 
     class Box3 {
+
+    public:
     };
 
 }// namespace threepp

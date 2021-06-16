@@ -21,11 +21,10 @@ Color &Color::setScalar(float scalar) {
 }
 
 Color &Color::setHex(int hex) {
-    hex = std::floor( hex );
 
-    this->r = ( hex >> 16 & 255 ) / 255;
-    this->g = ( hex >> 8 & 255 ) / 255;
-    this->b = ( hex & 255 ) / 255;
+    this->r = (float)( hex >> 16 & 255 ) / 255;
+    this->g = (float)( hex >> 8 & 255 ) / 255;
+    this->b = (float)( hex & 255 ) / 255;
 
     return *this;
 }

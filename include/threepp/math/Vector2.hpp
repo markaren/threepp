@@ -9,6 +9,8 @@
 
 namespace threepp {
 
+    class Matrix3;
+
     class Vector2 {
 
     public:
@@ -36,6 +38,26 @@ namespace threepp {
         Vector2 &addVectors(const Vector2 &a, const Vector2 &b);
 
         Vector2 &addScaledVector(const Vector2 &v, float s);
+
+        Vector2 &sub( const Vector2 &v );
+
+        Vector2 &sub( float s );
+
+        Vector2 &subVectors( const Vector2 &a, const Vector2 &b );
+
+        Vector2 &multiply( const Vector2 &v );
+
+        Vector2 &multiply( float scalar );
+
+        Vector2 &divide( const Vector2 &v );
+
+        Vector2 &divide( float scalar );
+
+        Vector2 &applyMatrix3( const Matrix3 &m );
+
+        Vector2 &min( const Vector2 &v );
+
+        Vector2 &max( const Vector2 &v );
 
         template<class ArrayLike>
         Vector2 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
