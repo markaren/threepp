@@ -37,6 +37,7 @@ endforeach ()
 
 set(sources
 
+        "threepp/core/BufferGeometry.cpp"
         "threepp/core/Object3D.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"

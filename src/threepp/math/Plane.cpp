@@ -82,5 +82,5 @@ float Plane::distanceToPoint(const Vector3 &point) const {
 
 float Plane::distanceToSphere(const Sphere &sphere) const {
 
-    return this->distanceToPoint(sphere.center()) - sphere.radius();
+    return this->distanceToPoint(sphere.center) - sphere.radius;
 };

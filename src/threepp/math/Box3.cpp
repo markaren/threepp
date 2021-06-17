@@ -1,15 +1,10 @@
 
 #include "threepp/math/Box3.hpp"
+#include "threepp/core/BufferAttribute.hpp"
 
-#include <limits>
+#include "threepp/math/infinity.hpp"
 
 using namespace threepp;
-
-namespace {
-
-    constexpr float Infinity = std::numeric_limits<float>::infinity();
-
-}
 
 std::array<Vector3, 9> Box3::_points = {
         Vector3(), Vector3(), Vector3(),
@@ -33,7 +28,7 @@ Vector3 Box3::_extents = Vector3();
 Vector3 Box3::_triangleNormal = Vector3();
 Vector3 Box3::_testAxis = Vector3();
 
-Box3::Box3() : min_(Vector3(+Infinity, +Infinity, +Infinity)), max_(Vector3(-Infinity, -Infinity, -Infinity)) {}
+Box3::Box3() : min_(Vector3(+Infinity<float>, +Infinity<float>, +Infinity<float>)), max_(Vector3(-Infinity<float>, -Infinity<float>, -Infinity<float>)) {}
 
 Box3::Box3(Vector3 min, Vector3 max) : min_(min), max_(max) {}
 
@@ -41,6 +36,37 @@ Box3 &Box3::set(const Vector3 &min, const Vector3 &max) {
 
     this->min_ = min;
     this->max_ = max;
+
+    return *this;
+}
+
+Box3 &Box3::setFromBufferAttribute(const BufferAttribute<float> &attribute) {
+
+    auto minX = +Infinity<float>;
+    auto minY = +Infinity<float>;
+    auto minZ = +Infinity<float>;
+
+    auto maxX = -Infinity<float>;
+    auto maxY = -Infinity<float>;
+    auto maxZ = -Infinity<float>;
+
+    for (int i = 0, l = attribute.count(); i < l; i++) {
+
+        const auto x = attribute.getX(i);
+        const auto y = attribute.getY(i);
+        const auto z = attribute.getZ(i);
+
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (z < minZ) minZ = z;
+
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (z > maxZ) maxZ = z;
+    }
+
+    this->min_.set(minX, minY, minZ);
+    this->max_.set(maxX, maxY, maxZ);
 
     return *this;
 }
@@ -77,11 +103,12 @@ Box3 &Box3::copy(const Box3 &box) {
 
 Box3 &Box3::makeEmpty() {
 
-    this->min_.x = this->min_.y = this->min_.z = +Infinity;
-    this->max_.x = this->max_.y = this->max_.z = -Infinity;
+    this->min_.x = this->min_.y = this->min_.z = +Infinity<float>;
+    this->max_.x = this->max_.y = this->max_.z = -Infinity<float>;
 
     return *this;
 }
+
 bool Box3::isEmpty() const {
 
     // this is a more robust check for empty than ( volume <= 0 ) because volume can get positive with two negative axes
@@ -163,11 +190,11 @@ bool Box3::intersectsBox(const Box3 &box) const {
 bool Box3::intersectsSphere(const Sphere &sphere) {
 
     // Find the point on the AABB closest to the sphere center.
-    this->clampPoint( sphere.center(), _vector );
+    this->clampPoint( sphere.center, _vector );
 
     // If that point is inside the sphere, the AABB and sphere intersect.
-    const auto radius = sphere.radius();
-    return _vector.distanceToSquared( sphere.center() ) <= (radius * radius);
+    const auto radius = sphere.radius;
+    return _vector.distanceToSquared( sphere.center ) <= (radius * radius);
 
 }
 

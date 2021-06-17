@@ -1,19 +1,13 @@
 
 #include "threepp/math/Box2.hpp"
 
-#include <limits>
+#include "threepp/math/infinity.hpp"
 
 using namespace threepp;
 
-namespace {
-
-    constexpr float Infinity = std::numeric_limits<float>::infinity();
-
-}
-
 Vector2 Box2::_vector = Vector2();
 
-Box2::Box2() : min_(+Infinity, +Infinity), max_(-Infinity, -Infinity) {}
+Box2::Box2() : min_(+Infinity<float>, +Infinity<float>), max_(-Infinity<float>, -Infinity<float>) {}
 
 Box2::Box2(const Vector2 &min, const Vector2 &max) : min_(min), max_(max) {}
 
@@ -46,10 +40,10 @@ Box2 &Box2::copy(const Box2 &box) {
 }
 
 Box2 &Box2::makeEmpty() {
-    this->min_.x = +Infinity;
-    this->min_.y = +Infinity;
-    this->max_.x = -Infinity;
-    this->max_.y = -Infinity;
+    this->min_.x = +Infinity<float>;
+    this->min_.y = +Infinity<float>;
+    this->max_.x = -Infinity<float>;
+    this->max_.y = -Infinity<float>;
 
     return *this;
 }

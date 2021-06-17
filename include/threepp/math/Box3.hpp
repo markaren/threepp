@@ -9,7 +9,10 @@
 #include "threepp/math/Triangle.hpp"
 #include "threepp/math/Vector3.hpp"
 
+#include "threepp/math/infinity.hpp"
+
 #include <array>
+
 
 namespace threepp {
 
@@ -17,9 +20,52 @@ namespace threepp {
 
     public:
         Box3();
+
         Box3(Vector3 min, Vector3 max);
 
+        [[nodiscard]] const Vector3 &min() const {
+            return min_;
+        }
+
+        [[nodiscard]] const Vector3 &max() const {
+            return max_;
+        }
+
         Box3 &set(const Vector3 &min, const Vector3 &max);
+
+        template<class ArrayLike>
+        Box3 &setFromArray(const ArrayLike &array) {
+
+            const auto minX = +Infinity<float>;
+            const auto minY = +Infinity<float>;
+            const auto minZ = +Infinity<float>;
+
+            const auto maxX = -Infinity<float>;
+            const auto maxY = -Infinity<float>;
+            const auto maxZ = -Infinity<float>;
+
+            for (int i = 0, l = array.size(); i < l; i += 3) {
+
+                const auto x = array[i];
+                const auto y = array[i + 1];
+                const auto z = array[i + 2];
+
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (z < minZ) minZ = z;
+
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
+                if (z > maxZ) maxZ = z;
+            }
+
+            this->min_.set(minX, minY, minZ);
+            this->max_.set(maxX, maxY, maxZ);
+
+            return *this;
+        }
+
+        Box3 &setFromBufferAttribute(const BufferAttribute<float> &attribute);
 
         Box3 &setFromPoints(const std::vector<Vector3> &points);
 
@@ -51,7 +97,7 @@ namespace threepp {
 
         bool intersectsSphere(const Sphere &sphere);
 
-        bool intersectsPlane(const Plane &plane) const;
+        [[nodiscard]] bool intersectsPlane(const Plane &plane) const;
 
         bool intersectsTriangle(const Triangle &triangle);
 

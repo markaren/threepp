@@ -17,19 +17,18 @@ namespace threepp {
     class Sphere {
 
     public:
+
+        Vector3 center;
+        float radius;
+
         explicit Sphere(Vector3 center = Vector3(), float radius = -1);
-
-        [[nodiscard]] float radius() const;
-
-        [[nodiscard]] const Vector3 &center() const;
 
         Sphere &set(const Vector3 &center, float radius);
 
         Sphere &setFromPoints(const std::vector<Vector3> &points, Vector3 *optionalCenter = nullptr);
 
     private:
-        Vector3 center_;
-        float radius_;
+
 
         static Box3 _box;
         static Vector3 _v1;
