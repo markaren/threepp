@@ -74,8 +74,8 @@ namespace {
 
                     // uvs
 
-                    uvs.emplace_back(ix / gridX);
-                    uvs.emplace_back(1 - (iy / gridY));
+                    uvs.emplace_back((float) ix / gridX);
+                    uvs.emplace_back(1 - (float) (iy / gridY));
 
                     // counters
 

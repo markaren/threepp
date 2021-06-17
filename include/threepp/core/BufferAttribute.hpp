@@ -8,7 +8,7 @@
 #include "threepp/math/Vector4.hpp"
 
 #include "threepp/constants.hpp"
-#include "threepp/core/UpdateRange.hpp"
+#include "threepp/core/misc.hpp"
 
 #include <vector>
 

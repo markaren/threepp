@@ -62,7 +62,7 @@ namespace threepp {
             return attributes_.count(name) != 0;
         }
 
-        void addGroup(unsigned int start, unsigned int count, unsigned int materialIndex = 0) {
+        void addGroup(int start, int count, int materialIndex = 0) {
 
             groups.emplace_back(GeometryGroup{start, count, materialIndex});
         }
