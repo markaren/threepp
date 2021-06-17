@@ -6,6 +6,8 @@ set(publicHeaders
         "threepp/core/Clock.hpp"
         "threepp/core/Object3D.hpp"
 
+        "threepp/geometries/BoxGeometry.hpp"
+
         "threepp/math/Box2.hpp"
         "threepp/math/Box3.hpp"
         "threepp/math/Color.hpp"
@@ -28,6 +30,8 @@ endforeach ()
 
 set(sources
         "threepp/core/Object3D.cpp"
+
+        "threepp/geometries/BoxGeometry.cpp"
 
         "threepp/math/Box2.cpp"
         "threepp/math/Box3.cpp"

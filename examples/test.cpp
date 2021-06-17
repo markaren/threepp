@@ -21,6 +21,8 @@
 
 #include <threepp/core/BufferGeometry.hpp>
 #include <threepp/core/BufferAttribute.hpp>
+
+#include <threepp/geometries/BoxGeometry.hpp>
 #include <vector>
 
 using namespace threepp;
@@ -110,6 +112,13 @@ int main() {
 
 
     std::cout << b.getX(0) << std::endl;
+
+    BoxGeometry box;
+    auto& attr = box.getAttribute<float>("position");
+    std::cout << attr.getX(0) << std::endl;
+    attr.setX(0, 1);
+    std::cout << attr.getX(0) << std::endl;
+    std::cout << box.getAttribute<float>("position").getX(0) << std::endl;
 
     return 0;
 

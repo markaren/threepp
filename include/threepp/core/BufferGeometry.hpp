@@ -3,21 +3,22 @@
 #ifndef THREEPP_BUFFERGEOMETRY_HPP
 #define THREEPP_BUFFERGEOMETRY_HPP
 
-#include "threepp/math/MathUtils.hpp"
-#include "threepp/math/Matrix4.hpp"
-#include "threepp/core/Group.hpp"
 #include "threepp/core/BufferAttribute.hpp"
+#include "threepp/core/Group.hpp"
+#include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Matrix4.hpp"
 
+#include <any>
+#include <unordered_map>
 #include <utility>
 #include <vector>
-#include <unordered_map>
 
 namespace threepp {
 
     class BufferGeometry {
 
     public:
-
         const unsigned int id = _id++;
 
         std::string uuid = generateUUID();
@@ -27,89 +28,103 @@ namespace threepp {
 
         std::vector<Group> groups;
 
-        auto &getAttribute(const std::string &name) {
-            return attributes_[name];
+        std::vector<int> &getIndex() {
+
+            return this->index;
         }
 
-        void setAttribute(const std::string &name, std::any attribute) {
+        BufferGeometry &setIndex(const std::vector<int> &index) {
+
+            this->index = index;
+
+            return *this;
+        }
+
+        template<class T>
+        BufferAttribute<T> &getAttribute(const std::string &name) {
+
+            if (!hasAttribute(name)) throw std::runtime_error("No attribute named: " + name);
+
+            return std::any_cast<BufferAttribute<T>&>(attributes_[name]);
+        }
+
+        template<class T>
+        void setAttribute(const std::string &name, BufferAttribute<T> attribute) {
+
             attributes_[name] = std::move(attribute);
         }
 
         bool hasAttribute(const std::string &name) {
+
             return attributes_.count(name) != 0;
         }
 
         void addGroup(unsigned int start, unsigned int count, unsigned int materialIndex = 0) {
+
             groups.emplace_back(Group{start, count, materialIndex});
         }
 
         void clearGroups() {
+
             groups.clear();
         }
 
-        BufferGeometry &applyMatrix4( const Matrix4 &matrix ) {
+        BufferGeometry &applyMatrix4(const Matrix4 &matrix) {
 
-            if ( this->attributes_.count("position") ) {
+            if (this->attributes_.count("position")) {
 
                 auto position = std::any_cast<BufferAttribute<float>>(this->attributes_["position"]);
 
-//                position.applyMatrix4( matrix );
-//
-//                position.needsUpdate = true;
+                position.applyMatrix4(matrix);
 
+                position.needsUpdate();
             }
 
 
-            if ( this->attributes_.count("normal") ) {
+            if (this->attributes_.count("normal")) {
 
-//                const normal = this.attributes.normal;
-//
-//                const normalMatrix = new Matrix3().getNormalMatrix( matrix );
-//
-//                normal.applyNormalMatrix( normalMatrix );
-//
-//                normal.needsUpdate = true;
+                auto normal = std::any_cast<BufferAttribute<float>>(this->attributes_["normal"]);
 
+                auto normalMatrix = Matrix3().getNormalMatrix(matrix);
+
+                normal.applyNormalMatrix(normalMatrix);
+
+                normal.needsUpdate();
             }
 
 
+            if (this->attributes_.count("tangent")) {
 
-            if ( this->attributes_.count("tangent") ) {
+                auto tangent = std::any_cast<BufferAttribute<float>>(this->attributes_["tangent"]);
 
-//                const tangent = this.attributes.tangent;
-//
-//                tangent.transformDirection( matrix );
-//
-//                tangent.needsUpdate = true;
+                tangent.transformDirection(matrix);
 
+                tangent.needsUpdate();
             }
 
-//            if ( this.boundingBox !== null ) {
-//
-//                this.computeBoundingBox();
-//
-//            }
-//
-//            if ( this.boundingSphere !== null ) {
-//
-//                this.computeBoundingSphere();
-//
-//            }
+            //            if ( this.boundingBox !== null ) {
+            //
+            //                this.computeBoundingBox();
+            //
+            //            }
+            //
+            //            if ( this.boundingSphere !== null ) {
+            //
+            //                this.computeBoundingSphere();
+            //
+            //            }
 
             return *this;
-
         }
 
     private:
-
+        std::vector<int> index;
         std::unordered_map<std::string, std::any> attributes_;
 
-        static unsigned int _id;
-
+        inline static unsigned int _id = 0;
     };
 
-    unsigned int BufferGeometry::_id = 0;
 
-}
+}// namespace threepp
 
 #endif//THREEPP_BUFFERGEOMETRY_HPP

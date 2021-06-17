@@ -20,7 +20,11 @@ namespace threepp {
     public:
         std::string name;
 
-        BufferAttribute(std::vector<T> array, int itemSize, bool normalized = false) : array(std::move(array)), itemSize(itemSize), count(static_cast<int>(array.size()) / itemSize) {}
+        BufferAttribute(std::vector<T> array, int itemSize, bool normalized = false) : array_(std::move(array)), itemSize(itemSize), count(static_cast<int>(array.size()) / itemSize) {}
+
+        std::vector<T> array() const {
+            return this->array_;
+        }
 
         void needsUpdate() {
 
@@ -41,7 +45,7 @@ namespace threepp {
 
             for (auto i = 0, l = this->itemSize; i < l; i++) {
 
-                this->array[index1 + i] = attribute.array[index2 + i];
+                this->array_[index1 + i] = attribute.array_[index2 + i];
             }
 
             return &this;
@@ -49,7 +53,7 @@ namespace threepp {
 
         BufferAttribute<T> &copyArray(const std::vector<T> &array) {
 
-            this->array = array;
+            this->array_ = array;
 
             return *this;
         }
@@ -62,9 +66,9 @@ namespace threepp {
 
                 auto color = colors[i];
 
-                array[offset++] = color.r;
-                array[offset++] = color.g;
-                array[offset++] = color.b;
+                array_[offset++] = color.r;
+                array_[offset++] = color.g;
+                array_[offset++] = color.b;
             }
 
             return *this;
@@ -78,8 +82,8 @@ namespace threepp {
 
                 const auto vector = vectors[i];
 
-                array[offset++] = vector.x;
-                array[offset++] = vector.y;
+                array_[offset++] = vector.x;
+                array_[offset++] = vector.y;
             }
 
             return *this;
@@ -93,9 +97,9 @@ namespace threepp {
 
                 const auto vector = vectors[i];
 
-                array[offset++] = vector.x;
-                array[offset++] = vector.y;
-                array[offset++] = vector.z;
+                array_[offset++] = vector.x;
+                array_[offset++] = vector.y;
+                array_[offset++] = vector.z;
             }
 
             return *this;
@@ -109,10 +113,10 @@ namespace threepp {
 
                 const auto vector = vectors[i];
 
-                array[offset++] = vector.x;
-                array[offset++] = vector.y;
-                array[offset++] = vector.z;
-                array[offset++] = vector.w;
+                array_[offset++] = vector.x;
+                array_[offset++] = vector.y;
+                array_[offset++] = vector.z;
+                array_[offset++] = vector.w;
             }
 
             return *this;
@@ -146,7 +150,7 @@ namespace threepp {
 
         BufferAttribute<T> &applyMatrix4( const Matrix4 &m ) {
 
-                for ( size_t i = 0, l = this->count; i < l; i ++ ) {
+                for ( int i = 0, l = this->count; i < l; i ++ ) {
 
                     _vector.x = this->getX( i );
                     _vector.y = this->getY( i );
@@ -164,7 +168,7 @@ namespace threepp {
 
         BufferAttribute<T> &applyNormalMatrix( const Matrix3 &m ) {
 
-                for ( size_t i = 0, l = this->count; i < l; i ++ ) {
+                for ( int i = 0, l = this->count; i < l; i ++ ) {
 
                     _vector.x = this->getX( i );
                     _vector.y = this->getY( i );
@@ -200,48 +204,48 @@ namespace threepp {
 
         T getX(int index) const {
 
-            return this->array[index * this->itemSize];
+            return this->array_[index * this->itemSize];
         }
 
         BufferAttribute<T> &setX(int index, T x) {
 
-            this->array[index * this->itemSize] = x;
+            this->array_[index * this->itemSize] = x;
 
             return *this;
         }
 
         T getY(int index) const {
 
-            return this->array[index * this->itemSize + 1];
+            return this->array_[index * this->itemSize + 1];
         }
 
         BufferAttribute<T> setY(int index, T y) {
 
-            this->array[index * this->itemSize + 1] = y;
+            this->array_[index * this->itemSize + 1] = y;
 
             return *this;
         }
 
         T getZ(int index) const {
 
-            return this->array[index * this->itemSize + 2];
+            return this->array_[index * this->itemSize + 2];
         }
 
         BufferAttribute<T> setZ(int index, T z) {
 
-            this->array[index * this->itemSize + 2] = z;
+            this->array_[index * this->itemSize + 2] = z;
 
             return *this;
         }
 
         T getW(int index) {
 
-            return this->array[index * this->itemSize + 3];
+            return this->array_[index * this->itemSize + 3];
         }
 
         BufferAttribute<T> &setW(int index, T w) {
 
-            this->array[index * this->itemSize + 3] = w;
+            this->array_[index * this->itemSize + 3] = w;
 
             return *this;
         }
@@ -250,8 +254,8 @@ namespace threepp {
 
             index *= this->itemSize;
 
-            this->array[ index + 0 ] = x;
-            this->array[ index + 1 ] = y;
+            this->array_[ index + 0 ] = x;
+            this->array_[ index + 1 ] = y;
 
             return *this;
 
@@ -261,9 +265,9 @@ namespace threepp {
 
             index *= this->itemSize;
 
-            this->array[ index + 0 ] = x;
-            this->array[ index + 1 ] = y;
-            this->array[ index + 2 ] = z;
+            this->array_[ index + 0 ] = x;
+            this->array_[ index + 1 ] = y;
+            this->array_[ index + 2 ] = z;
 
             return *this;
 
@@ -273,10 +277,10 @@ namespace threepp {
 
             index *= this->itemSize;
 
-            this->array[ index + 0 ] = x;
-            this->array[ index + 1 ] = y;
-            this->array[ index + 2 ] = z;
-            this->array[ index + 3 ] = w;
+            this->array_[ index + 0 ] = x;
+            this->array_[ index + 1 ] = y;
+            this->array_[ index + 2 ] = z;
+            this->array_[ index + 3 ] = w;
 
             return *this;
 
@@ -284,7 +288,7 @@ namespace threepp {
 
 
     private:
-        std::vector<T> array;
+        std::vector<T> array_;
         int itemSize;
         int count;
 
