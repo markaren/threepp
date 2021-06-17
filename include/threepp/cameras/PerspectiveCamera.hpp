@@ -29,16 +29,15 @@ namespace threepp {
         float filmGauge = 35;// width of the film (default in millimeters)
         float filmOffset = 0;// horizontal film offset (same unit as gauge)
 
-        explicit PerspectiveCamera(float fov, float aspect = 1, float near = 0.1, float far = 2000) : fov(fov), aspect(aspect), near(near), far(far) {}
 
         /**
-	 * Sets the FOV by focal length in respect to the current .filmGauge.
-	 *
-	 * The default film gauge is 35, so that the focal length can be specified for
-	 * a 35mm (full frame) camera.
-	 *
-	 * Values for focal length and film gauge must have the same unit.
-	 */
+         * Sets the FOV by focal length in respect to the current .filmGauge.
+         *
+         * The default film gauge is 35, so that the focal length can be specified for
+         * a 35mm (full frame) camera.
+         *
+         * Values for focal length and film gauge must have the same unit.
+         */
         void setFocalLength(float focalLength) {
 
             /** see {@link http://www.bobatkins.com/photography/technical/field_of_view.html} */
@@ -102,6 +101,14 @@ namespace threepp {
 
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
+
+        static std::shared_ptr<PerspectiveCamera> create(float fov, float aspect = 1, float near = 0.1, float far = 2000) {
+            return std::shared_ptr<PerspectiveCamera>(new PerspectiveCamera(fov, aspect, near, far));
+        }
+
+    protected:
+        explicit PerspectiveCamera(float fov, float aspect = 1, float near = 0.1, float far = 2000) : fov(fov), aspect(aspect), near(near), far(far) {}
+
     };
 
 }// namespace threepp

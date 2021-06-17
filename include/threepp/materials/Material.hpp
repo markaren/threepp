@@ -88,6 +88,9 @@ namespace threepp {
 
         }
 
+    protected:
+        Material() = default;
+
     private:
 
         inline static unsigned int materialId = 0;

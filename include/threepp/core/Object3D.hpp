@@ -10,12 +10,14 @@
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
 
+#include "threepp/core/EventDispatcher.hpp"
+
 #include <memory>
 #include <optional>
 
 namespace threepp {
 
-    class Object3D {
+    class Object3D : public std::enable_shared_from_this<Object3D>, private EventDispatcher {
 
     public:
         const unsigned int id = _object3Did++;
@@ -28,7 +30,7 @@ namespace threepp {
         std::shared_ptr<Object3D> parent;
         std::vector<std::shared_ptr<Object3D>> children;
 
-        const Vector3 up = Vector3(0,1,0);
+        const Vector3 up = Vector3(0, 1, 0);
 
         Vector3 position = Vector3();
         Euler rotation = Euler();
@@ -52,10 +54,6 @@ namespace threepp {
         bool frustumCulled = true;
         unsigned int renderOrder = 0;
 
-        Object3D() {
-            rotation._onChange(onQuaternionChange);
-            quaternion._onChange(onRotationChange);
-        };
 
         void applyMatrix4(const Matrix4 &matrix) {
 
@@ -111,36 +109,49 @@ namespace threepp {
             return *this;
         }
 
-        Object3D &rotateOnWorldAxis( const Vector3 &axis, float angle ) {
+        Object3D &rotateOnWorldAxis(const Vector3 &axis, float angle) {
 
             // rotate object on axis in world space
             // axis is assumed to be normalized
             // method assumes no rotated parent
 
-            _q1.setFromAxisAngle( axis, angle );
+            _q1.setFromAxisAngle(axis, angle);
 
-            this->quaternion.premultiply( _q1 );
+            this->quaternion.premultiply(_q1);
 
             return *this;
-
         }
 
-        Object3D &rotateX( float angle ) {
+        Object3D &rotateX(float angle) {
 
-                return this->rotateOnAxis( Vector3::X, angle );
-
+            return this->rotateOnAxis(Vector3::X, angle);
         }
 
-        Object3D &rotateY( float angle ) {
+        Object3D &rotateY(float angle) {
 
-                return this->rotateOnAxis( Vector3::Y, angle );
-
+            return this->rotateOnAxis(Vector3::Y, angle);
         }
 
-        Object3D &rotateZ( float angle ) {
+        Object3D &rotateZ(float angle) {
 
-                return this->rotateOnAxis( Vector3::Z, angle );
+            return this->rotateOnAxis(Vector3::Z, angle);
+        }
 
+        Object3D &add(std::shared_ptr<Object3D> object) {
+
+
+            if (object->parent) {
+
+                //object.parent.remove( object );
+            }
+
+            object->parent = shared_from_this();
+            this->children.emplace_back(object);
+
+            object->dispatchEvent("added");
+
+
+            return *this;
         }
 
         void updateMatrix() {
@@ -156,7 +167,7 @@ namespace threepp {
 
             if (this->matrixWorldNeedsUpdate || force) {
 
-                if (this->parent == nullptr) {
+                if (!this->parent) {
 
                     this->matrixWorld = (this->matrix);
 
@@ -180,14 +191,14 @@ namespace threepp {
 
         void updateWorldMatrix(bool updateParents, bool updateChildren) {
 
-            if (updateParents && parent != nullptr) {
+            if (updateParents && parent) {
 
                 parent->updateWorldMatrix(true, false);
             }
 
             if (this->matrixAutoUpdate) this->updateMatrix();
 
-            if (this->parent == nullptr) {
+            if (!this->parent) {
 
                 this->matrixWorld = (this->matrix);
 
@@ -208,8 +219,14 @@ namespace threepp {
         }
 
         static std::shared_ptr<Object3D> create() {
-            return std::make_shared<Object3D>();
+            return std::shared_ptr<Object3D>(new Object3D());
         }
+
+    protected:
+        Object3D() {
+            rotation._onChange(onQuaternionChange);
+            quaternion._onChange(onRotationChange);
+        };
 
     private:
         std::function<void()> onRotationChange = [&] {
@@ -220,11 +237,11 @@ namespace threepp {
             rotation.setFromQuaternion(quaternion, std::nullopt, false);
         };
 
+
         static Vector3 _v1;
         static Quaternion _q1;
 
         static unsigned int _object3Did;
-
     };
 
 }// namespace threepp

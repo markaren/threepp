@@ -23,9 +23,9 @@ namespace threepp {
 
         unsigned int version = 0;
 
-        Texture(
+        explicit Texture(
                 std::optional<Image> image = std::nullopt,
-                int mapping = Texture.DEFAULT_MAPPING,
+                int mapping = Texture::DEFAULT_MAPPING,
                 int wrapS = ClampToEdgeWrapping,
                 int wrapT = ClampToEdgeWrapping,
                 int magFilter = LinearFilter,
@@ -33,13 +33,13 @@ namespace threepp {
                 int format = RGBAFormat,
                 int type = UnsignedByteType,
                 int anisotropy = 1,
-                int encoding = LinearEncoding)
+                int encoding = LinearEncoding) {}
 
     private:
 
-        static unsigned int textureId = 0;
+        inline static unsigned int textureId = 0;
 
-        int DEFAULT_MAPPING = UVMapping;
+        inline static int DEFAULT_MAPPING = UVMapping;
 
     };
 

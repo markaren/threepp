@@ -39,13 +39,16 @@ namespace threepp {
         bool wireframe = false;
         float wireframeLinewidth = 1;
 
+
+    protected:
+
         MeshBasicMaterial() {
 
-            this.type = "MeshBasicMaterial";
+            this->type = "MeshBasicMaterial";
         }
 
         static std::shared_ptr<MeshBasicMaterial> create() {
-            return std::make_shared<MeshBasicMaterial>();
+            return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
         }
     };
 

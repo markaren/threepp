@@ -27,6 +27,7 @@
 #include "threepp/math/Sphere.hpp"
 
 #include "threepp/materials/Material.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 
 #include <threepp/core/Object3D.hpp>
 #include <threepp/objects/Mesh.hpp>
@@ -130,8 +131,20 @@ int main() {
 
     auto obj = Object3D::create();
 
-    Object3D o;
-//    Mesh mesh;
+    auto o = Object3D::create();
+    o->name = "parent";
+    auto p = PerspectiveCamera::create(60);
+
+    o->add(p);
+
+    p->far = 10;
+
+    auto pp = std::static_pointer_cast<PerspectiveCamera>(o->children[0]);
+
+    std::cout << "Excpecting " << p->far << ", got " << pp->far << std::endl;
+    std::cout << pp->parent->name << std::endl;
+
+
 
     return 0;
 
