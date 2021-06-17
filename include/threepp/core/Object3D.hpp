@@ -178,7 +178,7 @@ namespace threepp {
 
     private:
         std::function<void()> onRotationChange = [&] {
-
+            quaternion.setFromEuler(rotation, false);
         };
 
         std::function<void()> onQuaternionChange = [&] {
