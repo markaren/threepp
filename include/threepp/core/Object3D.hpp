@@ -55,6 +55,7 @@ namespace threepp {
         bool frustumCulled = true;
         unsigned int renderOrder = 0;
 
+        Object3D(const Object3D&) = delete;
 
         void applyMatrix4(const Matrix4 &matrix) {
 

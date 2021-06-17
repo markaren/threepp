@@ -28,6 +28,10 @@ namespace threepp {
 
         std::vector<Group> groups;
 
+        BufferGeometry() = default;
+
+        BufferGeometry(const BufferGeometry&) = delete;
+
         std::vector<int> &getIndex() {
 
             return this->index;

@@ -14,13 +14,22 @@ namespace threepp {
     class Mesh : public Object3D {
 
     public:
+
+        std::string type = "Mesh";
+
+        Mesh(const Mesh&) = delete;
+
         static std::shared_ptr<Mesh> create(const std::shared_ptr<BufferGeometry> &geometry, const std::shared_ptr<Material> &material) {
             return std::shared_ptr<Mesh>(new Mesh(geometry, material));
         }
 
+
+
     protected:
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-            : geometry_(std::move(geometry)), material_(std::move(material)) {}
+            : geometry_(std::move(geometry)), material_(std::move(material)) {
+
+        }
 
     private:
         std::shared_ptr<BufferGeometry> geometry_;

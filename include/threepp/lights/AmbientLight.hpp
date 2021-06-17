@@ -9,16 +9,14 @@
 
 namespace threepp {
 
-    class AmbientLight: public Light {
+    class AmbientLight : public Light {
 
     public:
-
         std::string type = "AmbientLight";
 
-        explicit AmbientLight(int color, std::optional<float> intensity = std::nullopt): Light(color, intensity){}
-
+        explicit AmbientLight(int color, std::optional<float> intensity = std::nullopt) : Light(color, intensity) {}
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_AMBIENTLIGHT_HPP

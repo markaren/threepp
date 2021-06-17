@@ -12,6 +12,9 @@ namespace threepp {
 
     public:
 
+        Camera() = default;
+        Camera(const Camera&) = delete;
+
         std::string type = "Camera";
 
         Matrix4 matrixWorldInverse = Matrix4();
