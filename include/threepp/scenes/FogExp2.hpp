@@ -11,8 +11,6 @@ namespace threepp {
 
     public:
 
-        std::string name;
-
         Color color;
         float density;
 

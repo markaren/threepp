@@ -10,7 +10,6 @@ namespace threepp {
     class Fog  {
 
     public:
-        std::string name;
 
         Color color;
         float near;
