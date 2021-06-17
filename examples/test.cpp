@@ -29,10 +29,14 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 
+#include "threepp/scenes/Scene.hpp"
+
 #include <threepp/core/Object3D.hpp>
 #include <threepp/objects/Mesh.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <vector>
+
+#include "threepp/Canvas.hpp"
 
 using namespace threepp;
 
@@ -151,6 +155,11 @@ int main() {
     std::cout << "Expected 0, got " <<  o->children.size() << std::endl;
 
     o->rotation.set(1,1,1);
+
+//    Canvas canvas(Canvas::Parameters().title(""));
+//    canvas.animate([](float dt){
+//
+//    });
 
     return 0;
 

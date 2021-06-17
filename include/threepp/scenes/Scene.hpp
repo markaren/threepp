@@ -5,7 +5,7 @@
 
 #include "threepp/core/Object3D.hpp"
 
-#include <optional>
+#include <memory>
 
 namespace threepp {
 
@@ -13,11 +13,20 @@ namespace threepp {
 
     public:
 
-        std::string type = "Scene";
-
         bool autoUpdate = true;
 
-        Scene()
+        Scene(const Scene&) = delete;
+
+        std::string type() const override {
+            return "Scene";
+        }
+
+        static std::shared_ptr<Scene> create() {
+            return std::shared_ptr<Scene>(new Scene());
+        }
+
+    protected:
+        Scene() = default;
 
     };
 

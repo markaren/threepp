@@ -21,6 +21,9 @@ set(publicHeaders
         "threepp/math/Triangle.hpp"
         "threepp/math/Quaternion.hpp"
         "threepp/math/MathUtils.hpp"
+
+        "threepp/canvas.hpp"
+        "threepp/constants.hpp"
         )
 
 set(publicHeadersFull)
@@ -29,6 +32,7 @@ foreach (header IN LISTS publicHeaders)
 endforeach ()
 
 set(sources
+
         "threepp/core/Object3D.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
@@ -52,6 +56,7 @@ set(privateHeaders
         )
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
+target_link_libraries(threepp PUBLIC CONAN_PKG::glfw CONAN_PKG::glad)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"

@@ -28,15 +28,15 @@ namespace threepp {
             autoStart_ = false;
         }
 
-        double getElapsedTime() {
+        float getElapsedTime() {
 
             getDelta();
             return elapsedTime_;
         }
 
-        double getDelta() {
+        float getDelta() {
 
-            double diff = 0;
+            float diff = 0;
 
             if (autoStart_ && !running_) {
 
@@ -48,7 +48,7 @@ namespace threepp {
 
                 const auto newTime = std::chrono::system_clock::now();
 
-                diff = std::chrono::duration_cast<std::chrono::microseconds>(newTime - oldTime_).count() / 1000000.0;
+                diff = std::chrono::duration_cast<std::chrono::microseconds>(newTime - oldTime_).count() / 1000000.0f;
                 oldTime_ = newTime;
 
                 elapsedTime_ += diff;
@@ -61,7 +61,7 @@ namespace threepp {
         bool autoStart_;
         bool running_ = false;
 
-        double elapsedTime_;
+        float elapsedTime_ = 0;
 
         std::chrono::time_point<std::chrono::system_clock> startTime_;
         std::chrono::time_point<std::chrono::system_clock> oldTime_;
