@@ -6,6 +6,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <cmath>
 
 using namespace threepp;
 

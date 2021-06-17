@@ -1,6 +1,8 @@
 
 #include "threepp/math/Triangle.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 Vector3 Triangle::_v0 = Vector3();
