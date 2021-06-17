@@ -34,6 +34,8 @@ namespace threepp {
 
         float &operator[](unsigned int index);
 
+        Vector2 &copy( const Vector2 &v );
+
         Vector2 &add(const Vector2 &v);
 
         Vector2 &add(float s);

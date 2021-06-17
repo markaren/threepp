@@ -16,6 +16,10 @@ namespace threepp {
 
         Box3 &set(const Vector3 &min, const Vector3 &max);
 
+        Box3 &setFromPoints( const std::vector<Vector3> &points );
+
+        Box3 &setFromCenterAndSize( const Vector3 &center, const Vector3 &size );
+
         Box3 &makeEmpty();
 
         [[nodiscard]] bool isEmpty() const;
@@ -30,12 +34,13 @@ namespace threepp {
 
         Box3 &expandByScalar(float scalar);
 
-        Box3& expandByObject( Object3D &object );
-
 
     private:
         Vector3 min_;
         Vector3 max_;
+
+        static Vector3 _vector;
+
     };
 
 }// namespace threepp

@@ -7,6 +7,8 @@ using namespace threepp;
 
 constexpr float Infinity = std::numeric_limits<float>::infinity();
 
+Vector3 Box3::_vector = Vector3();
+
 Box3::Box3() : min_(Vector3(+Infinity, +Infinity, +Infinity)), max_(Vector3(-Infinity, -Infinity, -Infinity)) {}
 
 Box3::Box3(Vector3 min, Vector3 max) : min_(min), max_(max) {}
@@ -17,6 +19,31 @@ Box3 &Box3::set(const Vector3 &min, const Vector3 &max) {
     this->max_ = max;
 
     return *this;
+}
+
+Box3 &Box3::setFromPoints(const std::vector<Vector3> &points) {
+
+    this->makeEmpty();
+
+    for (auto& point : points) {
+
+        this->expandByPoint( point );
+
+    }
+
+    return *this;
+
+}
+
+Box3 &Box3::setFromCenterAndSize(const Vector3 &center, const Vector3 &size) {
+
+    const auto halfSize = _vector.copy( size ).multiply( 0.5f );
+
+    this->min_.copy( center ).sub( halfSize );
+    this->max_.copy( center ).add( halfSize );
+
+    return *this;
+
 }
 
 Box3 &Box3::makeEmpty() {
@@ -63,38 +90,6 @@ Box3 &Box3::expandByScalar(float scalar) {
 
     this->min_.add(-scalar);
     this->max_.add(scalar);
-
-    return *this;
-}
-
-Box3& Box3::expandByObject( Object3D &object ) {
-    // Computes the world-axis-aligned bounding box of an object (including its children),
-    // accounting for both the object's, and children's, world transforms
-
-    object.updateWorldMatrix( false, false );
-
-//    auto geometry = object.geometry;
-//
-//    if ( geometry !== undefined ) {
-//
-//        if ( geometry.boundingBox === null ) {
-//
-//            geometry.computeBoundingBox();
-//
-//        }
-//
-//        _box.copy( geometry.boundingBox );
-//        _box.applyMatrix4( object.matrixWorld );
-//
-//        this.union( _box );
-//
-//    }
-
-    for ( const auto &child : object.children ) {
-
-        this->expandByObject( *child );
-
-    }
 
     return *this;
 }

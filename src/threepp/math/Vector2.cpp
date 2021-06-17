@@ -5,9 +5,9 @@
 
 #include "threepp/core/BufferAttribute.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <string>
-#include <algorithm>
 
 using namespace threepp;
 
@@ -53,6 +53,14 @@ float &Vector2::operator[](unsigned int index) {
         default:
             throw std::runtime_error("index out of bound: " + std::to_string(index));
     }
+}
+
+Vector2 &Vector2::copy(const Vector2 &v) {
+
+    this->x = v.x;
+    this->y = v.y;
+
+    return *this;
 }
 
 Vector2 &Vector2::add(const Vector2 &v) {
@@ -169,9 +177,8 @@ Vector2 &Vector2::max(const Vector2 &v) {
 
 Vector2 &Vector2::fromBufferAttribute(const BufferAttribute<float> &attribute, int index) {
 
-    this->x = attribute.getX( index );
-    this->y = attribute.getY( index );
+    this->x = attribute.getX(index);
+    this->y = attribute.getY(index);
 
     return *this;
-
 }

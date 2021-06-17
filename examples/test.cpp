@@ -22,6 +22,8 @@
 #include <threepp/core/BufferGeometry.hpp>
 #include <threepp/core/BufferAttribute.hpp>
 
+#include "threepp/math/Sphere.hpp"
+
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <vector>
 

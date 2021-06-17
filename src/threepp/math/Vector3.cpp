@@ -61,11 +61,24 @@ Vector3 &Vector3::setZ(float value) {
 float &Vector3::operator[](unsigned int index) {
     if (index >= 3) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     switch (index) {
-        case 0: return x;
-        case 1: return y;
-        case 2: return z;
-        default: throw std::runtime_error("index out of bound: " + std::to_string(index));
+        case 0:
+            return x;
+        case 1:
+            return y;
+        case 2:
+            return z;
+        default:
+            throw std::runtime_error("index out of bound: " + std::to_string(index));
     }
+}
+
+Vector3 &Vector3::copy(const Vector3 &v) {
+
+    this->x = v.x;
+    this->y = v.y;
+    this->z = v.z;
+
+    return *this;
 }
 
 Vector3 &Vector3::add(const Vector3 &v) {
@@ -160,12 +173,12 @@ Vector3 &Vector3::multiplyVectors(const Vector3 &a, const Vector3 &b) {
 
 Vector3 &Vector3::applyMatrix3(const Matrix3 &m) {
 
-//    const auto x_ = this->x, y_ = this->y, z_ = this->z;
-//    const auto e = m.elements_;
-//
-//    this->x = e[0] * x_ + e[3] * y_ + e[6] * z_;
-//    this->y = e[1] * x_ + e[4] * y_ + e[7] * z_;
-//    this->z = e[2] * x_ + e[5] * y_ + e[8] * z_;
+    //    const auto x_ = this->x, y_ = this->y, z_ = this->z;
+    //    const auto e = m.elements_;
+    //
+    //    this->x = e[0] * x_ + e[3] * y_ + e[6] * z_;
+    //    this->y = e[1] * x_ + e[4] * y_ + e[7] * z_;
+    //    this->z = e[2] * x_ + e[5] * y_ + e[8] * z_;
 
     return *this;
 }
@@ -199,26 +212,23 @@ Vector3 &Vector3::applyQuaternion(const Quaternion &q) {
     const auto ix = qw * x + qy * z - qz * y;
     const auto iy = qw * y + qz * x - qx * z;
     const auto iz = qw * z + qx * y - qy * x;
-    const auto iw = - qx * x - qy * y - qz * z;
+    const auto iw = -qx * x - qy * y - qz * z;
 
     // calculate result * inverse quat
 
-    this->x = ix * qw + iw * - qx + iy * - qz - iz * - qy;
-    this->y = iy * qw + iw * - qy + iz * - qx - ix * - qz;
-    this->z = iz * qw + iw * - qz + ix * - qy - iy * - qx;
+    this->x = ix * qw + iw * -qx + iy * -qz - iz * -qy;
+    this->y = iy * qw + iw * -qy + iz * -qx - ix * -qz;
+    this->z = iz * qw + iw * -qz + ix * -qy - iy * -qx;
 
     return *this;
-
 }
 Vector3 &Vector3::project(const Camera &camera) {
 
-    return this->applyMatrix4( camera.matrixWorldInverse ).applyMatrix4( camera.projectionMatrix );
-
+    return this->applyMatrix4(camera.matrixWorldInverse).applyMatrix4(camera.projectionMatrix);
 }
 Vector3 &Vector3::unproject(const Camera &camera) {
 
-    return this->applyMatrix4( camera.projectionMatrixInverse ).applyMatrix4( camera.matrixWorld );
-
+    return this->applyMatrix4(camera.projectionMatrixInverse).applyMatrix4(camera.matrixWorld);
 }
 
 Vector3 &Vector3::transformDirection(const Matrix4 &m) {
@@ -229,12 +239,11 @@ Vector3 &Vector3::transformDirection(const Matrix4 &m) {
     const auto x = this->x, y = this->y, z = this->z;
     const auto e = m.elements_;
 
-    this->x = e[ 0 ] * x + e[ 4 ] * y + e[ 8 ] * z;
-    this->y = e[ 1 ] * x + e[ 5 ] * y + e[ 9 ] * z;
-    this->z = e[ 2 ] * x + e[ 6 ] * y + e[ 10 ] * z;
+    this->x = e[0] * x + e[4] * y + e[8] * z;
+    this->y = e[1] * x + e[5] * y + e[9] * z;
+    this->z = e[2] * x + e[6] * y + e[10] * z;
 
     return this->normalize();
-
 }
 
 Vector3 &Vector3::divide(const Vector3 &v) {
@@ -457,14 +466,13 @@ Vector3 &Vector3::setFromMatrix3Column(const Matrix3 &m, unsigned int index) {
     return this->fromArray(m.elements_, index * 3);
 }
 
-Vector3 &Vector3::fromBufferAttribute( const BufferAttribute<float> &attribute, int index ) {
+Vector3 &Vector3::fromBufferAttribute(const BufferAttribute<float> &attribute, int index) {
 
-this->x = attribute.getX( index );
-this->y = attribute.getY( index );
-this->z = attribute.getZ( index );
+    this->x = attribute.getX(index);
+    this->y = attribute.getY(index);
+    this->z = attribute.getZ(index);
 
-return *this;
-
+    return *this;
 }
 
 

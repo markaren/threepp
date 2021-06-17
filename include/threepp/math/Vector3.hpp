@@ -40,6 +40,8 @@ namespace threepp {
 
         float &operator[](unsigned int index);
 
+        Vector3 &copy( const Vector3 &v );
+
         Vector3 &add(const Vector3 &v);
 
         Vector3 &add(float s);
@@ -129,7 +131,6 @@ namespace threepp {
         Vector3 &setFromMatrixColumn(const Matrix4 &m, unsigned int index);
 
         Vector3 &setFromMatrix3Column(const Matrix3 &m, unsigned int index);
-
 
         template<class ArrayLike>
         Vector3 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
