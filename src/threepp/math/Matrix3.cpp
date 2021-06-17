@@ -11,13 +11,15 @@
 using namespace threepp;
 
 float &Matrix3::operator[](unsigned int index) {
+
     if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
+
     return elements_[index];
 }
 
 Matrix3 &Matrix3::set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33) {
 
-    auto te = this->elements_;
+    auto& te = this->elements_;
 
     // clang-format off
     te[ 0 ] = n11; te[ 1 ] = n21; te[ 2 ] = n31;
@@ -52,7 +54,7 @@ Matrix3 &Matrix3::extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis) {
 
 Matrix3 &Matrix3::setFromMatrix4(const Matrix4 &m) {
 
-    auto me = m.elements_;
+    auto& me = m.elements();
 
     this->set(
 
@@ -65,11 +67,21 @@ Matrix3 &Matrix3::setFromMatrix4(const Matrix4 &m) {
     return *this;
 }
 
+Matrix3 &Matrix3::multiply(const Matrix3 &m) {
+
+    return this->multiplyMatrices(*this, m);
+}
+
+Matrix3 &Matrix3::premultiply(const Matrix3 &m) {
+
+    return this->multiplyMatrices(m, *this);
+}
+
 Matrix3 &Matrix3::multiplyMatrices(const Matrix3 &a, const Matrix3 &b) {
 
-    const auto ae = a.elements_;
-    const auto be = b.elements_;
-    const auto te = this->elements_;
+    const auto& ae = a.elements_;
+    const auto& be = b.elements_;
+    auto& te = this->elements_;
 
     const auto a11 = ae[0], a12 = ae[3], a13 = ae[6];
     const auto a21 = ae[1], a22 = ae[4], a23 = ae[7];
@@ -96,7 +108,7 @@ Matrix3 &Matrix3::multiplyMatrices(const Matrix3 &a, const Matrix3 &b) {
 
 Matrix3 &Matrix3::multiplyScalar(float s) {
 
-    auto te = this->elements_;
+    auto& te = this->elements_;
 
     // clang-format off
     te[ 0 ] *= s; te[ 3 ] *= s; te[ 6 ] *= s;
@@ -109,7 +121,7 @@ Matrix3 &Matrix3::multiplyScalar(float s) {
 
 float Matrix3::determinant() const {
 
-    auto te = this->elements_;
+    auto& te = this->elements_;
 
     const auto a = te[0], b = te[1], c = te[2],
                d = te[3], e = te[4], f = te[5],
@@ -120,7 +132,7 @@ float Matrix3::determinant() const {
 
 Matrix3 &Matrix3::invert() {
 
-    auto te = this->elements_;
+    auto& te = this->elements_;
 
     const auto n11 = te[0], n21 = te[1], n31 = te[2],
                n12 = te[3], n22 = te[4], n32 = te[5],
@@ -187,7 +199,7 @@ Matrix3 &Matrix3::setUvTransform(float tx, float ty, float sx, float sy, float r
 
 Matrix3 &Matrix3::scale(float sx, float sy) {
 
-    auto te = this->elements_;
+    auto& te = this->elements_;
 
     // clang-format off
     te[ 0 ] *= sx; te[ 3 ] *= sx; te[ 6 ] *= sx;
@@ -202,7 +214,7 @@ Matrix3 &Matrix3::rotate(float theta) {
     const auto c = std::cos(theta);
     const auto s = std::sin(theta);
 
-    auto te = this->elements_;
+    auto& te = this->elements_;
 
     const auto a11 = te[0], a12 = te[3], a13 = te[6];
     const auto a21 = te[1], a22 = te[4], a23 = te[7];
@@ -220,7 +232,7 @@ Matrix3 &Matrix3::rotate(float theta) {
 
 Matrix3 &Matrix3::translate(float tx, float ty) {
 
-    const auto te = this->elements_;
+    auto& te = this->elements_;
 
     te[0] += tx * te[2];
     te[3] += tx * te[5];

@@ -179,7 +179,7 @@ namespace threepp {
 
         Object3D &clear() {
 
-            for (auto object : this->children) {
+            for (auto &object : this->children) {
 
                 object->parent = nullptr;
 
@@ -191,6 +191,58 @@ namespace threepp {
             return *this;
         }
 
+        std::shared_ptr<Object3D> getObjectByName(const std::string &name) {
+
+            if (this->name == name) return shared_from_this();
+
+            for (auto &child : this->children) {
+
+                auto object = child->getObjectByName(name);
+
+                if (object) {
+
+                    return object;
+                }
+            }
+
+            return nullptr;
+        }
+
+        void getWorldPosition( Vector3 &target ) {
+
+                this->updateWorldMatrix( true, false );
+
+                target.setFromMatrixPosition( this->matrixWorld );
+
+        }
+
+        void getWorldQuaternion( Quaternion &target ) {
+
+                this->updateWorldMatrix( true, false );
+
+                this->matrixWorld.decompose( _position, target, _scale );
+
+
+        }
+
+        void getWorldScale( Vector3 & target ) {
+
+                this->updateWorldMatrix( true, false );
+
+                this->matrixWorld.decompose( _position, _quaternion, target );
+
+
+        }
+
+        void getWorldDirection( Vector3 &target ) {
+
+                this->updateWorldMatrix( true, false );
+
+                auto e = this->matrixWorld.elements();
+
+                target.set( e[ 8 ], e[ 9 ], e[ 10 ] ).normalize();
+
+        }
 
         void updateMatrix() {
 
@@ -278,6 +330,10 @@ namespace threepp {
 
         static Vector3 _v1;
         static Quaternion _q1;
+
+        static Vector3 _scale;
+        static Vector3 _position;
+        static Quaternion _quaternion;
 
         static unsigned int _object3Did;
     };

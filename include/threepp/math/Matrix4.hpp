@@ -3,6 +3,7 @@
 #ifndef THREEPP_MATRIX4_HPP
 #define THREEPP_MATRIX4_HPP
 
+#include <array>
 
 namespace threepp {
 
@@ -14,6 +15,10 @@ namespace threepp {
 
     public:
         Matrix4() = default;
+
+        [[nodiscard]] const auto &elements() const {
+            return elements_;
+        }
 
         float &operator[](unsigned int index);
 
@@ -97,7 +102,7 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) {
 
-            auto te = this->elements_;
+            auto& te = this->elements_;
 
             array[offset] = te[0];
             array[offset + 1] = te[1];
@@ -121,19 +126,11 @@ namespace threepp {
         }
 
     private:
-        float elements_[16] = {
+        std::array<float, 16> elements_{
                 1, 0, 0, 0,
                 0, 1, 0, 0,
                 0, 0, 1, 0,
                 0, 0, 0, 1};
-
-        friend class Euler;
-        friend class Quaternion;
-
-        friend class Matrix3;
-
-        friend class Vector3;
-        friend class Vector4;
 
         static Vector3 _v1;
         static Matrix4 _m1;

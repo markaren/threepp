@@ -198,7 +198,7 @@ Vector3 &Vector3::applyNormalMatrix(const Matrix3 &m) {
 Vector3 &Vector3::applyMatrix4(const Matrix4 &m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z;
-    const auto e = m.elements_;
+    const auto& e = m.elements();
 
     const auto w = 1.0f / (e[3] * x + e[7] * y + e[11] * z + e[15]);
 
@@ -244,7 +244,7 @@ Vector3 &Vector3::transformDirection(const Matrix4 &m) {
     // vector interpreted as a direction
 
     const auto x = this->x, y = this->y, z = this->z;
-    const auto e = m.elements_;
+    const auto& e = m.elements();
 
     this->x = e[0] * x + e[4] * y + e[8] * z;
     this->y = e[1] * x + e[5] * y + e[9] * z;
@@ -441,7 +441,7 @@ float Vector3::manhattanDistanceTo(const Vector3 &v) const {
 
 Vector3 &Vector3::setFromMatrixPosition(const Matrix4 &m) {
 
-    const auto e = m.elements_;
+    const auto& e = m.elements();
 
     this->x = e[12];
     this->y = e[13];
@@ -465,12 +465,12 @@ Vector3 &Vector3::setFromMatrixScale(const Matrix4 &m) {
 
 Vector3 &Vector3::setFromMatrixColumn(const Matrix4 &m, unsigned int index) {
 
-    return this->fromArray(m.elements_, index * 4);
+    return this->fromArray(m.elements(), index * 4);
 }
 
 Vector3 &Vector3::setFromMatrix3Column(const Matrix3 &m, unsigned int index) {
 
-    return this->fromArray(m.elements_, index * 3);
+    return this->fromArray(m.elements(), index * 3);
 }
 
 Vector3 &Vector3::fromBufferAttribute(const BufferAttribute<float> &attribute, int index) {

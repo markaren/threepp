@@ -84,6 +84,7 @@ namespace threepp {
 
     };
 
+
     //    std::ostream &operator<<(std::ostream &os, const Vector2 &v) {
     //        return os << "Vector2(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ")";
     //    }

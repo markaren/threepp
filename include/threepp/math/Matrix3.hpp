@@ -3,6 +3,8 @@
 #ifndef THREEPP_MATRIX3_HPP
 #define THREEPP_MATRIX3_HPP
 
+#include <array>
+
 namespace threepp {
 
     class Vector3;
@@ -12,6 +14,10 @@ namespace threepp {
 
     public:
         Matrix3() = default;
+
+        [[nodiscard]] const auto &elements() const {
+            return elements_;
+        }
 
         float &operator[](unsigned int index);
 
@@ -23,15 +29,9 @@ namespace threepp {
 
         Matrix3 &setFromMatrix4(const Matrix4 &m);
 
-        Matrix3 &multiply(const Matrix3 &m) {
+        Matrix3 &multiply(const Matrix3 &m);
 
-            return this->multiplyMatrices(*this, m);
-        }
-
-        Matrix3 &premultiply(const Matrix3 &m) {
-
-            return this->multiplyMatrices(m, *this);
-        }
+        Matrix3 &premultiply(const Matrix3 &m);
 
         Matrix3 &multiplyMatrices(const Matrix3 &a, const Matrix3 &b);
 
@@ -48,7 +48,7 @@ namespace threepp {
         template<class ArrayLike>
         Matrix3 &transposeIntoArray(ArrayLike &r) {
 
-            const auto m = this->elements_;
+            const auto& m = this->elements_;
 
             r[0] = m[0];
             r[1] = m[3];
@@ -85,7 +85,7 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) const {
 
-            const auto te = this->elements_;
+            const auto& te = this->elements_;
 
             array[offset] = te[0];
             array[offset + 1] = te[1];
@@ -103,14 +103,12 @@ namespace threepp {
         }
 
     private:
-        float elements_[9] = {
+        std::array<float, 16> elements_{
                 1, 0, 0,
                 0, 1, 0,
                 0, 0, 1};
 
-        friend class Vector2;
-        friend class Vector3;
-        friend class Euler;
+
     };
 
 

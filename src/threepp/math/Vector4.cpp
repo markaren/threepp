@@ -31,7 +31,7 @@ Vector4 &Vector4::setScalar(float value) {
 Vector4 &Vector4::applyMatrix4(const Matrix4 &m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z, w_ = this->w;
-    auto e = m.elements_;
+    const auto& e = m.elements();
 
     this->x = e[0] * x_ + e[4] * y_ + e[8] * z_ + e[12] * w_;
     this->y = e[1] * x_ + e[5] * y_ + e[9] * z_ + e[13] * w_;
