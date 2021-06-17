@@ -12,7 +12,7 @@ namespace threepp {
     public:
         Triangle() = default;
 
-        Triangle(Vector3 a, Vector3 b, Vector3 c);;
+        Triangle(Vector3 a, Vector3 b, Vector3 c);
 
         static void getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target);
 
@@ -29,14 +29,26 @@ namespace threepp {
 
         static bool isFrontFacing(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &direction);
 
+        [[nodiscard]] const Vector3 &a() const {
+            return a_;
+        }
+
+        [[nodiscard]] const Vector3 &b() const {
+            return b_;
+        }
+
+        [[nodiscard]] const Vector3 &c() const {
+            return c_;
+        }
+
         Triangle &set(const Vector3 &a, const Vector3 &b, const Vector3 &c);
 
         template<class ArrayLike>
         Triangle &setFromPointsAndIndices(const ArrayLike &points, unsigned int i0, unsigned int i1, unsigned int i2) {
 
-            this->a_ = (points[i0]);
-            this->b_ = (points[i1]);
-            this->c_ = (points[i2]);
+            this->a_.copy(points[i0]);
+            this->b_.copy(points[i1]);
+            this->c_.copy(points[i2]);
 
             return *this;
         }
