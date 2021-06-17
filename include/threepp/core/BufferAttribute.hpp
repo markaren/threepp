@@ -18,6 +18,7 @@ namespace threepp {
     class BufferAttribute {
 
     public:
+
         std::string name;
 
         BufferAttribute(std::vector<T> array, int itemSize, bool normalized = false) : array_(std::move(array)), itemSize(itemSize), count(static_cast<int>(array.size()) / itemSize) {}
@@ -78,9 +79,7 @@ namespace threepp {
 
             int offset = 0;
 
-            for (size_t i = 0, l = vectors.size(); i < l; i++) {
-
-                const auto vector = vectors[i];
+            for (auto vector : vectors) {
 
                 array_[offset++] = vector.x;
                 array_[offset++] = vector.y;
@@ -93,9 +92,7 @@ namespace threepp {
 
             int offset = 0;
 
-            for (size_t i = 0, l = vectors.size(); i < l; i++) {
-
-                const auto vector = vectors[i];
+            for (auto vector : vectors) {
 
                 array_[offset++] = vector.x;
                 array_[offset++] = vector.y;
@@ -109,9 +106,7 @@ namespace threepp {
 
             int offset = 0;
 
-            for (size_t i = 0, l = vectors.size(); i < l; i++) {
-
-                const auto vector = vectors[i];
+            for (auto vector : vectors) {
 
                 array_[offset++] = vector.x;
                 array_[offset++] = vector.y;
@@ -186,7 +181,7 @@ namespace threepp {
 
         BufferAttribute<T> &transformDirection( const Matrix4 &m ) {
 
-                for ( size_t i = 0, l = this->count; i < l; i ++ ) {
+                for ( int i = 0, l = this->count; i < l; i ++ ) {
 
                     _vector.x = this->getX( i );
                     _vector.y = this->getY( i );
@@ -219,7 +214,7 @@ namespace threepp {
             return this->array_[index * this->itemSize + 1];
         }
 
-        BufferAttribute<T> setY(int index, T y) {
+        BufferAttribute<T> &setY(int index, T y) {
 
             this->array_[index * this->itemSize + 1] = y;
 
@@ -231,14 +226,14 @@ namespace threepp {
             return this->array_[index * this->itemSize + 2];
         }
 
-        BufferAttribute<T> setZ(int index, T z) {
+        BufferAttribute<T> &setZ(int index, T z) {
 
             this->array_[index * this->itemSize + 2] = z;
 
             return *this;
         }
 
-        T getW(int index) {
+        T getW(int index) const {
 
             return this->array_[index * this->itemSize + 3];
         }

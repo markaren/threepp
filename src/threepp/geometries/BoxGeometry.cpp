@@ -66,7 +66,7 @@ namespace {
 
                     vector[u] = 0;
                     vector[v] = 0;
-                    vector[w] = depth > 0 ? 1 : -1;
+                    vector[w] = depth > 0 ? 1.f : -1.f;
 
                     // now apply vector to normal buffer
 
