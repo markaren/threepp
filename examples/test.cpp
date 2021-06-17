@@ -24,6 +24,8 @@
 
 #include "threepp/math/Sphere.hpp"
 
+#include "threepp/materials/Material.hpp"
+
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <vector>
 

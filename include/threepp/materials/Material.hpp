@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class Material: public EventDispatcher  {
+    class Material: private EventDispatcher  {
 
     public:
         const unsigned int id = materialId++;
@@ -72,13 +72,13 @@ namespace threepp {
 
         bool toneMapped = true;
 
-//        std::unordered_map userData;
+//        std::unordered_map<std::string, std::any> userData;
 
         unsigned int version = 0;
 
         void dispose() {
 
-            dispatchEvent("dispose")
+            dispatchEvent("dispose");
 
         }
 
@@ -90,7 +90,7 @@ namespace threepp {
 
     private:
 
-        static unsigned int materialId = 0;
+        inline static unsigned int materialId = 0;
 
     };
 
