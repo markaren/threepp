@@ -19,9 +19,7 @@ namespace threepp {
 
         std::string uuid = generateUUID();
 
-        std::string name = "";
-
-        unsigned int version = 0;
+        std::string name;
 
         explicit Texture(
                 std::optional<Image> image = std::nullopt,
@@ -36,6 +34,8 @@ namespace threepp {
                 int encoding = LinearEncoding) {}
 
     private:
+
+        unsigned int version = 0;
 
         inline static unsigned int textureId = 0;
 

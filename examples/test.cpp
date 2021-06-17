@@ -141,10 +141,12 @@ int main() {
 
     auto pp = std::static_pointer_cast<PerspectiveCamera>(o->children[0]);
 
-    std::cout << "Excpecting " << p->far << ", got " << pp->far << std::endl;
+    std::cout << "Expecting " << p->far << ", got " << pp->far << std::endl;
     std::cout << pp->parent->name << std::endl;
 
+    o->remove(pp);
 
+    std::cout << "Expected 0, got " <<  o->children.size() << std::endl;
 
     return 0;
 

@@ -31,7 +31,7 @@ namespace threepp {
         std::optional<Texture> envMap = std::nullopt;
         int combine = MultiplyOperation;
         float reflectivity = 1;
-        float refractionRatio = 0.98;
+        float refractionRatio = 0.98f;
 
         std::string wireframeLinecap = "round";
         std::string wireframeLinejoin = "round";

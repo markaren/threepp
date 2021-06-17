@@ -154,6 +154,44 @@ namespace threepp {
             return *this;
         }
 
+        Object3D &remove(const std::shared_ptr<Object3D> &object) {
+
+
+            auto find = std::find(children.begin(), children.end(), object);
+            if (find != children.end()) {
+                children.erase(find);
+                object->parent = nullptr;
+                object->dispatchEvent("remove");
+            }
+
+            return *this;
+        }
+
+        Object3D &removeFromParent() {
+
+            if (parent) {
+
+                parent->remove(shared_from_this());
+            }
+
+            return *this;
+        }
+
+        Object3D &clear() {
+
+            for (auto object : this->children) {
+
+                object->parent = nullptr;
+
+                object->dispatchEvent("remove");
+            }
+
+            this->children.clear();
+
+            return *this;
+        }
+
+
         void updateMatrix() {
 
             this->matrix.compose(this->position, this->quaternion, this->scale);
