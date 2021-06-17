@@ -148,6 +148,8 @@ int main() {
 
     std::cout << "Expected 0, got " <<  o->children.size() << std::endl;
 
+    o->rotation.set(1,1,1);
+
     return 0;
 
 }

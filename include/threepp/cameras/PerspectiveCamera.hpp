@@ -107,7 +107,7 @@ namespace threepp {
         }
 
     protected:
-        explicit PerspectiveCamera(float fov, float aspect = 1, float near = 0.1, float far = 2000) : fov(fov), aspect(aspect), near(near), far(far) {}
+        explicit PerspectiveCamera(float fov, float aspect, float near, float far) : fov(fov), aspect(aspect), near(near), far(far) {}
 
     };
 

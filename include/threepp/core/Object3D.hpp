@@ -12,6 +12,7 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -208,40 +209,66 @@ namespace threepp {
             return nullptr;
         }
 
-        void getWorldPosition( Vector3 &target ) {
+        void getWorldPosition(Vector3 &target) {
 
-                this->updateWorldMatrix( true, false );
+            this->updateWorldMatrix(true, false);
 
-                target.setFromMatrixPosition( this->matrixWorld );
-
+            target.setFromMatrixPosition(this->matrixWorld);
         }
 
-        void getWorldQuaternion( Quaternion &target ) {
+        void getWorldQuaternion(Quaternion &target) {
 
-                this->updateWorldMatrix( true, false );
+            this->updateWorldMatrix(true, false);
 
-                this->matrixWorld.decompose( _position, target, _scale );
-
-
+            this->matrixWorld.decompose(_position, target, _scale);
         }
 
-        void getWorldScale( Vector3 & target ) {
+        void getWorldScale(Vector3 &target) {
 
-                this->updateWorldMatrix( true, false );
+            this->updateWorldMatrix(true, false);
 
-                this->matrixWorld.decompose( _position, _quaternion, target );
-
-
+            this->matrixWorld.decompose(_position, _quaternion, target);
         }
 
-        void getWorldDirection( Vector3 &target ) {
+        void getWorldDirection(Vector3 &target) {
 
-                this->updateWorldMatrix( true, false );
+            this->updateWorldMatrix(true, false);
 
-                auto e = this->matrixWorld.elements();
+            auto e = this->matrixWorld.elements();
 
-                target.set( e[ 8 ], e[ 9 ], e[ 10 ] ).normalize();
+            target.set(e[8], e[9], e[10]).normalize();
+        }
 
+        void traverse(const std::function<void(std::shared_ptr<Object3D>)> &callback) {
+
+            callback(shared_from_this());
+
+            for (auto &i : children) {
+
+                i->traverse(callback);
+            }
+        }
+
+        void traverseVisible(const std::function<void(std::shared_ptr<Object3D>)> &callback) {
+
+            if (!this->visible) return;
+
+            callback(shared_from_this());
+
+            for (auto &i : children) {
+
+                i->traverseVisible(callback);
+            }
+        }
+
+        void traverseAncestors(const std::function<void(std::shared_ptr<Object3D>)> &callback) const {
+
+            if (parent) {
+
+                callback(parent);
+
+                parent->traverseAncestors(callback);
+            }
         }
 
         void updateMatrix() {
@@ -314,8 +341,8 @@ namespace threepp {
 
     protected:
         Object3D() {
-            rotation._onChange(onQuaternionChange);
-            quaternion._onChange(onRotationChange);
+            rotation._onChange(onRotationChange);
+            quaternion._onChange(onQuaternionChange);
         };
 
     private:
@@ -326,7 +353,6 @@ namespace threepp {
         std::function<void()> onQuaternionChange = [&] {
             rotation.setFromQuaternion(quaternion, std::nullopt, false);
         };
-
 
         static Vector3 _v1;
         static Quaternion _q1;
