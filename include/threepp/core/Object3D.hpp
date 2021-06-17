@@ -26,8 +26,7 @@ namespace threepp {
         std::string uuid = generateUUID();
 
         std::string name;
-        std::string type = "Object3D";
-
+  
         std::shared_ptr<Object3D> parent;
         std::vector<std::shared_ptr<Object3D>> children;
 
@@ -56,6 +55,10 @@ namespace threepp {
         unsigned int renderOrder = 0;
 
         Object3D(const Object3D&) = delete;
+
+        virtual std::string type() const {
+            return "Object3D";
+        }
 
         void applyMatrix4(const Matrix4 &matrix) {
 

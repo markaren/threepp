@@ -15,7 +15,6 @@ namespace threepp {
     class PerspectiveCamera : public Camera {
 
     public:
-        std::string type = "PerspectiveCamera";
 
         float fov;
         float zoom = 1;
@@ -28,7 +27,6 @@ namespace threepp {
 
         float filmGauge = 35;// width of the film (default in millimeters)
         float filmOffset = 0;// horizontal film offset (same unit as gauge)
-
 
         /**
          * Sets the FOV by focal length in respect to the current .filmGauge.
@@ -103,6 +101,10 @@ namespace threepp {
         }
 
         PerspectiveCamera(const PerspectiveCamera&) = delete;
+
+        std::string type() const override {
+            return "PerspectiveCamera";
+        }
 
         static std::shared_ptr<PerspectiveCamera> create(float fov, float aspect = 1, float near = 0.1, float far = 2000) {
             return std::shared_ptr<PerspectiveCamera>(new PerspectiveCamera(fov, aspect, near, far));

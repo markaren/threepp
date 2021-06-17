@@ -12,9 +12,12 @@ namespace threepp {
     class AmbientLight : public Light {
 
     public:
-        std::string type = "AmbientLight";
-
         explicit AmbientLight(int color, std::optional<float> intensity = std::nullopt) : Light(color, intensity) {}
+
+        std::string type() const override {
+            return "AmbientLight";
+        }
+
     };
 
 }// namespace threepp

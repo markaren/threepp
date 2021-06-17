@@ -15,15 +15,15 @@ namespace threepp {
 
     public:
 
-        std::string type = "Mesh";
-
         Mesh(const Mesh&) = delete;
+
+        std::string type() const override {
+            return "Mesh";
+        }
 
         static std::shared_ptr<Mesh> create(const std::shared_ptr<BufferGeometry> &geometry, const std::shared_ptr<Material> &material) {
             return std::shared_ptr<Mesh>(new Mesh(geometry, material));
         }
-
-
 
     protected:
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)

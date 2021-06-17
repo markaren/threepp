@@ -15,12 +15,16 @@ namespace threepp {
         Camera() = default;
         Camera(const Camera&) = delete;
 
-        std::string type = "Camera";
+//        std::string type = "Camera";
 
         Matrix4 matrixWorldInverse = Matrix4();
 
         Matrix4 projectionMatrix = Matrix4();
         Matrix4 projectionMatrixInverse = Matrix4();
+
+        std::string type() const override {
+            return "Camera";
+        }
 
     };
 

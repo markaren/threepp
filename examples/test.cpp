@@ -111,7 +111,7 @@ int main() {
 
     Fog f( Color::aliceblue);
 
-    std::cout << AmbientLight(0xffffff).type << std::endl;
+    std::cout << AmbientLight(0xffffff).type() << std::endl;
 
     std::vector<float> vec {1,2};
     std::vector<float> vec2 {-1, -1};
@@ -140,6 +140,8 @@ int main() {
     p->far = 10;
 
     auto pp = std::static_pointer_cast<PerspectiveCamera>(o->children[0]);
+
+    std::cout << o->children[0]->type() << std::endl;
 
     std::cout << "Expecting " << p->far << ", got " << pp->far << std::endl;
     std::cout << pp->parent->name << std::endl;

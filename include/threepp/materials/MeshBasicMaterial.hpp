@@ -42,10 +42,7 @@ namespace threepp {
 
     protected:
 
-        MeshBasicMaterial() {
-
-            this->type = "MeshBasicMaterial";
-        }
+        MeshBasicMaterial() = default;
 
         static std::shared_ptr<MeshBasicMaterial> create() {
             return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());

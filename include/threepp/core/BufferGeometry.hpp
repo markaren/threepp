@@ -4,7 +4,7 @@
 #define THREEPP_BUFFERGEOMETRY_HPP
 
 #include "threepp/core/BufferAttribute.hpp"
-#include "threepp/core/Group.hpp"
+#include "threepp/core/misc.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -24,13 +24,12 @@ namespace threepp {
         std::string uuid = generateUUID();
 
         std::string name;
-        std::string type = "BufferGeometry";
 
-        std::vector<Group> groups;
+        std::vector<GeometryGroup> groups;
 
         BufferGeometry() = default;
 
-        BufferGeometry(const BufferGeometry&) = delete;
+        BufferGeometry(const BufferGeometry &) = delete;
 
         std::vector<int> &getIndex() {
 
@@ -65,7 +64,7 @@ namespace threepp {
 
         void addGroup(unsigned int start, unsigned int count, unsigned int materialIndex = 0) {
 
-            groups.emplace_back(Group{start, count, materialIndex});
+            groups.emplace_back(GeometryGroup{start, count, materialIndex});
         }
 
         void clearGroups() {

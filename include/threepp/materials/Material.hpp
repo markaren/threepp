@@ -17,7 +17,6 @@ namespace threepp {
         std::string uuid = generateUUID();
 
         std::string name;
-        std::string type = "Material";
 
         bool fog = true;
 
