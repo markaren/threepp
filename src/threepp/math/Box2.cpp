@@ -5,7 +5,11 @@
 
 using namespace threepp;
 
-constexpr float Infinity = std::numeric_limits<float>::infinity();
+namespace {
+
+    constexpr float Infinity = std::numeric_limits<float>::infinity();
+
+}
 
 Vector2 Box2::_vector = Vector2();
 
@@ -25,14 +29,20 @@ Box2 &Box2::setFromPoints(const std::vector<Vector2> &points) {
 
     this->makeEmpty();
 
-    for ( size_t i = 0, il = points.size(); i < il; i ++ ) {
+    for (auto point : points) {
 
-        this->expandByPoint( points[ i ] );
-
+        this->expandByPoint(point);
     }
 
     return *this;
+}
 
+Box2 &Box2::copy(const Box2 &box) {
+
+    this->min_.copy(box.min_);
+    this->max_.copy(box.max_);
+
+    return *this;
 }
 
 Box2 &Box2::makeEmpty() {
@@ -47,26 +57,23 @@ Box2 &Box2::makeEmpty() {
 bool Box2::isEmpty() const {
     // this is a more robust check for empty than ( volume <= 0 ) because volume can get positive with two negative axes
 
-    return ( this->max_.x < this->min_.x ) || ( this->max_.y < this->min_.y );
+    return (this->max_.x < this->min_.x) || (this->max_.y < this->min_.y);
 }
 
 void Box2::getCenter(Vector2 &target) {
 
-    this->isEmpty() ? target.set( 0, 0 ) : target.addVectors( this->min_, this->max_ ).multiply( 0.5f );
-
+    this->isEmpty() ? target.set(0, 0) : target.addVectors(this->min_, this->max_).multiply(0.5f);
 }
 
 void Box2::getSize(Vector2 &target) {
 
-    this->isEmpty() ? target.set( 0, 0 ) : target.subVectors( this->max_, this->min_ );
-
+    this->isEmpty() ? target.set(0, 0) : target.subVectors(this->max_, this->min_);
 }
 
 Box2 &Box2::expandByPoint(const Vector2 &point) {
 
-    this->min_.min( point );
-    this->max_.max( point );
+    this->min_.min(point);
+    this->max_.max(point);
 
     return *this;
-
 }

@@ -20,6 +20,8 @@ namespace threepp {
 
         Box2 &setFromPoints(const std::vector<Vector2> &points);
 
+        Box2 &copy( const Box2 &box );
+
         Box2 &makeEmpty();
 
         [[nodiscard]] bool isEmpty() const;

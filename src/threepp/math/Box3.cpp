@@ -171,7 +171,7 @@ bool Box3::intersectsSphere(const Sphere &sphere) {
 
 }
 
-bool Box3::intersectsPlane(const Plane &plane) {
+bool Box3::intersectsPlane(const Plane &plane) const {
 
     // We compute the minimum and maximum dot product values. If those values
     // are on the same side (back or front) of the plane, then there is no intersection.

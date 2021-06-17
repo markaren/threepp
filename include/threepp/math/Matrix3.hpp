@@ -25,6 +25,8 @@ namespace threepp {
 
         Matrix3 &identity();
 
+        Matrix3 &copy(const Matrix3 &m);
+
         Matrix3 &extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis);
 
         Matrix3 &setFromMatrix4(const Matrix4 &m);
@@ -48,7 +50,7 @@ namespace threepp {
         template<class ArrayLike>
         Matrix3 &transposeIntoArray(ArrayLike &r) {
 
-            const auto& m = this->elements_;
+            const auto &m = this->elements_;
 
             r[0] = m[0];
             r[1] = m[3];
@@ -85,7 +87,7 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) const {
 
-            const auto& te = this->elements_;
+            const auto &te = this->elements_;
 
             array[offset] = te[0];
             array[offset + 1] = te[1];
@@ -107,8 +109,6 @@ namespace threepp {
                 1, 0, 0,
                 0, 1, 0,
                 0, 0, 1};
-
-
     };
 
 

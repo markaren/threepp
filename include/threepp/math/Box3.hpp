@@ -51,7 +51,7 @@ namespace threepp {
 
         bool intersectsSphere(const Sphere &sphere);
 
-        bool intersectsPlane(const Plane &plane);
+        bool intersectsPlane(const Plane &plane) const;
 
         bool intersectsTriangle(const Triangle &triangle);
 
