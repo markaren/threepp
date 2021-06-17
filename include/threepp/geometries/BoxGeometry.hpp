@@ -21,6 +21,9 @@ namespace threepp {
 
         explicit BoxGeometry(float width = 1, float height = 1, float depth = 1, int widthSegments = 1, int heightSegments = 1, int depthSegments = 1);
 
+        static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, int widthSegments = 1, int heightSegments = 1, int depthSegments = 1) {
+            return std::make_shared<BoxGeometry>(width, height, depth, widthSegments, heightSegments, depthSegments);
+        }
     };
 
 }// namespace threepp

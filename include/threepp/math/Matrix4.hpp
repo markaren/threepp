@@ -21,6 +21,8 @@ namespace threepp {
 
         Matrix4 &identity();
 
+        Matrix4 &copy( const Matrix4 &m );
+
         Matrix4 &copyPosition(const Matrix4 &m);
 
         Matrix4 &setFromMatrix3(const Matrix4 &m);

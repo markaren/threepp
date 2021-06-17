@@ -3,19 +3,18 @@
 #ifndef THREEPP_MESHBASICMATERIAL_HPP
 #define THREEPP_MESHBASICMATERIAL_HPP
 
-#include "threepp/math/Color.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/math/Color.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <optional>
 
 namespace threepp {
 
-    class MeshBasicMaterial: public Material {
+    class MeshBasicMaterial : public Material {
 
     public:
-
-        Color color = Color( 0xffffff );
+        Color color = Color(0xffffff);
 
         std::optional<Texture> map = std::nullopt;
 
@@ -43,11 +42,13 @@ namespace threepp {
         MeshBasicMaterial() {
 
             this.type = "MeshBasicMaterial";
-
         }
 
+        static std::shared_ptr<MeshBasicMaterial> create() {
+            return std::make_shared<MeshBasicMaterial>();
+        }
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_MESHBASICMATERIAL_HPP

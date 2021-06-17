@@ -46,6 +46,14 @@ Box3 &Box3::setFromCenterAndSize(const Vector3 &center, const Vector3 &size) {
 
 }
 
+Box3 &Box3::copy(const Box3 &box) {
+
+    this->min_.copy(box.min_);
+    this->max_.copy(box.max_);
+
+    return *this;
+}
+
 Box3 &Box3::makeEmpty() {
 
     this->min_.x = this->min_.y = this->min_.z = +Infinity;
@@ -92,4 +100,42 @@ Box3 &Box3::expandByScalar(float scalar) {
     this->max_.add(scalar);
 
     return *this;
+}
+
+bool Box3::containsPoint(const Vector3 &point) const {
+
+    return point.x < this->min_.x || point.x > this->max_.x ||
+           point.y < this->min_.y || point.y > this->max_.y ||
+           point.z < this->min_.z || point.z > this->max_.z ? false : true;
+
+}
+
+bool Box3::containsBox(const Box3 &box) const {
+
+    return this->min_.x <= box.min_.x && box.max_.x <= this->max_.x &&
+           this->min_.y <= box.min_.y && box.max_.y <= this->max_.y &&
+           this->min_.z <= box.min_.z && box.max_.z <= this->max_.z;
+
+}
+
+void Box3::getParameter(const Vector3 &point, Vector3 &target) const {
+
+    // This can potentially have a divide by zero if the box
+    // has a size dimension of 0.
+
+    target.set(
+            ( point.x - this->min_.x ) / ( this->max_.x - this->min_.x ),
+            ( point.y - this->min_.y ) / ( this->max_.y - this->min_.y ),
+            ( point.z - this->min_.z ) / ( this->max_.z - this->min_.z )
+    );
+
+}
+
+bool Box3::intersectsBox(const Box3 &box) const {
+
+    // using 6 splitting planes to rule out intersections.
+    return box.max_.x < this->min_.x || box.min_.x > this->max_.x ||
+           box.max_.y < this->min_.y || box.min_.y > this->max_.y ||
+           box.max_.z < this->min_.z || box.min_.z > this->max_.z ? false : true;
+
 }

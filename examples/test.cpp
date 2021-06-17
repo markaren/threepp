@@ -19,6 +19,8 @@
 
 #include <threepp/core/EventDispatcher.hpp>
 
+#include <threepp/cameras/PerspectiveCamera.hpp>
+
 #include <threepp/core/BufferGeometry.hpp>
 #include <threepp/core/BufferAttribute.hpp>
 

@@ -53,6 +53,22 @@ Matrix4 &Matrix4::identity() {
     return *this;
 }
 
+Matrix4 &Matrix4::copy(const Matrix4 &m) {
+
+    auto te = this->elements_;
+    const auto me = m.elements_;
+
+    //clang-format off
+    te[ 0 ] = me[ 0 ]; te[ 1 ] = me[ 1 ]; te[ 2 ] = me[ 2 ]; te[ 3 ] = me[ 3 ];
+    te[ 4 ] = me[ 4 ]; te[ 5 ] = me[ 5 ]; te[ 6 ] = me[ 6 ]; te[ 7 ] = me[ 7 ];
+    te[ 8 ] = me[ 8 ]; te[ 9 ] = me[ 9 ]; te[ 10 ] = me[ 10 ]; te[ 11 ] = me[ 11 ];
+    te[ 12 ] = me[ 12 ]; te[ 13 ] = me[ 13 ]; te[ 14 ] = me[ 14 ]; te[ 15 ] = me[ 15 ];
+    //clang-format on
+
+    return *this;
+
+}
+
 Matrix4 &Matrix4::copyPosition(const Matrix4 &m) {
 
     auto te = this->elements_;
