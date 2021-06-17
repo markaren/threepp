@@ -17,7 +17,7 @@ Vector3 Matrix4::_zero = Vector3();
 Vector3 Matrix4::_one = Vector3(1, 1, 1);
 Vector3 Matrix4::_x = Vector3(1, 0, 0);
 Vector3 Matrix4::_y = Vector3(0, 1, 0);
-Vector3 Matrix4::_z = Vector3(0, 1, 0);
+Vector3 Matrix4::_z = Vector3(0, 0, 1);
 
 float &Matrix4::operator[](unsigned int index) {
     if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));

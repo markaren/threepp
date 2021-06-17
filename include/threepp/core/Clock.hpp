@@ -10,7 +10,7 @@ namespace threepp {
     class Clock {
 
     public:
-        explicit Clock(bool autoStart = true): autoStart_(autoStart){}
+        explicit Clock(bool autoStart = true) : autoStart_(autoStart) {}
 
         void start() {
 
@@ -19,7 +19,6 @@ namespace threepp {
             oldTime_ = startTime_;
             elapsedTime_ = 0;
             running_ = true;
-
         }
 
         void stop() {
@@ -27,14 +26,12 @@ namespace threepp {
             getElapsedTime();
             running_ = false;
             autoStart_ = false;
-
         }
 
         double getElapsedTime() {
 
             getDelta();
             return elapsedTime_;
-
         }
 
         double getDelta() {
@@ -45,7 +42,6 @@ namespace threepp {
 
                 start();
                 return 0;
-
             }
 
             if (running_) {
@@ -56,11 +52,9 @@ namespace threepp {
                 oldTime_ = newTime;
 
                 elapsedTime_ += diff;
-
             }
 
             return diff;
-
         }
 
     private:
@@ -71,9 +65,8 @@ namespace threepp {
 
         std::chrono::time_point<std::chrono::system_clock> startTime_;
         std::chrono::time_point<std::chrono::system_clock> oldTime_;
-
     };
 
-}
+}// namespace threepp
 
-#endif //THREEPP_CLOCK_HPP
+#endif//THREEPP_CLOCK_HPP

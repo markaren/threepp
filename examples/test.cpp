@@ -1,10 +1,10 @@
 
-//#include <threepp/math/Vector2.hpp>
+#include <threepp/math/Vector2.hpp>
 #include <threepp/math/Vector3.hpp>
-//#include <threepp/math/Vector4.hpp>
-//#include <threepp/math/Triangle.hpp>
-//#include <threepp/math/Quaternion.hpp>
-//#include <threepp/math/Euler.hpp>
+#include <threepp/math/Vector4.hpp>
+#include <threepp/math/Triangle.hpp>
+#include <threepp/math/Quaternion.hpp>
+#include <threepp/math/Euler.hpp>
 #include <iostream>
 #include <thread>
 #include <threepp/core/Clock.hpp>
@@ -28,6 +28,8 @@
 
 #include "threepp/materials/Material.hpp"
 
+#include <threepp/core/Object3D.hpp>
+#include <threepp/objects/Mesh.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <vector>
 
@@ -125,6 +127,11 @@ int main() {
     attr.setX(0, 1);
     std::cout << attr.getX(0) << std::endl;
     std::cout << box.getAttribute<float>("position").getX(0) << std::endl;
+
+    auto obj = Object3D::create();
+
+    Object3D o;
+//    Mesh mesh;
 
     return 0;
 

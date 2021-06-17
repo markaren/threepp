@@ -21,7 +21,7 @@ namespace threepp {
 
         Matrix4 &identity();
 
-        Matrix4 &copy( const Matrix4 &m );
+        Matrix4 &copy(const Matrix4 &m);
 
         Matrix4 &copyPosition(const Matrix4 &m);
 
@@ -77,11 +77,11 @@ namespace threepp {
 
         Matrix4 &compose(const Vector3 &position, const Quaternion &quaternion, const Vector3 &scale);
 
-        Matrix4 &decompose(Vector3 &position, Quaternion &quaternion, Vector3 &scale );
+        Matrix4 &decompose(Vector3 &position, Quaternion &quaternion, Vector3 &scale);
 
-        Matrix4 &makePerspective( float left, float right, float top, float bottom, float near, float far );
+        Matrix4 &makePerspective(float left, float right, float top, float bottom, float near, float far);
 
-        Matrix4 &makeOrthographic( float left, float right, float top, float bottom, float near, float far );
+        Matrix4 &makeOrthographic(float left, float right, float top, float bottom, float near, float far);
 
         template<class ArrayLike>
         Matrix4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {

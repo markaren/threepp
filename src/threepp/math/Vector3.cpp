@@ -17,6 +17,13 @@
 
 using namespace threepp;
 
+Vector3 Vector3::X = Vector3(1,0,0);
+Vector3 Vector3::Y = Vector3(0,1,0);
+Vector3 Vector3::Z = Vector3(0,0,1);
+
+Vector3 Vector3::ONES = Vector3(1,1,1);
+Vector3 Vector3::ZEROS = Vector3(0,0,0);
+
 Vector3::Vector3(float x, float y, float z) : x(x), y(y), z(z) {}
 
 Vector3 &Vector3::set(float x, float y, float z) {

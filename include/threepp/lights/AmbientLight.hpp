@@ -15,7 +15,7 @@ namespace threepp {
 
         std::string type = "AmbientLight";
 
-        AmbientLight(int color, std::optional<float> intensity = std::nullopt): Light(color, intensity){}
+        explicit AmbientLight(int color, std::optional<float> intensity = std::nullopt): Light(color, intensity){}
 
     };
 

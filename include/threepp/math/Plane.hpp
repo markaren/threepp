@@ -19,7 +19,7 @@ namespace threepp {
 
         Plane &set(const Vector3 &normal, float constant);
 
-        Plane &setComponents( float x, float y, float z, float w );
+        Plane &setComponents(float x, float y, float z, float w);
 
     private:
         static Vector3 _vector1;

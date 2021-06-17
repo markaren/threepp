@@ -18,17 +18,17 @@ namespace threepp {
 
         Box2 &set(const Vector2 &min, const Vector2 &max);
 
-        Box2 &setFromPoints( const std::vector<Vector2> &points );
+        Box2 &setFromPoints(const std::vector<Vector2> &points);
 
         Box2 &makeEmpty();
 
         [[nodiscard]] bool isEmpty() const;
 
-        void getCenter( Vector2 &target );
+        void getCenter(Vector2 &target);
 
-        void getSize( Vector2 &target );
+        void getSize(Vector2 &target);
 
-        Box2 &expandByPoint( const Vector2 &point );
+        Box2 &expandByPoint(const Vector2 &point);
 
 
     private:
@@ -36,9 +36,8 @@ namespace threepp {
         Vector2 max_;
 
         static Vector2 _vector;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_BOX2_HPP

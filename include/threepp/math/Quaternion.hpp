@@ -37,13 +37,13 @@ namespace threepp {
 
         Quaternion &set(float x, float y, float z, float w);
 
-        Quaternion &setFromEuler( const Euler &euler, bool update = true );
+        Quaternion &setFromEuler(const Euler &euler, bool update = true);
 
         Quaternion &setFromAxisAngle(const Vector3 &axis, float angle);
 
-        Quaternion &setFromRotationMatrix( const Matrix4 &m );
+        Quaternion &setFromRotationMatrix(const Matrix4 &m);
 
-        [[nodiscard]] float angleTo( const Quaternion &q ) const;
+        [[nodiscard]] float angleTo(const Quaternion &q) const;
 
         Quaternion &identity();
 
@@ -59,13 +59,13 @@ namespace threepp {
 
         Quaternion &normalize();
 
-        Quaternion &multiply( const Quaternion &q );
+        Quaternion &multiply(const Quaternion &q);
 
-        Quaternion &premultiply( const Quaternion &q );
+        Quaternion &premultiply(const Quaternion &q);
 
-        Quaternion &multiplyQuaternions( const Quaternion &a, const Quaternion &b );
+        Quaternion &multiplyQuaternions(const Quaternion &a, const Quaternion &b);
 
-        Quaternion &_onChange( std::function<void()> callback );
+        Quaternion &_onChange(std::function<void()> callback);
 
         template<class ArrayLike>
         Quaternion &fromArray(const ArrayLike &array, unsigned int offset = 0) {

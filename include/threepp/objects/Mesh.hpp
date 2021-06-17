@@ -7,15 +7,17 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 
+#include <memory>
+
 namespace threepp {
 
     class Mesh : public Object3D {
 
     public:
-        Mesh(const std::shared_ptr<BufferGeometry> &geometry, const std::shared_ptr > Material > &material)
-            : geometry_(std::move(geometry)), material_(std::move(material_)) {}
+        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
+            : geometry_(std::move(geometry)), material_(std::move(material)) {}
 
-        static std::shared_ptr<Mesh> create(const std::shared_ptr<BufferGeometry> &geometry, const std::shared_ptr > Material > &material) {
+        static std::shared_ptr<Mesh> create( const std::shared_ptr<BufferGeometry>& geometry,  const std::shared_ptr<Material>& material) {
             return std::make_shared<Mesh>(geometry, material);
         }
 

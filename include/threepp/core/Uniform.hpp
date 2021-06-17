@@ -11,7 +11,7 @@ namespace threepp {
     class Uniform {
 
     public:
-        explicit Uniform(std::any value): value_(std::move(value)){}
+        explicit Uniform(std::any value) : value_(std::move(value)) {}
 
         [[nodiscard]] std::any &value() {
             return value_;
@@ -19,9 +19,8 @@ namespace threepp {
 
     private:
         std::any value_;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_UNIFORM_HPP

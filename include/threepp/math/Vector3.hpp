@@ -152,6 +152,13 @@ namespace threepp {
 
         Vector3 &fromBufferAttribute( const BufferAttribute<float> &attribute, int index );
 
+        static Vector3 X;
+        static Vector3 Y;
+        static Vector3 Z;
+
+        static Vector3 ONES;
+        static Vector3 ZEROS;
+
     };
 
 

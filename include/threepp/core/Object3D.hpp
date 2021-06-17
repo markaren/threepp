@@ -111,6 +111,38 @@ namespace threepp {
             return *this;
         }
 
+        Object3D &rotateOnWorldAxis( const Vector3 &axis, float angle ) {
+
+            // rotate object on axis in world space
+            // axis is assumed to be normalized
+            // method assumes no rotated parent
+
+            _q1.setFromAxisAngle( axis, angle );
+
+            this->quaternion.premultiply( _q1 );
+
+            return *this;
+
+        }
+
+        Object3D &rotateX( float angle ) {
+
+                return this->rotateOnAxis( Vector3::X, angle );
+
+        }
+
+        Object3D &rotateY( float angle ) {
+
+                return this->rotateOnAxis( Vector3::Y, angle );
+
+        }
+
+        Object3D &rotateZ( float angle ) {
+
+                return this->rotateOnAxis( Vector3::Z, angle );
+
+        }
+
         void updateMatrix() {
 
             this->matrix.compose(this->position, this->quaternion, this->scale);
@@ -175,6 +207,9 @@ namespace threepp {
             }
         }
 
+        static std::shared_ptr<Object3D> create() {
+            return std::make_shared<Object3D>();
+        }
 
     private:
         std::function<void()> onRotationChange = [&] {
@@ -189,6 +224,7 @@ namespace threepp {
         static Quaternion _q1;
 
         static unsigned int _object3Did;
+
     };
 
 }// namespace threepp

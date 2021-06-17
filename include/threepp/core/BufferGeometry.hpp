@@ -45,7 +45,7 @@ namespace threepp {
 
             if (!hasAttribute(name)) throw std::runtime_error("No attribute named: " + name);
 
-            return std::any_cast<BufferAttribute<T>&>(attributes_[name]);
+            return std::any_cast<BufferAttribute<T> &>(attributes_[name]);
         }
 
         template<class T>

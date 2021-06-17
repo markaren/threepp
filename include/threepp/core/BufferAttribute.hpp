@@ -18,7 +18,6 @@ namespace threepp {
     class BufferAttribute {
 
     public:
-
         std::string name;
 
         BufferAttribute(std::vector<T> array, int itemSize, bool normalized = false) : array_(std::move(array)), itemSize(itemSize), count(static_cast<int>(array.size()) / itemSize) {}
@@ -143,58 +142,52 @@ namespace threepp {
             return *this;
         }
 
-        BufferAttribute<T> &applyMatrix4( const Matrix4 &m ) {
+        BufferAttribute<T> &applyMatrix4(const Matrix4 &m) {
 
-                for ( int i = 0, l = this->count; i < l; i ++ ) {
+            for (int i = 0, l = this->count; i < l; i++) {
 
-                    _vector.x = this->getX( i );
-                    _vector.y = this->getY( i );
-                    _vector.z = this->getZ( i );
+                _vector.x = this->getX(i);
+                _vector.y = this->getY(i);
+                _vector.z = this->getZ(i);
 
-                    _vector.applyMatrix4( m );
+                _vector.applyMatrix4(m);
 
-                    this->setXYZ( i, _vector.x, _vector.y, _vector.z );
+                this->setXYZ(i, _vector.x, _vector.y, _vector.z);
+            }
 
-                }
-
-                return *this;
-
+            return *this;
         }
 
-        BufferAttribute<T> &applyNormalMatrix( const Matrix3 &m ) {
+        BufferAttribute<T> &applyNormalMatrix(const Matrix3 &m) {
 
-                for ( int i = 0, l = this->count; i < l; i ++ ) {
+            for (int i = 0, l = this->count; i < l; i++) {
 
-                    _vector.x = this->getX( i );
-                    _vector.y = this->getY( i );
-                    _vector.z = this->getZ( i );
+                _vector.x = this->getX(i);
+                _vector.y = this->getY(i);
+                _vector.z = this->getZ(i);
 
-                    _vector.applyNormalMatrix( m );
+                _vector.applyNormalMatrix(m);
 
-                    this->setXYZ( i, _vector.x, _vector.y, _vector.z );
+                this->setXYZ(i, _vector.x, _vector.y, _vector.z);
+            }
 
-                }
-
-                return *this;
-
+            return *this;
         }
 
-        BufferAttribute<T> &transformDirection( const Matrix4 &m ) {
+        BufferAttribute<T> &transformDirection(const Matrix4 &m) {
 
-                for ( int i = 0, l = this->count; i < l; i ++ ) {
+            for (int i = 0, l = this->count; i < l; i++) {
 
-                    _vector.x = this->getX( i );
-                    _vector.y = this->getY( i );
-                    _vector.z = this->getZ( i );
+                _vector.x = this->getX(i);
+                _vector.y = this->getY(i);
+                _vector.z = this->getZ(i);
 
-                    _vector.transformDirection( m );
+                _vector.transformDirection(m);
 
-                    this->setXYZ( i, _vector.x, _vector.y, _vector.z );
+                this->setXYZ(i, _vector.x, _vector.y, _vector.z);
+            }
 
-                }
-
-                return *this;
-
+            return *this;
         }
 
         T getX(int index) const {
@@ -245,40 +238,37 @@ namespace threepp {
             return *this;
         }
 
-        BufferAttribute<T> &setXY( int index, T x, T y ) {
+        BufferAttribute<T> &setXY(int index, T x, T y) {
 
             index *= this->itemSize;
 
-            this->array_[ index + 0 ] = x;
-            this->array_[ index + 1 ] = y;
+            this->array_[index + 0] = x;
+            this->array_[index + 1] = y;
 
             return *this;
-
         }
 
-        BufferAttribute<T> &setXYZ( int index, T x, T y, T z ) {
+        BufferAttribute<T> &setXYZ(int index, T x, T y, T z) {
 
             index *= this->itemSize;
 
-            this->array_[ index + 0 ] = x;
-            this->array_[ index + 1 ] = y;
-            this->array_[ index + 2 ] = z;
+            this->array_[index + 0] = x;
+            this->array_[index + 1] = y;
+            this->array_[index + 2] = z;
 
             return *this;
-
         }
 
-        BufferAttribute<T> &setXYZW( int index, T x, T y, T z, T w ) {
+        BufferAttribute<T> &setXYZW(int index, T x, T y, T z, T w) {
 
             index *= this->itemSize;
 
-            this->array_[ index + 0 ] = x;
-            this->array_[ index + 1 ] = y;
-            this->array_[ index + 2 ] = z;
-            this->array_[ index + 3 ] = w;
+            this->array_[index + 0] = x;
+            this->array_[index + 1] = y;
+            this->array_[index + 2] = z;
+            this->array_[index + 3] = w;
 
             return *this;
-
         }
 
 
@@ -295,7 +285,7 @@ namespace threepp {
         inline static Vector3 _vector = Vector3();
         inline static Vector2 _vector2 = Vector2();
     };
-    
+
 }// namespace threepp
 
 #endif//THREEPP_BUFFER_ATTRIBUTE_HPP
