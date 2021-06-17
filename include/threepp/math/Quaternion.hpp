@@ -23,19 +23,53 @@ namespace threepp {
             return x_;
         }
 
+        Quaternion &x(float value) {
+
+            this->x_ = value;
+            this->onChangeCallback_();
+
+            return *this;
+        }
+
         [[nodiscard]] float y() const {
             return y_;
+        }
+
+        Quaternion &y(float value) {
+
+            this->y_ = value;
+            this->onChangeCallback_();
+
+            return *this;
         }
 
         [[nodiscard]] float z() const {
             return z_;
         }
 
+        Quaternion &z(float value) {
+
+            this->z_ = value;
+            this->onChangeCallback_();
+
+            return *this;
+        }
+
         [[nodiscard]] float w() const {
             return w_;
         }
 
+        Quaternion &w(float value) {
+
+            this->w_ = value;
+            this->onChangeCallback_();
+
+            return *this;
+        }
+
         Quaternion &set(float x, float y, float z, float w);
+
+        Quaternion &copy(const Quaternion &quaternion);
 
         Quaternion &setFromEuler(const Euler &euler, bool update = true);
 

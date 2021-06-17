@@ -267,7 +267,7 @@ bool Box3::satForAxes(const std::vector<float> &axes, const Vector3 &v0, const V
 
     for (size_t i = 0, j = axes.size() - 3; i <= j; i += 3) {
 
-        _testAxis.fromArray(axes, i);
+        _testAxis.fromArray(axes, static_cast<unsigned int>(i));
         // project the aabb onto the seperating axis
         const auto r = extents.x * std::abs(_testAxis.x) + extents.y * std::abs(_testAxis.y) + extents.z * std::abs(_testAxis.z);
         // project all 3 vertices of the triangle onto the seperating axis

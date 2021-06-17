@@ -24,6 +24,18 @@ Quaternion &Quaternion::set(float x, float y, float z, float w) {
     return *this;
 }
 
+Quaternion &Quaternion::copy(const Quaternion &quaternion) {
+
+    this->x_ = quaternion.x_;
+    this->y_ = quaternion.y_;
+    this->z_ = quaternion.z_;
+    this->w_ = quaternion.w_;
+
+    this->onChangeCallback_();
+
+    return *this;
+}
+
 Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
 
     const auto x = euler.x_, y = euler.y_, z = euler.z_;
@@ -272,4 +284,3 @@ Quaternion &Quaternion::_onChange(std::function<void()> callback) {
     return *this;
 
 }
-

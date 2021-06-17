@@ -17,7 +17,7 @@ namespace threepp {
     class Sphere {
 
     public:
-        explicit Sphere(Vector3 center, float radius = -1);
+        explicit Sphere(Vector3 center = Vector3(), float radius = -1);
 
         [[nodiscard]] float radius() const;
 
