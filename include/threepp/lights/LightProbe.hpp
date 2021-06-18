@@ -5,8 +5,9 @@
 
 namespace threepp {
 
+    class LightProbe {
+    };
 
-
-}
+}// namespace threepp
 
 #endif//THREEPP_LIGHTPROBE_HPP

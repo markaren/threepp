@@ -3,10 +3,13 @@
 #ifndef THREEPP_POINTLIGHTSHADOWS_HPP
 #define THREEPP_POINTLIGHTSHADOWS_HPP
 
+#include "threepp/lights/LightShadow.hpp"
+
 namespace threepp {
 
+    class PointLightShadow : public LightShadow {
+    };
 
-
-}
+}// namespace threepp
 
 #endif//THREEPP_POINTLIGHTSHADOWS_HPP
