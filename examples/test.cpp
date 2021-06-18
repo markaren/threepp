@@ -156,10 +156,10 @@ int main() {
 
     o->rotation.set(1,1,1);
 
-//    Canvas canvas(Canvas::Parameters().title(""));
-//    canvas.animate([](float dt){
-//
-//    });
+    Canvas canvas(Canvas::Parameters().title(""));
+    canvas.animate([](float dt){
+
+    });
 
     return 0;
 

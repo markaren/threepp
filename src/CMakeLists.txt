@@ -1,6 +1,9 @@
 set(publicHeaderDir ${CMAKE_SOURCE_DIR}/include)
 
 set(publicHeaders
+
+        "threepp/Canvas.hpp"
+
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
@@ -14,6 +17,7 @@ set(publicHeaders
         "threepp/math/Cylindrical.hpp"
         "threepp/math/Euler.hpp"
         "threepp/math/Frustum.hpp"
+        "threepp/math/MathUtils.hpp"
         "threepp/math/Matrix3.hpp"
         "threepp/math/Matrix4.hpp"
         "threepp/math/Plane.hpp"
@@ -24,7 +28,6 @@ set(publicHeaders
         "threepp/math/Vector3.hpp"
         "threepp/math/Vector4.hpp"
         "threepp/math/Quaternion.hpp"
-        "threepp/math/MathUtils.hpp"
 
         "threepp/canvas.hpp"
         "threepp/constants.hpp"
@@ -37,6 +40,8 @@ endforeach ()
 
 set(sources
 
+        "threepp/Canvas.cpp"
+
         "threepp/core/BufferGeometry.cpp"
         "threepp/core/Object3D.cpp"
 
@@ -48,6 +53,7 @@ set(sources
         "threepp/math/Cylindrical.cpp"
         "threepp/math/Euler.cpp"
         "threepp/math/Frustum.cpp"
+        "threepp/math/MathUtils.cpp"
         "threepp/math/Matrix3.cpp"
         "threepp/math/Matrix4.cpp"
         "threepp/math/Plane.cpp"
@@ -58,14 +64,14 @@ set(sources
         "threepp/math/Vector3.cpp"
         "threepp/math/Vector4.cpp"
         "threepp/math/Quaternion.cpp"
-        "threepp/math/MathUtils.cpp"
+
         )
 
 set(privateHeaders
         )
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
-target_link_libraries(threepp PUBLIC CONAN_PKG::glfw CONAN_PKG::glad)
+target_link_libraries(threepp PRIVATE CONAN_PKG::glfw CONAN_PKG::glad)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"
