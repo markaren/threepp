@@ -1,17 +1,17 @@
 
-#include <threepp/math/Vector2.hpp>
-#include <threepp/math/Vector3.hpp>
-#include <threepp/math/Vector4.hpp>
-#include <threepp/math/Triangle.hpp>
-#include <threepp/math/Quaternion.hpp>
-#include <threepp/math/Euler.hpp>
 #include <iostream>
 #include <thread>
 #include <threepp/core/Clock.hpp>
-#include <threepp/math/Box2.hpp>
-#include <threepp/math/Matrix4.hpp>
-#include <threepp/math/Color.hpp>
 #include <threepp/lights/AmbientLight.hpp>
+#include <threepp/math/Box2.hpp>
+#include <threepp/math/Color.hpp>
+#include <threepp/math/Euler.hpp>
+#include <threepp/math/Matrix4.hpp>
+#include <threepp/math/Quaternion.hpp>
+#include <threepp/math/Triangle.hpp>
+#include <threepp/math/Vector2.hpp>
+#include <threepp/math/Vector3.hpp>
+#include <threepp/math/Vector4.hpp>
 
 #include <threepp/core/Uniform.hpp>
 
@@ -21,8 +21,8 @@
 
 #include <threepp/cameras/PerspectiveCamera.hpp>
 
-#include <threepp/core/BufferGeometry.hpp>
 #include <threepp/core/BufferAttribute.hpp>
+#include <threepp/core/BufferGeometry.hpp>
 
 #include "threepp/math/Sphere.hpp"
 
@@ -32,11 +32,17 @@
 #include "threepp/scenes/Scene.hpp"
 
 #include <threepp/core/Object3D.hpp>
-#include <threepp/objects/Mesh.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
+#include <threepp/objects/Mesh.hpp>
 #include <vector>
 
 #include "threepp/Canvas.hpp"
+
+#include "threepp/renderers/gl/GLInfo.hpp"
+
+#include "threepp/core/Uniform.hpp"
+
+#include "threepp/renderers/shaders/UniformsLib.hpp"
 
 using namespace threepp;
 
@@ -83,17 +89,17 @@ int main() {
 
     threepp::Clock c;
     c.start();
-    std::this_thread::sleep_for(std::chrono::milliseconds (500));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::cout << "Elapsed=" << c.getElapsedTime() << std::endl;
 
     EventDispatcher evt;
 
-    EventListener l = [](auto e){
-      std::cout << "Event type:" << e.type << std::endl;
+    EventListener l = [](auto e) {
+        std::cout << "Event type:" << e.type << std::endl;
     };
 
-    EventListener l1 = [](auto e){
-      std::cout << "Event type:" << e.type << std::endl;
+    EventListener l1 = [](auto e) {
+        std::cout << "Event type:" << e.type << std::endl;
     };
 
     evt.addEventListener("per", &l);
@@ -113,12 +119,12 @@ int main() {
     auto m = std::any_cast<Matrix4>(uniform.value());
     std::cout << m4[0] << ":" << m[0] << std::endl;
 
-    Fog f( Color::aliceblue);
+    Fog f(Color::aliceblue);
 
     std::cout << AmbientLight(0xffffff).type() << std::endl;
 
-    std::vector<float> vec {1,2};
-    std::vector<float> vec2 {-1, -1};
+    std::vector<float> vec{1, 2};
+    std::vector<float> vec2{-1, -1};
 
     BufferAttribute<float> b(vec, 2);
     b.copyArray(vec2);
@@ -127,7 +133,7 @@ int main() {
     std::cout << b.getX(0) << std::endl;
 
     BoxGeometry box;
-    auto& attr = box.getAttribute<float>("position");
+    auto &attr = box.getAttribute<float>("position");
     std::cout << attr.getX(0) << std::endl;
     attr.setX(0, 1);
     std::cout << attr.getX(0) << std::endl;
@@ -152,15 +158,20 @@ int main() {
 
     o->remove(pp);
 
-    std::cout << "Expected 0, got " <<  o->children.size() << std::endl;
+    std::cout << "Expected 0, got " << o->children.size() << std::endl;
 
-    o->rotation.set(1,1,1);
+    o->rotation.set(1, 1, 1);
 
-    Canvas canvas(Canvas::Parameters().title(""));
-    canvas.animate([](float dt){
+    std::vector<Uniform> uv;
+    uv.emplace_back(Matrix4());
 
-    });
+    auto ulib = shaders::UniformsLib::getInstance();
+    std::cout << std::any_cast<Color>(ulib->common["diffuse"].value()).r << std::endl;
+
+    //    Canvas canvas(Canvas::Parameters().title(""));
+    //    canvas.animate([](float dt){
+    //
+    //    });
 
     return 0;
-
 }

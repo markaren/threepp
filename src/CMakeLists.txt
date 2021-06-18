@@ -29,6 +29,9 @@ set(publicHeaders
         "threepp/math/Vector4.hpp"
         "threepp/math/Quaternion.hpp"
 
+        "threepp/renderers/GLRenderer.hpp"
+
+
         "threepp/canvas.hpp"
         "threepp/constants.hpp"
         )
@@ -65,13 +68,24 @@ set(sources
         "threepp/math/Vector4.cpp"
         "threepp/math/Quaternion.cpp"
 
+        "threepp/renderers/GLRenderer.cpp"
+
         )
 
 set(privateHeaders
+
+        "threepp/renderers/gl/GLInfo.hpp"
+        "threepp/renderers/gl/GLProgram.hpp"
+
+        "threepp/renderers/shaders/ShaderChunk.hpp"
+        "threepp/renderers/shaders/ShaderLib.hpp"
+        "threepp/renderers/shaders/UniformsLib.hpp"
+        "threepp/renderers/shaders/mergeuniforms.hpp"
+
         )
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
-target_link_libraries(threepp PRIVATE CONAN_PKG::glfw CONAN_PKG::glad)
+target_link_libraries(threepp PUBLIC CONAN_PKG::glfw CONAN_PKG::glad)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"
