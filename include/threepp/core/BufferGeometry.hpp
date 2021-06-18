@@ -254,7 +254,7 @@ namespace threepp {
 
                 // first, find the center of the bounding sphere
 
-                auto& center = this->boundingSphere->center;
+                auto center = this->boundingSphere->center;
 
                 _box.setFromBufferAttribute( position );
 

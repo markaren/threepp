@@ -33,6 +33,7 @@
 
 #include <threepp/core/Object3D.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
+#include <threepp/geometries/SphereGeometry.hpp>
 #include <threepp/objects/Mesh.hpp>
 #include <vector>
 
@@ -91,6 +92,11 @@ int main() {
     c.start();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     std::cout << "Elapsed=" << c.getElapsedTime() << std::endl;
+
+    auto sphere = SphereGeometry::create();
+    sphere->computeBoundingSphere();
+
+    std::cout << "excpected radius 1, got=" << sphere->boundingSphere->radius << std::endl;
 
     EventDispatcher evt;
 

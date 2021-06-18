@@ -11,15 +11,15 @@
 #include "threepp/core/misc.hpp"
 
 #include <vector>
-
+#include <iostream>
 namespace threepp {
 
     template<class T>
     class BufferAttribute {
 
     public:
-        BufferAttribute(std::vector<T> array, int itemSize, bool normalized = false)
-            : array_(std::move(array)), itemSize_(itemSize), count_(static_cast<int>(array.size()) / itemSize), normalized_(normalized) {}
+        BufferAttribute(const std::vector<T> &array, int itemSize, bool normalized = false)
+            : array_(std::move(array)), itemSize_(itemSize), count_((int) array.size() / itemSize), normalized_(normalized) {}
 
         [[nodiscard]] int count() const {
             return count_;

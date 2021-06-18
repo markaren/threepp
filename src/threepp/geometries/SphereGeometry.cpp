@@ -73,21 +73,20 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
         }
 
         grid.emplace_back(verticesRow);
+    }
+    // indices
 
-        // indices
+    for (int iy = 0; iy < heightSegments; iy++) {
 
-        for (iy = 0; iy < heightSegments; iy++) {
+        for (int ix = 0; ix < widthSegments; ix++) {
 
-            for (int ix = 0; ix < widthSegments; ix++) {
+            const auto a = grid[iy][ix + 1];
+            const auto b = grid[iy][ix];
+            const auto c = grid[iy + 1][ix];
+            const auto d = grid[iy + 1][ix + 1];
 
-                const auto a = grid[iy][ix + 1];
-                const auto b = grid[iy][ix];
-                const auto c = grid[iy + 1][ix];
-                const auto d = grid[iy + 1][ix + 1];
-
-                if (iy != 0 || thetaStart > 0) indices.insert(indices.end(), {a, b, d});
-                if (iy != heightSegments - 1 || thetaEnd < PI) indices.insert(indices.end(), {b, c, d});
-            }
+            if (iy != 0 || thetaStart > 0) indices.insert(indices.end(), {a, b, d});
+            if (iy != heightSegments - 1 || thetaEnd < PI) indices.insert(indices.end(), {b, c, d});
         }
     }
 
