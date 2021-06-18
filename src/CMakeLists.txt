@@ -10,6 +10,7 @@ set(publicHeaders
         "threepp/core/Object3D.hpp"
 
         "threepp/geometries/BoxGeometry.hpp"
+        "threepp/geometries/SphereGeometry.hpp"
 
         "threepp/math/Box2.hpp"
         "threepp/math/Box3.hpp"
@@ -49,6 +50,7 @@ set(sources
         "threepp/core/Object3D.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
+        "threepp/geometries/SphereGeometry.cpp"
 
         "threepp/math/Box2.cpp"
         "threepp/math/Box3.cpp"

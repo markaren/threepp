@@ -132,12 +132,12 @@ int main() {
 
     std::cout << b.getX(0) << std::endl;
 
-    BoxGeometry box;
-    auto &attr = box.getAttribute<float>("position");
+    auto box = BoxGeometry::create();
+    auto &attr = box->getAttribute<float>("position");
     std::cout << attr.getX(0) << std::endl;
     attr.setX(0, 1);
     std::cout << attr.getX(0) << std::endl;
-    std::cout << box.getAttribute<float>("position").getX(0) << std::endl;
+    std::cout << box->getAttribute<float>("position").getX(0) << std::endl;
 
     auto obj = Object3D::create();
 
