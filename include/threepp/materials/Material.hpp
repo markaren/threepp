@@ -4,12 +4,12 @@
 #define THREEPP_MATERIAL_HPP
 
 #include <threepp/constants.hpp>
-#include <threepp/math/MathUtils.hpp>
 #include <threepp/core/EventDispatcher.hpp>
+#include <threepp/math/MathUtils.hpp>
 
 namespace threepp {
 
-    class Material: private EventDispatcher  {
+    class Material : private EventDispatcher {
 
     public:
         const unsigned int id = materialId++;
@@ -47,15 +47,15 @@ namespace threepp {
         int stencilZPass = KeepStencilOp;
         bool stencilWrite = false;
 
-//        clippingPlanes = null;
+        //        clippingPlanes = null;
         bool clipIntersection = false;
         bool clipShadows = false;
 
-//        shadowSide = null;
+        //        shadowSide = null;
 
         bool colorWrite = true;
 
-//        precision = null;
+        //        precision = null;
 
         bool polygonOffset = false;
         float polygonOffsetFactor = 0;
@@ -71,31 +71,40 @@ namespace threepp {
 
         bool toneMapped = true;
 
-//        std::unordered_map<std::string, std::any> userData;
+        //        std::unordered_map<std::string, std::any> userData;
 
         unsigned int version = 0;
 
         void dispose() {
 
             dispatchEvent("dispose");
-
         }
 
         void needsUpdate() {
 
             this->version++;
-
         }
 
     protected:
         Material() = default;
 
     private:
-
         inline static unsigned int materialId = 0;
-
     };
 
-}
+    class MaterialWithWireframe {
+
+    public:
+        std::string wireframeLinecap = "round";
+        std::string wireframeLinejoin = "round";
+
+        bool wireframe = false;
+        float wireframeLinewidth = 1;
+
+    protected:
+        MaterialWithWireframe() = default;
+    };
+
+}// namespace threepp
 
 #endif//THREEPP_MATERIAL_HPP

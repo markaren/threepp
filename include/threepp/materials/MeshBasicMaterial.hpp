@@ -11,7 +11,7 @@
 
 namespace threepp {
 
-    class MeshBasicMaterial : public Material {
+    class MeshBasicMaterial : public Material, MaterialWithWireframe {
 
     public:
         Color color = Color(0xffffff);
@@ -33,20 +33,14 @@ namespace threepp {
         float reflectivity = 1;
         float refractionRatio = 0.98f;
 
-        std::string wireframeLinecap = "round";
-        std::string wireframeLinejoin = "round";
-
-        bool wireframe = false;
-        float wireframeLinewidth = 1;
-
+        static std::shared_ptr<MeshBasicMaterial> create() {
+            return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
+        }
 
     protected:
 
         MeshBasicMaterial() = default;
 
-        static std::shared_ptr<MeshBasicMaterial> create() {
-            return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
-        }
     };
 
 }// namespace threepp

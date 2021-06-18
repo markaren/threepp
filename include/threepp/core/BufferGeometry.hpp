@@ -12,6 +12,7 @@
 #include "threepp/math/Sphere.hpp"
 
 #include <any>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <unordered_map>
@@ -201,91 +202,79 @@ namespace threepp {
 
             this->computeBoundingBox();
 
-            this->boundingBox->getCenter( _offset );
+            this->boundingBox->getCenter(_offset);
             _offset.negate();
 
-            this->translate( _offset.x, _offset.y, _offset.z );
+            this->translate(_offset.x, _offset.y, _offset.z);
 
             return *this;
-
         }
 
         void computeBoundingBox() {
 
-            if ( !this->boundingBox ) {
+            if (!this->boundingBox) {
 
                 this->boundingBox = Box3();
-
             }
 
-            if ( this->attributes_.count("position") != 0 ) {
+            if (this->attributes_.count("position") != 0) {
 
-                const auto& position = std::any_cast<BufferAttribute<float>&>(this->attributes_["position"]);
+                const auto &position = std::any_cast<BufferAttribute<float> &>(this->attributes_["position"]);
 
-                this->boundingBox->setFromBufferAttribute( position );
+                this->boundingBox->setFromBufferAttribute(position);
 
 
             } else {
 
                 this->boundingBox->makeEmpty();
-
             }
 
-            if ( std::isnan( this->boundingBox->min().x ) || std::isnan( this->boundingBox->min().y ) || std::isnan( this->boundingBox->min().z ) ) {
+            if (std::isnan(this->boundingBox->min().x) || std::isnan(this->boundingBox->min().y) || std::isnan(this->boundingBox->min().z)) {
 
-                // TODO
-                //console.error( 'THREE.BufferGeometry.computeBoundingBox(): Computed min/max have NaN values. The "position" attribute is likely to have NaN values.', this );
-
+                std::cerr << "THREE.BufferGeometry.computeBoundingBox(): Computed min/max have NaN values. The 'position' attribute is likely to have NaN values." << std::endl;
             }
-
         }
 
         void computeBoundingSphere() {
 
-            if ( !this->boundingSphere ) {
+            if (!this->boundingSphere) {
 
                 this->boundingSphere = Sphere();
-
             }
 
-            if ( this->attributes_.count("position") != 0 ) {
+            if (this->attributes_.count("position") != 0) {
 
-                const auto& position = std::any_cast<BufferAttribute<float>&>(this->attributes_["position"]);
+                const auto &position = std::any_cast<BufferAttribute<float> &>(this->attributes_["position"]);
 
                 // first, find the center of the bounding sphere
 
                 auto center = this->boundingSphere->center;
 
-                _box.setFromBufferAttribute( position );
+                _box.setFromBufferAttribute(position);
 
                 // process morph attributes if present
 
-                _box.getCenter( center );
+                _box.getCenter(center);
 
                 // second, try to find a boundingSphere with a radius smaller than the
                 // boundingSphere of the boundingBox: sqrt(3) smaller in the best case
 
                 float maxRadiusSq = 0;
 
-                for ( auto i = 0, il = position.count(); i < il; i ++ ) {
+                for (auto i = 0, il = position.count(); i < il; i++) {
 
-                    _vector.fromBufferAttribute( position, i );
+                    _vector.fromBufferAttribute(position, i);
 
-                    maxRadiusSq = std::max( maxRadiusSq, center.distanceToSquared( _vector ) );
-
+                    maxRadiusSq = std::max(maxRadiusSq, center.distanceToSquared(_vector));
                 }
 
-                this->boundingSphere->radius = std::sqrt( maxRadiusSq );
+                this->boundingSphere->radius = std::sqrt(maxRadiusSq);
 
-                if ( std::isnan( this->boundingSphere->radius ) ) {
+                if (std::isnan(this->boundingSphere->radius)) {
 
-                    // TODO
-                    //console.error( 'THREE.BufferGeometry.computeBoundingSphere(): Computed radius is NaN. The "position" attribute is likely to have NaN values.', this );
-
+                    std::cerr << "THREE.BufferGeometry.computeBoundingSphere(): Computed radius is NaN. The 'position' attribute is likely to have NaN values." << std::endl;
                 }
-
             }
-
         }
 
     private:

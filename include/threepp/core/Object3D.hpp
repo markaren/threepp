@@ -32,16 +32,16 @@ namespace threepp {
 
         const Vector3 up = Vector3(0, 1, 0);
 
-        Vector3 position = Vector3();
-        Euler rotation = Euler();
-        Quaternion quaternion = Quaternion();
+        Vector3 position;
+        Euler rotation;
+        Quaternion quaternion;
         Vector3 scale = Vector3(1, 1, 1);
 
-        Matrix4 modelViewMatrix = Matrix4();
-        Matrix3 normalMatrix = Matrix3();
+        Matrix4 modelViewMatrix;
+        Matrix3 normalMatrix;
 
-        Matrix4 matrix = Matrix4();
-        Matrix4 matrixWorld = Matrix4();
+        Matrix4 matrix;
+        Matrix4 matrixWorld;
 
         bool matrixAutoUpdate = true;
         bool matrixWorldNeedsUpdate = false;
