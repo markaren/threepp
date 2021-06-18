@@ -49,13 +49,13 @@ namespace threepp {
             array[offset + 2] = this->z;
             array[offset + 3] = this->w;
         }
+
+        friend std::ostream &operator<<(std::ostream &os, const Vector4 &v) {
+            os << "Vector4(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
+                            ", w=" + std::to_string(v.w) + ")";
+            return os;
+        }
     };
-
-    //    std::ostream &operator<<(std::ostream &os, const Vector4 &v) {
-    //        return os << "Vector4(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
-    //                     ", w=" + std::to_string(v.w) + +")";
-    //    }
-
 
 }// namespace threepp
 

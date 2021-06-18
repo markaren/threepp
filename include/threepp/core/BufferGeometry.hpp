@@ -277,6 +277,8 @@ namespace threepp {
             }
         }
 
+        ~BufferGeometry() = default;
+
     private:
         std::vector<int> index;
         std::unordered_map<std::string, std::any> attributes_;

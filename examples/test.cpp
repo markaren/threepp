@@ -51,13 +51,16 @@
 using namespace threepp;
 
 namespace {
-    std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
-        os << "Vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
-                        ")";
-        return os;
+
+    void test(Mesh *m) {
+        std::cout << "mesh" << std::endl;
     }
 
-}// namespace
+    void test(Object3D *o) {
+        std::cout << "o" << std::endl;
+    }
+
+}
 
 int main() {
 
@@ -158,7 +161,7 @@ int main() {
 
     p->far = 10;
 
-    auto pp = std::static_pointer_cast<PerspectiveCamera>(o->children[0]);
+    auto pp = std::dynamic_pointer_cast<PerspectiveCamera>(o->children[0]);
 
     std::cout << o->children[0]->type() << std::endl;
 
@@ -169,7 +172,19 @@ int main() {
 
     std::cout << "Expected 0, got " << o->children.size() << std::endl;
 
-    o->rotation.set(1, 1, 1);
+    auto boxGeometry = BoxGeometry::create();
+    auto material = MeshBasicMaterial::create();
+    auto mesh = Mesh::create(boxGeometry, material);
+
+    o->add(mesh);
+
+
+    {
+        auto objectWithGeometry = std::reinterpret_pointer_cast<Mesh>(o->children[0]);
+        auto hasGeometry = objectWithGeometry->geometry() != nullptr;
+        std::cout << "successfull  " << (hasGeometry ? "true" : "false") << std::endl;
+        auto g = objectWithGeometry->geometry();
+    }
 
     std::vector<Uniform> uv;
     uv.emplace_back(Matrix4());
@@ -181,6 +196,8 @@ int main() {
     //    canvas.animate([](float dt){
     //
     //    });
+
+    o->clear();
 
     return 0;
 }

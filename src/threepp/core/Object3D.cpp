@@ -1,5 +1,6 @@
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 
 using namespace threepp;
 

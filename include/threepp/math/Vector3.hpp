@@ -14,7 +14,7 @@ namespace threepp {
     class Quaternion;
     class Camera;
 
-    template <typename T=float>
+    template<typename T = float>
     class BufferAttribute;
 
     class Vector3 {
@@ -40,7 +40,7 @@ namespace threepp {
 
         float &operator[](unsigned int index);
 
-        Vector3 &copy( const Vector3 &v );
+        Vector3 &copy(const Vector3 &v);
 
         Vector3 &add(const Vector3 &v);
 
@@ -68,13 +68,13 @@ namespace threepp {
 
         Vector3 &applyMatrix4(const Matrix4 &m);
 
-        Vector3 &applyQuaternion( const Quaternion &q );
+        Vector3 &applyQuaternion(const Quaternion &q);
 
-        Vector3 &project( const Camera &camera );
+        Vector3 &project(const Camera &camera);
 
-        Vector3 &unproject( const Camera &camera );
+        Vector3 &unproject(const Camera &camera);
 
-        Vector3 &transformDirection( const Matrix4 &m );
+        Vector3 &transformDirection(const Matrix4 &m);
 
         Vector3 &divide(const Vector3 &v);
 
@@ -150,7 +150,7 @@ namespace threepp {
             array[offset + 2] = this->z;
         }
 
-        Vector3 &fromBufferAttribute( const BufferAttribute<float> &attribute, int index );
+        Vector3 &fromBufferAttribute(const BufferAttribute<float> &attribute, int index);
 
         static Vector3 X;
         static Vector3 Y;
@@ -159,10 +159,13 @@ namespace threepp {
         static Vector3 ONES;
         static Vector3 ZEROS;
 
+        friend std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
+            os << "Vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
+                  ")";
+            return os;
+        }
+
     };
-
-
-//    std::ostream &operator<<(std::ostream &os, const threepp::Vector3 &v);
 
 }// namespace threepp
 

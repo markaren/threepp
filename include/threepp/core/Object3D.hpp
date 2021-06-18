@@ -12,11 +12,14 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
+
 #include <functional>
 #include <memory>
 #include <optional>
 
 namespace threepp {
+
+    class BufferGeometry;
 
     class Object3D : public std::enable_shared_from_this<Object3D>, private EventDispatcher {
 
@@ -58,6 +61,10 @@ namespace threepp {
 
         virtual std::string type() const {
             return "Object3D";
+        }
+
+        virtual std::shared_ptr<BufferGeometry> geometry() {
+            return nullptr;
         }
 
         void applyMatrix4(const Matrix4 &matrix) {
@@ -216,10 +223,9 @@ namespace threepp {
 
         Object3D &add(const std::shared_ptr<Object3D> &object) {
 
-
             if (object->parent) {
 
-                //object.parent.remove( object );
+                object->parent->remove( object );
             }
 
             object->parent = shared_from_this();
@@ -227,12 +233,10 @@ namespace threepp {
 
             object->dispatchEvent("added");
 
-
             return *this;
         }
 
         Object3D &remove(const std::shared_ptr<Object3D> &object) {
-
 
             auto find = std::find(children.begin(), children.end(), object);
             if (find != children.end()) {
@@ -414,6 +418,8 @@ namespace threepp {
         static std::shared_ptr<Object3D> create() {
             return std::shared_ptr<Object3D>(new Object3D());
         }
+
+        ~Object3D() = default;
 
     protected:
         Object3D() {

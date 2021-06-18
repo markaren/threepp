@@ -82,12 +82,12 @@ namespace threepp {
 
         Vector2 &fromBufferAttribute( const BufferAttribute<float> &attribute, int index );
 
+        friend std::ostream &operator<<(std::ostream &os, const Vector2 &v) {
+            os << "Vector2(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ")";
+            return os;
+        }
+
     };
-
-
-    //    std::ostream &operator<<(std::ostream &os, const Vector2 &v) {
-    //        return os << "Vector2(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ")";
-    //    }
 
 }// namespace threepp
 

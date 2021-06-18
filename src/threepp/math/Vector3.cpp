@@ -481,10 +481,3 @@ Vector3 &Vector3::fromBufferAttribute(const BufferAttribute<float> &attribute, i
 
     return *this;
 }
-
-
-//std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
-//    os << "Vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
-//          ")";
-//    return os;
-//}
