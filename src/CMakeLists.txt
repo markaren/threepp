@@ -32,7 +32,6 @@ set(publicHeaders
 
         "threepp/renderers/GLRenderer.hpp"
 
-
         "threepp/canvas.hpp"
         "threepp/constants.hpp"
         )
@@ -76,6 +75,7 @@ set(sources
 
 set(privateHeaders
 
+        "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
 

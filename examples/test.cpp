@@ -122,7 +122,7 @@ int main() {
 
     Uniform uniform(m4);
     m4[0] = 98;
-    auto m = std::any_cast<Matrix4>(uniform.value());
+    auto m = uniform.value<Matrix4>();
     std::cout << m4[0] << ":" << m[0] << std::endl;
 
     Fog f(Color::aliceblue);
@@ -172,7 +172,7 @@ int main() {
     uv.emplace_back(Matrix4());
 
     auto ulib = shaders::UniformsLib::getInstance();
-    std::cout << std::any_cast<Color>(ulib->common["diffuse"].value()).r << std::endl;
+    std::cout << ulib->common["diffuse"].value<Color>().r << std::endl;
 
     //    Canvas canvas(Canvas::Parameters().title(""));
     //    canvas.animate([](float dt){

@@ -4,17 +4,27 @@
 #define THREEPP_UNIFORM_HPP
 
 #include <any>
+#include <optional>
 #include <utility>
 
 namespace threepp {
 
+    using NULL_UNIFORM = std::any;
+
     class Uniform {
 
     public:
-        Uniform(std::any value = std::any()) : value_(std::move(value)) {}
+        std::optional<bool> needsUpdate;
 
-        [[nodiscard]] std::any &value() {
-            return value_;
+        explicit Uniform(std::any value = NULL_UNIFORM()) : value_(std::move(value)) {}
+
+        template<class T>
+        [[nodiscard]] T &value() {
+            return std::any_cast<T &>(value_);
+        }
+
+        void value(std::any value) {
+            this->value_ = std::move(value);
         }
 
     private:
