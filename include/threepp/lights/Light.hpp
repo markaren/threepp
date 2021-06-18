@@ -23,8 +23,8 @@ namespace threepp {
         void dispose() {}
 
     protected:
-        Light(int color, std::optional<float> intensity) : color(color), intensity(intensity.value_or(1)) {}
-        Light(Color color, std::optional<float> intensity) : color(color), intensity(intensity.value_or(1)) {}
+        template<class T>
+        Light(T color, std::optional<float> intensity) : color(color), intensity(intensity.value_or(1)) {}
     };
 
 }// namespace threepp

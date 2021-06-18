@@ -33,6 +33,10 @@ set(publicHeaders
         "threepp/objects/Line.hpp"
         "threepp/objects/Mesh.hpp"
 
+        "threepp/lights/Light.hpp"
+        "threepp/lights/AmbientLight.hpp"
+        "threepp/lights/LightShadow.hpp"
+
         "threepp/renderers/GLRenderer.hpp"
 
         "threepp/canvas.hpp"

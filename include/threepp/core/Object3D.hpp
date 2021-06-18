@@ -26,7 +26,7 @@ namespace threepp {
         std::string uuid = generateUUID();
 
         std::string name;
-  
+
         std::shared_ptr<Object3D> parent;
         std::vector<std::shared_ptr<Object3D>> children;
 
@@ -54,7 +54,7 @@ namespace threepp {
         bool frustumCulled = true;
         unsigned int renderOrder = 0;
 
-        Object3D(const Object3D&) = delete;
+        Object3D(const Object3D &) = delete;
 
         virtual std::string type() const {
             return "Object3D";
@@ -142,7 +142,79 @@ namespace threepp {
             return this->rotateOnAxis(Vector3::Z, angle);
         }
 
-        Object3D &add(std::shared_ptr<Object3D> object) {
+        Object3D &translateOnAxis(const Vector3 &axis, float distance) {
+
+            // translate object by distance along axis in object space
+            // axis is assumed to be normalized
+
+            _v1.copy(axis).applyQuaternion(this->quaternion);
+
+            this->position.add(_v1.multiply(distance));
+
+            return *this;
+        }
+
+        Object3D &translateX(float distance) {
+
+            return this->translateOnAxis(Vector3::X, distance);
+        }
+
+        Object3D &translateY(float distance) {
+
+            return this->translateOnAxis(Vector3::Y, distance);
+        }
+
+        Object3D &translateZ(float distance) {
+
+            return this->translateOnAxis(Vector3::Z, distance);
+        }
+
+        void localToWorld(Vector3 &vector) const {
+
+            vector.applyMatrix4(this->matrixWorld);
+        }
+
+        void worldToLocal(Vector3 &vector) const {
+
+            vector.applyMatrix4(_m1.copy(this->matrixWorld).invert());
+        }
+
+        void lookAt(const Vector3 &vector) {
+            lookAt(vector.x, vector.y, vector.z);
+        }
+
+        void lookAt(float x, float y, float z) {
+
+            // TODO
+
+            //            // This method does not support objects having non-uniformly-scaled parent(s)
+            //
+            //            _target.set(x, y, z);
+            //
+            //            this->updateWorldMatrix(true, false);
+            //
+            //            _position.setFromMatrixPosition(this->matrixWorld);
+            //
+            //            if (this->isCamera || this->isLight) {
+            //
+            //                _m1.lookAt(_position, _target, this->up);
+            //
+            //            } else {
+            //
+            //                _m1.lookAt(_target, _position, this->up);
+            //            }
+            //
+            //            this->quaternion.setFromRotationMatrix(_m1);
+            //
+            //            if (parent) {
+            //
+            //                _m1.extractRotation(parent.matrixWorld);
+            //                _q1.setFromRotationMatrix(_m1);
+            //                this->quaternion.premultiply(_q1.invert());
+            //            }
+        }
+
+        Object3D &add(const std::shared_ptr<Object3D> &object) {
 
 
             if (object->parent) {
@@ -360,6 +432,8 @@ namespace threepp {
 
         static Vector3 _v1;
         static Quaternion _q1;
+        static Matrix4 _m1;
+        static Vector3 _target;
 
         static Vector3 _scale;
         static Vector3 _position;

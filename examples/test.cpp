@@ -46,6 +46,8 @@
 
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 
+#include "threepp/lights/LightShadow.hpp"
+
 using namespace threepp;
 
 namespace {
@@ -128,7 +130,7 @@ int main() {
 
     Fog f(Color::aliceblue);
 
-    std::cout << AmbientLight(0xffffff).type() << std::endl;
+    std::cout << AmbientLight::create(0xffffff)->type() << std::endl;
 
     std::vector<float> vec{1, 2};
     std::vector<float> vec2{-1, -1};
