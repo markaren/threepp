@@ -80,7 +80,7 @@ set(privateHeaders
         "threepp/renderers/shaders/ShaderChunk.hpp"
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
-        "threepp/renderers/shaders/mergeuniforms.hpp"
+        "threepp/renderers/shaders/UniformsUtil.hpp"
 
         )
 

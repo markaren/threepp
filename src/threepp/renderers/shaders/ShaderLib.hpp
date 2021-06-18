@@ -6,13 +6,28 @@
 #include "threepp/renderers/shaders/Shader.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 
-#include "threepp/renderers/shaders/mergeuniforms.hpp"
+#include "threepp/renderers/shaders/UniformsLib.hpp"
+#include "threepp/renderers/shaders/UniformsUtil.hpp"
 
 namespace threepp::shaders {
 
+    using UniformsLib = UniformsLib::getInstance;
+    using ShaderChunk = ShaderChunk::getInstance;
+
     class ShaderLib {
 
-        Shader basic;
+        Shader basic{
+                mergeUniforms({// clang-format off
+                            UniformsLib()->common,
+                            UniformsLib()->specularmap,
+                            UniformsLib().envmap,
+                            UniformsLib().aomap,
+                            UniformsLib().lightmap,
+                            UniformsLib()->fog
+                        }),// clang-format on
+
+                ShaderChunk().get("meshbasic_vert"),
+                ShaderChunk().get("meshbasic_frag")};
 
         Shader lambert;
 

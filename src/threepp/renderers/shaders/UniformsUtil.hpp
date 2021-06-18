@@ -1,7 +1,7 @@
 
 
-#ifndef THREEPP_MERGEUNIFORMS_HPP
-#define THREEPP_MERGEUNIFORMS_HPP
+#ifndef THREEPP_UNIFORMSUTIL_HPP
+#define THREEPP_UNIFORMSUTIL_HPP
 
 #include "threepp/core/Uniform.hpp"
 
@@ -15,9 +15,9 @@ namespace threepp::shaders {
 
         std::unordered_map merged;
 
-        for (const auto& map : uniforms) {
+        for (const auto& u : uniforms) {
 
-            for (const auto& [key, value] : map) {
+            for (const auto& [key, value] : u) {
 
                 merged[key] = value;
 
@@ -30,4 +30,4 @@ namespace threepp::shaders {
 
 }
 
-#endif//THREEPP_MERGEUNIFORMS_HPP
+#endif//THREEPP_UNIFORMSUTIL_HPP
