@@ -10,15 +10,11 @@
 
 namespace threepp {
 
-    class Light: public Object3D {
+    class Light : public Object3D {
 
     public:
-
         Color color;
         float intensity;
-
-        Light(int color, std::optional<float> intensity): color(color), intensity(intensity.value_or(1)){}
-        Light(Color color, std::optional<float> intensity): color(color), intensity(intensity.value_or(1)){}
 
         std::string type() const override {
             return "Light";
@@ -26,8 +22,11 @@ namespace threepp {
 
         void dispose() {}
 
+    protected:
+        Light(int color, std::optional<float> intensity) : color(color), intensity(intensity.value_or(1)) {}
+        Light(Color color, std::optional<float> intensity) : color(color), intensity(intensity.value_or(1)) {}
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_LIGHT_HPP

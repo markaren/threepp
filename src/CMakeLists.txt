@@ -30,6 +30,9 @@ set(publicHeaders
         "threepp/math/Vector4.hpp"
         "threepp/math/Quaternion.hpp"
 
+        "threepp/objects/Line.hpp"
+        "threepp/objects/Mesh.hpp"
+
         "threepp/renderers/GLRenderer.hpp"
 
         "threepp/canvas.hpp"

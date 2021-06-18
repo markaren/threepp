@@ -35,6 +35,7 @@
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <threepp/geometries/SphereGeometry.hpp>
 #include <threepp/objects/Mesh.hpp>
+#include <threepp/objects/Line.hpp>
 #include <vector>
 
 #include "threepp/Canvas.hpp"
