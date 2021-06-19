@@ -1,12 +1,13 @@
 
 #include "threepp/math/Box3.hpp"
 #include "threepp/core/BufferAttribute.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 
 #include "threepp/math/infinity.hpp"
 
 using namespace threepp;
 
-std::array<Vector3, 9> Box3::_points = {
+std::vector<Vector3> Box3::_points{
         Vector3(), Vector3(), Vector3(),
         Vector3(), Vector3(), Vector3(),
         Vector3(), Vector3(), Vector3()};
@@ -93,6 +94,13 @@ Box3 &Box3::setFromCenterAndSize(const Vector3 &center, const Vector3 &size) {
     return *this;
 }
 
+Box3 &Box3::setFromObject(Object3D &object) {
+
+    this->makeEmpty();
+
+    return this->expandByObject(object);
+}
+
 Box3 &Box3::copy(const Box3 &box) {
 
     this->min_.copy(box.min_);
@@ -159,6 +167,36 @@ bool Box3::containsPoint(const Vector3 &point) const {
                    : true;
 }
 
+Box3 &Box3::expandByObject(Object3D &object) {
+
+    // Computes the world-axis-aligned bounding box of an object (including its children),
+    // accounting for both the object's, and children's, world transforms
+
+    object.updateWorldMatrix(false, false);
+
+    const auto geometry = object.geometry();
+
+    if (geometry) {
+
+        if (geometry->boundingBox) {
+
+            geometry->computeBoundingBox();
+        }
+
+        _box.copy(geometry->boundingBox.value());
+        _box.applyMatrix4(object.matrixWorld);
+
+        this->union_(_box);
+    }
+
+    for (auto &child : object.children) {
+
+        this->expandByObject(*child);
+    }
+
+    return *this;
+}
+
 bool Box3::containsBox(const Box3 &box) const {
 
     return this->min_.x <= box.min_.x && box.max_.x <= this->max_.x &&
@@ -187,15 +225,14 @@ bool Box3::intersectsBox(const Box3 &box) const {
                    : true;
 }
 
-bool Box3::intersectsSphere(const Sphere &sphere) {
+bool Box3::intersectsSphere(const Sphere &sphere) const {
 
     // Find the point on the AABB closest to the sphere center.
-    this->clampPoint( sphere.center, _vector );
+    this->clampPoint(sphere.center, _vector);
 
     // If that point is inside the sphere, the AABB and sphere intersect.
     const auto radius = sphere.radius;
-    return _vector.distanceToSquared( sphere.center ) <= (radius * radius);
-
+    return _vector.distanceToSquared(sphere.center) <= (radius * radius);
 }
 
 bool Box3::intersectsPlane(const Plane &plane) const {
@@ -241,7 +278,7 @@ bool Box3::intersectsPlane(const Plane &plane) const {
     return (min <= -plane.constant && max >= -plane.constant);
 }
 
-bool Box3::intersectsTriangle(const Triangle &triangle) {
+bool Box3::intersectsTriangle(const Triangle &triangle) const {
 
     if (this->isEmpty()) {
 
@@ -289,6 +326,72 @@ bool Box3::intersectsTriangle(const Triangle &triangle) {
     return satForAxes(axes, _v0, _v1, _v2, _extents);
 }
 
+Vector3 &Box3::clampPoint(const Vector3 &point, Vector3 &target) const {
+
+    return target.copy(point).clamp(this->min_, this->max_);
+}
+
+float Box3::distanceToPoint(const Vector3 &point) const {
+
+    auto clampedPoint = _vector.copy(point).clamp(this->min_, this->max_);
+
+    return clampedPoint.sub(point).length();
+}
+
+void Box3::getBoundingSphere(Sphere &target) const {
+
+    this->getCenter(target.center);
+
+    this->getSize(_vector);
+    target.radius = _vector.length() * 0.5f;
+}
+
+Box3 &Box3::intersect(const Box3 &box) {
+
+    this->min_.max(box.min_);
+    this->max_.min(box.max_);
+
+    // ensure that if there is no overlap, the result is fully empty, not slightly empty with non-inf/+inf values that will cause subsequence intersects to erroneously return valid values.
+    if (this->isEmpty()) this->makeEmpty();
+
+    return *this;
+}
+
+Box3 &Box3::union_(const Box3 &box) {
+
+    this->min_.min(box.min_);
+    this->max_.max(box.max_);
+
+    return *this;
+}
+
+Box3 &Box3::applyMatrix4(const Matrix4 &matrix) {
+
+    // transform of empty box is an empty box.
+    if (this->isEmpty()) return *this;
+
+    // NOTE: I am using a binary pattern to specify all 2^3 combinations below
+    _points[0].set(this->min_.x, this->min_.y, this->min_.z).applyMatrix4(matrix);// 000
+    _points[1].set(this->min_.x, this->min_.y, this->max_.z).applyMatrix4(matrix);// 001
+    _points[2].set(this->min_.x, this->max_.y, this->min_.z).applyMatrix4(matrix);// 010
+    _points[3].set(this->min_.x, this->max_.y, this->max_.z).applyMatrix4(matrix);// 011
+    _points[4].set(this->max_.x, this->min_.y, this->min_.z).applyMatrix4(matrix);// 100
+    _points[5].set(this->max_.x, this->min_.y, this->max_.z).applyMatrix4(matrix);// 101
+    _points[6].set(this->max_.x, this->max_.y, this->min_.z).applyMatrix4(matrix);// 110
+    _points[7].set(this->max_.x, this->max_.y, this->max_.z).applyMatrix4(matrix);// 111
+
+    this->setFromPoints(_points);
+
+    return *this;
+}
+
+Box3 &Box3::translate(const Vector3 &offset) {
+
+    this->min_.add(offset);
+    this->max_.add(offset);
+
+    return *this;
+}
 
 bool Box3::satForAxes(const std::vector<float> &axes, const Vector3 &v0, const Vector3 &v1, const Vector3 &v2, const Vector3 &extents) {
 
@@ -311,16 +414,4 @@ bool Box3::satForAxes(const std::vector<float> &axes, const Vector3 &v0, const V
     }
 
     return true;
-}
-
-Vector3 &Box3::clampPoint(const Vector3 &point, Vector3 &target) const {
-
-    return target.copy(point).clamp(this->min_, this->max_);
-}
-
-float Box3::distanceToPoint(const Vector3 &point) const {
-
-    auto clampedPoint = _vector.copy(point).clamp(this->min_, this->max_);
-
-    return clampedPoint.sub(point).length();
 }

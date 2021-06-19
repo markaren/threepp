@@ -8,12 +8,10 @@
 
 namespace threepp {
 
-    class Camera: public Object3D {
+    class Camera : public Object3D {
 
     public:
-
-
-        Camera(const Camera&) = delete;
+        Camera(const Camera &) = delete;
 
         Matrix4 matrixWorldInverse = Matrix4();
 
@@ -26,9 +24,8 @@ namespace threepp {
 
     protected:
         Camera() = default;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_CAMERA_HPP

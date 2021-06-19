@@ -15,7 +15,6 @@ namespace threepp {
     class PerspectiveCamera : public Camera {
 
     public:
-
         float fov;
         float zoom = 1;
 
@@ -100,7 +99,7 @@ namespace threepp {
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
 
-        PerspectiveCamera(const PerspectiveCamera&) = delete;
+        PerspectiveCamera(const PerspectiveCamera &) = delete;
 
         std::string type() const override {
             return "PerspectiveCamera";
@@ -112,7 +111,6 @@ namespace threepp {
 
     protected:
         explicit PerspectiveCamera(float fov, float aspect, float near, float far) : fov(fov), aspect(aspect), near(near), far(far) {}
-
     };
 
 }// namespace threepp

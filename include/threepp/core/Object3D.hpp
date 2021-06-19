@@ -63,10 +63,6 @@ namespace threepp {
             return "Object3D";
         }
 
-        virtual std::shared_ptr<BufferGeometry> geometry() {
-            return nullptr;
-        }
-
         void applyMatrix4(const Matrix4 &matrix) {
 
             if (this->matrixAutoUpdate) this->updateMatrix();
@@ -422,10 +418,15 @@ namespace threepp {
         ~Object3D() = default;
 
     protected:
+
         Object3D() {
             rotation._onChange(onRotationChange);
             quaternion._onChange(onQuaternionChange);
         };
+
+        virtual BufferGeometry *geometry() {
+            return nullptr;
+        }
 
     private:
         std::function<void()> onRotationChange = [&] {
@@ -446,6 +447,9 @@ namespace threepp {
         static Quaternion _quaternion;
 
         static unsigned int _object3Did;
+
+        friend class Box3;
+        friend class Frustum;
     };
 
 }// namespace threepp

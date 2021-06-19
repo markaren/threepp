@@ -71,6 +71,8 @@ namespace threepp {
 
         Box3 &setFromCenterAndSize(const Vector3 &center, const Vector3 &size);
 
+        Box3 &setFromObject(Object3D &object);
+
         Box3 &copy(const Box3 &box);
 
         Box3 &makeEmpty();
@@ -87,6 +89,8 @@ namespace threepp {
 
         Box3 &expandByScalar(float scalar);
 
+        Box3 &expandByObject(Object3D &object);
+
         [[nodiscard]] bool containsPoint(const Vector3 &point) const;
 
         [[nodiscard]] bool containsBox(const Box3 &box) const;
@@ -95,21 +99,32 @@ namespace threepp {
 
         [[nodiscard]] bool intersectsBox(const Box3 &box) const;
 
-        bool intersectsSphere(const Sphere &sphere);
+        bool intersectsSphere(const Sphere &sphere) const ;
 
         [[nodiscard]] bool intersectsPlane(const Plane &plane) const;
 
-        bool intersectsTriangle(const Triangle &triangle);
+        bool intersectsTriangle(const Triangle &triangle) const;
 
         Vector3 &clampPoint(const Vector3 &point, Vector3 &target) const;
 
         [[nodiscard]] float distanceToPoint(const Vector3 &point) const;
 
+        void getBoundingSphere(Sphere &target) const ;
+
+        Box3 &intersect(const Box3 &box);
+
+        Box3 &union_(const Box3 &box);
+
+        Box3 &applyMatrix4(const Matrix4 &matrix);
+
+        Box3 &translate(const Vector3 &offset);
+
+
     private:
         Vector3 min_;
         Vector3 max_;
 
-        static std::array<Vector3, 9> _points;
+        static std::vector<Vector3> _points;
 
         static Vector3 _vector;
 

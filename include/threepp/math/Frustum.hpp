@@ -9,7 +9,9 @@
 
 namespace threepp {
 
+    class Box3;
     class Sphere;
+    class Object3D;
 
     class Frustum {
 
@@ -28,10 +30,15 @@ namespace threepp {
             return *this;
         }
 
-        Frustum &copy( const Frustum &frustum );
+        Frustum &copy(const Frustum &frustum);
 
-        Frustum &setFromProjectionMatrix( const Matrix4 &m );
+        Frustum &setFromProjectionMatrix(const Matrix4 &m);
 
+        bool intersectsObject(Object3D &object);
+
+        bool intersectsSphere(const Sphere &sphere);
+
+        bool intersectsBox(const Box3 &box);
 
 
     private:
