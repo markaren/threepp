@@ -16,6 +16,8 @@ namespace threepp::shaders {
 
     class ShaderLib {
 
+
+    public:
         Shader basic{
                 mergeUniforms({// clang-format off
                             UniformsLib()->common,
@@ -60,21 +62,17 @@ namespace threepp::shaders {
         Shader physical;
 
 
-    public:
-        static ShaderLib *getInstance() {
-            if (!instance_) {
-                instance_ = new ShaderLib();
-            }
-            return instance_;
+        ShaderLib(const ShaderLib &) = delete;
+        void operator=(const ShaderLib &) = delete;
+
+        static ShaderLib &instance() {
+            static ShaderLib instance;
+            return instance;
         }
 
     private:
-        static ShaderLib *instance_;
-
         ShaderLib() = default;
     };
-
-    ShaderLib *ShaderLib::instance_ = nullptr;
 
 }// namespace threepp::shaders
 

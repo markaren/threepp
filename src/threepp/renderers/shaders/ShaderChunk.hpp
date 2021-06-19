@@ -13,11 +13,13 @@ namespace threepp::shaders {
     class ShaderChunk {
 
     public:
-        static ShaderChunk *getInstance() {
-            if (!instance_) {
-                instance_ = new ShaderChunk();
-            }
-            return instance_;
+
+        ShaderChunk(const ShaderChunk&) = delete;
+        void operator=(const ShaderChunk&) = delete;
+
+        static ShaderChunk &instance() {
+            static ShaderChunk instance;
+            return instance;
         }
 
         std::string get(const std::string &key) {
@@ -40,14 +42,11 @@ namespace threepp::shaders {
         }
 
     private:
-        static ShaderChunk *instance_;
-
         std::unordered_map<std::string, std::string> data_;
 
         ShaderChunk() = default;
+        ~ShaderChunk() = default;
     };
-
-    ShaderChunk *ShaderChunk::instance_ = nullptr;
 
 }// namespace threepp::shaders
 

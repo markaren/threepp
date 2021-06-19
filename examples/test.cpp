@@ -189,8 +189,8 @@ int main() {
     std::vector<Uniform> uv;
     uv.emplace_back(Matrix4());
 
-    auto ulib = shaders::UniformsLib::getInstance();
-    std::cout << ulib->common["diffuse"].value<Color>().r << std::endl;
+    auto& ulib = shaders::UniformsLib::instance();
+    std::cout << ulib.common["diffuse"].value<Color>().r << std::endl;
 
     //    Canvas canvas(Canvas::Parameters().title(""));
     //    canvas.animate([](float dt){
