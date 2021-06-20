@@ -8,6 +8,7 @@
 #include <threepp/math/Euler.hpp>
 #include <threepp/math/Matrix4.hpp>
 #include <threepp/math/Quaternion.hpp>
+#include <threepp/math/Line3.hpp>
 #include <threepp/math/Triangle.hpp>
 #include <threepp/math/Vector2.hpp>
 #include <threepp/math/Vector3.hpp>

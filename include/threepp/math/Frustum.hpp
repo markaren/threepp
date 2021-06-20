@@ -40,6 +40,8 @@ namespace threepp {
 
         bool intersectsBox(const Box3 &box);
 
+        bool containsPoint(const Vector3 &point);
+
 
     private:
         std::array<Plane, 6> planes_;

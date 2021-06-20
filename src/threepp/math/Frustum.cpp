@@ -91,3 +91,16 @@ bool Frustum::intersectsBox(const Box3 &box) {
 
     return true;
 }
+
+bool Frustum::containsPoint(const Vector3 &point) {
+
+    for (int i = 0; i < 6; i++) {
+
+        if (planes_[i].distanceToPoint(point) < 0) {
+
+            return false;
+        }
+    }
+
+    return true;
+}

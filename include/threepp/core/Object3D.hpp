@@ -24,6 +24,9 @@ namespace threepp {
     class Object3D : public std::enable_shared_from_this<Object3D>, private EventDispatcher {
 
     public:
+
+        static Vector3 defaultUp;
+
         const unsigned int id = _object3Did++;
 
         std::string uuid = generateUUID();
@@ -33,7 +36,7 @@ namespace threepp {
         std::shared_ptr<Object3D> parent;
         std::vector<std::shared_ptr<Object3D>> children;
 
-        const Vector3 up = Vector3(0, 1, 0);
+        const Vector3 up = defaultUp;
 
         Vector3 position;
         Euler rotation;
@@ -436,6 +439,7 @@ namespace threepp {
         std::function<void()> onQuaternionChange = [&] {
             rotation.setFromQuaternion(quaternion, std::nullopt, false);
         };
+
 
         static Vector3 _v1;
         static Quaternion _q1;

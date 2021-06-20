@@ -4,6 +4,8 @@
 
 using namespace threepp;
 
+Vector3 Object3D::defaultUp = Vector3(0, 1, 0);
+
 Vector3 Object3D::_v1 = Vector3();
 Quaternion Object3D::_q1 = Quaternion();
 

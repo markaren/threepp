@@ -5,9 +5,17 @@
 
 #include "threepp/lights/LightShadow.hpp"
 
+#include "threepp/cameras/Camera.hpp"
+
 namespace threepp {
 
     class PointLightShadow : public LightShadow {
+
+    public:
+        PointLightShadow(std::shared_ptr<Camera> camera) : camera_(camera) {}
+
+    private:
+        std::shared_ptr<Camera> camera_;
     };
 
 }// namespace threepp

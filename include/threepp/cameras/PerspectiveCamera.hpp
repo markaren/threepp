@@ -5,6 +5,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 
+#include "threepp/cameras/View.hpp"
 #include "threepp/math/MathUtils.hpp"
 
 #include <algorithm>
@@ -23,9 +24,12 @@ namespace threepp {
         float focus = 10;
 
         float aspect;
+        std::optional<View> view;
 
         float filmGauge = 35;// width of the film (default in millimeters)
         float filmOffset = 0;// horizontal film offset (same unit as gauge)
+
+        PerspectiveCamera(const PerspectiveCamera &) = delete;
 
         /**
          * Sets the FOV by focal length in respect to the current .filmGauge.
@@ -37,7 +41,7 @@ namespace threepp {
          */
         void setFocalLength(float focalLength) {
 
-            /** see {@link http://www.bobatkins.com/photography/technical/field_of_view.html} */
+            /** see {@link http://www.bobatkins.com/photography/technical/field_of_view->html} */
             const auto vExtentSlope = 0.5f * this->getFilmHeight() / focalLength;
 
             this->fov = RAD2DEG * 2 * std::atan(vExtentSlope);
@@ -71,25 +75,95 @@ namespace threepp {
             return this->filmGauge / std::max(this->aspect, 1.f);
         }
 
+        /**
+         * Sets an offset in a larger frustum. This is useful for multi-window or
+         * multi-monitor/multi-machine setups.
+         *
+         * For example, if you have 3x2 monitors and each monitor is 1920x1080 and
+         * the monitors are in grid like this
+         *
+         *   +---+---+---+
+         *   | A | B | C |
+         *   +---+---+---+
+         *   | D | E | F |
+         *   +---+---+---+
+         *
+         * then for each monitor you would call it like this
+         *
+         *   const w = 1920;
+         *   const h = 1080;
+         *   const fullWidth = w * 3;
+         *   const fullHeight = h * 2;
+         *
+         *   --A--
+         *   camera.setViewOffset( fullWidth, fullHeight, w * 0, h * 0, w, h );
+         *   --B--
+         *   camera.setViewOffset( fullWidth, fullHeight, w * 1, h * 0, w, h );
+         *   --C--
+         *   camera.setViewOffset( fullWidth, fullHeight, w * 2, h * 0, w, h );
+         *   --D--
+         *   camera.setViewOffset( fullWidth, fullHeight, w * 0, h * 1, w, h );
+         *   --E--
+         *   camera.setViewOffset( fullWidth, fullHeight, w * 1, h * 1, w, h );
+         *   --F--
+         *   camera.setViewOffset( fullWidth, fullHeight, w * 2, h * 1, w, h );
+         *
+         *   Note there is no reason monitors have to be the same size or in a grid.
+         */
+        void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
+
+            this->aspect = (float) fullWidth / fullHeight;
+
+            if (!this->view) {
+
+                this->view = View{
+                        true,
+                        1,
+                        1,
+                        0,
+                        0,
+                        1,
+                        1};
+            }
+
+            this->view->enabled = true;
+            this->view->fullWidth = fullWidth;
+            this->view->fullHeight = fullHeight;
+            this->view->offsetX = x;
+            this->view->offsetY = y;
+            this->view->width = width;
+            this->view->height = height;
+
+            this->updateProjectionMatrix();
+        }
+
+        void clearViewOffset() {
+
+            if (this->view) {
+
+                this->view->enabled = false;
+            }
+
+            this->updateProjectionMatrix();
+        }
+
         void updateProjectionMatrix() {
 
-            const auto top = near * std::tan(DEG2RAD * 0.5f * this->fov) / this->zoom;
-            const auto height = 2 * top;
-            const auto width = this->aspect * height;
+            auto top = near * std::tan(DEG2RAD * 0.5f * this->fov) / this->zoom;
+            auto height = (int) 2 * top;
+            auto width = this->aspect * height;
             auto left = -0.5f * width;
-            //            const view = this.view;
-            //
-            //            if ( this.view !== null && this.view.enabled ) {
-            //
-            //                const fullWidth = view.fullWidth,
-            //                        fullHeight = view.fullHeight;
-            //
-            //                left += view.offsetX * width / fullWidth;
-            //                top -= view.offsetY * height / fullHeight;
-            //                width *= view.width / fullWidth;
-            //                height *= view.height / fullHeight;
-            //
-            //            }
+
+            if (this->view && this->view->enabled) {
+
+                const auto fullWidth = view->fullWidth,
+                           fullHeight = view->fullHeight;
+
+                left += view->offsetX * width / fullWidth;
+                top -= view->offsetY * height / fullHeight;
+                width *= view->width / fullWidth;
+                height *= view->height / fullHeight;
+            }
 
             const auto skew = this->filmOffset;
             if (skew != 0) left += near * skew / this->getFilmWidth();
@@ -98,8 +172,6 @@ namespace threepp {
 
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
-
-        PerspectiveCamera(const PerspectiveCamera &) = delete;
 
         std::string type() const override {
             return "PerspectiveCamera";
