@@ -14,6 +14,7 @@ namespace threepp {
     class MeshBasicMaterial : public Material, MaterialWithWireframe {
 
     public:
+
         Color color = Color(0xffffff);
 
         std::optional<Texture> map = std::nullopt;
@@ -33,8 +34,8 @@ namespace threepp {
         float reflectivity = 1;
         float refractionRatio = 0.98f;
 
-        static std::shared_ptr<MeshBasicMaterial> create() {
-            return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
+        static std::unique_ptr<MeshBasicMaterial> create() {
+            return std::unique_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
         }
 
     protected:

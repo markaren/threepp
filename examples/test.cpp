@@ -175,10 +175,9 @@ int main() {
 
     auto boxGeometry = BoxGeometry::create();
     auto material = MeshBasicMaterial::create();
-    auto mesh = Mesh::create(boxGeometry, material);
+    auto mesh = Mesh::create(std::move(boxGeometry), std::move(material));
 
     o->add(mesh);
-
 
     {
         auto objectWithGeometry = std::reinterpret_pointer_cast<Mesh>(o->children[0]);

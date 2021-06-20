@@ -21,8 +21,8 @@ namespace threepp {
 
         BoxGeometry(const BoxGeometry&) = delete;
 
-        static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, int widthSegments = 1, int heightSegments = 1, int depthSegments = 1) {
-            return std::shared_ptr<BoxGeometry>(new BoxGeometry(width, height, depth, widthSegments, heightSegments, depthSegments));
+        static std::unique_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, int widthSegments = 1, int heightSegments = 1, int depthSegments = 1) {
+            return std::unique_ptr<BoxGeometry>(new BoxGeometry(width, height, depth, widthSegments, heightSegments, depthSegments));
         }
 
     private:
