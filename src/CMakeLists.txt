@@ -36,6 +36,9 @@ set(publicHeaders
         "threepp/objects/Line.hpp"
         "threepp/objects/Mesh.hpp"
 
+        "threepp/textures/Image.hpp"
+        "threepp/textures/Texture.hpp"
+
         "threepp/lights/Light.hpp"
         "threepp/lights/LightProbe.hpp"
         "threepp/lights/AmbientLight.hpp"
@@ -84,6 +87,8 @@ set(sources
         "threepp/math/Vector3.cpp"
         "threepp/math/Vector4.cpp"
         "threepp/math/Quaternion.cpp"
+
+        "threepp/textures/Texture.cpp"
 
         "threepp/renderers/GLRenderer.cpp"
 

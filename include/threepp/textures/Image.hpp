@@ -10,11 +10,11 @@ namespace threepp {
 
         Image(unsigned int width, unsigned int height): width_(width), height_(height){};
 
-        unsigned int width() const {
+        [[nodiscard]] unsigned int width() const {
             return width_;
         }
 
-        unsigned int height() const {
+        [[nodiscard]] unsigned int height() const {
             return height_;
         }
 
