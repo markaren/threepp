@@ -14,36 +14,35 @@ namespace threepp::gl {
 
         std::optional<std::vector<float>> globalState;
 
-        int numGlobalPlanes = 0;
+        size_t numGlobalPlanes = 0;
         bool localClippingEnabled = false;
         bool renderingShadows = false;
 
         Plane plane;
-        Matrix3 ViewNormalMatrix;
+        Matrix3 viewNormalMatrix;
 
-        Uniform uniform = Uniform(NULL_UNIFORM);
+        Uniform uniform;
 
-        int numPlanes = 0;
-        int numIntersection = 0;
+        size_t numPlanes = 0;
+        unsigned int numIntersection = 0;
 
         GLClipping() {
             uniform.needsUpdate = false;
         }
 
-        bool init(const std::vector<Plane> &planes, bool enableLocalClipping, const std::shared_ptr<Camera> &camera) {
+        bool init(const std::vector<Plane> &planes, bool enableLocalClipping, Camera &camera) {
 
             bool enabled =
-                    planes.length != 0 ||
+                    !planes.empty() ||
                     enableLocalClipping ||
                     // enable state of previous frame - the clipping code has to
                     // run another frame in order to reset the state:
-                    numGlobalPlanes != = 0 ||
-                                         localClippingEnabled;
+                    numGlobalPlanes != 0 || localClippingEnabled;
 
             localClippingEnabled = enableLocalClipping;
 
             globalState = projectPlanes(planes, camera, 0);
-            numGlobalPlanes = planes.length;
+            numGlobalPlanes = planes.size();
 
             return enabled;
         }
@@ -54,42 +53,58 @@ namespace threepp::gl {
             projectPlanes();
         }
 
-        std::optional<std::vector<float>> projectPlanes(const std::vector<Plane> &planes, Camera &camera, int dstOffset, bool skipTransform = false) {
+        void resetGlobalState() {
 
-            const auto nPlanes = planes.size();
-            std::optional<std::vector<float>> dstArray;
+            if (!uniform.hasValue() || uniform.value<std::vector<float>>() != globalState) {
 
-            if (nPlanes != 0) {
-
-                dstArray = uniform.value <std::vector<float>()>();
-
-                if (!skipTransform || !dstArray.empty()) {
-
-                    const flatSize = dstOffset + nPlanes * 4,
-                          viewMatrix = camera.matrixWorldInverse;
-
-                    viewNormalMatrix.getNormalMatrix(viewMatrix);
-
-                    if (dstArray.size() < flatSize) {
-
-                        dstArray = std::vector<float>(flatSize);
-                    }
-
-                    for (int i = 0, i4 = dstOffset; i != = nPlanes; ++i, i4 += 4) {
-
-                        plane.copy(planes[i]).applyMatrix4(viewMatrix, viewNormalMatrix);
-
-                        plane.normal.toArray(dstArray, i4);
-                        dstArray[i4 + 3] = plane.constant;
-                    }
-                }
-
-                uniform.value(dstArray);
-                uniform.needsUpdate = true;
+                uniform.setValue(globalState);
+                uniform.needsUpdate = numGlobalPlanes > 0;
             }
 
-            scope.numPlanes = nPlanes;
-            scope.numIntersection = 0;
+            numPlanes = numGlobalPlanes;
+            numIntersection = 0;
+        }
+
+        void projectPlanes() {
+
+            numPlanes = 0;
+            numIntersection = 0;
+        }
+
+        std::optional<std::vector<float>> projectPlanes(const std::vector<Plane> &planes, const Camera &camera, int dstOffset, bool skipTransform = false) {
+
+            const auto nPlanes = planes.size();
+            std::vector<float> dstArray;
+
+            dstArray = uniform.value<std::vector<float>>();
+
+            if (!skipTransform || !dstArray.empty()) {
+
+                const auto flatSize = dstOffset + nPlanes * 4;
+                const auto viewMatrix = camera.matrixWorldInverse;
+
+                viewNormalMatrix.getNormalMatrix(viewMatrix);
+
+                if (dstArray.size() < flatSize) {
+
+                    dstArray = std::vector<float>(flatSize);
+                }
+
+                for (int i = 0, i4 = dstOffset; i != nPlanes; ++i, i4 += 4) {
+
+                    plane.copy(planes[i]).applyMatrix4(viewMatrix, viewNormalMatrix);
+
+                    plane.normal.toArray(dstArray, i4);
+                    dstArray[i4 + 3] = plane.constant;
+                }
+            }
+
+            uniform.setValue(dstArray);
+            uniform.needsUpdate = true;
+
+
+            numPlanes = nPlanes;
+            numIntersection = 0;
 
             return dstArray;
         }

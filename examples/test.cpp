@@ -6,9 +6,9 @@
 #include <threepp/math/Box2.hpp>
 #include <threepp/math/Color.hpp>
 #include <threepp/math/Euler.hpp>
+#include <threepp/math/Line3.hpp>
 #include <threepp/math/Matrix4.hpp>
 #include <threepp/math/Quaternion.hpp>
-#include <threepp/math/Line3.hpp>
 #include <threepp/math/Triangle.hpp>
 #include <threepp/math/Vector2.hpp>
 #include <threepp/math/Vector3.hpp>
@@ -35,12 +35,14 @@
 #include <threepp/core/Object3D.hpp>
 #include <threepp/geometries/BoxGeometry.hpp>
 #include <threepp/geometries/SphereGeometry.hpp>
-#include <threepp/objects/Mesh.hpp>
 #include <threepp/objects/Line.hpp>
+#include <threepp/objects/Mesh.hpp>
 #include <vector>
 
 #include "threepp/Canvas.hpp"
 
+#include "threepp/renderers/gl/GLCapabilities.hpp"
+#include "threepp/renderers/gl/GLClipping.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
 #include "threepp/core/Uniform.hpp"
@@ -64,7 +66,7 @@ namespace {
         std::cout << "o" << std::endl;
     }
 
-}
+}// namespace
 
 int main() {
 
@@ -192,15 +194,16 @@ int main() {
     std::vector<Uniform> uv;
     uv.emplace_back(Matrix4());
 
-    auto& ulib = shaders::UniformsLib::instance();
+    auto &ulib = shaders::UniformsLib::instance();
     std::cout << ulib.common["diffuse"].value<Color>().r << std::endl;
 
-    //    Canvas canvas(Canvas::Parameters().title(""));
-    //    canvas.animate([](float dt){
-    //
-    //    });
+//    Canvas canvas(Canvas::Parameters().title(""));
+//    canvas.animate([](float dt) {
+//
+//    });
 
     o->clear();
+
 
     return 0;
 }

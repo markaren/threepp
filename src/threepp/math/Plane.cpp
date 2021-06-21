@@ -170,6 +170,19 @@ Plane &Plane::applyMatrix4(const Matrix4 &matrix) {
 
 }
 
+Plane &Plane::applyMatrix4(const Matrix4 &matrix, Matrix3 &normalMatrix) {
+
+    this->coplanarPoint( _vector1 );
+    const auto referencePoint = _vector1.applyMatrix4( matrix );
+
+    const auto normal = this->normal.applyMatrix3( normalMatrix ).normalize();
+
+    this->constant = - referencePoint.dot( normal );
+
+    return *this;
+
+}
+
 Plane &Plane::translate(const Vector3 &offset) {
 
     this->constant -= offset.dot( this->normal );

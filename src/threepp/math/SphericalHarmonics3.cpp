@@ -56,7 +56,7 @@ void threepp::SphericalHarmonis3::getIrradianceAt(const threepp::Vector3 &normal
     const auto& coeff = this->coefficients_;
 
     // band 0
-    target.copy( coeff[ 0 ] ).multiply( 0.886227 ); // π * 0.282095
+    target.copy( coeff[ 0 ] ).multiply( 0.886227f ); // π * 0.282095
 
     // band 1
     target.addScaledVector( coeff[ 1 ], 2.0f * 0.511664f * y ); // ( 2 * π / 3 ) * 0.488603

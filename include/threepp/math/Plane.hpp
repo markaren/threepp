@@ -54,6 +54,8 @@ namespace threepp {
 
         Plane &applyMatrix4( const Matrix4 &matrix);
 
+        Plane &applyMatrix4( const Matrix4 &matrix, Matrix3 &normalMatrix);
+
         Plane &translate( const Vector3 &offset );
 
 

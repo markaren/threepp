@@ -103,9 +103,11 @@ set(privateHeaders
 
         "threepp/renderers/GLShader.hpp"
 
+        "threepp/renderers/gl/GLCapabilities.hpp"
         "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
+        "threepp/renderers/gl/GLUtils.hpp"
 
         "threepp/renderers/shaders/ShaderChunk.hpp"
         "threepp/renderers/shaders/ShaderLib.hpp"

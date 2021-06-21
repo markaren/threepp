@@ -9,21 +9,29 @@
 
 namespace threepp {
 
-    using NULL_UNIFORM = std::any;
-
     class Uniform {
 
     public:
         std::optional<bool> needsUpdate;
 
-        explicit Uniform(std::any value = NULL_UNIFORM()) : value_(std::move(value)) {}
+        explicit Uniform() = default;
 
-        template<class T>
-        [[nodiscard]] T &value() {
-            return std::any_cast<T &>(value_);
+        explicit Uniform(std::any value) : value_(std::move(value)) {}
+
+        [[nodiscard]] bool hasValue() const {
+            return value_.has_value();
         }
 
-        void value(std::any value) {
+        std::any value() {
+            return value_;
+        }
+
+        template<class T>
+        [[nodiscard]] T value() {
+            return std::any_cast<T>(value_);
+        }
+
+        void setValue(std::any value) {
             this->value_ = std::move(value);
         }
 
