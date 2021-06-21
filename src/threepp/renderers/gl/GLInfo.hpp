@@ -84,8 +84,6 @@ namespace threepp::gl {
 
     };
 
-
-
 }
 
 #endif//THREEPP_GLINFO_HPP

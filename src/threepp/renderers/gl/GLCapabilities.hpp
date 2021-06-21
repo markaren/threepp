@@ -49,8 +49,6 @@ namespace threepp::gl {
             glGetInteger64v(GL_MAX_SAMPLES, (GLint64 *) &maxSamples);
         }
 
-    private:
-
 
     };
 
