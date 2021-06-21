@@ -47,6 +47,9 @@
 
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 
+
+#include "threepp/renderers/GLShader.hpp"
+
 #include "threepp/lights/LightShadow.hpp"
 
 using namespace threepp;

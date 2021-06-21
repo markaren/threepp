@@ -101,6 +101,8 @@ set(sources
 
 set(privateHeaders
 
+        "threepp/renderers/GLShader.hpp"
+
         "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
