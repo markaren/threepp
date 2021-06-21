@@ -12,19 +12,22 @@ namespace threepp {
     public:
         explicit Line3(Vector3 start = Vector3(), Vector3 end = Vector3());
 
+        const Vector3 &getStart() const;
+        const Vector3 &getEnd() const;
+
         Line3 set(const Vector3 &start, const Vector3 &end);
 
         Line3 &copy(const Line3 &line);
 
-        void getCenter(Vector3 &target);
+        void getCenter(Vector3 &target) const ;
 
-        void delta(Vector3 &target);
+        void delta(Vector3 &target) const;
 
-        float distanceSq();
+        [[nodiscard]] float distanceSq() const;
 
-        float distance();
+        [[nodiscard]] float distance() const;
 
-        void at(float t, Vector3 &target);
+        void at(float t, Vector3 &target) const;
 
         float closestPointToPointParameter(const Vector3 &point, bool clampToLine);
 

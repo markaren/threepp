@@ -6,6 +6,7 @@
 #define THREEPP_VECTOR2_HPP
 
 #include <string>
+#include <iostream>
 
 namespace threepp {
 

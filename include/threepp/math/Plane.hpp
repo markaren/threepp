@@ -9,6 +9,8 @@
 namespace threepp {
 
     class Sphere;
+    class Line3;
+    class Box3;
 
     class Plane {
 
@@ -34,9 +36,26 @@ namespace threepp {
 
         Plane &negate();
 
-        float distanceToPoint(const Vector3 &point) const;
+        [[nodiscard]] float distanceToPoint(const Vector3 &point) const;
 
-        float distanceToSphere(const Sphere &sphere) const;
+        [[nodiscard]] float distanceToSphere(const Sphere &sphere) const;
+
+        void projectPoint( const Vector3 &point, Vector3 &target ) const;
+
+        void intersectLine( const Line3 &line, Vector3 &target ) const;
+
+        [[nodiscard]] bool intersectsLine( const Line3 &line ) const;
+
+        [[nodiscard]] bool intersectsBox( const Box3 &box ) const;
+
+        [[nodiscard]] bool intersectsSphere( const Sphere &sphere ) const;
+
+        void coplanarPoint( Vector3 &target ) const;
+
+        Plane &applyMatrix4( const Matrix4 &matrix);
+
+        Plane &translate( const Vector3 &offset );
+
 
     private:
         static Vector3 _vector1;

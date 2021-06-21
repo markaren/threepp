@@ -12,6 +12,14 @@ Vector3 Line3::_startEnd = Vector3();
 
 Line3::Line3(Vector3 start, Vector3 end) : start_(start), end_(end) {}
 
+const Vector3 &Line3::getStart() const {
+    return start_;
+}
+
+const Vector3 &Line3::getEnd() const {
+    return end_;
+}
+
 Line3 Line3::set(const Vector3 &start, const Vector3 &end) {
 
     this->start_.copy(start);
@@ -28,27 +36,27 @@ Line3 &Line3::copy(const Line3 &line) {
     return *this;
 }
 
-void Line3::getCenter(Vector3 &target) {
+void Line3::getCenter(Vector3 &target) const {
 
     target.addVectors(this->start_, this->end_).multiply(0.5f);
 }
 
-void Line3::delta(Vector3 &target) {
+void Line3::delta(Vector3 &target) const {
 
     target.subVectors(this->end_, this->start_);
 }
 
-float Line3::distanceSq() {
+float Line3::distanceSq() const {
 
     return this->start_.distanceToSquared(this->end_);
 }
 
-float Line3::distance() {
+float Line3::distance() const {
 
     return this->start_.distanceTo(this->end_);
 }
 
-void Line3::at(float t, Vector3 &target) {
+void Line3::at(float t, Vector3 &target) const {
 
     this->delta(target);
     target.multiply(t).add(this->start_);
@@ -87,3 +95,4 @@ Line3 &Line3::applyMatrix4(const Matrix4 &matrix) {
 
     return *this;
 }
+
