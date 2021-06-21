@@ -5,8 +5,8 @@
 #ifndef THREEPP_VECTOR4_HPP
 #define THREEPP_VECTOR4_HPP
 
-#include <string>
 #include <iostream>
+#include <string>
 
 namespace threepp {
 
@@ -23,13 +23,45 @@ namespace threepp {
 
         Vector4() = default;
 
+        Vector4(int x, int y, int z, int w);
+
         Vector4(float x, float y, float z, float w);
 
         Vector4 &set(float x, float y, float z, float w);
 
         Vector4 &setScalar(float value);
 
+        Vector4 &copy(const Vector4 &v);
+
+        Vector4 &add(const Vector4 &v);
+
+        Vector4 &addScalar(float s);
+
+        Vector4 &addVectors( const Vector4 &a, const Vector4 &b );
+
+        Vector4 &addScaledVector( const Vector4 &v, float s );
+
+        Vector4 &multiply(const Vector4 &v);
+
+        Vector4 &multiplyScalar(float scalar);
+
         Vector4 &applyMatrix4(const Matrix4 &m);
+
+        Vector4 &divideScalar(float scalar);
+
+        [[nodiscard]] float dot(const Vector4 &v) const;
+
+        [[nodiscard]] float lengthSq() const;
+
+        [[nodiscard]] float length() const;
+
+        [[nodiscard]] float manhattanLength() const;
+
+        Vector4 &normalize();
+
+        Vector4 &setLength(float length);
+
+        [[nodiscard]] bool equals(const Vector4 &v) const;
 
         template<class ArrayLike>
         Vector4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {

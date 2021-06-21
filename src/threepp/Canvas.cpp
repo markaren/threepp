@@ -11,7 +11,7 @@ struct Canvas::Impl {
 
     GLFWwindow *window;
 
-    explicit Impl(const Canvas::Parameters &params) {
+    explicit Impl(const Canvas::Parameters &params): width_(params.width_), height_(params.height_) {
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
@@ -28,10 +28,19 @@ struct Canvas::Impl {
         }
 
         glfwSetKeyCallback(window, key_callback);
+        glfwSetWindowSizeCallback(window, window_size_callback);
 
         glfwMakeContextCurrent(window);
         gladLoadGL();
         glfwSwapInterval(1);
+    }
+
+    [[nodiscard]] int getWidth() const {
+        return width_;
+    }
+
+    [[nodiscard]] int getHeight() const {
+        return height_;
     }
 
     void animate(const std::function<void(float)> &f) const {
@@ -50,6 +59,17 @@ struct Canvas::Impl {
         glfwTerminate();
     }
 
+private:
+
+    int width_;
+    int height_;
+
+    static void window_size_callback(GLFWwindow*, int width, int height)
+    {
+//        this->width_ = width;
+//        this->height_ = height;
+    }
+
     static void error_callback(int error, const char *description) {
         fprintf(stderr, "Error: %s\n", description);
     }
@@ -65,6 +85,14 @@ Canvas::Canvas(const Canvas::Parameters &params) : pimpl_(new Impl(params)) {}
 void Canvas::animate(const std::function<void(float)> &f) const {
 
     pimpl_->animate(f);
+}
+
+int threepp::Canvas::getWidth() const {
+    return pimpl_->getWidth();
+}
+
+int threepp::Canvas::getHeight() const {
+    return pimpl_->getHeight();
 }
 
 Canvas::~Canvas() = default;

@@ -47,6 +47,10 @@ namespace threepp {
 
         Canvas(const Canvas &) = delete;
 
+        [[nodiscard]] int getWidth() const;
+
+        [[nodiscard]] int getHeight() const;
+
         void animate(const std::function<void(float)> &f) const;
 
         ~Canvas();

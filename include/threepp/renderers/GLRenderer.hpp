@@ -5,12 +5,18 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/math/Plane.hpp"
+#include "threepp/math/Vector4.hpp"
 
+#include "threepp/Canvas.hpp"
 #include "threepp/constants.hpp"
 
-#include <memory>
-#include <vector>
+#include "threepp/renderers/gl/GLCapabilities.hpp"
+#include "threepp/renderers/gl/GLState.hpp"
+#include "threepp/renderers/gl/GLInfo.hpp"
 
+#include <memory>
+#include <threepp/math/Frustum.hpp>
+#include <vector>
 
 namespace threepp {
 
@@ -59,9 +65,11 @@ namespace threepp {
         int toneMapping = NoToneMapping;
         float toneMappingExposure = 1.0f;
 
-        explicit GLRenderer(const Parameters &parameters);
+        explicit GLRenderer(const Canvas &canvas, const Parameters &parameters);
 
         void initGLContext();
+
+
 
     private:
 
@@ -70,7 +78,40 @@ namespace threepp {
         int _currentMaterialId = - 1;
 
         std::shared_ptr<Camera> _currentCamera = nullptr;
+        Vector4 _currentViewport;
+        Vector4 _currentScissor;
+        std::optional<bool> _currentScissorTest;
 
+        //
+
+        int _width;
+        int _height;
+
+        int _pixelRatio = 1;
+
+        Vector4 _viewPort;
+        Vector4 _scissor;
+
+        // frustum
+
+        Frustum _frustum;
+
+        // clipping
+
+        bool _clippingEnabled = false;
+        bool _localClippingEnabled = false;
+
+        // camera matrices cache
+
+        Matrix4 _projScreenMatrix;
+
+        Vector3 _vector3;
+
+
+
+        [[nodiscard]] int getTargetPixelRatio() const {
+            return _pixelRatio;
+        }
 
     };
 

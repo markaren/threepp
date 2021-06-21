@@ -5,7 +5,9 @@
 
 using namespace threepp;
 
-GLRenderer::GLRenderer(const GLRenderer::Parameters &parameters) {}
+GLRenderer::GLRenderer(const Canvas &canvas, const GLRenderer::Parameters &parameters)
+    : _width(canvas.getWidth()), _height(canvas.getHeight()), _viewPort(0, 0, _width, _height), _scissor(0, 0, _width, _height) {
+}
 
 void GLRenderer::initGLContext() {
 }
