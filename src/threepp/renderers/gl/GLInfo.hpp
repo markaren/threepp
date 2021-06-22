@@ -29,16 +29,7 @@ namespace threepp::gl {
 
     };
 
-    class GLInfo {
-
-    public:
-
-        MemoryInfo memory;
-        RenderInfo render;
-
-        bool autoReset = true;
-
-        std::vector<GLProgram> programs;
+    struct GLInfo {
 
         void update(int count, int mode, int instanceCount) {
 
@@ -81,6 +72,15 @@ namespace threepp::gl {
             render.points = 0;
             render.lines = 0;
         }
+
+    private:
+        MemoryInfo memory;
+        RenderInfo render;
+
+        bool autoReset = true;
+
+        std::vector<GLProgram> programs;
+
 
     };
 

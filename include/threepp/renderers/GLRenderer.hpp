@@ -5,6 +5,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/math/Plane.hpp"
+#include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
 
 #include "threepp/Canvas.hpp"
@@ -65,10 +66,18 @@ namespace threepp {
         int toneMapping = NoToneMapping;
         float toneMappingExposure = 1.0f;
 
-        explicit GLRenderer(const Canvas &canvas, const Parameters &parameters);
+        GLRenderer(const Canvas &canvas, const Parameters &parameters);
 
         void initGLContext();
 
+
+        [[nodiscard]] int getTargetPixelRatio() const {
+            return _pixelRatio;
+        }
+
+        void getSize( Vector2 &target) {
+            target.set( _width, _height );
+        }
 
 
     private:
@@ -107,11 +116,10 @@ namespace threepp {
 
         Vector3 _vector3;
 
+        gl::GLCapabilities capabilities;
+        gl::GLState state;
+//        gl::GLInfo info;
 
-
-        [[nodiscard]] int getTargetPixelRatio() const {
-            return _pixelRatio;
-        }
 
     };
 

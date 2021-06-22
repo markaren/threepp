@@ -1,9 +1,9 @@
-//
+// https://github.com/mrdoob/three.js/blob/r129/src/renderers/webgl/WebGLCapabilities.js
 
 #ifndef THREEPP_GLCAPABILITIES_HPP
 #define THREEPP_GLCAPABILITIES_HPP
 
-#include "glad/glad.h"
+#include <glad/glad.h>
 
 namespace threepp::gl {
 
@@ -11,7 +11,7 @@ namespace threepp::gl {
 
         GLint64 maxAnisotropy;
 
-        std::string precision = "highp";
+        const std::string precision = "highp";
 
         bool logarithmicDepthBuffer = false;
 

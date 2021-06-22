@@ -33,7 +33,11 @@ namespace threepp {
             return normalized_;
         }
 
-        std::vector<T> array() const {
+        [[nodiscard]] int getUsage() const {
+            return usage_;
+        }
+
+        std::vector<T> &array() const {
             return this->array_;
         }
 
@@ -44,7 +48,7 @@ namespace threepp {
 
         BufferAttribute<T> &setUsage(int value) {
 
-            this->usage = value;
+            this->usage_ = value;
 
             return *this;
         }
@@ -289,7 +293,7 @@ namespace threepp {
         const int count_;
         const bool normalized_;
 
-        int usage = StaticDrawUsage;
+        int usage_ = StaticDrawUsage;
         UpdateRange updateRange = {0, -1};
 
         unsigned int version = 0;
