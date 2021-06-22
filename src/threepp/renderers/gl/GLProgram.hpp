@@ -13,9 +13,10 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+
 namespace threepp::gl {
 
-    std::vector<std::string> split(const std::string &s, char delimiter) {
+    inline std::vector<std::string> split(const std::string &s, char delimiter) {
 
         std::string token;
         std::vector<std::string> tokens;
@@ -28,7 +29,7 @@ namespace threepp::gl {
         return tokens;
     }
 
-    void join(const std::vector<std::string> &v, char c, std::string &s) {
+    inline void join(const std::vector<std::string> &v, char c, std::string &s) {
 
         s.clear();
 
@@ -40,7 +41,7 @@ namespace threepp::gl {
         }
     }
 
-    std::string addLineNumbers(const std::string &str) {
+    inline std::string addLineNumbers(const std::string &str) {
 
         auto lines = split(str, '\n');
 
@@ -54,7 +55,7 @@ namespace threepp::gl {
         return result;
     }
 
-    std::pair<std::string, std::string> getEncodingComponents(int encoding) {
+    inline std::pair<std::string, std::string> getEncodingComponents(int encoding) {
 
         switch (encoding) {
 
@@ -80,19 +81,19 @@ namespace threepp::gl {
         }
     }
 
-    std::string getTexelDecodingFunction(const std::string &functionName, int encoding) {
+    inline std::string getTexelDecodingFunction(const std::string &functionName, int encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return " + components.first + "ToLinear" + components.second + "; }";
     }
 
-    std::string getTexelEncodingFunction(const std::string &functionName, int encoding) {
+    inline std::string getTexelEncodingFunction(const std::string &functionName, int encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
     }
 
-    std::string getToneMappingFunction(const std::string &functionName, int toneMapping) {
+    inline std::string getToneMappingFunction(const std::string &functionName, int toneMapping) {
 
         std::string toneMappingName;
 
@@ -126,7 +127,7 @@ namespace threepp::gl {
         return "vec3 " + functionName + "( vec3 color ) { return " + toneMappingName + "ToneMapping( color ); }";
     }
 
-    std::string generateDefines(const std::unordered_map<std::string, std::any> &defines) {
+    inline std::string generateDefines(const std::unordered_map<std::string, std::any> &defines) {
 
         //            std::vector<std::string> chunks;
         //

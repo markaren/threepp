@@ -14,7 +14,7 @@
 
 namespace threepp::gl {
 
-    GLenum equationToGL(int eq) {
+    inline GLenum equationToGL(int eq) {
 
         switch (eq) {
             case AddEquation:
@@ -32,7 +32,7 @@ namespace threepp::gl {
         }
     }
 
-    GLenum factorToGL(int factor) {
+    inline GLenum factorToGL(int factor) {
 
         switch (factor) {
             case ZeroFactor:
@@ -414,7 +414,7 @@ namespace threepp::gl {
                 glTexParameteri(type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
                 for (int i = 0; i < count; i++) {
-                    glTexImage2D(target + 1, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+                    glTexImage2D(target + 1, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &data);
                 }
 
                 return texture;
