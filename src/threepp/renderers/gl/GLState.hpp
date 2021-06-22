@@ -386,16 +386,13 @@ namespace threepp::gl {
 
             glGetInteger64v(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTextures);
 
-            GLint64 *scissorParam;
-            GLint64 *viewportParam;
+            GLint64 scissorParam[4];
+            GLint64 viewportParam[4];
             glGetInteger64v(GL_SCISSOR_BOX, scissorParam);
             glGetInteger64v(GL_VIEWPORT, viewportParam);
 
-            currentScissor.fromArray(scissorParam);
-            currentViewport.fromArray(scissorParam);
-
-            delete scissorParam;
-            delete viewportParam;
+            currentScissor.fromArray((float*) scissorParam);
+            currentViewport.fromArray((float*) scissorParam);
 
             auto enableLambda = [&](int id) {
                 enable(id);

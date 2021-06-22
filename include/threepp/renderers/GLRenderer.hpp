@@ -75,10 +75,9 @@ namespace threepp {
             return _pixelRatio;
         }
 
-        void getSize( Vector2 &target) {
-            target.set( _width, _height );
+        void getSize( Vector2 &target) const {
+            target.set( (float) _width, (float) _height );
         }
-
 
     private:
 
