@@ -19,8 +19,6 @@ namespace threepp {
 
             std::string title_;
 
-            Parameters() = default;
-
             Parameters &title(std::string value) {
 
                 this->title_ = std::move(value);
@@ -43,7 +41,7 @@ namespace threepp {
             }
         };
 
-        explicit Canvas(const Parameters &params);
+        explicit Canvas(const Parameters &params = Parameters());
 
         Canvas(const Canvas &) = delete;
 
@@ -51,9 +49,11 @@ namespace threepp {
 
         [[nodiscard]] int getHeight() const;
 
-        void animate(const std::function<void(float)> &f) const;
+        [[nodiscard]] int getAspect() const;
 
-        ~Canvas();
+        void setSize(int width, int height);
+
+        void animate(const std::function<void(float)> &f) const;
 
     private:
         struct Impl;

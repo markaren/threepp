@@ -16,14 +16,14 @@ namespace threepp {
     class PerspectiveCamera : public Camera {
 
     public:
-        float fov;
-        float zoom = 1;
+        int fov;
+        int zoom = 1;
 
         float near;
         float far;
         float focus = 10;
 
-        float aspect;
+        int aspect;
         std::optional<View> view;
 
         float filmGauge = 35;// width of the film (default in millimeters)
@@ -44,7 +44,7 @@ namespace threepp {
             /** see {@link http://www.bobatkins.com/photography/technical/field_of_view->html} */
             const auto vExtentSlope = 0.5f * this->getFilmHeight() / focalLength;
 
-            this->fov = RAD2DEG * 2 * std::atan(vExtentSlope);
+            this->fov = (int) (RAD2DEG * 2 * std::atan(vExtentSlope));
             this->updateProjectionMatrix();
         }
 
@@ -53,26 +53,26 @@ namespace threepp {
          */
         [[nodiscard]] float getFocalLength() const {
 
-            const auto vExtentSlope = std::tan(DEG2RAD * 0.5f * this->fov);
+            const auto vExtentSlope = std::tan(DEG2RAD * 0.5f * (float) this->fov);
 
             return 0.5f * this->getFilmHeight() / vExtentSlope;
         }
 
         [[nodiscard]] float getEffectiveFOV() const {
 
-            return RAD2DEG * 2 * std::atan(std::tan(DEG2RAD * 0.5f * this->fov) / this->zoom);
+            return RAD2DEG * 2 * std::atan(std::tan(DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
         }
 
         [[nodiscard]] float getFilmWidth() const {
 
             // film not completely covered in portrait format (aspect < 1)
-            return this->filmGauge * std::min(this->aspect, 1.f);
+            return this->filmGauge * std::min((float) this->aspect, 1.f);
         }
 
         [[nodiscard]] float getFilmHeight() const {
 
             // film not completely covered in landscape format (aspect > 1)
-            return this->filmGauge / std::max(this->aspect, 1.f);
+            return this->filmGauge / std::max((float) this->aspect, 1.f);
         }
 
         /**
@@ -112,7 +112,7 @@ namespace threepp {
          */
         void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
 
-            this->aspect = (float) fullWidth / fullHeight;
+            this->aspect = fullWidth / fullHeight;
 
             if (!this->view) {
 
@@ -149,10 +149,10 @@ namespace threepp {
 
         void updateProjectionMatrix() {
 
-            auto top = near * std::tan(DEG2RAD * 0.5f * this->fov) / this->zoom;
-            auto height = (int) 2 * top;
-            auto width = this->aspect * height;
-            auto left = -0.5f * width;
+            int top = (int) (near * std::tan(DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
+            int height = (int) 2 * top;
+            int width = this->aspect * height;
+            int left = (int) -0.5 * width;
 
             if (this->view && this->view->enabled) {
 
@@ -166,9 +166,9 @@ namespace threepp {
             }
 
             const auto skew = this->filmOffset;
-            if (skew != 0) left += near * skew / this->getFilmWidth();
+            if (skew != 0) left += (int) (near * skew / this->getFilmWidth());
 
-            this->projectionMatrix.makePerspective(left, left + width, top, top - height, near, far);
+            this->projectionMatrix.makePerspective((float) left, (float) (left + width), (float) top, (float) (top - height), near, far);
 
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
@@ -177,12 +177,12 @@ namespace threepp {
             return "PerspectiveCamera";
         }
 
-        static std::shared_ptr<PerspectiveCamera> create(float fov, float aspect = 1, float near = 0.1, float far = 2000) {
+        static std::shared_ptr<PerspectiveCamera> create(int fov, int aspect = 1, float near = 0.1, float far = 2000) {
             return std::shared_ptr<PerspectiveCamera>(new PerspectiveCamera(fov, aspect, near, far));
         }
 
     protected:
-        explicit PerspectiveCamera(float fov, float aspect, float near, float far) : fov(fov), aspect(aspect), near(near), far(far) {}
+        explicit PerspectiveCamera(int fov, int aspect, float near, float far) : fov(fov), aspect(aspect), near(near), far(far) {}
     };
 
 }// namespace threepp

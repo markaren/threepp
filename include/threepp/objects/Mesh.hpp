@@ -29,21 +29,21 @@ namespace threepp {
             return "Mesh";
         }
 
-        static std::shared_ptr<Mesh> create(std::unique_ptr<BufferGeometry> geometry, std::unique_ptr<Material> material) {
+        static std::shared_ptr<Mesh> create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
             return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
         }
 
         ~Mesh() = default;
 
     protected:
-        Mesh(std::unique_ptr<BufferGeometry> geometry, std::unique_ptr<Material> material)
+        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
             : geometry_(std::move(geometry)), material_(std::move(material)) {
 
         }
 
     private:
-        std::unique_ptr<BufferGeometry> geometry_;
-        std::unique_ptr<Material> material_;
+        std::shared_ptr<BufferGeometry> geometry_;
+        std::shared_ptr<Material> material_;
     };
 
 }// namespace threepp

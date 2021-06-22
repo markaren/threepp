@@ -35,10 +35,6 @@ namespace threepp {
 
         DrawRange drawRange = DrawRange{0, Infinity<int>};
 
-        BufferGeometry() = default;
-
-        BufferGeometry(const BufferGeometry &) = delete;
-
         std::vector<int> &getIndex();
 
         BufferGeometry &setIndex(const std::vector<int> &index);

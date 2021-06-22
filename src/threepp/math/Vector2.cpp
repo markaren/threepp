@@ -2,6 +2,7 @@
 #include "threepp/math/Vector2.hpp"
 
 #include "threepp/math/Matrix3.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -69,7 +70,7 @@ Vector2 &Vector2::add(const Vector2 &v) {
     return *this;
 }
 
-Vector2 &Vector2::add(float s) {
+Vector2 &Vector2::addScalar(float s) {
 
     this->x += s;
     this->y += s;
@@ -101,7 +102,7 @@ Vector2 &Vector2::sub(const Vector2 &v) {
     return *this;
 }
 
-Vector2 &Vector2::sub(float s) {
+Vector2 &Vector2::subScalar(float s) {
 
     this->x -= s;
     this->y -= s;
@@ -125,7 +126,7 @@ Vector2 &Vector2::multiply(const Vector2 &v) {
     return *this;
 }
 
-Vector2 &Vector2::multiply(float scalar) {
+Vector2 &Vector2::multiplyScalar(float scalar) {
 
     this->x *= scalar;
     this->y *= scalar;
@@ -141,15 +142,15 @@ Vector2 &Vector2::divide(const Vector2 &v) {
     return *this;
 }
 
-Vector2 &Vector2::divide(float scalar) {
+Vector2 &Vector2::divideScalar(float scalar) {
 
-    return this->multiply(1.0f / scalar);
+    return this->multiplyScalar(1.0f / scalar);
 }
 
 Vector2 &Vector2::applyMatrix3(const Matrix3 &m) {
 
     const auto x_ = this->x, y_ = this->y;
-    const auto& e = m.elements();
+    const auto &e = m.elements();
 
     this->x = e[0] * x_ + e[3] * y_ + e[6];
     this->y = e[1] * x_ + e[4] * y_ + e[7];
@@ -171,4 +172,160 @@ Vector2 &Vector2::max(const Vector2 &v) {
     this->y = std::max(this->y, v.y);
 
     return *this;
+}
+
+Vector2 &Vector2::clamp(const Vector2 &min, const Vector2 &max) {
+
+    // assumes min < max, componentwise
+
+    this->x = std::max(min.x, std::min(max.x, this->x));
+    this->y = std::max(min.y, std::min(max.y, this->y));
+
+    return *this;
+}
+
+Vector2 &Vector2::clampScalar(float minVal, float maxVal) {
+
+    this->x = std::max(minVal, std::min(maxVal, this->x));
+    this->y = std::max(minVal, std::min(maxVal, this->y));
+
+    return *this;
+}
+
+Vector2 &Vector2::clampLength(float min, float max) {
+
+    const auto length = this->length();
+
+    return this->divideScalar(isnan(length) ? 1 : length).multiplyScalar(std::max(min, std::min(max, length)));
+}
+
+Vector2 &Vector2::floor() {
+
+    this->x = std::floor(this->x);
+    this->y = std::floor(this->y);
+
+    return *this;
+}
+
+Vector2 &Vector2::ceil() {
+
+    this->x = std::ceil(this->x);
+    this->y = std::ceil(this->y);
+
+    return *this;
+}
+
+Vector2 &Vector2::round() {
+
+    this->x = std::round(this->x);
+    this->y = std::round(this->y);
+
+    return *this;
+}
+
+Vector2 &Vector2::roundToZero() {
+
+    this->x = (this->x < 0) ? std::ceil(this->x) : std::floor(this->x);
+    this->y = (this->y < 0) ? std::ceil(this->y) : std::floor(this->y);
+
+    return *this;
+}
+
+Vector2 &Vector2::negate() {
+
+    this->x = -this->x;
+    this->y = -this->y;
+
+    return *this;
+}
+
+float Vector2::dot(const Vector2 &v) const {
+
+    return this->x * v.x + this->y * v.y;
+}
+
+float Vector2::cross(const Vector2 &v) const {
+
+    return this->x * v.y - this->y * v.x;
+}
+
+float Vector2::lengthSq() const {
+
+    return this->x * this->x + this->y * this->y;
+}
+
+float Vector2::length() const {
+
+    return std::sqrt(this->x * this->x + this->y * this->y);
+}
+
+float Vector2::manhattanLength() const {
+
+    return std::abs(this->x) + std::abs(this->y);
+}
+
+Vector2 &Vector2::normalize() {
+
+    const auto len = this->length();
+    return this->divideScalar(isnan(len) ? 1 : len );
+
+}
+
+float Vector2::angle() const {
+
+    // computes the angle in radians with respect to the positive x-axis
+
+    const auto angle = std::atan2( - this->y, - this->x ) + PI;
+
+    return angle;
+
+}
+
+float Vector2::distanceTo(const Vector2 &v) {
+
+    return std::sqrt( this->distanceToSquared( v ) );
+
+}
+
+float Vector2::distanceToSquared(const Vector2 &v) const {
+
+    const auto dx = this->x - v.x, dy = this->y - v.y;
+    return dx * dx + dy * dy;
+
+}
+
+float Vector2::manhattanDistanceTo(const Vector2 &v) const {
+
+    return std::abs( this->x - v.x ) + std::abs( this->y - v.y );
+
+}
+
+Vector2 &Vector2::setLength(float length) {
+
+    return this->normalize().multiplyScalar( length );
+
+}
+
+Vector2 &Vector2::lerp(const Vector2 &v, float alpha) {
+
+    this->x += ( v.x - this->x ) * alpha;
+    this->y += ( v.y - this->y ) * alpha;
+
+    return *this;
+
+}
+
+Vector2 &Vector2::lerpVectors(const Vector2 &v1, const Vector2 &v2, float alpha) {
+
+    this->x = v1.x + ( v2.x - v1.x ) * alpha;
+    this->y = v1.y + ( v2.y - v1.y ) * alpha;
+
+    return *this;
+
+}
+
+bool Vector2::equals(const Vector2 &v) const {
+
+    return ( ( v.x == this->x ) && ( v.y == this->y ) );
+
 }

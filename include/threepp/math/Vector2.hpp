@@ -36,7 +36,7 @@ namespace threepp {
 
         Vector2 &add(const Vector2 &v);
 
-        Vector2 &add(float s);
+        Vector2 &addScalar(float s);
 
         Vector2 &addVectors(const Vector2 &a, const Vector2 &b);
 
@@ -44,23 +44,67 @@ namespace threepp {
 
         Vector2 &sub( const Vector2 &v );
 
-        Vector2 &sub( float s );
+        Vector2 &subScalar( float s );
 
         Vector2 &subVectors( const Vector2 &a, const Vector2 &b );
 
         Vector2 &multiply( const Vector2 &v );
 
-        Vector2 &multiply( float scalar );
+        Vector2 &multiplyScalar( float scalar );
 
         Vector2 &divide( const Vector2 &v );
 
-        Vector2 &divide( float scalar );
+        Vector2 &divideScalar( float scalar );
 
         Vector2 &applyMatrix3( const Matrix3 &m );
 
         Vector2 &min( const Vector2 &v );
 
         Vector2 &max( const Vector2 &v );
+
+        Vector2 &clamp( const Vector2 &min, const Vector2 &max );
+
+        Vector2 &clampScalar( float minVal, float maxVal );
+
+        Vector2 &clampLength( float min, float max );
+
+        Vector2 &floor();
+
+        Vector2 &ceil();
+
+        Vector2 &round();
+
+        Vector2 &roundToZero();
+
+        Vector2 &negate();
+
+        [[nodiscard]] float dot( const Vector2 &v ) const;
+
+        [[nodiscard]] float cross( const Vector2 &v ) const;
+
+        [[nodiscard]] float lengthSq() const;
+
+        [[nodiscard]] float length() const;
+
+        [[nodiscard]] float manhattanLength() const;
+
+        Vector2 &normalize();
+
+        [[nodiscard]] float angle() const;
+
+        float distanceTo( const Vector2 &v );
+
+        [[nodiscard]] float distanceToSquared( const Vector2 &v ) const;
+
+        [[nodiscard]] float manhattanDistanceTo( const Vector2 &v ) const;
+
+        Vector2 &setLength( float length );
+
+        Vector2 &lerp( const Vector2 &v, float alpha );
+
+        Vector2 &lerpVectors( const Vector2 &v1, const Vector2 &v2, float alpha );
+
+        [[nodiscard]] bool equals( const Vector2 &v ) const;
 
         template<class ArrayLike>
         Vector2 &fromArray(const ArrayLike &array, unsigned int offset = 0) {

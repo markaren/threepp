@@ -56,7 +56,7 @@ bool Box2::isEmpty() const {
 
 void Box2::getCenter(Vector2 &target) {
 
-    this->isEmpty() ? target.set(0, 0) : target.addVectors(this->min_, this->max_).multiply(0.5f);
+    this->isEmpty() ? target.set(0, 0) : target.addVectors(this->min_, this->max_).multiplyScalar(0.5f);
 }
 
 void Box2::getSize(Vector2 &target) {

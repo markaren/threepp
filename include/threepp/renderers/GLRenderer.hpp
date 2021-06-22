@@ -66,20 +66,29 @@ namespace threepp {
         int toneMapping = NoToneMapping;
         float toneMappingExposure = 1.0f;
 
-        GLRenderer(const Canvas &canvas, const Parameters &parameters);
+        explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
 
         void initGLContext();
 
+        [[nodiscard]] int getTargetPixelRatio() const;
 
-        [[nodiscard]] int getTargetPixelRatio() const {
-            return _pixelRatio;
-        }
+        void getSize( Vector2 &target) const;
 
-        void getSize( Vector2 &target) const {
-            target.set( (float) _width, (float) _height );
-        }
+        void setSize(int width, int height);
+
+        void getCurrentViewport( Vector4 &target ) const;
+
+        void getViewport ( Vector4 &target ) const;
+
+        void setViewport( const Vector4 &v );
+
+        void setViewport( int x, int y, int width, int height );
+
+        void getDrawingBufferSize( Vector2 &target ) const;;
 
     private:
+
+        Canvas &canvas_;
 
         int _currentActiveCubeFace = 0;
         int _currentActiveMipmapLevel = 0;
@@ -97,7 +106,7 @@ namespace threepp {
 
         int _pixelRatio = 1;
 
-        Vector4 _viewPort;
+        Vector4 _viewport;
         Vector4 _scissor;
 
         // frustum

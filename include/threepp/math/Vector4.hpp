@@ -49,6 +49,16 @@ namespace threepp {
 
         Vector4 &divideScalar(float scalar);
 
+        Vector4 &floor();
+
+        Vector4 &ceil();
+
+        Vector4 &round();
+
+        Vector4 &roundToZero();
+
+        Vector4 &negate();
+
         [[nodiscard]] float dot(const Vector4 &v) const;
 
         [[nodiscard]] float lengthSq() const;

@@ -39,6 +39,10 @@ struct Canvas::Impl {
         return width_;
     }
 
+    void setSize(int width, int height ) const {
+        glfwSetWindowSize(window, width, height);
+    }
+
     [[nodiscard]] int getHeight() const {
         return height_;
     }
@@ -88,11 +92,20 @@ void Canvas::animate(const std::function<void(float)> &f) const {
 }
 
 int threepp::Canvas::getWidth() const {
+
     return pimpl_->getWidth();
 }
 
 int threepp::Canvas::getHeight() const {
+
     return pimpl_->getHeight();
 }
 
-Canvas::~Canvas() = default;
+int threepp::Canvas::getAspect() const {
+
+    return getWidth() / getWidth();
+}
+void threepp::Canvas::setSize(int width, int height) {
+
+    pimpl_->setSize(width, height);
+}

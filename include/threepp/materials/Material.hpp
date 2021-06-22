@@ -47,15 +47,13 @@ namespace threepp {
         int stencilZPass = KeepStencilOp;
         bool stencilWrite = false;
 
-        //        clippingPlanes = null;
+        std::vector<Plane> clippingPlanes;
         bool clipIntersection = false;
         bool clipShadows = false;
 
-        //        shadowSide = null;
+        std::optional<int> shadowSide;
 
         bool colorWrite = true;
-
-        //        precision = null;
 
         bool polygonOffset = false;
         float polygonOffsetFactor = 0;
@@ -70,8 +68,6 @@ namespace threepp {
         bool visible = true;
 
         bool toneMapped = true;
-
-        //        std::unordered_map<std::string, std::any> userData;
 
         unsigned int version = 0;
 
@@ -95,11 +91,15 @@ namespace threepp {
     class MaterialWithWireframe {
 
     public:
-        std::string wireframeLinecap = "round";
-        std::string wireframeLinejoin = "round";
+        virtual std::string getWireframeLinecap() const = 0;
+        virtual std::string getWireframeLinejoin() const = 0;
 
-        bool wireframe = false;
-        float wireframeLinewidth = 1;
+        [[nodiscard]] virtual bool getWireframe() const = 0;
+        virtual void setWireframe(bool wireframe) = 0;
+        [[nodiscard]] virtual float getWireframeLinewidth() const = 0;
+        virtual void setWireframeLinewidth(float width) = 0;
+
+        ~MaterialWithWireframe() = default;
 
     protected:
         MaterialWithWireframe() = default;
