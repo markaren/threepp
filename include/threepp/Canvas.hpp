@@ -14,10 +14,12 @@ namespace threepp {
     public:
         struct Parameters {
 
-            int width_ = 640;
-            int height_ = 480;
+            int width_;
+            int height_;
 
             std::string title_;
+
+            Parameters(): width_(640), height_(480) {}
 
             Parameters &title(std::string value) {
 
@@ -26,14 +28,14 @@ namespace threepp {
                 return *this;
             }
 
-            Parameters &width(unsigned int value) {
+            Parameters &width(int value) {
 
                 this->width_ = value;
 
                 return *this;
             }
 
-            Parameters &height(unsigned int value) {
+            Parameters &height(int value) {
 
                 this->height_ = value;
 
@@ -42,8 +44,6 @@ namespace threepp {
         };
 
         explicit Canvas(const Parameters &params = Parameters());
-
-        Canvas(const Canvas &) = delete;
 
         [[nodiscard]] int getWidth() const;
 
@@ -55,8 +55,10 @@ namespace threepp {
 
         void animate(const std::function<void(float)> &f) const;
 
+        ~Canvas();
+
     private:
-        struct Impl;
+        class Impl;
 
         std::unique_ptr<Impl> pimpl_;
     };

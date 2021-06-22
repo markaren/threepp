@@ -7,11 +7,10 @@
 
 using namespace threepp;
 
-struct Canvas::Impl {
+class Canvas::Impl {
 
-    GLFWwindow *window;
-
-    explicit Impl(const Canvas::Parameters &params): width_(params.width_), height_(params.height_) {
+public:
+    explicit Impl(const Canvas::Parameters &params) : width_(params.width_), height_(params.height_) {
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
@@ -39,7 +38,7 @@ struct Canvas::Impl {
         return width_;
     }
 
-    void setSize(int width, int height ) const {
+    void setSize(int width, int height) const {
         glfwSetWindowSize(window, width, height);
     }
 
@@ -64,14 +63,14 @@ struct Canvas::Impl {
     }
 
 private:
-
     int width_;
     int height_;
 
-    static void window_size_callback(GLFWwindow*, int width, int height)
-    {
-//        this->width_ = width;
-//        this->height_ = height;
+    GLFWwindow *window;
+
+    static void window_size_callback(GLFWwindow *, int width, int height) {
+        //        this->width_ = width;
+        //        this->height_ = height;
     }
 
     static void error_callback(int error, const char *description) {
@@ -109,3 +108,5 @@ void threepp::Canvas::setSize(int width, int height) {
 
     pimpl_->setSize(width, height);
 }
+
+threepp::Canvas::~Canvas() = default;

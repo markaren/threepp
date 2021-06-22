@@ -22,8 +22,8 @@ int main () {
 
     canvas.animate( [&](float dt) {
 
-        cube->rotation.x(cube->rotation.x() + 0.01);
-        cube->rotation.y(cube->rotation.y() + 0.01);
+        cube->rotation.x(cube->rotation.x() + 0.01f);
+        cube->rotation.y(cube->rotation.y() + 0.01f);
 
         //renderer.render( scene, camera );
     });
