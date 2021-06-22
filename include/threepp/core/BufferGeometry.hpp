@@ -41,33 +41,32 @@ namespace threepp {
 
         std::vector<int> &getIndex() {
 
-            return this->index;
+            return this->index_;
         }
 
         BufferGeometry &setIndex(const std::vector<int> &index) {
 
-            this->index = index;
+            this->index_ = index;
 
             return *this;
         }
 
         template<class T>
-        BufferAttribute<T> &getAttribute(const std::string &name) {
+        TypedBufferAttribute<T> &getAttribute(const std::string &name) {
 
             if (!hasAttribute(name)) throw std::runtime_error("No attribute named: " + name);
 
-            return std::any_cast<BufferAttribute<T> &>(attributes_[name]);
+            return *dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
         }
 
-        template<class T>
-        void setAttribute(const std::string &name, BufferAttribute<T> attribute) {
+        void setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute) {
 
             attributes_[name] = std::move(attribute);
         }
 
         bool hasAttribute(const std::string &name) {
 
-            return attributes_.count(name) != 0;
+            return attributes_.count(name);
         }
 
         void addGroup(int start, int count, int materialIndex = 0) {
@@ -90,35 +89,35 @@ namespace threepp {
 
         BufferGeometry &applyMatrix4(const Matrix4 &matrix) {
 
-            if (this->attributes_.count("position")) {
+            if (hasAttribute("position")) {
 
-                auto position = std::any_cast<BufferAttribute<float>>(this->attributes_["position"]);
+                auto position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
 
-                position.applyMatrix4(matrix);
+                position->applyMatrix4(matrix);
 
-                position.needsUpdate();
+                position->needsUpdate();
             }
 
 
-            if (this->attributes_.count("normal")) {
+            if (hasAttribute("normal")) {
 
-                auto normal = std::any_cast<BufferAttribute<float>>(this->attributes_["normal"]);
+                auto normal = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("normal").get());
 
                 auto normalMatrix = Matrix3().getNormalMatrix(matrix);
 
-                normal.applyNormalMatrix(normalMatrix);
+                normal->applyNormalMatrix(normalMatrix);
 
-                normal.needsUpdate();
+                normal->needsUpdate();
             }
 
 
-            if (this->attributes_.count("tangent")) {
+            if (hasAttribute("tangent")) {
 
-                auto tangent = std::any_cast<BufferAttribute<float>>(this->attributes_["tangent"]);
+                auto tangent = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("tangent").get());
 
-                tangent.transformDirection(matrix);
+                tangent->transformDirection(matrix);
 
-                tangent.needsUpdate();
+                tangent->needsUpdate();
             }
 
             if (!this->boundingBox) {
@@ -219,10 +218,9 @@ namespace threepp {
 
             if (this->attributes_.count("position") != 0) {
 
-                const auto &position = std::any_cast<BufferAttribute<float> &>(this->attributes_["position"]);
+                const auto position = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("position").get());
 
-                this->boundingBox->setFromBufferAttribute(position);
-
+                position->setFromBufferAttribute(*this->boundingBox);
 
             } else {
 
@@ -244,13 +242,13 @@ namespace threepp {
 
             if (this->attributes_.count("position") != 0) {
 
-                const auto &position = std::any_cast<BufferAttribute<float> &>(this->attributes_["position"]);
+                const auto &position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
 
                 // first, find the center of the bounding sphere
 
                 auto center = this->boundingSphere->center;
 
-                _box.setFromBufferAttribute(position);
+                position->setFromBufferAttribute(_box);
 
                 // process morph attributes if present
 
@@ -261,9 +259,9 @@ namespace threepp {
 
                 float maxRadiusSq = 0;
 
-                for (auto i = 0, il = position.count(); i < il; i++) {
+                for (auto i = 0, il = position->count(); i < il; i++) {
 
-                    _vector.fromBufferAttribute(position, i);
+                    position->setFromBufferAttribute(_vector, i);
 
                     maxRadiusSq = std::max(maxRadiusSq, center.distanceToSquared(_vector));
                 }
@@ -280,8 +278,8 @@ namespace threepp {
         ~BufferGeometry() = default;
 
     private:
-        std::vector<int> index;
-        std::unordered_map<std::string, std::any> attributes_;
+        std::vector<int> index_;
+        std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
 
         static Matrix4 _m1;
         static Vector3 _offset;

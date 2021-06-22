@@ -1,6 +1,6 @@
 
 #include "threepp/math/Box3.hpp"
-#include "threepp/core/BufferAttribute.hpp"
+
 #include "threepp/core/BufferGeometry.hpp"
 
 #include "threepp/math/infinity.hpp"
@@ -35,42 +35,20 @@ Box3::Box3(Vector3 min, Vector3 max) : min_(min), max_(max) {}
 
 Box3 &Box3::set(const Vector3 &min, const Vector3 &max) {
 
-    this->min_ = min;
-    this->max_ = max;
+    this->min_.copy(min);
+    this->max_.copy(max);
 
     return *this;
 }
 
-Box3 &Box3::setFromBufferAttribute(const BufferAttribute<float> &attribute) {
-
-    auto minX = +Infinity<float>;
-    auto minY = +Infinity<float>;
-    auto minZ = +Infinity<float>;
-
-    auto maxX = -Infinity<float>;
-    auto maxY = -Infinity<float>;
-    auto maxZ = -Infinity<float>;
-
-    for (int i = 0, l = attribute.count(); i < l; i++) {
-
-        const auto x = attribute.getX(i);
-        const auto y = attribute.getY(i);
-        const auto z = attribute.getZ(i);
-
-        if (x < minX) minX = x;
-        if (y < minY) minY = y;
-        if (z < minZ) minZ = z;
-
-        if (x > maxX) maxX = x;
-        if (y > maxY) maxY = y;
-        if (z > maxZ) maxZ = z;
-    }
+Box3 &Box3::set(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
 
     this->min_.set(minX, minY, minZ);
     this->max_.set(maxX, maxY, maxZ);
 
     return *this;
 }
+
 
 Box3 &Box3::setFromPoints(const std::vector<Vector3> &points) {
 

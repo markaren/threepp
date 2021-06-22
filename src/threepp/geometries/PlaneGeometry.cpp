@@ -61,8 +61,8 @@ PlaneGeometry::PlaneGeometry(float width, float height, int widthSegments, int h
     }
 
     this->setIndex( indices );
-    this->setAttribute( "position", BufferAttribute<float>( vertices, 3 ) );
-    this->setAttribute( "normal", BufferAttribute<float>( normals, 3 ) );
-    this->setAttribute( "uv", BufferAttribute<float>( uvs, 2 ) );
+    this->setAttribute( "position", TypedBufferAttribute<float>::create( vertices, 3 ) );
+    this->setAttribute( "normal", TypedBufferAttribute<float>::create( normals, 3 ) );
+    this->setAttribute( "uv", TypedBufferAttribute<float>::create( uvs, 2 ) );
 
 }

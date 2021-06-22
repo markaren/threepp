@@ -37,14 +37,14 @@ namespace threepp {
 
                 for (int i = 1, l = positionAttribute.count(); i < l; i++) {
 
-                    _start.fromBufferAttribute(positionAttribute, i - 1);
-                    _end.fromBufferAttribute(positionAttribute, i);
+                    positionAttribute.setFromBufferAttribute(_start, i - 1);
+                    positionAttribute.setFromBufferAttribute(_end, i);
 
                     lineDistances[i] = lineDistances[i - 1];
                     lineDistances[i] += _start.distanceTo(_end);
                 }
 
-                geometry_->setAttribute("lineDistance", BufferAttribute<float>(lineDistances, 1));
+                geometry_->setAttribute("lineDistance", TypedBufferAttribute<float>::create(lineDistances, 1));
 
             } else {
 

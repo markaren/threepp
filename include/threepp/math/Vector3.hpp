@@ -15,9 +15,6 @@ namespace threepp {
     class Quaternion;
     class Camera;
 
-    template<typename T = float>
-    class BufferAttribute;
-
     class Vector3 {
 
     public:
@@ -151,7 +148,7 @@ namespace threepp {
             array[offset + 2] = this->z;
         }
 
-        Vector3 &fromBufferAttribute(const BufferAttribute<float> &attribute, int index);
+
 
         static Vector3 X;
         static Vector3 Y;

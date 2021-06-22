@@ -132,7 +132,7 @@ BoxGeometry::BoxGeometry(float width, float height, float depth, int widthSegmen
 
     Helper h(*this);
     this->setIndex(h.indices);
-    this->setAttribute("position", BufferAttribute<float>(h.vertices, 3));
-    this->setAttribute("normal", BufferAttribute<float>(h.normals, 3));
-    this->setAttribute("uv", BufferAttribute<float>(h.uvs, 2));
+    this->setAttribute("position", TypedBufferAttribute<float>::create(h.vertices, 3));
+    this->setAttribute("normal", TypedBufferAttribute<float>::create(h.normals, 3));
+    this->setAttribute("uv", TypedBufferAttribute<float>::create(h.uvs, 2));
 }

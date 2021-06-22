@@ -145,14 +145,14 @@ int main() {
     std::vector<float> vec{1, 2};
     std::vector<float> vec2{-1, -1};
 
-    BufferAttribute<float> b(vec, 2);
-    b.copyArray(vec2);
+    auto b = TypedBufferAttribute<float>::create(vec, 2);
+    b->copyArray(vec2);
 
 
-    std::cout << b.getX(0) << std::endl;
+    std::cout << b->getX(0) << std::endl;
 
     auto box = BoxGeometry::create();
-    auto &attr = box->getAttribute<float>("position");
+    auto attr = box->getAttribute<float>("position");
     std::cout << attr.getX(0) << std::endl;
     attr.setX(0, 1);
     std::cout << attr.getX(0) << std::endl;

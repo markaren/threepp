@@ -3,8 +3,6 @@
 
 #include "threepp/math/Matrix3.hpp"
 
-#include "threepp/core/BufferAttribute.hpp"
-
 #include <algorithm>
 #include <iostream>
 #include <string>
@@ -171,14 +169,6 @@ Vector2 &Vector2::max(const Vector2 &v) {
 
     this->x = std::max(this->x, v.x);
     this->y = std::max(this->y, v.y);
-
-    return *this;
-}
-
-Vector2 &Vector2::fromBufferAttribute(const BufferAttribute<float> &attribute, int index) {
-
-    this->x = attribute.getX(index);
-    this->y = attribute.getY(index);
 
     return *this;
 }

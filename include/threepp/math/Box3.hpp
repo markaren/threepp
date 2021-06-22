@@ -33,6 +33,8 @@ namespace threepp {
 
         Box3 &set(const Vector3 &min, const Vector3 &max);
 
+        Box3 &set(float minX, float minY, float minZ, float maxX, float maxY, float maxZ);
+
         template<class ArrayLike>
         Box3 &setFromArray(const ArrayLike &array) {
 
@@ -64,8 +66,6 @@ namespace threepp {
 
             return *this;
         }
-
-        Box3 &setFromBufferAttribute(const BufferAttribute<float> &attribute);
 
         Box3 &setFromPoints(const std::vector<Vector3> &points);
 
@@ -99,17 +99,17 @@ namespace threepp {
 
         [[nodiscard]] bool intersectsBox(const Box3 &box) const;
 
-        bool intersectsSphere(const Sphere &sphere) const ;
+        [[nodiscard]] bool intersectsSphere(const Sphere &sphere) const;
 
         [[nodiscard]] bool intersectsPlane(const Plane &plane) const;
 
-        bool intersectsTriangle(const Triangle &triangle) const;
+        [[nodiscard]] bool intersectsTriangle(const Triangle &triangle) const;
 
         Vector3 &clampPoint(const Vector3 &point, Vector3 &target) const;
 
         [[nodiscard]] float distanceToPoint(const Vector3 &point) const;
 
-        void getBoundingSphere(Sphere &target) const ;
+        void getBoundingSphere(Sphere &target) const;
 
         Box3 &intersect(const Box3 &box);
 
