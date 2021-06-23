@@ -8,15 +8,44 @@
 
 #include "threepp/scenes/Scene.hpp"
 
+#include "threepp/renderers/gl/GLState.hpp"
+
 namespace threepp::gl {
 
     struct GLBackground {
 
-        void render() {
+        GLBackground(GLState &state, bool premultipliedAlpha) : state(state), premultipliedAlpha(premultipliedAlpha) {}
 
+        void render() {
         }
 
+        [[nodiscard]] Color getClearColor() const {
+            return clearColor;
+        }
+
+        void setClearColor(const Color &color, float alpha = 1) {
+
+            clearColor.copy( color );
+            clearAlpha = alpha;
+            setClear( clearColor, clearAlpha );
+        }
+
+        [[nodiscard]] float getClearAlpha() const {
+            return clearAlpha;
+        }
+
+        void setClearAlpha(float alpha) {
+
+            clearAlpha = alpha;
+            setClear( clearColor, clearAlpha );
+        }
+
+
     private:
+        GLState &state;
+
+        bool premultipliedAlpha;
+
         Color clearColor = Color(0x000000);
         float clearAlpha = 0;
 
@@ -25,10 +54,14 @@ namespace threepp::gl {
 
         std::any currentBackground;
         unsigned int currentBackgroundVersion = 0;
-//        let currentTonemapping = null;
+        //        let currentTonemapping = null;
 
+        void setClear(const Color &color, float alpha) {
+
+            state.colorBuffer.setClear(color.r, color.g, color.b, alpha, premultipliedAlpha);
+        }
     };
 
-}
+}// namespace threepp::gl
 
 #endif//THREEPP_GLBACKGROUND_HPP

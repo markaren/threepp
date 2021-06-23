@@ -27,6 +27,24 @@ namespace threepp {
 
         Color &setHex(int hex);
 
+        Color &copy(const Color &color);
+
+        Color &add(const Color &color);
+
+        Color &addColors(const Color &color1, const Color &color2);
+
+        Color &addScalar(float s);
+
+        Color &sub(const Color &color);
+
+        Color &multiply(const Color &color);
+
+        Color &multiplyScalar(float s);
+
+        Color &lerp(const Color &color, float alpha);
+
+        Color &lerpColors(const Color &color1, const Color &color2, float alpha);
+
         template<class ArrayLike>
         Color &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 

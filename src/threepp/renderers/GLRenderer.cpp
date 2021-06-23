@@ -1,12 +1,14 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "threepp/constants.hpp"
 
 using namespace threepp;
 
 GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
-    : canvas_(canvas), _width(canvas.getWidth()), _height(canvas.getHeight()), _viewport(0, 0, _width, _height), _scissor(0, 0, _width, _height), state(canvas) {
+    : canvas_(canvas), _width(canvas.getWidth()), _height(canvas.getHeight()),
+      _viewport(0, 0, _width, _height),
+      _scissor(0, 0, _width, _height), state(canvas),
+      background(state, parameters.premultipliedAlpha) {
 }
 
 void GLRenderer::initGLContext() {

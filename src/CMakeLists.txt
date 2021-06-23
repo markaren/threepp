@@ -130,6 +130,9 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
 
+        "threepp/renderers/gl/GLInfo.cpp"
+        "threepp/renderers/gl/GLProgram.cpp"
+
         "threepp/utils/StringUtils.cpp"
 
         )

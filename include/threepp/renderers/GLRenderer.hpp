@@ -4,9 +4,12 @@
 #define THREEPP_GLRENDERER_HPP
 
 #include "threepp/cameras/Camera.hpp"
+
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
+#include <threepp/math/Color.hpp>
+#include <threepp/math/Frustum.hpp>
 
 #include "threepp/Canvas.hpp"
 #include "threepp/constants.hpp"
@@ -15,8 +18,10 @@
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
+#include "threepp/renderers/gl/GLBackground.hpp"
+
 #include <memory>
-#include <threepp/math/Frustum.hpp>
+
 #include <vector>
 
 namespace threepp {
@@ -96,6 +101,28 @@ namespace threepp {
 
         void setScissorTest(bool boolean);
 
+        // Clearing
+
+        void getClearColor(Color &target) const {
+
+            target.copy(background.getClearColor());
+        }
+
+        void setClearColor() {
+
+            //background.setClearColor.apply( background, arguments );
+        }
+
+        float getClearAlpha() const {
+
+            return background.getClearAlpha();
+        }
+
+        void setClearAlpha() {
+
+            // background.setClearAlpha.apply( background, arguments );
+        }
+
 
     private:
         Canvas &canvas_;
@@ -138,7 +165,9 @@ namespace threepp {
 
         gl::GLCapabilities capabilities;
         gl::GLState state;
-//        gl::GLInfo info;
+        gl::GLInfo info;
+
+        gl::GLBackground background;
     };
 
 }// namespace threepp
