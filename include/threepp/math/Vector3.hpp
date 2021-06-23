@@ -132,6 +132,10 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Vector3 &v) const;
 
+        bool operator==(const Vector3 &other) const {
+            return equals(other);
+        }
+
         template<class ArrayLike>
         Vector3 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
@@ -148,11 +152,6 @@ namespace threepp {
             array[offset] = this->x;
             array[offset + 1] = this->y;
             array[offset + 2] = this->z;
-        }
-
-
-        bool operator==(const Vector3 &other) const {
-            return equals(other);
         }
 
         static Vector3 X;

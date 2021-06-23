@@ -99,6 +99,12 @@ namespace threepp {
 
         Quaternion &multiplyQuaternions(const Quaternion &a, const Quaternion &b);
 
+        [[nodiscard]] bool equals(const Quaternion &v) const;
+
+        bool operator==(const Quaternion &other) const {
+            return equals(other);
+        }
+
         Quaternion &_onChange(std::function<void()> callback);
 
         template<class ArrayLike>

@@ -58,6 +58,12 @@ namespace threepp {
 
         Plane &translate( const Vector3 &offset );
 
+        [[nodiscard]] bool equals(const Plane &plane) const;
+
+        bool operator==(const Plane &plane) const {
+            return equals(plane);
+        }
+
     };
 
 }// namespace threepp

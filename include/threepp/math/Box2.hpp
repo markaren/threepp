@@ -3,7 +3,7 @@
 #ifndef THREEPP_BOX2_HPP
 #define THREEPP_BOX2_HPP
 
-#include "Vector2.hpp"
+#include "threepp/math/Vector2.hpp"
 
 #include <vector>
 
@@ -31,7 +31,6 @@ namespace threepp {
         void getSize(Vector2 &target);
 
         Box2 &expandByPoint(const Vector2 &point);
-
 
     private:
         Vector2 min_;

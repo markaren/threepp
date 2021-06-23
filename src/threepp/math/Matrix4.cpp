@@ -803,3 +803,16 @@ Matrix4 &Matrix4::makeOrthographic(float left, float right, float top, float bot
 
     return *this;
 }
+
+bool Matrix4::equals(const Matrix4 &matrix) const {
+
+    const auto &te = this->elements_;
+    const auto &me = matrix.elements_;
+
+    for (int i = 0; i < 16; i++) {
+
+        if (te[i] != me[i]) return false;
+    }
+
+    return true;
+}

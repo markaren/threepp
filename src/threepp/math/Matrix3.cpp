@@ -257,3 +257,16 @@ Matrix3 &Matrix3::translate(float tx, float ty) {
 
     return *this;
 }
+
+bool Matrix3::equals(const Matrix3 &matrix) const {
+
+    const auto &te = this->elements_;
+    const auto &me = matrix.elements_;
+
+    for (int i = 0; i < 9; i++) {
+
+        if (te[i] != me[i]) return false;
+    }
+
+    return true;
+}

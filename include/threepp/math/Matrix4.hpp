@@ -88,6 +88,12 @@ namespace threepp {
 
         Matrix4 &makeOrthographic(float left, float right, float top, float bottom, float near, float far);
 
+        [[nodiscard]] bool equals(const Matrix4 &matrix) const;
+
+        bool operator==(const Matrix4 &matrix) const {
+            return equals(matrix);
+        }
+
         template<class ArrayLike>
         Matrix4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
@@ -102,7 +108,7 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) {
 
-            auto& te = this->elements_;
+            auto &te = this->elements_;
 
             array[offset] = te[0];
             array[offset + 1] = te[1];

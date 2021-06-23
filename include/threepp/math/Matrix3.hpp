@@ -73,6 +73,12 @@ namespace threepp {
 
         Matrix3 &translate(float tx, float ty);
 
+        [[nodiscard]] bool equals(const Matrix3 &matrix) const;
+
+        bool operator==(const Matrix3 &matrix) const {
+            return equals(matrix);
+        }
+
         template<class ArrayLike>
         Matrix3 &fromArray(ArrayLike &array, unsigned int offset = 0) {
 

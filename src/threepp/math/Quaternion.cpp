@@ -277,6 +277,11 @@ Quaternion &Quaternion::multiplyQuaternions(const Quaternion &a, const Quaternio
 
 }
 
+bool Quaternion::equals(const Quaternion &v) const {
+
+    return ((v.x_ == this->x_) && (v.y_ == this->y_) && (v.z_ == this->z_) && (v.w_ == this->w_));
+}
+
 Quaternion &Quaternion::_onChange(std::function<void()> callback) {
 
     this->onChangeCallback_ = std::move(callback);

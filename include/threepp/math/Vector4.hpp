@@ -73,6 +73,10 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Vector4 &v) const;
 
+        bool operator==(const Vector4 &other) const {
+            return equals(other);
+        }
+
         template<class ArrayLike>
         Vector4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
@@ -91,10 +95,6 @@ namespace threepp {
             array[offset + 1] = this->y;
             array[offset + 2] = this->z;
             array[offset + 3] = this->w;
-        }
-
-        bool operator==(const Vector4 &other) const {
-            return equals(other);
         }
 
         friend std::ostream &operator<<(std::ostream &os, const Vector4 &v) {
