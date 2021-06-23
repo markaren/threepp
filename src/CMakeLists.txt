@@ -75,10 +75,11 @@ set(privateHeaders
         "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLGeometries.hpp"
         "threepp/renderers/gl/GLInfo.hpp"
+        "threepp/renderers/gl/GLLights.hpp"
         "threepp/renderers/gl/GLMaterials.hpp"
         "threepp/renderers/gl/GLObjects.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
-        "threepp/renderers/gl/GLProperties.hpp"
+        "threepp/renderers/gl/GLPrograms.hpp"
         "threepp/renderers/gl/GLRenderLists.hpp"
         "threepp/renderers/gl/GLState.hpp"
         "threepp/renderers/gl/GLTextures.hpp"
@@ -132,7 +133,9 @@ set(sources
         "threepp/renderers/GLRenderer.cpp"
 
         "threepp/renderers/gl/GLInfo.cpp"
+        "threepp/renderers/gl/GLLights.cpp"
         "threepp/renderers/gl/GLProgram.cpp"
+        "threepp/renderers/gl/GLPrograms.cpp"
 
         "threepp/utils/StringUtils.cpp"
 

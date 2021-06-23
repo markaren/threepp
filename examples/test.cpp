@@ -44,7 +44,6 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLClipping.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
-#include "threepp/renderers/gl/GLProperties.hpp"
 
 #include "threepp/core/Uniform.hpp"
 

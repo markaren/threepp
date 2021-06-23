@@ -53,13 +53,11 @@ namespace threepp {
 
         bool visible = true;
 
-        bool castShadows = true;
+        bool castShadow = true;
         bool receiveShadow = true;
 
         bool frustumCulled = true;
         unsigned int renderOrder = 0;
-
-        Object3D(const Object3D &) = delete;
 
         virtual std::string type() const {
             return "Object3D";

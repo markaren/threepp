@@ -3,6 +3,8 @@
 #ifndef THREEPP_POINTLIGHTSHADOWS_HPP
 #define THREEPP_POINTLIGHTSHADOWS_HPP
 
+#include <utility>
+
 #include "threepp/lights/LightShadow.hpp"
 
 #include "threepp/cameras/Camera.hpp"
@@ -12,10 +14,8 @@ namespace threepp {
     class PointLightShadow : public LightShadow {
 
     public:
-        PointLightShadow(std::shared_ptr<Camera> camera) : camera_(camera) {}
+        explicit PointLightShadow(std::shared_ptr<Camera> camera) : LightShadow(std::move(camera)) {}
 
-    private:
-        std::shared_ptr<Camera> camera_;
     };
 
 }// namespace threepp

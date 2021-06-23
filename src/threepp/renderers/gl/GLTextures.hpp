@@ -5,7 +5,6 @@
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
-#include "threepp/renderers/gl/GLProperties.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
 #include <memory>
@@ -17,7 +16,6 @@ namespace threepp::gl {
     public:
         GLTextures(
                 std::shared_ptr<GLState> state,
-//                std::shared_ptr<GLProperties> properties,
                 GLCapabilities capabilities,
                 std::shared_ptr<GLInfo> info) {}
     };

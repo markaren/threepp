@@ -6,6 +6,7 @@
 #include <threepp/constants.hpp>
 #include <threepp/core/EventDispatcher.hpp>
 #include <threepp/math/MathUtils.hpp>
+#include <threepp/math/Plane.hpp>
 
 namespace threepp {
 

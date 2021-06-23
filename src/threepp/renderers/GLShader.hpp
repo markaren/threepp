@@ -9,7 +9,7 @@
 
 namespace threepp::gl {
 
-    unsigned int createShader(int type, const char *str) {
+    inline unsigned int createShader(int type, const char *str) {
 
         const auto shader = glCreateShader(type);
 

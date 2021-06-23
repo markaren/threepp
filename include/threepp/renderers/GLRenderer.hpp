@@ -19,7 +19,6 @@
 #include "threepp/renderers/gl/GLState.hpp"
 
 #include "threepp/renderers/gl/GLBackground.hpp"
-#include "threepp/renderers/gl/GLProperties.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"

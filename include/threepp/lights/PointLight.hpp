@@ -4,6 +4,9 @@
 #define THREEPP_POINTLIGHT_HPP
 
 #include "threepp/lights/Light.hpp"
+#include "threepp/lights/PointLightShadow.hpp"
+
+#include "threepp/cameras/PerspectiveCamera.hpp"
 
 #include "threepp/math/MathUtils.hpp"
 
@@ -12,13 +15,11 @@ namespace threepp {
     class PointLight : public Light {
 
     public:
-        PointLight(const PointLight &) = delete;
-
         float getPower() const {
 
             // intensity = power per solid angle.
             // ref: equation (15) from https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf
-            return this->intensity * 4f * PI;
+            return this->intensity * 4.f * PI;
         }
 
         void setPower(float power) {
@@ -28,9 +29,9 @@ namespace threepp {
             this->intensity = power / (4 * PI);
         }
 
-        dispose() {
+        void dispose() {
 
-            this->shadow.dispose();
+            this->shadow_.dispose();
         }
 
         template<class T>
@@ -39,7 +40,12 @@ namespace threepp {
         }
 
     protected:
-        PointLight(T color, std::optional<float> intensity, float distance, float decay) : Light(color, intensity) {}
+        template<class T>
+        PointLight(T color, std::optional<float> intensity, float distance, float decay)
+            : Light(color, intensity), shadow_(PerspectiveCamera::create(90, 1, 0.5, 500)) {}
+
+    private:
+        PointLightShadow shadow_;
     };
 
 }// namespace threepp

@@ -3,6 +3,7 @@
 #ifndef THREEPP_GLPROGRAM_HPP
 #define THREEPP_GLPROGRAM_HPP
 
+#include "threepp/renderers/gl/GLCapabilities.hpp"
 
 #include <string>
 #include <unordered_map>
@@ -12,8 +13,6 @@
 namespace threepp::gl {
 
     struct GLProgram {
-
-        // GLProgram(std::shared_ptr<GLRenderer> renderer, std::string cacheKey) {}
 
     private:
         inline static int programIdCount = 0;

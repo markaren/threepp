@@ -5,6 +5,8 @@
 
 #include "threepp/core/Object3D.hpp"
 
+#include "threepp/scenes/Fog.hpp"
+
 #include <memory>
 
 namespace threepp {
@@ -14,8 +16,7 @@ namespace threepp {
     public:
 
         bool autoUpdate = true;
-
-        Scene(const Scene&) = delete;
+        std::optional<Fog> fog;
 
         std::string type() const override {
             return "Scene";

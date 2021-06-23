@@ -27,8 +27,6 @@ namespace threepp {
         bool autoUpdate = true;
         bool needsUpdate = false;
 
-        LightShadow(const LightShadow &) = delete;
-
         [[nodiscard]] int getViewportCount() const {
 
             return this->_viewportCount;
