@@ -15,47 +15,66 @@ namespace threepp::gl {
 
     struct GLMaterials {
 
-        void refreshMaterialUniforms(Material* material) {
+        void refreshMaterialUniforms(std::unordered_map<std::string, Uniform> &uniforms, Material *material, int pixelRatio, float height) {
 
             if (instanceof <MeshBasicMaterial>(material)) {
 
+                refreshUniformsCommon(uniforms, material);
+            } else if (instanceof <LineBasicMaterial>(material)) {
 
+                refreshUniformsLine(uniforms, dynamic_cast<LineBasicMaterial*>(material));
+            } else if (instanceof <PointsMaterial>(material)) {
 
+                refreshUniformsPoints(uniforms, dynamic_cast<PointsMaterial*>(material), pixelRatio, height);
             }
-
         }
 
-        void refreshUniformsCommon(std::unordered_map<std::string, Uniform> uniforms, Material* material) {
+        void refreshUniformsCommon(std::unordered_map<std::string, Uniform> &uniforms, Material *material) {
 
-            if (uniforms.count("opacity")) {
-
-                uniforms.at("opacity").setValue(material->opacity);
-
-            }
+            uniforms["opacity"].setValue(material->opacity);
 
             if (instanceof <MaterialWithColor>(material)) {
 
-                if (uniforms.count("diffuse")) {
-                    auto m = dynamic_cast<MaterialWithColor*>(material);
-                    uniforms.at("diffuse").value<Color>().copy(m->getColor());
-                }
-
+                auto m = dynamic_cast<MaterialWithColor *>(material);
+                uniforms["diffuse"].value<Color>().copy(m->getColor());
             }
 
             if (instanceof <MaterialWithEmissive>(material)) {
 
-                if (uniforms.count("emissive")) {
-                    auto m = dynamic_cast<MaterialWithEmissive*>(material);
-                    uniforms.at("emissive").value<Color>().copy(m->getEmissiveColor()).multiplyScalar(m->getEmissiveIntensity());
-                }
-
+                auto m = dynamic_cast<MaterialWithEmissive *>(material);
+                uniforms["emissive"].value<Color>().copy(m->getEmissiveColor()).multiplyScalar(m->getEmissiveIntensity());
             }
 
+            if (instanceof <MaterialWithMap>(material)) {
+
+                auto m = dynamic_cast<MaterialWithMap *>(material);
+                uniforms["map"].setValue(m->getMap());
+            }
+
+            if (instanceof <MaterialWithAlphaMap>(material)) {
+
+                auto m = dynamic_cast<MaterialWithAlphaMap *>(material);
+                uniforms["alphaMap"].setValue(m->getAlphaMap());
+            }
         }
 
+        void refreshUniformsLine(std::unordered_map<std::string, Uniform> &uniforms, LineBasicMaterial *material) {
+
+            uniforms["diffuse"].value<Color>().copy(material->getColor());
+            uniforms["opacity"].value<float>() = material->opacity;
+        }
+
+        void refreshUniformsPoints(std::unordered_map<std::string, Uniform> &uniforms, PointsMaterial *material, int pixelRatio, float height) {
+
+            uniforms["diffuse"].value<Color>().copy( material->getColor() );
+            uniforms["opacity"].value<float>() = material->opacity;
+            uniforms["size"].value<int>() = (int) material->getSize() * pixelRatio;
+            uniforms["scale"].value<float>() = height * 0.5f;
+
+        }
     };
 
 
-}
+}// namespace threepp::gl
 
 #endif//THREEPP_GLMATERIAL_HPP

@@ -44,6 +44,7 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLClipping.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
+#include "threepp/renderers/gl/GLMaterials.hpp"
 
 #include "threepp/core/Uniform.hpp"
 
@@ -221,11 +222,15 @@ int main() {
 
     o->clear();
 
-    Uniform u(1.f);
+    Uniform u;
 
     std::cout << "Color r=" << u.value<float>() << std::endl;
     u.value<float>() = 0.5f;
     std::cout << "Color r=" << u.value<float>() << std::endl;
+
+    auto vPtr = std::make_shared<Vector3>(1.f,1.f,1.f);
+    Uniform u1(vPtr);
+    std::cout << u1.value<std::shared_ptr<Vector3>>()->x << std::endl;
 
     return 0;
 }

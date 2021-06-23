@@ -452,6 +452,8 @@ namespace threepp {
         friend class Frustum;
     };
 
+    typedef std::shared_ptr<Object3D> Object3DPtr;
+
 }// namespace threepp
 
 #endif// THREEPP_OBJECT3D_HPP

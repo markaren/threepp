@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace threepp {
 
@@ -68,7 +69,7 @@ namespace threepp {
 
         void needsUpdate();
 
-        static std::shared_ptr<Texture> create(
+        explicit Texture(
                 std::optional<Image> image = std::nullopt,
                 int mapping = Texture::DEFAULT_MAPPING,
                 int wrapS = ClampToEdgeWrapping,
@@ -78,33 +79,25 @@ namespace threepp {
                 int format = RGBAFormat,
                 int type = UnsignedByteType,
                 int anisotropy = 1,
-                int encoding = LinearEncoding) {
-
-            return std::shared_ptr<Texture>(new Texture(image, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding));
-        }
+                int encoding = LinearEncoding)
+            : image(std::move(image)),
+              mapping(mapping),
+              wrapS(wrapS), wrapT(wrapT),
+              magFilter(magFilter), minFilter(minFilter),
+              format(format), type(type),
+              anisotropy(anisotropy), encoding(encoding) {}
 
     private:
         unsigned int version_ = 0;
 
         std::function<void()> onUpdate_;
 
-        explicit Texture(
-                std::optional<Image> image,
-                int mapping,
-                int wrapS, int wrapT,
-                int magFilter, int minFilter,
-                int format, int type,
-                int anisotropy, int encoding)
-            : mapping(mapping),
-              wrapS(wrapS), wrapT(wrapT),
-              magFilter(magFilter), minFilter(minFilter),
-              format(format), type(type),
-              anisotropy(anisotropy), encoding(encoding) {}
-
         inline static unsigned int textureId = 0;
 
         inline static int DEFAULT_MAPPING = UVMapping;
     };
+
+    //    typedef std::shared_ptr<Texture> TexturePtr;
 
 }// namespace threepp
 

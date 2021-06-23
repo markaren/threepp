@@ -72,14 +72,14 @@ namespace threepp {
 
     struct MaterialWithMap : virtual Material {
 
-        virtual std::shared_ptr<Texture> &getMap() = 0;
+        virtual std::optional<Texture> &getMap() = 0;
 
         ~MaterialWithMap() override = default;
     };
 
     struct MaterialWithAlphaMap : virtual Material {
 
-        virtual std::shared_ptr<Texture> &getAlphaMap() = 0;
+        virtual std::optional<Texture> &getAlphaMap() = 0;
 
         ~MaterialWithAlphaMap() override = default;
     };

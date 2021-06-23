@@ -72,7 +72,6 @@ namespace threepp {
         inline static Vector3 _vector = Vector3();
         inline static Vector2 _vector2 = Vector2();
 
-
     };
 
     template <class T>

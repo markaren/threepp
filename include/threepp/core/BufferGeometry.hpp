@@ -93,6 +93,7 @@ namespace threepp {
         static unsigned int _id;
     };
 
+    typedef std::shared_ptr<BufferGeometry> BufferGeometryPtr;
 
 }// namespace threepp
 
