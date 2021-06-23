@@ -22,13 +22,13 @@ namespace threepp {
             return value_.has_value();
         }
 
-        std::any value() {
+        std::any &value() {
             return value_;
         }
 
         template<class T>
-        [[nodiscard]] T value() {
-            return std::any_cast<T>(value_);
+        [[nodiscard]] T &value() {
+            return std::any_cast<T&>(value_);
         }
 
         void setValue(std::any value) {

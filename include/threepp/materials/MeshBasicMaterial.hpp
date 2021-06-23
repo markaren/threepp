@@ -16,19 +16,19 @@ namespace threepp {
     class MeshBasicMaterial : public MaterialWithColor, MaterialWithWireframe, MaterialWithReflectivity {
 
     public:
-        std::optional<Texture> map = std::nullopt;
+        std::shared_ptr<Texture> map = nullptr;
 
-        std::optional<Texture> lightMap = std::nullopt;
+        std::shared_ptr<Texture> lightMap = nullptr;
         float lightMapIntensity = 1.0;
 
-        std::optional<Texture> aoMap = std::nullopt;
+        std::shared_ptr<Texture> aoMap = nullptr;
         float aoMapIntensity = 1.0;
 
-        std::optional<Texture> specularMap = std::nullopt;
+        std::shared_ptr<Texture> specularMap = nullptr;
 
-        std::optional<Texture> alphaMap = std::nullopt;
+        std::shared_ptr<Texture> alphaMap = nullptr;
 
-        std::optional<Texture> envMap = std::nullopt;
+        std::shared_ptr<Texture> envMap = nullptr;
         int combine = MultiplyOperation;
 
         Color &getColor() override {

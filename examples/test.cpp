@@ -221,6 +221,11 @@ int main() {
 
     o->clear();
 
+    Uniform u(1.f);
+
+    std::cout << "Color r=" << u.value<float>() << std::endl;
+    u.value<float>() = 0.5f;
+    std::cout << "Color r=" << u.value<float>() << std::endl;
 
     return 0;
 }

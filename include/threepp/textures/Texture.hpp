@@ -3,8 +3,8 @@
 #ifndef THREEPP_TEXTURE_HPP
 #define THREEPP_TEXTURE_HPP
 
-#include "threepp/math/Vector2.hpp"
 #include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Vector2.hpp"
 
 #include "threepp/core/EventDispatcher.hpp"
 
@@ -12,6 +12,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/textures/Image.hpp"
 
+#include <memory>
 #include <optional>
 
 namespace threepp {
@@ -59,7 +60,15 @@ namespace threepp {
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding;
 
-        explicit Texture(
+        void updateMatrix();
+
+        void dispose();
+
+        void transformUv(Vector2 &uv) const;
+
+        void needsUpdate();
+
+        static std::shared_ptr<Texture> create(
                 std::optional<Image> image = std::nullopt,
                 int mapping = Texture::DEFAULT_MAPPING,
                 int wrapS = ClampToEdgeWrapping,
@@ -69,21 +78,28 @@ namespace threepp {
                 int format = RGBAFormat,
                 int type = UnsignedByteType,
                 int anisotropy = 1,
-                int encoding = LinearEncoding)
-            : mapping(mapping), wrapS(wrapS), wrapT(wrapT), magFilter(magFilter), minFilter(minFilter), format(format), type(type), anisotropy(anisotropy), encoding(encoding) {}
+                int encoding = LinearEncoding) {
 
-        void updateMatrix();
-
-        void dispose();
-
-        void transformUv(Vector2 &uv) const;
-
-        void needsUpdate();
+            return std::shared_ptr<Texture>(new Texture(image, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding));
+        }
 
     private:
         unsigned int version_ = 0;
 
         std::function<void()> onUpdate_;
+
+        explicit Texture(
+                std::optional<Image> image,
+                int mapping,
+                int wrapS, int wrapT,
+                int magFilter, int minFilter,
+                int format, int type,
+                int anisotropy, int encoding)
+            : mapping(mapping),
+              wrapS(wrapS), wrapT(wrapT),
+              magFilter(magFilter), minFilter(minFilter),
+              format(format), type(type),
+              anisotropy(anisotropy), encoding(encoding) {}
 
         inline static unsigned int textureId = 0;
 

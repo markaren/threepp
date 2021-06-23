@@ -4,8 +4,9 @@
 
 #include "threepp/materials/Material.hpp"
 
-namespace threepp {
+#include "threepp/textures/Texture.hpp"
 
+namespace threepp {
 
     struct MaterialWithColor : virtual Material {
 
@@ -67,6 +68,20 @@ namespace threepp {
         virtual void setWireframeLinewidth(float width) = 0;
 
         ~MaterialWithWireframe() override = default;
+    };
+
+    struct MaterialWithMap : virtual Material {
+
+        virtual std::shared_ptr<Texture> &getMap() = 0;
+
+        ~MaterialWithMap() override = default;
+    };
+
+    struct MaterialWithAlphaMap : virtual Material {
+
+        virtual std::shared_ptr<Texture> &getAlphaMap() = 0;
+
+        ~MaterialWithAlphaMap() override = default;
     };
 
 }
