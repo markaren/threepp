@@ -5,8 +5,8 @@
 #ifndef THREEPP_VECTOR3_HPP
 #define THREEPP_VECTOR3_HPP
 
-#include <string>
 #include <iostream>
+#include <string>
 
 namespace threepp {
 
@@ -130,6 +130,8 @@ namespace threepp {
 
         Vector3 &setFromMatrix3Column(const Matrix3 &m, unsigned int index);
 
+        [[nodiscard]] bool equals(const Vector3 &v) const;
+
         template<class ArrayLike>
         Vector3 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
@@ -148,6 +150,11 @@ namespace threepp {
             array[offset + 2] = this->z;
         }
 
+
+        bool operator==(const Vector3 &other) const {
+            return equals(other);
+        }
+
         static Vector3 X;
         static Vector3 Y;
         static Vector3 Z;
@@ -157,10 +164,9 @@ namespace threepp {
 
         friend std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
             os << "Vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
-                  ")";
+                            ")";
             return os;
         }
-
     };
 
 }// namespace threepp

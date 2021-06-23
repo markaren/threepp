@@ -122,6 +122,10 @@ namespace threepp {
             array[offset + 1] = this->y;
         }
 
+        bool operator==(const Vector2 &other) const {
+            return equals(other);
+        }
+
         friend std::ostream &operator<<(std::ostream &os, const Vector2 &v) {
             os << "Vector2(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ")";
             return os;

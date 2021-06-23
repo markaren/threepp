@@ -198,6 +198,11 @@ int main() {
     auto &ulib = shaders::UniformsLib::instance();
     std::cout << ulib.common["diffuse"].value<Color>().r << std::endl;
 
+    Vector3 v1;
+    Vector3 v2;
+
+    std::cout << "v1==v2: " << ((v1 == v2) ? "true" : "false") << std::endl;
+
 //    Canvas canvas(Canvas::Parameters().title(""));
 //    canvas.animate([](float dt) {
 //

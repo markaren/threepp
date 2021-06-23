@@ -93,6 +93,10 @@ namespace threepp {
             array[offset + 3] = this->w;
         }
 
+        bool operator==(const Vector4 &other) const {
+            return equals(other);
+        }
+
         friend std::ostream &operator<<(std::ostream &os, const Vector4 &v) {
             os << "Vector4(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
                             ", w=" + std::to_string(v.w) + ")";
