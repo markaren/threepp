@@ -15,7 +15,7 @@ namespace threepp {
     struct UpdateRange {
 
         const int offset;
-        const int count;
+        int count;
 
     };
 

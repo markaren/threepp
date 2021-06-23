@@ -19,6 +19,13 @@
 #include "threepp/renderers/gl/GLState.hpp"
 
 #include "threepp/renderers/gl/GLBackground.hpp"
+#include "threepp/renderers/gl/GLProperties.hpp"
+#include "threepp/renderers/gl/GLTextures.hpp"
+#include "threepp/renderers/gl/GLAttributes.hpp"
+#include "threepp/renderers/gl/GLGeometries.hpp"
+#include "threepp/renderers/gl/GLObjects.hpp"
+#include "threepp/renderers/gl/GLClipping.hpp"
+#include "threepp/renderers/gl/GLPrograms.hpp"
 
 #include <memory>
 
@@ -113,7 +120,7 @@ namespace threepp {
             //background.setClearColor.apply( background, arguments );
         }
 
-        float getClearAlpha() const {
+        [[nodiscard]] float getClearAlpha() const {
 
             return background.getClearAlpha();
         }
@@ -168,6 +175,7 @@ namespace threepp {
         gl::GLInfo info;
 
         gl::GLBackground background;
+//        gl::GLProperties
     };
 
 }// namespace threepp

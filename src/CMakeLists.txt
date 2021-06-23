@@ -75,6 +75,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLGeometries.hpp"
         "threepp/renderers/gl/GLInfo.hpp"
+        "threepp/renderers/gl/GLMaterials.hpp"
         "threepp/renderers/gl/GLObjects.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
         "threepp/renderers/gl/GLProperties.hpp"

@@ -39,12 +39,20 @@ namespace threepp {
 
         void needsUpdate() {
 
-            version++;
+            version_++;
         }
 
         void setUsage(int value) {
 
             this->usage_ = value;
+        }
+
+        [[nodiscard]] unsigned int version() const {
+            return version_;
+        }
+
+        [[nodiscard]] UpdateRange &getUpdateRange() {
+            return updateRange;
         }
 
     protected:
@@ -55,7 +63,7 @@ namespace threepp {
         int usage_ = StaticDrawUsage;
         UpdateRange updateRange = {0, -1};
 
-        unsigned int version = 0;
+        unsigned int version_ = 0;
 
         BufferAttribute(int itemSize, bool normalized)
                 : itemSize_(itemSize), normalized_(normalized) {}
@@ -79,6 +87,11 @@ namespace threepp {
         [[nodiscard]] int count() const override {
 
             return count_;
+        }
+
+        const std::vector<T> &array() const {
+
+            return array_;
         }
 
         TypedBufferAttribute<T> &copyAt(unsigned int index1, const TypedBufferAttribute<T> &attribute, unsigned int index2) {
@@ -233,7 +246,7 @@ namespace threepp {
             return *this;
         }
 
-        T getX(int index) const {
+        [[nodiscard]] T getX(int index) const {
 
             return this->array_[index * this->itemSize_];
         }
@@ -245,7 +258,7 @@ namespace threepp {
             return *this;
         }
 
-        T getY(int index) const {
+        [[nodiscard]] T getY(int index) const {
 
             return this->array_[index * this->itemSize_ + 1];
         }
@@ -257,7 +270,7 @@ namespace threepp {
             return *this;
         }
 
-        T getZ(int index) const {
+        [[nodiscard]] T getZ(int index) const {
 
             return this->array_[index * this->itemSize_ + 2];
         }
@@ -269,7 +282,7 @@ namespace threepp {
             return *this;
         }
 
-        T getW(int index) const {
+        [[nodiscard]] T getW(int index) const {
 
             return this->array_[index * this->itemSize_ + 3];
         }
@@ -374,8 +387,10 @@ namespace threepp {
 
         const int count_;
 
-
     };
+
+    typedef TypedBufferAttribute<int> IntBufferAttribute;
+    typedef TypedBufferAttribute<float> FloatBufferAttribute;
 
 
 }// namespace threepp

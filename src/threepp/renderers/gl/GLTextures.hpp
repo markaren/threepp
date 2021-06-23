@@ -17,7 +17,7 @@ namespace threepp::gl {
     public:
         GLTextures(
                 std::shared_ptr<GLState> state,
-                std::shared_ptr<GLProperties> properties,
+//                std::shared_ptr<GLProperties> properties,
                 GLCapabilities capabilities,
                 std::shared_ptr<GLInfo> info) {}
     };
