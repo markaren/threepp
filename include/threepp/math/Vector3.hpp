@@ -148,8 +148,6 @@ namespace threepp {
             array[offset + 2] = this->z;
         }
 
-
-
         static Vector3 X;
         static Vector3 Y;
         static Vector3 Z;
