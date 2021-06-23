@@ -22,10 +22,10 @@ namespace threepp::gl {
                 refreshUniformsCommon(uniforms, material);
             } else if (instanceof <LineBasicMaterial>(material)) {
 
-                refreshUniformsLine(uniforms, dynamic_cast<LineBasicMaterial*>(material));
+                refreshUniformsLine(uniforms, dynamic_cast<LineBasicMaterial *>(material));
             } else if (instanceof <PointsMaterial>(material)) {
 
-                refreshUniformsPoints(uniforms, dynamic_cast<PointsMaterial*>(material), pixelRatio, height);
+                refreshUniformsPoints(uniforms, dynamic_cast<PointsMaterial *>(material), pixelRatio, height);
             }
         }
 
@@ -48,13 +48,19 @@ namespace threepp::gl {
             if (instanceof <MaterialWithMap>(material)) {
 
                 auto m = dynamic_cast<MaterialWithMap *>(material);
-                uniforms["map"].setValue(m->getMap());
+                auto map = m->getMap();
+                if (map) {
+                    uniforms["map"].setValue(map);
+                }
             }
 
             if (instanceof <MaterialWithAlphaMap>(material)) {
 
                 auto m = dynamic_cast<MaterialWithAlphaMap *>(material);
-                uniforms["alphaMap"].setValue(m->getAlphaMap());
+                auto alphaMap = m->getAlphaMap();
+                if (alphaMap) {
+                    uniforms["alphaMap"].setValue(alphaMap);
+                }
             }
         }
 
@@ -66,11 +72,10 @@ namespace threepp::gl {
 
         void refreshUniformsPoints(std::unordered_map<std::string, Uniform> &uniforms, PointsMaterial *material, int pixelRatio, float height) {
 
-            uniforms["diffuse"].value<Color>().copy( material->getColor() );
+            uniforms["diffuse"].value<Color>().copy(material->getColor());
             uniforms["opacity"].value<float>() = material->opacity;
             uniforms["size"].value<int>() = (int) material->getSize() * pixelRatio;
             uniforms["scale"].value<float>() = height * 0.5f;
-
         }
     };
 
