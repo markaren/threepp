@@ -98,8 +98,7 @@ namespace threepp {
         }
 
         friend std::ostream &operator<<(std::ostream &os, const Vector4 &v) {
-            os << "Vector4(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
-                            ", w=" + std::to_string(v.w) + ")";
+            os << "Vector4(x=" << v.x << ", y=" << v.y << ", z=" << v.z << ", w=" << v.w << ")";
             return os;
         }
     };

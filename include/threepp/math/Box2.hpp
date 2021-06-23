@@ -32,6 +32,11 @@ namespace threepp {
 
         Box2 &expandByPoint(const Vector2 &point);
 
+        friend std::ostream &operator<<(std::ostream &os, const Box2 &v) {
+            os << "Box2(max=" << v.min_  << ", max=" << v.max_ << ")";
+            return os;
+        }
+
     private:
         Vector2 min_;
         Vector2 max_;

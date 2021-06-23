@@ -162,8 +162,7 @@ namespace threepp {
         static Vector3 ZEROS;
 
         friend std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
-            os << "Vector3(x=" + std::to_string(v.x) + ", y=" + std::to_string(v.y) + ", z=" + std::to_string(v.z) +
-                            ")";
+            os << "Vector3(x=" << v.x << ", y=" << v.y << ", z=" << v.z << ")";
             return os;
         }
     };

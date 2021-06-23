@@ -127,6 +127,11 @@ namespace threepp {
 
         Box3 &translate(const Vector3 &offset);
 
+        friend std::ostream &operator<<(std::ostream &os, const Box3 &v) {
+            os << "Box3(max=" << v.min_  << ", max=" << v.max_ << ")";
+            return os;
+        }
+
 
     private:
         Vector3 min_;

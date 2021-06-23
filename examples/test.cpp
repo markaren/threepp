@@ -99,6 +99,7 @@ int main() {
     std::cout << m4[0] << ":" << copy[0] << std::endl;
 
     Box2 b2;
+    std::cout << b2 << std::endl;
     std::cout << "empty box: " << (b2.isEmpty() ? "true" : "false") << std::endl;
 
     threepp::Clock c;
@@ -109,7 +110,7 @@ int main() {
     auto sphere = SphereGeometry::create();
     sphere->computeBoundingSphere();
 
-    std::cout << "excpected radius 1, got=" << sphere->boundingSphere->radius << std::endl;
+    std::cout << "expected radius 1, got=" << sphere->boundingSphere->radius << std::endl;
 
     EventDispatcher evt;
 
