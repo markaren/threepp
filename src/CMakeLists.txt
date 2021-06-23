@@ -48,6 +48,7 @@ set(publicHeaders
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
+        "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
         "threepp/lights/LightProbe.hpp"
         "threepp/lights/AmbientLight.hpp"

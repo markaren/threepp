@@ -11,9 +11,6 @@
 
 #include "threepp/math/infinity.hpp"
 
-#include <array>
-
-
 namespace threepp {
 
     class Box3 {
@@ -67,7 +64,18 @@ namespace threepp {
             return *this;
         }
 
-        Box3 &setFromPoints(const std::vector<Vector3> &points);
+        template <class ArrayLike>
+        Box3 &setFromPoints(const ArrayLike &points) {
+
+            this->makeEmpty();
+
+            for (const auto &point : points) {
+
+                this->expandByPoint(point);
+            }
+
+            return *this;
+        }
 
         Box3 &setFromCenterAndSize(const Vector3 &center, const Vector3 &size);
 
@@ -123,25 +131,6 @@ namespace threepp {
     private:
         Vector3 min_;
         Vector3 max_;
-
-        static std::vector<Vector3> _points;
-
-        static Vector3 _vector;
-
-        static Box3 _box;
-
-        static Vector3 _v0;
-        static Vector3 _v1;
-        static Vector3 _v2;
-
-        static Vector3 _f0;
-        static Vector3 _f1;
-        static Vector3 _f2;
-
-        static Vector3 _center;
-        static Vector3 _extents;
-        static Vector3 _triangleNormal;
-        static Vector3 _testAxis;
 
         static bool satForAxes(const std::vector<float> &axes, const Vector3 &v0, const Vector3 &v1, const Vector3 &v2, const Vector3 &extents);
     };

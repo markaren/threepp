@@ -7,8 +7,12 @@
 
 using namespace threepp;
 
-Vector3 Line3::_startP = Vector3();
-Vector3 Line3::_startEnd = Vector3();
+namespace {
+
+    Vector3 _startP;
+    Vector3 _startEnd;
+
+}// namespace
 
 Line3::Line3(Vector3 start, Vector3 end) : start_(start), end_(end) {}
 
@@ -95,4 +99,3 @@ Line3 &Line3::applyMatrix4(const Matrix4 &matrix) {
 
     return *this;
 }
-

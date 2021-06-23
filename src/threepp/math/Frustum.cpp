@@ -9,8 +9,12 @@
 
 using namespace threepp;
 
-Vector3 Frustum::_vector = Vector3();
-Sphere Frustum::_sphere = Sphere();
+namespace {
+
+    Sphere _sphere;
+    Vector3 _vector;
+
+}
 
 Frustum::Frustum(Plane p0, Plane p1, Plane p2, Plane p3, Plane p4, Plane p5)
     : planes_{p0, p1, p2, p3, p4, p5} {}
@@ -24,6 +28,7 @@ Frustum &Frustum::copy(const Frustum &frustum) {
 
     return *this;
 }
+
 Frustum &Frustum::setFromProjectionMatrix(const Matrix4 &m) {
 
     const auto &me = m.elements();

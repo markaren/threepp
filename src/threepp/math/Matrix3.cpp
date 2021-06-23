@@ -21,30 +21,10 @@ Matrix3 &Matrix3::set(float n11, float n12, float n13, float n21, float n22, flo
 
     auto &te = this->elements_;
 
-
-    te[0] = n11;
-    te[1] = n21;
-    te[2] = n31;
-    te[3] = n12;
-    te[4] = n22;
-    te[5] = n32;
-    te[6] = n13;
-    te[7] = n23;
-    te[8] = n33;
-    // clang-format on
-
-    return *this;
-}
-
-Matrix3 &Matrix3::copy(const Matrix3 &m) {
-
-    auto &te = this->elements_;
-    const auto &me = m.elements_;
-
     // clang-format off
-    te[ 0 ] = me[ 0 ]; te[ 1 ] = me[ 1 ]; te[ 2 ] = me[ 2 ];
-    te[ 3 ] = me[ 3 ]; te[ 4 ] = me[ 4 ]; te[ 5 ] = me[ 5 ];
-    te[ 6 ] = me[ 6 ]; te[ 7 ] = me[ 7 ]; te[ 8 ] = me[ 8 ];
+    te[ 0 ] = n11; te[ 1 ] = n21; te[ 2 ] = n31;
+    te[ 3 ] = n12; te[ 4 ] = n22; te[ 5 ] = n32;
+    te[ 6 ] = n13; te[ 7 ] = n23; te[ 8 ] = n33;
     // clang-format on
 
     return *this;
@@ -59,6 +39,20 @@ Matrix3 &Matrix3::identity() {
             0, 0, 1
 
     );
+
+    return *this;
+}
+
+Matrix3 &Matrix3::copy(const Matrix3 &m) {
+
+    auto &te = this->elements_;
+    const auto &me = m.elements_;
+
+    // clang-format off
+    te[ 0 ] = me[ 0 ]; te[ 1 ] = me[ 1 ]; te[ 2 ] = me[ 2 ];
+    te[ 3 ] = me[ 3 ]; te[ 4 ] = me[ 4 ]; te[ 5 ] = me[ 5 ];
+    te[ 6 ] = me[ 6 ]; te[ 7 ] = me[ 7 ]; te[ 8 ] = me[ 8 ];
+    // clang-format on
 
     return *this;
 }

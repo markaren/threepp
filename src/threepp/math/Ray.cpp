@@ -3,14 +3,18 @@
 
 using namespace threepp;
 
-Vector3 Ray::_vector = Vector3();
-Vector3 Ray::_segCenter = Vector3();
-Vector3 Ray::_segDir = Vector3();
-Vector3 Ray::_diff = Vector3();
+namespace {
 
-Vector3 Ray::_edge1 = Vector3();
-Vector3 Ray::_edge2 = Vector3();
-Vector3 Ray::_normal = Vector3();
+    Vector3 _vector;
+    Vector3 _segCenter ;
+    Vector3 _segDir ;
+    Vector3 _diff ;
+
+    Vector3 _edge1 ;
+    Vector3 _edge2 ;
+    Vector3 _normal ;
+
+}
 
 Ray::Ray(Vector3 origin, Vector3 direction) : origin_(origin), direction_(direction){}
 

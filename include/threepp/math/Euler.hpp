@@ -108,9 +108,6 @@ namespace threepp {
 
         std::function<void()> onChangeCallback_ = [] {};
 
-        static Quaternion _quaternion;
-        static Matrix4 _matrix;
-
         friend class Quaternion;
     };
 

@@ -46,8 +46,6 @@ namespace threepp {
     private:
         std::array<Plane, 6> planes_;
 
-        static Sphere _sphere;
-        static Vector3 _vector;
     };
 
 }// namespace threepp

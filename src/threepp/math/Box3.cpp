@@ -7,27 +7,28 @@
 
 using namespace threepp;
 
-std::vector<Vector3> Box3::_points{
-        Vector3(), Vector3(), Vector3(),
-        Vector3(), Vector3(), Vector3(),
-        Vector3(), Vector3(), Vector3()};
+namespace {
 
-Vector3 Box3::_vector = Vector3();
+    std::array<Vector3, 9> _points;
 
-Box3 Box3::_box = Box3();
+    Vector3 _vector;
 
-Vector3 Box3::_v0 = Vector3();
-Vector3 Box3::_v1 = Vector3();
-Vector3 Box3::_v2 = Vector3();
+    Box3 _box;
 
-Vector3 Box3::_f0 = Vector3();
-Vector3 Box3::_f1 = Vector3();
-Vector3 Box3::_f2 = Vector3();
+    Vector3 _v0;
+    Vector3 _v1;
+    Vector3 _v2;
 
-Vector3 Box3::_center = Vector3();
-Vector3 Box3::_extents = Vector3();
-Vector3 Box3::_triangleNormal = Vector3();
-Vector3 Box3::_testAxis = Vector3();
+    Vector3 _f0;
+    Vector3 _f1;
+    Vector3 _f2;
+
+    Vector3 _center;
+    Vector3 _extents;
+    Vector3 _triangleNormal;
+    Vector3 _testAxis;
+
+}
 
 Box3::Box3() : min_(Vector3(+Infinity<float>, +Infinity<float>, +Infinity<float>)), max_(Vector3(-Infinity<float>, -Infinity<float>, -Infinity<float>)) {}
 
@@ -45,19 +46,6 @@ Box3 &Box3::set(float minX, float minY, float minZ, float maxX, float maxY, floa
 
     this->min_.set(minX, minY, minZ);
     this->max_.set(maxX, maxY, maxZ);
-
-    return *this;
-}
-
-
-Box3 &Box3::setFromPoints(const std::vector<Vector3> &points) {
-
-    this->makeEmpty();
-
-    for (auto &point : points) {
-
-        this->expandByPoint(point);
-    }
 
     return *this;
 }

@@ -39,8 +39,6 @@ namespace threepp {
         Vector3 start_;
         Vector3 end_;
 
-        static Vector3 _startP;
-        static Vector3 _startEnd;
     };
 
 }// namespace threepp

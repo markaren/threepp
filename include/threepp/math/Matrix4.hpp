@@ -131,14 +131,6 @@ namespace threepp {
                 0, 1, 0, 0,
                 0, 0, 1, 0,
                 0, 0, 0, 1};
-
-        static Vector3 _v1;
-        static Matrix4 _m1;
-        static Vector3 _zero;
-        static Vector3 _one;
-        static Vector3 _x;
-        static Vector3 _y;
-        static Vector3 _z;
     };
 
 }// namespace threepp

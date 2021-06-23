@@ -27,15 +27,6 @@ namespace threepp {
         Vector3 origin_;
         Vector3 direction_;
 
-        static Vector3 _vector;
-        static Vector3 _segCenter ;
-        static Vector3 _segDir ;
-        static Vector3 _diff ;
-
-        static Vector3 _edge1 ;
-        static Vector3 _edge2 ;
-        static Vector3 _normal ;
-
     };
 
 }

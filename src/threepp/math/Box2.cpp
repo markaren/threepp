@@ -5,7 +5,11 @@
 
 using namespace threepp;
 
-Vector2 Box2::_vector = Vector2();
+namespace {
+
+    Vector2 _vector;
+
+}
 
 Box2::Box2() : min_(+Infinity<float>, +Infinity<float>), max_(-Infinity<float>, -Infinity<float>) {}
 

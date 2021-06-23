@@ -58,11 +58,6 @@ namespace threepp {
 
         Plane &translate( const Vector3 &offset );
 
-
-    private:
-        static Vector3 _vector1;
-        static Vector3 _vector2;
-        static Matrix3 _normalMatrix;
     };
 
 }// namespace threepp

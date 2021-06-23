@@ -10,8 +10,12 @@
 
 using namespace threepp;
 
-Matrix4 Euler::_matrix = Matrix4();
-Quaternion Euler::_quaternion = Quaternion();
+namespace {
+
+    Quaternion _quaternion;
+    Matrix4 _matrix;
+
+}// namespace
 
 Euler &Euler::set(float x, float y, float z, const std::optional<RotationOrders> &order) {
 
@@ -29,7 +33,7 @@ Euler &Euler::setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrde
 
     // assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)
 
-    const auto& te = m.elements();
+    const auto &te = m.elements();
     const auto m11 = te[0], m12 = te[4], m13 = te[8];
     const auto m21 = te[1], m22 = te[5], m23 = te[9];
     const auto m31 = te[2], m32 = te[6], m33 = te[10];
@@ -148,10 +152,9 @@ Euler &Euler::setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrde
 
 Euler &Euler::setFromQuaternion(const Quaternion &q, std::optional<RotationOrders> order, bool update) {
 
-    _matrix.makeRotationFromQuaternion( q );
+    _matrix.makeRotationFromQuaternion(q);
 
-    return this->setFromRotationMatrix( _matrix, order, update );
-
+    return this->setFromRotationMatrix(_matrix, order, update);
 }
 
 Euler &Euler::setFromVector3(const Vector3 &v, std::optional<RotationOrders> order) {

@@ -12,7 +12,6 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
-
 #include <functional>
 #include <memory>
 #include <optional>
@@ -439,7 +438,6 @@ namespace threepp {
         std::function<void()> onQuaternionChange = [&] {
             rotation.setFromQuaternion(quaternion, std::nullopt, false);
         };
-
 
         static Vector3 _v1;
         static Quaternion _q1;

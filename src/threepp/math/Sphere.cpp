@@ -8,10 +8,14 @@
 
 using namespace threepp;
 
-Box3 Sphere::_box = Box3();
-Vector3 Sphere::_v1 = Vector3();
-Vector3 Sphere::_toFarthestPoint = Vector3();
-Vector3 Sphere::_toPoint  = Vector3();
+namespace {
+
+    Box3 _box;
+    Vector3 _v1;
+    Vector3 _toFarthestPoint;
+    Vector3 _toPoint;
+
+}
 
 Sphere::Sphere(Vector3 center, float radius) : center(center), radius(radius) {}
 

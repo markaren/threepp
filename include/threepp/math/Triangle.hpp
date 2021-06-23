@@ -73,18 +73,6 @@ namespace threepp {
         Vector3 a_ = Vector3();
         Vector3 b_ = Vector3();
         Vector3 c_ = Vector3();
-
-        static Vector3 _v0;
-        static Vector3 _v1;
-        static Vector3 _v2;
-        static Vector3 _v3;
-
-        static Vector3 _vab;
-        static Vector3 _vac;
-        static Vector3 _vbc;
-        static Vector3 _vap;
-        static Vector3 _vbp;
-        static Vector3 _vcp;
     };
 
 

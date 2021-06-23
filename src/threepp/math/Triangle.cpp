@@ -5,19 +5,23 @@
 
 using namespace threepp;
 
-Vector3 Triangle::_v0 = Vector3();
-Vector3 Triangle::_v1 = Vector3();
-Vector3 Triangle::_v2 = Vector3();
-Vector3 Triangle::_v3 = Vector3();
+namespace {
 
-Vector3 Triangle::_vab = Vector3();
-Vector3 Triangle::_vac = Vector3();
-Vector3 Triangle::_vbc = Vector3();
-Vector3 Triangle::_vap = Vector3();
-Vector3 Triangle::_vbp = Vector3();
-Vector3 Triangle::_vcp = Vector3();
+    Vector3 _v0;
+    Vector3 _v1;
+    Vector3 _v2;
+    Vector3 _v3;
 
-Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c) : a_(a), b_(b), c_(c){}
+    Vector3 _vab;
+    Vector3 _vac;
+    Vector3 _vbc;
+    Vector3 _vap;
+    Vector3 _vbp;
+    Vector3 _vcp;
+
+}// namespace
+
+Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c) : a_(a), b_(b), c_(c) {}
 
 void Triangle::getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target) {
 

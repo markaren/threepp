@@ -37,7 +37,6 @@ namespace threepp {
         Vector2 min_;
         Vector2 max_;
 
-        static Vector2 _vector;
     };
 
 }// namespace threepp

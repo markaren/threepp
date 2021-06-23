@@ -6,10 +6,13 @@
 
 using namespace threepp;
 
-Vector3 Plane::_vector1 = Vector3();
-Vector3 Plane::_vector2 = Vector3();
-Matrix3 Plane::_normalMatrix = Matrix3();
+namespace {
 
+    Vector3 _vector1;
+    Vector3 _vector2;
+    Matrix3 _normalMatrix;
+
+}
 
 Plane::Plane() : normal(Vector3(1, 0, 0)), constant(0) {}
 

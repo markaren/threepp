@@ -52,11 +52,6 @@ namespace threepp {
 
         Sphere &union_(const Sphere &sphere);
 
-    private:
-        static Box3 _box;
-        static Vector3 _v1;
-        static Vector3 _toFarthestPoint;
-        static Vector3 _toPoint;
     };
 
 }// namespace threepp
