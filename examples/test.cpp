@@ -55,6 +55,8 @@
 
 #include "threepp/lights/LightShadow.hpp"
 
+#include "threepp/utils/InstanceOf.hpp"
+
 using namespace threepp;
 
 namespace {
@@ -192,6 +194,11 @@ int main() {
         std::cout << "successfull  " << (hasGeometry ? "true" : "false") << std::endl;
         auto g = objectWithGeometry->geometry();
     }
+
+    std::vector<float> vf(3);
+    auto fba = FloatBufferAttribute::create(vf, 3);
+
+    std::cout << "instanceof: " << instanceof<FloatBufferAttribute>(fba.get()) << std::endl;
 
     std::vector<Uniform> uv;
     uv.emplace_back(Matrix4());
