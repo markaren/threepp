@@ -64,6 +64,34 @@ foreach (header IN LISTS publicHeaders)
   list(APPEND publicHeadersFull "${publicHeaderDir}/${header}")
 endforeach ()
 
+set(privateHeaders
+
+        "threepp/renderers/GLShader.hpp"
+
+        "threepp/renderers/gl/GLAttributes.hpp"
+        "threepp/renderers/gl/GLBackground.hpp"
+        "threepp/renderers/gl/GLCapabilities.hpp"
+        "threepp/renderers/gl/GLClipping.hpp"
+        "threepp/renderers/gl/GLGeometries.hpp"
+        "threepp/renderers/gl/GLInfo.hpp"
+        "threepp/renderers/gl/GLObjects.hpp"
+        "threepp/renderers/gl/GLProgram.hpp"
+        "threepp/renderers/gl/GLProperties.hpp"
+        "threepp/renderers/gl/GLRenderLists.hpp"
+        "threepp/renderers/gl/GLState.hpp"
+        "threepp/renderers/gl/GLTextures.hpp"
+        "threepp/renderers/gl/GLUniforms.hpp"
+        "threepp/renderers/gl/GLUtils.hpp"
+
+        "threepp/renderers/shaders/ShaderChunk.hpp"
+        "threepp/renderers/shaders/ShaderLib.hpp"
+        "threepp/renderers/shaders/UniformsLib.hpp"
+        "threepp/renderers/shaders/UniformsUtil.hpp"
+
+        "threepp/utils/StringUtils.hpp"
+
+        )
+
 set(sources
 
         "threepp/Canvas.cpp"
@@ -101,31 +129,7 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
 
-        )
-
-set(privateHeaders
-
-        "threepp/renderers/GLShader.hpp"
-
-        "threepp/renderers/gl/GLAttributes.hpp"
-        "threepp/renderers/gl/GLBackground.hpp"
-        "threepp/renderers/gl/GLCapabilities.hpp"
-        "threepp/renderers/gl/GLClipping.hpp"
-        "threepp/renderers/gl/GLGeometries.hpp"
-        "threepp/renderers/gl/GLInfo.hpp"
-        "threepp/renderers/gl/GLObjects.hpp"
-        "threepp/renderers/gl/GLProgram.hpp"
-        "threepp/renderers/gl/GLProperties.hpp"
-        "threepp/renderers/gl/GLRenderLists.hpp"
-        "threepp/renderers/gl/GLState.hpp"
-        "threepp/renderers/gl/GLTextures.hpp"
-        "threepp/renderers/gl/GLUniforms.hpp"
-        "threepp/renderers/gl/GLUtils.hpp"
-
-        "threepp/renderers/shaders/ShaderChunk.hpp"
-        "threepp/renderers/shaders/ShaderLib.hpp"
-        "threepp/renderers/shaders/UniformsLib.hpp"
-        "threepp/renderers/shaders/UniformsUtil.hpp"
+        "threepp/utils/StringUtils.cpp"
 
         )
 

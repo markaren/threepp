@@ -138,7 +138,7 @@ namespace threepp {
 
         gl::GLCapabilities capabilities;
         gl::GLState state;
-        gl::GLInfo info;
+//        gl::GLInfo info;
     };
 
 }// namespace threepp
