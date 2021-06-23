@@ -5,10 +5,14 @@ using namespace threepp;
 
 unsigned int BufferGeometry::_id = 0;
 
-Matrix4 BufferGeometry::_m1 = Matrix4();
-Vector3 BufferGeometry::_offset = Vector3();
-Box3 BufferGeometry::_box = Box3();
-Vector3 BufferGeometry::_vector = Vector3();
+namespace {
+
+    Matrix4 _m1;
+    Vector3 _offset;
+    Box3 _box;
+    Vector3 _vector;
+
+}// namespace
 
 
 std::vector<int> &BufferGeometry::getIndex() {
@@ -54,7 +58,7 @@ BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
 
     if (hasAttribute("position")) {
 
-        auto position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
+        auto position = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("position").get());
 
         position->applyMatrix4(matrix);
 
@@ -64,7 +68,7 @@ BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
 
     if (hasAttribute("normal")) {
 
-        auto normal = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("normal").get());
+        auto normal = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("normal").get());
 
         auto normalMatrix = Matrix3().getNormalMatrix(matrix);
 
@@ -76,7 +80,7 @@ BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
 
     if (hasAttribute("tangent")) {
 
-        auto tangent = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("tangent").get());
+        auto tangent = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("tangent").get());
 
         tangent->transformDirection(matrix);
 
@@ -200,7 +204,7 @@ void BufferGeometry::computeBoundingSphere() {
 
     if (this->attributes_.count("position") != 0) {
 
-        const auto &position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
+        const auto &position = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("position").get());
 
         // first, find the center of the bounding sphere
 

@@ -82,6 +82,8 @@ namespace threepp {
             this->version++;
         }
 
+        virtual ~Material() = default;
+
     protected:
         Material() = default;
 
@@ -89,22 +91,6 @@ namespace threepp {
         inline static unsigned int materialId = 0;
     };
 
-    class MaterialWithWireframe {
-
-    public:
-        virtual std::string getWireframeLinecap() const = 0;
-        virtual std::string getWireframeLinejoin() const = 0;
-
-        [[nodiscard]] virtual bool getWireframe() const = 0;
-        virtual void setWireframe(bool wireframe) = 0;
-        [[nodiscard]] virtual float getWireframeLinewidth() const = 0;
-        virtual void setWireframeLinewidth(float width) = 0;
-
-        ~MaterialWithWireframe() = default;
-
-    protected:
-        MaterialWithWireframe() = default;
-    };
 
 }// namespace threepp
 

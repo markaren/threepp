@@ -2,7 +2,7 @@
 #include "threepp/math/Color.hpp"
 
 #include <cmath>
-#include <utility>
+#include <algorithm>
 
 using namespace threepp;
 

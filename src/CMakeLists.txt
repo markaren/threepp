@@ -2,9 +2,9 @@ set(publicHeaderDir ${CMAKE_SOURCE_DIR}/include)
 
 set(publicHeaders
 
-        "threepp/threepp.hpp"
         "threepp/Canvas.hpp"
         "threepp/constants.hpp"
+        "threepp/threepp.hpp"
 
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
@@ -20,6 +20,8 @@ set(publicHeaders
 
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"
+        "threepp/materials/PointsMaterial.hpp"
+        "threepp/materials/interfaces.hpp"
 
         "threepp/math/Box2.hpp"
         "threepp/math/Box3.hpp"
@@ -44,6 +46,7 @@ set(publicHeaders
 
         "threepp/objects/Line.hpp"
         "threepp/objects/Mesh.hpp"
+        "threepp/objects/Points.hpp"
 
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"

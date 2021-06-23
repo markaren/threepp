@@ -79,14 +79,16 @@ namespace threepp {
 
         ~BufferGeometry() = default;
 
+        static std::shared_ptr<BufferGeometry> create() {
+            return std::shared_ptr<BufferGeometry>(new BufferGeometry());
+        }
+
+    protected:
+        BufferGeometry() = default;
+
     private:
         std::vector<int> index_;
         std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
-
-        static Matrix4 _m1;
-        static Vector3 _offset;
-        static Box3 _box;
-        static Vector3 _vector;
 
         static unsigned int _id;
     };

@@ -5,5 +5,6 @@
 #include "threepp/materials/Material.hpp"
 
 #include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/materials/PointsMaterial.hpp"
 
 #endif//THREEPP_MATERIALS_HPP

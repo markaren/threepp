@@ -4,6 +4,8 @@
 #define THREEPP_MESHBASICMATERIAL_HPP
 
 #include "threepp/materials/Material.hpp"
+#include "threepp/materials/interfaces.hpp"
+
 #include "threepp/math/Color.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -11,12 +13,9 @@
 
 namespace threepp {
 
-    class MeshBasicMaterial : public Material, MaterialWithWireframe {
+    class MeshBasicMaterial : public MaterialWithColor, MaterialWithWireframe, MaterialWithReflectivity {
 
     public:
-
-        Color color = Color(0xffffff);
-
         std::optional<Texture> map = std::nullopt;
 
         std::optional<Texture> lightMap = std::nullopt;
@@ -31,8 +30,17 @@ namespace threepp {
 
         std::optional<Texture> envMap = std::nullopt;
         int combine = MultiplyOperation;
-        float reflectivity = 1;
-        float refractionRatio = 0.98f;
+
+        Color &getColor() override {
+            return color_;
+        }
+
+        [[nodiscard]] float getReflectivity() const override {
+            return reflectivity_;
+        }
+        [[nodiscard]] float getRefractionRatio() const override {
+            return refractionRatio_;
+        }
 
         [[nodiscard]] std::string getWireframeLinecap() const override {
             return wireframeLinecap_;
@@ -53,6 +61,7 @@ namespace threepp {
         [[nodiscard]] float getWireframeLinewidth() const override {
             return wireframeLinewidth_;
         }
+
         void setWireframeLinewidth(float width) override {
             wireframeLinewidth_ = width;
         }
@@ -62,17 +71,19 @@ namespace threepp {
         }
 
     protected:
-
         MeshBasicMaterial() = default;
 
     private:
+        Color color_ = Color(0xffffff);
+
+        float reflectivity_ = 1;
+        float refractionRatio_ = 0.98f;
 
         std::string wireframeLinecap_ = "round";
         std::string wireframeLinejoin_ = "round";
 
         bool wireframe_ = false;
         float wireframeLinewidth_ = 1;
-
     };
 
 }// namespace threepp

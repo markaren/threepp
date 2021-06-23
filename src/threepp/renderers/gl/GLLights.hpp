@@ -96,13 +96,11 @@ namespace threepp::gl {
 
         void setup(std::vector<std::shared_ptr<Light>> &lights) {
 
-            int r, g, b = 0;
+            float r = 0, g = 0, b = 0;
 
             std::sort(lights.begin(), lights.end(), &shadowCastingLightsFirst);
 
-            for (int i = 0, l = lights.size(); i < l; i++) {
-
-                auto &light = lights[i];
+            for (auto &light : lights) {
 
                 auto &color = light->color;
                 auto intensity = light->intensity;
@@ -117,12 +115,9 @@ namespace threepp::gl {
                 } else if (instanceof <LightProbe>(light.get())) {
 
 
-
                 } else if (instanceof <DirectionalLight>(light.get())) {
 
-                    auto& uniforms = cache.get(*light);
-
-
+                    auto &uniforms = cache.get(*light);
                 }
             }
         }

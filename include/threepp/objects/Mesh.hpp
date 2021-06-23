@@ -6,6 +6,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 
 #include <memory>
 
@@ -14,9 +15,6 @@ namespace threepp {
     class Mesh : public Object3D {
 
     public:
-
-        Mesh(const Mesh&) = delete;
-
         BufferGeometry *geometry() override {
             return geometry_.get();
         }
@@ -29,7 +27,10 @@ namespace threepp {
             return "Mesh";
         }
 
-        static std::shared_ptr<Mesh> create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
+        static std::shared_ptr<Mesh> create(
+                std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
+                std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
+
             return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
         }
 
@@ -38,7 +39,6 @@ namespace threepp {
     protected:
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
             : geometry_(std::move(geometry)), material_(std::move(material)) {
-
         }
 
     private:

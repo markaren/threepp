@@ -183,7 +183,11 @@ int main() {
 
     auto boxGeometry = BoxGeometry::create();
     auto material = MeshBasicMaterial::create();
-    auto mesh = Mesh::create(std::move(boxGeometry), std::move(material));
+    auto mesh = Mesh::create(boxGeometry, material);
+
+    Material *baseMaterial = material.get();
+
+    std::cout << "RefractionRatio" << dynamic_cast<MaterialWithReflectivity*>(baseMaterial)->getRefractionRatio() << std::endl;
 
     o->add(mesh);
 

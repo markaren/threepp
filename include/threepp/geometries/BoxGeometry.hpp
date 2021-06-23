@@ -23,9 +23,8 @@ namespace threepp {
             return std::shared_ptr<BoxGeometry>(new BoxGeometry(width, height, depth, widthSegments, heightSegments, depthSegments));
         }
 
-    private:
+    protected:
         explicit BoxGeometry(float width, float height, float depth, int widthSegments, int heightSegments, int depthSegments);
-
     };
 
 }// namespace threepp
