@@ -93,7 +93,7 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
     // build geometry
 
     this->setIndex(indices);
-    this->setAttribute("position", TypedBufferAttribute<float>::create(vertices, 3));
-    this->setAttribute("normal", TypedBufferAttribute<float>::create(normals, 3));
-    this->setAttribute("uv", TypedBufferAttribute<float>::create(uvs, 2));
+    this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
+    this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+    this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
