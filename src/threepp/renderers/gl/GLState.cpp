@@ -659,7 +659,7 @@ void gl::GLState::activeTexture(std::optional<GLenum> glSlot) {
     if (currentTextureSlot != glSlot) {
 
         glActiveTexture(*glSlot);
-        currentTextureSlot = *glSlot;
+        currentTextureSlot = glSlot;
     }
 }
 

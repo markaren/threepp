@@ -13,7 +13,7 @@ namespace threepp {
 
     struct Event {
         const std::string type;
-        const std::any &target;
+        void* target;
     };
 
     using EventListener = std::function<void(Event)>;
@@ -45,7 +45,7 @@ namespace threepp {
             }
         }
 
-        void dispatchEvent(const std::string &type, const std::any &target = {}) {
+        void dispatchEvent(const std::string &type, void* target = nullptr) {
 
             if (listeners_.count(type)) {
                 Event e{type, target};

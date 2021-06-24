@@ -18,7 +18,7 @@
 
 namespace threepp {
 
-    class Texture : private EventDispatcher {
+    class Texture : public EventDispatcher {
 
     public:
         unsigned int id = textureId++;
@@ -39,7 +39,7 @@ namespace threepp {
         int anisotropy;
 
         int format;
-        std::optional<int> internalFormat;
+//        std::optional<int> internalFormat;
         int type;
 
         Vector2 offset = Vector2(0, 0);
@@ -53,7 +53,7 @@ namespace threepp {
         bool generateMipmaps = true;
         bool premultiplyAlpha = false;
         bool flipY = true;
-        unsigned int unpackAlignment = 4;// valid values: 1, 2, 4, 8 (see http://www.khronos.org/opengles/sdk/docs/man/xhtml/glPixelStorei.xml)
+        int unpackAlignment = 4;// valid values: 1, 2, 4, 8 (see http://www.khronos.org/opengles/sdk/docs/man/xhtml/glPixelStorei.xml)
 
         // Values of encoding !== THREE.LinearEncoding only supported on map, envMap and emissiveMap.
         //
@@ -88,6 +88,8 @@ namespace threepp {
 
         void needsUpdate();
 
+        [[nodiscard]] unsigned int version() const;
+
         Texture &copy(const Texture &source);
 
     private:
@@ -98,6 +100,7 @@ namespace threepp {
         inline static unsigned int textureId = 0;
 
         inline static int DEFAULT_MAPPING = UVMapping;
+
     };
 
 }// namespace threepp

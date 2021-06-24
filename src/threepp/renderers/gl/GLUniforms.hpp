@@ -3,11 +3,13 @@
 #ifndef THREEPP_GLUNIFORMS_HPP
 #define THREEPP_GLUNIFORMS_HPP
 
+#include "GLProgram.hpp"
+
 namespace threepp::gl {
 
     struct GLUniforms {
 
-        GLUniforms(const GLProgram ){}
+        GLUniforms(const GLProgram &program){}
 
     };
 

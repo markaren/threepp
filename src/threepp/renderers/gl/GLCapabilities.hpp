@@ -31,7 +31,7 @@ namespace threepp::gl {
         const bool vertexTextures;
         const bool floatVertexTextures = true;
 
-        const GLint64 maxSamples;
+        const GLint maxSamples;
 
         GLCapabilities(const GLCapabilities &) = delete;
         void operator=(const GLCapabilities &) = delete;

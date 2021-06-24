@@ -31,17 +31,16 @@ namespace threepp::gl {
 
     struct GLInfo {
 
-        void update(int count, int mode, int instanceCount);
-
-        void reset ();
-
-    private:
         MemoryInfo memory;
         RenderInfo render;
 
         bool autoReset = true;
 
         std::vector<GLProgram> programs;
+
+        void update(int count, int mode, int instanceCount);
+
+        void reset ();
 
     };
 

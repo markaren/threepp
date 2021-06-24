@@ -7,6 +7,7 @@
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
+#include "threepp/renderers/gl/GLProperties.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
 #include <glad/glad.h>
@@ -16,22 +17,36 @@
 
 namespace threepp::gl {
 
-    class GLTextures {
+    struct GLTextures {
 
-        struct TextureProperties {
+        const GLint maxTextures = GLCapabilities::instance().maxTextures;
+        const GLint maxCubemapSize = GLCapabilities::instance().maxCubemapSize;
+        const GLint maxTextureSize = GLCapabilities::instance().maxTextureSize;
+        const GLint maxSamples = GLCapabilities::instance().maxSamples;
 
-            GLint glTexture;
-
-        };
-
-    public:
         GLTextures(
-                std::shared_ptr<GLState> state,
-                GLCapabilities capabilities,
-                std::shared_ptr<GLInfo> info) {}
+                GLState &state,
+                GLProperties &properties,
+                GLInfo &info);
 
-        void uploadTexture(const TextureProperties &textureProperties, GLint texture, GLint slot);
+        void initTexture(GLTextureProperties::Properties &textureProperties, Texture &texture);
 
+        void uploadTexture(GLTextureProperties::Properties &textureProperties, Texture &texture, GLint slot);
+
+        void deallocateTexture( Texture &texture );
+
+        void resetTextureUnits();
+
+        int allocateTextureUnit();
+
+    private:
+        GLState &state;
+        GLProperties &properties;
+        GLInfo &info;
+
+        EventListener onTextureDispose;
+
+        int textureUnits = 0;
     };
 
 }// namespace threepp::gl

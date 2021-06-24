@@ -84,7 +84,13 @@ void Texture::transformUv(Vector2 &uv) const {
 }
 
 void Texture::needsUpdate() {
+
     this->version_++;
+}
+
+unsigned int Texture::version() const {
+
+    return version_;
 }
 
 Texture &Texture::copy(const Texture &source) {
@@ -103,7 +109,7 @@ Texture &Texture::copy(const Texture &source) {
     this->anisotropy = source.anisotropy;
 
     this->format = source.format;
-    this->internalFormat = source.internalFormat;
+//    this->internalFormat = source.internalFormat;
     this->type = source.type;
 
     this->offset.copy(source.offset);
