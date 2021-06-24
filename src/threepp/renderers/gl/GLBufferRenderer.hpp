@@ -10,7 +10,7 @@ namespace threepp::gl {
 
     struct GLBufferRenderer {
 
-        GLBufferRenderer(GLInfo &info) : info_(info) {}
+        explicit GLBufferRenderer(GLInfo &info) : info_(info) {}
 
         void setMode(int mode) {
 

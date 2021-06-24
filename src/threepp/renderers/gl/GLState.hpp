@@ -129,7 +129,7 @@ namespace threepp::gl {
         std::optional<float> currentPolygonOffsetFactor;
         std::optional<float> currentPolygonOffsetUnits;
 
-        GLint64 maxTextures;
+        const GLint maxTextures;
 
         bool lineWidthAvailable = false;
         unsigned int version = 0;

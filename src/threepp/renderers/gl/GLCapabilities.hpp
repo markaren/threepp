@@ -3,53 +3,78 @@
 #ifndef THREEPP_GLCAPABILITIES_HPP
 #define THREEPP_GLCAPABILITIES_HPP
 
-#include <glad/glad.h>
+#include "glParameter.hpp"
 
 #include <string>
+#include <iostream>
 
 namespace threepp::gl {
 
     struct GLCapabilities {
 
-        GLint maxAnisotropy;
+        const GLint maxAnisotropy;
 
         const std::string precision = "highp";
 
-        bool logarithmicDepthBuffer = false;
+        const bool logarithmicDepthBuffer = false;
 
-        GLint maxTextures;
-        GLint maxVertexTextures;
-        GLint maxTextureSize;
-        GLint maxCubemapSize;
+        const GLint maxTextures;
+        const GLint maxVertexTextures;
+        const GLint maxTextureSize;
+        const GLint maxCubemapSize;
 
-        GLint maxAttributes;
-        GLint maxVertexUniforms;
-        GLint maxVaryings ;
-        GLint maxFragmentUniforms ;
+        const GLint maxAttributes;
+        const GLint maxVertexUniforms;
+        const GLint maxVaryings;
+        const GLint maxFragmentUniforms;
 
-        bool vertexTextures;
-        bool floatVertexTextures = true;
+        const bool vertexTextures;
+        const bool floatVertexTextures = true;
 
-        GLint64 maxSamples;
+        const GLint64 maxSamples;
 
-        GLCapabilities() {
+        GLCapabilities(const GLCapabilities &) = delete;
+        void operator=(const GLCapabilities &) = delete;
 
-            glGetIntegerv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &maxAnisotropy);
-
-            glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, (GLint *) &maxTextures);
-            glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, (GLint *) &maxVertexTextures);
-            glGetIntegerv(GL_MAX_TEXTURE_SIZE, (GLint *) &maxTextureSize);
-            glGetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE, (GLint *) &maxCubemapSize);
-
-            glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, (GLint *) &maxAttributes);
-            glGetIntegerv(GL_MAX_VERTEX_UNIFORM_VECTORS, (GLint *) &maxVertexTextures);
-            glGetIntegerv(GL_MAX_VARYING_VECTORS, (GLint *) &maxVaryings);
-            glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_VECTORS, (GLint *) &maxFragmentUniforms);
-
-            vertexTextures = maxVertexTextures > 0;
-
-            glGetInteger64v(GL_MAX_SAMPLES, (GLint64 *) &maxSamples);
+        friend std::ostream &operator<<(std::ostream &os, const GLCapabilities &v) {
+            os << "GLCapabilities(\n"
+                    << "maxAnisotropy: " << v.maxAnisotropy << "\n"
+                    << "maxTextures: " << v.maxTextures << "\n"
+                    << "maxVertexTextures: " << v.maxVertexTextures << "\n"
+                    << "maxTextureSize: " << v.maxTextureSize << "\n"
+                    << "maxCubemapSize: " << v.maxCubemapSize << "\n"
+                    << "maxAttributes: " << v.maxAttributes << "\n"
+                    << "maxVertexUniforms: " << v.maxVertexUniforms << "\n"
+                    << "maxVaryings: " << v.maxVaryings << "\n"
+                    << "maxFragmentUniforms: " << v.maxFragmentUniforms << "\n"
+                    << "vertexTextures: " << (v.vertexTextures ? "true" : "false") << "\n"
+                    << "maxSamples: " << v.maxSamples << "\n";
+            return os;
         }
+
+        static GLCapabilities &instance() {
+            static GLCapabilities instance;
+            return instance;
+        }
+
+    private:
+        GLCapabilities()
+            : maxAnisotropy(glGetParameter(GL_MAX_TEXTURE_MAX_ANISOTROPY)),
+
+              maxTextures(glGetParameter(GL_MAX_TEXTURE_IMAGE_UNITS)),
+              maxVertexTextures(glGetParameter(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS)),
+              maxTextureSize(glGetParameter(GL_MAX_TEXTURE_SIZE)),
+              maxCubemapSize(glGetParameter(GL_MAX_CUBE_MAP_TEXTURE_SIZE)),
+
+              maxAttributes(glGetParameter(GL_MAX_VERTEX_ATTRIBS)),
+              maxVertexUniforms(glGetParameter(GL_MAX_VERTEX_UNIFORM_VECTORS)),
+              maxVaryings(glGetParameter(GL_MAX_VARYING_VECTORS)),
+              maxFragmentUniforms(glGetParameter(GL_MAX_FRAGMENT_UNIFORM_VECTORS)),
+
+              vertexTextures(maxVertexTextures > 0),
+
+              maxSamples(glGetParameter(GL_MAX_SAMPLES)) {}
+
 
 
     };

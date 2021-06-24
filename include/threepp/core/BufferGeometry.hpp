@@ -26,7 +26,7 @@ namespace threepp {
     public:
         const unsigned int id = _id++;
 
-        std::string uuid = math::generateUUID();
+        const std::string uuid = math::generateUUID();
 
         std::vector<GeometryGroup> groups;
 
@@ -77,6 +77,8 @@ namespace threepp {
 
         void computeBoundingSphere();
 
+        [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &getAttributes() const;
+
         ~BufferGeometry() = default;
 
         static std::shared_ptr<BufferGeometry> create() {
@@ -91,6 +93,7 @@ namespace threepp {
         std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
 
         static unsigned int _id;
+
     };
 
     typedef std::shared_ptr<BufferGeometry> BufferGeometryPtr;

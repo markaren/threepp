@@ -168,7 +168,6 @@ namespace threepp {
 
         Vector3 _vector3;
 
-        gl::GLCapabilities capabilities;
         gl::GLState state;
         gl::GLInfo info;
 

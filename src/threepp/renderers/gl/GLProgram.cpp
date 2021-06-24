@@ -13,7 +13,7 @@ using namespace threepp;
 
 namespace {
 
-    inline std::pair<std::string, std::string> getEncodingComponents(int encoding) {
+    std::pair<std::string, std::string> getEncodingComponents(int encoding) {
 
         switch (encoding) {
 
@@ -39,19 +39,19 @@ namespace {
         }
     }
 
-    inline std::string getTexelDecodingFunction(const std::string &functionName, int encoding) {
+    std::string getTexelDecodingFunction(const std::string &functionName, int encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return " + components.first + "ToLinear" + components.second + "; }";
     }
 
-    inline std::string getTexelEncodingFunction(const std::string &functionName, int encoding) {
+    std::string getTexelEncodingFunction(const std::string &functionName, int encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
     }
 
-    inline std::string getToneMappingFunction(const std::string &functionName, int toneMapping) {
+    std::string getToneMappingFunction(const std::string &functionName, int toneMapping) {
 
         std::string toneMappingName;
 
@@ -85,7 +85,7 @@ namespace {
         return "vec3 " + functionName + "( vec3 color ) { return " + toneMappingName + "ToneMapping( color ); }";
     }
 
-    inline std::string generateDefines(const std::unordered_map<std::string, std::any> &defines) {
+    std::string generateDefines(const std::unordered_map<std::string, std::any> &defines) {
 
         //            std::vector<std::string> chunks;
         //
@@ -107,7 +107,7 @@ namespace {
         return "";
     }
 
-//    inline void fetchAttributeLocations(program) {
+//    void fetchAttributeLocations(program) {
 //
 //        const attributes = {};
 //

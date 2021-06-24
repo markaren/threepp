@@ -46,6 +46,7 @@
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
+#include "threepp/renderers/gl/GLBindingStates.hpp"
 
 #include "threepp/core/Uniform.hpp"
 
@@ -193,7 +194,7 @@ int main() {
     {
         auto objectWithGeometry = std::reinterpret_pointer_cast<Mesh>(o->children[0]);
         auto hasGeometry = objectWithGeometry->geometry() != nullptr;
-        std::cout << "successfull  " << (hasGeometry ? "true" : "false") << std::endl;
+        std::cout << "successful  " << (hasGeometry ? "true" : "false") << std::endl;
         auto g = objectWithGeometry->geometry();
     }
 
@@ -215,7 +216,7 @@ int main() {
 
 //    Canvas canvas(Canvas::Parameters().title(""));
 //    canvas.animate([](float dt) {
-//
+//        std::cout << gl::GLCapabilities::instance() << std::endl;
 //    });
 
     o->clear();

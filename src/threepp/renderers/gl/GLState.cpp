@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/gl/GLState.hpp"
 
+#include "glParameter.hpp"
+
 using namespace threepp;
 
 namespace {
@@ -53,7 +55,7 @@ namespace {
         }
     }
 
-}
+}// namespace
 
 void gl::ColorBuffer::setMask(bool colorMask) {
 
@@ -283,42 +285,41 @@ void gl::StencilBuffer::reset() {
     currentStencilClear = std::nullopt;
 }
 
-gl::GLState::GLState(const Canvas &canvas) : canvas(canvas) {
+gl::GLState::GLState(const Canvas &canvas)
+    : canvas(canvas), maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)) {
 
-    glGetInteger64v(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &maxTextures);
+    GLint scissorParam[4];
+    GLint viewportParam[4];
+    glGetIntegerv(GL_SCISSOR_BOX, scissorParam);
+    glGetIntegerv(GL_VIEWPORT, viewportParam);
 
-    GLint64 scissorParam[4];
-    GLint64 viewportParam[4];
-    glGetInteger64v(GL_SCISSOR_BOX, scissorParam);
-    glGetInteger64v(GL_VIEWPORT, viewportParam);
-
-    currentScissor.fromArray((float*) scissorParam);
-    currentViewport.fromArray((float*) scissorParam);
+    currentScissor.fromArray((float *) scissorParam);
+    currentViewport.fromArray((float *) scissorParam);
 
     auto enableLambda = [&](int id) {
-      enable(id);
+        enable(id);
     };
 
     auto disableLambda = [&](int id) {
-      disable(id);
+        disable(id);
     };
 
     std::function<GLuint(GLenum, GLenum, int)> createTexture = [](GLenum type, GLenum target, int count) {
-      GLint64 data[4];// 4 is required to match default unpack alignment of 4.
-      GLuint textureArray[1];
-      glGenTextures(1, textureArray);
+        GLint64 data[4];// 4 is required to match default unpack alignment of 4.
+        GLuint textureArray[1];
+        glGenTextures(1, textureArray);
 
-      GLuint texture = textureArray[0];
+        GLuint texture = textureArray[0];
 
-      glBindTexture(type, texture);
-      glTexParameteri(type, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-      glTexParameteri(type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(type, texture);
+        glTexParameteri(type, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-      for (int i = 0; i < count; i++) {
-          glTexImage2D(target + 1, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &data);
-      }
+        for (int i = 0; i < count; i++) {
+            glTexImage2D(target + 1, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &data);
+        }
 
-      return texture;
+        return texture;
     };
 
     depthBuffer.setFunctions(enableLambda, disableLambda);
@@ -531,8 +532,8 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
 void gl::GLState::setMaterial(const Material &material, bool frontFaceCW) {
 
     material.side == DoubleSide
-    ? disable(GL_CULL_FACE)
-    : enable(GL_CULL_FACE);
+            ? disable(GL_CULL_FACE)
+            : enable(GL_CULL_FACE);
 
     auto flipSided = (material.side == BackSide);
     if (frontFaceCW) flipSided = !flipSided;
@@ -540,8 +541,8 @@ void gl::GLState::setMaterial(const Material &material, bool frontFaceCW) {
     setFlipSided(flipSided);
 
     (material.blending == NormalBlending && !material.transparent)
-    ? setBlending(NoBlending)
-    : setBlending(material.blending, material.blendEquation, material.blendSrc, material.blendDst, material.blendEquationAlpha, material.blendSrcAlpha, material.blendDstAlpha, material.premultipliedAlpha);
+            ? setBlending(NoBlending)
+            : setBlending(material.blending, material.blendEquation, material.blendSrc, material.blendDst, material.blendEquationAlpha, material.blendSrcAlpha, material.blendDstAlpha, material.premultipliedAlpha);
 
     depthBuffer.setFunc(material.depthFunc);
     depthBuffer.setTest(material.depthTest);

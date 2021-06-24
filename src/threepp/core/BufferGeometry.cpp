@@ -236,3 +236,7 @@ void BufferGeometry::computeBoundingSphere() {
         }
     }
 }
+
+const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &BufferGeometry::getAttributes() const {
+    return attributes_;
+}
