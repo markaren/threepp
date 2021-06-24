@@ -79,7 +79,7 @@ namespace threepp::gl {
 
             if (updateBuffers) {
 
-                //                setupVertexAttributes(object, material, program, geometry); // TODO
+                setupVertexAttributes(object, material, program, geometry);// TODO
 
                 if (index) {
 
@@ -144,8 +144,6 @@ namespace threepp::gl {
             int attributesNum = 0;
 
             for (const auto &[key, value] : geometryAttributes) {
-
-                std::string k = key;
 
                 if (!cachedAttributes.count(key)) return true;
 
@@ -252,6 +250,9 @@ namespace threepp::gl {
 
                 glVertexAttribPointer(index, size, type, normalized, stride, reinterpret_cast<const void *>(offset));
             }
+        }
+
+        void setupVertexAttributes(Object3D *object, Material *material, GLProgram &program, BufferGeometry *geometry) {
         }
 
         void dispose() {
