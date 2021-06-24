@@ -19,14 +19,14 @@ namespace threepp {
 
             // intensity = power per solid angle.
             // ref: equation (15) from https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf
-            return this->intensity * 4.f * PI;
+            return this->intensity * 4.f * math::PI;
         }
 
         void setPower(float power) {
 
             // intensity = power per solid angle.
             // ref: equation (15) from https://seblagarde.files.wordpress.com/2015/07/course_notes_moving_frostbite_to_pbr_v32.pdf
-            this->intensity = power / (4 * PI);
+            this->intensity = power / (4.f * math::PI);
         }
 
         void dispose() {

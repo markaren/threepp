@@ -18,7 +18,7 @@ namespace threepp {
                 int heightSegments = 1,
                 bool openEnded = false,
                 float thetaStart = 0,
-                float thetaLength = PI * 2) {
+                float thetaLength = math::PI * 2) {
 
             return std::unique_ptr<CylinderGeometry>(new CylinderGeometry(radiusTop, radiusBottom, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
         }

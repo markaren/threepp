@@ -23,7 +23,7 @@ namespace threepp {
     public:
         unsigned int id = textureId++;
 
-        std::string uuid = generateUUID();
+        std::string uuid = math::generateUUID();
 
         std::optional<Image> image;
         std::vector<Image> mipmaps;
@@ -53,21 +53,13 @@ namespace threepp {
         bool generateMipmaps = true;
         bool premultiplyAlpha = false;
         bool flipY = true;
-        unsigned int unpackAligment = 4;// valid values: 1, 2, 4, 8 (see http://www.khronos.org/opengles/sdk/docs/man/xhtml/glPixelStorei.xml)
+        unsigned int unpackAlignment = 4;// valid values: 1, 2, 4, 8 (see http://www.khronos.org/opengles/sdk/docs/man/xhtml/glPixelStorei.xml)
 
         // Values of encoding !== THREE.LinearEncoding only supported on map, envMap and emissiveMap.
         //
         // Also changing the encoding after already used by a Material will not automatically make the Material
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding;
-
-        void updateMatrix();
-
-        void dispose();
-
-        void transformUv(Vector2 &uv) const;
-
-        void needsUpdate();
 
         explicit Texture(
                 std::optional<Image> image = std::nullopt,
@@ -80,12 +72,23 @@ namespace threepp {
                 int type = UnsignedByteType,
                 int anisotropy = 1,
                 int encoding = LinearEncoding)
-            : image(std::move(image)),
-              mapping(mapping),
-              wrapS(wrapS), wrapT(wrapT),
-              magFilter(magFilter), minFilter(minFilter),
-              format(format), type(type),
-              anisotropy(anisotropy), encoding(encoding) {}
+                : image(std::move(image)),
+                  mapping(mapping),
+                  wrapS(wrapS), wrapT(wrapT),
+                  magFilter(magFilter), minFilter(minFilter),
+                  format(format), type(type),
+                  anisotropy(anisotropy), encoding(encoding) {}
+
+
+        void updateMatrix();
+
+        void dispose();
+
+        void transformUv(Vector2 &uv) const;
+
+        void needsUpdate();
+
+        Texture &copy(const Texture &source);
 
     private:
         unsigned int version_ = 0;
@@ -96,8 +99,6 @@ namespace threepp {
 
         inline static int DEFAULT_MAPPING = UVMapping;
     };
-
-    //    typedef std::shared_ptr<Texture> TexturePtr;
 
 }// namespace threepp
 

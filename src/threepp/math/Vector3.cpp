@@ -411,7 +411,7 @@ float Vector3::angleTo(const Vector3 &v) const {
 
     const auto denominator = std::sqrt(lengthSq() * v.lengthSq());
 
-    if (denominator == 0) return PI / 2;
+    if (denominator == 0) return math::PI / 2;
 
     const auto theta = dot(v) / denominator;
 

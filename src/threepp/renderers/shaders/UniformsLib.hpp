@@ -3,7 +3,6 @@
 #ifndef THREEPP_UNIFORMSLIB_HPP
 #define THREEPP_UNIFORMSLIB_HPP
 
-
 #include "threepp/core/Uniform.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"

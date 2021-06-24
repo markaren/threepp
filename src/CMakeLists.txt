@@ -70,8 +70,6 @@ endforeach ()
 
 set(privateHeaders
 
-        "threepp/renderers/GLShader.hpp"
-
         "threepp/renderers/gl/GLAttributes.hpp"
         "threepp/renderers/gl/GLBackground.hpp"
         "threepp/renderers/gl/GLCapabilities.hpp"
@@ -89,6 +87,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLUniforms.hpp"
         "threepp/renderers/gl/GLUtils.hpp"
 
+        "threepp/renderers/shaders/Shader.hpp"
         "threepp/renderers/shaders/ShaderChunk.hpp"
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
@@ -139,6 +138,8 @@ set(sources
         "threepp/renderers/gl/GLLights.cpp"
         "threepp/renderers/gl/GLProgram.cpp"
         "threepp/renderers/gl/GLPrograms.cpp"
+        "threepp/renderers/gl/GLState.cpp"
+        "threepp/renderers/gl/GLTextures.cpp"
 
         "threepp/utils/StringUtils.cpp"
 

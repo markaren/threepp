@@ -92,7 +92,7 @@ namespace threepp {
 
         [[nodiscard]] float angle() const;
 
-        float distanceTo( const Vector2 &v );
+        float distanceTo( const Vector2 &v ) const;
 
         [[nodiscard]] float distanceToSquared( const Vector2 &v ) const;
 

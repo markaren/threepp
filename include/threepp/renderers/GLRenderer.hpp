@@ -27,7 +27,6 @@
 #include "threepp/renderers/gl/GLPrograms.hpp"
 
 #include <memory>
-
 #include <vector>
 
 namespace threepp {

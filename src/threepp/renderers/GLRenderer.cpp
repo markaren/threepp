@@ -1,8 +1,23 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include <glad/glad.h>
 
 using namespace threepp;
+
+namespace {
+
+    inline unsigned int createShader(int type, const char *str) {
+
+        const auto shader = glCreateShader(type);
+
+        glShaderSource(shader, 1, &str, nullptr);
+        glCompileShader(shader);
+
+        return shader;
+    }
+
+}
 
 GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
     : canvas_(canvas), _width(canvas.getWidth()), _height(canvas.getHeight()),

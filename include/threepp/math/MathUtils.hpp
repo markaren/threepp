@@ -6,19 +6,27 @@
 #include <random>
 #include <sstream>
 
-namespace threepp {
+namespace threepp::math {
 
-    const float PI = 2.0f * std::acos(0.0f);
+    const float LN2 = std::log(2.f);
+    const float PI = 2.0f * std::acos(0.f);
 
-    const float DEG2RAD = PI / 180.0f;
-    const float RAD2DEG = 180.0f / PI;
+    const float DEG2RAD = PI / 180.f;
+    const float RAD2DEG = 180.f / PI;
 
     //https://stackoverflow.com/questions/24365331/how-can-i-generate-uuid-in-c-without-using-boost-library/58467162
     std::string generateUUID();
 
-    float degToRad( float degrees);
+    float degToRad(float degrees);
 
-    float radToDeg( float radians);
+    float radToDeg(float radians);
+
+    bool isPowerOfTwo(int value);
+
+    float ceilPowerOfTwo( float value );
+
+    float floorPowerOfTwo( float value );
+
 
 }// namespace threepp
 

@@ -8,6 +8,8 @@
 #include <threepp/math/MathUtils.hpp>
 #include <threepp/math/Plane.hpp>
 
+#include <optional>
+
 namespace threepp {
 
     class Material : private EventDispatcher {
@@ -15,9 +17,7 @@ namespace threepp {
     public:
         const unsigned int id = materialId++;
 
-        std::string uuid = generateUUID();
-
-        std::string name;
+        std::string uuid = math::generateUUID();
 
         bool fog = true;
 

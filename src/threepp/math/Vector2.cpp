@@ -275,13 +275,13 @@ float Vector2::angle() const {
 
     // computes the angle in radians with respect to the positive x-axis
 
-    const auto angle = std::atan2( - this->y, - this->x ) + PI;
+    const auto angle = std::atan2( - this->y, - this->x ) + math::PI;
 
     return angle;
 
 }
 
-float Vector2::distanceTo(const Vector2 &v) {
+float Vector2::distanceTo(const Vector2 &v) const {
 
     return std::sqrt( this->distanceToSquared( v ) );
 

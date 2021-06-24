@@ -7,7 +7,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace threepp {
+namespace threepp::shaders {
 
     struct Shader {
 

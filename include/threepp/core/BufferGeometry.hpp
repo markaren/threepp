@@ -26,7 +26,7 @@ namespace threepp {
     public:
         const unsigned int id = _id++;
 
-        std::string uuid = generateUUID();
+        std::string uuid = math::generateUUID();
 
         std::vector<GeometryGroup> groups;
 

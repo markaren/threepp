@@ -19,7 +19,7 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
     widthSegments = std::max(3, (int) std::floor(widthSegments));
     heightSegments = std::max(2, (int) std::floor(heightSegments));
 
-    const auto thetaEnd = std::min(thetaStart + thetaLength, PI);
+    const auto thetaEnd = std::min(thetaStart + thetaLength, math::PI);
 
     int index = 0;
     std::vector<std::vector<int>> grid;
@@ -43,7 +43,7 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
 
             uOffset = (int) 0.5 / widthSegments;
 
-        } else if (iy == heightSegments && thetaEnd == PI) {
+        } else if (iy == heightSegments && thetaEnd == math::PI) {
 
             uOffset = (int) -0.5 / widthSegments;
         }
@@ -86,7 +86,7 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
             const auto d = grid[iy + 1][ix + 1];
 
             if (iy != 0 || thetaStart > 0) indices.insert(indices.end(), {a, b, d});
-            if (iy != heightSegments - 1 || thetaEnd < PI) indices.insert(indices.end(), {b, c, d});
+            if (iy != heightSegments - 1 || thetaEnd < math::PI) indices.insert(indices.end(), {b, c, d});
         }
     }
 

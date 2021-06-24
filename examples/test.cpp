@@ -50,9 +50,6 @@
 
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 
-
-#include "threepp/renderers/GLShader.hpp"
-
 #include "threepp/lights/LightShadow.hpp"
 
 #include "threepp/utils/InstanceOf.hpp"

@@ -44,7 +44,7 @@ namespace threepp {
             /** see {@link http://www.bobatkins.com/photography/technical/field_of_view->html} */
             const auto vExtentSlope = 0.5f * this->getFilmHeight() / focalLength;
 
-            this->fov = (int) (RAD2DEG * 2 * std::atan(vExtentSlope));
+            this->fov = (int) (math::RAD2DEG * 2 * std::atan(vExtentSlope));
             this->updateProjectionMatrix();
         }
 
@@ -53,14 +53,14 @@ namespace threepp {
          */
         [[nodiscard]] float getFocalLength() const {
 
-            const auto vExtentSlope = std::tan(DEG2RAD * 0.5f * (float) this->fov);
+            const auto vExtentSlope = std::tan(math::DEG2RAD * 0.5f * (float) this->fov);
 
             return 0.5f * this->getFilmHeight() / vExtentSlope;
         }
 
         [[nodiscard]] float getEffectiveFOV() const {
 
-            return RAD2DEG * 2 * std::atan(std::tan(DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
+            return math::RAD2DEG * 2.f * std::atan(std::tan(math::DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
         }
 
         [[nodiscard]] float getFilmWidth() const {
@@ -149,7 +149,7 @@ namespace threepp {
 
         void updateProjectionMatrix() {
 
-            int top = (int) (near * std::tan(DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
+            int top = (int) (near * std::tan(math::DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
             int height = (int) 2 * top;
             int width = this->aspect * height;
             int left = (int) -0.5 * width;

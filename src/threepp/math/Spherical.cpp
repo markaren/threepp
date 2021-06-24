@@ -32,7 +32,7 @@ Spherical &Spherical::copy(const Spherical &other) {
 Spherical &Spherical::makeSafe() {
 
     const auto EPS = 0.000001f;
-    this->phi = std::max(EPS, std::min(PI - EPS, this->phi));
+    this->phi = std::max(EPS, std::min(math::PI - EPS, this->phi));
 
     return *this;
 }

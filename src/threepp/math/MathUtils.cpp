@@ -1,16 +1,16 @@
 
 #include "threepp/math/MathUtils.hpp"
 
-using namespace threepp;
+using namespace threepp::math;
 
 namespace {
     static std::random_device rd;
     static std::mt19937 gen(rd());
     static std::uniform_int_distribution<> dis(0, 15);
     static std::uniform_int_distribution<> dis2(8, 11);
-}
+}// namespace
 
-std::string threepp::generateUUID() {
+std::string threepp::math::generateUUID() {
 
     std::stringstream ss;
     int i;
@@ -38,12 +38,27 @@ std::string threepp::generateUUID() {
     return ss.str();
 }
 
-float threepp::degToRad(const float degrees) {
+float threepp::math::degToRad(const float degrees) {
 
     return degrees * DEG2RAD;
 }
 
-float threepp::radToDeg(const float radians) {
+float threepp::math::radToDeg(const float radians) {
 
     return radians * RAD2DEG;
+}
+
+bool threepp::math::isPowerOfTwo(int value) {
+
+    return (value & (value - 1)) == 0 && value != 0;
+}
+
+float threepp::math::floorPowerOfTwo(float value) {
+
+    return std::pow(2.f, floor(std::log(value) / LN2));
+}
+
+float threepp::math::ceilPowerOfTwo(float value) {
+
+    return std::pow(2.f, std::ceil(std::log(value) / LN2));
 }
