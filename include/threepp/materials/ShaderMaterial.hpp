@@ -15,6 +15,10 @@ namespace threepp {
         std::string vertexShader;
         std::string fragmentShader;
 
+        bool fog = false; // set to use scene fog
+        bool lights = false; // set to use scene lights
+        bool clipping = false; // set to use user-defined clipping planes
+
         bool getWireframe() const override {
             return wireframe_;
         }
