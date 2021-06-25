@@ -11,6 +11,12 @@ namespace threepp {
     class DirectionalLight : Light {
 
     public:
+
+        Vector3 position;
+        std::optional<Object3D> target;
+
+        LightShadow shadow;
+
         DirectionalLight(const DirectionalLight &) = delete;
 
         template<class T>
@@ -18,28 +24,19 @@ namespace threepp {
             return std::shared_ptr<DirectionalLight>(new DirectionalLight(color, intensity));
         }
 
-        std::optional<Object3D> target() override {
-            return target_;
-        }
-
         void dispose() override {
 
-            this->shadow_.dispose();
+            this->shadow.dispose();
         }
         
     protected:
         template<class T>
         DirectionalLight(T color, std::optional<float> intensity) : Light(color, intensity) {
 
-            this->position_.copy(Object3D::defaultUp);
+            this->position.copy(Object3D::defaultUp);
             this->updateMatrix();
         }
 
-    private:
-        Vector3 position_;
-        Object3D target_;
-
-        LightShadow shadow_;
     };
 
 }// namespace threepp

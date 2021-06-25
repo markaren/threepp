@@ -50,8 +50,6 @@ namespace threepp::gl {
                 //
                 //                }
 
-                //
-
                 scope_.info_.memory.geometries--;
             }
 
@@ -90,14 +88,12 @@ namespace threepp::gl {
             }
         }
 
-        void updateWireframeAttribute(BufferGeometry *geometry) {
-        }
 
         IntBufferAttribute *getWireframeAttribute(BufferGeometry *geometry) {
 
             if (wireframeAttributes_.count(geometry->id)) {
 
-                const auto& currentAttribute = wireframeAttributes_.at(geometry->id);
+                const auto &currentAttribute = wireframeAttributes_.at(geometry->id);
 
                 if (geometry->hasIndex()) {
 
@@ -128,6 +124,10 @@ namespace threepp::gl {
 
         std::unordered_map<unsigned int, bool> geometries_;
         std::unordered_map<unsigned int, IntBufferAttribute *> wireframeAttributes_;
+
+
+        void updateWireframeAttribute(BufferGeometry *geometry) {
+        }
     };
 
 }// namespace threepp::gl

@@ -25,15 +25,17 @@ namespace threepp {
         // get the irradiance (radiance convolved with cosine lobe) in the direction of the normal
         // target is a Vector3
         // https://graphics.stanford.edu/papers/envmap/envmap.pdf
-        void getIrradianceAt( const Vector3 &normal, Vector3 &target );
+        void getIrradianceAt(const Vector3 &normal, Vector3 &target);
 
-        SphericalHarmonis3 &add( const SphericalHarmonis3 &sh );
+        SphericalHarmonis3 &add(const SphericalHarmonis3 &sh);
 
-        SphericalHarmonis3 &addScaledSH( const SphericalHarmonis3 &sh, float s );
+        SphericalHarmonis3 &addScaledSH(const SphericalHarmonis3 &sh, float s);
 
-        SphericalHarmonis3 &scale( float s );
+        SphericalHarmonis3 &scale(float s);
 
-        SphericalHarmonis3 &lerp( const SphericalHarmonis3 &sh, float alpha );
+        SphericalHarmonis3 &lerp(const SphericalHarmonis3 &sh, float alpha);
+
+        const std::vector<Vector3> &getCoefficients() const;
 
     private:
         std::vector<Vector3> coefficients_;

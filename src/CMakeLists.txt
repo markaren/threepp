@@ -11,6 +11,11 @@ set(publicHeaders
         "threepp/core/Clock.hpp"
         "threepp/core/Object3D.hpp"
 
+        "threepp/cameras/Camera.hpp"
+        "threepp/cameras/PerspectiveCamera.hpp"
+        "threepp/cameras/OrthographicCamera.hpp"
+        "threepp/cameras/View.hpp"
+
         "threepp/geometries/geometries.hpp"
         "threepp/geometries/BoxGeometry.hpp"
         "threepp/geometries/ConeGeometry.hpp"
@@ -60,11 +65,13 @@ set(publicHeaders
         "threepp/lights/LightProbe.hpp"
         "threepp/lights/AmbientLight.hpp"
         "threepp/lights/DirectionalLight.hpp"
+        "threepp/lights/DirectionalLightShadow.hpp"
         "threepp/lights/LightShadow.hpp"
         "threepp/lights/PointLight.hpp"
+        "threepp/lights/SpotLight.hpp"
 
         "threepp/renderers/GLRenderer.hpp"
-        "../include/threepp/renderers/GLRenderTarget.hpp"
+        "threepp/renderers/GLRenderTarget.hpp"
 
         )
 
@@ -91,6 +98,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLProgram.hpp"
         "threepp/renderers/gl/GLPrograms.hpp"
         "threepp/renderers/gl/GLRenderLists.hpp"
+        "threepp/renderers/gl/GLRenderStates.hpp"
         "threepp/renderers/gl/GLState.hpp"
         "threepp/renderers/gl/GLTextures.hpp"
         "threepp/renderers/gl/GLUniforms.hpp"
