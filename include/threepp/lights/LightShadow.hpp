@@ -11,6 +11,8 @@
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
 
+#include "threepp/textures/Texture.hpp"
+
 namespace threepp {
 
     class LightShadow {
@@ -22,6 +24,7 @@ namespace threepp {
 
         Vector2 mapSize = Vector2(512, 512);
 
+        std::optional<Texture> map;
         Matrix4 matrix;
 
         bool autoUpdate = true;
@@ -74,16 +77,14 @@ namespace threepp {
 
         void dispose() {
 
-            //            if ( this.map ) {
-            //
-            //                this.map.dispose();
-            //
-            //            }
-            //
-            //            if ( this.mapPass ) {
+            if (this->map) {
+
+                this->map->dispose();
+            }
+
+            //            if (this.mapPass) {
             //
             //                this.mapPass.dispose();
-            //
             //            }
         }
 
