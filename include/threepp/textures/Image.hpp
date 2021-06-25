@@ -10,26 +10,34 @@ namespace threepp {
 
     public:
 
-        Image(unsigned int width, unsigned int height, std::string data = std::string())
-            : width_(width), height_(height), data_(std::move(data)){};
+        Image(unsigned int width, unsigned int height, const unsigned char *data = nullptr)
+            : width_(width), height_(height), data_(data){};
 
         [[nodiscard]] unsigned int width() const {
+
             return width_;
         }
 
         [[nodiscard]] unsigned int height() const {
+
             return height_;
         }
 
-        [[nodiscard]] const std::string &getData() const {
+        [[nodiscard]] const unsigned char *getData() const {
+
             return data_;
+        }
+
+        ~Image() {
+
+            delete data_;
         }
 
     private:
         unsigned int width_;
         unsigned int height_;
 
-        std::string data_;
+        const unsigned char* data_;
 
     };
 

@@ -18,6 +18,8 @@ set(publicHeaders
         "threepp/geometries/PlaneGeometry.hpp"
         "threepp/geometries/SphereGeometry.hpp"
 
+        "threepp/loaders/ImageLoader.hpp"
+
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"
         "threepp/materials/PointsMaterial.hpp"
@@ -48,6 +50,7 @@ set(publicHeaders
         "threepp/objects/Mesh.hpp"
         "threepp/objects/Points.hpp"
 
+        "threepp/textures/DataTexture.hpp"
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
@@ -113,6 +116,8 @@ set(sources
         "threepp/geometries/PlaneGeometry.cpp"
         "threepp/geometries/SphereGeometry.cpp"
 
+        "threepp/loaders/ImageLoader.cpp"
+
         "threepp/math/Box2.cpp"
         "threepp/math/Box3.cpp"
         "threepp/math/Color.cpp"
@@ -151,7 +156,12 @@ set(sources
         )
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
-target_link_libraries(threepp PUBLIC CONAN_PKG::glfw CONAN_PKG::glad)
+target_link_libraries(threepp
+        PUBLIC
+        CONAN_PKG::glfw
+        CONAN_PKG::glad
+        PRIVATE
+        CONAN_PKG::cimg)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"
