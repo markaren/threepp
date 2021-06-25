@@ -63,6 +63,7 @@ set(publicHeaders
         "threepp/lights/PointLight.hpp"
 
         "threepp/renderers/GLRenderer.hpp"
+        "../include/threepp/renderers/GLRenderTarget.hpp"
 
         )
 

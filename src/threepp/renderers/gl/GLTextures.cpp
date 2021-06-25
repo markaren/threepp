@@ -11,7 +11,7 @@ namespace {
 
     bool isPowerOfTwo(const Image &image) {
 
-        return math::isPowerOfTwo(image.width()) && math::isPowerOfTwo(image.height());
+        return math::isPowerOfTwo(image.width) && math::isPowerOfTwo(image.height);
     }
 
     bool textureNeedsGenerateMipmaps(const Texture &texture, bool supportsMips) {
@@ -19,15 +19,6 @@ namespace {
         return texture.generateMipmaps && supportsMips &&
                texture.minFilter != NearestFilter && texture.minFilter != LinearFilter;
     }
-
-    //    void generateMipmap(int target, int texture, int width, int height) {
-    //
-    //        glGenerateMipmap(target);
-    //
-    //        const textureProperties = properties.get(texture);
-    //
-    //        textureProperties.__maxMipLevel = std::log2(std::max(width, height));
-    //    }
 
     GLuint getInternalFormat(GLuint glFormat, GLuint glType) {
 
@@ -59,8 +50,21 @@ namespace {
 
 }// namespace
 
+gl::GLTextures::GLTextures(gl::GLState &state, gl::GLProperties &properties, gl::GLInfo &info)
+    : state(state), properties(properties), info(info), onTextureDispose_(*this) {
+}
 
-void gl::GLTextures::uploadTexture(GLTextureProperties::Properties &textureProperties, Texture &texture, GLint slot) {
+
+void gl::GLTextures::generateMipmap(GLuint target, const Texture &texture, GLuint width, GLuint height) {
+
+    glGenerateMipmap(target);
+
+    auto &textureProperties = properties.textureProperties.get(texture.uuid);
+
+    textureProperties.maxMipLevel = (int) std::log2(std::max(width, height));
+}
+
+void gl::GLTextures::uploadTexture(GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot) {
 
     if (!texture.image) return;
 
@@ -127,31 +131,17 @@ void gl::GLTextures::initTexture(gl::GLTextureProperties::Properties &texturePro
 
         textureProperties.glInit = true;
 
-        texture.addEventListener("dispose", &onTextureDispose);
+        texture.addEventListener("dispose", &onTextureDispose_);
 
         glGenTextures(1, &textureProperties.glTexture);
 
         info.memory.textures++;
     }
 }
-gl::GLTextures::GLTextures(gl::GLState &state, gl::GLProperties &properties, gl::GLInfo &info)
-    : state(state), properties(properties), info(info) {
-
-    //    onTextureDispose = [&](Event &event) {
-    //      auto texture = static_cast<Texture*>(event.target);
-    //
-    //      texture->removeEventListener( "dispose", onTextureDispose );
-    //
-    //      deallocateTexture( texture );
-    //
-    //      info.memory.textures --;
-    //    };
-}
-
 
 void gl::GLTextures::deallocateTexture(Texture &texture) {
 
-    auto textureProperties = properties.textureProperties.get(texture.uuid);
+    auto &textureProperties = properties.textureProperties.get(texture.uuid);
 
     if (!textureProperties.glInit) return;
 
@@ -166,6 +156,7 @@ void gl::GLTextures::resetTextureUnits() {
 }
 
 int gl::GLTextures::allocateTextureUnit() {
+
     int textureUnit = textureUnits;
 
     if (textureUnit >= maxTextures) {
@@ -178,3 +169,82 @@ int gl::GLTextures::allocateTextureUnit() {
     return textureUnit;
 }
 
+void gl::GLTextures::setTexture2D(Texture &texture, GLuint slot) {
+
+    auto &textureProperties = properties.textureProperties.get(texture.uuid);
+
+    if (texture.version() > 0 && textureProperties.version != texture.version()) {
+
+        const auto &image = texture.image;
+
+        if (image) {
+
+            std::cerr << "THREE.WebGLRenderer: Texture marked for update but image is undefined" << std::endl;
+
+        } else {
+
+            uploadTexture(textureProperties, texture, slot);
+            return;
+        }
+    }
+
+    state.activeTexture(GL_TEXTURE0 + slot);
+    state.bindTexture(GL_TEXTURE_2D, textureProperties.glTexture);
+}
+
+void gl::GLTextures::setTexture2DArray(Texture &texture, GLuint slot) {
+
+    auto &textureProperties = properties.textureProperties.get(texture.uuid);
+
+    if (texture.version() > 0 && textureProperties.version != texture.version()) {
+
+        uploadTexture(textureProperties, texture, slot);
+        return;
+    }
+
+    state.activeTexture(GL_TEXTURE0 + slot);
+    state.bindTexture(GL_TEXTURE_2D_ARRAY, textureProperties.glTexture);
+}
+
+void gl::GLTextures::setTexture3D(Texture &texture, GLuint slot) {
+
+    auto textureProperties = properties.textureProperties.get(texture.uuid);
+
+    if (texture.version() > 0 && textureProperties.version != texture.version()) {
+
+        uploadTexture(textureProperties, texture, slot);
+        return;
+    }
+
+    state.activeTexture(GL_TEXTURE0 + slot);
+    state.bindTexture(GL_TEXTURE_3D, textureProperties.glTexture);
+}
+
+void gl::GLTextures::setTextureCube(Texture &texture, GLuint slot) {
+
+    auto &textureProperties = properties.textureProperties.get(texture.uuid);
+
+    if (texture.version() > 0 && textureProperties.version != texture.version()) {
+
+        uploadCubeTexture(textureProperties, texture, slot);
+        return;
+    }
+
+    state.activeTexture(GL_TEXTURE0 + slot);
+    state.bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties.glTexture);
+}
+
+void gl::GLTextures::uploadCubeTexture(gl::GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot) {
+    // TODO
+}
+
+void gl::GLTextures::TextureEventListener::onEvent(Event &event) {
+
+    auto texture = static_cast<Texture *>(event.target);
+
+    texture->removeEventListener("dispose", this);
+
+    scope_.deallocateTexture(*texture);
+
+    scope_.info.memory.textures--;
+}

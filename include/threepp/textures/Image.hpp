@@ -10,18 +10,15 @@ namespace threepp {
 
     public:
 
+        unsigned int width;
+        unsigned int height;
+        unsigned int depth = 0;
+
         Image(unsigned int width, unsigned int height, const unsigned char *data = nullptr)
-            : width_(width), height_(height), data_(data){};
+            : width(width), height(height), data_(data){};
 
-        [[nodiscard]] unsigned int width() const {
-
-            return width_;
-        }
-
-        [[nodiscard]] unsigned int height() const {
-
-            return height_;
-        }
+        Image(unsigned int width, unsigned int height, unsigned int depth)
+                : width(width), height(height), depth(depth), data_(nullptr){};
 
         [[nodiscard]] const unsigned char *getData() const {
 
@@ -34,9 +31,6 @@ namespace threepp {
         }
 
     private:
-        unsigned int width_;
-        unsigned int height_;
-
         const unsigned char* data_;
 
     };

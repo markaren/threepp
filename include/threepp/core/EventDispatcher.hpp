@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "threepp/math/MathUtils.hpp"
+
 namespace threepp {
 
     struct Event {
@@ -16,7 +18,15 @@ namespace threepp {
         void* target;
     };
 
-    using EventListener = std::function<void(Event)>;
+    struct EventListener {
+
+        const std::string uuid = math::generateUUID();
+
+        virtual void onEvent(Event &event) = 0;
+
+        virtual ~EventListener() = default;
+
+    };
     using EventListenerPtr = EventListener *;
 
     class EventDispatcher {
@@ -51,7 +61,7 @@ namespace threepp {
                 Event e{type, target};
                 auto listeners = listeners_[type];
                 for (auto &l : listeners) {
-                    l->operator()(e);
+                    l->onEvent(e);
                 }
             }
         }

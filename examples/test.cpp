@@ -68,6 +68,13 @@ namespace {
         std::cout << "o" << std::endl;
     }
 
+    struct MyEventListener: EventListener {
+
+        void onEvent(Event &e) override {
+            std::cout << "Event type:" << e.type << std::endl;
+        }
+    };
+
 }// namespace
 
 int main() {
@@ -115,16 +122,14 @@ int main() {
 
     EventDispatcher evt;
 
-    EventListener l = [](auto e) {
-        std::cout << "Event type:" << e.type << std::endl;
-    };
+    MyEventListener l;
 
-    EventListener l1 = [](auto e) {
-        std::cout << "Event type:" << e.type << std::endl;
-    };
+//    EventListener l1 = [](auto e) {
+//        std::cout << "Event type:" << e.type << std::endl;
+//    };
 
     evt.addEventListener("per", &l);
-    evt.addEventListener("truls", &l1);
+//    evt.addEventListener("truls", &l1);
 
     evt.dispatchEvent("per");
     evt.dispatchEvent("per");

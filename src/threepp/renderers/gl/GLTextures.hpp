@@ -29,24 +29,50 @@ namespace threepp::gl {
                 GLProperties &properties,
                 GLInfo &info);
 
+        void generateMipmap(GLuint target, const Texture &texture, GLuint width, GLuint height);
+
         void initTexture(GLTextureProperties::Properties &textureProperties, Texture &texture);
 
-        void uploadTexture(GLTextureProperties::Properties &textureProperties, Texture &texture, GLint slot);
+        void uploadTexture(GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot);
 
-        void deallocateTexture( Texture &texture );
+        void uploadCubeTexture( GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot );
+
+        void deallocateTexture(Texture &texture);
 
         void resetTextureUnits();
 
         int allocateTextureUnit();
 
+        void setTexture2D(Texture &texture, GLuint slot);
+
+        void setTexture2DArray(Texture &texture, GLuint slot);
+
+        void setTexture3D( Texture &texture, GLuint slot );
+
+        void setTextureCube( Texture &texture, GLuint slot );
+
+
     private:
+
+        struct TextureEventListener: EventListener {
+
+            explicit TextureEventListener( GLTextures &scope): scope_(scope) {}
+
+            void onEvent(Event &event) override;
+
+        private:
+            GLTextures &scope_;
+
+        };
+
         GLState &state;
         GLProperties &properties;
         GLInfo &info;
 
-        EventListener onTextureDispose;
+        TextureEventListener onTextureDispose_;
 
         int textureUnits = 0;
+
     };
 
 }// namespace threepp::gl
