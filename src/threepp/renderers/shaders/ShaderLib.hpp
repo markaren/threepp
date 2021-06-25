@@ -11,25 +11,22 @@
 
 namespace threepp::shaders {
 
-    using UniformsLib = UniformsLib::getInstance;
-    using ShaderChunk = ShaderChunk::getInstance;
-
     class ShaderLib {
-
 
     public:
         Shader basic{
                 mergeUniforms({// clang-format off
-                            UniformsLib()->common,
-                            UniformsLib()->specularmap,
-                            UniformsLib().envmap,
-                            UniformsLib().aomap,
-                            UniformsLib().lightmap,
-                            UniformsLib()->fog
+                            UniformsLib::instance().common,
+                            UniformsLib::instance().specularmap,
+                            UniformsLib::instance().envmap,
+                            UniformsLib::instance().aomap,
+                            UniformsLib::instance().lightmap,
+                            UniformsLib::instance().fog
                         }),// clang-format on
 
-                ShaderChunk().get("meshbasic_vert"),
-                ShaderChunk().get("meshbasic_frag")};
+                ShaderChunk::instance().meshbasic_vert(),
+                ShaderChunk::instance().meshbasic_frag(),
+        };
 
         Shader lambert;
 

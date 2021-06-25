@@ -41,12 +41,12 @@
 
 #include "threepp/Canvas.hpp"
 
+#include "threepp/renderers/gl/GLBindingStates.hpp"
+#include "threepp/renderers/gl/GLBufferRenderer.hpp"
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLClipping.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
-#include "threepp/renderers/gl/GLBufferRenderer.hpp"
-#include "threepp/renderers/gl/GLBindingStates.hpp"
 
 #include "threepp/core/Uniform.hpp"
 
@@ -55,6 +55,9 @@
 #include "threepp/lights/LightShadow.hpp"
 
 #include "threepp/utils/InstanceOf.hpp"
+
+#include "threepp/renderers/shaders/ShaderChunk.hpp"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 
 using namespace threepp;
 
@@ -68,7 +71,7 @@ namespace {
         std::cout << "o" << std::endl;
     }
 
-    struct MyEventListener: EventListener {
+    struct MyEventListener : EventListener {
 
         void onEvent(Event &e) override {
             std::cout << "Event type:" << e.type << std::endl;
@@ -124,7 +127,7 @@ int main() {
 
     MyEventListener l;
 
-    LambdaEventListener l1 ([](Event& e) {
+    LambdaEventListener l1([](Event &e) {
         std::cout << "Event type:" << e.type << std::endl;
     });
 
@@ -195,7 +198,7 @@ int main() {
 
     Material *baseMaterial = material.get();
 
-    std::cout << "RefractionRatio" << dynamic_cast<MaterialWithReflectivity*>(baseMaterial)->getRefractionRatio() << std::endl;
+    std::cout << "RefractionRatio" << dynamic_cast<MaterialWithReflectivity *>(baseMaterial)->getRefractionRatio() << std::endl;
 
     o->add(mesh);
 
@@ -209,7 +212,7 @@ int main() {
     std::vector<float> vf(3);
     auto fba = FloatBufferAttribute::create(vf, 3);
 
-    std::cout << "instanceof: " << instanceof<FloatBufferAttribute>(fba.get()) << std::endl;
+    std::cout << "instanceof: " << instanceof <FloatBufferAttribute>(fba.get()) << std::endl;
 
     std::vector<Uniform> uv;
     uv.emplace_back(Matrix4());
@@ -222,10 +225,10 @@ int main() {
 
     std::cout << "v1==v2: " << ((v1 == v2) ? "true" : "false") << std::endl;
 
-//    Canvas canvas(Canvas::Parameters().title(""));
-//    canvas.animate([](float dt) {
-//        std::cout << gl::GLCapabilities::instance() << std::endl;
-//    });
+    //    Canvas canvas(Canvas::Parameters().title(""));
+    //    canvas.animate([](float dt) {
+    //        std::cout << gl::GLCapabilities::instance() << std::endl;
+    //    });
 
     o->clear();
 
@@ -235,9 +238,12 @@ int main() {
     u.value<float>() = 0.5f;
     std::cout << "Color r=" << u.value<float>() << std::endl;
 
-    auto vPtr = std::make_shared<Vector3>(1.f,1.f,1.f);
+    auto vPtr = std::make_shared<Vector3>(1.f, 1.f, 1.f);
     Uniform u1(vPtr);
     std::cout << u1.value<std::shared_ptr<Vector3>>()->x << std::endl;
+
+    std::cout << shaders::ShaderChunk::instance().alphamap_fragment() << std::endl;
+
 
     return 0;
 }

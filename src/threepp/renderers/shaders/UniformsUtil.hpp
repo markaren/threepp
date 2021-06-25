@@ -13,7 +13,7 @@ namespace threepp::shaders {
 
     std::unordered_map<std::string, Uniform> mergeUniforms(const std::vector<std::unordered_map<std::string, Uniform>> &uniforms) {
 
-        std::unordered_map merged;
+        std::unordered_map<std::string, Uniform> merged;
 
         for (const auto& u : uniforms) {
 
