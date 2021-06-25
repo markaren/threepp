@@ -1,11 +1,13 @@
 
 #include "threepp/renderers/gl/GLPrograms.hpp"
 
+#include "threepp/utils/InstanceOf.hpp"
+
 using namespace threepp::gl;
 
 namespace {
 
-    const std::unordered_map<std::string, std::string> shaderIds{
+    std::unordered_map<std::string, std::string> shaderIds{
             {"MeshDepthMaterial", "depth"},
             {"MeshDistanceMaterial", "distanceRGBA"},
             {"MeshNormalMaterial", "normal"},
@@ -39,59 +41,39 @@ namespace {
     // clang-format on
 }// namespace
 
-struct GLPrograms::Parameters {
 
-    std::string shaderId;
-    std::string shaderName;
+GLPrograms::Parameters::Parameters(const GLPrograms &scope, threepp::Material *material, std::vector<Object3D *> &shadows, std::optional<Fog> fog, int nClipPlanes, int nClipIntersection, threepp::Object3D *object) {
 
-    std::string vertexShader;
-    std::string fragmentShader;
+    shaderId = shaderIds[material->type()];
+    shaderName = material->type();
 
-    bool isRawShaderMaterial;
 
-    bool supportsVertexTextures;
-    int outputEncoding;
+    isRawShaderMaterial = false; //TODO
 
-    int numDirLights;
-    int numPointLights;
-    int numSpotLights;
-    int numRectAreaLights;
-    int numHemiLights;
+    supportsVertexTextures = scope.vertexTextures;
 
-    int numDirLightShadows;
-    int numPointLightShadows;
-    int numSpotLightShadows;
 
-    int numClippingPlanes;
-    int numClipIntersection;
+}
 
-    bool dithering;
+GLPrograms::GLPrograms()
+        : logarithmicDepthBuffer(GLCapabilities::instance().logarithmicDepthBuffer),
+          floatVertexTextures(GLCapabilities::instance().floatVertexTextures),
+          maxVertexUniforms(GLCapabilities::instance().maxVertexUniforms),
+          vertexTextures(GLCapabilities::instance().vertexTextures) {}
 
-    bool shadowMapEnabled;
-    int shadowMapType;
 
-    int toneMapping;
-    bool physicallyCorrectLights;
+int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
 
-    bool premultipliedAlpha;
+    int encoding;
 
-    bool alphaTest;
-    bool doubleSided;
-    bool flipSided;
+    if (map) {
 
-    bool depthPacking;
+        encoding = map->encoding;
 
-    std::string index0AttributeName;
+    } else {
 
-    std::string customProgramCacheKey;
-
-    Parameters(
-            std::shared_ptr<Material> material,
-            std::vector<std::shared_ptr<Object3D>> shadows,
-            std::optional<Fog> fog,
-            int nClipPlanes,
-            int nClipIntersection,
-            std::shared_ptr<Object3D> object) {
-
+        encoding = LinearEncoding;
     }
-};
+
+    return encoding;
+}

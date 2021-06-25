@@ -23,6 +23,8 @@ set(publicHeaders
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"
         "threepp/materials/PointsMaterial.hpp"
+        "threepp/materials/ShaderMaterial.hpp"
+        "threepp/materials/RawShaderMaterial.hpp"
         "threepp/materials/interfaces.hpp"
 
         "threepp/math/Box2.hpp"

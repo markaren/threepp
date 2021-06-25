@@ -82,6 +82,8 @@ namespace threepp {
             this->version++;
         }
 
+        [[nodiscard]] virtual std::string type() const = 0;
+
         virtual ~Material() = default;
 
     protected:

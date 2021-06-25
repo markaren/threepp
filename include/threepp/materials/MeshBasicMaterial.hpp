@@ -74,6 +74,10 @@ namespace threepp {
             return map;
         }
 
+        [[nodiscard]] std::string type() const override {
+            return "MeshBasicMaterial";
+        }
+
         static std::shared_ptr<MeshBasicMaterial> create() {
             return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
         }

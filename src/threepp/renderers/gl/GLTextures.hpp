@@ -10,6 +10,8 @@
 #include "threepp/renderers/gl/GLProperties.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
+#include "threepp/renderers/GLRenderTarget.hpp"
+
 #include <glad/glad.h>
 
 #include <memory>
@@ -31,11 +33,13 @@ namespace threepp::gl {
 
         void generateMipmap(GLuint target, const Texture &texture, GLuint width, GLuint height);
 
-        void initTexture(GLTextureProperties::Properties &textureProperties, Texture &texture);
+        void setTextureParameters( GLuint textureType, Texture &texture, bool supportsMips );
 
-        void uploadTexture(GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot);
+        void initTexture(TextureProperties &textureProperties, Texture &texture);
 
-        void uploadCubeTexture( GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot );
+        void uploadTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot);
+
+        void uploadCubeTexture( TextureProperties &textureProperties, Texture &texture, GLuint slot );
 
         void deallocateTexture(Texture &texture);
 
@@ -50,6 +54,9 @@ namespace threepp::gl {
         void setTexture3D( Texture &texture, GLuint slot );
 
         void setTextureCube( Texture &texture, GLuint slot );
+
+        // Setup storage for target texture and bind it to correct framebuffer
+        void setupFrameBufferTexture( GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget );
 
 
     private:

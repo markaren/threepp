@@ -35,8 +35,8 @@ namespace threepp {
     public:
         GLRenderTarget(unsigned int width, unsigned int height, const Options &options)
             : width_(width), height_(height),
-              scissor_(0, 0, (float) width, (float) height),
-              viewPort_(0, 0, (float) width, (float) height),
+              scissor_(0.f, 0.f, (float) width, (float) height),
+              viewport_(0.f, 0.f, (float) width, (float) height),
               depthBuffer_(options.depthBuffer), stencilBuffer_(options.stencilBuffer), depthTexture_(options.depthTexture),
               texture_(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding) {
         }
@@ -50,15 +50,15 @@ namespace threepp {
         
         void setSize( unsigned int width,  unsigned int height,  unsigned int depth = 1 ) {
 
-            if ( this->width != width || this->height != height || this->depth != depth ) {
+            if ( this->width_ != width || this->height_ != height || this->depth_ != depth ) {
 
-                this->width = width;
-                this->height = height;
-                this->depth = depth;
+                this->width_ = width;
+                this->height_ = height;
+                this->depth_ = depth;
 
-                this->texture.image.width = width;
-                this->texture.image.height = height;
-                this->texture.image.depth = depth;
+                this->texture_.image->width = width;
+                this->texture_.image->height = height;
+                this->texture_.image->depth = depth;
 
                 this->dispose();
 
@@ -71,20 +71,20 @@ namespace threepp {
 
         GLRenderTarget &copy( const GLRenderTarget &source ) {
 
-                this->width = source.width;
-                this->height = source.height;
-                this->depth = source.depth;
+                this->width_ = source.width_;
+                this->height_ = source.height_;
+                this->depth_ = source.depth_;
 
-                this->viewport_.copy( source.viewport );
+                this->viewport_.copy( source.viewport_ );
 
-                this->texture_ = source.texture;
+                this->texture_ = source.texture_;
 //                this->texture_.image = { ...this->texture.image }; // See #20328.
 
-                this->depthBuffer_ = source.depthBuffer;
-                this->stencilBuffer_ = source.stencilBuffer;
-                this->depthTexture_ = source.depthTexture;
+                this->depthBuffer_ = source.depthBuffer_;
+                this->stencilBuffer_ = source.stencilBuffer_;
+                this->depthTexture_ = source.depthTexture_;
 
-                return this;
+                return *this;
 
         }
         
@@ -94,14 +94,14 @@ namespace threepp {
         }
 
     private:
-        const unsigned int width_;
-        const unsigned int height_;
-        const unsigned int depth_ = 1;
+        unsigned int width_;
+        unsigned int height_;
+        unsigned int depth_ = 1;
 
         Vector4 scissor_;
         bool scissorTest_ = false;
 
-        Vector4 viewPort_;
+        Vector4 viewport_;
 
         Texture texture_;
 

@@ -9,6 +9,20 @@ using namespace threepp;
 
 namespace {
 
+    std::unordered_map<int, GLuint> wrappingToGL{
+            {RepeatWrapping, GL_REPEAT},
+            {ClampToEdgeWrapping, GL_CLAMP_TO_EDGE},
+            {MirroredRepeatWrapping, GL_MIRRORED_REPEAT}};
+
+    std::unordered_map<int, GLuint> filterToGL{
+            {NearestFilter, GL_NEAREST},
+            {NearestMipmapNearestFilter, GL_NEAREST_MIPMAP_NEAREST},
+            {NearestMipmapLinearFilter, GL_NEAREST_MIPMAP_LINEAR},
+
+            {LinearFilter, GL_LINEAR},
+            {LinearMipmapNearestFilter, GL_LINEAR_MIPMAP_NEAREST},
+            {LinearMipmapLinearFilter, GL_LINEAR_MIPMAP_LINEAR}};
+
     bool isPowerOfTwo(const Image &image) {
 
         return math::isPowerOfTwo(image.width) && math::isPowerOfTwo(image.height);
@@ -18,6 +32,16 @@ namespace {
 
         return texture.generateMipmaps && supportsMips &&
                texture.minFilter != NearestFilter && texture.minFilter != LinearFilter;
+    }
+
+    GLuint filterFallback(int f) {
+
+        if (f == NearestFilter || f == NearestMipmapNearestFilter || f == NearestMipmapLinearFilter) {
+
+            return GL_NEAREST;
+        }
+
+        return GL_LINEAR;
     }
 
     GLuint getInternalFormat(GLuint glFormat, GLuint glType) {
@@ -64,7 +88,47 @@ void gl::GLTextures::generateMipmap(GLuint target, const Texture &texture, GLuin
     textureProperties.maxMipLevel = (int) std::log2(std::max(width, height));
 }
 
-void gl::GLTextures::uploadTexture(GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot) {
+void gl::GLTextures::setTextureParameters(GLuint textureType, Texture &texture, bool supportsMips) {
+
+    if (supportsMips) {
+
+        glTexParameteri(textureType, GL_TEXTURE_WRAP_S, wrappingToGL[texture.wrapS]);
+        glTexParameteri(textureType, GL_TEXTURE_WRAP_T, wrappingToGL[texture.wrapT]);
+
+        if (textureType == GL_TEXTURE_3D || textureType == GL_TEXTURE_2D_ARRAY) {
+
+            //            glTexParameteri( textureType, GL_TEXTURE_WRAP_R, wrappingToGL[ texture.wrapR ] );
+        }
+
+        glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);
+        glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[texture.minFilter]);
+
+    } else {
+
+        glTexParameteri(textureType, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(textureType, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        if (textureType == GL_TEXTURE_3D || textureType == GL_TEXTURE_2D_ARRAY) {
+
+            glTexParameteri(textureType, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        }
+
+        if (texture.wrapS != ClampToEdgeWrapping || texture.wrapT != ClampToEdgeWrapping) {
+
+            std::cerr << "THREE.WebGLRenderer: Texture is not power of two. Texture.wrapS and Texture.wrapT should be set to THREE.ClampToEdgeWrapping." << std::endl;
+        }
+
+        glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterFallback(texture.magFilter));
+        glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterFallback(texture.minFilter));
+
+        if (texture.minFilter != NearestFilter && texture.minFilter != LinearFilter) {
+
+            std::cerr << "THREE.WebGLRenderer: Texture is not power of two. Texture.minFilter should be set to THREE.NearestFilter or THREE.LinearFilter." << std::endl;
+        }
+    }
+}
+
+void gl::GLTextures::uploadTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot) {
 
     if (!texture.image) return;
 
@@ -125,7 +189,7 @@ void gl::GLTextures::uploadTexture(GLTextureProperties::Properties &texturePrope
     //    if (texture.onUpdate) texture.onUpdate(texture);
 }
 
-void gl::GLTextures::initTexture(gl::GLTextureProperties::Properties &textureProperties, Texture &texture) {
+void gl::GLTextures::initTexture(TextureProperties &textureProperties, Texture &texture) {
 
     if (!textureProperties.glInit) {
 
@@ -234,8 +298,14 @@ void gl::GLTextures::setTextureCube(Texture &texture, GLuint slot) {
     state.bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties.glTexture);
 }
 
-void gl::GLTextures::uploadCubeTexture(gl::GLTextureProperties::Properties &textureProperties, Texture &texture, GLuint slot) {
+void gl::GLTextures::uploadCubeTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot) {
     // TODO
+}
+
+void gl::GLTextures::setupFrameBufferTexture(GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget) {
+
+    //TODO
+
 }
 
 void gl::GLTextures::TextureEventListener::onEvent(Event &event) {

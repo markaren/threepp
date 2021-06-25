@@ -3,7 +3,8 @@
 #ifndef THREEPP_GLPROGRAM_HPP
 #define THREEPP_GLPROGRAM_HPP
 
-#include "threepp/renderers/gl/GLCapabilities.hpp"
+#include "GLPrograms.hpp"
+
 
 #include <string>
 #include <unordered_map>

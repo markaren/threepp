@@ -1,15 +1,19 @@
 
 #include "GLProgram.hpp"
-
-#include <glad/glad.h>
+#include "GLCapabilities.hpp"
+#include "GLPrograms.hpp"
 
 #include "threepp/constants.hpp"
 
-#include <iostream>
-#include <vector>
+#include <glad/glad.h>
+
 #include <any>
+#include <iostream>
+#include <regex>
+#include <vector>
 
 using namespace threepp;
+using namespace threepp::gl;
 
 namespace {
 
@@ -107,24 +111,41 @@ namespace {
         return "";
     }
 
-//    void fetchAttributeLocations(program) {
-//
-//        const attributes = {};
-//
-//        const n = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES);
-//
-//        for (let i = 0; i < n; i++) {
-//
-//            const info = gl.getActiveAttrib(program, i);
-//            const name = info.name;
-//
-//            // console.log( 'THREE.WebGLProgram: ACTIVE VERTEX ATTRIBUTE:', name, i );
-//
-//            attributes[name] = gl.getAttribLocation(program, name);
-//        }
-//
-//        return attributes;
-//    }
+    std::unordered_map<std::string, GLint> fetchAttributeLocations(GLuint program) {
+
+        std::unordered_map<std::string, GLint> attributes;
+
+        GLint n;
+        glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &n);
+
+        GLsizei length;
+        GLint size;
+        GLenum type;
+        GLchar name[256];
+        for (int i = 0; i < n; i++) {
+
+            glGetActiveAttrib(program, i, 256, &length, &size, &type, name);
+
+            attributes[name] = glGetAttribLocation(program, name);
+        }
+
+        return attributes;
+    }
+
+    std::string replaceLightNums(const std::string &str, GLPrograms::Parameters &parameters) {
+
+        std::string result = str;
+        result = std::regex_replace(result, std::regex("NUM_DIR_LIGHTS"), std::to_string(parameters.numDirLights));
+        result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHTS"), std::to_string(parameters.numSpotLights));
+        result = std::regex_replace(result, std::regex("NUM_RECT_AREA_LIGHTS"), std::to_string(parameters.numRectAreaLights));
+        result = std::regex_replace(result, std::regex("NUM_POINT_LIGHTS"), std::to_string(parameters.numPointLights));
+        result = std::regex_replace(result, std::regex("NUM_HEMI_LIGHTS"), std::to_string(parameters.numHemiLights));
+        result = std::regex_replace(result, std::regex("NUM_DIR_LIGHT_SHADOWS"), std::to_string(parameters.numDirLightShadows));
+        result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHT_SHADOWS"), std::to_string(parameters.numSpotLightShadows));
+        result = std::regex_replace(result, std::regex("NUM_POINT_LIGHT_SHADOWS"), std::to_string(parameters.numPointLightShadows));
+
+        return result;
+    }
 
 
-}
+}// namespace

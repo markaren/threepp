@@ -25,6 +25,10 @@ namespace threepp {
             return color_;
         }
 
+        [[nodiscard]] std::string type() const override {
+            return "PointsMaterial";
+        }
+
         static std::shared_ptr<PointsMaterial> create() {
             return std::shared_ptr<PointsMaterial>(new PointsMaterial());
         }

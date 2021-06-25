@@ -7,22 +7,26 @@
 
 namespace threepp::gl {
 
-    struct GLTextureProperties {
+    struct TextureProperties {
 
-        struct Properties {
+        unsigned int version;
 
-            unsigned int version;
+        bool glInit;
 
-            bool glInit;
+        int maxMipLevel;
 
-            int maxMipLevel;
+        GLuint glTexture;
+    };
 
-            GLuint glTexture;
+    struct MaterialProperties {
 
+        std::optional<GLProgram> program;
+    };
 
-        };
+    template <class T>
+    struct GLTypeProperties {
 
-        Properties &get(const std::string &key) {
+        T &get(const std::string &key) {
 
             return properties_.at(key);
         }
@@ -33,16 +37,15 @@ namespace threepp::gl {
         }
 
     private:
-        std::unordered_map<std::string, Properties> properties_;
-
+        std::unordered_map<std::string, T> properties_;
     };
 
     struct GLProperties {
 
-        GLTextureProperties textureProperties;
-
+        GLTypeProperties<TextureProperties> textureProperties;
+        GLTypeProperties<MaterialProperties> materialProperties;
     };
 
-}
+}// namespace threepp::gl
 
 #endif//THREEPP_GLPROPERTIES_HPP

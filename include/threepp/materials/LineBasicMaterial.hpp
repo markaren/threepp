@@ -26,6 +26,10 @@ namespace threepp {
             return linejoin;
         }
 
+        [[nodiscard]] std::string type() const override {
+            return "LineBasicMaterial";
+        }
+
         static std::shared_ptr<LineBasicMaterial> create() {
             return std::shared_ptr<LineBasicMaterial>(new LineBasicMaterial());
         }
