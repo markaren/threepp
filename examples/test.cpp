@@ -124,12 +124,12 @@ int main() {
 
     MyEventListener l;
 
-//    EventListener l1 = [](auto e) {
-//        std::cout << "Event type:" << e.type << std::endl;
-//    };
+    LambdaEventListener l1 ([](Event& e) {
+        std::cout << "Event type:" << e.type << std::endl;
+    });
 
     evt.addEventListener("per", &l);
-//    evt.addEventListener("truls", &l1);
+    evt.addEventListener("truls", &l1);
 
     evt.dispatchEvent("per");
     evt.dispatchEvent("per");
@@ -137,8 +137,11 @@ int main() {
     evt.removeEventListener("per", &l);
 
     evt.dispatchEvent("per");
+    evt.dispatchEvent("truls");
 
-    std::cout << "has evt:" << evt.hasEventListener("per", &l) << std::endl;
+    std::cout << "has per evt:" << evt.hasEventListener("per", &l) << std::endl;
+    std::cout << "has truls evt:" << evt.hasEventListener("truls", &l1) << std::endl;
+
 
     Uniform uniform(m4);
     m4[0] = 98;

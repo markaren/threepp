@@ -202,7 +202,7 @@ void BufferGeometry::computeBoundingSphere() {
         this->boundingSphere = Sphere();
     }
 
-    if (this->attributes_.count("position") != 0) {
+    if (this->attributes_.count("position")) {
 
         const auto &position = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("position").get());
 

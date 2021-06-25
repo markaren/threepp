@@ -29,6 +29,19 @@ namespace threepp {
     };
     using EventListenerPtr = EventListener *;
 
+    struct LambdaEventListener: EventListener {
+
+        explicit LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)){}
+
+        void onEvent(Event &event) override {
+            f_(event);
+        }
+
+    private:
+        std::function<void(Event&)> f_;
+
+    };
+
     class EventDispatcher {
 
     public:
@@ -40,18 +53,18 @@ namespace threepp {
 
             if (listeners_.count(type) == 0) return false;
 
-            auto listenerArray = &listeners_.at(type);
-            return std::find(listenerArray->begin(), listenerArray->end(), listener) != listenerArray->end();
+            auto& listenerArray = listeners_.at(type);
+            return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
         }
 
         void removeEventListener(const std::string &type, const EventListenerPtr &listener) {
 
             if (listeners_.count(type) == 0) return;
 
-            auto listenerArray = &listeners_.at(type);
-            auto find = std::find(listenerArray->begin(), listenerArray->end(), listener);
-            if (find != listenerArray->end()) {
-                listenerArray->erase(find);
+            auto& listenerArray = listeners_.at(type);
+            auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
+            if (find != listenerArray.end()) {
+                listenerArray.erase(find);
             }
         }
 

@@ -80,7 +80,7 @@ namespace threepp {
     public:
 
         TypedBufferAttribute(std::vector<T> array, int itemSize, bool normalized)
-                : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_((int) array.size() / itemSize) {}
+                : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_((int) array_.size() / itemSize) {}
 
 
         [[nodiscard]] int count() const override {
