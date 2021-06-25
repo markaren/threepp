@@ -42,7 +42,7 @@ namespace threepp::shaders {
                 {"lightMap", Uniform()},
                 {"lightMapIntesity", Uniform(1)}};
 
-        std::unordered_map<std::string, Uniform> emissivemap = {
+        std::unordered_map<std::string, Uniform> emissivemap{
                 {"emissiveMap", Uniform()}};
 
         std::unordered_map<std::string, Uniform> bumpmap{

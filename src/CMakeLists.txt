@@ -51,8 +51,7 @@ set(publicHeaders
         "threepp/objects/Line.hpp"
         "threepp/objects/Mesh.hpp"
         "threepp/objects/Points.hpp"
-
-        "threepp/textures/DataTexture.hpp"
+        
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
