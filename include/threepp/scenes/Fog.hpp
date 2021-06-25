@@ -7,19 +7,17 @@
 
 namespace threepp {
 
-    class Fog  {
+    class Fog {
 
     public:
-
         Color color;
         float near;
         float far;
 
-        explicit Fog(int hex, float near = 1, float far = 1000): color(hex), near(near), far(far) {}
-        explicit Fog(Color color, float near = 1, float far = 1000): color(color), near(near), far(far) {}
-
+        explicit Fog(int hex, float near = 1, float far = 1000) : color(hex), near(near), far(far) {}
+        explicit Fog(Color color, float near = 1, float far = 1000) : color(color), near(near), far(far) {}
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_FOG_HPP

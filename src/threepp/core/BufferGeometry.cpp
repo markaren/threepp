@@ -1,6 +1,8 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
+#include <utility>
+
 using namespace threepp;
 
 unsigned int BufferGeometry::_id = 0;
@@ -15,13 +17,20 @@ namespace {
 }// namespace
 
 
-std::vector<int> &BufferGeometry::getIndex() {
+bool BufferGeometry::hasIndex() const {
 
-    return this->index_;
+    return index_ != nullptr;
 }
-BufferGeometry &BufferGeometry::setIndex(const std::vector<int> &index) {
 
-    this->index_ = index;
+IntBufferAttribute *BufferGeometry::getIndex() {
+
+    if (!index_) return nullptr;
+
+    return this->index_.get();
+}
+BufferGeometry &BufferGeometry::setIndex(std::vector<int> index) {
+
+    this->index_ = IntBufferAttribute::create(std::move(index), 1);
 
     return *this;
 }

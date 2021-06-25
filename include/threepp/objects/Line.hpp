@@ -30,15 +30,15 @@ namespace threepp {
 
             // we assume non-indexed geometry
 
-            if (!geometry_->getIndex().empty()) {
+            if (!geometry_->hasIndex()) {
 
                 const auto positionAttribute = geometry_->getAttribute<float>("position");
                 std::vector<float> lineDistances{0};
 
-                for (int i = 1, l = positionAttribute.count(); i < l; i++) {
+                for (int i = 1, l = positionAttribute->count(); i < l; i++) {
 
-                    positionAttribute.setFromBufferAttribute(_start, i - 1);
-                    positionAttribute.setFromBufferAttribute(_end, i);
+                    positionAttribute->setFromBufferAttribute(_start, i - 1);
+                    positionAttribute->setFromBufferAttribute(_end, i);
 
                     lineDistances[i] = lineDistances[i - 1];
                     lineDistances[i] += _start.distanceTo(_end);

@@ -3,6 +3,7 @@
 
 #include "threepp/utils/InstanceOf.hpp"
 
+using namespace threepp;
 using namespace threepp::gl;
 
 namespace {
@@ -42,7 +43,14 @@ namespace {
 }// namespace
 
 
-GLPrograms::Parameters::Parameters(const GLPrograms &scope, threepp::Material *material, std::vector<Object3D *> &shadows, std::optional<Fog> fog, int nClipPlanes, int nClipIntersection, threepp::Object3D *object) {
+GLPrograms::Parameters::Parameters(
+        const GLPrograms &scope,
+        Material *material,
+        std::vector<Object3D *> &shadows,
+        std::optional<Fog> fog,
+        int nClipPlanes,
+        int nClipIntersection,
+        threepp::Object3D *object) {
 
     shaderId = shaderIds[material->type()];
     shaderName = material->type();
@@ -51,7 +59,6 @@ GLPrograms::Parameters::Parameters(const GLPrograms &scope, threepp::Material *m
     isRawShaderMaterial = false; //TODO
 
     supportsVertexTextures = scope.vertexTextures;
-
 
 }
 

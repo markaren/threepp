@@ -31,7 +31,7 @@ namespace threepp {
 
     struct LambdaEventListener: EventListener {
 
-        explicit LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)){}
+        LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)){}
 
         void onEvent(Event &event) override {
             f_(event);

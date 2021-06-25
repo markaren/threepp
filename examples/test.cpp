@@ -167,10 +167,10 @@ int main() {
 
     auto box = BoxGeometry::create();
     auto attr = box->getAttribute<float>("position");
-    std::cout << attr.getX(0) << std::endl;
-    attr.setX(0, 1);
-    std::cout << attr.getX(0) << std::endl;
-    std::cout << box->getAttribute<float>("position").getX(0) << std::endl;
+    std::cout << attr->getX(0) << std::endl;
+    attr->setX(0, 1);
+    std::cout << attr->getX(0) << std::endl;
+    std::cout << box->getAttribute<float>("position")->getX(0) << std::endl;
 
     auto obj = Object3D::create();
 

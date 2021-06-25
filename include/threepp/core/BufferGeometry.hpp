@@ -21,9 +21,10 @@
 
 namespace threepp {
 
-    class BufferGeometry {
+    class BufferGeometry: public EventDispatcher {
 
     public:
+
         const unsigned int id = _id++;
 
         const std::string uuid = math::generateUUID();
@@ -35,16 +36,20 @@ namespace threepp {
 
         DrawRange drawRange = DrawRange{0, Infinity<int>};
 
-        std::vector<int> &getIndex();
+        [[nodiscard]] bool hasIndex() const;
 
-        BufferGeometry &setIndex(const std::vector<int> &index);
+        IntBufferAttribute *getIndex();
+
+        BufferGeometry &setIndex(std::vector<int> index);
+
+        BufferGeometry &setIndex(std::unique_ptr<IntBufferAttribute> index);
 
         template<class T>
-        TypedBufferAttribute<T> &getAttribute(const std::string &name) {
+        TypedBufferAttribute<T> *getAttribute(const std::string &name) {
 
             if (!hasAttribute(name)) throw std::runtime_error("No attribute named: " + name);
 
-            return *dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
+            return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
         }
 
         void setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute);
@@ -89,7 +94,7 @@ namespace threepp {
         BufferGeometry() = default;
 
     private:
-        std::vector<int> index_;
+        std::unique_ptr<IntBufferAttribute> index_;
         std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
 
         static unsigned int _id;
