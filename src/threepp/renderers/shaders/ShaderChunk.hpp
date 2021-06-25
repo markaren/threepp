@@ -16,6 +16,14 @@ namespace threepp::shaders {
         ShaderChunk(const ShaderChunk &) = delete;
         void operator=(const ShaderChunk &) = delete;
 
+        const std::string &default_vertex() {
+            return get("default_vertex", "ShaderChunk");
+        }
+
+        const std::string &default_fragment() {
+            return get("default_fragment", "ShaderChunk");
+        }
+
         const std::string &alphamap_fragment() {
             return get("alphamap_fragment", "ShaderChunk");
         }

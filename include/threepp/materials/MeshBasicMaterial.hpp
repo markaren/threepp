@@ -42,11 +42,11 @@ namespace threepp {
             return refractionRatio_;
         }
 
-        [[nodiscard]] std::string getWireframeLinecap() const override {
+        [[nodiscard]] std::string getWireframeLinecap() const {
             return wireframeLinecap_;
         }
 
-        [[nodiscard]] std::string getWireframeLinejoin() const override {
+        [[nodiscard]] std::string getWireframeLinejoin() const {
             return wireframeLinejoin_;
         }
 

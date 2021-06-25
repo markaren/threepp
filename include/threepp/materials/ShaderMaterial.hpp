@@ -9,22 +9,48 @@
 
 namespace threepp {
 
-    class ShaderMaterial: public Material {
+    class ShaderMaterial : public MaterialWithWireframe {
 
     public:
+        std::string vertexShader;
+        std::string fragmentShader;
 
-        std::string type() const override {
+        bool getWireframe() const override {
+            return wireframe_;
+        }
+
+        void setWireframe(bool wireframe) override {
+            wireframe_ = wireframe;
+        }
+
+        float getWireframeLinewidth() const override {
+            return wireframeLinewidth_;
+        }
+
+        void setWireframeLinewidth(float width) override {
+            wireframeLinewidth_ = width;
+        }
+
+        [[nodiscard]] std::string type() const override {
             return "ShaderMaterial";
         }
 
     protected:
-        ShaderMaterial() = default;
+        ShaderMaterial()
+            : vertexShader(shaders::ShaderChunk::instance().default_vertex()),
+              fragmentShader(shaders::ShaderChunk::instance().default_fragment()) {}
 
     private:
-        std::unordered_map<std::string, Uniform> uniforms_;
 
+        float linewidth_ = 1;
+
+        bool wireframe_ = false;
+        float wireframeLinewidth_ = 1;
+
+
+        std::unordered_map<std::string, Uniform> uniforms_;
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_SHADERMATERIAL_HPP

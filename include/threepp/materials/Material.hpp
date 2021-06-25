@@ -17,7 +17,7 @@ namespace threepp {
     public:
         const unsigned int id = materialId++;
 
-        std::string uuid = math::generateUUID();
+        const std::string uuid = math::generateUUID();
 
         bool fog = true;
 

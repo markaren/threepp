@@ -58,9 +58,6 @@ namespace threepp {
 
     struct MaterialWithWireframe : virtual Material {
 
-        virtual std::string getWireframeLinecap() const = 0;
-        virtual std::string getWireframeLinejoin() const = 0;
-
         [[nodiscard]] virtual bool getWireframe() const = 0;
         virtual void setWireframe(bool wireframe) = 0;
 
