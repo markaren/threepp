@@ -187,15 +187,7 @@ namespace threepp::gl {
 
         void unbindTexture();
 
-        void texImage2D(
-                int target,
-                int level,
-                int internalFormat,
-                int width,
-                int height,
-                int format,
-                int type,
-                const void *pixels);
+        void texImage2D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLuint format, GLuint type, const void *pixels);
 
         //
 

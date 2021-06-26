@@ -39,7 +39,7 @@ namespace threepp {
         int anisotropy;
 
         int format;
-//        std::optional<int> internalFormat;
+        std::optional<std::string> internalFormat;
         int type;
 
         Vector2 offset = Vector2(0, 0);
@@ -61,6 +61,8 @@ namespace threepp {
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding;
 
+        std::optional<std::function<void(Texture&)>> onUpdate;
+
         explicit Texture(
                 std::optional<Image> image = std::nullopt,
                 int mapping = Texture::DEFAULT_MAPPING,
@@ -72,12 +74,12 @@ namespace threepp {
                 int type = UnsignedByteType,
                 int anisotropy = 1,
                 int encoding = LinearEncoding)
-                : image(std::move(image)),
-                  mapping(mapping),
-                  wrapS(wrapS), wrapT(wrapT),
-                  magFilter(magFilter), minFilter(minFilter),
-                  format(format), type(type),
-                  anisotropy(anisotropy), encoding(encoding) {}
+            : image(std::move(image)),
+              mapping(mapping),
+              wrapS(wrapS), wrapT(wrapT),
+              magFilter(magFilter), minFilter(minFilter),
+              format(format), type(type),
+              anisotropy(anisotropy), encoding(encoding) {}
 
 
         void updateMatrix();
@@ -95,12 +97,9 @@ namespace threepp {
     private:
         unsigned int version_ = 0;
 
-        std::function<void()> onUpdate_;
-
         inline static unsigned int textureId = 0;
 
         inline static int DEFAULT_MAPPING = UVMapping;
-
     };
 
 }// namespace threepp

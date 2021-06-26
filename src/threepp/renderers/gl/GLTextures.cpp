@@ -44,7 +44,7 @@ namespace {
         return GL_LINEAR;
     }
 
-    GLuint getInternalFormat(GLuint glFormat, GLuint glType) {
+    GLint getInternalFormat(GLint glFormat, GLuint glType) {
 
         auto internalFormat = glFormat;
 
@@ -149,44 +149,44 @@ void gl::GLTextures::uploadTexture(TextureProperties &textureProperties, Texture
 
     GLuint glType = convert(texture.type);
     auto glInternalFormat = getInternalFormat(glFormat, glType);
-    //
-    //    setTextureParameters(textureType, texture, supportsMips);
-    //
-    //    Image *mipmap;
-    //    auto &mipmaps = texture.mipmaps;
-    //
-    //    // regular Texture (image, video, canvas)
-    //
-    //    // use manually created mipmaps if available
-    //    // if there are no manual mipmaps
-    //    // set 0 level mipmap and then use GL to generate other mipmap levels
-    //
-    //    if (mipmaps.size() > 0 && supportsMips) {
-    //
-    //        for (int i = 0, il = mipmaps.size(); i < il; i++) {
-    //
-    //            mipmap = &mipmaps[i];
-    //            state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat, glFormat, glType, mipmap);
-    //        }
-    //
-    //        texture.generateMipmaps = false;
-    //        textureProperties.maxMipLevel = mipmaps.size() - 1;
-    //
-    //    } else {
-    //
-    //        state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, glFormat, glType, texture.image->getData());
-    //        textureProperties.maxMipLevel = 0;
-    //    }
-    //
-    //
-    //    if (textureNeedsGenerateMipmaps(texture, supportsMips)) {
-    //
-    //        generateMipmap(textureType, texture, image.width(), image.height());
-    //    }
-    //
-    //    textureProperties.version = texture.version();
-    //
-    //    if (texture.onUpdate) texture.onUpdate(texture);
+
+    setTextureParameters(textureType, texture, supportsMips);
+
+        Image *mipmap;
+        auto &mipmaps = texture.mipmaps;
+
+        // regular Texture (image, video, canvas)
+
+        // use manually created mipmaps if available
+        // if there are no manual mipmaps
+        // set 0 level mipmap and then use GL to generate other mipmap levels
+
+        if (mipmaps.size() > 0 && supportsMips) {
+
+            for (size_t i = 0, il = mipmaps.size(); i < il; i++) {
+
+                mipmap = &mipmaps[i];
+                state.texImage2D(GL_TEXTURE_2D, (GLint) i, glInternalFormat, mipmap->width, mipmap->height, glFormat, glType, mipmap);
+            }
+
+            texture.generateMipmaps = false;
+            textureProperties.maxMipLevel = (int) mipmaps.size() - 1;
+
+        } else {
+
+            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
+            textureProperties.maxMipLevel = 0;
+        }
+
+
+        if (textureNeedsGenerateMipmaps(texture, supportsMips)) {
+
+            generateMipmap(textureType, texture, image.width, image.height);
+        }
+
+        textureProperties.version = texture.version();
+
+        if (texture.onUpdate) texture.onUpdate.value()(texture);
 }
 
 void gl::GLTextures::initTexture(TextureProperties &textureProperties, Texture &texture) {
@@ -305,7 +305,6 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties &textureProperties, Tex
 void gl::GLTextures::setupFrameBufferTexture(GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget) {
 
     //TODO
-
 }
 
 void gl::GLTextures::TextureEventListener::onEvent(Event &event) {
