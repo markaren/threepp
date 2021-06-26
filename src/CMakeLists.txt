@@ -24,6 +24,7 @@ set(publicHeaders
         "threepp/geometries/SphereGeometry.hpp"
 
         "threepp/loaders/ImageLoader.hpp"
+        "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"

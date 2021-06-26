@@ -10,6 +10,8 @@ namespace threepp {
 
     class ImageLoader {
 
+    public:
+
         Image load(const char *imagePath);
     };
 
