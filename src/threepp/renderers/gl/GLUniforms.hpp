@@ -3,13 +3,29 @@
 #ifndef THREEPP_GLUNIFORMS_HPP
 #define THREEPP_GLUNIFORMS_HPP
 
-#include "GLProgram.hpp"
+#include <glad/glad.h>
+
+#include <any>
+#include <vector>
+#include <unordered_map>
 
 namespace threepp::gl {
 
-    struct GLUniforms {
+    struct StructuredUniform {
 
-        GLUniforms(const GLProgram &program){}
+        struct UniformObject {
+
+        };
+
+        StructuredUniform(const GLuint id): id(id){}
+
+
+    private:
+        GLuint id;
+
+    private:
+        std::vector<UniformObject> seq;
+        std::unordered_map<std::string, UniformObject> map;
 
     };
 

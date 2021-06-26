@@ -11,12 +11,16 @@
 
 namespace threepp {
 
-    class Scene: public Object3D {
+    class Scene : public Object3D {
 
     public:
+        std::optional<Color> background;
+        std::optional<Texture> environment;
+        std::optional<Fog> fog;
+
+        std::shared_ptr<Material> overrideMaterial;
 
         bool autoUpdate = true;
-        std::optional<Fog> fog;
 
         std::string type() const override {
             return "Scene";
@@ -28,9 +32,10 @@ namespace threepp {
 
     protected:
         Scene() = default;
-
     };
 
-}
+    struct EmptyScene : Scene {};
+
+}// namespace threepp
 
 #endif//THREEPP_SCENE_HPP

@@ -14,7 +14,8 @@ namespace threepp {
     public:
         std::optional<bool> needsUpdate;
 
-        explicit Uniform(std::any value = std::any()) : value_(std::move(value)) {}
+        explicit Uniform(std::any value = std::any(), std::optional<bool> needsUpdate = std::nullopt)
+            : value_(std::move(value)), needsUpdate(needsUpdate) {}
 
         [[nodiscard]] bool hasValue() const {
             return value_.has_value();
@@ -27,7 +28,7 @@ namespace threepp {
         template<class T>
         [[nodiscard]] T &value() {
             if (!value_.has_value()) value_ = T();
-            return std::any_cast<T&>(value_);
+            return std::any_cast<T &>(value_);
         }
 
         void setValue(std::any value) {

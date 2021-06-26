@@ -167,7 +167,7 @@ namespace threepp::gl {
                 std::optional<bool> premultipliedAlpha = std::nullopt);
 
 
-        void setMaterial(const Material &material, bool frontFaceCW);
+        void setMaterial(const Material *material, bool frontFaceCW);
 
         void setFlipSided(bool flipSided);
 

@@ -529,38 +529,38 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
     currentPremultipledAlpha = std::nullopt;
 }
 
-void gl::GLState::setMaterial(const Material &material, bool frontFaceCW) {
+void gl::GLState::setMaterial( const Material *material, bool frontFaceCW) {
 
-    material.side == DoubleSide
+    material->side == DoubleSide
             ? disable(GL_CULL_FACE)
             : enable(GL_CULL_FACE);
 
-    auto flipSided = (material.side == BackSide);
+    auto flipSided = (material->side == BackSide);
     if (frontFaceCW) flipSided = !flipSided;
 
     setFlipSided(flipSided);
 
-    (material.blending == NormalBlending && !material.transparent)
+    (material->blending == NormalBlending && !material->transparent)
             ? setBlending(NoBlending)
-            : setBlending(material.blending, material.blendEquation, material.blendSrc, material.blendDst, material.blendEquationAlpha, material.blendSrcAlpha, material.blendDstAlpha, material.premultipliedAlpha);
+            : setBlending(material->blending, material->blendEquation, material->blendSrc, material->blendDst, material->blendEquationAlpha, material->blendSrcAlpha, material->blendDstAlpha, material->premultipliedAlpha);
 
-    depthBuffer.setFunc(material.depthFunc);
-    depthBuffer.setTest(material.depthTest);
-    depthBuffer.setMask(material.depthWrite);
-    colorBuffer.setMask(material.colorWrite);
+    depthBuffer.setFunc(material->depthFunc);
+    depthBuffer.setTest(material->depthTest);
+    depthBuffer.setMask(material->depthWrite);
+    colorBuffer.setMask(material->colorWrite);
 
-    const auto stencilWrite = material.stencilWrite;
+    const auto stencilWrite = material->stencilWrite;
     stencilBuffer.setTest(stencilWrite);
     if (stencilWrite) {
 
-        stencilBuffer.setMask(material.stencilWriteMask);
-        stencilBuffer.setFunc(material.stencilFunc, material.stencilRef, material.stencilFuncMask);
-        stencilBuffer.setOp(material.stencilFail, material.stencilZFail, material.stencilZPass);
+        stencilBuffer.setMask(material->stencilWriteMask);
+        stencilBuffer.setFunc(material->stencilFunc, material->stencilRef, material->stencilFuncMask);
+        stencilBuffer.setOp(material->stencilFail, material->stencilZFail, material->stencilZPass);
     }
 
-    setPolygonOffset(material.polygonOffset, material.polygonOffsetFactor, material.polygonOffsetUnits);
+    setPolygonOffset(material->polygonOffset, material->polygonOffsetFactor, material->polygonOffsetUnits);
 
-    material.alphaToCoverage ? enable(GL_SAMPLE_ALPHA_TO_COVERAGE) : disable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+    material->alphaToCoverage ? enable(GL_SAMPLE_ALPHA_TO_COVERAGE) : disable(GL_SAMPLE_ALPHA_TO_COVERAGE);
 }
 
 void gl::GLState::setFlipSided(bool flipSided) {

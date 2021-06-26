@@ -21,6 +21,7 @@ namespace {
     std::array<float, 9> mat3array;
     std::array<float, 4> mat2array;
 
+
     template<class ArrayLike>
     std::vector<float> &flatten(const ArrayLike &array, int nBlocks, int blockSize) {
 
@@ -62,6 +63,15 @@ namespace {
         }
 
         return true;
+    }
+
+    template<class ArrayLike>
+    void copyArray(const ArrayLike &a, ArrayLike &b) {
+
+        for (int i = 0, l = b.size(); i < l; i++) {
+
+            a[i] = b[i];
+        }
     }
 
     // Texture unit allocation

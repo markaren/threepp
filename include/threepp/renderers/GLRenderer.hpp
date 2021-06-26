@@ -14,17 +14,22 @@
 #include "threepp/Canvas.hpp"
 #include "threepp/constants.hpp"
 
+#include "threepp/objects/Points.hpp"
+
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
+#include "threepp/renderers/gl/GLProgram.hpp"
 
-#include "threepp/renderers/gl/GLBackground.hpp"
-#include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLAttributes.hpp"
+#include "threepp/renderers/gl/GLBackground.hpp"
+#include "threepp/renderers/gl/GLClipping.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
-#include "threepp/renderers/gl/GLClipping.hpp"
 #include "threepp/renderers/gl/GLPrograms.hpp"
+#include "threepp/renderers/gl/GLTextures.hpp"
+#include "threepp/renderers/gl/GLMaterials.hpp"
+#include "threepp/renderers/gl/GLBufferRenderer.hpp"
 
 #include <memory>
 #include <vector>
@@ -74,6 +79,12 @@ namespace threepp {
         int toneMapping = NoToneMapping;
         float toneMappingExposure = 1.0f;
 
+    private:
+
+        EmptyScene _emptyScene;
+
+    public:
+
         explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
 
         void initGLContext();
@@ -108,25 +119,29 @@ namespace threepp {
 
         // Clearing
 
-        void getClearColor(Color &target) const {
+        void getClearColor(Color &target) const;
 
-            target.copy(background.getClearColor());
-        }
+        void setClearColor(const Color &color, float alpha = 1);
 
-        void setClearColor() {
+        [[nodiscard]] float getClearAlpha() const;
 
-            //background.setClearColor.apply( background, arguments );
-        }
+        void setClearAlpha(float clearAlpha);
 
-        [[nodiscard]] float getClearAlpha() const {
+        void clear(bool color = true, bool depth = true, bool stencil = true);
 
-            return background.getClearAlpha();
-        }
+        void clearColor();
+        void clearDepth();
+        void clearStencil();
 
-        void setClearAlpha() {
+        void dispose();
 
-            // background.setClearAlpha.apply( background, arguments );
-        }
+        void deallocateMaterial(Material *material);
+
+        void releaseMaterialProgramReferences(Material *material);
+
+        void renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, GeometryGroup *group);
+
+        gl::GLProgram setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object);
 
 
     private:
@@ -136,7 +151,7 @@ namespace threepp {
         int _currentActiveMipmapLevel = 0;
         int _currentMaterialId = -1;
 
-        std::shared_ptr<Camera> _currentCamera = nullptr;
+        Camera* _currentCamera = nullptr;
         Vector4 _currentViewport;
         Vector4 _currentScissor;
         std::optional<bool> _currentScissorTest;
@@ -172,7 +187,15 @@ namespace threepp {
         gl::GLInfo info;
 
         gl::GLBackground background;
-//        gl::GLProperties
+        gl::GLProperties properties;
+        gl::GLGeometries geometries;
+        gl::GLBindingStates bindingStates;
+        gl::GLAttributes attributes;
+        gl::GLClipping clipping;
+        gl::GLTextures textures;
+        gl::GLMaterials materials;
+        gl::GLBufferRenderer bufferRenderer;
+        gl::GLIndexedBufferRenderer indexedBufferRenderer;
     };
 
 }// namespace threepp

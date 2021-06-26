@@ -3,6 +3,7 @@
 #ifndef THREEPP_POINTS_HPP
 #define THREEPP_POINTS_HPP
 
+#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
 
@@ -12,10 +13,10 @@ namespace threepp {
 
     public:
         static std::shared_ptr<Points> create(
-                const std::shared_ptr<BufferGeometry> &geometry = BufferGeometry::create(),
-                const std::shared_ptr<Material> &material = PointsMaterial::create()) {
+                std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
+                std::shared_ptr<Material> material = PointsMaterial::create()) {
 
-            return std::shared_ptr<Points>(new Mesh(std::move(geometry), std::move(material)));
+            return std::shared_ptr<Points>(new Points(std::move(geometry), std::move(material)));
         }
 
         ~Points() = default;

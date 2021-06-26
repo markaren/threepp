@@ -3,6 +3,8 @@
 #ifndef THREEPP_GLCLIPPING_HPP
 #define THREEPP_GLCLIPPING_HPP
 
+#include "GLProperties.hpp"
+
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/math/Plane.hpp"
 
@@ -26,11 +28,12 @@ namespace threepp::gl {
         size_t numPlanes = 0;
         unsigned int numIntersection = 0;
 
-        GLClipping() {
+        explicit GLClipping(GLProperties &properties) : properties(properties) {
+
             uniform.needsUpdate = false;
         }
 
-        bool init(const std::vector<Plane> &planes, bool enableLocalClipping, Camera &camera) {
+        bool init(const std::vector<Plane> &planes, bool enableLocalClipping, Camera *camera) {
 
             bool enabled =
                     !planes.empty() ||
@@ -53,6 +56,59 @@ namespace threepp::gl {
             projectPlanes();
         }
 
+        void endShadows() {
+
+            renderingShadows = false;
+            resetGlobalState();
+        }
+
+        void setState(Material *material, Camera *camera, bool useCache) {
+
+            // TODO
+
+//            const planes = material.clippingPlanes,
+//                  clipIntersection = material.clipIntersection,
+//                  clipShadows = material.clipShadows;
+//
+//            const auto materialProperties = properties.materialProperties.get(material->uuid);
+//
+//            if (!localClippingEnabled || planes == nullptr|| planes.length == = 0 || renderingShadows && !clipShadows) {
+//
+//                // there's no local clipping
+//
+//                if (renderingShadows) {
+//
+//                    // there's no global clipping
+//
+//                    projectPlanes(null);
+//
+//                } else {
+//
+//                    resetGlobalState();
+//                }
+//
+//            } else {
+//
+//                const auto nGlobal = renderingShadows ? 0 : numGlobalPlanes,
+//                           lGlobal = nGlobal * 4;
+//
+//                auto dstArray = materialProperties.clippingState || {};
+//
+//                uniform.value = dstArray;// ensure unique state
+//
+//                dstArray = projectPlanes(planes, camera, lGlobal, useCache);
+//
+//                for (int i = 0; i != lGlobal; ++i) {
+//
+//                    dstArray[i] = globalState.value()[i];
+//                }
+//
+//                materialProperties.clippingState = dstArray;
+//                this->numIntersection = clipIntersection ? this->numPlanes : 0;
+//                this->numPlanes += nGlobal;
+//            }
+        }
+
         void resetGlobalState() {
 
             if (!uniform.hasValue() || uniform.value<std::vector<float>>() != globalState) {
@@ -71,43 +127,50 @@ namespace threepp::gl {
             numIntersection = 0;
         }
 
-        std::optional<std::vector<float>> projectPlanes(const std::vector<Plane> &planes, const Camera &camera, int dstOffset, bool skipTransform = false) {
+        std::optional<std::vector<float>> projectPlanes(const std::vector<Plane> &planes, const Camera *camera, int dstOffset, bool skipTransform = false) {
 
             const auto nPlanes = planes.size();
-            std::vector<float> dstArray;
+            std::optional<std::vector<float>> dstArray;
 
-            dstArray = uniform.value<std::vector<float>>();
+            if (nPlanes != 0) {
 
-            if (!skipTransform || !dstArray.empty()) {
-
-                const auto flatSize = dstOffset + nPlanes * 4;
-                const auto viewMatrix = camera.matrixWorldInverse;
-
-                viewNormalMatrix.getNormalMatrix(viewMatrix);
-
-                if (dstArray.size() < flatSize) {
-
-                    dstArray = std::vector<float>(flatSize);
+                if (uniform.hasValue()) {
+                    dstArray = uniform.value<std::vector<float>>();
                 }
 
-                for (int i = 0, i4 = dstOffset; i != nPlanes; ++i, i4 += 4) {
+                if (!skipTransform || !dstArray.has_value() ) {
 
-                    plane.copy(planes[i]).applyMatrix4(viewMatrix, viewNormalMatrix);
+                    const auto flatSize = dstOffset + nPlanes * 4;
+                    const auto &viewMatrix = camera->matrixWorldInverse;
 
-                    plane.normal.toArray(dstArray, i4);
-                    dstArray[i4 + 3] = plane.constant;
+                    viewNormalMatrix.getNormalMatrix(viewMatrix);
+
+                    if (!dstArray.has_value() || dstArray->size() < flatSize) {
+
+                        dstArray = std::vector<float>(flatSize);
+                    }
+
+                    for (int i = 0, i4 = dstOffset; i != nPlanes; ++i, i4 += 4) {
+
+                        plane.copy(planes[i]).applyMatrix4(viewMatrix, viewNormalMatrix);
+
+                        plane.normal.toArray(*dstArray, i4);
+                        dstArray.value()[i4 + 3] = plane.constant;
+                    }
                 }
+
+                uniform.setValue(*dstArray);
+                uniform.needsUpdate = true;
             }
-
-            uniform.setValue(dstArray);
-            uniform.needsUpdate = true;
-
 
             numPlanes = nPlanes;
             numIntersection = 0;
 
             return dstArray;
         }
+
+    private:
+        GLProperties &properties;
     };
 
 }// namespace threepp::gl
