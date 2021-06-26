@@ -230,7 +230,7 @@ namespace threepp::gl {
             auto &newAttributes = currentState_.newAttributes;
             auto &enabledAttributes = currentState_.enabledAttributes;
 
-            for (int i = 0, il = enabledAttributes.size(); i < il; i++) {
+            for (int i = 0, il = (int) enabledAttributes.size(); i < il; i++) {
 
                 if (enabledAttributes[i] != newAttributes[i]) {
 
