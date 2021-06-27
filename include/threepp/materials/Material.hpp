@@ -15,9 +15,9 @@ namespace threepp {
     class Material : private EventDispatcher {
 
     public:
-        const unsigned int id = materialId++;
+        unsigned int id = materialId++;
 
-        const std::string uuid = math::generateUUID();
+        std::string uuid = math::generateUUID();
 
         bool fog = true;
 

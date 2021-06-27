@@ -32,53 +32,66 @@ namespace threepp {
         int combine = MultiplyOperation;
 
         Color &getColor() override {
+
             return color_;
         }
 
         [[nodiscard]] float getReflectivity() const override {
+
             return reflectivity_;
         }
         [[nodiscard]] float getRefractionRatio() const override {
+
             return refractionRatio_;
         }
 
         [[nodiscard]] std::string getWireframeLinecap() const {
+
             return wireframeLinecap_;
         }
 
         [[nodiscard]] std::string getWireframeLinejoin() const {
+
             return wireframeLinejoin_;
         }
 
         [[nodiscard]] bool getWireframe() const override {
+
             return wireframe_;
         }
 
         void setWireframe(bool wireframe) override {
+
             wireframe_ = wireframe;
         }
 
         [[nodiscard]] float getWireframeLinewidth() const override {
+
             return wireframeLinewidth_;
         }
 
         void setWireframeLinewidth(float width) override {
+
             wireframeLinewidth_ = width;
         }
 
         std::optional<Texture> &getMap() override {
+
             return map;
         }
 
         std::optional<Texture> &getAlphaMap() override {
+
             return map;
         }
 
         [[nodiscard]] std::string type() const override {
+
             return "MeshBasicMaterial";
         }
 
         static std::shared_ptr<MeshBasicMaterial> create() {
+
             return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
         }
 

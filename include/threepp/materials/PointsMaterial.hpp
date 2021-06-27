@@ -14,22 +14,27 @@ namespace threepp {
 
     public:
         [[nodiscard]] float getSize() const override {
+
             return size_;
         }
 
         [[nodiscard]] bool getSizeAttenuation() const override {
+
             return sizeAttenuation_;
         }
 
         Color &getColor() override {
+
             return color_;
         }
 
         [[nodiscard]] std::string type() const override {
+
             return "PointsMaterial";
         }
 
         static std::shared_ptr<PointsMaterial> create() {
+
             return std::shared_ptr<PointsMaterial>(new PointsMaterial());
         }
 

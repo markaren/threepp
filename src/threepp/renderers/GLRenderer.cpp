@@ -169,10 +169,9 @@ void GLRenderer::dispose() {
     renderLists.dispose();
     renderStates.dispose();
     properties.dispose();
-//    cubemaps.dispose();
+    //    cubemaps.dispose();
     objects.dispose();
     bindingStates.dispose();
-
 }
 void GLRenderer::deallocateMaterial(Material *material) {
 
@@ -244,7 +243,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
     bindingStates.setup(object, material, program, geometry, index);
 
     gl::Buffer attribute{};
-    gl::BufferRenderer* renderer = &bufferRenderer;
+    gl::BufferRenderer *renderer = &bufferRenderer;
 
     if (index != nullptr) {
 
@@ -335,291 +334,50 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
     }
 }
 
-gl::GLProgram GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object) {
-
-    bool isScene = instanceof <Scene>(scene);
-
-//            if (isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
-//
-//            textures.resetTextureUnits();
-//
-//            const fog = scene->fog;
-//            const environment = material.isMeshStandardMaterial ? scene.environment : nullptr;
-//            const encoding = (_currentRenderTarget == = nullptr) ? _this.outputEncoding : _currentRenderTarget.texture.encoding;
-//            const envMap = cubemaps.get(material.envMap || environment);
-//            const vertexAlphas = material.vertexColors == = true &&object.geometry &&object.geometry.attributes.color &&object.geometry.attributes.color.itemSize == = 4;
-//
-//            const materialProperties = properties.get(material);
-//            const lights = currentRenderState.state.lights;
-//
-//            if (_clippingEnabled) {
-//
-//                if (_localClippingEnabled || camera != _currentCamera) {
-//
-//                    const useCache =
-//                            camera == _currentCamera && material->id == _currentMaterialId;
-//
-//                    // we might want to call this function with some ClippingGroup
-//                    // object instead of the material, once it becomes feasible
-//                    // (#8465, #8379)
-//                    clipping.setState(material, camera, useCache);
-//                }
-//            }
-//
-//            //
-//
-//            let needsProgramChange = false;
-//
-//            if (material.version == = materialProperties.__version) {
-//
-//                if (materialProperties.needsLights && (materialProperties.lightsStateVersion != = lights.state.version)) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (materialProperties.outputEncoding != = encoding) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (object.isInstancedMesh &&materialProperties.instancing == = false) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (!object.isInstancedMesh &&materialProperties.instancing == = true) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (object.isSkinnedMesh &&materialProperties.skinning == = false) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (!object.isSkinnedMesh &&materialProperties.skinning == = true) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (materialProperties.envMap != = envMap) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (material.fog &&materialProperties.fog != = fog) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (materialProperties.numClippingPlanes != = undefined &&
-//                                                                     (materialProperties.numClippingPlanes != = clipping.numPlanes ||
-//                                                                                                                materialProperties.numIntersection != = clipping.numIntersection)) {
-//
-//                    needsProgramChange = true;
-//
-//                } else if (materialProperties.vertexAlphas != = vertexAlphas) {
-//
-//                    needsProgramChange = true;
-//                }
-//
-//            } else {
-//
-//                needsProgramChange = true;
-//                materialProperties.__version = material.version;
-//            }
-//
-//            //
-//
-//            let program = materialProperties.currentProgram;
-//
-//            if (needsProgramChange == = true) {
-//
-//                program = getProgram(material, scene, object);
-//            }
-//
-//            let refreshProgram = false;
-//            let refreshMaterial = false;
-//            let refreshLights = false;
-//
-//            const p_uniforms = program.getUniforms(),
-//                  m_uniforms = materialProperties.uniforms;
-//
-//            if (state.useProgram(program.program)) {
-//
-//                refreshProgram = true;
-//                refreshMaterial = true;
-//                refreshLights = true;
-//            }
-//
-//            if (material.id != = _currentMaterialId) {
-//
-//                _currentMaterialId = material.id;
-//
-//                refreshMaterial = true;
-//            }
-//
-//            if (refreshProgram || _currentCamera != = camera) {
-//
-//                p_uniforms.setValue(_gl, 'projectionMatrix', camera.projectionMatrix);
-//
-//                if (capabilities.logarithmicDepthBuffer) {
-//
-//                    p_uniforms.setValue(_gl, 'logDepthBufFC',
-//                                        2.0 / (Math.log(camera.far + 1.0) / Math.LN2));
-//                }
-//
-//                if (_currentCamera != = camera) {
-//
-//                    _currentCamera = camera;
-//
-//                    // lighting uniforms depend on the camera so enforce an update
-//                    // now, in case this material supports lights - or later, when
-//                    // the next material that does gets activated:
-//
-//                    refreshMaterial = true;// set to true on material change
-//                    refreshLights = true;  // remains set until update done
-//                }
-//
-//                // load material specific uniforms
-//                // (shader material also gets them for the sake of genericity)
-//
-//                if (material.isShaderMaterial ||
-//                    material.isMeshPhongMaterial ||
-//                    material.isMeshToonMaterial ||
-//                    material.isMeshStandardMaterial ||
-//                    material.envMap) {
-//
-//                    const uCamPos = p_uniforms.map.cameraPosition;
-//
-//                    if (uCamPos != = undefined) {
-//
-//                        uCamPos.setValue(_gl,
-//                                         _vector3.setFromMatrixPosition(camera.matrixWorld));
-//                    }
-//                }
-//
-//                if (material.isMeshPhongMaterial ||
-//                    material.isMeshToonMaterial ||
-//                    material.isMeshLambertMaterial ||
-//                    material.isMeshBasicMaterial ||
-//                    material.isMeshStandardMaterial ||
-//                    material.isShaderMaterial) {
-//
-//                    p_uniforms.setValue(_gl, 'isOrthographic', camera.isOrthographicCamera == = true);
-//                }
-//
-//                if (material.isMeshPhongMaterial ||
-//                    material.isMeshToonMaterial ||
-//                    material.isMeshLambertMaterial ||
-//                    material.isMeshBasicMaterial ||
-//                    material.isMeshStandardMaterial ||
-//                    material.isShaderMaterial ||
-//                    material.isShadowMaterial ||
-//                    object.isSkinnedMesh) {
-//
-//                    p_uniforms.setValue(_gl, 'viewMatrix', camera.matrixWorldInverse);
-//                }
-//            }
-//
-//            if (refreshMaterial || materialProperties.receiveShadow != = object.receiveShadow) {
-//
-//                materialProperties.receiveShadow = object.receiveShadow;
-//                p_uniforms.setValue(_gl, 'receiveShadow', object.receiveShadow);
-//            }
-//
-//            if (refreshMaterial) {
-//
-//                p_uniforms.setValue(_gl, 'toneMappingExposure', _this.toneMappingExposure);
-//
-//                if (materialProperties.needsLights) {
-//
-//                    // the current material requires lighting info
-//
-//                    // note: all lighting uniforms are always set correctly
-//                    // they simply reference the renderer's state for their
-//                    // values
-//                    //
-//                    // use the current material's .needsUpdate flags to set
-//                    // the GL state when required
-//
-//                    markUniformsLightsNeedsUpdate(m_uniforms, refreshLights);
-//                }
-//
-//                // refresh uniforms common to several materials
-//
-//                if (fog && material.fog) {
-//
-//                    materials.refreshFogUniforms(m_uniforms, fog);
-//                }
-//
-//                materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _height, _transmissionRenderTarget);
-//
-//                WebGLUniforms.upload(_gl, materialProperties.uniformsList, m_uniforms, textures);
-//            }
-//
-//            if (material.isShaderMaterial &&material.uniformsNeedUpdate == = true) {
-//
-//                WebGLUniforms.upload(_gl, materialProperties.uniformsList, m_uniforms, textures);
-//                material.uniformsNeedUpdate = false;
-//            }
-//
-//            if (material.isSpriteMaterial) {
-//
-//                p_uniforms.setValue(_gl, 'center', object.center);
-//            }
-//
-//            // common matrices
-//
-//            p_uniforms.setValue(_gl, 'modelViewMatrix', object.modelViewMatrix);
-//            p_uniforms.setValue(_gl, 'normalMatrix', object.normalMatrix);
-//            p_uniforms.setValue(_gl, 'modelMatrix', object.matrixWorld);
-//
-//            return program;
-
-    return {};
-}
 void GLRenderer::compile(Scene *scene, Camera *camera) {
 
-    currentRenderState = renderStates.get( scene );
+    currentRenderState = renderStates.get(scene);
     currentRenderState.value().init();
 
-    scene->traverseVisible( [] ( Object3D &object ) {
-
-//        if (instanceof <Light>(&object) && object.layers.test( camera->layers ) ) {
-//
-//            currentRenderState.pushLight( object );
-//
-//            if ( object.castShadow ) {
-//
-//                currentRenderState.pushShadow( object );
-//
-//            }
-//
-//        }
-
-    } );
+    scene->traverseVisible([](Object3D &object) {
+        //        if (instanceof <Light>(&object) && object.layers.test( camera->layers ) ) {
+        //
+        //            currentRenderState.pushLight( object );
+        //
+        //            if ( object.castShadow ) {
+        //
+        //                currentRenderState.pushShadow( object );
+        //
+        //            }
+        //
+        //        }
+    });
 
     currentRenderState.value().setupLights();
 
-    scene->traverse( [&] ( Object3D &object ) {
-
+    scene->traverse([&](Object3D &object) {
         auto material = object.material();
 
-        if ( material ) {
+        if (material) {
 
-//            if ( Array.isArray( material ) ) {
-//
-//                for ( let i = 0; i < material.length; i ++ ) {
-//
-//                    const material2 = material[ i ];
-//
-//                    getProgram( material2, scene, object );
-//
-//                }
-//
-//            } else {
-//
-                getProgram( material, scene, &object );
-//
-//            }
-//
+            //            if ( Array.isArray( material ) ) {
+            //
+            //                for ( let i = 0; i < material.length; i ++ ) {
+            //
+            //                    const material2 = material[ i ];
+            //
+            //                    getProgram( material2, scene, object );
+            //
+            //                }
+            //
+            //            } else {
+            //
+            getProgram(material, scene, &object);
+            //
+            //            }
+            //
         }
-
-    } );
-
+    });
 }
 
 void GLRenderer::render(Scene *scene, Camera *camera) {
@@ -628,11 +386,282 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
 }
 
-void GLRenderer::renderObjects(gl::GLRenderList renderList, Scene *scene, Camera *camera) {
+void GLRenderer::renderObjects(gl::GLRenderList& renderList, Scene *scene, Camera *camera) {
 }
 
 void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group) {
 }
 
-void GLRenderer::getProgram(Material *material, Scene *scene, Object3D *object) {
+void GLRenderer::getProgram(Material *material, Object3D *scene, Object3D *object) {
+
+    bool isScene = instanceof <Scene>(scene);
+
+//    if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
+
+    auto& materialProperties = properties.materialProperties.get(material->uuid);
 }
+
+void GLRenderer::updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters) {
+
+    auto &materialProperties = properties.materialProperties.get(material->uuid);
+
+    //    materialProperties.outputEncoding = parameters.outputEncoding;
+    //    materialProperties.instancing = parameters.instancing;
+    //    materialProperties.numClippingPlanes = parameters.numClippingPlanes;
+    //    materialProperties.numIntersection = parameters.numClipIntersection;
+    //    materialProperties.vertexAlphas = parameters.vertexAlphas;
+}
+
+
+gl::GLProgram GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object) {
+
+    bool isScene = instanceof <Scene>(scene);
+
+    //            if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
+    //
+    //            textures.resetTextureUnits();
+    //
+    //            const fog = scene->fog;
+    //            const environment = material.isMeshStandardMaterial ? scene.environment : nullptr;
+    //            const encoding = (_currentRenderTarget == = nullptr) ? _this.outputEncoding : _currentRenderTarget.texture.encoding;
+    //            const envMap = cubemaps.get(material.envMap || environment);
+    //            const vertexAlphas = material.vertexColors == = true &&object.geometry &&object.geometry.attributes.color &&object.geometry.attributes.color.itemSize == = 4;
+    //
+    //            const materialProperties = properties.get(material);
+    //            const lights = currentRenderState.state.lights;
+    //
+    //            if (_clippingEnabled) {
+    //
+    //                if (_localClippingEnabled || camera != _currentCamera) {
+    //
+    //                    const useCache =
+    //                            camera == _currentCamera && material->id == _currentMaterialId;
+    //
+    //                    // we might want to call this function with some ClippingGroup
+    //                    // object instead of the material, once it becomes feasible
+    //                    // (#8465, #8379)
+    //                    clipping.setState(material, camera, useCache);
+    //                }
+    //            }
+    //
+    //            //
+    //
+    //            let needsProgramChange = false;
+    //
+    //            if (material.version == = materialProperties.__version) {
+    //
+    //                if (materialProperties.needsLights && (materialProperties.lightsStateVersion != = lights.state.version)) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (materialProperties.outputEncoding != = encoding) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (object.isInstancedMesh &&materialProperties.instancing == = false) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (!object.isInstancedMesh &&materialProperties.instancing == = true) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (object.isSkinnedMesh &&materialProperties.skinning == = false) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (!object.isSkinnedMesh &&materialProperties.skinning == = true) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (materialProperties.envMap != = envMap) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (material.fog &&materialProperties.fog != = fog) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (materialProperties.numClippingPlanes != = undefined &&
+    //                                                                     (materialProperties.numClippingPlanes != = clipping.numPlanes ||
+    //                                                                                                                materialProperties.numIntersection != = clipping.numIntersection)) {
+    //
+    //                    needsProgramChange = true;
+    //
+    //                } else if (materialProperties.vertexAlphas != = vertexAlphas) {
+    //
+    //                    needsProgramChange = true;
+    //                }
+    //
+    //            } else {
+    //
+    //                needsProgramChange = true;
+    //                materialProperties.__version = material.version;
+    //            }
+    //
+    //            //
+    //
+    //            let program = materialProperties.currentProgram;
+    //
+    //            if (needsProgramChange == = true) {
+    //
+    //                program = getProgram(material, scene, object);
+    //            }
+    //
+    //            let refreshProgram = false;
+    //            let refreshMaterial = false;
+    //            let refreshLights = false;
+    //
+    //            const p_uniforms = program.getUniforms(),
+    //                  m_uniforms = materialProperties.uniforms;
+    //
+    //            if (state.useProgram(program.program)) {
+    //
+    //                refreshProgram = true;
+    //                refreshMaterial = true;
+    //                refreshLights = true;
+    //            }
+    //
+    //            if (material.id != = _currentMaterialId) {
+    //
+    //                _currentMaterialId = material.id;
+    //
+    //                refreshMaterial = true;
+    //            }
+    //
+    //            if (refreshProgram || _currentCamera != = camera) {
+    //
+    //                p_uniforms.setValue(_gl, 'projectionMatrix', camera.projectionMatrix);
+    //
+    //                if (capabilities.logarithmicDepthBuffer) {
+    //
+    //                    p_uniforms.setValue(_gl, 'logDepthBufFC',
+    //                                        2.0 / (Math.log(camera.far + 1.0) / Math.LN2));
+    //                }
+    //
+    //                if (_currentCamera != = camera) {
+    //
+    //                    _currentCamera = camera;
+    //
+    //                    // lighting uniforms depend on the camera so enforce an update
+    //                    // now, in case this material supports lights - or later, when
+    //                    // the next material that does gets activated:
+    //
+    //                    refreshMaterial = true;// set to true on material change
+    //                    refreshLights = true;  // remains set until update done
+    //                }
+    //
+    //                // load material specific uniforms
+    //                // (shader material also gets them for the sake of genericity)
+    //
+    //                if (material.isShaderMaterial ||
+    //                    material.isMeshPhongMaterial ||
+    //                    material.isMeshToonMaterial ||
+    //                    material.isMeshStandardMaterial ||
+    //                    material.envMap) {
+    //
+    //                    const uCamPos = p_uniforms.map.cameraPosition;
+    //
+    //                    if (uCamPos != = undefined) {
+    //
+    //                        uCamPos.setValue(_gl,
+    //                                         _vector3.setFromMatrixPosition(camera.matrixWorld));
+    //                    }
+    //                }
+    //
+    //                if (material.isMeshPhongMaterial ||
+    //                    material.isMeshToonMaterial ||
+    //                    material.isMeshLambertMaterial ||
+    //                    material.isMeshBasicMaterial ||
+    //                    material.isMeshStandardMaterial ||
+    //                    material.isShaderMaterial) {
+    //
+    //                    p_uniforms.setValue(_gl, 'isOrthographic', camera.isOrthographicCamera == = true);
+    //                }
+    //
+    //                if (material.isMeshPhongMaterial ||
+    //                    material.isMeshToonMaterial ||
+    //                    material.isMeshLambertMaterial ||
+    //                    material.isMeshBasicMaterial ||
+    //                    material.isMeshStandardMaterial ||
+    //                    material.isShaderMaterial ||
+    //                    material.isShadowMaterial ||
+    //                    object.isSkinnedMesh) {
+    //
+    //                    p_uniforms.setValue(_gl, 'viewMatrix', camera.matrixWorldInverse);
+    //                }
+    //            }
+    //
+    //            if (refreshMaterial || materialProperties.receiveShadow != = object.receiveShadow) {
+    //
+    //                materialProperties.receiveShadow = object.receiveShadow;
+    //                p_uniforms.setValue(_gl, 'receiveShadow', object.receiveShadow);
+    //            }
+    //
+    //            if (refreshMaterial) {
+    //
+    //                p_uniforms.setValue(_gl, 'toneMappingExposure', _this.toneMappingExposure);
+    //
+    //                if (materialProperties.needsLights) {
+    //
+    //                    // the current material requires lighting info
+    //
+    //                    // note: all lighting uniforms are always set correctly
+    //                    // they simply reference the renderer's state for their
+    //                    // values
+    //                    //
+    //                    // use the current material's .needsUpdate flags to set
+    //                    // the GL state when required
+    //
+    //                    markUniformsLightsNeedsUpdate(m_uniforms, refreshLights);
+    //                }
+    //
+    //                // refresh uniforms common to several materials
+    //
+    //                if (fog && material.fog) {
+    //
+    //                    materials.refreshFogUniforms(m_uniforms, fog);
+    //                }
+    //
+    //                materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _height, _transmissionRenderTarget);
+    //
+    //                WebGLUniforms.upload(_gl, materialProperties.uniformsList, m_uniforms, textures);
+    //            }
+    //
+    //            if (material.isShaderMaterial &&material.uniformsNeedUpdate == = true) {
+    //
+    //                WebGLUniforms.upload(_gl, materialProperties.uniformsList, m_uniforms, textures);
+    //                material.uniformsNeedUpdate = false;
+    //            }
+    //
+    //            if (material.isSpriteMaterial) {
+    //
+    //                p_uniforms.setValue(_gl, 'center', object.center);
+    //            }
+    //
+    //            // common matrices
+    //
+    //            p_uniforms.setValue(_gl, 'modelViewMatrix', object.modelViewMatrix);
+    //            p_uniforms.setValue(_gl, 'normalMatrix', object.normalMatrix);
+    //            p_uniforms.setValue(_gl, 'modelMatrix', object.matrixWorld);
+    //
+    //            return program;
+
+    return {};
+}
+
+bool GLRenderer::materialNeedsLights(Material *material) {
+
+    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material);
+    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material);
+    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material);
+    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
+    bool isShadowMaterial = instanceof <ShadowMaterial>(material);
+    bool isShaderMaterial = instanceof <ShaderMaterial>(material);
+
+    return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
+           isMeshStandardMaterial || isShadowMaterial ||
+           ( isShaderMaterial /*&& lights*/);
+
+}
+

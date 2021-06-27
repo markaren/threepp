@@ -20,7 +20,7 @@
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLProgram.hpp"
-
+//
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
 #include "threepp/renderers/gl/GLClipping.hpp"
@@ -143,19 +143,25 @@ namespace threepp {
 
         void renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, GeometryGroup *group);
 
-        gl::GLProgram setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object);
-
         void compile(Scene *scene, Camera *camera);
 
         void render(Scene *scene, Camera *camera);
 
         void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
 
-        void renderObjects( gl::GLRenderList renderList, Scene *scene, Camera *camera);
+        void renderObjects( gl::GLRenderList &renderList, Scene *scene, Camera *camera);
 
         void renderObject(Object3D *object, Scene* scene, Camera *camera, BufferGeometry *geometry, Material *material, int group);
 
-        void getProgram(Material *material, Scene *scene, Object3D* object);
+        void getProgram(Material *material, Object3D *scene, Object3D* object);
+
+        void updateCommonMaterialProperties(Material* material, gl::GLPrograms::Parameters &parameters);
+
+        gl::GLProgram setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object);
+
+//        void markUniformsLightsNeedsUpdate(uniforms, value );
+
+        bool materialNeedsLights(Material* material);
 
     private:
         Canvas &canvas_;

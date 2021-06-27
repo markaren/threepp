@@ -7,30 +7,36 @@
 
 namespace threepp {
 
-    class LineBasicMaterial: public MaterialWithColor {
+    class LineBasicMaterial : public MaterialWithColor {
 
     public:
         Color &getColor() override {
+
             return color_;
         }
 
         [[nodiscard]] float getLinewidth() const {
+
             return linewidth;
         }
 
         [[nodiscard]] const std::string &getLinecap() const {
+
             return linecap;
         }
 
         [[nodiscard]] const std::string &getLinejoin() const {
+
             return linejoin;
         }
 
         [[nodiscard]] std::string type() const override {
+
             return "LineBasicMaterial";
         }
 
         static std::shared_ptr<LineBasicMaterial> create() {
+
             return std::shared_ptr<LineBasicMaterial>(new LineBasicMaterial());
         }
 
@@ -43,9 +49,8 @@ namespace threepp {
         float linewidth = 1;
         std::string linecap = "round";
         std::string linejoin = "round";
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_LINEBASICMATERIAL_HPP

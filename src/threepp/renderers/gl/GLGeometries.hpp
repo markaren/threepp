@@ -7,6 +7,8 @@
 #include "GLBindingStates.hpp"
 #include "GLInfo.hpp"
 
+#include <unordered_map>
+
 namespace threepp::gl {
 
     struct GLGeometries {

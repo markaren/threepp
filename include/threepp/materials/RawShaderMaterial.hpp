@@ -11,10 +11,12 @@ namespace threepp {
 
     public:
         [[nodiscard]] std::string type() const override {
+
             return "RawShaderMaterial";
         }
 
         static std::shared_ptr<RawShaderMaterial> create() {
+
             return std::shared_ptr<RawShaderMaterial>(new RawShaderMaterial());
         }
 

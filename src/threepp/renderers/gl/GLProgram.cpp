@@ -137,9 +137,9 @@ namespace {
         std::string result = str;
         result = std::regex_replace(result, std::regex("NUM_DIR_LIGHTS"), std::to_string(parameters.numDirLights));
         result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHTS"), std::to_string(parameters.numSpotLights));
-        result = std::regex_replace(result, std::regex("NUM_RECT_AREA_LIGHTS"), std::to_string(parameters.numRectAreaLights));
+        result = std::regex_replace(result, std::regex("NUM_RECT_AREA_LIGHTS"), std::to_string(0));
         result = std::regex_replace(result, std::regex("NUM_POINT_LIGHTS"), std::to_string(parameters.numPointLights));
-        result = std::regex_replace(result, std::regex("NUM_HEMI_LIGHTS"), std::to_string(parameters.numHemiLights));
+        result = std::regex_replace(result, std::regex("NUM_HEMI_LIGHTS"), std::to_string(0));
         result = std::regex_replace(result, std::regex("NUM_DIR_LIGHT_SHADOWS"), std::to_string(parameters.numDirLightShadows));
         result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHT_SHADOWS"), std::to_string(parameters.numSpotLightShadows));
         result = std::regex_replace(result, std::regex("NUM_POINT_LIGHT_SHADOWS"), std::to_string(parameters.numPointLightShadows));

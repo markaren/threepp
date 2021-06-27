@@ -3,13 +3,12 @@
 #ifndef THREEPP_GLATTRIBUTES_HPP
 #define THREEPP_GLATTRIBUTES_HPP
 
-#include <glad/glad.h>
+#include "GLCapabilities.hpp"
 
 #include "threepp/core/BufferAttribute.hpp"
-
 #include "threepp/utils/InstanceOf.hpp"
 
-#include "threepp/renderers/gl/GLCapabilities.hpp"
+#include <glad/glad.h>
 
 namespace threepp::gl {
 

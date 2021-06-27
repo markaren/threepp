@@ -39,8 +39,6 @@ namespace threepp::gl {
             int numDirLights;
             int numPointLights;
             int numSpotLights;
-            int numRectAreaLights;
-            int numHemiLights;
 
             int numDirLightShadows;
             int numPointLightShadows;

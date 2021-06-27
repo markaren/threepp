@@ -12,7 +12,6 @@
 
 namespace threepp::gl {
 
-
     struct GLMaterials {
 
         void refreshMaterialUniforms(std::unordered_map<std::string, Uniform> &uniforms, Material *material, int pixelRatio, float height) {

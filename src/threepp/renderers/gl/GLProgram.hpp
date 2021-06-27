@@ -9,7 +9,7 @@ namespace threepp::gl {
 
     struct GLProgram {
 
-        const int id = programIdCount++;
+        int id = programIdCount++;
 
     private:
         inline static int programIdCount = 0;

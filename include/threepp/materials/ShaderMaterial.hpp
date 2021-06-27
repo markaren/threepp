@@ -21,22 +21,27 @@ namespace threepp {
         bool clipping = false; // set to use user-defined clipping planes
 
         [[nodiscard]] bool getWireframe() const override {
+
             return wireframe_;
         }
 
         void setWireframe(bool wireframe) override {
+
             wireframe_ = wireframe;
         }
 
         [[nodiscard]] float getWireframeLinewidth() const override {
+
             return wireframeLinewidth_;
         }
 
         void setWireframeLinewidth(float width) override {
+
             wireframeLinewidth_ = width;
         }
 
         [[nodiscard]] std::string type() const override {
+
             return "ShaderMaterial";
         }
 
