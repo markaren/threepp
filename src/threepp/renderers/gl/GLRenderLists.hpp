@@ -6,17 +6,17 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 
-#include "GLProperties.hpp"
 #include "GLProgram.hpp"
+#include "GLProperties.hpp"
 
 namespace threepp::gl {
 
     struct RenderItem {
 
         unsigned int id;
-        Object3D* object;
-        BufferGeometry* geometry;
-        Material* material;
+        Object3D *object;
+        BufferGeometry *geometry;
+        Material *material;
         GLProgram program;
         int groupOrder;
         int renderOrder;
@@ -31,7 +31,7 @@ namespace threepp::gl {
 
         void init();
 
-        RenderItem &getNextRenderItem(Object3D* object, BufferGeometry* geometry, Material* material, int groupOrder, float z, int group);
+        RenderItem &getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, int group);
 
     private:
         GLProperties &properties;
@@ -39,10 +39,9 @@ namespace threepp::gl {
         std::vector<RenderItem> renderItems;
         int renderItemIndex = 0;
 
-        std::vector<Object3D*> opaque;
-        std::vector<Object3D*> transmissive;
-        std::vector<Object3D*> transparent;
-
+        std::vector<Object3D *> opaque;
+        std::vector<Object3D *> transmissive;
+        std::vector<Object3D *> transparent;
     };
 
 }// namespace threepp::gl

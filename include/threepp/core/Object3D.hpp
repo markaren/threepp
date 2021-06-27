@@ -167,6 +167,7 @@ namespace threepp {
 
         friend class Box3;
         friend class Frustum;
+        friend class GLRenderer;
     };
 
     typedef std::shared_ptr<Object3D> Object3DPtr;

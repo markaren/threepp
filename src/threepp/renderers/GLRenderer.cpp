@@ -510,33 +510,6 @@ gl::GLProgram GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *
 //                }
 //            }
 //
-//            // skinning uniforms must be set even if material didn't change
-//            // auto-setting of texture unit for bone texture must go before other textures
-//            // otherwise textures used for skinning can take over texture units reserved for other material textures
-//
-//            if (object.isSkinnedMesh) {
-//
-//                p_uniforms.setOptional(_gl, object, 'bindMatrix');
-//                p_uniforms.setOptional(_gl, object, 'bindMatrixInverse');
-//
-//                const skeleton = object.skeleton;
-//
-//                if (skeleton) {
-//
-//                    if (capabilities.floatVertexTextures) {
-//
-//                        if (skeleton.boneTexture == = nullptr) skeleton.computeBoneTexture();
-//
-//                        p_uniforms.setValue(_gl, 'boneTexture', skeleton.boneTexture, textures);
-//                        p_uniforms.setValue(_gl, 'boneTextureSize', skeleton.boneTextureSize);
-//
-//                    } else {
-//
-//                        p_uniforms.setOptional(_gl, skeleton, 'boneMatrices');
-//                    }
-//                }
-//            }
-//
 //            if (refreshMaterial || materialProperties.receiveShadow != = object.receiveShadow) {
 //
 //                materialProperties.receiveShadow = object.receiveShadow;
@@ -619,12 +592,8 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
 
     scene->traverse( [&] ( Object3D &object ) {
 
-//        bool isObjectWithMaterial = instanceof <Object3DWithMaterial>(&object);
-//
-//        if ( isObjectWithMaterial) {
-//
-//            auto material = dynamic_cast<Object3DWithMaterial*>(&object)->material();
-//
+        if ( object.material() ) {
+
 //            if ( Array.isArray( material ) ) {
 //
 //                for ( let i = 0; i < material.length; i ++ ) {
@@ -641,7 +610,7 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
 //
 //            }
 //
-//        }
+        }
 
     } );
 }
