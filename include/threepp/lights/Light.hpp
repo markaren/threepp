@@ -16,16 +16,15 @@ namespace threepp {
         Color color;
         float intensity;
 
-        Light(const Light&) = delete;
+        Light(const Light &) = delete;
 
         std::string type() const override {
             return "Light";
         }
 
-        virtual void dispose() {}
+        virtual void dispose(){};
 
     protected:
-
         template<class T>
         Light(T color, std::optional<float> intensity)
             : color(color), intensity(intensity.value_or(1)) {}
@@ -33,8 +32,6 @@ namespace threepp {
         virtual std::optional<Object3D> target() {
             return std::nullopt;
         }
-
-
     };
 
 }// namespace threepp

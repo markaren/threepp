@@ -1,4 +1,4 @@
-//
+// // https://github.com/mrdoob/three.js/blob/r129/src/lights/SpotLight.js
 
 #ifndef THREEPP_SPOTLIGHT_HPP
 #define THREEPP_SPOTLIGHT_HPP
@@ -17,7 +17,7 @@ namespace threepp {
         float penumbra;
         float decay;
 
-        Object3D target;
+        Object3D* target = nullptr;
 
         float getPower() {
 

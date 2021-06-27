@@ -29,7 +29,7 @@ namespace threepp {
             this->intensity = power / (4.f * math::PI);
         }
 
-        void dispose() {
+        void dispose() override {
 
             this->shadow_.dispose();
         }

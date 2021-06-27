@@ -8,12 +8,12 @@
 
 namespace threepp {
 
-    class DirectionalLight : Light {
+    class DirectionalLight : public Light {
 
     public:
 
         Vector3 position;
-        std::optional<Object3D> target;
+        Object3D* target = nullptr;
 
         LightShadow shadow;
 
