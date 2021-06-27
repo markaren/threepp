@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include "threepp/objects/Line.hpp"
+
 #include <glad/glad.h>
 
 using namespace threepp;
@@ -271,7 +273,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         if (isWireframeMaterial) {
 
-            if (isWireframeMaterial && wireframeMaterial->getWireframe()) {
+            if (wireframeMaterial->getWireframe()) {
 
                 state.setLineWidth(wireframeMaterial->getWireframeLinewidth() * (float) getTargetPixelRatio());
                 renderer->setMode(GL_LINES);
@@ -282,7 +284,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
             renderer->setMode(GL_TRIANGLES);
         }
 
-    } else if (instanceof <Line3>(object)) {
+    } else if (instanceof <Line>(object)) {
 
         float lineWidth = 1;
         if (isWireframeMaterial) {
@@ -591,4 +593,55 @@ gl::GLProgram GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *
 //            return program;
 
     return {};
+}
+void GLRenderer::compile(Scene *scene, Camera *camera) {
+
+    currentRenderState = renderStates.get( scene );
+    currentRenderState.value().init();
+
+    scene->traverseVisible( [] ( Object3D &object ) {
+
+//        if (instanceof <Light>(&object) && object.layers.test( camera->layers ) ) {
+//
+//            currentRenderState.pushLight( object );
+//
+//            if ( object.castShadow ) {
+//
+//                currentRenderState.pushShadow( object );
+//
+//            }
+//
+//        }
+
+    } );
+
+    currentRenderState.value().setupLights();
+
+    scene->traverse( [&] ( Object3D &object ) {
+
+//        bool isObjectWithMaterial = instanceof <Object3DWithMaterial>(&object);
+//
+//        if ( isObjectWithMaterial) {
+//
+//            auto material = dynamic_cast<Object3DWithMaterial*>(&object)->material();
+//
+//            if ( Array.isArray( material ) ) {
+//
+//                for ( let i = 0; i < material.length; i ++ ) {
+//
+//                    const material2 = material[ i ];
+//
+//                    getProgram( material2, scene, object );
+//
+//                }
+//
+//            } else {
+//
+//                getProgram( material, scene, object );
+//
+//            }
+//
+//        }
+
+    } );
 }

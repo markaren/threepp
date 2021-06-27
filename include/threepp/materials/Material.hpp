@@ -93,7 +93,6 @@ namespace threepp {
         inline static unsigned int materialId = 0;
     };
 
-
 }// namespace threepp
 
 #endif//THREEPP_MATERIAL_HPP

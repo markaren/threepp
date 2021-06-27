@@ -19,7 +19,7 @@ namespace threepp {
             return geometry_.get();
         }
 
-        Material *material() {
+        Material *material() override {
             return material_.get();
         }
 

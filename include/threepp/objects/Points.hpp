@@ -19,7 +19,15 @@ namespace threepp {
             return std::shared_ptr<Points>(new Points(std::move(geometry), std::move(material)));
         }
 
-        ~Points() = default;
+        BufferGeometry *geometry() override {
+
+            return geometry_.get();
+        }
+
+        Material *material() override {
+
+            return material_.get();
+        }
 
     protected:
         Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)

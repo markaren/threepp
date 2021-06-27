@@ -14,16 +14,16 @@
 
 namespace threepp {
 
-    class Line : public Object3D {
+    class Line : public Object3D{
 
     public:
-        Line(const Line &) = delete;
 
         BufferGeometry *geometry() override {
             return geometry_.get();
         }
-        const std::shared_ptr<Material> &material() const {
-            return material_;
+
+        Material *material() override {
+            return material_.get();
         }
 
         Line &computeLineDistances() {

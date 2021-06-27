@@ -30,6 +30,8 @@
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
+#include "threepp/renderers/gl/GLRenderStates.hpp"
+#include "threepp/renderers/gl/GLRenderLists.hpp"
 
 #include <memory>
 #include <vector>
@@ -143,9 +145,16 @@ namespace threepp {
 
         gl::GLProgram setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object);
 
+        void compile(Scene *scene, Camera *camera);
 
     private:
         Canvas &canvas_;
+
+        std::optional<gl::GLRenderList> currentRenderList;
+        std::optional<gl::GLRenderState> currentRenderState;
+
+        std::vector<gl::GLRenderList> renderListStack;
+        std::vector<gl::GLRenderState> renderStateStack;
 
         int _currentActiveCubeFace = 0;
         int _currentActiveMipmapLevel = 0;
@@ -196,6 +205,7 @@ namespace threepp {
         gl::GLMaterials materials;
         gl::GLBufferRenderer bufferRenderer;
         gl::GLIndexedBufferRenderer indexedBufferRenderer;
+        gl::GLRenderStates renderStates;
     };
 
 }// namespace threepp
