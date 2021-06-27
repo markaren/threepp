@@ -1,7 +1,8 @@
 
-#include "threepp/renderers/gl/GLPrograms.hpp"
+#include "GLPrograms.hpp"
 
 #include "threepp/utils/InstanceOf.hpp"
+
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -46,27 +47,31 @@ namespace {
 GLPrograms::Parameters::Parameters(
         const GLPrograms &scope,
         Material *material,
-        std::vector<Object3D *> &shadows,
-        std::optional<Fog> fog,
-        int nClipPlanes,
-        int nClipIntersection,
-        threepp::Object3D *object) {
+        GLLights::LightState &lights,
+        int numShadows,
+        Scene *scene,
+        Object3D *object) {
 
     shaderId = shaderIds[material->type()];
     shaderName = material->type();
 
 
-    isRawShaderMaterial = false; //TODO
+    isRawShaderMaterial = false; //instanceof <RawShaderMaterial>(material);
 
     supportsVertexTextures = scope.vertexTextures;
 
+//    numDirLights = lights.directional.size();
+//    numPointLights = lights.point.size();
+//    numSpotLights = lights.spot.size();
+//    numRectAreaLights = lights.rectArea.size();
+//    numHemiLights = lights.hemi.size();
 }
 
 GLPrograms::GLPrograms()
-        : logarithmicDepthBuffer(GLCapabilities::instance().logarithmicDepthBuffer),
-          floatVertexTextures(GLCapabilities::instance().floatVertexTextures),
-          maxVertexUniforms(GLCapabilities::instance().maxVertexUniforms),
-          vertexTextures(GLCapabilities::instance().vertexTextures) {}
+    : logarithmicDepthBuffer(GLCapabilities::instance().logarithmicDepthBuffer),
+      floatVertexTextures(GLCapabilities::instance().floatVertexTextures),
+      maxVertexUniforms(GLCapabilities::instance().maxVertexUniforms),
+      vertexTextures(GLCapabilities::instance().vertexTextures) {}
 
 
 int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
@@ -83,4 +88,9 @@ int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
     }
 
     return encoding;
+}
+
+GLPrograms::Parameters GLPrograms::getParameters(Material *material, GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
+
+    return GLPrograms::Parameters(*this, material, lights, numShadows, scene, object);
 }

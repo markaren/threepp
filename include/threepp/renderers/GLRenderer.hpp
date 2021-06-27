@@ -147,6 +147,16 @@ namespace threepp {
 
         void compile(Scene *scene, Camera *camera);
 
+        void render(Scene *scene, Camera *camera);
+
+        void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
+
+        void renderObjects( gl::GLRenderList renderList, Scene *scene, Camera *camera);
+
+        void renderObject(Object3D *object, Scene* scene, Camera *camera, BufferGeometry *geometry, Material *material, int group);
+
+        void getProgram(Material *material, Scene *scene, Object3D* object);
+
     private:
         Canvas &canvas_;
 
@@ -206,6 +216,8 @@ namespace threepp {
         gl::GLBufferRenderer bufferRenderer;
         gl::GLIndexedBufferRenderer indexedBufferRenderer;
         gl::GLRenderStates renderStates;
+        gl::GLRenderLists renderLists;
+        gl::GLObjects objects;
     };
 
 }// namespace threepp

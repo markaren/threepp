@@ -31,7 +31,8 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       clipping(properties),
       bindingStates(attributes),
       geometries(attributes, info, bindingStates),
-      textures(state, properties, info) {
+      textures(state, properties, info),
+      objects(geometries, attributes, info) {
 }
 
 void GLRenderer::initGLContext() {
@@ -164,11 +165,14 @@ void GLRenderer::clearDepth() { clear(false, true, false); }
 void GLRenderer::clearStencil() { clear(false, false, true); }
 
 void GLRenderer::dispose() {
-    //            const material = event.target;
-    //
-    //            material.removeEventListener( 'dispose', onMaterialDispose );
-    //
-    //            deallocateMaterial( material );
+
+    renderLists.dispose();
+    renderStates.dispose();
+    properties.dispose();
+//    cubemaps.dispose();
+    objects.dispose();
+    bindingStates.dispose();
+
 }
 void GLRenderer::deallocateMaterial(Material *material) {
 
@@ -592,7 +596,9 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
 
     scene->traverse( [&] ( Object3D &object ) {
 
-        if ( object.material() ) {
+        auto material = object.material();
+
+        if ( material ) {
 
 //            if ( Array.isArray( material ) ) {
 //
@@ -606,11 +612,27 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
 //
 //            } else {
 //
-//                getProgram( material, scene, object );
+                getProgram( material, scene, &object );
 //
 //            }
 //
         }
 
     } );
+
+}
+
+void GLRenderer::render(Scene *scene, Camera *camera) {
+}
+
+void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
+}
+
+void GLRenderer::renderObjects(gl::GLRenderList renderList, Scene *scene, Camera *camera) {
+}
+
+void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group) {
+}
+
+void GLRenderer::getProgram(Material *material, Scene *scene, Object3D *object) {
 }

@@ -136,14 +136,6 @@ namespace threepp {
             return std::shared_ptr<Object3D>(new Object3D());
         }
 
-        virtual ~Object3D() = default;
-
-    protected:
-        Object3D() {
-            rotation._onChange(onRotationChange);
-            quaternion._onChange(onQuaternionChange);
-        };
-
         virtual BufferGeometry *geometry() {
 
             return nullptr;
@@ -153,6 +145,14 @@ namespace threepp {
 
             return nullptr;
         }
+
+        virtual ~Object3D() = default;
+
+    protected:
+        Object3D() {
+            rotation._onChange(onRotationChange);
+            quaternion._onChange(onQuaternionChange);
+        };
 
     private:
         std::function<void()> onRotationChange = [&] {
@@ -167,7 +167,6 @@ namespace threepp {
 
         friend class Box3;
         friend class Frustum;
-        friend class GLRenderer;
     };
 
     typedef std::shared_ptr<Object3D> Object3DPtr;

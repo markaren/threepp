@@ -161,6 +161,7 @@ set(sources
         "threepp/renderers/gl/GLState.cpp"
         "threepp/renderers/gl/GLTextures.cpp"
         "threepp/renderers/gl/GLUniforms.cpp"
+        "threepp/renderers/gl/GLRenderLists.cpp"
 
         "threepp/utils/StringUtils.cpp"
 

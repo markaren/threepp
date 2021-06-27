@@ -30,6 +30,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
 
 #include "threepp/scenes/Scene.hpp"
 

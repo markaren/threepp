@@ -240,7 +240,7 @@ namespace threepp::gl {
             }
         }
 
-        void vertexAttribPointer(int index, int size, int type, bool normalized, int stride, int offset) {
+        void vertexAttribPointer(GLuint index, GLint size, GLenum type, bool normalized, GLsizei stride, int offset) {
 
             if (type == GL_INT || type == GL_UNSIGNED_INT) {
 

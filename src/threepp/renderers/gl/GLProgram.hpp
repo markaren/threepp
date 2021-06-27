@@ -3,13 +3,7 @@
 #ifndef THREEPP_GLPROGRAM_HPP
 #define THREEPP_GLPROGRAM_HPP
 
-#include "GLPrograms.hpp"
-
-
-#include <string>
 #include <unordered_map>
-#include <utility>
-
 
 namespace threepp::gl {
 
@@ -20,7 +14,6 @@ namespace threepp::gl {
     private:
         inline static int programIdCount = 0;
     };
-
 
 }// namespace threepp::gl
 

@@ -7,15 +7,15 @@
 
 namespace threepp {
 
-    class RawShaderMaterial: public ShaderMaterial {
+    class RawShaderMaterial: public virtual ShaderMaterial {
 
     public:
-        std::string type() const override {
+        [[nodiscard]] std::string type() const override {
             return "RawShaderMaterial";
         }
 
         static std::shared_ptr<RawShaderMaterial> create() {
-            return std::shared_ptr<RawShaderMaterial>(new ShaderMaterial());
+            return std::shared_ptr<RawShaderMaterial>(new RawShaderMaterial());
         }
 
     protected:

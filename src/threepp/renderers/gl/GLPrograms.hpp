@@ -3,10 +3,12 @@
 #ifndef THREEPP_GLPROGRAMS_HPP
 #define THREEPP_GLPROGRAMS_HPP
 
+#include "GLLights.hpp"
+#include "GLCapabilities.hpp"
+
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
-#include "threepp/renderers/gl/GLCapabilities.hpp"
-#include "threepp/scenes/Fog.hpp"
+#include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <glad/glad.h>
@@ -70,10 +72,9 @@ namespace threepp::gl {
             Parameters(
                     const GLPrograms &scope,
                     Material *material,
-                    std::vector<Object3D *> &shadows,
-                    std::optional<Fog> fog,
-                    int nClipPlanes,
-                    int nClipIntersection,
+                    GLLights::LightState &lights,
+                    int numShadows,
+                    Scene* scene,
                     Object3D *object);
         };
 
@@ -86,6 +87,9 @@ namespace threepp::gl {
         GLPrograms();
 
         int getTextureEncodingFromMap(std::optional<Texture> &map) const;
+
+        Parameters getParameters(Material* material, GLLights::LightState &lights, int numShadows, Scene* scene, Object3D* object);
+
     };
 
 }// namespace threepp::gl

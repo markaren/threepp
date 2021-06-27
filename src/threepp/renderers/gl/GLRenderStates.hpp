@@ -74,6 +74,11 @@ namespace threepp::gl {
             }
         }
 
+        void dispose() {
+
+            renderStates_.clear();
+        }
+
     private:
         std::unordered_map<Scene *, std::vector<GLRenderState>> renderStates_;
     };

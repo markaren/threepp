@@ -3,6 +3,9 @@
 #ifndef THREEPP_GLPROPERTIES_HPP
 #define THREEPP_GLPROPERTIES_HPP
 
+#include <glad/glad.h>
+
+#include <optional>
 #include <unordered_map>
 
 namespace threepp::gl {
@@ -36,6 +39,11 @@ namespace threepp::gl {
             properties_.erase(key);
         }
 
+        void dispose() {
+
+            properties_.clear();
+        }
+
     private:
         std::unordered_map<std::string, T> properties_;
     };
@@ -44,6 +52,13 @@ namespace threepp::gl {
 
         GLTypeProperties<TextureProperties> textureProperties;
         GLTypeProperties<MaterialProperties> materialProperties;
+
+        void dispose() {
+
+            textureProperties.dispose();
+            materialProperties.dispose();
+        }
+
     };
 
 }// namespace threepp::gl
