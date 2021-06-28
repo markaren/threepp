@@ -3,8 +3,8 @@
 #ifndef THREEPP_GLPROGRAMS_HPP
 #define THREEPP_GLPROGRAMS_HPP
 
-#include "GLLights.hpp"
 #include "GLCapabilities.hpp"
+#include "GLLights.hpp"
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
@@ -13,11 +13,12 @@
 
 #include <glad/glad.h>
 
+#include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <optional>
 
 namespace threepp::gl {
 
@@ -25,8 +26,10 @@ namespace threepp::gl {
 
         struct Parameters {
 
-            std::string shaderId;
+            std::optional<std::string> shaderID;
             std::string shaderName;
+
+            std::optional<std::map<std::string, std::string>> defines;
 
             std::string vertexShader;
             std::string fragmentShader;
@@ -35,6 +38,31 @@ namespace threepp::gl {
 
             bool supportsVertexTextures;
             int outputEncoding;
+            bool map;
+            int mapEncoding;
+            bool matcap;
+            int matcapEncoding;
+            bool envMap;
+            int envMapMode;
+            int envMapEncoding;
+            bool envMapCubeUV;
+            bool lightMap;
+            int lightMapEncoding;
+            bool aoMap;
+            bool emissiveMap;
+            int emissiveMapEncoding;
+            bool bumpMap;
+            bool normalMap;
+            bool objectSpaceNormalMap;
+            bool tangentSpaceNormalMap;
+            bool clearcoatMap;
+            bool clearcoatRoughnessMap;
+            bool clearcoatNormalMap;
+            bool displacementMap;
+            bool roughnessMap;
+            bool metalnessMap;
+            bool specularMap;
+            bool alphaMap;
 
             int numDirLights;
             int numPointLights;
@@ -74,7 +102,7 @@ namespace threepp::gl {
                     Material *material,
                     GLLights::LightState &lights,
                     int numShadows,
-                    Scene* scene,
+                    Scene *scene,
                     Object3D *object);
         };
 
@@ -88,7 +116,9 @@ namespace threepp::gl {
 
         int getTextureEncodingFromMap(std::optional<Texture> &map) const;
 
-        Parameters getParameters(Material* material, GLLights::LightState &lights, int numShadows, Scene* scene, Object3D* object);
+        Parameters getParameters(Material *material, GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
+
+        std::string getProgramCacheKey( const Parameters &parameters );
 
     };
 

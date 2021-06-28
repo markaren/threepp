@@ -2,8 +2,10 @@
 #include "GLProgram.hpp"
 #include "GLCapabilities.hpp"
 #include "GLPrograms.hpp"
+#include "threepp/renderers/shaders/ShaderChunk.hpp"
 
 #include "threepp/constants.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <glad/glad.h>
 
@@ -89,26 +91,22 @@ namespace {
         return "vec3 " + functionName + "( vec3 color ) { return " + toneMappingName + "ToneMapping( color ); }";
     }
 
-    std::string generateDefines(const std::unordered_map<std::string, std::any> &defines) {
+    std::string generateDefines(const std::unordered_map<std::string, std::string> &defines) {
 
-        //            std::vector<std::string> chunks;
-        //
-        //            for ( const auto& [name, value] : defines ) {
-        //
-        //                if ( value == false ) continue;
-        //
-        //                chunks.emplace_back( "#define " + name + " " + value );
-        //
-        //            }
-        //
-        //            std::string result;
-        //            join(chunks, '\n',result);
-        //
-        //            return result;
+        std::vector<std::string> chunks;
 
-        //TODO
+        for (const auto &[name, value] : defines) {
 
-        return "";
+            if (value == "false") continue;
+
+            std::string chunk("#define " + name + " " + value);
+            chunks.emplace_back(chunk);
+        }
+
+        std::string result;
+        utils::join(chunks, '\n', result);
+
+        return result;
     }
 
     std::unordered_map<std::string, GLint> fetchAttributeLocations(GLuint program) {
@@ -132,7 +130,12 @@ namespace {
         return attributes;
     }
 
-    std::string replaceLightNums(const std::string &str, GLPrograms::Parameters &parameters) {
+    bool filterEmptyLine(const std::string &str) {
+
+        return str.empty();
+    }
+
+    std::string replaceLightNums(const std::string &str, const GLPrograms::Parameters &parameters) {
 
         std::string result = str;
         result = std::regex_replace(result, std::regex("NUM_DIR_LIGHTS"), std::to_string(parameters.numDirLights));
@@ -145,6 +148,113 @@ namespace {
         result = std::regex_replace(result, std::regex("NUM_POINT_LIGHT_SHADOWS"), std::to_string(parameters.numPointLightShadows));
 
         return result;
+    }
+
+    std::string replaceClippingPlaneNums(const std::string &str, const GLPrograms::Parameters &parameters) {
+
+        std::string result;
+        result = std::regex_replace(result, std::regex("NUM_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes));
+        result = std::regex_replace(result, std::regex("UNION_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes - parameters.numClipIntersection));
+
+        return result;
+    }
+
+    // Resolve Includes
+
+    std::regex includePattern("^[ \\t]*#include +<([\\w\\d./]+)>", std::regex::extended);
+
+    std::string resolveIncludes(const std::string &str) {
+
+        std::string result;
+
+        std::sregex_iterator rex_it(str.begin(), str.end(), includePattern);
+        std::sregex_iterator end;
+        size_t pos = 0;
+
+        while (rex_it != end) {
+
+            std::smatch match = *rex_it;
+            result.append(str, pos, match.position(0) - pos);
+
+            std::ssub_match sub = match[1];
+            std::string r = shaders::ShaderChunk::instance().get(sub.str(), "ShaderChunk");
+
+            if (r.empty()) {
+
+                std::stringstream ss;
+                ss << "unable to resolve #include <" << sub.str() << ">";
+                throw std::logic_error(ss.str());
+            }
+
+            result.append(r);
+            rex_it++;
+        }
+
+        if (pos == 0) {
+
+            return str;
+        } else {
+
+            result.append(str, pos, str.length());
+            return result;
+        }
+    }
+
+    // Unroll loops
+
+    std::regex unrollLoopPattern("#pragma unroll_loop_start\\s+for\\s*\\(\\s*int\\s+i\\s*=\\s*(\\d+)\\s*;\\s*i\\s*<\\s*(\\d+)\\s*;\\s*i\\s*\\+\\+\\s*\\)\\s*{([\\s\\S]+?)}\\s+#pragma unroll_loop_end");
+
+    std::string unrollLoops(const std::string &glsl) {
+
+        return "";
+    }
+
+    std::string generatePrecision() {
+
+        return "precision highp float;\nprecision highp int;\n#define HIGH_PRECISION";
+    }
+
+    std::string generateShadowMapTypeDefine(const GLPrograms::Parameters &parameters) {
+
+        std::string shadowMapTypeDefine = "SHADOWMAP_TYPE_BASIC";
+
+        if (parameters.shadowMapType == PCFShadowMap) {
+
+            shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF";
+
+        } else if (parameters.shadowMapType == PCFSoftShadowMap) {
+
+            shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF_SOFT";
+
+        } else if (parameters.shadowMapType == VSMShadowMap) {
+
+            shadowMapTypeDefine = "SHADOWMAP_TYPE_VSM";
+        }
+
+        return shadowMapTypeDefine;
+    }
+
+    std::string generateEnvMapTypeDefine(const GLPrograms::Parameters &parameters) {
+
+        std::string envMapTypeDefine = "ENVMAP_TYPE_CUBE";
+
+        if (parameters.envMap) {
+
+            switch (parameters.envMapMode) {
+
+                case CubeReflectionMapping:
+                case CubeRefractionMapping:
+                    envMapTypeDefine = "ENVMAP_TYPE_CUBE";
+                    break;
+
+                case CubeUVReflectionMapping:
+                case CubeUVRefractionMapping:
+                    envMapTypeDefine = "ENVMAP_TYPE_CUBE_UV";
+                    break;
+            }
+        }
+
+        return envMapTypeDefine;
     }
 
 

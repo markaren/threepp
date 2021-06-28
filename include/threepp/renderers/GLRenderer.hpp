@@ -20,7 +20,6 @@
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLProgram.hpp"
-//
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
 #include "threepp/renderers/gl/GLClipping.hpp"
@@ -39,6 +38,8 @@
 namespace threepp {
 
     class GLRenderer {
+
+//        struct GLPrograms;
 
     public:
         struct Parameters {

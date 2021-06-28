@@ -1,8 +1,9 @@
 
 #include "GLPrograms.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/utils/InstanceOf.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -52,7 +53,7 @@ GLPrograms::Parameters::Parameters(
         Scene *scene,
         Object3D *object) {
 
-    shaderId = shaderIds[material->type()];
+    shaderID = shaderIds[material->type()];
     shaderName = material->type();
 
 
@@ -93,4 +94,48 @@ int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
 GLPrograms::Parameters GLPrograms::getParameters(Material *material, GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
 
     return GLPrograms::Parameters(*this, material, lights, numShadows, scene, object);
+}
+
+std::string GLPrograms::getProgramCacheKey(const GLPrograms::Parameters &parameters) {
+
+    std::vector<std::string> array;
+
+    if (parameters.shaderID) {
+
+        array.emplace_back(*parameters.shaderID);
+
+    } else {
+
+        array.emplace_back(parameters.fragmentShader);
+        array.emplace_back(parameters.vertexShader);
+    }
+
+    if (parameters.defines) {
+
+        for (const auto &[name, value] : *parameters.defines) {
+
+            array.emplace_back(name);
+            array.emplace_back(value);
+        }
+    }
+
+    if (!parameters.isRawShaderMaterial) {
+
+        for (int i = 0; i < parameterNames.size(); i++) {
+
+            // TODO
+            //            array.emplace_back(parameters[parameterNames[i]]);
+        }
+
+        //TODO
+//        array.emplace_back(renderer_.outputEncoding);
+//        array.emplace_back(renderer_.gammaFactor);
+    }
+
+    array.emplace_back(parameters.customProgramCacheKey);
+
+    std::string result;
+    utils::join(array, '\n', result);
+
+    return result;
 }

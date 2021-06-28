@@ -540,16 +540,6 @@ namespace threepp::shaders {
             return get("sprite_vert", "ShaderLib");
         }
 
-        static ShaderChunk &instance() {
-            static ShaderChunk instance;
-            return instance;
-        }
-
-    private:
-        std::unordered_map<std::string, std::string> data_;
-
-        ShaderChunk() = default;
-
         std::string &get(const std::string &key, const std::string& folder) {
             if (!data_.count(key)) {
                 std::string line;
@@ -569,6 +559,15 @@ namespace threepp::shaders {
             return data_.at(key);
         }
 
+        static ShaderChunk &instance() {
+            static ShaderChunk instance;
+            return instance;
+        }
+
+    private:
+        std::unordered_map<std::string, std::string> data_;
+
+        ShaderChunk() = default;
 
         ~ShaderChunk() = default;
     };
