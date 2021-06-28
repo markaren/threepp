@@ -7,17 +7,16 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 
+#include <iostream>
 #include <memory>
 #include <utility>
 #include <vector>
-#include <iostream>
 
 namespace threepp {
 
-    class Line : public Object3D{
+    class Line : public Object3D {
 
     public:
-
         BufferGeometry *geometry() override {
             return geometry_.get();
         }
@@ -74,7 +73,6 @@ namespace threepp {
 
         inline static Vector3 _start;
         inline static Vector3 _end;
-
     };
 
 }// namespace threepp

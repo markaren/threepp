@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class InstancedBufferGeometry: public BufferGeometry {
+    class InstancedBufferGeometry : public BufferGeometry {
 
     public:
         int instanceCount = math::infinity<int>;
@@ -19,10 +19,9 @@ namespace threepp {
         }
 
     protected:
-        InstancedBufferGeometry(): BufferGeometry() {}
-
+        InstancedBufferGeometry() : BufferGeometry() {}
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_INSTANCEDBUFFERGEOMETRY_HPP

@@ -3,8 +3,8 @@
 #ifndef THREEPP_MESHTOONMATERIAL_HPP
 #define THREEPP_MESHTOONMATERIAL_HPP
 
-#include "threepp/materials/Material.hpp"
 #include "interfaces.hpp"
+#include "threepp/materials/Material.hpp"
 
 namespace threepp {
 

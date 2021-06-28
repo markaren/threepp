@@ -21,10 +21,9 @@
 
 namespace threepp {
 
-    class BufferGeometry: public EventDispatcher {
+    class BufferGeometry : public EventDispatcher {
 
     public:
-
         const unsigned int id = _id++;
 
         const std::string uuid = math::generateUUID();
@@ -49,7 +48,7 @@ namespace threepp {
 
             if (!hasAttribute(name)) throw std::runtime_error("No attribute named: " + name);
 
-            return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
+            return dynamic_cast<TypedBufferAttribute<T> *>(attributes_.at(name).get());
         }
 
         void setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute);
@@ -98,7 +97,6 @@ namespace threepp {
         std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
 
         static unsigned int _id;
-
     };
 
     typedef std::shared_ptr<BufferGeometry> BufferGeometryPtr;

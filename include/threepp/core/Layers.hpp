@@ -8,8 +8,7 @@ namespace threepp {
     class Layers {
 
     public:
-
-        Layers(): mask_(1 | 0){}
+        Layers() : mask_(1 | 0) {}
 
         void set(int channel) {
 

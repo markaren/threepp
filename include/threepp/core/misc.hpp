@@ -9,23 +9,20 @@ namespace threepp {
         const int start;
         const int count;
         const int materialIndex;
-
     };
 
     struct UpdateRange {
 
         const int offset;
         int count;
-
     };
 
     struct DrawRange {
 
         int start;
         int count;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_MISC_HPP

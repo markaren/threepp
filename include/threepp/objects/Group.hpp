@@ -6,10 +6,9 @@
 
 namespace threepp {
 
-    class Group: public Object3D {
+    class Group : public Object3D {
 
     public:
-
         std::string type() const override {
             return "Group";
         }
@@ -20,7 +19,6 @@ namespace threepp {
 
     protected:
         Group() = default;
-
     };
 
 }// namespace threepp

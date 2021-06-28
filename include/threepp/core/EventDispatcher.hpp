@@ -15,7 +15,7 @@ namespace threepp {
 
     struct Event {
         const std::string type;
-        void* target;
+        void *target;
     };
 
     struct EventListener {
@@ -25,21 +25,19 @@ namespace threepp {
         virtual void onEvent(Event &event) = 0;
 
         virtual ~EventListener() = default;
-
     };
     using EventListenerPtr = EventListener *;
 
-    struct LambdaEventListener: EventListener {
+    struct LambdaEventListener : EventListener {
 
-        LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)){}
+        LambdaEventListener(std::function<void(Event &)> f) : f_(std::move(f)) {}
 
         void onEvent(Event &event) override {
             f_(event);
         }
 
     private:
-        std::function<void(Event&)> f_;
-
+        std::function<void(Event &)> f_;
     };
 
     class EventDispatcher {
@@ -53,7 +51,7 @@ namespace threepp {
 
             if (listeners_.count(type) == 0) return false;
 
-            auto& listenerArray = listeners_.at(type);
+            auto &listenerArray = listeners_.at(type);
             return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
         }
 
@@ -61,14 +59,14 @@ namespace threepp {
 
             if (listeners_.count(type) == 0) return;
 
-            auto& listenerArray = listeners_.at(type);
+            auto &listenerArray = listeners_.at(type);
             auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
             if (find != listenerArray.end()) {
                 listenerArray.erase(find);
             }
         }
 
-        void dispatchEvent(const std::string &type, void* target = nullptr) {
+        void dispatchEvent(const std::string &type, void *target = nullptr) {
 
             if (listeners_.count(type)) {
                 Event e{type, target};

@@ -7,10 +7,10 @@
 
 namespace threepp {
 
-    class PlaneGeometry: public BufferGeometry {
+    class PlaneGeometry : public BufferGeometry {
 
     public:
-        PlaneGeometry(const PlaneGeometry&) = delete;
+        PlaneGeometry(const PlaneGeometry &) = delete;
 
         static std::unique_ptr<PlaneGeometry> create(float width = 1, float height = 1, int widthSegments = 1, int heightSegments = 1) {
             return std::unique_ptr<PlaneGeometry>(new PlaneGeometry(width, height, widthSegments, heightSegments));
@@ -18,7 +18,6 @@ namespace threepp {
 
     protected:
         PlaneGeometry(float width, float height, int widthSegments, int heightSegments);
-
     };
 
 }// namespace threepp

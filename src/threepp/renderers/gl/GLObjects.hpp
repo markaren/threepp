@@ -15,7 +15,7 @@ namespace threepp::gl {
 
         struct OnInstancedMeshDispose : public EventListener {
 
-            OnInstancedMeshDispose(GLObjects &scope) : scope(scope) {}
+            explicit OnInstancedMeshDispose(GLObjects &scope) : scope(scope) {}
 
             void onEvent(Event &event) override {
                 auto instancedMesh = static_cast<InstancedMesh *>(event.target);

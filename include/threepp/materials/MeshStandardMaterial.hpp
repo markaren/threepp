@@ -3,8 +3,8 @@
 #ifndef THREEPP_MESHSTANDARDMATERIAL_HPP
 #define THREEPP_MESHSTANDARDMATERIAL_HPP
 
-#include "threepp/materials/Material.hpp"
 #include "interfaces.hpp"
+#include "threepp/materials/Material.hpp"
 
 namespace threepp {
 

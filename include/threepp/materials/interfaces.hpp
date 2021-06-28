@@ -52,7 +52,6 @@ namespace threepp {
 
         virtual float getReflectivity() const = 0;
         virtual float getRefractionRatio() const = 0;
-
     };
 
     struct MaterialWithWireframe : virtual Material {
@@ -67,16 +66,14 @@ namespace threepp {
     struct MaterialWithMap : virtual Material {
 
         virtual std::optional<Texture> &getMap() = 0;
-
     };
 
     struct MaterialWithAlphaMap : virtual Material {
 
         virtual std::optional<Texture> &getAlphaMap() = 0;
-
     };
 
-}
+}// namespace threepp
 
 
 #endif//THREEPP_INTERFACES_HPP

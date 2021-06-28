@@ -3,12 +3,12 @@
 #ifndef THREEPP_MESHPHONGMATERIAL_HPP
 #define THREEPP_MESHPHONGMATERIAL_HPP
 
-#include "threepp/materials/Material.hpp"
 #include "interfaces.hpp"
+#include "threepp/materials/Material.hpp"
 
 namespace threepp {
 
-    class MeshPhongMaterial: public MaterialWithColor {
+    class MeshPhongMaterial : public MaterialWithColor {
 
     public:
         Color &getColor() override {
@@ -32,6 +32,6 @@ namespace threepp {
         Color color_ = Color(0x000000);
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_MESHPHONGMATERIAL_HPP

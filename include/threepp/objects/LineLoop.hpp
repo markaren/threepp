@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    class LineLoop: public Line {
+    class LineLoop : public Line {
 
         std::string type() const override {
 
@@ -21,10 +21,9 @@ namespace threepp {
 
     protected:
         LineLoop(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-        : Line(std::move(geometry), std::move(material)) {}
-
+            : Line(std::move(geometry), std::move(material)) {}
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_LINELOOP_HPP

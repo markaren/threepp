@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    class RawShaderMaterial: public virtual ShaderMaterial {
+    class RawShaderMaterial : public virtual ShaderMaterial {
 
     public:
         [[nodiscard]] std::string type() const override {
@@ -22,9 +22,8 @@ namespace threepp {
 
     protected:
         RawShaderMaterial() = default;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_RAWSHADERMATERIAL_HPP

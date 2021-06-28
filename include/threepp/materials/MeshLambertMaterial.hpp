@@ -3,8 +3,8 @@
 #ifndef THREEPP_MESHLAMBERTMATERIAL_HPP
 #define THREEPP_MESHLAMBERTMATERIAL_HPP
 
-#include "threepp/materials/Material.hpp"
 #include "interfaces.hpp"
+#include "threepp/materials/Material.hpp"
 
 namespace threepp {
 
@@ -31,7 +31,6 @@ namespace threepp {
 
     private:
         Color color_ = Color(0xffffff);
-
     };
 
 }// namespace threepp

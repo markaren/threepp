@@ -3,8 +3,8 @@
 #ifndef THREEPP_SHADERMATERIAL_HPP
 #define THREEPP_SHADERMATERIAL_HPP
 
-#include "threepp/materials/Material.hpp"
 #include "interfaces.hpp"
+#include "threepp/materials/Material.hpp"
 
 #include "threepp/core/Uniform.hpp"
 
@@ -18,8 +18,8 @@ namespace threepp {
         std::string vertexShader;
         std::string fragmentShader;
 
-        bool lights = false; // set to use scene lights
-        bool clipping = false; // set to use user-defined clipping planes
+        bool lights = false;  // set to use scene lights
+        bool clipping = false;// set to use user-defined clipping planes
 
         [[nodiscard]] bool getWireframe() const override {
 
@@ -57,11 +57,9 @@ namespace threepp {
               fragmentShader(shaders::ShaderChunk::instance().default_fragment()) {
 
             this->fog = false;
-
         }
 
     private:
-
         float linewidth_ = 1;
 
         bool wireframe_ = false;
