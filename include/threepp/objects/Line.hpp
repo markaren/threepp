@@ -25,7 +25,7 @@ namespace threepp {
             return material_.get();
         }
 
-        Line &computeLineDistances() {
+        virtual void computeLineDistances() {
 
             // we assume non-indexed geometry
 
@@ -49,9 +49,6 @@ namespace threepp {
 
                 std::cerr << "THREE.Line.computeLineDistances(): Computation only possible with non-indexed BufferGeometry." << std::endl;
             }
-
-
-            return *this;
         }
 
         std::string type() const override {
@@ -64,15 +61,14 @@ namespace threepp {
         }
 
     protected:
-        Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-            : geometry_(std::move(geometry)), material_(std::move(material)) {}
-
-    private:
         std::shared_ptr<BufferGeometry> geometry_;
         std::shared_ptr<Material> material_;
 
         inline static Vector3 _start;
         inline static Vector3 _end;
+
+        Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
+            : geometry_(std::move(geometry)), material_(std::move(material)) {}
     };
 
 }// namespace threepp

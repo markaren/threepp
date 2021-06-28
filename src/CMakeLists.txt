@@ -63,6 +63,7 @@ set(publicHeaders
         "threepp/objects/InstancedMesh.hpp"
         "threepp/objects/Line.hpp"
         "threepp/objects/LineLoop.hpp"
+        "threepp/objects/LineSegments.hpp"
         "threepp/objects/Mesh.hpp"
         "threepp/objects/Points.hpp"
         

@@ -2,6 +2,8 @@
 #include "threepp/renderers/GLRenderer.hpp"
 
 #include "threepp/objects/Line.hpp"
+#include "threepp/objects/LineLoop.hpp"
+#include "threepp/objects/LineSegments.hpp"
 
 #include <glad/glad.h>
 
@@ -296,18 +298,18 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         state.setLineWidth(lineWidth * getTargetPixelRatio());
 
-        //                if (object.isLineSegments) {
-        //
-        //                    renderer.setMode(GL_LINES);
-        //
-        //                } else if (object.isLineLoop) {
-        //
-        //                    renderer.setMode(GL_LINE_LOOP);
-        //
-        //                } else {
-        //
-        //                    renderer.setMode(GL_LINE_STRIP);
-        //                }
+        if (instanceof <LineSegments>(object)) {
+
+            renderer->setMode(GL_LINES);
+
+        } else if (instanceof <LineLoop>(object)) {
+
+            renderer->setMode(GL_LINE_LOOP);
+
+        } else {
+
+            renderer->setMode(GL_LINE_STRIP);
+        }
 
     } else if (instanceof <Points *>(object)) {
 
@@ -386,7 +388,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
 }
 
-void GLRenderer::renderObjects(gl::GLRenderList& renderList, Scene *scene, Camera *camera) {
+void GLRenderer::renderObjects(gl::GLRenderList &renderList, Scene *scene, Camera *camera) {
 }
 
 void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group) {
@@ -396,9 +398,9 @@ void GLRenderer::getProgram(Material *material, Object3D *scene, Object3D *objec
 
     bool isScene = instanceof <Scene>(scene);
 
-//    if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
+    //    if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
 
-    auto& materialProperties = properties.materialProperties.get(material->uuid);
+    auto &materialProperties = properties.materialProperties.get(material->uuid);
 }
 
 void GLRenderer::updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters) {
@@ -661,7 +663,5 @@ bool GLRenderer::materialNeedsLights(Material *material) {
 
     return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
            isMeshStandardMaterial || isShadowMaterial ||
-           ( isShaderMaterial /*&& lights*/);
-
+           (isShaderMaterial /*&& lights*/);
 }
-
