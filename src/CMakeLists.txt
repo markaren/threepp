@@ -9,7 +9,12 @@ set(publicHeaders
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
+        "threepp/core/Group.hpp"
+        "threepp/core/misc.hpp"
+        "threepp/core/InstancedBufferAttribute.hpp"
+        "threepp/core/InstancedBufferGeometry.hpp"
         "threepp/core/Object3D.hpp"
+        "threepp/core/Uniform.hpp"
 
         "threepp/cameras/Camera.hpp"
         "threepp/cameras/PerspectiveCamera.hpp"

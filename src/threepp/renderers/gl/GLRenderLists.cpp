@@ -18,7 +18,7 @@ namespace {
 //
 //        } else if (a.program != b.program) {
 //
-//            return a.program.id - b.program.id;
+//            return a.program->id - b.program->id;
 //
 //        } else if (a.material->id != b.material->id) {
 //

@@ -10,8 +10,6 @@ namespace threepp {
 
     public:
 
-        Group(const Group&) = delete;
-
         std::string type() const override {
             return "Group";
         }

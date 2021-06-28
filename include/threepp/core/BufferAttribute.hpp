@@ -3,23 +3,22 @@
 #ifndef THREEPP_BUFFER_ATTRIBUTE_HPP
 #define THREEPP_BUFFER_ATTRIBUTE_HPP
 
+#include "threepp/math/Box3.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/math/Vector4.hpp"
-#include "threepp/math/Box3.hpp"
 
 #include "threepp/constants.hpp"
 #include "threepp/core/misc.hpp"
 
-#include <vector>
 #include <iostream>
+#include <vector>
 
 namespace threepp {
 
     class BufferAttribute {
 
     public:
-
         [[nodiscard]] virtual int count() const = 0;
 
         [[nodiscard]] int itemSize() const {
@@ -56,7 +55,6 @@ namespace threepp {
         }
 
     protected:
-
         const int itemSize_;
         const bool normalized_;
 
@@ -66,23 +64,17 @@ namespace threepp {
         unsigned int version_ = 0;
 
         BufferAttribute(int itemSize, bool normalized)
-                : itemSize_(itemSize), normalized_(normalized) {}
+            : itemSize_(itemSize), normalized_(normalized) {}
 
 
         inline static Vector3 _vector = Vector3();
         inline static Vector2 _vector2 = Vector2();
-
     };
 
-    template <class T>
-    class TypedBufferAttribute: public BufferAttribute {
+    template<class T>
+    class TypedBufferAttribute : public BufferAttribute {
 
     public:
-
-        TypedBufferAttribute(std::vector<T> array, int itemSize, bool normalized)
-                : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_((int) array_.size() / itemSize) {}
-
-
         [[nodiscard]] int count() const override {
 
             return count_;
@@ -373,19 +365,22 @@ namespace threepp {
             }
 
             target.set(minX, minY, minZ, maxX, maxY, maxZ);
-
         }
 
         static std::unique_ptr<TypedBufferAttribute<T>> create(std::vector<T> array, int itemSize, bool normalized = false) {
 
-            return std::make_unique<TypedBufferAttribute<T>>(array, itemSize, normalized);
+            return std::unique_ptr<TypedBufferAttribute<T>>(new TypedBufferAttribute<T>(array, itemSize, normalized));
         }
+
+    protected:
+        TypedBufferAttribute(std::vector<T> array, int itemSize, bool normalized)
+            : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_((int) array_.size() / itemSize) {}
+
 
     private:
         std::vector<T> array_;
 
         const int count_;
-
     };
 
     typedef TypedBufferAttribute<int> IntBufferAttribute;

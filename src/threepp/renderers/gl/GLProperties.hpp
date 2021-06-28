@@ -24,6 +24,8 @@ namespace threepp::gl {
     struct MaterialProperties {
 
         std::optional<GLProgram> program;
+
+        std::vector<float> clippingState;
     };
 
     template <class T>
