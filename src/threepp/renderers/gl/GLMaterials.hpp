@@ -35,19 +35,19 @@ namespace threepp::gl {
             if (instanceof <MaterialWithColor>(material)) {
 
                 auto m = dynamic_cast<MaterialWithColor *>(material);
-                uniforms["diffuse"].value<Color>().copy(m->getColor());
+                uniforms["diffuse"].value<Color>().copy(m->color);
             }
 
             if (instanceof <MaterialWithEmissive>(material)) {
 
                 auto m = dynamic_cast<MaterialWithEmissive *>(material);
-                uniforms["emissive"].value<Color>().copy(m->getEmissiveColor()).multiplyScalar(m->getEmissiveIntensity());
+                uniforms["emissive"].value<Color>().copy(m->emissiveColor).multiplyScalar(m->emissiveIntensity);
             }
 
             if (instanceof <MaterialWithMap>(material)) {
 
                 auto m = dynamic_cast<MaterialWithMap *>(material);
-                auto map = m->getMap();
+                auto& map = m->map;
                 if (map) {
                     uniforms["map"].setValue(map);
                 }
@@ -56,7 +56,7 @@ namespace threepp::gl {
             if (instanceof <MaterialWithAlphaMap>(material)) {
 
                 auto m = dynamic_cast<MaterialWithAlphaMap *>(material);
-                auto alphaMap = m->getAlphaMap();
+                auto& alphaMap = m->alphaMap;
                 if (alphaMap) {
                     uniforms["alphaMap"].setValue(alphaMap);
                 }
@@ -65,15 +65,15 @@ namespace threepp::gl {
 
         void refreshUniformsLine(std::unordered_map<std::string, Uniform> &uniforms, LineBasicMaterial *material) {
 
-            uniforms["diffuse"].value<Color>().copy(material->getColor());
+            uniforms["diffuse"].value<Color>().copy(material->color);
             uniforms["opacity"].value<float>() = material->opacity;
         }
 
         void refreshUniformsPoints(std::unordered_map<std::string, Uniform> &uniforms, PointsMaterial *material, int pixelRatio, float height) {
 
-            uniforms["diffuse"].value<Color>().copy(material->getColor());
+            uniforms["diffuse"].value<Color>().copy(material->color);
             uniforms["opacity"].value<float>() = material->opacity;
-            uniforms["size"].value<int>() = (int) material->getSize() * pixelRatio;
+            uniforms["size"].value<int>() = (int) material->size * pixelRatio;
             uniforms["scale"].value<float>() = height * 0.5f;
         }
     };

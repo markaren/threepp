@@ -201,7 +201,7 @@ int main() {
 
     Material *baseMaterial = material.get();
 
-    std::cout << "RefractionRatio" << dynamic_cast<MaterialWithReflectivity *>(baseMaterial)->getRefractionRatio() << std::endl;
+    std::cout << "RefractionRatio " << dynamic_cast<MaterialWithReflectivity *>(baseMaterial)->refractionRatio << std::endl;
 
     o->add(mesh);
 

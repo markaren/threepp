@@ -10,24 +10,12 @@
 
 namespace threepp {
 
-    class PointsMaterial : public MaterialWithColor, MaterialWithSize {
+    class PointsMaterial : public virtual MaterialWithColor,
+                           public MaterialWithMap,
+                           public MaterialWithAlphaMap,
+                           public MaterialWithSize {
 
     public:
-        [[nodiscard]] float getSize() const override {
-
-            return size_;
-        }
-
-        [[nodiscard]] bool getSizeAttenuation() const override {
-
-            return sizeAttenuation_;
-        }
-
-        Color &getColor() override {
-
-            return color_;
-        }
-
         [[nodiscard]] std::string type() const override {
 
             return "PointsMaterial";
@@ -39,17 +27,10 @@ namespace threepp {
         }
 
     protected:
-        PointsMaterial() = default;
+        PointsMaterial()
+            : MaterialWithColor(0xffffff),
+              MaterialWithSize(1, true) {}
 
-    private:
-        Color color_ = Color(0xffffff);
-
-        std::optional<Texture> map_ = std::nullopt;
-
-        std::optional<Texture> alphaMap_ = std::nullopt;
-
-        float size_ = 1;
-        bool sizeAttenuation_ = true;
     };
 
 }// namespace threepp

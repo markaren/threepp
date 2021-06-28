@@ -13,77 +13,22 @@
 
 namespace threepp {
 
-    class MeshBasicMaterial : public MaterialWithColor, MaterialWithWireframe, MaterialWithReflectivity, MaterialWithMap, MaterialWithAlphaMap {
+    class MeshBasicMaterial : public virtual Material,
+                              public MaterialWithColor,
+                              public MaterialWithWireframe,
+                              public MaterialWithReflectivity,
+                              public MaterialWithMap,
+                              public MaterialWithLightMap,
+                              public MaterialWithAlphaMap,
+                              public MaterialWithSpecularMap,
+                              public MaterialWithAoMap,
+                              public MaterialWithEnvMap {
 
     public:
-        std::optional<Texture> map = std::nullopt;
-
-        std::optional<Texture> lightMap = std::nullopt;
-        float lightMapIntensity = 1.0;
-
-        std::optional<Texture> aoMap = std::nullopt;
-        float aoMapIntensity = 1.0;
-
-        std::optional<Texture> specularMap = std::nullopt;
-
-        std::optional<Texture> alphaMap = std::nullopt;
-
-        std::optional<Texture> envMap = std::nullopt;
         int combine = MultiplyOperation;
 
-        Color &getColor() override {
-
-            return color_;
-        }
-
-        [[nodiscard]] float getReflectivity() const override {
-
-            return reflectivity_;
-        }
-        [[nodiscard]] float getRefractionRatio() const override {
-
-            return refractionRatio_;
-        }
-
-        [[nodiscard]] std::string getWireframeLinecap() const {
-
-            return wireframeLinecap_;
-        }
-
-        [[nodiscard]] std::string getWireframeLinejoin() const {
-
-            return wireframeLinejoin_;
-        }
-
-        [[nodiscard]] bool getWireframe() const override {
-
-            return wireframe_;
-        }
-
-        void setWireframe(bool wireframe) override {
-
-            wireframe_ = wireframe;
-        }
-
-        [[nodiscard]] float getWireframeLinewidth() const override {
-
-            return wireframeLinewidth_;
-        }
-
-        void setWireframeLinewidth(float width) override {
-
-            wireframeLinewidth_ = width;
-        }
-
-        std::optional<Texture> &getMap() override {
-
-            return map;
-        }
-
-        std::optional<Texture> &getAlphaMap() override {
-
-            return map;
-        }
+        std::string wireframeLinecap_ = "round";
+        std::string wireframeLinejoin_ = "round";
 
         [[nodiscard]] std::string type() const override {
 
@@ -96,19 +41,12 @@ namespace threepp {
         }
 
     protected:
-        MeshBasicMaterial() = default;
-
-    private:
-        Color color_ = Color(0xffffff);
-
-        float reflectivity_ = 1;
-        float refractionRatio_ = 0.98f;
-
-        std::string wireframeLinecap_ = "round";
-        std::string wireframeLinejoin_ = "round";
-
-        bool wireframe_ = false;
-        float wireframeLinewidth_ = 1;
+        MeshBasicMaterial()
+            : MaterialWithColor(0xffffff),
+              MaterialWithAoMap(1),
+              MaterialWithLightMap(1),
+              MaterialWithReflectivity(1, 0.98f),
+              MaterialWithWireframe(false, 1) {}
     };
 
 }// namespace threepp

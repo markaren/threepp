@@ -233,7 +233,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         wireframeMaterial = dynamic_cast<MaterialWithWireframe *>(material);
 
-        if (wireframeMaterial->getWireframe()) {
+        if (wireframeMaterial->wireframe) {
 
             index = geometries.getWireframeAttribute(geometry);
             rangeFactor = 2;
@@ -276,9 +276,9 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         if (isWireframeMaterial) {
 
-            if (wireframeMaterial->getWireframe()) {
+            if (wireframeMaterial->wireframe) {
 
-                state.setLineWidth(wireframeMaterial->getWireframeLinewidth() * (float) getTargetPixelRatio());
+                state.setLineWidth(wireframeMaterial->wireframeLinewidth * (float) getTargetPixelRatio());
                 renderer->setMode(GL_LINES);
             }
 
@@ -291,7 +291,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         float lineWidth = 1;
         if (isWireframeMaterial) {
-            lineWidth = wireframeMaterial->getWireframeLinewidth();
+            lineWidth = wireframeMaterial->wireframeLinewidth;
         }
 
         state.setLineWidth(lineWidth * getTargetPixelRatio());

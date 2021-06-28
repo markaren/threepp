@@ -8,13 +8,10 @@
 
 namespace threepp {
 
-    class ShadowMaterial : public MaterialWithColor {
+    class ShadowMaterial : public virtual Material,
+                           public MaterialWithColor {
 
     public:
-        Color &getColor() override {
-            return color_;
-        }
-
         [[nodiscard]] std::string type() const override {
 
             return "ShadowMaterial";
@@ -26,13 +23,10 @@ namespace threepp {
         }
 
     protected:
-        ShadowMaterial() {
+        ShadowMaterial() : MaterialWithColor(0x000000) {
 
             this->transparent = true;
         };
-
-    private:
-        Color color_ = Color(0x000000);
     };
 
 }// namespace threepp

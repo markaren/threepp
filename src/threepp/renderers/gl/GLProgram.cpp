@@ -206,7 +206,9 @@ namespace {
 
     std::string unrollLoops(const std::string &glsl) {
 
-        return "";
+        //TODO
+
+        return glsl;
     }
 
     std::string generatePrecision() {

@@ -12,34 +12,15 @@
 
 namespace threepp {
 
-    class ShaderMaterial : public virtual MaterialWithWireframe {
+    class ShaderMaterial : public virtual Material,
+                           MaterialWithClipping,
+                           MaterialWithLights,
+                           MaterialWithWireframe,
+                           MaterialWithLineWidth {
 
     public:
         std::string vertexShader;
         std::string fragmentShader;
-
-        bool lights = false;  // set to use scene lights
-        bool clipping = false;// set to use user-defined clipping planes
-
-        [[nodiscard]] bool getWireframe() const override {
-
-            return wireframe_;
-        }
-
-        void setWireframe(bool wireframe) override {
-
-            wireframe_ = wireframe;
-        }
-
-        [[nodiscard]] float getWireframeLinewidth() const override {
-
-            return wireframeLinewidth_;
-        }
-
-        void setWireframeLinewidth(float width) override {
-
-            wireframeLinewidth_ = width;
-        }
 
         [[nodiscard]] std::string type() const override {
 
@@ -53,17 +34,17 @@ namespace threepp {
 
     protected:
         ShaderMaterial()
-            : vertexShader(shaders::ShaderChunk::instance().default_vertex()),
+            : MaterialWithLights(false),
+              MaterialWithClipping(false),
+              MaterialWithWireframe(false, 1),
+              MaterialWithLineWidth(1),
+              vertexShader(shaders::ShaderChunk::instance().default_vertex()),
               fragmentShader(shaders::ShaderChunk::instance().default_fragment()) {
 
             this->fog = false;
         }
 
     private:
-        float linewidth_ = 1;
-
-        bool wireframe_ = false;
-        float wireframeLinewidth_ = 1;
 
         std::unordered_map<std::string, Uniform> uniforms_;
     };

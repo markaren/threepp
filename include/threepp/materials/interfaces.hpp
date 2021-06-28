@@ -10,67 +10,106 @@ namespace threepp {
 
     struct MaterialWithColor : virtual Material {
 
-        virtual Color &getColor() = 0;
+        Color color;
 
-        ~MaterialWithColor() override = default;
+        explicit MaterialWithColor(int color) : color(color) {}
     };
 
     struct MaterialWithClipping : virtual Material {
 
-        virtual bool getClipping() = 0;
+        bool clipping;
 
-        ~MaterialWithClipping() override = default;
+        explicit MaterialWithClipping(bool clipping) : clipping(clipping) {}
+    };
+
+    struct MaterialWithLights : virtual Material {
+
+        bool lights;
+
+        explicit MaterialWithLights(bool lights) : lights(lights) {}
     };
 
     struct MaterialWithSize : virtual Material {
 
-        virtual float getSize() const = 0;
-        virtual bool getSizeAttenuation() const = 0;
+        float size;
+        bool sizeAttenuation;
 
-        ~MaterialWithSize() override = default;
+        MaterialWithSize(float size, bool sizeAttenuation) : size(size), sizeAttenuation(sizeAttenuation) {}
+    };
+
+    struct MaterialWithLineWidth : virtual Material {
+
+        float lineWidth;
+
+        explicit MaterialWithLineWidth(float lineWidth) : lineWidth(lineWidth) {}
     };
 
     struct MaterialWithEmissive : virtual Material {
 
-        virtual Color &getEmissiveColor() = 0;
+        Color emissiveColor;
+        float emissiveIntensity;
 
-        virtual float getEmissiveIntensity() const = 0;
-
-        ~MaterialWithEmissive() override = default;
+        MaterialWithEmissive(const Color &emissiveColor, float emissiveIntensity) : emissiveColor(emissiveColor), emissiveIntensity(emissiveIntensity) {}
     };
 
     struct MaterialWithSpecular : virtual Material {
 
-        virtual Color &getSpecularColor() = 0;
+        Color specularColor;
+        float getShininess;
 
-        virtual float getShininess() const = 0;
-
-        ~MaterialWithSpecular() override = default;
+        MaterialWithSpecular(const Color &specularColor, float getShininess) : specularColor(specularColor), getShininess(getShininess) {}
     };
 
     struct MaterialWithReflectivity : virtual Material {
 
-        virtual float getReflectivity() const = 0;
-        virtual float getRefractionRatio() const = 0;
+        float reflectivity;
+        float refractionRatio;
+
+        MaterialWithReflectivity(float reflectivity, float refractionRatio) : reflectivity(reflectivity), refractionRatio(refractionRatio) {}
     };
 
     struct MaterialWithWireframe : virtual Material {
 
-        [[nodiscard]] virtual bool getWireframe() const = 0;
-        virtual void setWireframe(bool wireframe) = 0;
+        bool wireframe;
+        float wireframeLinewidth;
 
-        [[nodiscard]] virtual float getWireframeLinewidth() const = 0;
-        virtual void setWireframeLinewidth(float width) = 0;
+        MaterialWithWireframe(bool wireframe, float wireframeLinewidth) : wireframe(wireframe), wireframeLinewidth(wireframeLinewidth) {}
     };
 
     struct MaterialWithMap : virtual Material {
 
-        virtual std::optional<Texture> &getMap() = 0;
+        std::optional<Texture> map;
     };
 
     struct MaterialWithAlphaMap : virtual Material {
 
-        virtual std::optional<Texture> &getAlphaMap() = 0;
+        std::optional<Texture> alphaMap;
+    };
+
+    struct MaterialWithSpecularMap : virtual Material {
+
+        std::optional<Texture> specularMap;
+    };
+
+    struct MaterialWithEnvMap : virtual Material {
+
+        std::optional<Texture> envMap;
+    };
+
+    struct MaterialWithAoMap : virtual Material {
+
+        std::optional<Texture> aoMap;
+        float aoMapIntensity;
+
+        explicit MaterialWithAoMap(float aoMapIntensity) : aoMapIntensity(aoMapIntensity) {}
+    };
+
+    struct MaterialWithLightMap : virtual Material {
+
+        std::optional<Texture> lightMap;
+        float lightMapIntensity;
+
+        explicit MaterialWithLightMap(float lightMapIntensity) : lightMapIntensity(lightMapIntensity) {}
     };
 
 }// namespace threepp

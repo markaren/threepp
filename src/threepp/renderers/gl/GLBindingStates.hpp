@@ -107,7 +107,7 @@ namespace threepp::gl {
             bool wireframe = false;
 
             if (instanceof <MaterialWithWireframe>(material)) {
-                wireframe = dynamic_cast<MaterialWithWireframe *>(material)->getWireframe();
+                wireframe = dynamic_cast<MaterialWithWireframe *>(material)->wireframe;
             }
 
             auto programMap = bindingStates[geometry->id];

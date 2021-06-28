@@ -8,13 +8,10 @@
 
 namespace threepp {
 
-    class MeshToonMaterial : public MaterialWithColor {
+    class MeshToonMaterial : public virtual Material,
+                             public MaterialWithColor {
 
     public:
-        Color &getColor() override {
-
-            return color_;
-        }
         [[nodiscard]] std::string type() const override {
 
             return "MeshToonMaterial";
@@ -25,10 +22,8 @@ namespace threepp {
         }
 
     protected:
-        MeshToonMaterial() = default;
-
-    private:
-        Color color_ = Color(0xffffff);
+        MeshToonMaterial()
+            : MaterialWithColor(0xffffff) {}
     };
 
 }// namespace threepp
