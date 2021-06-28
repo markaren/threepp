@@ -2,7 +2,7 @@
 #include "GLPrograms.hpp"
 
 #include "threepp/utils/InstanceOf.hpp"
-
+#include "threepp/materials/RawShaderMaterial.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -56,15 +56,15 @@ GLPrograms::Parameters::Parameters(
     shaderName = material->type();
 
 
-    isRawShaderMaterial = false; //instanceof <RawShaderMaterial>(material);
+    isRawShaderMaterial = instanceof <RawShaderMaterial>(material);
 
     supportsVertexTextures = scope.vertexTextures;
 
-//    numDirLights = lights.directional.size();
-//    numPointLights = lights.point.size();
-//    numSpotLights = lights.spot.size();
-//    numRectAreaLights = lights.rectArea.size();
-//    numHemiLights = lights.hemi.size();
+    numDirLights = (int) lights.directional.size();
+    numPointLights = (int) lights.point.size();
+    numSpotLights = (int) lights.spot.size();
+    numRectAreaLights = 0;
+    numHemiLights = 0;
 }
 
 GLPrograms::GLPrograms()

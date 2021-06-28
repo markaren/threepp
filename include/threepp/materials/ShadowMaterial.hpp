@@ -4,6 +4,7 @@
 #define THREEPP_SHADOWMATERIAL_HPP
 
 #include "threepp/materials/Material.hpp"
+#include "interfaces.hpp"
 
 namespace threepp {
 

@@ -43,6 +43,8 @@ namespace threepp::gl {
             int numDirLightShadows;
             int numPointLightShadows;
             int numSpotLightShadows;
+            int numRectAreaLights;
+            int numHemiLights;
 
             int numClippingPlanes;
             int numClipIntersection;

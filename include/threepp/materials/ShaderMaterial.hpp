@@ -4,6 +4,7 @@
 #define THREEPP_SHADERMATERIAL_HPP
 
 #include "threepp/materials/Material.hpp"
+#include "interfaces.hpp"
 
 #include "threepp/core/Uniform.hpp"
 

@@ -4,6 +4,7 @@
 #define THREEPP_MESHTOONMATERIAL_HPP
 
 #include "threepp/materials/Material.hpp"
+#include "interfaces.hpp"
 
 namespace threepp {
 
