@@ -228,10 +228,10 @@ int main() {
 
     std::cout << "v1==v2: " << ((v1 == v2) ? "true" : "false") << std::endl;
 
-    //    Canvas canvas(Canvas::Parameters().title(""));
-    //    canvas.animate([](float dt) {
-    //        std::cout << gl::GLCapabilities::instance() << std::endl;
-    //    });
+//        Canvas canvas(Canvas::Parameters().title(""));
+//        canvas.animate([](float dt) {
+//            std::cout << gl::GLCapabilities::instance() << std::endl;
+//        });
 
     o->clear();
 

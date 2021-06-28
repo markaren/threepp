@@ -34,8 +34,6 @@ namespace threepp {
             return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
         }
 
-        ~Mesh() = default;
-
     protected:
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
             : geometry_(std::move(geometry)), material_(std::move(material)) {

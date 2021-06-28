@@ -9,7 +9,6 @@ set(publicHeaders
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
-        "threepp/core/Group.hpp"
         "threepp/core/Layers.hpp"
         "threepp/core/misc.hpp"
         "threepp/core/InstancedBufferAttribute.hpp"
@@ -60,7 +59,10 @@ set(publicHeaders
         "threepp/math/Vector4.hpp"
         "threepp/math/Quaternion.hpp"
 
+        "threepp/objects/Group.hpp"
+        "threepp/objects/InstancedMesh.hpp"
         "threepp/objects/Line.hpp"
+        "threepp/objects/LineLoop.hpp"
         "threepp/objects/Mesh.hpp"
         "threepp/objects/Points.hpp"
         

@@ -22,7 +22,7 @@ namespace threepp {
 
     class BufferGeometry;
 
-    class Object3D : public std::enable_shared_from_this<Object3D>, private EventDispatcher {
+    class Object3D : public std::enable_shared_from_this<Object3D>, public EventDispatcher {
 
     public:
         static Vector3 defaultUp;

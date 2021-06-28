@@ -4,6 +4,7 @@
 #define THREEPP_GLOBJECTS_HPP
 
 #include "threepp/core/Object3D.hpp"
+#include <threepp/objects/InstancedMesh.hpp>
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
@@ -12,8 +13,26 @@ namespace threepp::gl {
 
     struct GLObjects {
 
-        GLObjects(GLGeometries geometries, GLAttributes attributes, GLInfo &info)
-            : attributes_(attributes), geometries_(geometries), info_(info) {}
+        struct OnInstancedMeshDispose : public EventListener {
+
+            OnInstancedMeshDispose(GLObjects &scope) : scope(scope) {}
+
+            void onEvent(Event &event) override {
+                auto instancedMesh = static_cast<InstancedMesh *>(event.target);
+
+                instancedMesh->removeEventListener("dispose", this);
+
+                scope.attributes_.remove(instancedMesh->instanceMatrix.get());
+
+                if (instancedMesh->instanceColor) scope.attributes_.remove(instancedMesh->instanceColor.get());
+            }
+
+        private:
+            GLObjects &scope;
+        };
+
+        GLObjects(GLGeometries &geometries, GLAttributes &attributes, GLInfo &info)
+            : attributes_(attributes), geometries_(geometries), info_(info), onInstancedMeshDispose(*this) {}
 
         BufferGeometry *update(Object3D *object) {
 
@@ -31,6 +50,23 @@ namespace threepp::gl {
                 updateMap_[buffergeometry] = frame;
             }
 
+            if (instanceof <InstancedMesh>(object)) {
+
+                if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
+
+                    object->addEventListener("dispose", &onInstancedMeshDispose);
+                }
+
+                auto o = dynamic_cast<InstancedMesh *>(object);
+
+                attributes_.update(o->instanceMatrix.get(), GL_ARRAY_BUFFER);
+
+                if (o->instanceColor != nullptr) {
+
+                    attributes_.update(o->instanceColor.get(), GL_ARRAY_BUFFER);
+                }
+            }
+
             return buffergeometry;
         }
 
@@ -43,6 +79,8 @@ namespace threepp::gl {
         GLInfo info_;
         GLGeometries geometries_;
         GLAttributes attributes_;
+
+        OnInstancedMeshDispose onInstancedMeshDispose;
 
         std::unordered_map<BufferGeometry *, int> updateMap_;
     };
