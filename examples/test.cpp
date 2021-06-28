@@ -24,6 +24,7 @@
 
 #include <threepp/core/BufferAttribute.hpp>
 #include <threepp/core/BufferGeometry.hpp>
+#include <threepp/core/Layers.hpp>
 
 #include "threepp/math/Sphere.hpp"
 

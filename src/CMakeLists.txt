@@ -10,6 +10,7 @@ set(publicHeaders
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
         "threepp/core/Group.hpp"
+        "threepp/core/Layers.hpp"
         "threepp/core/misc.hpp"
         "threepp/core/InstancedBufferAttribute.hpp"
         "threepp/core/InstancedBufferGeometry.hpp"

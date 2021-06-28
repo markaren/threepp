@@ -104,7 +104,7 @@ namespace threepp::gl {
                 }
 
                 materialProperties.clippingState = dstArray;
-                this->numIntersection = clipIntersection ? this->numPlanes : 0;
+                this->numIntersection = clipIntersection ? (unsigned int) this->numPlanes : 0;
                 this->numPlanes += nGlobal;
             }
         }
