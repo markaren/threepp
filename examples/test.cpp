@@ -18,6 +18,9 @@
 
 #include <threepp/scenes/Fog.hpp>
 
+#include <threepp/cameras/PerspectiveCamera.hpp>
+#include <threepp/cameras/OrthographicCamera.hpp>
+
 #include <threepp/core/EventDispatcher.hpp>
 
 #include <threepp/cameras/PerspectiveCamera.hpp>

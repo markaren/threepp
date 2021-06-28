@@ -660,8 +660,12 @@ bool GLRenderer::materialNeedsLights(Material *material) {
     bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
     bool isShadowMaterial = instanceof <ShadowMaterial>(material);
     bool isShaderMaterial = instanceof <ShaderMaterial>(material);
+    bool lights = false;
+    if (instanceof <MaterialWithLights>(material)) {
+        lights = dynamic_cast<MaterialWithLights*>(material)->lights;
+    }
 
     return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
            isMeshStandardMaterial || isShadowMaterial ||
-           (isShaderMaterial /*&& lights*/);
+           (isShaderMaterial && lights);
 }
