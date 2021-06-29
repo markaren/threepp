@@ -49,6 +49,7 @@ namespace threepp {
 
         Color emissiveColor;
         float emissiveIntensity;
+        std::optional<Texture> emissiveMap;
 
         template<class T>
         MaterialWithEmissive(T emissiveColor, float emissiveIntensity) : emissiveColor(emissiveColor), emissiveIntensity(emissiveIntensity) {}
@@ -57,10 +58,10 @@ namespace threepp {
     struct MaterialWithSpecular : virtual Material {
 
         Color specularColor;
-        float getShininess;
+        float shininess;
 
         template<class T>
-        MaterialWithSpecular(T specularColor, float getShininess) : specularColor(specularColor), getShininess(getShininess) {}
+        MaterialWithSpecular(T specularColor, float shininess) : specularColor(specularColor), shininess(shininess) {}
     };
 
     struct MaterialWithReflectivity : virtual Material {
@@ -107,12 +108,38 @@ namespace threepp {
         explicit MaterialWithAoMap(float aoMapIntensity) : aoMapIntensity(aoMapIntensity) {}
     };
 
+    struct MaterialWithBumpMap : virtual Material {
+
+        std::optional<Texture> bumpMap;
+        float bumpScale;
+
+        explicit MaterialWithBumpMap(float bumpScale) : bumpScale(bumpScale) {}
+    };
+
     struct MaterialWithLightMap : virtual Material {
 
         std::optional<Texture> lightMap;
         float lightMapIntensity;
 
         explicit MaterialWithLightMap(float lightMapIntensity) : lightMapIntensity(lightMapIntensity) {}
+    };
+
+    struct MaterialWithDisplacementMap : virtual Material {
+
+        std::optional<Texture> displacementMap;
+        float displacementScale;
+        float displacementBias;
+
+        MaterialWithDisplacementMap(float displacementScale, float displacementBias) : displacementScale(displacementScale), displacementBias(displacementBias) {}
+    };
+
+    struct MaterialWithNormalMap : virtual Material {
+
+        std::optional<Texture> normalMap;
+        int normalMapType;
+        Vector2 normalScale;
+
+        MaterialWithNormalMap(int normalMapType, Vector2 normalScale) : normalMapType(normalMapType), normalScale(normalScale) {}
     };
 
 }// namespace threepp

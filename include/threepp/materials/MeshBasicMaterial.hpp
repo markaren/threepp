@@ -15,14 +15,14 @@ namespace threepp {
 
     class MeshBasicMaterial : public virtual Material,
                               public MaterialWithColor,
-                              public MaterialWithWireframe,
-                              public MaterialWithReflectivity,
                               public MaterialWithMap,
                               public MaterialWithLightMap,
-                              public MaterialWithAlphaMap,
-                              public MaterialWithSpecularMap,
                               public MaterialWithAoMap,
-                              public MaterialWithEnvMap {
+                              public MaterialWithSpecularMap,
+                              public MaterialWithAlphaMap,
+                              public MaterialWithEnvMap,
+                              public MaterialWithReflectivity,
+                              public MaterialWithWireframe {
 
     public:
         int combine = MultiplyOperation;
