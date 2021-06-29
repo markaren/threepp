@@ -10,7 +10,7 @@ namespace threepp {
     class CylinderGeometry : public BufferGeometry {
 
     public:
-        static std::unique_ptr<CylinderGeometry> create(
+        static std::shared_ptr<CylinderGeometry> create(
                 float radiusTop = 1,
                 float radiusBottom = 1,
                 float height = 1,
@@ -20,7 +20,7 @@ namespace threepp {
                 float thetaStart = 0,
                 float thetaLength = math::PI * 2) {
 
-            return std::unique_ptr<CylinderGeometry>(new CylinderGeometry(radiusTop, radiusBottom, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
+            return std::shared_ptr<CylinderGeometry>(new CylinderGeometry(radiusTop, radiusBottom, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
         }
 
     protected:

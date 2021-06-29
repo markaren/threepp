@@ -35,6 +35,13 @@ BufferGeometry &BufferGeometry::setIndex(std::vector<int> index) {
     return *this;
 }
 
+BufferGeometry &BufferGeometry::setIndex(std::unique_ptr<IntBufferAttribute> index) {
+
+    this->index_ = std::move(index);
+
+    return *this;
+}
+
 void BufferGeometry::setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute) {
 
     attributes_[name] = std::move(attribute);

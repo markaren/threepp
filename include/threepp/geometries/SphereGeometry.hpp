@@ -14,7 +14,7 @@ namespace threepp {
     class SphereGeometry : public BufferGeometry {
 
     public:
-        static std::unique_ptr<SphereGeometry> create(
+        static std::shared_ptr<SphereGeometry> create(
                 float radius = 1,
                 int widthSegments = 8,
                 int heightSegments = 6,
@@ -23,7 +23,7 @@ namespace threepp {
                 float thetaStart = 0,
                 float thetaLength = math::PI) {
 
-            return std::unique_ptr<SphereGeometry>(new SphereGeometry(radius, widthSegments, heightSegments, phiStart, phiLength, thetaStart, thetaLength));
+            return std::shared_ptr<SphereGeometry>(new SphereGeometry(radius, widthSegments, heightSegments, phiStart, phiLength, thetaStart, thetaLength));
         }
 
     private:

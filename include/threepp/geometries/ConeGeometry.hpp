@@ -10,8 +10,8 @@ namespace threepp {
     class ConeGeometry : public CylinderGeometry {
 
     public:
-        static std::unique_ptr<ConeGeometry> create(float radius = 1, float height = 1, int radialSegments = 8, int heightSegments = 1, bool openEnded = false, float thetaStart = 0, float thetaLength = PI * 2) {
-            return std::unique_ptr<ConeGeometry>(new ConeGeometry(radius, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
+        static std::shared_ptr<ConeGeometry> create(float radius = 1, float height = 1, int radialSegments = 8, int heightSegments = 1, bool openEnded = false, float thetaStart = 0, float thetaLength = PI * 2) {
+            return std::shared_ptr<ConeGeometry>(new ConeGeometry(radius, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
         }
 
     protected:
