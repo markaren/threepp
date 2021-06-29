@@ -25,11 +25,6 @@ namespace threepp {
             return data_;
         }
 
-//        ~Image() {
-//
-//            delete data_;
-//        }
-
     private:
         std::vector<unsigned char> data_;
 
