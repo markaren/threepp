@@ -9,6 +9,6 @@ int main() {
 
     auto image = ImageLoader().load(R"(C:\Users\laht\Downloads\LarsIvar.png)");
 
-    std::cout << image.getData() << std::endl;
+    std::cout << "Image size: (" << image.width << ", " << image.height << ")" << std::endl;
 
 }

@@ -11,5 +11,5 @@ Image ImageLoader::load(const char *imagePath) {
     CImg<unsigned char> image(imagePath);
     image._is_shared = true;
 
-    return Image(0, 0, image.data());
+    return Image(image.width(), image.height(), image.data());
 }
