@@ -7,6 +7,8 @@
 
 #include "threepp/scenes/Fog.hpp"
 
+#include "threepp/textures/Texture.hpp"
+
 #include <memory>
 
 namespace threepp {

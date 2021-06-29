@@ -37,9 +37,9 @@
 
 namespace threepp {
 
-    class GLRenderer {
+    class GLBackground;
 
-//        struct GLPrograms;
+    class GLRenderer {
 
     public:
         struct Parameters {

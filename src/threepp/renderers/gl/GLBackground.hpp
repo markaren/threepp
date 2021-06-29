@@ -3,65 +3,46 @@
 #ifndef THREEPP_GLBACKGROUND_HPP
 #define THREEPP_GLBACKGROUND_HPP
 
+#include "GLState.hpp"
+
 #include "threepp/math/Color.hpp"
-#include "threepp/objects/Mesh.hpp"
 
 #include "threepp/scenes/Scene.hpp"
 
-#include "threepp/renderers/gl/GLState.hpp"
+namespace threepp {
 
-namespace threepp::gl {
+    class GLRenderer;
 
-    struct GLBackground {
+    namespace gl {
 
-        GLBackground(GLState &state, bool premultipliedAlpha) : state(state), premultipliedAlpha(premultipliedAlpha) {}
+        struct GLBackground {
 
-        void render() {
-        }
+            GLBackground(GLState &state, bool premultipliedAlpha);
 
-        [[nodiscard]] Color getClearColor() const {
-            return clearColor;
-        }
+            void render(GLRenderer &renderer, Object3D *scene);
 
-        void setClearColor(const Color &color, float alpha = 1) {
+            [[nodiscard]] const Color &getClearColor() const;
 
-            clearColor.copy( color );
-            clearAlpha = alpha;
-            setClear( clearColor, clearAlpha );
-        }
+            void setClearColor(const Color &color, float alpha = 1);
 
-        [[nodiscard]] float getClearAlpha() const {
-            return clearAlpha;
-        }
+            [[nodiscard]] float getClearAlpha() const;
 
-        void setClearAlpha(float alpha) {
-
-            clearAlpha = alpha;
-            setClear( clearColor, clearAlpha );
-        }
+            void setClearAlpha(float alpha);
 
 
-    private:
-        GLState &state;
+        private:
+            GLState &state;
 
-        bool premultipliedAlpha;
+            bool premultipliedAlpha;
 
-        Color clearColor = Color(0x000000);
-        float clearAlpha = 0;
+            Color clearColor = Color(0x000000);
+            float clearAlpha = 0;
 
-        std::shared_ptr<Mesh> planeMesh = nullptr;
-        std::shared_ptr<Mesh> boxMesh = nullptr;
+            void setClear(const Color &color, float alpha);
+        };
 
-        std::any currentBackground;
-        unsigned int currentBackgroundVersion = 0;
-        //        let currentTonemapping = null;
+    }// namespace gl
 
-        void setClear(const Color &color, float alpha) {
-
-            state.colorBuffer.setClear(color.r, color.g, color.b, alpha, premultipliedAlpha);
-        }
-    };
-
-}// namespace threepp::gl
+}// namespace threepp
 
 #endif//THREEPP_GLBACKGROUND_HPP
