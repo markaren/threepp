@@ -47,7 +47,7 @@ namespace threepp {
               MaterialWithBumpMap(1),
               MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
               MaterialWithDisplacementMap(1, 0),
-              MaterialWithReflectivity(1, 0.98),
+              MaterialWithReflectivity(1, 0.98f),
               MaterialWithWireframe(false, 1) {}
     };
 

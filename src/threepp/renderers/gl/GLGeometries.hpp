@@ -7,6 +7,8 @@
 #include "GLBindingStates.hpp"
 #include "GLInfo.hpp"
 
+#include "threepp/core/InstancedBufferGeometry.hpp"
+
 #include <unordered_map>
 
 namespace threepp::gl {
@@ -46,11 +48,10 @@ namespace threepp::gl {
 
                 scope_.bindingStates_.releaseStatesOfGeometry(geometry);
 
-                //                if ( geometry.isInstancedBufferGeometry === true ) {
-                //
-                //                    delete geometry._maxInstanceCount;
-                //
-                //                }
+                if (instanceof <InstancedBufferGeometry>(geometry)) {
+
+                    dynamic_cast<InstancedBufferGeometry *>(geometry)->_maxInstanceCount = std::nullopt;
+                }
 
                 scope_.info_.memory.geometries--;
             }
@@ -63,7 +64,7 @@ namespace threepp::gl {
             : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(*this) {
         }
 
-        BufferGeometry *get(Object3D *object, BufferGeometry *geometry) {
+        BufferGeometry *get(BufferGeometry *geometry) {
 
             if (geometries_.count(geometry->id)) {
                 return geometry;

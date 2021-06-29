@@ -83,7 +83,7 @@ namespace threepp {
 
         [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &getAttributes() const;
 
-        ~BufferGeometry() = default;
+        virtual ~BufferGeometry() = default;
 
         static std::shared_ptr<BufferGeometry> create() {
             return std::shared_ptr<BufferGeometry>(new BufferGeometry());

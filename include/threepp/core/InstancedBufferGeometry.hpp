@@ -12,7 +12,9 @@ namespace threepp {
     class InstancedBufferGeometry : public BufferGeometry {
 
     public:
-        int instanceCount = math::infinity<int>;
+        int instanceCount = Infinity<int>;
+
+        std::optional<int> _maxInstanceCount;
 
         static std::shared_ptr<InstancedBufferGeometry> create() {
             return std::shared_ptr<InstancedBufferGeometry>(new InstancedBufferGeometry());

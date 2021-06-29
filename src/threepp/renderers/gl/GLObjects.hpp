@@ -39,7 +39,7 @@ namespace threepp::gl {
             const auto frame = info_.render.frame;
 
             auto geometry = object->geometry();
-            auto buffergeometry = geometries_.get(object, geometry);
+            auto buffergeometry = geometries_.get(geometry);
 
             // Update once per frame
 
