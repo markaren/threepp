@@ -5,6 +5,7 @@
 
 #include "GLCapabilities.hpp"
 #include "GLLights.hpp"
+#include "GLProgram.hpp"
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
@@ -15,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <threepp/core/Uniform.hpp>
 #include <unordered_map>
 #include <vector>
 
@@ -25,6 +27,53 @@ namespace threepp {
     namespace gl {
 
         struct GLPrograms {
+
+            struct Parameters;
+
+            std::vector<GLProgram> programs;
+
+            bool logarithmicDepthBuffer;
+            bool floatVertexTextures;
+            GLint maxVertexUniforms;
+            bool vertexTextures;
+
+            GLPrograms();
+
+            int getTextureEncodingFromMap(std::optional<Texture> &map) const;
+
+            Parameters getParameters(Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
+
+            std::string getProgramCacheKey(const GLRenderer &renderer, const Parameters &parameters);
+
+            std::unordered_map<std::string, Uniform> getUniforms(Material *material);
+
+            GLProgram acquireProgram(const Parameters &parameters, const std::string &cacheKey) {
+
+                std::optional<GLProgram> program;
+
+                // Check if code has been already compiled
+                for (int p = 0, pl = programs.size(); p < pl; p++) {
+
+                    auto preexistingProgram = programs[p];
+
+                    if (preexistingProgram.cacheKey == cacheKey) {
+
+                        program = preexistingProgram;
+                        ++program->usedTimes;
+
+                        break;
+                    }
+                }
+
+                if (!program) {
+
+                    // TODO
+                    //                    program = GLProgram( renderer, cacheKey, parameters, bindingStates );
+                    //                    programs.emplace_back( program );
+                }
+
+                return *program;
+            }
 
             struct Parameters {
 
@@ -107,24 +156,10 @@ namespace threepp {
                         Scene *scene,
                         Object3D *object);
             };
-
-
-            bool logarithmicDepthBuffer;
-            bool floatVertexTextures;
-            GLint maxVertexUniforms;
-            bool vertexTextures;
-
-            GLPrograms();
-
-            int getTextureEncodingFromMap(std::optional<Texture> &map) const;
-
-            Parameters getParameters(Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
-
-            std::string getProgramCacheKey(const GLRenderer& renderer, const Parameters &parameters);
         };
 
-    }
+    }// namespace gl
 
-}// namespace threepp::gl
+}// namespace threepp
 
 #endif//THREEPP_GLPROGRAMS_HPP

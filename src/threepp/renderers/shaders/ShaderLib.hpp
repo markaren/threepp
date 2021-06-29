@@ -270,6 +270,48 @@ namespace threepp::shaders {
                 ShaderChunk::instance().meshphysical_frag()};
 
 
+        [[nodiscard]] Shader get(const std::string &name) const {
+
+           if (name == "basic") {
+               return basic;
+           } else if (name == "lambert") {
+               return lambert;
+           } else if (name == "phong") {
+               return phong;
+           } else if (name == "standard") {
+               return standard;
+           } else if (name == "toon") {
+               return toon;
+           } else if (name == "matcap") {
+               return matcap;
+           } else if (name == "points") {
+               return points;
+           } else if (name == "dashed") {
+               return dashed;
+           } else if (name == "depth") {
+               return depth;
+           } else if (name == "normal") {
+               return normal;
+           } else if (name == "sprite") {
+               return sprite;
+           } else if (name == "background") {
+               return background;
+           } else if (name == "cube") {
+               return cube;
+           } else if (name == "equirect") {
+               return equirect;
+           } else if (name == "distanceRGBA") {
+               return distanceRGBA;
+           } else if (name == "shadow") {
+               return shadow;
+           } else if (name == "physical") {
+               return physical;
+           } else {
+               throw std::runtime_error("No shader with name: " + name);
+           }
+
+        }
+
         ShaderLib(const ShaderLib &) = delete;
         void operator=(const ShaderLib &) = delete;
 

@@ -9,6 +9,7 @@
 #include <threepp/math/Plane.hpp>
 
 #include <optional>
+#include <threepp/core/Uniform.hpp>
 
 namespace threepp {
 
@@ -69,6 +70,8 @@ namespace threepp {
         bool visible = true;
 
         bool toneMapped = true;
+
+        std::unordered_map<std::string, Uniform> uniforms;
 
         unsigned int version = 0;
 

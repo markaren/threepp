@@ -11,6 +11,12 @@ namespace threepp::gl {
 
         int id = programIdCount++;
 
+        int usedTimes;
+
+        std::string cacheKey;
+
+//        GLProgram(GLRenderer &renderer, const std::string &cacheKey,  )
+
     private:
         inline static int programIdCount = 0;
     };

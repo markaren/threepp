@@ -90,8 +90,6 @@ namespace threepp {
 
         explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
 
-        void initGLContext();
-
         [[nodiscard]] int getTargetPixelRatio() const;
 
         void getSize(Vector2 &target) const;

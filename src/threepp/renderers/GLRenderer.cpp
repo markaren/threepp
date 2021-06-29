@@ -35,9 +35,9 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       geometries(attributes, info, bindingStates),
       textures(state, properties, info),
       objects(geometries, attributes, info) {
-}
 
-void GLRenderer::initGLContext() {
+    info.programs = &programCache.programs;
+
 }
 
 int GLRenderer::getTargetPixelRatio() const {

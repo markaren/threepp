@@ -2,9 +2,11 @@
 #include "GLPrograms.hpp"
 
 #include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/InstanceOf.hpp"
 #include "threepp/utils/StringUtils.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include <glad/glad.h>
 
@@ -14,7 +16,7 @@ using namespace threepp::gl;
 
 namespace {
 
-    std::unordered_map<std::string, std::string> shaderIds{
+    std::unordered_map<std::string, std::string> shaderIDs{
             {"MeshDepthMaterial", "depth"},
             {"MeshDistanceMaterial", "distanceRGBA"},
             {"MeshNormalMaterial", "normal"},
@@ -57,10 +59,9 @@ GLPrograms::Parameters::Parameters(
         Scene *scene,
         Object3D *object) {
 
-    shaderID = shaderIds[material->type()];
+    shaderID = shaderIDs[material->type()];
     shaderName = material->type();
-
-
+    
     isRawShaderMaterial = instanceof <RawShaderMaterial>(material);
 
     supportsVertexTextures = scope.vertexTextures;
@@ -100,7 +101,7 @@ GLPrograms::Parameters GLPrograms::getParameters(Material *material, const GLLig
     return GLPrograms::Parameters(*this, material, lights, numShadows, scene, object);
 }
 
-std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const GLPrograms::Parameters &parameters) {
+std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const GLPrograms::Parameters &parameters) {
 
     std::vector<std::string> array;
 
@@ -128,7 +129,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const GLP
         for (int i = 0; i < parameterNames.size(); i++) {
 
             // TODO
-//                        array.emplace_back(parameters[parameterNames[i]]);
+            //                        array.emplace_back(parameters[parameterNames[i]]);
         }
 
         array.emplace_back(std::to_string(renderer.outputEncoding));
@@ -138,4 +139,23 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const GLP
     array.emplace_back(parameters.customProgramCacheKey);
 
     return utils::join(array, '\n');
+}
+
+std::unordered_map<std::string, Uniform> GLPrograms::getUniforms(Material *material) {
+
+    std::unordered_map<std::string, Uniform> uniforms;
+
+    if (shaderIDs.count(material->type())) {
+
+        auto shaderID = shaderIDs.at(material->type());
+
+        auto shader = shaders::ShaderLib::instance().get(shaderID);
+        uniforms = shader.uniforms;
+
+    } else {
+
+        uniforms = material->uniforms;
+    }
+
+    return uniforms;
 }

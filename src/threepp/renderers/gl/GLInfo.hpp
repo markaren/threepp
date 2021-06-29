@@ -36,7 +36,7 @@ namespace threepp::gl {
 
         bool autoReset = true;
 
-        std::vector<GLProgram> programs;
+        std::vector<GLProgram> *programs;
 
         void update(int count, int mode, int instanceCount);
 
