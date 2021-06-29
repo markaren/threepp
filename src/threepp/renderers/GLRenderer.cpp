@@ -242,7 +242,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
         }
     }
 
-    bindingStates.setup(object, material, program, geometry, index);
+    bindingStates.setup(object, material, *program, geometry, index);
 
     gl::Buffer attribute{};
     gl::BufferRenderer *renderer = &bufferRenderer;
@@ -425,7 +425,7 @@ void GLRenderer::updateCommonMaterialProperties(Material *material, gl::GLProgra
 }
 
 
-gl::GLProgram GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object) {
+std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object) {
 
     bool isScene = instanceof <Scene>(scene);
 
@@ -659,7 +659,7 @@ gl::GLProgram GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *
     //
     //            return program;
 
-    return {};
+    return nullptr;
 }
 
 bool GLRenderer::materialNeedsLights(Material *material) {

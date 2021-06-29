@@ -7,7 +7,7 @@
 
 #include "threepp/utils/StringUtils.hpp"
 
-
+#include <memory>
 #include <vector>
 
 namespace threepp::gl {
@@ -36,7 +36,7 @@ namespace threepp::gl {
 
         bool autoReset = true;
 
-        std::vector<GLProgram> *programs;
+        std::vector<std::shared_ptr<GLProgram>> *programs;
 
         void update(int count, int mode, int instanceCount);
 

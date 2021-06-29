@@ -30,7 +30,7 @@ namespace threepp {
 
             struct Parameters;
 
-            std::vector<GLProgram> programs;
+            std::vector<std::shared_ptr<GLProgram>> programs;
 
             bool logarithmicDepthBuffer;
             bool floatVertexTextures;
@@ -47,16 +47,16 @@ namespace threepp {
 
             std::unordered_map<std::string, Uniform> getUniforms(Material *material);
 
-            GLProgram acquireProgram(const Parameters &parameters, const std::string &cacheKey) {
+            std::shared_ptr<GLProgram> acquireProgram(const Parameters &parameters, const std::string &cacheKey) {
 
-                std::optional<GLProgram> program;
+                std::shared_ptr<GLProgram> program = nullptr;
 
                 // Check if code has been already compiled
                 for (int p = 0, pl = programs.size(); p < pl; p++) {
 
                     auto preexistingProgram = programs[p];
 
-                    if (preexistingProgram.cacheKey == cacheKey) {
+                    if (preexistingProgram->cacheKey == cacheKey) {
 
                         program = preexistingProgram;
                         ++program->usedTimes;
@@ -72,7 +72,7 @@ namespace threepp {
                     //                    programs.emplace_back( program );
                 }
 
-                return *program;
+                return program;
             }
 
             struct Parameters {
@@ -86,6 +86,9 @@ namespace threepp {
                 std::string fragmentShader;
 
                 bool isRawShaderMaterial;
+
+                bool instancing;
+                bool instancingColor;
 
                 bool supportsVertexTextures;
                 int outputEncoding;
@@ -115,15 +118,40 @@ namespace threepp {
                 bool specularMap;
                 bool alphaMap;
 
+                bool gradientMap;
+
+                bool sheen;
+
+                bool transmission;
+                bool transmissionMap;
+                bool thicknessMap;
+
+                int combine;
+
+                bool vertexTangents;
+                bool vertexColors;
+                bool vertexAlphas;
+                bool vertexUvs;
+                bool uvsVertexOnly;
+
+                bool fog;
+                bool useFog;
+                bool fogExp2;
+
+                bool flatShading;
+
+                bool sizeAttenuation;
+                bool logarithmicDepthBuffer;
+
                 int numDirLights;
                 int numPointLights;
                 int numSpotLights;
+                int numRectAreaLights = 0;
+                int numHemiLights = 0;
 
                 int numDirLightShadows;
                 int numPointLightShadows;
                 int numSpotLightShadows;
-                int numRectAreaLights;
-                int numHemiLights;
 
                 int numClippingPlanes;
                 int numClipIntersection;
@@ -155,6 +183,8 @@ namespace threepp {
                         int numShadows,
                         Scene *scene,
                         Object3D *object);
+
+                [[nodiscard]] std::string hash() const;
             };
         };
 

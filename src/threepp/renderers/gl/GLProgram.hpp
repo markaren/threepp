@@ -4,6 +4,7 @@
 #define THREEPP_GLPROGRAM_HPP
 
 #include <unordered_map>
+#include <utility>
 
 namespace threepp::gl {
 
@@ -15,7 +16,7 @@ namespace threepp::gl {
 
         std::string cacheKey;
 
-//        GLProgram(GLRenderer &renderer, const std::string &cacheKey,  )
+        GLProgram(std::string cacheKey): cacheKey(std::move(cacheKey))  {}
 
     private:
         inline static int programIdCount = 0;
