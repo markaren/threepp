@@ -9,7 +9,13 @@ using namespace cimg_library;
 Image ImageLoader::load(const char *imagePath) {
 
     CImg<unsigned char> image(imagePath);
-    image._is_shared = true;
 
-    return Image(image.width(), image.height(), image.data());
+    const size_t size = image.size() * sizeof (unsigned char);
+
+    std::vector<unsigned char> data(size);
+    for (int i = 0; i < size; i++) {
+        data.emplace_back(image.data()[i]);
+    }
+
+    return Image(image.width(), image.height(), data);
 }

@@ -174,7 +174,7 @@ void gl::GLTextures::uploadTexture(TextureProperties &textureProperties, Texture
 
         } else {
 
-            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
+            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData().data());
             textureProperties.maxMipLevel = 0;
         }
 

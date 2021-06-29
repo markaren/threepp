@@ -2,6 +2,8 @@
 #ifndef THREEPP_IMAGE_HPP
 #define THREEPP_IMAGE_HPP
 
+#include <vector>
+
 namespace threepp {
 
     class Image {
@@ -12,24 +14,24 @@ namespace threepp {
         unsigned int height;
         unsigned int depth = 0;
 
-        Image(unsigned int width, unsigned int height, const unsigned char *data = nullptr)
-            : width(width), height(height), data_(data){};
+        Image(unsigned int width, unsigned int height, std::vector<unsigned char> data = {})
+            : width(width), height(height), data_(std::move(data)){};
 
         Image(unsigned int width, unsigned int height, unsigned int depth)
-                : width(width), height(height), depth(depth), data_(nullptr){};
+                : width(width), height(height), depth(depth){};
 
-        [[nodiscard]] const unsigned char *getData() const {
+        [[nodiscard]] const std::vector<unsigned char> &getData() const {
 
             return data_;
         }
 
-        ~Image() {
-
-            delete data_;
-        }
+//        ~Image() {
+//
+//            delete data_;
+//        }
 
     private:
-        const unsigned char* data_;
+        std::vector<unsigned char> data_;
 
     };
 
