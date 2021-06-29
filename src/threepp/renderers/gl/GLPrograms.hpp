@@ -102,7 +102,7 @@ namespace threepp {
                 Parameters(
                         const GLPrograms &scope,
                         Material *material,
-                        GLLights::LightState &lights,
+                        const GLLights::LightState &lights,
                         int numShadows,
                         Scene *scene,
                         Object3D *object);
@@ -118,7 +118,7 @@ namespace threepp {
 
             int getTextureEncodingFromMap(std::optional<Texture> &map) const;
 
-            Parameters getParameters(Material *material, GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
+            Parameters getParameters(Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
 
             std::string getProgramCacheKey(const GLRenderer& renderer, const Parameters &parameters);
         };

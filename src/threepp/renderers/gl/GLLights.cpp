@@ -158,3 +158,8 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
         }
     }
 }
+
+const GLLights::LightState &GLLights::getState() const {
+
+    return state_;
+}

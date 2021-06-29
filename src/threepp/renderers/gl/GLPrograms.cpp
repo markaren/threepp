@@ -52,7 +52,7 @@ namespace {
 GLPrograms::Parameters::Parameters(
         const GLPrograms &scope,
         Material *material,
-        GLLights::LightState &lights,
+        const GLLights::LightState &lights,
         int numShadows,
         Scene *scene,
         Object3D *object) {
@@ -95,7 +95,7 @@ int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
     return encoding;
 }
 
-GLPrograms::Parameters GLPrograms::getParameters(Material *material, GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
+GLPrograms::Parameters GLPrograms::getParameters(Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
 
     return GLPrograms::Parameters(*this, material, lights, numShadows, scene, object);
 }

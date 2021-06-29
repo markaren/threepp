@@ -115,6 +115,8 @@ namespace threepp::gl {
 
         };
 
+        const LightState &getState() const;
+
         void setup(std::vector<Light *> &lights);
 
         void setupView(std::vector<Light *> &lights, Camera *camera);

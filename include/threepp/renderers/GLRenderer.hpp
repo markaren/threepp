@@ -225,6 +225,7 @@ namespace threepp {
         gl::GLRenderStates renderStates;
         gl::GLRenderLists renderLists;
         gl::GLObjects objects;
+        gl::GLPrograms programCache;
     };
 
 }// namespace threepp

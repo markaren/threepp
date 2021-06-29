@@ -12,6 +12,7 @@ namespace threepp::gl {
         GLRenderState() = default;
 
         const GLLights &getLights() const {
+
             return lights_;
         }
         const std::vector<Light *> &getLightsArray() const {
@@ -55,7 +56,6 @@ namespace threepp::gl {
 
         std::vector<Light *> lightsArray_;
         std::vector<Light *> shadowsArray_;
-
     };
 
     struct GLRenderStates {
@@ -66,12 +66,10 @@ namespace threepp::gl {
 
             if (renderCallDepth >= renderStates_[scene].size()) {
 
-                return renderStates_[scene].emplace_back(GLRenderState());
-
-            } else {
-
-                return renderStates_[scene][renderCallDepth];
+                renderStates_[scene].emplace_back(GLRenderState());
             }
+
+            return renderStates_[scene][renderCallDepth];
         }
 
         void dispose() {

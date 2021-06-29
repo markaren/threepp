@@ -398,9 +398,19 @@ void GLRenderer::getProgram(Material *material, Object3D *scene, Object3D *objec
 
     bool isScene = instanceof <Scene>(scene);
 
-    //    if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
+    if (!isScene) scene = &_emptyScene;// scene could be a Mesh, Line, Points, ...
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
+
+    auto &lights = currentRenderState->getLights();
+    auto &shadowsArray = currentRenderState->getShadowsArray();
+
+    auto lightsStateVersion = lights.getState().version;
+
+    auto parameters = programCache.getParameters(material, lights.getState(), shadowsArray.size(), (Scene *) scene, object);
+    auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
+
+    //TODO
 }
 
 void GLRenderer::updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters) {
@@ -662,7 +672,7 @@ bool GLRenderer::materialNeedsLights(Material *material) {
     bool isShaderMaterial = instanceof <ShaderMaterial>(material);
     bool lights = false;
     if (instanceof <MaterialWithLights>(material)) {
-        lights = dynamic_cast<MaterialWithLights*>(material)->lights;
+        lights = dynamic_cast<MaterialWithLights *>(material)->lights;
     }
 
     return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
