@@ -1,4 +1,4 @@
-//
+// https://github.com/mrdoob/three.js/blob/r129/src/materials/MeshToonMaterial.js
 
 #ifndef THREEPP_MESHTOONMATERIAL_HPP
 #define THREEPP_MESHTOONMATERIAL_HPP

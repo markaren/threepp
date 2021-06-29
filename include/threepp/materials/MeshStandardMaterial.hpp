@@ -1,4 +1,4 @@
-//
+// https://github.com/mrdoob/three.js/blob/r129/src/materials/MeshStandardMaterial.js
 
 #ifndef THREEPP_MESHSTANDARDMATERIAL_HPP
 #define THREEPP_MESHSTANDARDMATERIAL_HPP
@@ -8,7 +8,8 @@
 
 namespace threepp {
 
-    class MeshStandardMaterial : public Material {
+    class MeshStandardMaterial : public virtual Material,
+                                 public MaterialWithColor {
 
     public:
         [[nodiscard]] std::string type() const override {
@@ -21,7 +22,7 @@ namespace threepp {
         }
 
     protected:
-        MeshStandardMaterial() = default;
+        MeshStandardMaterial() : MaterialWithColor(0xffffff) {}
     };
 
 }// namespace threepp

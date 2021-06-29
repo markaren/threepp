@@ -23,6 +23,7 @@ set(publicHeaders
 
         "threepp/geometries/geometries.hpp"
         "threepp/geometries/BoxGeometry.hpp"
+        "threepp/geometries/CircleGeometry.hpp"
         "threepp/geometries/ConeGeometry.hpp"
         "threepp/geometries/CylinderGeometry.hpp"
         "threepp/geometries/PlaneGeometry.hpp"
@@ -33,9 +34,15 @@ set(publicHeaders
 
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"
+        "threepp/materials/MeshDepthMaterial.hpp"
+        "threepp/materials/MeshLambertMaterial.hpp"
+        "threepp/materials/MeshPhongMaterial.hpp"
+        "threepp/materials/MeshStandardMaterial.hpp"
+        "threepp/materials/MeshToonMaterial.hpp"
         "threepp/materials/PointsMaterial.hpp"
-        "threepp/materials/ShaderMaterial.hpp"
         "threepp/materials/RawShaderMaterial.hpp"
+        "threepp/materials/ShaderMaterial.hpp"
+        "threepp/materials/ShadowMaterial.hpp"
         "threepp/materials/interfaces.hpp"
 
         "threepp/math/Box2.hpp"

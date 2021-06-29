@@ -2,6 +2,8 @@
 #ifndef THREEPP_INTERFACES_HPP
 #define THREEPP_INTERFACES_HPP
 
+#include <utility>
+
 #include "threepp/materials/Material.hpp"
 
 #include "threepp/textures/Texture.hpp"
@@ -140,6 +142,14 @@ namespace threepp {
         Vector2 normalScale;
 
         MaterialWithNormalMap(int normalMapType, Vector2 normalScale) : normalMapType(normalMapType), normalScale(normalScale) {}
+    };
+
+    struct MaterialWithLineProperties: virtual Material {
+
+        std::string linecap;
+        std::string linejoin;
+
+        MaterialWithLineProperties(std::string linecap, std::string linejoin) : linecap(std::move(linecap)), linejoin(std::move(linejoin)) {}
     };
 
 }// namespace threepp

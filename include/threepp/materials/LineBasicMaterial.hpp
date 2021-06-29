@@ -9,12 +9,10 @@ namespace threepp {
 
     class LineBasicMaterial : public virtual Material,
                               public MaterialWithColor,
-                              MaterialWithLineWidth {
+                              public MaterialWithLineWidth,
+                              public MaterialWithLineProperties {
 
     public:
-        std::string linecap = "round";
-        std::string linejoin = "round";
-
         [[nodiscard]] std::string type() const override {
 
             return "LineBasicMaterial";
@@ -28,7 +26,8 @@ namespace threepp {
     protected:
         LineBasicMaterial()
             : MaterialWithColor(0xffffff),
-              MaterialWithLineWidth(1) {}
+              MaterialWithLineWidth(1),
+              MaterialWithLineProperties("round", "round") {}
     };
 
 }// namespace threepp
