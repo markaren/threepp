@@ -17,9 +17,9 @@ std::vector<std::string> split(const std::string &s, char delimiter) {
     return tokens;
 }
 
-void join(const std::vector<std::string> &v, char c, std::string &s) {
+std::string join(const std::vector<std::string> &v, char c) {
 
-    s.clear();
+    std::string s;
 
     for (auto p = v.begin(); p != v.end(); ++p) {
         s += *p;
@@ -27,6 +27,8 @@ void join(const std::vector<std::string> &v, char c, std::string &s) {
             s += c;
         }
     }
+
+    return s;
 }
 
 std::string addLineNumbers(const std::string &str) {
@@ -38,7 +40,5 @@ std::string addLineNumbers(const std::string &str) {
         lines[i] = std::to_string(i + 1) + ": " + lines[i];
     }
 
-    std::string result;
-    join(lines, '\n', result);
-    return result;
+    return join(lines, '\n');
 }

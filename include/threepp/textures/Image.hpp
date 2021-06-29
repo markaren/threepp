@@ -2,8 +2,6 @@
 #ifndef THREEPP_IMAGE_HPP
 #define THREEPP_IMAGE_HPP
 
-#include <utility>
-
 namespace threepp {
 
     class Image {

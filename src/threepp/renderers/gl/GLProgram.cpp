@@ -103,10 +103,7 @@ namespace {
             chunks.emplace_back(chunk);
         }
 
-        std::string result;
-        utils::join(chunks, '\n', result);
-
-        return result;
+        return utils::join(chunks, '\n');
     }
 
     std::unordered_map<std::string, GLint> fetchAttributeLocations(GLuint program) {

@@ -9,7 +9,7 @@ namespace threepp::utils {
 
     std::vector<std::string> split(const std::string &s, char delimiter);
 
-    void join(const std::vector<std::string> &v, char c, std::string &s);
+    std::string join(const std::vector<std::string> &v, char c);
 
     std::string addLineNumbers(const std::string &str);
 

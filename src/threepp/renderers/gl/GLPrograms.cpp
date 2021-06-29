@@ -134,8 +134,5 @@ std::string GLPrograms::getProgramCacheKey(const GLPrograms::Parameters &paramet
 
     array.emplace_back(parameters.customProgramCacheKey);
 
-    std::string result;
-    utils::join(array, '\n', result);
-
-    return result;
+    return utils::join(array, '\n');
 }

@@ -11,7 +11,7 @@ using namespace threepp;
 
 namespace {
 
-    inline unsigned int createShader(int type, const char *str) {
+    inline GLuint createShader(int type, const char *str) {
 
         const auto shader = glCreateShader(type);
 
