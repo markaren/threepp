@@ -529,7 +529,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
     currentPremultipledAlpha = std::nullopt;
 }
 
-void gl::GLState::setMaterial( const Material *material, bool frontFaceCW) {
+void gl::GLState::setMaterial(const Material *material, bool frontFaceCW) {
 
     material->side == DoubleSide
             ? disable(GL_CULL_FACE)
@@ -672,6 +672,7 @@ void gl::GLState::bindTexture(int glType, int glTexture) {
 
     BoundTexture &boundTexture = currentBoundTextures[*currentTextureSlot];
 
+    // TODO
     //            if ( boundTexture === undefined ) {
     //
     //                boundTexture = { type: undefined, texture: undefined };

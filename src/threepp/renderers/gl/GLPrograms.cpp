@@ -4,6 +4,10 @@
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/utils/InstanceOf.hpp"
 #include "threepp/utils/StringUtils.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
+
+#include <glad/glad.h>
+
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -96,7 +100,7 @@ GLPrograms::Parameters GLPrograms::getParameters(Material *material, GLLights::L
     return GLPrograms::Parameters(*this, material, lights, numShadows, scene, object);
 }
 
-std::string GLPrograms::getProgramCacheKey(const GLPrograms::Parameters &parameters) {
+std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const GLPrograms::Parameters &parameters) {
 
     std::vector<std::string> array;
 
@@ -124,12 +128,11 @@ std::string GLPrograms::getProgramCacheKey(const GLPrograms::Parameters &paramet
         for (int i = 0; i < parameterNames.size(); i++) {
 
             // TODO
-            //            array.emplace_back(parameters[parameterNames[i]]);
+//                        array.emplace_back(parameters[parameterNames[i]]);
         }
 
-        //TODO
-//        array.emplace_back(renderer_.outputEncoding);
-//        array.emplace_back(renderer_.gammaFactor);
+        array.emplace_back(std::to_string(renderer.outputEncoding));
+        array.emplace_back(std::to_string(renderer.gammaFactor));
     }
 
     array.emplace_back(parameters.customProgramCacheKey);

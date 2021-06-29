@@ -11,32 +11,29 @@ void GLBackground::render(threepp::GLRenderer &renderer, Object3D *scene) {
 
     bool forceClear = false;
     bool isScene = instanceof <Scene>(scene);
-    std::optional<Color> background = isScene ? dynamic_cast<Scene*>(scene)->background : std::nullopt;
+    std::optional<Color> background = isScene ? dynamic_cast<Scene *>(scene)->background : std::nullopt;
 
-    if ( !background ) {
+    if (!background) {
 
-        setClear( clearColor, clearAlpha );
+        setClear(clearColor, clearAlpha);
 
     } else {
 
-        setClear( *background, 1 );
+        setClear(*background, 1);
         forceClear = true;
-
     }
 
-    if ( renderer.autoClear || forceClear ) {
+    if (renderer.autoClear || forceClear) {
 
-        renderer.clear( renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil );
-
+        renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
     }
-
 }
 
 void GLBackground::setClearColor(const Color &color, float alpha) {
 
-    clearColor.copy( color );
+    clearColor.copy(color);
     clearAlpha = alpha;
-    setClear( clearColor, clearAlpha );
+    setClear(clearColor, clearAlpha);
 }
 
 const threepp::Color &GLBackground::getClearColor() const {
@@ -52,7 +49,7 @@ float GLBackground::getClearAlpha() const {
 void GLBackground::setClearAlpha(float alpha) {
 
     clearAlpha = alpha;
-    setClear( clearColor, clearAlpha );
+    setClear(clearColor, clearAlpha);
 }
 
 void GLBackground::setClear(const Color &color, float alpha) {

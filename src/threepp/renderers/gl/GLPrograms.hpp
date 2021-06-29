@@ -11,8 +11,6 @@
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
 
-#include <glad/glad.h>
-
 #include <map>
 #include <memory>
 #include <optional>
@@ -20,107 +18,112 @@
 #include <unordered_map>
 #include <vector>
 
-namespace threepp::gl {
+namespace threepp {
 
-    struct GLPrograms {
+    class GLRenderer;
 
-        struct Parameters {
+    namespace gl {
 
-            std::optional<std::string> shaderID;
-            std::string shaderName;
+        struct GLPrograms {
 
-            std::optional<std::map<std::string, std::string>> defines;
+            struct Parameters {
 
-            std::string vertexShader;
-            std::string fragmentShader;
+                std::optional<std::string> shaderID;
+                std::string shaderName;
 
-            bool isRawShaderMaterial;
+                std::optional<std::map<std::string, std::string>> defines;
 
-            bool supportsVertexTextures;
-            int outputEncoding;
-            bool map;
-            int mapEncoding;
-            bool matcap;
-            int matcapEncoding;
-            bool envMap;
-            int envMapMode;
-            int envMapEncoding;
-            bool envMapCubeUV;
-            bool lightMap;
-            int lightMapEncoding;
-            bool aoMap;
-            bool emissiveMap;
-            int emissiveMapEncoding;
-            bool bumpMap;
-            bool normalMap;
-            bool objectSpaceNormalMap;
-            bool tangentSpaceNormalMap;
-            bool clearcoatMap;
-            bool clearcoatRoughnessMap;
-            bool clearcoatNormalMap;
-            bool displacementMap;
-            bool roughnessMap;
-            bool metalnessMap;
-            bool specularMap;
-            bool alphaMap;
+                std::string vertexShader;
+                std::string fragmentShader;
 
-            int numDirLights;
-            int numPointLights;
-            int numSpotLights;
+                bool isRawShaderMaterial;
 
-            int numDirLightShadows;
-            int numPointLightShadows;
-            int numSpotLightShadows;
-            int numRectAreaLights;
-            int numHemiLights;
+                bool supportsVertexTextures;
+                int outputEncoding;
+                bool map;
+                int mapEncoding;
+                bool matcap;
+                int matcapEncoding;
+                bool envMap;
+                int envMapMode;
+                int envMapEncoding;
+                bool envMapCubeUV;
+                bool lightMap;
+                int lightMapEncoding;
+                bool aoMap;
+                bool emissiveMap;
+                int emissiveMapEncoding;
+                bool bumpMap;
+                bool normalMap;
+                bool objectSpaceNormalMap;
+                bool tangentSpaceNormalMap;
+                bool clearcoatMap;
+                bool clearcoatRoughnessMap;
+                bool clearcoatNormalMap;
+                bool displacementMap;
+                bool roughnessMap;
+                bool metalnessMap;
+                bool specularMap;
+                bool alphaMap;
 
-            int numClippingPlanes;
-            int numClipIntersection;
+                int numDirLights;
+                int numPointLights;
+                int numSpotLights;
 
-            bool dithering;
+                int numDirLightShadows;
+                int numPointLightShadows;
+                int numSpotLightShadows;
+                int numRectAreaLights;
+                int numHemiLights;
 
-            bool shadowMapEnabled;
-            int shadowMapType;
+                int numClippingPlanes;
+                int numClipIntersection;
 
-            int toneMapping;
-            bool physicallyCorrectLights;
+                bool dithering;
 
-            bool premultipliedAlpha;
+                bool shadowMapEnabled;
+                int shadowMapType;
 
-            bool alphaTest;
-            bool doubleSided;
-            bool flipSided;
+                int toneMapping;
+                bool physicallyCorrectLights;
 
-            bool depthPacking;
+                bool premultipliedAlpha;
 
-            std::string index0AttributeName;
+                bool alphaTest;
+                bool doubleSided;
+                bool flipSided;
 
-            std::string customProgramCacheKey;
+                bool depthPacking;
 
-            Parameters(
-                    const GLPrograms &scope,
-                    Material *material,
-                    GLLights::LightState &lights,
-                    int numShadows,
-                    Scene *scene,
-                    Object3D *object);
+                std::string index0AttributeName;
+
+                std::string customProgramCacheKey;
+
+                Parameters(
+                        const GLPrograms &scope,
+                        Material *material,
+                        GLLights::LightState &lights,
+                        int numShadows,
+                        Scene *scene,
+                        Object3D *object);
+            };
+
+
+            bool logarithmicDepthBuffer;
+            bool floatVertexTextures;
+            GLint maxVertexUniforms;
+            bool vertexTextures;
+
+            GLPrograms();
+
+            int getTextureEncodingFromMap(std::optional<Texture> &map) const;
+
+            Parameters getParameters(Material *material, GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
+
+            std::string getProgramCacheKey(const GLRenderer& renderer, const Parameters &parameters);
         };
 
-
-        bool logarithmicDepthBuffer;
-        bool floatVertexTextures;
-        GLint maxVertexUniforms;
-        bool vertexTextures;
-
-        GLPrograms();
-
-        int getTextureEncodingFromMap(std::optional<Texture> &map) const;
-
-        Parameters getParameters(Material *material, GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
-
-        std::string getProgramCacheKey( const Parameters &parameters );
-
-    };
+    }
 
 }// namespace threepp::gl
 
