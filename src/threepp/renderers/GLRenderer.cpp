@@ -420,7 +420,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     if ( sortObjects ) {
 
-//        currentRenderList.sort( _opaqueSort, _transparentSort );
+        currentRenderList->sort();
 
     }
 

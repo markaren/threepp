@@ -7,7 +7,7 @@ using namespace threepp::gl;
 
 GLBackground::GLBackground(GLState &state, bool premultipliedAlpha) : state(state), premultipliedAlpha(premultipliedAlpha) {}
 
-void GLBackground::render(threepp::GLRenderer &renderer, Object3D *scene) {
+void GLBackground::render(threepp::GLRenderer &renderer, threepp::Object3D *scene) {
 
     bool forceClear = false;
     bool isScene = instanceof <Scene>(scene);
@@ -29,7 +29,7 @@ void GLBackground::render(threepp::GLRenderer &renderer, Object3D *scene) {
     }
 }
 
-void GLBackground::setClearColor(const Color &color, float alpha) {
+void GLBackground::setClearColor(const threepp::Color &color, float alpha) {
 
     clearColor.copy(color);
     clearAlpha = alpha;
@@ -52,7 +52,7 @@ void GLBackground::setClearAlpha(float alpha) {
     setClear(clearColor, clearAlpha);
 }
 
-void GLBackground::setClear(const Color &color, float alpha) {
+void GLBackground::setClear(const threepp::Color &color, float alpha) {
 
     state.colorBuffer.setClear(color.r, color.g, color.b, alpha, premultipliedAlpha);
 }

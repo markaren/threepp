@@ -38,7 +38,7 @@ namespace threepp::gl {
 
     };
 
-    void upload(std::vector<UniformObject> &seq) {
+    static void upload(std::vector<UniformObject> &seq) {
 
     }
 

@@ -213,7 +213,6 @@ namespace threepp {
         int _height;
 
         int _pixelRatio = 1;
-        //std::function<bool(int, int)> _opaqueSort;
 
         Vector4 _viewport;
         Vector4 _scissor;

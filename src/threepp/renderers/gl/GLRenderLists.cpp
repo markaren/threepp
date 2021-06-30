@@ -6,54 +6,57 @@ using namespace threepp::gl;
 
 namespace {
 
-    int painterSortStable(const RenderItem &a, const RenderItem &b) {
+    struct {
 
-        //        if (a.groupOrder != b.groupOrder) {
-        //
-        //            return a.groupOrder - b.groupOrder;
-        //
-        //        } else if (a.renderOrder != b.renderOrder) {
-        //
-        //            return a.renderOrder - b.renderOrder;
-        //
-        //        } else if (a.program != b.program) {
-        //
-        //            return a.program->id - b.program->id;
-        //
-        //        } else if (a.material->id != b.material->id) {
-        //
-        //            return a.material->id - b.material->id;
-        //
-        //        } else if (a.z != b.z) {
-        //
-        //            return a.z - b.z;
-        //
-        //        } else {
-        //
-        //            return a.id - b.id;
-        //        }
-        return 0;
-    }
+        bool operator()(const RenderItem &a, const RenderItem &b) {
+            if (a.groupOrder != b.groupOrder) {
 
-    int reversePainterSortStable(const RenderItem &a, const RenderItem &b) {
+                return a.groupOrder < b.groupOrder;
 
-        if (a.groupOrder != b.groupOrder) {
+            } else if (a.renderOrder != b.renderOrder) {
 
-            return a.groupOrder - b.groupOrder;
+                return a.renderOrder < b.renderOrder;
 
-        } else if (a.renderOrder != b.renderOrder) {
+            } else if (*a.program != *b.program) {
 
-            return a.renderOrder - b.renderOrder;
+                return a.program->id < b.program->id;
 
-        } else if (a.z != b.z) {
+            } else if (a.material->id != b.material->id) {
 
-            return b.z - a.z;
+                return a.material->id < b.material->id;
 
-        } else {
+            } else if (a.z != b.z) {
 
-            return *a.id - *b.id;
+                return a.z < b.z;
+
+            } else {
+
+                return a.id < b.id;
+            }
         }
-    }
+    } painterSortStable;
+
+    struct {
+        bool operator()(const RenderItem &a, const RenderItem &b) {
+
+            if (a.groupOrder != b.groupOrder) {
+
+                return a.groupOrder < b.groupOrder;
+
+            } else if (a.renderOrder != b.renderOrder) {
+
+                return a.renderOrder < b.renderOrder;
+
+            } else if (a.z != b.z) {
+
+                return b.z < a.z;
+
+            } else {
+
+                return a.id < b.id;
+            }
+        }
+    } reversePainterSortStable;
 
 }// namespace
 
@@ -87,7 +90,7 @@ gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeom
         renderItem.geometry = geometry;
         renderItem.material = material;
         if (materialProperties.program) {
-            renderItem.program = materialProperties.program.value();
+            renderItem.program = materialProperties.program;
         }
         renderItem.groupOrder = groupOrder;
         renderItem.renderOrder = object->renderOrder;
@@ -133,12 +136,11 @@ void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material 
 }
 
 
-void GLRenderList::sort(bool customOpaqueSort, bool customTransparentSort) {
+void GLRenderList::sort() {
 
-    // TODO
-    //    if ( opaque.size() > 1 ) opaque.sort( customOpaqueSort || painterSortStable );
-    //    if ( transmissive.size() > 1 ) transmissive.sort( customTransparentSort || reversePainterSortStable );
-    //    if ( transparent.size() > 1 ) transparent.sort( customTransparentSort || reversePainterSortStable );
+    if (opaque.size() > 1) std::sort(opaque.begin(), opaque.end(), painterSortStable);
+    if (transmissive.size() > 1) std::sort(transmissive.begin(), transmissive.end(), reversePainterSortStable);
+    if (transparent.size() > 1) std::sort(transparent.begin(), transparent.end(), reversePainterSortStable);
 }
 
 void GLRenderList::finish() {
@@ -147,13 +149,13 @@ void GLRenderList::finish() {
 
     for (auto &renderItem : renderItems) {
 
-        if (!renderItem.id) break;
+        if (renderItem.id == -1) break;
 
-        renderItem.id = std::nullopt;
+        renderItem.id = -1;
         renderItem.object = nullptr;
         renderItem.geometry = nullptr;
         renderItem.material = nullptr;
-        renderItem.program = std::nullopt;
+        renderItem.program = nullptr;
         renderItem.group = std::nullopt;
     }
 }

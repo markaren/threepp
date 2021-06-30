@@ -14,11 +14,11 @@ namespace threepp::gl {
 
     struct RenderItem {
 
-        std::optional<unsigned int> id;
+        unsigned int id;
         Object3D *object;
         BufferGeometry *geometry;
         Material *material;
-        std::optional<GLProgram> program;
+        std::shared_ptr<GLProgram> program;
         int groupOrder;
         unsigned int renderOrder;
         float z;
@@ -45,7 +45,7 @@ namespace threepp::gl {
 
         void unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group);
 
-        void sort(bool customOpaqueSort, bool customTransparentSort);
+        void sort();
 
         void finish();
 

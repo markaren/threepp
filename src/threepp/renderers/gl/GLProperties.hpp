@@ -25,7 +25,7 @@ namespace threepp::gl {
 
     struct MaterialProperties {
 
-        std::optional<GLProgram> program;
+        std::shared_ptr<GLProgram> program;
         std::vector<std::shared_ptr<GLProgram>> programs;
 
         std::optional<Texture> environment;
