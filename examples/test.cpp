@@ -244,9 +244,11 @@ int main() {
     u.value<float>() = 0.5f;
     std::cout << "Color r=" << u.value<float>() << std::endl;
 
-    auto vPtr = std::make_shared<Vector3>(1.f, 1.f, 1.f);
-    Uniform u1(vPtr);
-    std::cout << u1.value<std::shared_ptr<Vector3>>()->x << std::endl;
+    Vector3 myVec(1.f, 1.f, 1.f);
+    Uniform u1(myVec);
+    std::cout << u1.value<Vector3>() << std::endl;
+    u1.value<Vector3>().y = -1;
+    std::cout << u1.value<Vector3>() << std::endl;
 
     std::cout << shaders::ShaderChunk::instance().alphamap_fragment() << std::endl;
 

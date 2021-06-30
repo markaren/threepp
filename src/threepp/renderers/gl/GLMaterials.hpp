@@ -49,7 +49,7 @@ namespace threepp::gl {
                 auto m = dynamic_cast<MaterialWithMap *>(material);
                 auto& map = m->map;
                 if (map) {
-                    uniforms["map"].setValue(map);
+                    uniforms["map"].setValue(*map);
                 }
             }
 
@@ -58,7 +58,7 @@ namespace threepp::gl {
                 auto m = dynamic_cast<MaterialWithAlphaMap *>(material);
                 auto& alphaMap = m->alphaMap;
                 if (alphaMap) {
-                    uniforms["alphaMap"].setValue(alphaMap);
+                    uniforms["alphaMap"].setValue(*alphaMap);
                 }
             }
         }

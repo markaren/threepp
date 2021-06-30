@@ -113,7 +113,7 @@ namespace threepp::gl {
 
             if (!uniform.hasValue() || uniform.value<std::vector<float>>() != globalState) {
 
-                uniform.setValue(globalState);
+                uniform.setValue(*globalState);
                 uniform.needsUpdate = numGlobalPlanes > 0;
             }
 
