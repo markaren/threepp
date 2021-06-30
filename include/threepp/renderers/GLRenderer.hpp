@@ -16,21 +16,21 @@
 
 #include "threepp/objects/Points.hpp"
 
-#include "threepp/renderers/gl/GLCapabilities.hpp"
-#include "threepp/renderers/gl/GLInfo.hpp"
-#include "threepp/renderers/gl/GLState.hpp"
-#include "threepp/renderers/gl/GLProgram.hpp"
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
+#include "threepp/renderers/gl/GLBufferRenderer.hpp"
+#include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLClipping.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
-#include "threepp/renderers/gl/GLObjects.hpp"
-#include "threepp/renderers/gl/GLPrograms.hpp"
-#include "threepp/renderers/gl/GLTextures.hpp"
+#include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
-#include "threepp/renderers/gl/GLBufferRenderer.hpp"
-#include "threepp/renderers/gl/GLRenderStates.hpp"
+#include "threepp/renderers/gl/GLObjects.hpp"
+#include "threepp/renderers/gl/GLProgram.hpp"
+#include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
+#include "threepp/renderers/gl/GLRenderStates.hpp"
+#include "threepp/renderers/gl/GLState.hpp"
+#include "threepp/renderers/gl/GLTextures.hpp"
 
 #include <memory>
 #include <vector>
@@ -83,11 +83,21 @@ namespace threepp {
         float toneMappingExposure = 1.0f;
 
     private:
+        struct OnMaterialDispose : EventListener {
 
-        EmptyScene _emptyScene;
+            OnMaterialDispose(GLRenderer &scope);
+
+            void onEvent(Event &event) override;
+
+        private:
+            GLRenderer &scope_;
+        };
+
+        OnMaterialDispose onMaterialDispose;
+
+        //        EmptyScene _emptyScene;
 
     public:
-
         explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
 
         [[nodiscard]] int getTargetPixelRatio() const;
@@ -148,19 +158,19 @@ namespace threepp {
 
         void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
 
-        void renderObjects( gl::GLRenderList &renderList, Scene *scene, Camera *camera);
+        void renderObjects(gl::GLRenderList &renderList, Scene *scene, Camera *camera);
 
-        void renderObject(Object3D *object, Scene* scene, Camera *camera, BufferGeometry *geometry, Material *material, int group);
+        void renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group);
 
-        void getProgram(Material *material, Object3D *scene, Object3D* object);
+        void getProgram(Material *material, Scene *scene, Object3D *object);
 
-        void updateCommonMaterialProperties(Material* material, gl::GLPrograms::Parameters &parameters);
+        void updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters);
 
-        std::shared_ptr<gl::GLProgram> setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object);
+        std::shared_ptr<gl::GLProgram> setProgram(Camera *camera, Scene *scene, Material *material, Object3D *object);
 
-//        void markUniformsLightsNeedsUpdate(uniforms, value );
+        //        void markUniformsLightsNeedsUpdate(uniforms, value );
 
-        bool materialNeedsLights(Material* material);
+        bool materialNeedsLights(Material *material);
 
     private:
         Canvas &canvas_;
@@ -175,7 +185,7 @@ namespace threepp {
         int _currentActiveMipmapLevel = 0;
         int _currentMaterialId = -1;
 
-        Camera* _currentCamera = nullptr;
+        Camera *_currentCamera = nullptr;
         Vector4 _currentViewport;
         Vector4 _currentScissor;
         std::optional<bool> _currentScissorTest;

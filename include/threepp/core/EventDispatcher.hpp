@@ -14,6 +14,7 @@
 namespace threepp {
 
     struct Event {
+
         const std::string type;
         void *target;
     };
@@ -30,7 +31,7 @@ namespace threepp {
 
     struct LambdaEventListener : EventListener {
 
-        LambdaEventListener(std::function<void(Event &)> f) : f_(std::move(f)) {}
+        explicit LambdaEventListener(std::function<void(Event &)> f) : f_(std::move(f)) {}
 
         void onEvent(Event &event) override {
             f_(event);
@@ -44,12 +45,13 @@ namespace threepp {
 
     public:
         void addEventListener(const std::string &type, EventListenerPtr listener) {
+
             listeners_[type].push_back(listener);
         }
 
         bool hasEventListener(const std::string &type, const EventListenerPtr &listener) {
 
-            if (listeners_.count(type) == 0) return false;
+            if (!listeners_.count(type)) return false;
 
             auto &listenerArray = listeners_.at(type);
             return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
@@ -57,7 +59,7 @@ namespace threepp {
 
         void removeEventListener(const std::string &type, const EventListenerPtr &listener) {
 
-            if (listeners_.count(type) == 0) return;
+            if (!listeners_.count(type)) return;
 
             auto &listenerArray = listeners_.at(type);
             auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
@@ -69,9 +71,11 @@ namespace threepp {
         void dispatchEvent(const std::string &type, void *target = nullptr) {
 
             if (listeners_.count(type)) {
+
                 Event e{type, target};
-                auto listeners = listeners_[type];
-                for (auto &l : listeners) {
+
+                auto& listenersOfType = listeners_.at(type);
+                for (auto& l : listenersOfType) {
                     l->onEvent(e);
                 }
             }

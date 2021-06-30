@@ -3,6 +3,8 @@
 #ifndef THREEPP_GLPROPERTIES_HPP
 #define THREEPP_GLPROPERTIES_HPP
 
+#include "threepp/scenes/Scene.hpp"
+
 #include <glad/glad.h>
 
 #include <optional>
@@ -24,11 +26,24 @@ namespace threepp::gl {
     struct MaterialProperties {
 
         std::optional<GLProgram> program;
+        std::vector<GLProgram> programs;
+
+        std::optional<Texture> environment;
+
+        std::optional<FogVariant> fog;
 
         std::vector<float> clippingState;
+
+        std::optional<Texture> envMap;
+
+        int outputEncoding;
+        bool instancing;
+        int numClippingPlanes;
+        int numIntersection;
+        bool vertexAlphas;
     };
 
-    template <class T>
+    template<class T>
     struct GLTypeProperties {
 
         T &get(const std::string &key) {
@@ -60,7 +75,6 @@ namespace threepp::gl {
             textureProperties.dispose();
             materialProperties.dispose();
         }
-
     };
 
 }// namespace threepp::gl

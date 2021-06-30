@@ -34,10 +34,10 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       bindingStates(attributes),
       geometries(attributes, info, bindingStates),
       textures(state, properties, info),
-      objects(geometries, attributes, info) {
+      objects(geometries, attributes, info),
+      onMaterialDispose(*this){
 
     info.programs = &programCache.programs;
-
 }
 
 int GLRenderer::getTargetPixelRatio() const {
@@ -198,7 +198,7 @@ void GLRenderer::releaseMaterialProgramReferences(Material *material) {
 
 void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, GeometryGroup *group) {
 
-    if (scene == nullptr) scene = &_emptyScene;// renderBufferDirect second parameter used to be fog (could be nullptr)
+    //    if (scene == nullptr) scene = &_emptyScene;// renderBufferDirect second parameter used to be fog (could be nullptr)
 
     bool isMesh = instanceof <Mesh>(object);
 
@@ -394,11 +394,11 @@ void GLRenderer::renderObjects(gl::GLRenderList &renderList, Scene *scene, Camer
 void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group) {
 }
 
-void GLRenderer::getProgram(Material *material, Object3D *scene, Object3D *object) {
+void GLRenderer::getProgram(Material *material, Scene *scene, Object3D *object) {
 
-    bool isScene = instanceof <Scene>(scene);
-
-    if (!isScene) scene = &_emptyScene;// scene could be a Mesh, Line, Points, ...
+    //    bool isScene = instanceof <Scene>(scene);
+    //
+    //    if (!isScene) scene = &_emptyScene;// scene could be a Mesh, Line, Points, ...
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
@@ -407,8 +407,26 @@ void GLRenderer::getProgram(Material *material, Object3D *scene, Object3D *objec
 
     auto lightsStateVersion = lights.getState().version;
 
-    auto parameters = programCache.getParameters(material, lights.getState(), shadowsArray.size(), (Scene *) scene, object);
+    auto parameters = programCache.getParameters(material, lights.getState(), shadowsArray.size(), scene, object);
     auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
+
+    auto &programs = materialProperties.programs;
+
+    // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
+
+    materialProperties.environment = instanceof <MeshStandardMaterial>(material) ? scene->environment : std::nullopt;
+    materialProperties.fog = scene->fog;
+    //    materialProperties.envMap = cubemaps.get( material.envMap || materialProperties.environment );
+
+    if (programs.empty()) {
+
+        // new material
+
+        material->addEventListener("dispose", &onMaterialDispose);
+
+        //        programs = new Map();
+        //        materialProperties.programs = programs;
+    }
 
     //TODO
 }
@@ -417,15 +435,15 @@ void GLRenderer::updateCommonMaterialProperties(Material *material, gl::GLProgra
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
-    //    materialProperties.outputEncoding = parameters.outputEncoding;
-    //    materialProperties.instancing = parameters.instancing;
-    //    materialProperties.numClippingPlanes = parameters.numClippingPlanes;
-    //    materialProperties.numIntersection = parameters.numClipIntersection;
-    //    materialProperties.vertexAlphas = parameters.vertexAlphas;
+    materialProperties.outputEncoding = parameters.outputEncoding;
+    materialProperties.instancing = parameters.instancing;
+    materialProperties.numClippingPlanes = parameters.numClippingPlanes;
+    materialProperties.numIntersection = parameters.numClipIntersection;
+    materialProperties.vertexAlphas = parameters.vertexAlphas;
 }
 
 
-std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Object3D *scene, Material *material, Object3D *object) {
+std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *scene, Material *material, Object3D *object) {
 
     bool isScene = instanceof <Scene>(scene);
 
@@ -678,4 +696,15 @@ bool GLRenderer::materialNeedsLights(Material *material) {
     return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
            isMeshStandardMaterial || isShadowMaterial ||
            (isShaderMaterial && lights);
+}
+
+
+GLRenderer::OnMaterialDispose::OnMaterialDispose(GLRenderer &scope) : scope_(scope) {}
+
+void GLRenderer::OnMaterialDispose::onEvent(Event &event) {
+    auto material = static_cast<Material *>(event.target);
+
+    material->removeEventListener("dispose", this);
+
+    scope_.deallocateMaterial(material);
 }

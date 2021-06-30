@@ -6,19 +6,23 @@
 #include "threepp/core/Object3D.hpp"
 
 #include "threepp/scenes/Fog.hpp"
+#include "threepp/scenes/FogExp2.hpp"
 
 #include "threepp/textures/Texture.hpp"
 
 #include <memory>
+#include <variant>
 
 namespace threepp {
+
+    typedef std::variant<Fog, FogExp2> FogVariant;
 
     class Scene : public Object3D {
 
     public:
         std::optional<Color> background;
         std::optional<Texture> environment;
-        std::optional<Fog> fog;
+        std::optional<FogVariant> fog;
 
         std::shared_ptr<Material> overrideMaterial;
 

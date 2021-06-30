@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    class Material : private EventDispatcher {
+    class Material : public EventDispatcher {
 
     public:
         const unsigned int id = materialId++;
@@ -77,7 +77,7 @@ namespace threepp {
 
         void dispose() {
 
-            dispatchEvent("dispose");
+            dispatchEvent("dispose", this);
         }
 
         void needsUpdate() {
