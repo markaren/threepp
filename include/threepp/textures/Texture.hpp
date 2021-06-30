@@ -25,6 +25,8 @@ namespace threepp {
 
         std::string uuid = math::generateUUID();
 
+        std::string name;
+
         std::optional<Image> image;
         std::vector<Image> mipmaps;
 

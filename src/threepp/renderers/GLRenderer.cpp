@@ -38,6 +38,7 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       textures(state, properties, info),
       objects(geometries, attributes, info),
       renderLists(properties),
+      shadowMap(objects),
       onMaterialDispose(*this) {
 
     info.programs = &programCache.programs;
@@ -429,7 +430,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     auto& shadowsArray = currentRenderState->getShadowsArray();
 
-//    shadowMap.render( shadowsArray, scene, camera );
+    shadowMap.render( *this, shadowsArray, scene, camera );
 
     currentRenderState->setupLights();
     currentRenderState->setupLightsView( camera );
@@ -442,17 +443,17 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     //
 
-//    background.render( currentRenderList, scene );
+    background.render( *this, scene );
 
     // render scene
 
-//    auto& opaqueObjects = currentRenderList.opaque;
-//    auto& transmissiveObjects = currentRenderList.transmissive;
-//    auto& transparentObjects = currentRenderList.transparent;
+    auto& opaqueObjects = currentRenderList->opaque;
+    auto& transmissiveObjects = currentRenderList->transmissive;
+    auto& transparentObjects = currentRenderList->transparent;
 //
-//    if ( opaqueObjects.length > 0 ) renderObjects( opaqueObjects, scene, camera );
-//    if ( transmissiveObjects.length > 0 ) renderTransmissiveObjects( opaqueObjects, transmissiveObjects, scene, camera );
-//    if ( transparentObjects.length > 0 ) renderObjects( transparentObjects, scene, camera );
+    if ( opaqueObjects.size() > 0 ) renderObjects( opaqueObjects, scene, camera );
+//    if ( transmissiveObjects.size > 0 ) renderTransmissiveObjects( opaqueObjects, transmissiveObjects, scene, camera );
+    if ( transparentObjects.size() > 0 ) renderObjects( transparentObjects, scene, camera );
 
     //
 
@@ -515,7 +516,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
 }
 
-void GLRenderer::renderObjects(gl::GLRenderList &renderList, Scene *scene, Camera *camera) {
+void GLRenderer::renderObjects(std::vector<gl::RenderItem> &renderList, Scene *scene, Camera *camera) {
 }
 
 void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group) {

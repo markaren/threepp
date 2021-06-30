@@ -28,6 +28,13 @@ namespace threepp::gl {
 
     struct GLRenderList {
 
+        std::vector<RenderItem> opaque;
+        std::vector<RenderItem> transmissive;
+        std::vector<RenderItem> transparent;
+
+        std::vector<RenderItem> renderItems;
+        int renderItemsIndex = 0;
+
         explicit GLRenderList(GLProperties &properties);
 
         void init();
@@ -44,13 +51,6 @@ namespace threepp::gl {
 
     private:
         GLProperties &properties;
-
-        std::vector<RenderItem> renderItems;
-        int renderItemsIndex = 0;
-
-        std::vector<RenderItem> opaque;
-        std::vector<RenderItem> transmissive;
-        std::vector<RenderItem> transparent;
     };
 
     struct GLRenderLists {

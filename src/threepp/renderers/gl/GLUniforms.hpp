@@ -11,6 +11,7 @@
 
 namespace threepp::gl {
 
+
     struct UniformObject {
 
     };
@@ -36,6 +37,11 @@ namespace threepp::gl {
         std::unordered_map<std::string, UniformObject> map;
 
     };
+
+    void upload(std::vector<UniformObject> &seq) {
+
+    }
+
 
 }
 

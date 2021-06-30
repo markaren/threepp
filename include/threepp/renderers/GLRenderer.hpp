@@ -31,6 +31,7 @@
 #include "threepp/renderers/gl/GLRenderStates.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
+#include "threepp/renderers/gl/GLShadowMap.hpp"
 
 #include <memory>
 #include <vector>
@@ -158,7 +159,7 @@ namespace threepp {
 
         void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
 
-        void renderObjects(gl::GLRenderList &renderList, Scene *scene, Camera *camera);
+        void renderObjects(std::vector<gl::RenderItem> &renderList, Scene *scene, Camera *camera);
 
         void renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group);
 
@@ -171,6 +172,21 @@ namespace threepp {
         void markUniformsLightsNeedsUpdate(std::unordered_map<std::string, Uniform>& uniforms, bool value );
 
         bool materialNeedsLights(Material *material);
+
+        int getActiveCubeFace() const {
+
+            return _currentActiveCubeFace;
+        }
+
+        int getActiveMipmapLevel() const {
+
+            return _currentActiveMipmapLevel;
+        }
+
+        std::shared_ptr<GLRenderTarget> &getRenderTarget() {
+
+            return _currentRenderTarget;
+        }
 
     private:
         Canvas &canvas_;
@@ -235,6 +251,7 @@ namespace threepp {
         gl::GLRenderLists renderLists;
         gl::GLObjects objects;
         gl::GLPrograms programCache;
+        gl::GLShadowMap shadowMap;
     };
 
 }// namespace threepp
