@@ -576,44 +576,40 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             refreshLights = true;  // remains set until update done
         }
 
+        bool isMeshBasicMaterial = instanceof <MeshBasicMaterial>(material);
+        bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material);
+        bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material);
+        bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material);
+        bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
+        bool isShadowMaterial = instanceof <ShadowMaterial>(material);
+        bool isShaderMaterial = instanceof <ShaderMaterial>(material);
+        bool isEnvMap = instanceof <MaterialWithEnvMap>(material);
+
         // load material specific uniforms
         // (shader material also gets them for the sake of genericity)
 
-        //                    if (material.isShaderMaterial ||
-        //                        material.isMeshPhongMaterial ||
-        //                        material.isMeshToonMaterial ||
-        //                        material.isMeshStandardMaterial ||
-        //                        material.envMap) {
-        //
-        //                        auto uCamPos = p_uniforms.map.cameraPosition;
-        //
-        //                        if (uCamPos != undefined) {
-        //
-        //                            uCamPos.setValue(_vector3.setFromMatrixPosition(camera->matrixWorld));
-        //                        }
-        //                    }
+        if (isShaderMaterial ||
+            isMeshPhongMaterial ||
+            isMeshToonMaterial ||
+            isMeshStandardMaterial ||
+            isEnvMap) {
 
-        //                    if (material.isMeshPhongMaterial ||
-        //                        material.isMeshToonMaterial ||
-        //                        material.isMeshLambertMaterial ||
-        //                        material.isMeshBasicMaterial ||
-        //                        material.isMeshStandardMaterial ||
-        //                        material.isShaderMaterial) {
-        //
-        //                        p_uniforms.setValue("isOrthographic", camera.isOrthographicCamera == = true);
-        //                    }
+            if (p_uniforms.map.count("cameraPosition")) {
 
-        //                    if (material.isMeshPhongMaterial ||
-        //                        material.isMeshToonMaterial ||
-        //                        material.isMeshLambertMaterial ||
-        //                        material.isMeshBasicMaterial ||
-        //                        material.isMeshStandardMaterial ||
-        //                        material.isShaderMaterial ||
-        //                        material.isShadowMaterial ||
-        //                        object.isSkinnedMesh) {
-        //
-        //                        p_uniforms.setValue("viewMatrix", camera.matrixWorldInverse);
-        //                    }
+                auto uCamPos = p_uniforms.map["cameraPosition"];
+                //                uCamPos.setValue(_vector3.setFromMatrixPosition(camera->matrixWorld));
+            }
+        }
+
+        if (isMeshPhongMaterial ||
+            isMeshToonMaterial ||
+            isMeshLambertMaterial ||
+            isMeshBasicMaterial ||
+            isMeshStandardMaterial ||
+            isShaderMaterial) {
+
+            //                                p_uniforms.setValue("isOrthographic", camera.isOrthographicCamera == true);
+        }
     }
 
     if (refreshMaterial || materialProperties.receiveShadow != object->receiveShadow) {

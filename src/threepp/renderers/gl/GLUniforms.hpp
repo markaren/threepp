@@ -11,11 +11,13 @@
 
 namespace threepp::gl {
 
+    struct UniformObject {
+
+    };
+
+
+
     struct StructuredUniform {
-
-        struct UniformObject {
-
-        };
 
         StructuredUniform(const GLuint id): id(id){}
 
@@ -30,6 +32,8 @@ namespace threepp::gl {
     };
 
     struct GLUniforms {
+
+        std::unordered_map<std::string, UniformObject> map;
 
     };
 
