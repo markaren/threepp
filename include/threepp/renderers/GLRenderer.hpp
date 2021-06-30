@@ -32,6 +32,7 @@
 #include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLShadowMap.hpp"
+#include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include <memory>
 #include <vector>

@@ -386,131 +386,126 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
 }
 
 void GLRenderer::render(Scene *scene, Camera *camera) {
-    
+
     // update scene graph
 
-    if ( scene->autoUpdate ) scene->updateMatrixWorld();
+    if (scene->autoUpdate) scene->updateMatrixWorld();
 
     // update camera matrices and frustum
 
-    if ( camera->parent == nullptr ) camera->updateMatrixWorld();
-    
-    //
-//    if ( scene.isScene === true ) scene.onBeforeRender( _this, scene, camera, _currentRenderTarget );
+    if (camera->parent == nullptr) camera->updateMatrixWorld();
 
-    currentRenderState = renderStates.get( scene, renderStateStack.size() );
+    //
+    //    if ( scene.isScene === true ) scene.onBeforeRender( _this, scene, camera, _currentRenderTarget );
+
+    currentRenderState = renderStates.get(scene, renderStateStack.size());
     currentRenderState->init();
 
-    renderStateStack.emplace_back( *currentRenderState );
+    renderStateStack.emplace_back(*currentRenderState);
 
-    _projScreenMatrix.multiplyMatrices( camera->projectionMatrix, camera->matrixWorldInverse );
-    _frustum.setFromProjectionMatrix( _projScreenMatrix );
+    _projScreenMatrix.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_projScreenMatrix);
 
     _localClippingEnabled = this->localClippingEnabled;
-    _clippingEnabled = clipping.init( this->clippingPlanes, _localClippingEnabled, camera );
+    _clippingEnabled = clipping.init(this->clippingPlanes, _localClippingEnabled, camera);
 
-//    currentRenderList = renderLists.get( scene, renderListStack.size() );
+    //    currentRenderList = renderLists.get( scene, renderListStack.size() );
     currentRenderList->init();
 
-    renderListStack.emplace_back( *currentRenderList );
+    renderListStack.emplace_back(*currentRenderList);
 
-    projectObject( scene, camera, 0, sortObjects );
+    projectObject(scene, camera, 0, sortObjects);
 
     currentRenderList->finish();
 
-    if ( sortObjects ) {
+    if (sortObjects) {
 
         currentRenderList->sort();
-
     }
 
     //
 
-    if ( _clippingEnabled ) clipping.beginShadows();
+    if (_clippingEnabled) clipping.beginShadows();
 
-    auto& shadowsArray = currentRenderState->getShadowsArray();
+    auto &shadowsArray = currentRenderState->getShadowsArray();
 
-    shadowMap.render( *this, shadowsArray, scene, camera );
+    shadowMap.render(*this, shadowsArray, scene, camera);
 
     currentRenderState->setupLights();
-    currentRenderState->setupLightsView( camera );
+    currentRenderState->setupLightsView(camera);
 
-    if ( _clippingEnabled ) clipping.endShadows();
-
-    //
-
-    if ( this->info.autoReset ) this->info.reset();
+    if (_clippingEnabled) clipping.endShadows();
 
     //
 
-    background.render( *this, scene );
+    if (this->info.autoReset) this->info.reset();
+
+    //
+
+    background.render(*this, scene);
 
     // render scene
 
-    auto& opaqueObjects = currentRenderList->opaque;
-    auto& transmissiveObjects = currentRenderList->transmissive;
-    auto& transparentObjects = currentRenderList->transparent;
-//
-    if ( opaqueObjects.size() > 0 ) renderObjects( opaqueObjects, scene, camera );
-//    if ( transmissiveObjects.size > 0 ) renderTransmissiveObjects( opaqueObjects, transmissiveObjects, scene, camera );
-    if ( transparentObjects.size() > 0 ) renderObjects( transparentObjects, scene, camera );
+    auto &opaqueObjects = currentRenderList->opaque;
+    auto &transmissiveObjects = currentRenderList->transmissive;
+    auto &transparentObjects = currentRenderList->transparent;
+    //
+    if (opaqueObjects.size() > 0) renderObjects(opaqueObjects, scene, camera);
+    //    if ( transmissiveObjects.size > 0 ) renderTransmissiveObjects( opaqueObjects, transmissiveObjects, scene, camera );
+    if (transparentObjects.size() > 0) renderObjects(transparentObjects, scene, camera);
 
     //
 
-    if ( _currentRenderTarget ) {
+    if (_currentRenderTarget) {
 
         // Generate mipmap if we're using any kind of mipmap filtering
 
-//        textures.updateRenderTargetMipmap( _currentRenderTarget );
+        //        textures.updateRenderTargetMipmap( _currentRenderTarget );
 
         // resolve multisample renderbuffers to a single-sample texture if necessary
 
-//        textures.updateMultisampleRenderTarget( _currentRenderTarget );
-
+        //        textures.updateMultisampleRenderTarget( _currentRenderTarget );
     }
 
     //
 
-//    if ( scene.isScene === true ) scene.onAfterRender( _this, scene, camera );
+    //    if ( scene.isScene === true ) scene.onAfterRender( _this, scene, camera );
 
     // Ensure depth buffer writing is enabled so it can be cleared on next render
 
-//    state.buffers.depth.setTest( true );
-//    state.buffers.depth.setMask( true );
-//    state.buffers.color.setMask( true );
-//
-//    state.setPolygonOffset( false );
+    //    state.buffers.depth.setTest( true );
+    //    state.buffers.depth.setMask( true );
+    //    state.buffers.color.setMask( true );
+    //
+    //    state.setPolygonOffset( false );
 
     // _gl.finish();
 
-//    bindingStates.resetDefaultState();
-    _currentMaterialId = - 1;
+    //    bindingStates.resetDefaultState();
+    _currentMaterialId = -1;
     _currentCamera = nullptr;
 
     renderStateStack.pop_back();
 
-    if ( renderStateStack.size() > 0 ) {
+    if (!renderStateStack.empty()) {
 
-        currentRenderState = renderStateStack[ renderStateStack.size() - 1 ];
+        currentRenderState = renderStateStack[renderStateStack.size() - 1];
 
     } else {
 
         currentRenderState = std::nullopt;
-
     }
 
     renderListStack.pop_back();
 
-    if ( renderListStack.size() > 0 ) {
+    if (!renderListStack.empty()) {
 
-//        currentRenderList = renderListStack[ renderListStack.size() - 1 ];
+        //        currentRenderList = renderListStack[ renderListStack.size() - 1 ];
 
     } else {
 
         currentRenderList = std::nullopt;
-
     }
-    
 }
 
 void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
@@ -723,7 +718,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
             if (p_uniforms.map.count("cameraPosition")) {
 
-                auto uCamPos = p_uniforms.map["cameraPosition"];
+                //                auto uCamPos = p_uniforms.map["cameraPosition"];
                 //                uCamPos.setValue(_vector3.setFromMatrixPosition(camera->matrixWorld));
             }
         }
@@ -772,7 +767,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
         materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _height /*, _transmissionRenderTarget*/);
 
-        //                    WebGLUniforms.upload(materialProperties.uniformsList, m_uniforms, textures);
+        upload(materialProperties.uniformsList, m_uniforms, textures);
     }
 
     //                if (material.isShaderMaterial &&material.uniformsNeedUpdate == true) {

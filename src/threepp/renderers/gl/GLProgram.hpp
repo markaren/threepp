@@ -15,6 +15,8 @@
 
 namespace threepp::gl {
 
+    struct GLUniforms;
+
     struct GLProgram {
 
         int id = programIdCount++;
@@ -32,6 +34,8 @@ namespace threepp::gl {
         void destroy();
 
     private:
+
+        std::optional<GLUniforms> cachedUniforms;
 
 //        GLBindingStates &bindingStates;
 

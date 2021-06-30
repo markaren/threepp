@@ -2,12 +2,12 @@
 #include "GLProgram.hpp"
 #include "GLCapabilities.hpp"
 #include "GLPrograms.hpp"
+#include "GLUniforms.hpp"
+
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 
 #include "threepp/constants.hpp"
 #include "threepp/utils/StringUtils.hpp"
-
-#include <glad/glad.h>
 
 #include <any>
 #include <iostream>
@@ -261,13 +261,17 @@ namespace {
 
 void GLProgram::destroy() {
 
-//    bindingStates.releaseStatesOfProgram( this );
+    //    bindingStates.releaseStatesOfProgram( this );
 
-    glDeleteProgram( *program );
+    glDeleteProgram(*program);
     this->program = std::nullopt;
-
 }
 
 GLUniforms &GLProgram::getUniforms() {
-    throw std::runtime_error("");
+
+    if (!cachedUniforms) {
+        cachedUniforms = GLUniforms(*program);
+    }
+
+    return *cachedUniforms;
 }

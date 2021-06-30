@@ -3,6 +3,8 @@
 #ifndef THREEPP_GLPROPERTIES_HPP
 #define THREEPP_GLPROPERTIES_HPP
 
+#include "GLProgram.hpp"
+#include "GLUniforms.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <glad/glad.h>
@@ -35,6 +37,8 @@ namespace threepp::gl {
         std::vector<float> clippingState;
 
         std::optional<Texture> envMap;
+
+        std::vector<UniformObject> &uniformsList;
 
         int outputEncoding;
         bool instancing;
