@@ -77,12 +77,6 @@ namespace {
         std::cout << "o" << std::endl;
     }
 
-    struct MyEventListener : EventListener {
-
-        void onEvent(Event &e) override {
-            std::cout << "Event type:" << e.type << std::endl;
-        }
-    };
 
 }// namespace
 
@@ -94,15 +88,11 @@ int main() {
     std::cout << "x=" << v << std::endl;
 
     std::vector<float> a{1, 2, 3};
-
     v.fromArray(a);
-
     std::cout << v << std::endl;
 
     std::vector<float> arr(3);
-
     v.toArray(arr);
-
     std::cout << arr[0] << std::endl;
 
     Matrix4 m4;
@@ -128,29 +118,6 @@ int main() {
     sphere->computeBoundingSphere();
 
     std::cout << "expected radius 1, got=" << sphere->boundingSphere->radius << std::endl;
-
-    EventDispatcher evt;
-
-    MyEventListener l;
-
-    LambdaEventListener l1([](Event &e) {
-        std::cout << "Event type:" << e.type << std::endl;
-    });
-
-    evt.addEventListener("per", &l);
-    evt.addEventListener("truls", &l1);
-
-    evt.dispatchEvent("per");
-    evt.dispatchEvent("per");
-
-    evt.removeEventListener("per", &l);
-
-    evt.dispatchEvent("per");
-    evt.dispatchEvent("truls");
-
-    std::cout << "has per evt:" << evt.hasEventListener("per", &l) << std::endl;
-    std::cout << "has truls evt:" << evt.hasEventListener("truls", &l1) << std::endl;
-
 
     Uniform uniform(m4);
     m4[0] = 98;
@@ -237,18 +204,6 @@ int main() {
 //        });
 
     o->clear();
-
-    Uniform u;
-
-    std::cout << "Color r=" << u.value<float>() << std::endl;
-    u.value<float>() = 0.5f;
-    std::cout << "Color r=" << u.value<float>() << std::endl;
-
-    Vector3 myVec(1.f, 1.f, 1.f);
-    Uniform u1(myVec);
-    std::cout << u1.value<Vector3>() << std::endl;
-    u1.value<Vector3>().y = -1;
-    std::cout << u1.value<Vector3>() << std::endl;
 
     std::cout << shaders::ShaderChunk::instance().alphamap_fragment() << std::endl;
 
