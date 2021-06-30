@@ -80,7 +80,7 @@ namespace threepp {
                 bottom = top - scaleH * this->view->height;
             }
 
-            this->projectionMatrix.makeOrthographic(left, right, top, bottom, this->near, this->far);
+            this->projectionMatrix.makeOrthographic((float) left, (float) right, (float) top, (float) bottom, this->near, this->far);
 
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
