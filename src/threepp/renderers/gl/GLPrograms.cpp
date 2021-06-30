@@ -252,3 +252,47 @@ std::unordered_map<std::string, Uniform> GLPrograms::getUniforms(Material *mater
 
     return uniforms;
 }
+
+std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLPrograms::Parameters &parameters, const std::string &cacheKey) {
+
+    std::shared_ptr<GLProgram> program = nullptr;
+
+    // Check if code has been already compiled
+    for (int p = 0, pl = programs.size(); p < pl; p++) {
+
+        auto preexistingProgram = programs[p];
+
+        if (preexistingProgram->cacheKey == cacheKey) {
+
+            program = preexistingProgram;
+            ++program->usedTimes;
+
+            break;
+        }
+    }
+
+    if (!program) {
+
+        // TODO
+        //                    program = GLProgram( renderer, cacheKey, parameters, bindingStates );
+        //                    programs.emplace_back( program );
+    }
+
+    return program;
+}
+
+void GLPrograms::releaseProgram(std::shared_ptr<GLProgram> &program) {
+
+    if (--program->usedTimes == 0) {
+
+        auto it = find(programs.begin(), programs.end(), program);
+        int i = it - programs.begin();
+
+        // Remove from unordered set
+        programs[i] = programs[programs.size() - 1];
+        programs.pop_back();
+
+        // Free WebGL resources
+        program->destroy();
+    }
+}

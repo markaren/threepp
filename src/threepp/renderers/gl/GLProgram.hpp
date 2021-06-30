@@ -3,8 +3,15 @@
 #ifndef THREEPP_GLPROGRAM_HPP
 #define THREEPP_GLPROGRAM_HPP
 
+//#include "GLBindingStates.hpp"
+
+#include "GLUniforms.hpp"
+
+#include <glad/glad.h>
+
 #include <unordered_map>
 #include <utility>
+#include <optional>
 
 namespace threepp::gl {
 
@@ -16,9 +23,18 @@ namespace threepp::gl {
 
         std::string cacheKey;
 
+        std::optional<GLuint> program;
+
         GLProgram(std::string cacheKey): cacheKey(std::move(cacheKey))  {}
 
+        GLUniforms &getUniforms();
+
+        void destroy();
+
     private:
+
+//        GLBindingStates &bindingStates;
+
         inline static int programIdCount = 0;
     };
 

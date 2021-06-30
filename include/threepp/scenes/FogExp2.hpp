@@ -14,8 +14,13 @@ namespace threepp {
         Color color;
         float density;
 
-        explicit FogExp2(int hex, float density = 0.00025): color(hex), density(density){}
-        explicit FogExp2(Color color, float density = 0.00025): color(color), density(density){}
+        template<class T>
+        explicit FogExp2(T hex, float density = 0.00025f): color(hex), density(density){}
+
+        bool operator==(const FogExp2 &f) const {
+
+            return f.color == this->color && f.density == this->density;
+        }
 
     };
 

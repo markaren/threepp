@@ -27,6 +27,14 @@ int main() {
     std::cout << uv.value<std::vector<float>>()[1] << std::endl;
     std::cout << uv2.value<std::vector<float>>()[1] << std::endl;
 
+    std::unordered_map<std::string, Uniform> uniforms;
+    uniforms["light"] = Uniform(Vector3(-1, -1, -1));
+    uniforms["light"].value<Vector3>().x = 1;
+
+    std::cout << uniforms["light"].value<Vector3>() << std::endl;
+
+
+
     return 0;
 
 }

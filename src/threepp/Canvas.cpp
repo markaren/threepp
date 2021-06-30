@@ -69,8 +69,8 @@ private:
     GLFWwindow *window;
 
     static void window_size_callback(GLFWwindow *, int width, int height) {
-        //        this->width_ = width;
-        //        this->height_ = height;
+        //        this->width = width;
+        //        this->height = height;
     }
 
     static void error_callback(int error, const char *description) {

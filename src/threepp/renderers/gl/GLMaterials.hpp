@@ -14,6 +14,24 @@ namespace threepp::gl {
 
     struct GLMaterials {
 
+        void refreshFogUniforms(std::unordered_map<std::string, Uniform> &uniforms, FogVariant &fog) {
+
+            if (fog.index() == 0) {
+
+                Fog &f = std::get<Fog>(fog);
+                uniforms["fogColor"].value<Color>().copy(f.color);
+
+                uniforms["fogNear"].value<float>() = f.near;
+                uniforms["fogFar"].value<float>() = f.far;
+            } else {
+
+                FogExp2 &f = std::get<FogExp2>(fog);
+                uniforms["fogColor"].value<Color>().copy(f.color);
+
+                uniforms["fogDensity"].value<float>() = f.density;
+            }
+        }
+
         void refreshMaterialUniforms(std::unordered_map<std::string, Uniform> &uniforms, Material *material, int pixelRatio, float height) {
 
             if (instanceof <MeshBasicMaterial>(material)) {
@@ -47,7 +65,7 @@ namespace threepp::gl {
             if (instanceof <MaterialWithMap>(material)) {
 
                 auto m = dynamic_cast<MaterialWithMap *>(material);
-                auto& map = m->map;
+                auto &map = m->map;
                 if (map) {
                     uniforms["map"].setValue(*map);
                 }
@@ -56,7 +74,7 @@ namespace threepp::gl {
             if (instanceof <MaterialWithAlphaMap>(material)) {
 
                 auto m = dynamic_cast<MaterialWithAlphaMap *>(material);
-                auto& alphaMap = m->alphaMap;
+                auto &alphaMap = m->alphaMap;
                 if (alphaMap) {
                     uniforms["alphaMap"].setValue(*alphaMap);
                 }

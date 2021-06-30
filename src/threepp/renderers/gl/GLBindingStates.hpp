@@ -11,7 +11,10 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/materials.hpp"
 
+#include "threepp/utils/InstanceOf.hpp"
+
 #include <optional>
+#include <threepp/objects/InstancedMesh.hpp>
 #include <unordered_map>
 #include <vector>
 
@@ -49,7 +52,7 @@ namespace threepp::gl {
             : maxVertexAttributes_(glGetParameter(GL_MAX_VERTEX_ATTRIBS)), attributes_(attributes), defaultState_(createBindingState(std::nullopt)), currentState_(defaultState_) {
         }
 
-        void setup(Object3D *object, Material *material, GLProgram &program, BufferGeometry *geometry, BufferAttribute *index) {
+        void setup(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry, BufferAttribute *index) {
 
             bool updateBuffers = false;
 
@@ -66,11 +69,10 @@ namespace threepp::gl {
             if (updateBuffers) saveCache(geometry, index);
 
 
-            //            if ( object.isInstancedMesh === true ) {
-            //
-            //                updateBuffers = true;
-            //
-            //            }
+            if (instanceof <InstancedMesh>(object)) {
+
+                updateBuffers = true;
+            }
 
             if (index) {
 
@@ -102,7 +104,7 @@ namespace threepp::gl {
             glDeleteVertexArrays(1, &vao);
         }
 
-        GLBindingState getBindingState(BufferGeometry *geometry, GLProgram &program, Material *material) {
+        GLBindingState getBindingState(BufferGeometry *geometry, std::shared_ptr<GLProgram> &program, Material *material) {
 
             bool wireframe = false;
 
@@ -112,7 +114,7 @@ namespace threepp::gl {
 
             auto programMap = bindingStates[geometry->id];
 
-            auto stateMap = programMap[program.id];
+            auto stateMap = programMap[program->id];
 
             auto state = stateMap[wireframe];
 
@@ -252,7 +254,7 @@ namespace threepp::gl {
             }
         }
 
-        void setupVertexAttributes(Object3D *object, Material *material, GLProgram &program, BufferGeometry *geometry) {
+        void setupVertexAttributes(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry) {
         }
 
         void dispose() {

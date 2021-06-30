@@ -85,7 +85,7 @@ namespace threepp {
     private:
         struct OnMaterialDispose : EventListener {
 
-            OnMaterialDispose(GLRenderer &scope);
+            explicit OnMaterialDispose(GLRenderer &scope);
 
             void onEvent(Event &event) override;
 
@@ -162,13 +162,13 @@ namespace threepp {
 
         void renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group);
 
-        void getProgram(Material *material, Scene *scene, Object3D *object);
+        std::shared_ptr<gl::GLProgram> getProgram(Material *material, Scene *scene, Object3D *object);
 
         void updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters);
 
         std::shared_ptr<gl::GLProgram> setProgram(Camera *camera, Scene *scene, Material *material, Object3D *object);
 
-        //        void markUniformsLightsNeedsUpdate(uniforms, value );
+        void markUniformsLightsNeedsUpdate(std::unordered_map<std::string, Uniform>& uniforms, bool value );
 
         bool materialNeedsLights(Material *material);
 
@@ -183,6 +183,7 @@ namespace threepp {
 
         int _currentActiveCubeFace = 0;
         int _currentActiveMipmapLevel = 0;
+        std::shared_ptr<GLRenderTarget> _currentRenderTarget = nullptr;
         int _currentMaterialId = -1;
 
         Camera *_currentCamera = nullptr;

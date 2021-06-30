@@ -258,3 +258,16 @@ namespace {
 
 
 }// namespace
+
+void GLProgram::destroy() {
+
+//    bindingStates.releaseStatesOfProgram( this );
+
+    glDeleteProgram( *program );
+    this->program = std::nullopt;
+
+}
+
+GLUniforms &GLProgram::getUniforms() {
+    throw std::runtime_error("");
+}

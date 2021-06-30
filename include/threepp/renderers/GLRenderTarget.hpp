@@ -1,7 +1,7 @@
 // https://github.com/mrdoob/three.js/blob/r129/src/renderers/WebGLRenderTarget.js
 
-#ifndef THREEPP_GLRENDERTARGET_HPP
-#define THREEPP_GLRENDERTARGET_HPP
+#ifndef THREEPPGLRENDERTARGETHPP
+#define THREEPPGLRENDERTARGETHPP
 
 #include "threepp/core/EventDispatcher.hpp"
 
@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    class GLRenderTarget: public EventDispatcher {
+    class GLRenderTarget : public EventDispatcher {
 
         struct Options {
 
@@ -33,83 +33,79 @@ namespace threepp {
         };
 
     public:
+        unsigned int width;
+        unsigned int height;
+        unsigned int depth = 1;
+
+        Vector4 scissor;
+        bool scissorTest = false;
+
+        Vector4 viewport;
+
+        Texture texture;
+
+        bool depthBuffer;
+        bool stencilBuffer;
+        std::optional<Texture> depthTexture;
+
         GLRenderTarget(unsigned int width, unsigned int height, const Options &options)
-            : width_(width), height_(height),
-              scissor_(0.f, 0.f, (float) width, (float) height),
-              viewport_(0.f, 0.f, (float) width, (float) height),
-              depthBuffer_(options.depthBuffer), stencilBuffer_(options.stencilBuffer), depthTexture_(options.depthTexture),
-              texture_(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding) {
+            : width(width), height(height),
+              scissor(0.f, 0.f, (float) width, (float) height),
+              viewport(0.f, 0.f, (float) width, (float) height),
+              depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
+              texture(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding) {
         }
 
         void setTexture(Texture &texture) {
 
-            texture.image = Image {width_, height_, depth_};
+            texture.image = Image{width, height, depth};
 
-            this->texture_ = texture;
+            this->texture = texture;
         }
-        
-        void setSize( unsigned int width,  unsigned int height,  unsigned int depth = 1 ) {
 
-            if ( this->width_ != width || this->height_ != height || this->depth_ != depth ) {
+        void setSize(unsigned int width, unsigned int height, unsigned int depth = 1) {
 
-                this->width_ = width;
-                this->height_ = height;
-                this->depth_ = depth;
+            if (this->width != width || this->height != height || this->depth != depth) {
 
-                this->texture_.image->width = width;
-                this->texture_.image->height = height;
-                this->texture_.image->depth = depth;
+                this->width = width;
+                this->height = height;
+                this->depth = depth;
+
+                this->texture.image->width = width;
+                this->texture.image->height = height;
+                this->texture.image->depth = depth;
 
                 this->dispose();
-
             }
 
-            this->viewport_.set( 0, 0, (float) width, (float) height );
-            this->scissor_.set( 0, 0, (float) width, (float) height );
-
+            this->viewport.set(0, 0, (float) width, (float) height);
+            this->scissor.set(0, 0, (float) width, (float) height);
         }
 
-        GLRenderTarget &copy( const GLRenderTarget &source ) {
+        GLRenderTarget &copy(const GLRenderTarget &source) {
 
-                this->width_ = source.width_;
-                this->height_ = source.height_;
-                this->depth_ = source.depth_;
+            this->width = source.width;
+            this->height = source.height;
+            this->depth = source.depth;
 
-                this->viewport_.copy( source.viewport_ );
+            this->viewport.copy(source.viewport);
 
-                this->texture_ = source.texture_;
-//                this->texture_.image = { ...this->texture.image }; // See #20328.
+            this->texture = source.texture;
+            //                this->texture.image = { ...this->texture.image }; // See #20328.
 
-                this->depthBuffer_ = source.depthBuffer_;
-                this->stencilBuffer_ = source.stencilBuffer_;
-                this->depthTexture_ = source.depthTexture_;
+            this->depthBuffer = source.depthBuffer;
+            this->stencilBuffer = source.stencilBuffer;
+            this->depthTexture = source.depthTexture;
 
-                return *this;
-
+            return *this;
         }
-        
+
         void dispose() {
-            
+
             this->dispatchEvent("dispose");
         }
-
-    private:
-        unsigned int width_;
-        unsigned int height_;
-        unsigned int depth_ = 1;
-
-        Vector4 scissor_;
-        bool scissorTest_ = false;
-
-        Vector4 viewport_;
-
-        Texture texture_;
-
-        bool depthBuffer_;
-        bool stencilBuffer_;
-        std::optional<Texture> depthTexture_;
     };
 
 }// namespace threepp
 
-#endif//THREEPP_GLRENDERTARGET_HPP
+#endif//THREEPPGLRENDERTARGETHPP

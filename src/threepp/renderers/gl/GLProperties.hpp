@@ -26,7 +26,7 @@ namespace threepp::gl {
     struct MaterialProperties {
 
         std::optional<GLProgram> program;
-        std::vector<GLProgram> programs;
+        std::vector<std::shared_ptr<GLProgram>> programs;
 
         std::optional<Texture> environment;
 
@@ -38,9 +38,17 @@ namespace threepp::gl {
 
         int outputEncoding;
         bool instancing;
-        int numClippingPlanes;
+        std::optional<int> numClippingPlanes;
         int numIntersection;
         bool vertexAlphas;
+
+        unsigned int version;
+
+        bool needsLights;
+        unsigned int lightsStateVersion;
+        std::shared_ptr<GLProgram> currentProgram;
+        std::unordered_map<std::string, Uniform> &uniforms;
+        bool receiveShadow;
     };
 
     template<class T>

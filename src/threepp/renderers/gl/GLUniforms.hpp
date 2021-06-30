@@ -29,6 +29,10 @@ namespace threepp::gl {
 
     };
 
+    struct GLUniforms {
+
+    };
+
 }
 
 #endif//THREEPP_GLUNIFORMS_HPP

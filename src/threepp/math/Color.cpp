@@ -119,3 +119,8 @@ Color &Color::lerpColors(const Color &color1, const Color &color2, float alpha) 
 
     return *this;
 }
+
+bool Color::equals(const Color &c) const {
+
+    return (c.r == this->r) && (c.g == this->g) && (c.b == this->b);
+}

@@ -47,33 +47,9 @@ namespace threepp {
 
             std::unordered_map<std::string, Uniform> getUniforms(Material *material);
 
-            std::shared_ptr<GLProgram> acquireProgram(const Parameters &parameters, const std::string &cacheKey) {
+            std::shared_ptr<GLProgram> acquireProgram(const Parameters &parameters, const std::string &cacheKey);
 
-                std::shared_ptr<GLProgram> program = nullptr;
-
-                // Check if code has been already compiled
-                for (int p = 0, pl = programs.size(); p < pl; p++) {
-
-                    auto preexistingProgram = programs[p];
-
-                    if (preexistingProgram->cacheKey == cacheKey) {
-
-                        program = preexistingProgram;
-                        ++program->usedTimes;
-
-                        break;
-                    }
-                }
-
-                if (!program) {
-
-                    // TODO
-                    //                    program = GLProgram( renderer, cacheKey, parameters, bindingStates );
-                    //                    programs.emplace_back( program );
-                }
-
-                return program;
-            }
+            void releaseProgram(std::shared_ptr<GLProgram> &program);
 
             struct Parameters {
 

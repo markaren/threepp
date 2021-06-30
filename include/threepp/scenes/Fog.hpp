@@ -14,8 +14,14 @@ namespace threepp {
         float near;
         float far;
 
-        explicit Fog(int hex, float near = 1, float far = 1000) : color(hex), near(near), far(far) {}
-        explicit Fog(Color color, float near = 1, float far = 1000) : color(color), near(near), far(far) {}
+        template<class T>
+        explicit Fog(T hex, float near = 1, float far = 1000) : color(hex), near(near), far(far) {}
+
+        bool operator==(const Fog &f) const {
+
+            return f.color == this->color && f.near == this->near && f.far == this->far;
+        }
+
     };
 
 }// namespace threepp
