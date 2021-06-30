@@ -8,31 +8,31 @@ namespace {
 
     int painterSortStable(const RenderItem &a, const RenderItem &b) {
 
-//        if (a.groupOrder != b.groupOrder) {
-//
-//            return a.groupOrder - b.groupOrder;
-//
-//        } else if (a.renderOrder != b.renderOrder) {
-//
-//            return a.renderOrder - b.renderOrder;
-//
-//        } else if (a.program != b.program) {
-//
-//            return a.program->id - b.program->id;
-//
-//        } else if (a.material->id != b.material->id) {
-//
-//            return a.material->id - b.material->id;
-//
-//        } else if (a.z != b.z) {
-//
-//            return a.z - b.z;
-//
-//        } else {
-//
-//            return a.id - b.id;
-//        }
-return 0;
+        //        if (a.groupOrder != b.groupOrder) {
+        //
+        //            return a.groupOrder - b.groupOrder;
+        //
+        //        } else if (a.renderOrder != b.renderOrder) {
+        //
+        //            return a.renderOrder - b.renderOrder;
+        //
+        //        } else if (a.program != b.program) {
+        //
+        //            return a.program->id - b.program->id;
+        //
+        //        } else if (a.material->id != b.material->id) {
+        //
+        //            return a.material->id - b.material->id;
+        //
+        //        } else if (a.z != b.z) {
+        //
+        //            return a.z - b.z;
+        //
+        //        } else {
+        //
+        //            return a.id - b.id;
+        //        }
+        return 0;
     }
 
     int reversePainterSortStable(const RenderItem &a, const RenderItem &b) {
@@ -51,7 +51,7 @@ return 0;
 
         } else {
 
-            return a.id - b.id;
+            return *a.id - *b.id;
         }
     }
 
@@ -62,21 +62,21 @@ gl::GLRenderList::GLRenderList(gl::GLProperties &properties) : properties(proper
 void gl::GLRenderList::init() {
 }
 
-gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, int group) {
+gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group) {
 
-    auto& materialProperties = properties.materialProperties.get(material->uuid);
+    auto &materialProperties = properties.materialProperties.get(material->uuid);
 
     if (renderItemsIndex >= renderItems.size()) {
 
-        renderItems.emplace_back(RenderItem {object->id,
-                                  object,
-                                  geometry,
-                                  material,
-                                  materialProperties.program,
-                                  groupOrder,
-                                  object->renderOrder,
-                                  z,
-                                  group});
+        renderItems.emplace_back(RenderItem{object->id,
+                                            object,
+                                            geometry,
+                                            material,
+                                            materialProperties.program,
+                                            groupOrder,
+                                            object->renderOrder,
+                                            z,
+                                            group});
 
     } else {
 
@@ -87,7 +87,7 @@ gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeom
         renderItem.geometry = geometry;
         renderItem.material = material;
         if (materialProperties.program) {
-//            renderItem.program = materialProperties.program.value();
+            renderItem.program = materialProperties.program.value();
         }
         renderItem.groupOrder = groupOrder;
         renderItem.renderOrder = object->renderOrder;
@@ -100,17 +100,60 @@ gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeom
     return renderItems.at(renderItemsIndex - 1);
 }
 
-void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, int group) {
+void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group) {
 
-    auto& renderItem = getNextRenderItem( object, geometry, material, groupOrder, z, group );
+    auto &renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
-    if ( material->transparent ) {
+    if (material->transparent) {
 
-        transparent.emplace_back( renderItem );
+        transparent.emplace_back(renderItem);
 
     } else {
 
-        opaque.emplace_back( renderItem );
+        opaque.emplace_back(renderItem);
+    }
+}
 
+void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group) {
+
+    auto &renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
+
+    if (false /*material->transmission > 0.0*/) {
+
+        transmissive.insert(transmissive.begin(), renderItem);
+
+    } else if (material->transparent == true) {
+
+        transparent.insert(transparent.begin(), renderItem);
+
+    } else {
+
+        opaque.insert(opaque.begin(), renderItem);
+    }
+}
+
+
+void GLRenderList::sort(bool customOpaqueSort, bool customTransparentSort) {
+
+    // TODO
+    //    if ( opaque.size() > 1 ) opaque.sort( customOpaqueSort || painterSortStable );
+    //    if ( transmissive.size() > 1 ) transmissive.sort( customTransparentSort || reversePainterSortStable );
+    //    if ( transparent.size() > 1 ) transparent.sort( customTransparentSort || reversePainterSortStable );
+}
+
+void GLRenderList::finish() {
+
+    // Clear references from inactive renderItems in the list
+
+    for (auto &renderItem : renderItems) {
+
+        if (!renderItem.id) break;
+
+        renderItem.id = std::nullopt;
+        renderItem.object = nullptr;
+        renderItem.geometry = nullptr;
+        renderItem.material = nullptr;
+        renderItem.program = std::nullopt;
+        renderItem.group = std::nullopt;
     }
 }

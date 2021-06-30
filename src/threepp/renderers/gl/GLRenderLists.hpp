@@ -4,6 +4,7 @@
 #define THREEPP_GLRENDERLIST_HPP
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/core/misc.hpp"
 #include "threepp/materials/Material.hpp"
 
 #include "GLProgram.hpp"
@@ -13,7 +14,7 @@ namespace threepp::gl {
 
     struct RenderItem {
 
-        unsigned int id;
+        std::optional<unsigned int> id;
         Object3D *object;
         BufferGeometry *geometry;
         Material *material;
@@ -21,7 +22,7 @@ namespace threepp::gl {
         int groupOrder;
         unsigned int renderOrder;
         float z;
-        int group;
+        std::optional<GeometryGroup> group;
     };
 
 
@@ -31,9 +32,15 @@ namespace threepp::gl {
 
         void init();
 
-        RenderItem &getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, int group);
+        RenderItem &getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group);
 
-        void push( Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, int group );
+        void push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group);
+
+        void unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group);
+
+        void sort(bool customOpaqueSort, bool customTransparentSort);
+
+        void finish();
 
     private:
         GLProperties &properties;
@@ -48,10 +55,40 @@ namespace threepp::gl {
 
     struct GLRenderLists {
 
-        void dispose() {
+        explicit GLRenderLists(GLProperties &properties) : properties(properties) {}
 
+        GLRenderList &get(Scene *scene, int renderCallDepth) {
+
+            if (!lists.count(scene)) {
+
+                auto &l = lists[scene] = std::vector<GLRenderList>{GLRenderList(properties)};
+                return l.back();
+
+            } else {
+
+                auto &l = lists.at(scene);
+                if (renderCallDepth >= l.size()) {
+
+                    l.emplace_back(GLRenderList(properties));
+                    return l.back();
+
+                } else {
+
+                    return l[renderCallDepth];
+                }
+            }
         }
 
+
+        void dispose() {
+
+            lists.clear();
+        }
+
+    private:
+        GLProperties &properties;
+
+        std::unordered_map<Scene *, std::vector<GLRenderList>> lists;
     };
 
 }// namespace threepp::gl
