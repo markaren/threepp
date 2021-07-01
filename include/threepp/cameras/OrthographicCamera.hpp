@@ -3,24 +3,18 @@
 #ifndef THREEPP_ORTHOGRAPHICCAMERA_HPP
 #define THREEPP_ORTHOGRAPHICCAMERA_HPP
 
-#include "Camera.hpp"
-#include "View.hpp"
+#include "threepp/cameras/Camera.hpp"
 
 namespace threepp {
 
     class OrthographicCamera : public Camera {
 
     public:
-        int zoom = 1;
-        std::optional<View> view;
 
         int left;
         int right;
         int top;
         int bottom;
-
-        float near;
-        float far;
 
         void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
 
@@ -96,7 +90,7 @@ namespace threepp {
 
     protected:
         OrthographicCamera(int left, int right, int top, int bottom, float near, float far)
-            : left(left), right(right), top(top), bottom(bottom), near(near), far(far) {
+            : Camera(near, far), left(left), right(right), top(top), bottom(bottom) {
 
             updateProjectionMatrix();
         }

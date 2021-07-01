@@ -118,6 +118,15 @@ GLUniforms::GLUniforms(unsigned int program) {
 
 }
 
+void GLUniforms::setValue(const std::string &name, const UniformValue &value, GLTextures *textures) {
+
+    if (map.count(name)) {
+
+        map[name]->setValue(value, textures);
+    }
+
+}
+
 void gl::upload(std::vector<UniformObject *> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures) {
 
     for (int i = 0, n = seq.size(); i != n; ++i) {

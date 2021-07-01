@@ -258,7 +258,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLPrograms::Paramete
     std::shared_ptr<GLProgram> program = nullptr;
 
     // Check if code has been already compiled
-    for (int p = 0, pl = programs.size(); p < pl; p++) {
+    for (int p = 0, pl = (int) programs.size(); p < pl; p++) {
 
         auto preexistingProgram = programs[p];
 
@@ -286,7 +286,7 @@ void GLPrograms::releaseProgram(std::shared_ptr<GLProgram> &program) {
     if (--program->usedTimes == 0) {
 
         auto it = find(programs.begin(), programs.end(), program);
-        int i = it - programs.begin();
+        auto i = it - programs.begin();
 
         // Remove from unordered set
         programs[i] = programs[programs.size() - 1];

@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include "threepp/cameras/OrthographicCamera.hpp"
+
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 
 #include "threepp/objects/Line.hpp"
@@ -688,12 +690,11 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     if (refreshProgram || _currentCamera != camera) {
 
-        //                    p_uniforms.setValue("projectionMatrix", camera->projectionMatrix);
+        p_uniforms.setValue("projectionMatrix", camera->projectionMatrix);
 
         if (gl::GLCapabilities::instance().logarithmicDepthBuffer) {
 
-            //                        p_uniforms.setValue("logDepthBufFC",
-            //                                            2.0 / (std::log(camera->far + 1.0) / std::LN2));
+            p_uniforms.setValue("logDepthBufFC", 2.f / (std::log(camera->far + 1.f) / math::LN2));
         }
 
         if (_currentCamera != camera) {
@@ -719,8 +720,9 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
             if (p_uniforms.map.count("cameraPosition")) {
 
-                //                auto uCamPos = p_uniforms.map["cameraPosition"];
-                //                uCamPos.setValue(_vector3.setFromMatrixPosition(camera->matrixWorld));
+                auto uCamPos = p_uniforms.map["cameraPosition"];
+                _vector3.setFromMatrixPosition(camera->matrixWorld);
+                uCamPos->setValue(_vector3);
             }
         }
 
@@ -731,19 +733,19 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             isMeshStandardMaterial ||
             isShaderMaterial) {
 
-            //                                p_uniforms.setValue("isOrthographic", camera.isOrthographicCamera == true);
+            p_uniforms.setValue("isOrthographic", instanceof <OrthographicCamera>(camera));
         }
     }
 
     if (refreshMaterial || materialProperties.receiveShadow != object->receiveShadow) {
 
         materialProperties.receiveShadow = object->receiveShadow;
-        //                    p_uniforms.setValue("receiveShadow", object->receiveShadow);
+        p_uniforms.setValue("receiveShadow", object->receiveShadow);
     }
 
     if (refreshMaterial) {
 
-        //                            p_uniforms.setValue("toneMappingExposure", toneMappingExposure);
+        p_uniforms.setValue("toneMappingExposure", toneMappingExposure);
 
         if (materialProperties.needsLights) {
 
@@ -788,9 +790,9 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     // common matrices
 
-    //                p_uniforms.setValue("modelViewMatrix", object.modelViewMatrix);
-    //                p_uniforms.setValue("normalMatrix", object.normalMatrix);
-    //                p_uniforms.setValue("modelMatrix", object.matrixWorld);
+    p_uniforms.setValue("modelViewMatrix", object->modelViewMatrix);
+    p_uniforms.setValue("normalMatrix", object->normalMatrix);
+    p_uniforms.setValue("modelMatrix", object->matrixWorld);
 
     return program;
 }

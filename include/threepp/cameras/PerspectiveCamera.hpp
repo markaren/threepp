@@ -5,7 +5,6 @@
 
 #include "threepp/cameras/Camera.hpp"
 
-#include "threepp/cameras/View.hpp"
 #include "threepp/math/MathUtils.hpp"
 
 #include <algorithm>
@@ -17,14 +16,10 @@ namespace threepp {
 
     public:
         int fov;
-        int zoom = 1;
 
-        float near;
-        float far;
         float focus = 10;
 
         int aspect;
-        std::optional<View> view;
 
         float filmGauge = 35;// width of the film (default in millimeters)
         float filmOffset = 0;// horizontal film offset (same unit as gauge)
@@ -182,7 +177,8 @@ namespace threepp {
         }
 
     protected:
-        explicit PerspectiveCamera(int fov, int aspect, float near, float far) : fov(fov), aspect(aspect), near(near), far(far) {}
+        explicit PerspectiveCamera(int fov, int aspect, float near, float far)
+            : Camera(near, far), fov(fov), aspect(aspect) {}
     };
 
 }// namespace threepp
