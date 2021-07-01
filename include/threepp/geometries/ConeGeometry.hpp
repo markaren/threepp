@@ -5,12 +5,14 @@
 
 #include "threepp/geometries/CylinderGeometry.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 namespace threepp {
 
     class ConeGeometry : public CylinderGeometry {
 
     public:
-        static std::shared_ptr<ConeGeometry> create(float radius = 1, float height = 1, int radialSegments = 8, int heightSegments = 1, bool openEnded = false, float thetaStart = 0, float thetaLength = PI * 2) {
+        static std::shared_ptr<ConeGeometry> create(float radius = 1, float height = 1, int radialSegments = 8, int heightSegments = 1, bool openEnded = false, float thetaStart = 0, float thetaLength = math::PI * 2) {
             return std::shared_ptr<ConeGeometry>(new ConeGeometry(radius, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
         }
 

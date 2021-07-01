@@ -127,7 +127,7 @@ void GLUniforms::setValue(const std::string &name, const UniformValue &value, GL
 
 }
 
-void gl::upload(std::vector<UniformObject *> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures) {
+void GLUniforms::upload(std::vector<UniformObject *> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures) {
 
     for (int i = 0, n = seq.size(); i != n; ++i) {
 
@@ -142,7 +142,7 @@ void gl::upload(std::vector<UniformObject *> &seq, std::unordered_map<std::strin
     }
 }
 
-std::vector<UniformObject*> seqWithValue(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values) {
+std::vector<UniformObject*> GLUniforms::seqWithValue(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values) {
 
     std::vector<UniformObject*> r;
 

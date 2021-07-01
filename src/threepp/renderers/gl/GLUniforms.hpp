@@ -49,12 +49,11 @@ namespace threepp::gl {
 
         void setValue(const std::string &name, const UniformValue &value, GLTextures* textures = nullptr);
 
+        static void upload(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures);
+
+        static std::vector<UniformObject*> seqWithValue(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values);
+
     };
-
-    inline void upload(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures);
-
-    inline std::vector<UniformObject*> seqWithValue(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values);
-
 
 }// namespace threepp::gl
 

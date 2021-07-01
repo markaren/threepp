@@ -7,10 +7,11 @@ int main () {
 
     Canvas canvas;
 
-    const auto scene = Scene::create();
-    const auto camera = PerspectiveCamera::create( 75, canvas.getAspect(), 0.1f, 1000 );
+    auto scene = Scene::create();
+    auto camera = PerspectiveCamera::create( 75, canvas.getAspect(), 0.1f, 1000 );
 
     auto renderer = GLRenderer(canvas);
+    renderer.setClearColor(Color(0xff0000));
     renderer.setSize( canvas.getWidth(), canvas.getHeight() );
 
     const auto geometry = BoxGeometry::create();
@@ -25,7 +26,11 @@ int main () {
         cube->rotation.x(cube->rotation.x() + 0.01f);
         cube->rotation.y(cube->rotation.y() + 0.01f);
 
-        //renderer.render( scene, camera );
+        try {
+            renderer.render( scene, camera );
+        } catch (std::exception &e) {
+
+        }
     });
 
 }

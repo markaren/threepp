@@ -3,6 +3,8 @@
 
 #include "glParameter.hpp"
 
+#include <cstdint>
+
 using namespace threepp;
 
 namespace {
@@ -305,18 +307,16 @@ gl::GLState::GLState(const Canvas &canvas)
     };
 
     std::function<GLuint(GLenum, GLenum, int)> createTexture = [](GLenum type, GLenum target, int count) {
-        GLint64 data[4];// 4 is required to match default unpack alignment of 4.
-        GLuint textureArray[1];
-        glGenTextures(1, textureArray);
-
-        GLuint texture = textureArray[0];
+        uint8_t data[4];// 4 is required to match default unpack alignment of 4.
+        GLuint texture;
+        glGenTextures(1, &texture);
 
         glBindTexture(type, texture);
         glTexParameteri(type, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
         for (int i = 0; i < count; i++) {
-            glTexImage2D(target + 1, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &data);
+            glTexImage2D(target + 1, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
         }
 
         return texture;

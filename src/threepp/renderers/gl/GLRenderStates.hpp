@@ -62,11 +62,11 @@ namespace threepp::gl {
 
         GLRenderStates() = default;
 
-        GLRenderState &get(Scene *scene, int renderCallDepth = 1) {
+        std::shared_ptr<GLRenderState> get(Scene *scene, int renderCallDepth = 1) {
 
             if (renderCallDepth >= renderStates_[scene].size()) {
 
-                renderStates_[scene].emplace_back(GLRenderState());
+                renderStates_[scene].emplace_back(std::make_shared<GLRenderState>());
             }
 
             return renderStates_[scene][renderCallDepth];
@@ -78,7 +78,7 @@ namespace threepp::gl {
         }
 
     private:
-        std::unordered_map<Scene *, std::vector<GLRenderState>> renderStates_;
+        std::unordered_map<Scene *, std::vector<std::shared_ptr<GLRenderState>>> renderStates_;
     };
 
 }// namespace threepp::gl

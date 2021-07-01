@@ -119,9 +119,9 @@ namespace threepp::gl {
         }
 
     private:
-        GLInfo info_;
-        GLAttributes attributes_;
-        GLBindingStates bindingStates_;
+        GLInfo& info_;
+        GLAttributes& attributes_;
+        GLBindingStates& bindingStates_;
 
         OnGeometryDispose onGeometryDispose_;
 

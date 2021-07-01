@@ -12,6 +12,7 @@
 
 #include "threepp/materials/Material.hpp"
 
+#include "threepp/core/Layers.hpp"
 #include "threepp/core/EventDispatcher.hpp"
 
 #include <functional>
@@ -52,6 +53,7 @@ namespace threepp {
         bool matrixAutoUpdate = true;
         bool matrixWorldNeedsUpdate = false;
 
+        Layers layers;
         bool visible = true;
 
         bool castShadow = true;

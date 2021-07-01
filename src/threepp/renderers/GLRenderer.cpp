@@ -344,23 +344,23 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 void GLRenderer::compile(Scene *scene, Camera *camera) {
 
     currentRenderState = renderStates.get(scene);
-    currentRenderState.value().init();
+    currentRenderState->init();
 
-    scene->traverseVisible([](Object3D &object) {
-        //        if (instanceof <Light>(&object) && object.layers.test( camera->layers ) ) {
-        //
-        //            currentRenderState.pushLight( object );
-        //
-        //            if ( object.castShadow ) {
-        //
-        //                currentRenderState.pushShadow( object );
-        //
-        //            }
-        //
-        //        }
+    scene->traverseVisible([&](Object3D &object) {
+        if (instanceof <Light>(&object) && object.layers.test(camera->layers)) {
+
+            auto light = dynamic_cast<Light *>(&object);
+
+            currentRenderState->pushLight(light);
+
+            if (object.castShadow) {
+
+                currentRenderState->pushShadow(light);
+            }
+        }
     });
 
-    currentRenderState.value().setupLights();
+    currentRenderState->setupLights();
 
     scene->traverse([&](Object3D &object) {
         auto material = object.material();
@@ -387,7 +387,7 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
     });
 }
 
-void GLRenderer::render(Scene *scene, Camera *camera) {
+void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera>& camera) {
 
     // update scene graph
 
@@ -400,23 +400,23 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     //
     //    if ( scene.isScene === true ) scene.onBeforeRender( _this, scene, camera, _currentRenderTarget );
 
-    currentRenderState = renderStates.get(scene, renderStateStack.size());
+    currentRenderState = renderStates.get(scene.get(), (int) renderStateStack.size());
     currentRenderState->init();
 
-    renderStateStack.emplace_back(*currentRenderState);
+    renderStateStack.emplace_back(currentRenderState);
 
     _projScreenMatrix.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
     _frustum.setFromProjectionMatrix(_projScreenMatrix);
 
     _localClippingEnabled = this->localClippingEnabled;
-    _clippingEnabled = clipping.init(this->clippingPlanes, _localClippingEnabled, camera);
+    _clippingEnabled = clipping.init(this->clippingPlanes, _localClippingEnabled, camera.get());
 
-    //    currentRenderList = renderLists.get( scene, renderListStack.size() );
+    currentRenderList = renderLists.get(scene.get(), (int) renderListStack.size());
     currentRenderList->init();
 
-    renderListStack.emplace_back(*currentRenderList);
+    renderListStack.emplace_back(currentRenderList);
 
-    projectObject(scene, camera, 0, sortObjects);
+    projectObject(scene.get(), camera.get(), 0, sortObjects);
 
     currentRenderList->finish();
 
@@ -431,10 +431,10 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     auto &shadowsArray = currentRenderState->getShadowsArray();
 
-    shadowMap.render(*this, shadowsArray, scene, camera);
+    shadowMap.render(*this, shadowsArray, scene.get(), camera.get());
 
     currentRenderState->setupLights();
-    currentRenderState->setupLightsView(camera);
+    currentRenderState->setupLightsView(camera.get());
 
     if (_clippingEnabled) clipping.endShadows();
 
@@ -444,7 +444,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     //
 
-    background.render(*this, scene);
+    background.render(*this, scene.get());
 
     // render scene
 
@@ -452,9 +452,9 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     auto &transmissiveObjects = currentRenderList->transmissive;
     auto &transparentObjects = currentRenderList->transparent;
     //
-    if (opaqueObjects.size() > 0) renderObjects(opaqueObjects, scene, camera);
+    if (opaqueObjects.size() > 0) renderObjects(opaqueObjects, scene.get(), camera.get());
     //    if ( transmissiveObjects.size > 0 ) renderTransmissiveObjects( opaqueObjects, transmissiveObjects, scene, camera );
-    if (transparentObjects.size() > 0) renderObjects(transparentObjects, scene, camera);
+    if (transparentObjects.size() > 0) renderObjects(transparentObjects, scene.get(), camera.get());
 
     //
 
@@ -462,7 +462,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
         // Generate mipmap if we're using any kind of mipmap filtering
 
-        //        textures.updateRenderTargetMipmap( _currentRenderTarget );
+//                textures.updateRenderTargetMipmap( _currentRenderTarget );
 
         // resolve multisample renderbuffers to a single-sample texture if necessary
 
@@ -479,11 +479,10 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     //    state.buffers.depth.setMask( true );
     //    state.buffers.color.setMask( true );
     //
-    //    state.setPolygonOffset( false );
+    state.setPolygonOffset(false);
 
     // _gl.finish();
 
-    //    bindingStates.resetDefaultState();
     _currentMaterialId = -1;
     _currentCamera = nullptr;
 
@@ -495,18 +494,18 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     } else {
 
-        currentRenderState = std::nullopt;
+        currentRenderState = nullptr;
     }
 
     renderListStack.pop_back();
 
     if (!renderListStack.empty()) {
 
-        //        currentRenderList = renderListStack[ renderListStack.size() - 1 ];
+        currentRenderList = renderListStack[renderListStack.size() - 1];
 
     } else {
 
-        currentRenderList = std::nullopt;
+        currentRenderList = nullptr;
     }
 }
 
@@ -770,7 +769,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
         materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _height /*, _transmissionRenderTarget*/);
 
-        upload(materialProperties.uniformsList, m_uniforms, &textures);
+        gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }
 
     if (isShaderMaterial) {
@@ -778,7 +777,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
         auto m = dynamic_cast<ShaderMaterial *>(material);
         if (m->uniformsNeedUpdate) {
 
-            upload(materialProperties.uniformsList, m_uniforms, &textures);
+            gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
             m->uniformsNeedUpdate = false;
         }
     }

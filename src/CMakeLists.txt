@@ -183,8 +183,6 @@ set(sources
         "threepp/renderers/gl/GLUniforms.cpp"
         "threepp/renderers/gl/GLRenderLists.cpp"
 
-        "threepp/utils/StringUtils.cpp"
-
         )
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})

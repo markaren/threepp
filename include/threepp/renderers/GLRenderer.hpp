@@ -156,7 +156,7 @@ namespace threepp {
 
         void compile(Scene *scene, Camera *camera);
 
-        void render(Scene *scene, Camera *camera);
+        void render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera);
 
         void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
 
@@ -192,11 +192,11 @@ namespace threepp {
     private:
         Canvas &canvas_;
 
-        std::optional<gl::GLRenderList> currentRenderList;
-        std::optional<gl::GLRenderState> currentRenderState;
+        std::shared_ptr<gl::GLRenderList> currentRenderList;
+        std::shared_ptr<gl::GLRenderState> currentRenderState;
 
-        std::vector<gl::GLRenderList> renderListStack;
-        std::vector<gl::GLRenderState> renderStateStack;
+        std::vector<std::shared_ptr<gl::GLRenderList>> renderListStack;
+        std::vector<std::shared_ptr<gl::GLRenderState>> renderStateStack;
 
         int _currentActiveCubeFace = 0;
         int _currentActiveMipmapLevel = 0;
