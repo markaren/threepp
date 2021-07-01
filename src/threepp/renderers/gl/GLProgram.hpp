@@ -23,9 +23,11 @@ namespace threepp::gl {
 
         std::optional<unsigned int> program;
 
-        GLProgram(GLBindingStates& bindingStates, std::string cacheKey);
+        GLProgram(std::string cacheKey, GLBindingStates& bindingStates);
 
         std::shared_ptr<GLUniforms> getUniforms();
+
+        std::unordered_map<std::string, int> getAttributes();
 
         void destroy();
 

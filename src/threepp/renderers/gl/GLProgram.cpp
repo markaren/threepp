@@ -275,6 +275,16 @@ struct GLProgram::Impl {
         return cachedUniforms;
     }
 
+    std::unordered_map<std::string, int> getAttributes(unsigned int program) {
+
+        if (cachedAttributes.empty()) {
+
+            cachedAttributes = fetchAttributeLocations(program);
+        }
+
+        return cachedAttributes;
+    }
+
     void destroy(GLProgram &scope, unsigned int program) {
 
         bindingStates.releaseStatesOfProgram(scope);
@@ -287,20 +297,25 @@ struct GLProgram::Impl {
 private:
     GLBindingStates &bindingStates;
     std::shared_ptr<GLUniforms> cachedUniforms;
+    std::unordered_map<std::string, GLint> cachedAttributes;
 };
 
 
-GLProgram::GLProgram(GLBindingStates &bindingStates, std::string cacheKey)
+GLProgram::GLProgram(std::string cacheKey, GLBindingStates &bindingStates)
     : cacheKey(std::move(cacheKey)), pimpl_(new Impl(bindingStates)) {}
 
+std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
+
+    return pimpl_->getUniforms(*program);
+}
+
+std::unordered_map<std::string, int> GLProgram::getAttributes() {
+
+    return pimpl_->getAttributes(*program);
+}
 
 void GLProgram::destroy() {
 
     pimpl_->destroy(*this, *program);
     this->program = std::nullopt;
-}
-
-std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
-
-    return pimpl_->getUniforms(*program);
 }
