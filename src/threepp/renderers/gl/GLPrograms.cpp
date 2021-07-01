@@ -258,9 +258,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLPrograms::Paramete
     std::shared_ptr<GLProgram> program = nullptr;
 
     // Check if code has been already compiled
-    for (int p = 0, pl = (int) programs.size(); p < pl; p++) {
-
-        auto preexistingProgram = programs[p];
+    for (auto preexistingProgram : programs) {
 
         if (preexistingProgram->cacheKey == cacheKey) {
 
