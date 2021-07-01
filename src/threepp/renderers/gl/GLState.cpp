@@ -316,7 +316,7 @@ gl::GLState::GLState(const Canvas &canvas)
         glTexParameteri(type, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
         for (int i = 0; i < count; i++) {
-            glTexImage2D(target + 1, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+            glTexImage2D(target + i, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
         }
 
         return texture;
@@ -326,7 +326,7 @@ gl::GLState::GLState(const Canvas &canvas)
     stencilBuffer.setFunctions(enableLambda, disableLambda);
 
     emptyTextures[GL_TEXTURE_2D] = createTexture(GL_TEXTURE_2D, GL_TEXTURE_2D, 1);
-    emptyTextures[GL_TEXTURE_CUBE_MAP] = createTexture(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_CUBE_MAP, 1);
+    emptyTextures[GL_TEXTURE_CUBE_MAP] = createTexture(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_CUBE_MAP_POSITIVE_X, 6);
 
     colorBuffer.setClear(0, 0, 0, 1);
     depthBuffer.setClear(1);
