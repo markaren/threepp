@@ -25,7 +25,7 @@ namespace threepp::gl {
 
         GLProgram(GLBindingStates& bindingStates, std::string cacheKey);
 
-        GLUniforms &getUniforms();
+        std::shared_ptr<GLUniforms> getUniforms();
 
         void destroy();
 

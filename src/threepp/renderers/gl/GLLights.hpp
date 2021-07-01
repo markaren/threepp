@@ -26,7 +26,7 @@ namespace threepp::gl {
 
     }// namespace
 
-    typedef std::unordered_map<std::string, UniformValue> LightUniforms;
+    typedef std::unordered_map<std::string, NestedUniformValue> LightUniforms;
 
     struct UniformsCache {
 

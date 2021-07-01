@@ -556,10 +556,12 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
         //        programs = new Map();
         //                materialProperties.programs = programs;
     }
+    
+    std::shared_ptr<gl::GLProgram> program = nullptr;
 
     if (programs.count(programCacheKey)) {
 
-        auto program = programs[programCacheKey];
+        program = programs[programCacheKey];
 
         if (materialProperties.currentProgram == program && materialProperties.lightsStateVersion == lightsStateVersion) {
 
@@ -576,7 +578,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
         // material.onBeforeCompile( parameters, this );
 
-        auto program = programCache.acquireProgram( parameters, programCacheKey );
+        program = programCache.acquireProgram( parameters, programCacheKey );
         programs[programCacheKey] = program;
 
         materialProperties.uniforms = parameters.uniforms;
@@ -600,33 +602,35 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
     if ( materialProperties.needsLights ) {
 
         // wire up the material to this renderer's lighting state
-
-        // TODO
-
+        
         uniforms["ambientLightColor"].setValue(lights.state.ambient);
         uniforms["lightProbe"].setValue(lights.state.probe);
-//        uniforms["directionalLights"].setValue(lights.state.directional);
-//        uniforms["directionalLightShadows"].setValue(lights.state.directionalShadow);
-//        uniforms["spotLights"].setValue(lights.state.spot);
-//        uniforms["spotLightShadows"].setValue(lights.state.spotShadow);
+        uniforms["directionalLights"].setValue(lights.state.directional);
+        uniforms["directionalLightShadows"].setValue(lights.state.directionalShadow);
+        uniforms["spotLights"].setValue(lights.state.spot);
+        uniforms["spotLightShadows"].setValue(lights.state.spotShadow);
 //        uniforms["rectAreaLights"].setValue(lights.state.rectArea);
 //        uniforms["ltc_1"].setValue(lights.state.rectAreaLTC1);
 //        uniforms["ltc_2"].setValue(lights.state.rectAreaLTC2);
-//        uniforms["pointLights"].setValue(lights.state.point);
-//        uniforms["pointLightShadows"].setValue(lights.state.pointShadow);
+        uniforms["pointLights"].setValue(lights.state.point);
+        uniforms["pointLightShadows"].setValue(lights.state.pointShadow);
 //        uniforms["hemisphereLights"].setValue(lights.state.hemi);
 
-//        uniforms["directionalShadowMap"].setValue(lights.state.directionalShadowMap);
-//        uniforms["directionalShadowMatrix"].setValue(lights.state.directionalShadowMatrix);
-//        uniforms["spotShadowMap"].setValue(lights.state.spotShadowMap);
-//        uniforms["spotShadowMatrix"].setValue(lights.state.spotShadowMatrix);
-//        uniforms["pointShadowMap"].setValue(lights.state.pointShadowMap);
-//        uniforms["pointShadowMatrix"].setValue(lights.state.pointShadowMatrix);
+        uniforms["directionalShadowMap"].setValue(lights.state.directionalShadowMap);
+        uniforms["directionalShadowMatrix"].setValue(lights.state.directionalShadowMatrix);
+        uniforms["spotShadowMap"].setValue(lights.state.spotShadowMap);
+        uniforms["spotShadowMatrix"].setValue(lights.state.spotShadowMatrix);
+        uniforms["pointShadowMap"].setValue(lights.state.pointShadowMap);
+        uniforms["pointShadowMatrix"].setValue(lights.state.pointShadowMatrix);
     }
 
-    //TODO
+    auto progUniforms = program->getUniforms();
+    auto uniformsList = gl::GLUniforms::seqWithValue( progUniforms->seq, uniforms );
 
-    return nullptr;
+    materialProperties.currentProgram = program;
+    materialProperties.uniformsList = uniformsList;
+
+    return program;
 }
 
 void GLRenderer::updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters) {
@@ -761,11 +765,11 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     if (refreshProgram || _currentCamera != camera) {
 
-        p_uniforms.setValue("projectionMatrix", camera->projectionMatrix);
+        p_uniforms->setValue("projectionMatrix", camera->projectionMatrix);
 
         if (gl::GLCapabilities::instance().logarithmicDepthBuffer) {
 
-            p_uniforms.setValue("logDepthBufFC", 2.f / (std::log(camera->far + 1.f) / math::LN2));
+            p_uniforms->setValue("logDepthBufFC", 2.f / (std::log(camera->far + 1.f) / math::LN2));
         }
 
         if (_currentCamera != camera) {
@@ -789,9 +793,9 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             isMeshStandardMaterial ||
             isEnvMap) {
 
-            if (p_uniforms.map.count("cameraPosition")) {
+            if (p_uniforms->map.count("cameraPosition")) {
 
-                auto uCamPos = p_uniforms.map["cameraPosition"];
+                auto uCamPos = p_uniforms->map["cameraPosition"];
                 _vector3.setFromMatrixPosition(camera->matrixWorld);
                 uCamPos->setValue(_vector3);
             }
@@ -804,19 +808,19 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             isMeshStandardMaterial ||
             isShaderMaterial) {
 
-            p_uniforms.setValue("isOrthographic", instanceof <OrthographicCamera>(camera));
+            p_uniforms->setValue("isOrthographic", instanceof <OrthographicCamera>(camera));
         }
     }
 
     if (refreshMaterial || materialProperties.receiveShadow != object->receiveShadow) {
 
         materialProperties.receiveShadow = object->receiveShadow;
-        p_uniforms.setValue("receiveShadow", object->receiveShadow);
+        p_uniforms->setValue("receiveShadow", object->receiveShadow);
     }
 
     if (refreshMaterial) {
 
-        p_uniforms.setValue("toneMappingExposure", toneMappingExposure);
+        p_uniforms->setValue("toneMappingExposure", toneMappingExposure);
 
         if (materialProperties.needsLights) {
 
@@ -856,14 +860,14 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     //                if (material.isSpriteMaterial) {
     //
-    //                    p_uniforms.setValue("center", object.center);
+    //                    p_uniforms->setValue("center", object.center);
     //                }
 
     // common matrices
 
-    p_uniforms.setValue("modelViewMatrix", object->modelViewMatrix);
-    p_uniforms.setValue("normalMatrix", object->normalMatrix);
-    p_uniforms.setValue("modelMatrix", object->matrixWorld);
+    p_uniforms->setValue("modelViewMatrix", object->modelViewMatrix);
+    p_uniforms->setValue("normalMatrix", object->normalMatrix);
+    p_uniforms->setValue("modelMatrix", object->matrixWorld);
 
     return program;
 }

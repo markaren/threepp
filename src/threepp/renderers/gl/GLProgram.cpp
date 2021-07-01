@@ -266,13 +266,13 @@ struct GLProgram::Impl {
     explicit Impl(GLBindingStates &bindingStates)
         : bindingStates(bindingStates){};
 
-    GLUniforms &getUniforms(unsigned int program) {
+    std::shared_ptr<GLUniforms> getUniforms(unsigned int program) {
 
         if (!cachedUniforms) {
-            cachedUniforms = GLUniforms(program);
+            cachedUniforms = std::make_shared<GLUniforms>(program);
         }
 
-        return *cachedUniforms;
+        return cachedUniforms;
     }
 
     void destroy(GLProgram &scope, unsigned int program) {
@@ -286,7 +286,7 @@ struct GLProgram::Impl {
 
 private:
     GLBindingStates &bindingStates;
-    std::optional<GLUniforms> cachedUniforms;
+    std::shared_ptr<GLUniforms> cachedUniforms;
 };
 
 
@@ -300,7 +300,7 @@ void GLProgram::destroy() {
     this->program = std::nullopt;
 }
 
-GLUniforms &GLProgram::getUniforms() {
+std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
 
     return pimpl_->getUniforms(*program);
 }
