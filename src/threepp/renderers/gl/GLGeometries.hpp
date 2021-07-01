@@ -50,7 +50,7 @@ namespace threepp::gl {
 
                 if (instanceof <InstancedBufferGeometry>(geometry)) {
 
-                    dynamic_cast<InstancedBufferGeometry *>(geometry)->_maxInstanceCount = std::nullopt;
+                    dynamic_cast<InstancedBufferGeometry *>(geometry)->_maxInstanceCount = 0;
                 }
 
                 scope_.info_.memory.geometries--;

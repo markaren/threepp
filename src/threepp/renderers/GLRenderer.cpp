@@ -194,7 +194,7 @@ void GLRenderer::releaseMaterialProgramReferences(Material *material) {
 
     if (!programs.empty()) {
 
-        for (auto &program : programs) {
+        for (auto &[key, program] : programs) {
 
             programCache.releaseProgram(program);
         }
@@ -325,15 +325,20 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
         //                renderer.setMode(GL_TRIANGLES);
     }
 
-    if (false /*object.isInstancedMesh*/) {
+    if (instanceof <InstancedMesh>(object)) {
 
-        //                renderer.renderInstances(drawStart, drawCount, object.count);
+        auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
 
-    } else if (false /*geometry.isInstancedBufferGeometry*/) {
+        //TODO
+        //        renderer->renderInstances(drawStart, drawCount, object->count);
 
-        //                const instanceCount = Math.min(geometry.instanceCount, geometry._maxInstanceCount);
-        //
-        //                renderer.renderInstances(drawStart, drawCount, instanceCount);
+    } else if (instanceof <InstancedBufferGeometry>(geometry)) {
+
+        auto g = dynamic_cast<InstancedBufferGeometry *>(geometry);
+        const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
+
+        //TODO
+        //        renderer->renderInstances(drawStart, drawCount, instanceCount);
 
     } else {
 
@@ -387,7 +392,7 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
     });
 }
 
-void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera>& camera) {
+void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera> &camera) {
 
     // update scene graph
 
@@ -462,7 +467,7 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
 
         // Generate mipmap if we're using any kind of mipmap filtering
 
-//                textures.updateRenderTargetMipmap( _currentRenderTarget );
+        //                textures.updateRenderTargetMipmap( _currentRenderTarget );
 
         // resolve multisample renderbuffers to a single-sample texture if necessary
 
@@ -475,13 +480,13 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
 
     // Ensure depth buffer writing is enabled so it can be cleared on next render
 
-    //    state.buffers.depth.setTest( true );
-    //    state.buffers.depth.setMask( true );
-    //    state.buffers.color.setMask( true );
+    state.depthBuffer.setTest(true);
+    state.depthBuffer.setMask(true);
+    state.colorBuffer.setMask(true);
     //
     state.setPolygonOffset(false);
 
-    // _gl.finish();
+    // finish);
 
     _currentMaterialId = -1;
     _currentCamera = nullptr;
@@ -529,9 +534,9 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
     auto &lights = currentRenderState->getLights();
     auto &shadowsArray = currentRenderState->getShadowsArray();
 
-    auto lightsStateVersion = lights.getState().version;
+    auto lightsStateVersion = lights.state.version;
 
-    auto parameters = programCache.getParameters(material, lights.getState(), shadowsArray.size(), scene, object);
+    auto parameters = programCache.getParameters(material, lights.state, shadowsArray.size(), scene, object);
     auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;
@@ -549,7 +554,74 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
         material->addEventListener("dispose", &onMaterialDispose);
 
         //        programs = new Map();
-        //        materialProperties.programs = programs;
+        //                materialProperties.programs = programs;
+    }
+
+    if (programs.count(programCacheKey)) {
+
+        auto program = programs[programCacheKey];
+
+        if (materialProperties.currentProgram == program && materialProperties.lightsStateVersion == lightsStateVersion) {
+
+            updateCommonMaterialProperties(material, parameters);
+
+            return program;
+        }
+
+    } else {
+
+        parameters.uniforms = programCache.getUniforms(material);
+
+        // material.onBuild( parameters, this );
+
+        // material.onBeforeCompile( parameters, this );
+
+        auto program = programCache.acquireProgram( parameters, programCacheKey );
+        programs[programCacheKey] = program;
+
+        materialProperties.uniforms = parameters.uniforms;
+
+    }
+
+    auto& uniforms = materialProperties.uniforms;
+
+    if (! instanceof <ShaderMaterial>(material) && ! instanceof <ShaderMaterial>(material) || material->clipping) {
+
+        uniforms["clippingPlanes"] = clipping.uniform;
+    }
+
+    updateCommonMaterialProperties( material, parameters );
+
+    // store the light setup it was created for
+
+    materialProperties.needsLights = materialNeedsLights( material );
+    materialProperties.lightsStateVersion = lightsStateVersion;
+
+    if ( materialProperties.needsLights ) {
+
+        // wire up the material to this renderer's lighting state
+
+        // TODO
+
+        uniforms["ambientLightColor"].setValue(lights.state.ambient);
+        uniforms["lightProbe"].setValue(lights.state.probe);
+//        uniforms["directionalLights"].setValue(lights.state.directional);
+//        uniforms["directionalLightShadows"].setValue(lights.state.directionalShadow);
+//        uniforms["spotLights"].setValue(lights.state.spot);
+//        uniforms["spotLightShadows"].setValue(lights.state.spotShadow);
+//        uniforms["rectAreaLights"].setValue(lights.state.rectArea);
+//        uniforms["ltc_1"].setValue(lights.state.rectAreaLTC1);
+//        uniforms["ltc_2"].setValue(lights.state.rectAreaLTC2);
+//        uniforms["pointLights"].setValue(lights.state.point);
+//        uniforms["pointLightShadows"].setValue(lights.state.pointShadow);
+//        uniforms["hemisphereLights"].setValue(lights.state.hemi);
+
+//        uniforms["directionalShadowMap"].setValue(lights.state.directionalShadowMap);
+//        uniforms["directionalShadowMatrix"].setValue(lights.state.directionalShadowMatrix);
+//        uniforms["spotShadowMap"].setValue(lights.state.spotShadowMap);
+//        uniforms["spotShadowMatrix"].setValue(lights.state.spotShadowMatrix);
+//        uniforms["pointShadowMap"].setValue(lights.state.pointShadowMap);
+//        uniforms["pointShadowMatrix"].setValue(lights.state.pointShadowMatrix);
     }
 
     //TODO
@@ -616,7 +688,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     if (material->version == materialProperties.version) {
 
-        if (materialProperties.needsLights && (materialProperties.lightsStateVersion != lights.getState().version)) {
+        if (materialProperties.needsLights && (materialProperties.lightsStateVersion != lights.state.version)) {
 
             needsProgramChange = true;
 

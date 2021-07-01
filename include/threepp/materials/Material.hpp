@@ -52,6 +52,7 @@ namespace threepp {
         std::vector<Plane> clippingPlanes;
         bool clipIntersection = false;
         bool clipShadows = false;
+        bool clipping = false;
 
         std::optional<int> shadowSide;
 

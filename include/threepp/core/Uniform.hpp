@@ -19,7 +19,8 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, Texture, std::vector<float>> UniformValue;
+    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, Texture, std::vector<float>> NestedUniformValue;
+    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, Texture, std::vector<Vector3>, std::vector<float>, NestedUniformValue> UniformValue;
 
     class Uniform {
 

@@ -30,7 +30,7 @@ namespace threepp::gl {
     struct MaterialProperties {
 
         std::shared_ptr<GLProgram> program;
-        std::vector<std::shared_ptr<GLProgram>> programs;
+        std::unordered_map<std::string, std::shared_ptr<GLProgram>> programs;
 
         std::optional<Texture> environment;
 

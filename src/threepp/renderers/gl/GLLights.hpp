@@ -26,9 +26,70 @@ namespace threepp::gl {
 
     }// namespace
 
-    typedef std::unordered_map<std::string, std::any> LightUniforms;
+    typedef std::unordered_map<std::string, UniformValue> LightUniforms;
 
-    struct UniformCache {
+    struct UniformsCache {
+
+        LightUniforms &get(const Light &light) {
+
+            if (!lights.count(light.id)) {
+                return lights.at(light.id);
+            }
+
+            auto type = light.type();
+            LightUniforms uniforms;
+            if (type == "DirectionalLight") {
+
+                uniforms = {
+                        {"direction", Vector3()},
+                        {"color", Color()}};
+
+            } else if (type == "SpotLight") {
+
+                uniforms = {
+                        {"position", Vector3()},
+                        {"direction", Vector3()},
+                        {"color", Color()},
+                        {"distance", 0.f},
+                        {"coneCos", 0.f},
+                        {"penumbraCos", 0.f},
+                        {"decay", 0.f}};
+
+            } else if (type == "PointLight") {
+
+                uniforms = {
+                        {"position", Vector3()},
+                        {"direction", Vector3()},
+                        {"color", Color()},
+                        {"distance", 0.f},
+                        {"decay", 0.f}};
+
+            } else if (type == "HemisphereLight") {
+
+                uniforms = {
+                        {"direction", Vector3()},
+                        {"skyColor", Color()},
+                        {"groundColor", Color()}};
+
+            } else if (type == "RectAreaLight") {
+
+                uniforms = {
+                        {"color", Color()},
+                        {"position", Vector3()},
+                        {"halfWidth", Vector3()},
+                        {"halfHeight", Vector3()}};
+            }
+
+            lights[light.id] = uniforms;
+
+            return lights.at(light.id);
+        }
+
+    private:
+        std::unordered_map<unsigned int, LightUniforms> lights;
+    };
+
+    struct ShadowUniformsCache {
 
         LightUniforms &get(const Light &light) {
 
@@ -74,9 +135,6 @@ namespace threepp::gl {
         std::unordered_map<unsigned int, LightUniforms> lights;
     };
 
-    struct ShadowUniformsCache {
-    };
-
 
     struct GLLights {
 
@@ -91,15 +149,14 @@ namespace threepp::gl {
                 int numDirectionalShadows = -1;
                 int numPointShadows = -1;
                 int numSpotShadows = -1;
-
             };
 
             unsigned int version = 0;
 
             Hash hash;
 
-            std::array<float, 3> ambient;
-            std::array<Vector3, 9> probe;
+            Color ambient;
+            std::vector<Vector3> probe;
             std::vector<LightUniforms> directional;
             std::vector<LightUniforms> directionalShadow;
             std::vector<Texture> directionalShadowMap;
@@ -112,26 +169,23 @@ namespace threepp::gl {
             std::vector<LightUniforms> pointShadow;
             std::vector<Texture> pointShadowMap;
             std::vector<Matrix4> pointShadowMatrix;
-
         };
 
-        const LightState &getState() const;
+        LightState state;
 
         void setup(std::vector<Light *> &lights);
 
         void setupView(std::vector<Light *> &lights, Camera *camera);
 
     private:
-        UniformCache cache_;
-
-        LightState state_;
+        UniformsCache cache_;
+        ShadowUniformsCache shadowCache_;
 
         unsigned int nextVersion = 0;
 
         Vector3 vector3;
         Matrix4 matrix4;
         Matrix4 matrix42;
-
     };
 
 }// namespace threepp::gl

@@ -4,7 +4,7 @@
 #define THREEPP_DIRECTIONALLIGHT_HPP
 
 #include "threepp/lights/Light.hpp"
-#include "threepp/lights/LightShadow.hpp"
+#include "threepp/lights/DirectionalLightShadow.hpp"
 
 namespace threepp {
 
@@ -15,7 +15,7 @@ namespace threepp {
         Vector3 position;
         Object3D* target = nullptr;
 
-        LightShadow shadow;
+        DirectionalLightShadow shadow;
 
         DirectionalLight(const DirectionalLight &) = delete;
 

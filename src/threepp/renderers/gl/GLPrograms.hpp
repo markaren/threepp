@@ -152,6 +152,8 @@ namespace threepp {
 
                 std::string customProgramCacheKey;
 
+                std::unordered_map<std::string, Uniform> uniforms;
+
                 Parameters(
                         const GLPrograms &scope,
                         Material *material,
@@ -161,6 +163,7 @@ namespace threepp {
                         Object3D *object);
 
                 [[nodiscard]] std::string hash() const;
+
             };
         };
 

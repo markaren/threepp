@@ -85,6 +85,7 @@ set(publicHeaders
         "threepp/lights/DirectionalLightShadow.hpp"
         "threepp/lights/LightShadow.hpp"
         "threepp/lights/PointLight.hpp"
+        "threepp/lights/PointLightShadow.hpp"
         "threepp/lights/SpotLight.hpp"
 
         "threepp/renderers/GLRenderer.hpp"
@@ -166,6 +167,9 @@ set(sources
         "threepp/math/Vector3.cpp"
         "threepp/math/Vector4.cpp"
         "threepp/math/Quaternion.cpp"
+
+        "threepp/lights/PointLight.cpp"
+        "threepp/lights/PointLightShadow.cpp"
 
         "threepp/textures/Texture.cpp"
 

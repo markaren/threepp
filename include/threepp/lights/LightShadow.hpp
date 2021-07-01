@@ -3,8 +3,7 @@
 #ifndef THREEPP_LIGHTSHADOW_HPP
 #define THREEPP_LIGHTSHADOW_HPP
 
-#include <utility>
-
+#include "threepp/lights/Light.hpp"
 #include "threepp/cameras/Camera.hpp"
 
 #include "threepp/math/Frustum.hpp"
@@ -18,6 +17,8 @@ namespace threepp {
     class LightShadow {
 
     public:
+        std::shared_ptr<Camera> camera;
+
         float bias = 0;
         float normalBias = 0;
         float radius = 1;
@@ -42,7 +43,7 @@ namespace threepp {
 
         void updateMatrices(const Light &light, const Object3D &target) {
 
-            const auto &shadowCamera = this->camera_;
+            const auto &shadowCamera = this->camera;
             auto &shadowMatrix = this->matrix;
 
             _lightPositionWorld.setFromMatrixPosition(light.matrixWorld);
@@ -81,20 +82,20 @@ namespace threepp {
 
                 this->map->dispose();
             }
-
+            // TODO
             //            if (this.mapPass) {
             //
             //                this.mapPass.dispose();
             //            }
         }
 
+        virtual ~LightShadow() = default;
 
     protected:
-        explicit LightShadow(std::shared_ptr<Camera> camera) : camera_(std::move(camera)) {}
+        explicit LightShadow(std::shared_ptr<Camera> camera)
+            : camera(std::move(camera)) {}
 
-
-    private:
-        std::shared_ptr<Camera> camera_;
+    protected:
 
         Frustum _frustum;
         Vector2 _frameExtents;

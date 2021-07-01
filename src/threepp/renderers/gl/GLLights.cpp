@@ -1,20 +1,16 @@
 
-#include "threepp/renderers/gl/GLLights.hpp"
+#include "GLLights.hpp"
 
-#include "threepp/math/Vector2.hpp"
-
-#include <any>
 #include <unordered_map>
 
 using namespace threepp;
 using namespace threepp::gl;
 
-
 void GLLights::setup(std::vector<Light *> &lights) {
 
     float r = 0, g = 0, b = 0;
 
-    for (int i = 0; i < 9; i++) state_.probe[i].set(0, 0, 0);
+    for (int i = 0; i < 9; i++) state.probe.emplace_back(Vector3());
 
     int directionalLength = 0;
     int pointLength = 0;
@@ -43,32 +39,79 @@ void GLLights::setup(std::vector<Light *> &lights) {
 
             for (int j = 0; j < 9; j++) {
 
-                state_.probe[j].addScaledVector(l->sh.getCoefficients()[j], intensity);
+                state.probe[j].addScaledVector(l->sh.getCoefficients()[j], intensity);
             }
 
         } else if (instanceof <DirectionalLight>(light)) {
 
             auto &uniforms = cache_.get(*light);
 
-            std::any_cast<Color>(uniforms["color"]).copy(light->color).multiplyScalar(light->intensity);
+            std::get<Color>(uniforms["color"]).copy(light->color).multiplyScalar(light->intensity);
 
             if (light->castShadow) {
 
                 auto l = dynamic_cast<DirectionalLight *>(light);
                 auto shadow = l->shadow;
 
-                // TODO
+                auto shadowUniforms = shadowCache_.get( *light );
 
-                numDirectionalShadows++;
+                shadowUniforms["shadowBias"] = shadow.bias;
+                shadowUniforms["shadowNormalBias"] = shadow.normalBias;
+                shadowUniforms["shadowRadius"] = shadow.radius;
+                shadowUniforms["shadowMapSize"] = shadow.mapSize;
+
+                state.directionalShadow[ directionalLength ] = shadowUniforms;
+//                state.directionalShadowMap[ directionalLength ] = shadowMap;
+//                state.directionalShadowMatrix[ directionalLength ] = light.shadow.matrix;
+
+                numDirectionalShadows ++;
             }
+
+            state.directional[ directionalLength ] = uniforms;
+
+            directionalLength ++;
+        } else if (instanceof <SpotLight>(light)) {
+
+
+        } else if (instanceof <PointLight>(light)) {
+
+            auto l = dynamic_cast<PointLight *>(light);
+            auto shadow = l->shadow;
+
+            auto &uniforms = cache_.get(*light);
+
+            std::get<Color>(uniforms["color"]).copy( light->color ).multiplyScalar( light->intensity );
+            uniforms["distance"] = l->distance;
+            uniforms["decay"] = l->decay;
+
+            if (light->castShadow) {
+
+                auto shadowUniforms = shadowCache_.get( *light );
+
+                shadowUniforms["shadowBias"] = shadow.bias;
+                shadowUniforms["shadowNormalBias"] = shadow.normalBias;
+                shadowUniforms["shadowRadius"] = shadow.radius;
+                shadowUniforms["shadowMapSize"] = shadow.mapSize;
+                shadowUniforms["shadowCameraNear"] = shadow.camera->near;
+                shadowUniforms["shadowCameraFar"] = shadow.camera->far;
+
+                state.pointShadow[ pointLength ] = shadowUniforms;
+//                state.pointShadowMap[ pointLength ] = shadowMap;
+//                state.pointShadowMatrix[ pointLength ] = light.shadow.matrix;
+
+                numPointShadows ++;
+
+            }
+
+            state.point[ pointLength ] = uniforms;
+
+            pointLength ++;
         }
     }
 
-    state_.ambient[0] = r;
-    state_.ambient[1] = g;
-    state_.ambient[2] = b;
+    state.ambient.setRGB(r, g, b);
 
-    auto &hash = state_.hash;
+    auto &hash = state.hash;
 
     if (hash.directionalLength != directionalLength ||
         hash.pointLength != pointLength ||
@@ -77,19 +120,19 @@ void GLLights::setup(std::vector<Light *> &lights) {
         hash.numPointShadows != numPointShadows ||
         hash.numSpotShadows != numSpotShadows) {
 
-        state_.directional.resize(directionalLength);
-        state_.spot.resize(spotLength);
-        state_.point.resize(pointLength);
+        state.directional.resize(directionalLength);
+        state.spot.resize(spotLength);
+        state.point.resize(pointLength);
 
-        state_.directionalShadow.resize(numDirectionalShadows);
-        state_.directionalShadowMap.resize(numDirectionalShadows);
-        state_.pointShadow.resize(numPointShadows);
-        state_.pointShadowMap.resize(numPointShadows);
-        state_.spotShadow.resize(numSpotShadows);
-        state_.spotShadowMap.resize(numSpotShadows);
-        state_.directionalShadowMatrix.resize(numDirectionalShadows);
-        state_.pointShadowMatrix.resize(numPointShadows);
-        state_.spotShadowMatrix.resize(numSpotShadows);
+        state.directionalShadow.resize(numDirectionalShadows);
+        state.directionalShadowMap.resize(numDirectionalShadows);
+        state.pointShadow.resize(numPointShadows);
+        state.pointShadowMap.resize(numPointShadows);
+        state.spotShadow.resize(numSpotShadows);
+        state.spotShadowMap.resize(numSpotShadows);
+        state.directionalShadowMatrix.resize(numDirectionalShadows);
+        state.pointShadowMatrix.resize(numPointShadows);
+        state.spotShadowMatrix.resize(numSpotShadows);
 
         hash.directionalLength = directionalLength;
         hash.pointLength = pointLength;
@@ -99,7 +142,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
         hash.numPointShadows = numPointShadows;
         hash.numSpotShadows = numSpotShadows;
 
-        state_.version = nextVersion++;
+        state.version = nextVersion++;
     }
 }
 
@@ -116,9 +159,9 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
         if (instanceof <DirectionalLight>(light)) {
 
             auto l = dynamic_cast<DirectionalLight*>(light);
-            auto& uniforms = state_.directional.at(directionalLength);
+            auto& uniforms = state.directional.at(directionalLength);
 
-            auto& direction = std::any_cast<Vector3&>(uniforms.at("direction"));
+            auto& direction = std::get<Vector3>(uniforms.at("direction"));
 
             direction.setFromMatrixPosition(light->matrixWorld);
             vector3.setFromMatrixPosition(l->target->matrixWorld);
@@ -130,10 +173,10 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
         } else if (instanceof <SpotLight>(light)) {
 
             auto l = dynamic_cast<SpotLight*>(light);
-            auto& uniforms = state_.spot.at(spotLength);
+            auto& uniforms = state.spot.at(spotLength);
 
-            auto& position = std::any_cast<Vector3&>(uniforms.at("position"));
-            auto& direction = std::any_cast<Vector3&>(uniforms.at("direction"));
+            auto& position = std::get<Vector3>(uniforms.at("position"));
+            auto& direction = std::get<Vector3>(uniforms.at("direction"));
 
             position.setFromMatrixPosition(light->matrixWorld);
             position.applyMatrix4(viewMatrix);
@@ -147,9 +190,9 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
         } else if (instanceof <PointLight>(light)) {
 
-            auto& uniforms = state_.spot.at(pointLength);
+            auto& uniforms = state.spot.at(pointLength);
 
-            auto& position = std::any_cast<Vector3&>(uniforms.at("position"));
+            auto& position = std::get<Vector3>(uniforms.at("position"));
 
             position.setFromMatrixPosition(light->matrixWorld);
             position.applyMatrix4(viewMatrix);
@@ -157,9 +200,4 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             pointLength++;
         }
     }
-}
-
-const GLLights::LightState &GLLights::getState() const {
-
-    return state_;
 }
