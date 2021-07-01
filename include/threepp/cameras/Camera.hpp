@@ -32,6 +32,8 @@ namespace threepp {
             return "Camera";
         }
 
+        virtual void updateProjectionMatrix() = 0;
+
     protected:
         Camera(float near, float far): near(near), far(far) {};
     };

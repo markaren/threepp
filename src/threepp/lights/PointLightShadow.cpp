@@ -4,7 +4,6 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
-
 using namespace threepp;
 
 PointLightShadow::PointLightShadow()
@@ -52,27 +51,27 @@ void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
 
     // TODO
 
-//    auto far = light->distance || camera->far;
-//
-//    if ( far !== camera.far ) {
-//
-//        camera.far = far;
-//        camera.updateProjectionMatrix();
-//
-//    }
-//
-//    _lightPositionWorld.setFromMatrixPosition( light.matrixWorld );
-//    camera.position.copy( _lightPositionWorld );
-//
-//    _lookTarget.copy( camera.position );
-//    _lookTarget.add( this->_cubeDirections[ viewportIndex ] );
-//    camera.up.copy( this->_cubeUps[ viewportIndex ] );
-//    camera.lookAt( _lookTarget );
-//    camera.updateMatrixWorld();
-//
-//    shadowMatrix.makeTranslation( - _lightPositionWorld.x, - _lightPositionWorld.y, - _lightPositionWorld.z );
-//
-//    _projScreenMatrix.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse );
-//    this->_frustum.setFromProjectionMatrix( _projScreenMatrix );
+    auto far = light->distance > 0 ? light->distance : camera->far;
+
+    if ( far != camera->far ) {
+
+        camera->far = far;
+        camera->updateProjectionMatrix();
+
+    }
+
+    _lightPositionWorld.setFromMatrixPosition( light->matrixWorld );
+    camera->position.copy( _lightPositionWorld );
+
+    _lookTarget.copy( camera->position );
+    _lookTarget.add( this->_cubeDirections[ viewportIndex ] );
+    camera->up.copy( this->_cubeUps[ viewportIndex ] );
+    camera->lookAt( _lookTarget );
+    camera->updateMatrixWorld();
+
+    shadowMatrix.makeTranslation( - _lightPositionWorld.x, - _lightPositionWorld.y, - _lightPositionWorld.z );
+
+    _projScreenMatrix.multiplyMatrices( camera->projectionMatrix, camera->matrixWorldInverse );
+    this->_frustum.setFromProjectionMatrix( _projScreenMatrix );
 
 }

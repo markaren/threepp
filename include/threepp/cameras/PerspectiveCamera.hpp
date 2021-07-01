@@ -142,7 +142,7 @@ namespace threepp {
             this->updateProjectionMatrix();
         }
 
-        void updateProjectionMatrix() {
+        void updateProjectionMatrix() override {
 
             int top = (int) (near * std::tan(math::DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
             int height = (int) 2 * top;

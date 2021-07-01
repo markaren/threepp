@@ -37,7 +37,7 @@ namespace threepp {
         std::shared_ptr<Object3D> parent;
         std::vector<std::shared_ptr<Object3D>> children;
 
-        const Vector3 up = defaultUp;
+        Vector3 up = defaultUp;
 
         Vector3 position;
         Euler rotation;

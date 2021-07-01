@@ -51,7 +51,7 @@ namespace threepp {
             this->updateProjectionMatrix();
         }
 
-        void updateProjectionMatrix() {
+        void updateProjectionMatrix() override {
 
             const auto dx = (this->right - this->left) / (2 * this->zoom);
             const auto dy = (this->top - this->bottom) / (2 * this->zoom);
