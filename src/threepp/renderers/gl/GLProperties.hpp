@@ -3,16 +3,18 @@
 #ifndef THREEPP_GLPROPERTIES_HPP
 #define THREEPP_GLPROPERTIES_HPP
 
-#include "GLProgram.hpp"
-#include "GLUniforms.hpp"
-#include "threepp/scenes/Scene.hpp"
+//#include "GLUniforms.hpp"
+//#include "GLProgram.hpp"
 
-#include <glad/glad.h>
+#include "threepp/scenes/Scene.hpp"
 
 #include <optional>
 #include <unordered_map>
 
 namespace threepp::gl {
+
+    struct GLProgram;
+    struct UniformObject;
 
     struct TextureProperties {
 
@@ -22,7 +24,7 @@ namespace threepp::gl {
 
         int maxMipLevel;
 
-        GLuint glTexture;
+        unsigned int glTexture;
     };
 
     struct MaterialProperties {
@@ -38,7 +40,7 @@ namespace threepp::gl {
 
         std::optional<Texture> envMap;
 
-        std::vector<UniformObject> &uniformsList;
+        std::vector<UniformObject*> &uniformsList;
 
         int outputEncoding;
         bool instancing;
@@ -82,11 +84,7 @@ namespace threepp::gl {
         GLTypeProperties<TextureProperties> textureProperties;
         GLTypeProperties<MaterialProperties> materialProperties;
 
-        void dispose() {
-
-            textureProperties.dispose();
-            materialProperties.dispose();
-        }
+        void dispose();
     };
 
 }// namespace threepp::gl

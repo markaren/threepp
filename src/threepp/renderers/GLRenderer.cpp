@@ -574,6 +574,16 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     //            if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
     //
+
+    bool isMeshBasicMaterial = instanceof <MeshBasicMaterial>(material);
+    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material);
+    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material);
+    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material);
+    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
+    bool isShadowMaterial = instanceof <ShadowMaterial>(material);
+    bool isShaderMaterial = instanceof <ShaderMaterial>(material);
+    bool isEnvMap = instanceof <MaterialWithEnvMap>(material);
+
     textures.resetTextureUnits();
 
     auto fog = scene->fog;
@@ -698,15 +708,6 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             refreshLights = true;  // remains set until update done
         }
 
-        bool isMeshBasicMaterial = instanceof <MeshBasicMaterial>(material);
-        bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material);
-        bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material);
-        bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material);
-        bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
-        bool isShadowMaterial = instanceof <ShadowMaterial>(material);
-        bool isShaderMaterial = instanceof <ShaderMaterial>(material);
-        bool isEnvMap = instanceof <MaterialWithEnvMap>(material);
-
         // load material specific uniforms
         // (shader material also gets them for the sake of genericity)
 
@@ -742,7 +743,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     if (refreshMaterial) {
 
-        //                    p_uniforms.setValue("toneMappingExposure", toneMappingExposure);
+        //                            p_uniforms.setValue("toneMappingExposure", toneMappingExposure);
 
         if (materialProperties.needsLights) {
 
@@ -767,15 +768,19 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
         materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _height /*, _transmissionRenderTarget*/);
 
-        upload(materialProperties.uniformsList, m_uniforms, textures);
+        upload(materialProperties.uniformsList, m_uniforms, &textures);
     }
 
-    //                if (material.isShaderMaterial &&material.uniformsNeedUpdate == true) {
-    //
-    //                    WebGLUniforms.upload(materialProperties.uniformsList, m_uniforms, textures);
-    //                    material.uniformsNeedUpdate = false;
-    //                }
-    //
+    if (isShaderMaterial) {
+
+        auto m = dynamic_cast<ShaderMaterial *>(material);
+        if (m->uniformsNeedUpdate) {
+
+            upload(materialProperties.uniformsList, m_uniforms, &textures);
+            m->uniformsNeedUpdate = false;
+        }
+    }
+
     //                if (material.isSpriteMaterial) {
     //
     //                    p_uniforms.setValue("center", object.center);

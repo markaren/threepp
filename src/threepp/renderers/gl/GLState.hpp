@@ -154,7 +154,7 @@ namespace threepp::gl {
 
         bool bindFramebuffer(int target, int framebuffer);
 
-        bool useProgram(int program);
+        bool useProgram(unsigned int program);
 
         void setBlending(
                 int blending,
@@ -175,7 +175,7 @@ namespace threepp::gl {
 
         void setLineWidth(float width);
 
-        void setPolygonOffset(bool polygonOffset, float factor, float units);
+        void setPolygonOffset(bool polygonOffset, std::optional<float> factor = std::nullopt, std::optional<float> units = std::nullopt);
 
         void setScissorTest(bool scissorTest);
 

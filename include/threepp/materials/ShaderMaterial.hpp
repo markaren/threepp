@@ -22,6 +22,8 @@ namespace threepp {
         std::string vertexShader;
         std::string fragmentShader;
 
+        bool uniformsNeedUpdate;
+
         [[nodiscard]] std::string type() const override {
 
             return "ShaderMaterial";

@@ -1,5 +1,7 @@
 
 #include "GLProgram.hpp"
+
+#include "GLBindingStates.hpp"
 #include "GLCapabilities.hpp"
 #include "GLPrograms.hpp"
 #include "GLUniforms.hpp"
@@ -259,19 +261,46 @@ namespace {
 
 }// namespace
 
+struct GLProgram::Impl {
+
+    explicit Impl(GLBindingStates &bindingStates)
+        : bindingStates(bindingStates){};
+
+    GLUniforms &getUniforms(unsigned int program) {
+
+        if (!cachedUniforms) {
+            cachedUniforms = GLUniforms(program);
+        }
+
+        return *cachedUniforms;
+    }
+
+    void destroy(GLProgram &scope, unsigned int program) {
+
+        bindingStates.releaseStatesOfProgram(scope);
+
+        glDeleteProgram(program);
+    }
+
+    ~Impl() = default;
+
+private:
+    GLBindingStates &bindingStates;
+    std::optional<GLUniforms> cachedUniforms;
+};
+
+
+GLProgram::GLProgram(GLBindingStates &bindingStates, std::string cacheKey)
+    : cacheKey(std::move(cacheKey)), pimpl_(new Impl(bindingStates)) {}
+
+
 void GLProgram::destroy() {
 
-    //    bindingStates.releaseStatesOfProgram( this );
-
-    glDeleteProgram(*program);
+    pimpl_->destroy(*this, *program);
     this->program = std::nullopt;
 }
 
 GLUniforms &GLProgram::getUniforms() {
 
-    if (!cachedUniforms) {
-        cachedUniforms = GLUniforms(*program);
-    }
-
-    return *cachedUniforms;
+    return pimpl_->getUniforms(*program);
 }

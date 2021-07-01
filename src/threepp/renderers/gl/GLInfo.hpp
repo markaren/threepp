@@ -3,9 +3,7 @@
 #ifndef THREEPP_GLINFO_HPP
 #define THREEPP_GLINFO_HPP
 
-#include "threepp/renderers/gl/GLProgram.hpp"
-
-#include "threepp/utils/StringUtils.hpp"
+#include "GLProgram.hpp"
 
 #include <memory>
 #include <vector>

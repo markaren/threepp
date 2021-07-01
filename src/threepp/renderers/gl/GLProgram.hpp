@@ -3,18 +3,14 @@
 #ifndef THREEPP_GLPROGRAM_HPP
 #define THREEPP_GLPROGRAM_HPP
 
-//#include "GLBindingStates.hpp"
-
-#include "GLUniforms.hpp"
-
-#include <glad/glad.h>
-
+#include <string>
 #include <unordered_map>
-#include <utility>
 #include <optional>
+#include <memory>
 
 namespace threepp::gl {
 
+    struct GLBindingStates;
     struct GLUniforms;
 
     struct GLProgram {
@@ -25,9 +21,9 @@ namespace threepp::gl {
 
         std::string cacheKey;
 
-        std::optional<GLuint> program;
+        std::optional<unsigned int> program;
 
-        GLProgram(std::string cacheKey): cacheKey(std::move(cacheKey))  {}
+        GLProgram(GLBindingStates& bindingStates, std::string cacheKey);
 
         GLUniforms &getUniforms();
 
@@ -35,9 +31,8 @@ namespace threepp::gl {
 
     private:
 
-        std::optional<GLUniforms> cachedUniforms;
-
-//        GLBindingStates &bindingStates;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
 
         inline static int programIdCount = 0;
     };

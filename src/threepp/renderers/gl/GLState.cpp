@@ -393,7 +393,7 @@ bool gl::GLState::bindFramebuffer(int target, int framebuffer) {
     return false;
 }
 
-bool gl::GLState::useProgram(int program) {
+bool gl::GLState::useProgram(unsigned int program) {
 
     if (currentProgram != program) {
 
@@ -620,18 +620,18 @@ void gl::GLState::setLineWidth(float width) {
     }
 }
 
-void gl::GLState::setPolygonOffset(bool polygonOffset, float factor, float units) {
+void gl::GLState::setPolygonOffset(bool polygonOffset, std::optional<float> factor, std::optional<float> units) {
 
     if (polygonOffset) {
 
         enable(GL_POLYGON_OFFSET_FILL);
 
-        if (currentPolygonOffsetFactor != factor || currentPolygonOffsetUnits != units) {
+        if (factor && currentPolygonOffsetFactor != *factor || units && currentPolygonOffsetUnits != *units) {
 
-            glPolygonOffset(factor, units);
+            glPolygonOffset(*factor, *units);
 
-            currentPolygonOffsetFactor = factor;
-            currentPolygonOffsetUnits = units;
+            currentPolygonOffsetFactor = *factor;
+            currentPolygonOffsetUnits = *units;
         }
 
     } else {

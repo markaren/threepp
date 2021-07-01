@@ -17,7 +17,7 @@ namespace {
 
                 return a.renderOrder < b.renderOrder;
 
-            } else if (*a.program != *b.program) {
+            } else if (a.program.get() != b.program.get()) {
 
                 return a.program->id < b.program->id;
 

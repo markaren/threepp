@@ -2,7 +2,6 @@
 #include "GLUniforms.hpp"
 
 #include "GLTextures.hpp"
-#include "threepp/textures/Texture.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -95,3 +94,55 @@ namespace {
     }
 
 }// namespace
+
+
+ActiveUniformInfo::ActiveUniformInfo(unsigned int program, unsigned int index) {
+
+    int length;
+    glGetActiveUniform(program, index, 256, &length, &size, &type, name);
+
+}
+
+GLUniforms::GLUniforms(unsigned int program) {
+
+    int n;
+    glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &n);
+
+    for (int i = 0; i < n; i++) {
+
+        ActiveUniformInfo info(program, i);
+        glGetUniformLocation(program, info.name);
+
+        //TODO
+    }
+
+}
+
+void gl::upload(std::vector<UniformObject *> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures) {
+
+    for (int i = 0, n = seq.size(); i != n; ++i) {
+
+        auto &u = seq[i];
+        Uniform &v = values[u->id];
+
+        if (!v.needsUpdate || *v.needsUpdate) {
+
+            // note: always updating when .needsUpdate is undefined
+            u->setValue(v.value(), textures);
+        }
+    }
+}
+
+std::vector<UniformObject*> seqWithValue(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values) {
+
+    std::vector<UniformObject*> r;
+
+    for (int i = 0, n = seq.size(); i != n; ++i) {
+
+        auto &u = seq[i];
+        if (values.count(u->id)) r.emplace_back(u);
+    }
+
+    return r;
+}
+

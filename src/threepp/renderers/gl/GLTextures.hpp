@@ -3,16 +3,15 @@
 #ifndef THREEPP_GLTEXTURES_HPP
 #define THREEPP_GLTEXTURES_HPP
 
+#include "GLProperties.hpp"
+#include "GLCapabilities.hpp"
+#include "GLInfo.hpp"
+#include "GLState.hpp"
+
 #include "threepp/textures/Texture.hpp"
-
-#include "threepp/renderers/gl/GLCapabilities.hpp"
-#include "threepp/renderers/gl/GLInfo.hpp"
-#include "threepp/renderers/gl/GLProperties.hpp"
-#include "threepp/renderers/gl/GLState.hpp"
-
 #include "threepp/renderers/GLRenderTarget.hpp"
+#include "GLUniforms.hpp"
 
-#include <glad/glad.h>
 
 #include <memory>
 #include <unordered_map>
