@@ -17,7 +17,7 @@ namespace threepp::gl {
 
         int id = programIdCount++;
 
-        int usedTimes;
+        int usedTimes = 1;
 
         std::string cacheKey;
 

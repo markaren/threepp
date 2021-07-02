@@ -30,8 +30,6 @@ namespace threepp {
 
         struct GLPrograms {
 
-            struct Parameters;
-
             std::vector<std::shared_ptr<GLProgram>> programs;
 
             bool logarithmicDepthBuffer;
