@@ -1,107 +1,41 @@
 
 #include "GLUniforms.hpp"
 
-#include "GLTextures.hpp"
+#include "UniformUtils.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
 
-#include <array>
-#include <vector>
 
 namespace {
 
-    Texture emptyTexture;
+    struct ActiveUniformInfo {
 
-    std::vector<std::vector<float>> arrayCacheF32;
-    std::vector<std::vector<int>> arrayCacheI32;
+        int size;
+        unsigned int type;
+        std::string name;
 
-    std::array<float, 16> mat4array;
-    std::array<float, 9> mat3array;
-    std::array<float, 4> mat2array;
+        ActiveUniformInfo(unsigned int program, unsigned int index) {
 
-
-    template<class ArrayLike>
-    std::vector<float> &flatten(const ArrayLike &array, int nBlocks, int blockSize) {
-
-        const auto firstElem = array[0];
-
-        if (!isnan(firstElem)) return array;
-
-        const auto n = nBlocks * blockSize;
-        auto &r = arrayCacheF32[n];
-
-        if (r.empty()) {
-
-            r.resize(n);
-            arrayCacheF32[n] = r;
+            int length;
+            char nameBuffer[256];
+            glGetActiveUniform(program, index, 256, &length, &size, &type, nameBuffer);
+            name.assign(name, length);
         }
+    };
 
-        if (nBlocks != 0) {
+    void addUniform(Container *container, std::shared_ptr<UniformObject> &uniformObject) {
 
-            firstElem.toArray(r, 0);
-
-            for (int i = 1, offset = 0; i != nBlocks; ++i) {
-
-                offset += blockSize;
-                array[i].toArray(r, offset);
-            }
-        }
-
-        return r;
+        container->seq.emplace_back(uniformObject);
+        container->map[uniformObject->id] = uniformObject;
     }
 
-    template<class T>
-    bool arraysEqual(const T &a, const T &b) {
-
-        if (a.size() != b.size()) return false;
-
-        for (int i = 0, l = a.size(); i < l; i++) {
-
-            if (a[i] != b[i]) return false;
-        }
-
-        return true;
+    void parseUniform(ActiveUniformInfo &activeInfo, int addr, Container *container) {
     }
 
-    template<class ArrayLike>
-    void copyArray(const ArrayLike &a, ArrayLike &b) {
-
-        for (int i = 0, l = b.size(); i < l; i++) {
-
-            a[i] = b[i];
-        }
-    }
-
-    // Texture unit allocation
-
-    std::vector<int> &allocTexUnits(GLTextures &textures, int n) {
-
-        auto &r = arrayCacheI32[n];
-
-        if (r.empty()) {
-
-            r.resize(n);
-            arrayCacheI32[n] = r;
-        }
-
-        for (int i = 0; i != n; ++i) {
-
-            r[i] = textures.allocateTextureUnit();
-        }
-
-        return r;
-    }
 
 }// namespace
 
-
-ActiveUniformInfo::ActiveUniformInfo(unsigned int program, unsigned int index) {
-
-    int length;
-    glGetActiveUniform(program, index, 256, &length, &size, &type, name);
-
-}
 
 GLUniforms::GLUniforms(unsigned int program) {
 
@@ -111,11 +45,31 @@ GLUniforms::GLUniforms(unsigned int program) {
     for (int i = 0; i < n; i++) {
 
         ActiveUniformInfo info(program, i);
-        glGetUniformLocation(program, info.name);
+        GLint addr = glGetUniformLocation(program, info.name.c_str());
 
-        //TODO
+        parseUniform(info, addr, dynamic_cast<Container *>(this));
     }
 
+    struct SingleUniform : UniformObject {
+
+        explicit SingleUniform(std::string id) : UniformObject(std::move(id)) {}
+
+        void setValue(const UniformValue &value, GLTextures *textures) override {
+        }
+    };
+
+    struct PureArrayUniform : UniformObject {
+
+        explicit PureArrayUniform(std::string id) : UniformObject(std::move(id)) {}
+    };
+
+    struct StructuredUniform : UniformObject, Container {
+
+        explicit StructuredUniform(std::string id) : UniformObject(std::move(id)) {}
+
+        void setValue(const UniformValue &value, GLTextures *textures) override {
+        }
+    };
 }
 
 void GLUniforms::setValue(const std::string &name, const UniformValue &value, GLTextures *textures) {
@@ -124,14 +78,12 @@ void GLUniforms::setValue(const std::string &name, const UniformValue &value, GL
 
         map[name]->setValue(value, textures);
     }
-
 }
 
-void GLUniforms::upload(std::vector<UniformObject *> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures) {
+void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures) {
 
-    for (int i = 0, n = seq.size(); i != n; ++i) {
+    for (auto &u : seq) {
 
-        auto &u = seq[i];
         Uniform &v = values[u->id];
 
         if (!v.needsUpdate || *v.needsUpdate) {
@@ -142,16 +94,14 @@ void GLUniforms::upload(std::vector<UniformObject *> &seq, std::unordered_map<st
     }
 }
 
-std::vector<UniformObject*> GLUniforms::seqWithValue(std::vector<UniformObject*> &seq, std::unordered_map<std::string, Uniform> &values) {
+std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector<std::shared_ptr<UniformObject>> &seq, std::unordered_map<std::string, Uniform> &values) {
 
-    std::vector<UniformObject*> r;
+    std::vector<std::shared_ptr<UniformObject>> r;
 
-    for (int i = 0, n = seq.size(); i != n; ++i) {
+    for (auto &u : seq) {
 
-        auto &u = seq[i];
         if (values.count(u->id)) r.emplace_back(u);
     }
 
     return r;
 }
-

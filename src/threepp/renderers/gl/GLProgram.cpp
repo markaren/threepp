@@ -118,12 +118,13 @@ namespace {
         GLsizei length;
         GLint size;
         GLenum type;
-        GLchar name[256];
+        GLchar nameBuffer[256];
         for (int i = 0; i < n; i++) {
 
-            glGetActiveAttrib(program, i, 256, &length, &size, &type, name);
+            glGetActiveAttrib(program, i, 256, &length, &size, &type, nameBuffer);
 
-            attributes[name] = glGetAttribLocation(program, name);
+            std::string name(nameBuffer, length);
+            attributes[name] = glGetAttribLocation(program, name.c_str());
         }
 
         return attributes;

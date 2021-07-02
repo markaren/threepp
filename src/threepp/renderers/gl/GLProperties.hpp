@@ -40,7 +40,7 @@ namespace threepp::gl {
 
         std::optional<Texture> envMap;
 
-        std::vector<UniformObject*> &uniformsList;
+        std::vector<std::shared_ptr<UniformObject>> &uniformsList;
 
         int outputEncoding;
         bool instancing;
