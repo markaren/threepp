@@ -6,6 +6,7 @@
 #include "ProgramParameters.hpp"
 
 #include <memory>
+#include <utility>
 
 namespace threepp::gl {
 
@@ -22,18 +23,20 @@ namespace threepp::gl {
 
         std::optional<unsigned int> program;
 
-        GLProgram(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates& bindingStates);
-
         std::shared_ptr<GLUniforms> getUniforms();
 
         std::unordered_map<std::string, int> getAttributes();
 
         void destroy();
 
+        static std::shared_ptr<GLProgram> create(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates& bindingStates);
+
     private:
 
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
+
+        GLProgram(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates& bindingStates);
 
         inline static int programIdCount = 0;
     };

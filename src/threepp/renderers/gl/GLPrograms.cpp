@@ -1,15 +1,13 @@
 
 #include "GLPrograms.hpp"
 
+#include "GLProgram.hpp"
+
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
-
-#include <glad/glad.h>
-
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -57,7 +55,7 @@ ProgramParameters GLPrograms::getParameters(Material *material, const GLLights::
     p.shaderID = shaderIDs[material->type()];
     p.shaderName = material->type();
 
-    p.isRawShaderMaterial = instanceof<RawShaderMaterial>(material);
+    p.isRawShaderMaterial = instanceof <RawShaderMaterial>(material);
 
     auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
     p.instancing = instancedMesh != nullptr;
@@ -123,7 +121,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
         array.emplace_back(std::to_string(renderer.gammaFactor));
     }
 
-//    array.emplace_back(parameters.customProgramCacheKey);
+    //    array.emplace_back(parameters.customProgramCacheKey);
 
     return utils::join(array, '\n');
 }
@@ -152,7 +150,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const ProgramParameters &p
     std::shared_ptr<GLProgram> program = nullptr;
 
     // Check if code has been already compiled
-    for (auto& preexistingProgram : programs) {
+    for (auto &preexistingProgram : programs) {
 
         if (preexistingProgram->cacheKey == cacheKey) {
 
@@ -165,9 +163,8 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const ProgramParameters &p
 
     if (!program) {
 
-        // TODO
-        //                    program = GLProgram( renderer, cacheKey, parameters, bindingStates );
-        //                    programs.emplace_back( program );
+        program = GLProgram::create(cacheKey, parameters, bindingStates );
+        programs.emplace_back(program);
     }
 
     return program;

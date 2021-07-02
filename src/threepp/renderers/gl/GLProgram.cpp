@@ -2,13 +2,9 @@
 #include "GLProgram.hpp"
 
 #include "GLBindingStates.hpp"
-#include "GLCapabilities.hpp"
 #include "GLPrograms.hpp"
 #include "GLUniforms.hpp"
 
-#include "threepp/renderers/shaders/ShaderChunk.hpp"
-
-#include "threepp/constants.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #include <any>
@@ -363,4 +359,9 @@ void GLProgram::destroy() {
 
     pimpl_->destroy(*this, *program);
     this->program = std::nullopt;
+}
+
+std::shared_ptr<GLProgram> gl::GLProgram::create(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates) {
+
+    return std::shared_ptr<GLProgram>(new GLProgram(std::move(cacheKey), parameters, bindingStates));
 }
