@@ -3,7 +3,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 
 #include "threepp/utils/InstanceOf.hpp"
-
+#include "threepp/cameras/Camera.hpp"
 #include "threepp/lights/Light.hpp"
 
 using namespace threepp;

@@ -62,7 +62,11 @@ GLPrograms::Parameters::Parameters(
     shaderID = shaderIDs[material->type()];
     shaderName = material->type();
 
-    isRawShaderMaterial = instanceof <RawShaderMaterial>(material);
+    isRawShaderMaterial = instanceof<RawShaderMaterial>(material);
+
+    auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
+    instancing = instancedMesh != nullptr;
+    instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor != nullptr;
 
     supportsVertexTextures = scope.vertexTextures;
 
@@ -71,6 +75,21 @@ GLPrograms::Parameters::Parameters(
     numSpotLights = (int) lights.spot.size();
     numRectAreaLights = 0;
     numHemiLights = 0;
+
+    numDirLightShadows = (int) lights.directionalShadowMap.size();
+    numPointLightShadows = (int) lights.pointShadowMap.size();
+    numSpotLightShadows = (int) lights.spotShadowMap.size();
+
+    dithering = material->dithering;
+
+    premultipliedAlpha = material->premultipliedAlpha;
+
+    alphaTest = material->alphaTest;
+    doubleSided = material->side == DoubleSide;
+    flipSided = material->side == BackSide;
+
+    index0AttributeName = std::nullopt;
+
 }
 
 std::string GLPrograms::Parameters::hash() const {
@@ -166,11 +185,13 @@ std::string GLPrograms::Parameters::hash() const {
     return s;
 }
 
-GLPrograms::GLPrograms()
+GLPrograms::GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping)
     : logarithmicDepthBuffer(GLCapabilities::instance().logarithmicDepthBuffer),
       floatVertexTextures(GLCapabilities::instance().floatVertexTextures),
       maxVertexUniforms(GLCapabilities::instance().maxVertexUniforms),
-      vertexTextures(GLCapabilities::instance().vertexTextures) {}
+      vertexTextures(GLCapabilities::instance().vertexTextures),
+      bindingStates(bindingStates),
+      clipping(clipping) {}
 
 
 int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
@@ -220,7 +241,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const GLP
     if (!parameters.isRawShaderMaterial) {
 
         auto hash = utils::split(parameters.hash(), '\n');
-        for (const auto& value : hash) {
+        for (const auto &value : hash) {
 
             array.emplace_back(value);
         }
@@ -229,7 +250,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const GLP
         array.emplace_back(std::to_string(renderer.gammaFactor));
     }
 
-    array.emplace_back(parameters.customProgramCacheKey);
+//    array.emplace_back(parameters.customProgramCacheKey);
 
     return utils::join(array, '\n');
 }

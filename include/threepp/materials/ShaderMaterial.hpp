@@ -24,6 +24,8 @@ namespace threepp {
 
         bool uniformsNeedUpdate;
 
+        std::optional<std::string> index0AttributeName;
+
         [[nodiscard]] std::string type() const override {
 
             return "ShaderMaterial";

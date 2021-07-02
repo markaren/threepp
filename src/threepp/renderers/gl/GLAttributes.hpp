@@ -43,6 +43,9 @@ namespace threepp::gl {
                 glBufferData(bufferType, (GLsizei) array.size(), array.data(), usage);
                 type = GL_FLOAT;
                 bytesPerElement = sizeof(float);
+            } else {
+
+                //TODO
             }
 
             return {buffer, type, bytesPerElement, attribute->version()};
@@ -67,23 +70,29 @@ namespace threepp::gl {
                     auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
                     auto array = attr->array();
                     glBufferSubData(bufferType, 0, (GLsizei) array.size(), array.data());
+                } else {
+
+                    // TODO
                 }
 
             } else {
 
-                if (dynamic_cast<IntBufferAttribute *>(attribute)) {
+                if (instanceof<IntBufferAttribute>(attribute)) {
 
                     auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
                     auto array = attr->array();
                     std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
                     glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) sub.size(), sub.data());
 
-                } else if (dynamic_cast<FloatBufferAttribute *>(attribute)) {
+                } else if (instanceof<FloatBufferAttribute>(attribute)) {
 
                     auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
                     auto array = attr->array();
                     std::vector<float> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
                     glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) sub.size(), sub.data());
+                } else {
+
+                    //TODO
                 }
 
                 updateRange.count = -1;

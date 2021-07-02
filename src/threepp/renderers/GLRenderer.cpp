@@ -43,6 +43,7 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       objects(geometries, attributes, info),
       renderLists(properties),
       shadowMap(objects),
+      programCache(bindingStates, clipping),
       onMaterialDispose(*this) {
 
     info.programs = &programCache.programs;
@@ -183,6 +184,7 @@ void GLRenderer::dispose() {
     objects.dispose();
     bindingStates.dispose();
 }
+
 void GLRenderer::deallocateMaterial(Material *material) {
 
     releaseMaterialProgramReferences(material);
@@ -235,12 +237,10 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
     int rangeFactor = 1;
 
-    MaterialWithWireframe *wireframeMaterial;
-    bool isWireframeMaterial = instanceof <MaterialWithWireframe>(material);
+    auto wireframeMaterial = dynamic_cast<MaterialWithWireframe *>(material);
+    bool isWireframeMaterial = wireframeMaterial != nullptr;
 
     if (isWireframeMaterial) {
-
-        wireframeMaterial = dynamic_cast<MaterialWithWireframe *>(material);
 
         if (wireframeMaterial->wireframe) {
 
@@ -318,7 +318,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
             renderer->setMode(GL_LINE_STRIP);
         }
 
-    } else if (instanceof <Points *>(object)) {
+    } else if (instanceof <Points>(object)) {
 
         renderer->setMode(GL_POINTS);
 
@@ -340,7 +340,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
         const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
         //TODO
-        //        renderer->renderInstances(drawStart, drawCount, instanceCount);
+        //                renderer->renderInstances(drawStart, drawCount, instanceCount);
 
     } else {
 
@@ -354,9 +354,9 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
     currentRenderState->init();
 
     scene->traverseVisible([&](Object3D &object) {
-        if (instanceof <Light>(&object) && object.layers.test(camera->layers)) {
+        auto light = dynamic_cast<Light *>(&object);
 
-            auto light = dynamic_cast<Light *>(&object);
+        if (light && object.layers.test(camera->layers)) {
 
             currentRenderState->pushLight(light);
 
@@ -374,22 +374,19 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
 
         if (material) {
 
-            //            if ( Array.isArray( material ) ) {
-            //
-            //                for ( let i = 0; i < material.length; i ++ ) {
-            //
-            //                    const material2 = material[ i ];
-            //
-            //                    getProgram( material2, scene, object );
-            //
-            //                }
-            //
-            //            } else {
-            //
-            getProgram(material, scene, &object);
-            //
-            //            }
-            //
+            if (false /*Array.isArray(material)*/) {
+
+//                for (let i = 0; i < material.length; i++) {
+//
+//                    const material2 = material[i];
+//
+//                    getProgram(material2, scene, object);
+//                }
+
+            } else {
+
+                getProgram(material, scene, &object);
+            }
         }
     });
 }
@@ -630,7 +627,7 @@ void GLRenderer::renderObjects(std::vector<gl::RenderItem> &renderList, Scene *s
 
     auto overrideMaterial = scene->overrideMaterial;
 
-    for (const auto & renderItem : renderList) {
+    for (const auto &renderItem : renderList) {
 
         auto object = renderItem.object;
         auto geometry = renderItem.geometry;

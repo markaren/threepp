@@ -129,7 +129,7 @@ namespace threepp::gl {
 
         GLBindingState createBindingState(std::optional<GLuint> vao) {
 
-            return GLBindingState {
+            return GLBindingState{
                     std::vector<int>(maxVertexAttributes_),
                     std::vector<int>(maxVertexAttributes_),
                     std::vector<int>(maxVertexAttributes_),

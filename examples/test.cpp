@@ -45,6 +45,8 @@
 #include <threepp/objects/Mesh.hpp>
 #include <vector>
 
+#include "threepp/utils/InstanceOf.hpp"
+
 #include "threepp/Canvas.hpp"
 
 #include "threepp/renderers/gl/GLBindingStates.hpp"
@@ -59,8 +61,6 @@
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 
 #include "threepp/lights/LightShadow.hpp"
-
-#include "threepp/utils/InstanceOf.hpp"
 
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
@@ -169,6 +169,13 @@ int main() {
     auto material = MeshBasicMaterial::create();
     auto mesh = Mesh::create(boxGeometry, material);
 
+    Object3D* objectMesh = mesh.get();
+
+    std::cout << "IsObject3D: " << instanceof<Object3D>(objectMesh) << std::endl;
+    std::cout << "IsMesh: " << instanceof<Mesh>(objectMesh) << std::endl;
+
+    std::cout << (dynamic_cast<Mesh*>(objectMesh)->type()) << std::endl;
+
     Material *baseMaterial = material.get();
 
     std::cout << "RefractionRatio " << dynamic_cast<MaterialWithReflectivity *>(baseMaterial)->refractionRatio << std::endl;
@@ -197,11 +204,6 @@ int main() {
     Vector3 v2;
 
     std::cout << "v1==v2: " << ((v1 == v2) ? "true" : "false") << std::endl;
-
-//        Canvas canvas(Canvas::Parameters().title(""));
-//        canvas.animate([](float dt) {
-//            std::cout << gl::GLCapabilities::instance() << std::endl;
-//        });
 
     o->clear();
 

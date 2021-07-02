@@ -40,7 +40,7 @@ namespace threepp::gl {
 
         std::optional<Texture> envMap;
 
-        std::vector<std::shared_ptr<UniformObject>> &uniformsList;
+        std::vector<std::shared_ptr<UniformObject>> uniformsList;
 
         int outputEncoding;
         bool instancing;
@@ -53,8 +53,10 @@ namespace threepp::gl {
         bool needsLights;
         unsigned int lightsStateVersion;
         std::shared_ptr<GLProgram> currentProgram;
-        std::unordered_map<std::string, Uniform> &uniforms;
+        std::unordered_map<std::string, Uniform> uniforms;
         bool receiveShadow;
+
+        MaterialProperties() = default;
     };
 
     template<class T>
@@ -62,7 +64,7 @@ namespace threepp::gl {
 
         T &get(const std::string &key) {
 
-            return properties_.at(key);
+            return properties_[key];
         }
 
         void remove(const std::string &key) {

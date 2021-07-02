@@ -4,6 +4,7 @@
 #define THREEPP_GLPROGRAMS_HPP
 
 #include "GLCapabilities.hpp"
+#include "GLClipping.hpp"
 #include "GLLights.hpp"
 #include "GLProgram.hpp"
 
@@ -37,7 +38,12 @@ namespace threepp {
             GLint maxVertexUniforms;
             bool vertexTextures;
 
-            GLPrograms();
+        private:
+            GLClipping &clipping;
+            GLBindingStates &bindingStates;
+
+        public:
+            GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping);
 
             int getTextureEncodingFromMap(std::optional<Texture> &map) const;
 
@@ -142,15 +148,15 @@ namespace threepp {
 
                 bool premultipliedAlpha;
 
-                bool alphaTest;
+                float alphaTest;
                 bool doubleSided;
                 bool flipSided;
 
                 bool depthPacking;
 
-                std::string index0AttributeName;
+                std::optional<std::string> index0AttributeName;
 
-                std::string customProgramCacheKey;
+//                std::string customProgramCacheKey;
 
                 std::unordered_map<std::string, Uniform> uniforms;
 
@@ -163,7 +169,6 @@ namespace threepp {
                         Object3D *object);
 
                 [[nodiscard]] std::string hash() const;
-
             };
         };
 
