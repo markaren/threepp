@@ -5,6 +5,7 @@
 #include "GLPrograms.hpp"
 #include "GLUniforms.hpp"
 
+#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #include <any>
@@ -101,7 +102,7 @@ namespace {
             chunks.emplace_back(chunk);
         }
 
-        return utils::join(chunks, '\n');
+        return utils::join(chunks);
     }
 
     std::unordered_map<std::string, GLint> fetchAttributeLocations(GLuint program) {
@@ -302,66 +303,208 @@ namespace {
 
 }// namespace
 
-struct GLProgram::Impl {
 
-    explicit Impl(GLBindingStates &bindingStates)
-        : bindingStates(bindingStates){};
+std::shared_ptr<GLProgram> gl::GLProgram::create(const GLRenderer &renderer, std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates) {
 
-    std::shared_ptr<GLUniforms> getUniforms(unsigned int program) {
+    return std::shared_ptr<GLProgram>(new GLProgram(renderer, std::move(cacheKey), parameters, bindingStates));
+}
 
-        if (!cachedUniforms) {
-            cachedUniforms = std::make_shared<GLUniforms>(program);
+GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates)
+    : cacheKey(std::move(cacheKey)), bindingStates(bindingStates) {
+
+    auto &defines = parameters.defines;
+
+    auto vertexShader = parameters.vertexShader;
+    auto fragmentShader = parameters.fragmentShader;
+
+    auto shadowMapTypeDefine = generateShadowMapTypeDefine(parameters);
+    auto envMapTypeDefine = generateEnvMapTypeDefine(parameters);
+    auto envMapModeDefine = generateEnvMapModeDefine(parameters);
+    auto envMapBlendingDefine = generateEnvMapBlendingDefine(parameters);
+
+
+    auto gammaFactorDefine = (renderer.gammaFactor > 0) ? renderer.gammaFactor : 1.f;
+
+    auto customDefines = generateDefines(defines);
+
+    auto program = glCreateProgram();
+
+    std::string prefixVertex, prefixFragment;
+
+    if (parameters.isRawShaderMaterial) {
+
+        {
+            std::vector<std::string> v{customDefines};
+
+            v.erase(
+                    std::remove_if(
+                            v.begin(),
+                            v.end(),
+                            [](const std::string &s) { return s.empty(); }),
+                    v.end());
+
+            prefixVertex = utils::join(v);
+
+            if (!prefixVertex.empty()) {
+
+                prefixVertex += "\n";
+            }
         }
 
-        return cachedUniforms;
-    }
+        {
+            std::vector<std::string> v{customDefines};
 
-    std::unordered_map<std::string, int> getAttributes(unsigned int program) {
+            v.erase(
+                    std::remove_if(
+                            v.begin(),
+                            v.end(),
+                            [](const std::string &s) { return s.empty(); }),
+                    v.end());
 
-        if (cachedAttributes.empty()) {
+            prefixFragment = utils::join(v);
 
-            cachedAttributes = fetchAttributeLocations(program);
+            if (!prefixFragment.empty()) {
+
+                prefixFragment += "\n";
+            }
         }
+    } else {
 
-        return cachedAttributes;
+        std::vector<std::string> v{
+
+                generatePrecision(),
+
+                "#define SHADER_NAME " + parameters.shaderName,
+
+                customDefines,
+
+                parameters.instancing ? "#define USE_INSTANCING" : "",
+                parameters.instancingColor ? "#define USE_INSTANCING_COLOR" : "",
+
+                parameters.supportsVertexTextures ? "#define VERTEX_TEXTURES" : "",
+
+                "#define GAMMA_FACTOR " + std::to_string(gammaFactorDefine),
+
+                (parameters.useFog && parameters.fog) ? "#define USE_FOG" : "",
+                (parameters.useFog && parameters.fogExp2) ? "#define FOG_EXP2" : "",
+
+                parameters.map ? "#define USE_MAP" : "",
+                parameters.envMap ? "#define USE_ENVMAP" : "",
+                parameters.envMap ? "#define " + envMapModeDefine : "",
+                parameters.lightMap ? "#define USE_LIGHTMAP" : "",
+                parameters.aoMap ? "#define USE_AOMAP" : "",
+                parameters.emissiveMap ? "#define USE_EMISSIVEMAP" : "",
+                parameters.bumpMap ? "#define USE_BUMPMAP" : "",
+                parameters.normalMap ? "#define USE_NORMALMAP" : "",
+                (parameters.normalMap && parameters.objectSpaceNormalMap) ? "#define OBJECTSPACE_NORMALMAP" : "",
+                (parameters.normalMap && parameters.tangentSpaceNormalMap) ? "#define TANGENTSPACE_NORMALMAP" : "",
+
+                parameters.clearcoatMap ? "#define USE_CLEARCOATMAP" : "",
+                parameters.clearcoatRoughnessMap ? "#define USE_CLEARCOAT_ROUGHNESSMAP" : "",
+                parameters.clearcoatNormalMap ? "#define USE_CLEARCOAT_NORMALMAP" : "",
+                parameters.displacementMap && parameters.supportsVertexTextures ? "#define USE_DISPLACEMENTMAP" : "",
+                parameters.specularMap ? "#define USE_SPECULARMAP" : "",
+                parameters.roughnessMap ? "#define USE_ROUGHNESSMAP" : "",
+                parameters.metalnessMap ? "#define USE_METALNESSMAP" : "",
+                parameters.alphaMap ? "#define USE_ALPHAMAP" : "",
+                parameters.transmission ? "#define USE_TRANSMISSION" : "",
+                parameters.transmissionMap ? "#define USE_TRANSMISSIONMAP" : "",
+                parameters.thicknessMap ? "#define USE_THICKNESSMAP" : "",
+
+                parameters.vertexTangents ? "#define USE_TANGENT" : "",
+                parameters.vertexColors ? "#define USE_COLOR" : "",
+                parameters.vertexAlphas ? "#define USE_COLOR_ALPHA" : "",
+                parameters.vertexUvs ? "#define USE_UV" : "",
+                parameters.uvsVertexOnly ? "#define UVS_VERTEX_ONLY" : "",
+
+                parameters.flatShading ? "#define FLAT_SHADED" : "",
+
+                parameters.doubleSided ? "#define DOUBLE_SIDED" : "",
+                parameters.flipSided ? "#define FLIP_SIDED" : "",
+
+                parameters.shadowMapEnabled ? "#define USE_SHADOWMAP" : "",
+                parameters.shadowMapEnabled ? "#define " + shadowMapTypeDefine : "",
+
+                parameters.sizeAttenuation ? "#define USE_SIZEATTENUATION" : "",
+
+                parameters.logarithmicDepthBuffer ? "#define USE_LOGDEPTHBUF" : "",
+
+                "uniform mat4 modelMatrix;",
+                "uniform mat4 modelViewMatrix;",
+                "uniform mat4 projectionMatrix;",
+                "uniform mat4 viewMatrix;",
+                "uniform mat3 normalMatrix;",
+                "uniform vec3 cameraPosition;",
+                "uniform bool isOrthographic;",
+
+                "#ifdef USE_INSTANCING",
+
+                "	attribute mat4 instanceMatrix;",
+
+                "#endif",
+
+                "#ifdef USE_INSTANCING_COLOR",
+
+                "	attribute vec3 instanceColor;",
+
+                "#endif",
+
+                "attribute vec3 position;",
+                "attribute vec3 normal;",
+                "attribute vec2 uv;",
+
+                "#ifdef USE_TANGENT",
+
+                "	attribute vec4 tangent;",
+
+                "#endif",
+
+                "#if defined( USE_COLOR_ALPHA )",
+
+                "	attribute vec4 color;",
+
+                "#elif defined( USE_COLOR )",
+
+                "	attribute vec3 color;",
+
+                "#endif"
+
+        };
+
+        v.erase(
+                std::remove_if(
+                        v.begin(),
+                        v.end(),
+                        [](const std::string &s) { return s.empty(); }),
+                v.end());
+
+        prefixVertex = utils::join(v);
     }
-
-    void destroy(GLProgram &scope, unsigned int program) {
-
-        bindingStates.releaseStatesOfProgram(scope);
-
-        glDeleteProgram(program);
-    }
-
-    ~Impl() = default;
-
-private:
-    GLBindingStates &bindingStates;
-    std::shared_ptr<GLUniforms> cachedUniforms;
-    std::unordered_map<std::string, GLint> cachedAttributes;
-};
-
-
-GLProgram::GLProgram(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates)
-    : cacheKey(std::move(cacheKey)), pimpl_(new Impl(bindingStates)) {}
+}
 
 std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
 
-    return pimpl_->getUniforms(*program);
+    if (!cachedUniforms) {
+        cachedUniforms = std::make_shared<GLUniforms>(*program);
+    }
+
+    return cachedUniforms;
 }
 
 std::unordered_map<std::string, int> GLProgram::getAttributes() {
 
-    return pimpl_->getAttributes(*program);
+    if (cachedAttributes.empty()) {
+
+        cachedAttributes = fetchAttributeLocations(*program);
+    }
+
+    return cachedAttributes;
 }
 
 void GLProgram::destroy() {
 
-    pimpl_->destroy(*this, *program);
+    bindingStates.releaseStatesOfProgram(*this);
+
+    glDeleteProgram(*program);
     this->program = std::nullopt;
-}
-
-std::shared_ptr<GLProgram> gl::GLProgram::create(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates) {
-
-    return std::shared_ptr<GLProgram>(new GLProgram(std::move(cacheKey), parameters, bindingStates));
 }

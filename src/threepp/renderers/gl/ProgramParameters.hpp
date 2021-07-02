@@ -4,8 +4,8 @@
 
 #include "threepp/core/Uniform.hpp"
 
-#include <string>
 #include <optional>
+#include <string>
 #include <unordered_map>
 
 namespace threepp::gl {
@@ -15,7 +15,7 @@ namespace threepp::gl {
         std::optional<std::string> shaderID;
         std::string shaderName;
 
-        std::optional<std::unordered_map<std::string, std::string>> defines;
+        std::unordered_map<std::string, std::string> defines;
 
         std::string vertexShader;
         std::string fragmentShader;
@@ -205,6 +205,6 @@ namespace threepp::gl {
         }
     };
 
-}
+}// namespace threepp::gl
 
 #endif//THREEPP_PROGRAMPARAMETERS_HPP

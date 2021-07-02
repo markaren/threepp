@@ -52,10 +52,9 @@ namespace threepp {
 
             std::unordered_map<std::string, Uniform> getUniforms(Material *material);
 
-            std::shared_ptr<GLProgram> acquireProgram(const ProgramParameters &parameters, const std::string &cacheKey);
+            std::shared_ptr<GLProgram> acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey);
 
             void releaseProgram(std::shared_ptr<GLProgram> &program);
-
         };
 
     }// namespace gl

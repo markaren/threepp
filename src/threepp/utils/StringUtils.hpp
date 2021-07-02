@@ -22,7 +22,7 @@ namespace threepp::utils {
         return tokens;
     }
 
-    inline std::string join(const std::vector<std::string> &v, char c) {
+    inline std::string join(const std::vector<std::string> &v, char c = '\n') {
 
         std::string s;
 

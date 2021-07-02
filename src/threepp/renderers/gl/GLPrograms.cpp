@@ -100,9 +100,9 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
         array.emplace_back(parameters.vertexShader);
     }
 
-    if (parameters.defines) {
+    if (!parameters.defines.empty()) {
 
-        for (const auto &[name, value] : *parameters.defines) {
+        for (const auto &[name, value] : parameters.defines) {
 
             array.emplace_back(name);
             array.emplace_back(value);
@@ -145,7 +145,7 @@ std::unordered_map<std::string, Uniform> GLPrograms::getUniforms(Material *mater
     return uniforms;
 }
 
-std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const ProgramParameters &parameters, const std::string &cacheKey) {
+std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey) {
 
     std::shared_ptr<GLProgram> program = nullptr;
 
@@ -163,7 +163,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const ProgramParameters &p
 
     if (!program) {
 
-        program = GLProgram::create(cacheKey, parameters, bindingStates );
+        program = GLProgram::create(renderer, cacheKey, parameters, bindingStates );
         programs.emplace_back(program);
     }
 

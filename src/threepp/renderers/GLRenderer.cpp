@@ -738,7 +738,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
         // material.onBeforeCompile( parameters, this );
 
-        program = programCache.acquireProgram(parameters, programCacheKey);
+        program = programCache.acquireProgram(*this, parameters, programCacheKey);
         programs[programCacheKey] = program;
 
         materialProperties.uniforms = parameters.uniforms;

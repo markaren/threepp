@@ -8,47 +8,51 @@
 #include <memory>
 #include <utility>
 
-namespace threepp::gl {
+namespace threepp {
 
-    struct GLBindingStates;
-    struct GLUniforms;
+    class GLRenderer;
 
-    struct GLProgram {
+    namespace gl {
 
-        int id = programIdCount++;
+        struct GLBindingStates;
+        struct GLUniforms;
 
-        int usedTimes = 1;
+        struct GLProgram {
 
-        std::string cacheKey;
+            std::string name;
+            int id = programIdCount++;
+            std::string cacheKey;
+            int usedTimes = 1;
+            std::optional<unsigned int> program;
+            unsigned int glVertexShader;
+            unsigned int glFragmentShader;
 
-        std::optional<unsigned int> program;
+            std::shared_ptr<GLUniforms> getUniforms();
 
-        std::shared_ptr<GLUniforms> getUniforms();
+            std::unordered_map<std::string, int> getAttributes();
 
-        std::unordered_map<std::string, int> getAttributes();
+            void destroy();
 
-        void destroy();
+            static std::shared_ptr<GLProgram> create(const GLRenderer &renderer, std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates);
 
-        static std::shared_ptr<GLProgram> create(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates& bindingStates);
+        private:
+            GLBindingStates &bindingStates;
+            std::shared_ptr<GLUniforms> cachedUniforms;
+            std::unordered_map<std::string, int> cachedAttributes;
 
-    private:
+            GLProgram(const GLRenderer &renderer, std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates);
 
-        struct Impl;
-        std::unique_ptr<Impl> pimpl_;
+            inline static int programIdCount = 0;
+        };
 
-        GLProgram(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates& bindingStates);
+        inline bool operator==(const GLProgram &p1, const GLProgram &p2) {
+            return p1.cacheKey == p2.cacheKey;
+        }
 
-        inline static int programIdCount = 0;
-    };
-
-    inline bool operator==(const GLProgram &p1, const GLProgram &p2) {
-        return p1.cacheKey == p2.cacheKey;
-    }
-
-    inline bool operator!=(const GLProgram &p1, const GLProgram &p2) {
-        return !(p1 == p2);
-    }
-
-}// namespace threepp::gl
+        inline bool operator!=(const GLProgram &p1, const GLProgram &p2) {
+            return !(p1 == p2);
+        }
+    }// namespace gl
+}// namespace threepp
 
 #endif//THREEPP_GLPROGRAM_HPP
