@@ -168,7 +168,7 @@ namespace threepp {
 
         std::shared_ptr<gl::GLProgram> getProgram(Material *material, Scene *scene, Object3D *object);
 
-        void updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters);
+        void updateCommonMaterialProperties(Material *material, gl::ProgramParameters &parameters);
 
         std::shared_ptr<gl::GLProgram> setProgram(Camera *camera, Scene *scene, Material *material, Object3D *object);
 

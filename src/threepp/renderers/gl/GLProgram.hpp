@@ -3,9 +3,8 @@
 #ifndef THREEPP_GLPROGRAM_HPP
 #define THREEPP_GLPROGRAM_HPP
 
-#include <string>
-#include <unordered_map>
-#include <optional>
+#include "ProgramParameters.hpp"
+
 #include <memory>
 
 namespace threepp::gl {
@@ -23,7 +22,7 @@ namespace threepp::gl {
 
         std::optional<unsigned int> program;
 
-        GLProgram(std::string cacheKey, GLBindingStates& bindingStates);
+        GLProgram(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates& bindingStates);
 
         std::shared_ptr<GLUniforms> getUniforms();
 

@@ -792,7 +792,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
     return program;
 }
 
-void GLRenderer::updateCommonMaterialProperties(Material *material, gl::GLPrograms::Parameters &parameters) {
+void GLRenderer::updateCommonMaterialProperties(Material *material, gl::ProgramParameters &parameters) {
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 

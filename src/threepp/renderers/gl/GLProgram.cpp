@@ -135,7 +135,7 @@ namespace {
         return str.empty();
     }
 
-    std::string replaceLightNums(const std::string &str, const GLPrograms::Parameters &parameters) {
+    std::string replaceLightNums(const std::string &str, ProgramParameters &parameters) {
 
         std::string result = str;
         result = std::regex_replace(result, std::regex("NUM_DIR_LIGHTS"), std::to_string(parameters.numDirLights));
@@ -150,7 +150,7 @@ namespace {
         return result;
     }
 
-    std::string replaceClippingPlaneNums(const std::string &str, const GLPrograms::Parameters &parameters) {
+    std::string replaceClippingPlaneNums(const std::string &str, const ProgramParameters &parameters) {
 
         std::string result;
         result = std::regex_replace(result, std::regex("NUM_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes));
@@ -161,9 +161,9 @@ namespace {
 
     // Resolve Includes
 
-    std::regex includePattern("^[ \\t]*#include +<([\\w\\d./]+)>", std::regex::extended);
-
     std::string resolveIncludes(const std::string &str) {
+
+        std::regex includePattern("^[ \\t]*#include +<([\\w\\d./]+)>", std::regex::extended);
 
         std::string result;
 
@@ -216,7 +216,7 @@ namespace {
         return "precision highp float;\nprecision highp int;\n#define HIGH_PRECISION";
     }
 
-    std::string generateShadowMapTypeDefine(const GLPrograms::Parameters &parameters) {
+    std::string generateShadowMapTypeDefine(const ProgramParameters &parameters) {
 
         std::string shadowMapTypeDefine = "SHADOWMAP_TYPE_BASIC";
 
@@ -236,7 +236,7 @@ namespace {
         return shadowMapTypeDefine;
     }
 
-    std::string generateEnvMapTypeDefine(const GLPrograms::Parameters &parameters) {
+    std::string generateEnvMapTypeDefine(const ProgramParameters &parameters) {
 
         std::string envMapTypeDefine = "ENVMAP_TYPE_CUBE";
 
@@ -257,6 +257,50 @@ namespace {
         }
 
         return envMapTypeDefine;
+    }
+
+    std::string generateEnvMapModeDefine(const ProgramParameters &parameters) {
+
+        std::string envMapModeDefine = "ENVMAP_MODE_REFLECTION";
+
+        if (parameters.envMap) {
+
+            switch (parameters.envMapMode) {
+
+                case CubeRefractionMapping:
+                case CubeUVRefractionMapping:
+
+                    envMapModeDefine = "ENVMAP_MODE_REFRACTION";
+                    break;
+            }
+        }
+
+        return envMapModeDefine;
+    }
+
+    std::string generateEnvMapBlendingDefine(const ProgramParameters &parameters) {
+
+        std::string envMapBlendingDefine = "ENVMAP_BLENDING_NONE";
+
+        if (parameters.envMap) {
+
+            switch (parameters.combine) {
+
+                case MultiplyOperation:
+                    envMapBlendingDefine = "ENVMAP_BLENDING_MULTIPLY";
+                    break;
+
+                case MixOperation:
+                    envMapBlendingDefine = "ENVMAP_BLENDING_MIX";
+                    break;
+
+                case AddOperation:
+                    envMapBlendingDefine = "ENVMAP_BLENDING_ADD";
+                    break;
+            }
+        }
+
+        return envMapBlendingDefine;
     }
 
 
@@ -302,7 +346,7 @@ private:
 };
 
 
-GLProgram::GLProgram(std::string cacheKey, GLBindingStates &bindingStates)
+GLProgram::GLProgram(std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates)
     : cacheKey(std::move(cacheKey)), pimpl_(new Impl(bindingStates)) {}
 
 std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
