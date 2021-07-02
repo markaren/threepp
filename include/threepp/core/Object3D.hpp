@@ -23,7 +23,7 @@ namespace threepp {
 
     class BufferGeometry;
 
-    class Object3D : public std::enable_shared_from_this<Object3D>, public EventDispatcher {
+    class Object3D : public EventDispatcher {
 
     public:
         static Vector3 defaultUp;
@@ -34,8 +34,8 @@ namespace threepp {
 
         std::string name;
 
-        std::shared_ptr<Object3D> parent;
-        std::vector<std::shared_ptr<Object3D>> children;
+        Object3D *parent = nullptr;
+        std::vector<Object3D*> children;
 
         Vector3 up = defaultUp;
 
@@ -63,6 +63,7 @@ namespace threepp {
         int renderOrder = 0;
 
         virtual std::string type() const {
+
             return "Object3D";
         }
 
@@ -104,9 +105,19 @@ namespace threepp {
 
         void lookAt(float x, float y, float z);
 
-        Object3D &add(const std::shared_ptr<Object3D> &object);
+        Object3D &add(const std::shared_ptr<Object3D> &object) {
 
-        Object3D &remove(const std::shared_ptr<Object3D> &object);
+            return add(object.get());
+        }
+
+        Object3D &add(Object3D *object);
+
+        Object3D &remove(const std::shared_ptr<Object3D> &object) {
+
+            return remove(object.get());
+        }
+
+        Object3D &remove(Object3D *object);
 
         Object3D &removeFromParent();
 

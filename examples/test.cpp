@@ -65,6 +65,8 @@
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include "threepp/helpers/helpers.hpp"
+
 using namespace threepp;
 
 namespace {
@@ -154,7 +156,7 @@ int main() {
 
     p->far = 10;
 
-    auto pp = std::dynamic_pointer_cast<PerspectiveCamera>(o->children[0]);
+    auto pp = dynamic_cast<PerspectiveCamera *>(o->children[0]);
 
     std::cout << o->children[0]->type() << std::endl;
 
@@ -180,10 +182,10 @@ int main() {
 
     std::cout << "RefractionRatio " << dynamic_cast<MaterialWithReflectivity *>(baseMaterial)->refractionRatio << std::endl;
 
-    o->add(mesh);
+    o->add(mesh.get());
 
     {
-        auto objectWithGeometry = std::reinterpret_pointer_cast<Mesh>(o->children[0]);
+        auto objectWithGeometry = reinterpret_cast<Mesh *>(o->children[0]);
         auto hasGeometry = objectWithGeometry->geometry() != nullptr;
         std::cout << "successful  " << (hasGeometry ? "true" : "false") << std::endl;
         auto g = objectWithGeometry->geometry();
@@ -209,6 +211,8 @@ int main() {
 
     std::cout << shaders::ShaderChunk::instance().alphamap_fragment() << std::endl;
 
+    auto arrow = ArrowHelper::create();
+    arrow->setColor(0xffffff);
 
     return 0;
 }

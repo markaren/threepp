@@ -39,13 +39,13 @@ namespace threepp {
 
             levels.insert(levels.begin() + l, {distance, object});
 
-            this->add(object);
+            this->add(object.get());
 
             return *this;
         }
 
 
-        int getCurrentLevel() const {
+        [[nodiscard]] int getCurrentLevel() const {
 
             return _currentLevel;
         }

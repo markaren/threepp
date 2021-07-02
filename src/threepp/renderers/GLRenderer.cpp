@@ -614,7 +614,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
 
     for (const auto &child : object->children) {
 
-        projectObject(child.get(), camera, groupOrder, sortObjects);
+        projectObject(child, camera, groupOrder, sortObjects);
     }
 }
 

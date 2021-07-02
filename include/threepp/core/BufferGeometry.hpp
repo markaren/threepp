@@ -35,6 +35,8 @@ namespace threepp {
 
         DrawRange drawRange = DrawRange{0, Infinity<int>};
 
+        BufferGeometry() = default;
+
         [[nodiscard]] bool hasIndex() const;
 
         IntBufferAttribute *getIndex();
@@ -88,9 +90,6 @@ namespace threepp {
         static std::shared_ptr<BufferGeometry> create() {
             return std::shared_ptr<BufferGeometry>(new BufferGeometry());
         }
-
-    protected:
-        BufferGeometry() = default;
 
     private:
         std::unique_ptr<IntBufferAttribute> index_;

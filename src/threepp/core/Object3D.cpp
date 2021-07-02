@@ -178,14 +178,14 @@ void Object3D::lookAt(float x, float y, float z) {
     }
 }
 
-Object3D &Object3D::add(const std::shared_ptr<Object3D> &object) {
+Object3D &Object3D::add(Object3D *object) {
 
     if (object->parent) {
 
         object->parent->remove( object );
     }
 
-    object->parent = shared_from_this();
+    object->parent = this;
     this->children.emplace_back(object);
 
     object->dispatchEvent("added");
@@ -193,7 +193,7 @@ Object3D &Object3D::add(const std::shared_ptr<Object3D> &object) {
     return *this;
 }
 
-Object3D &Object3D::remove(const std::shared_ptr<Object3D> &object) {
+Object3D &Object3D::remove(Object3D *object) {
 
     auto find = std::find(children.begin(), children.end(), object);
     if (find != children.end()) {
@@ -209,7 +209,7 @@ Object3D &Object3D::removeFromParent() {
 
     if (parent) {
 
-        parent->remove(shared_from_this());
+        parent->remove(this);
     }
 
     return *this;

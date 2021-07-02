@@ -29,6 +29,9 @@ set(publicHeaders
         "threepp/geometries/PlaneGeometry.hpp"
         "threepp/geometries/SphereGeometry.hpp"
 
+        "threepp/helpers/helpers.hpp"
+        "threepp/helpers/ArrowHelper.hpp"
+
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
@@ -145,6 +148,8 @@ set(sources
         "threepp/geometries/CylinderGeometry.cpp"
         "threepp/geometries/PlaneGeometry.cpp"
         "threepp/geometries/SphereGeometry.cpp"
+
+        "threepp/helpers/ArrowHelper.cpp"
 
         "threepp/loaders/ImageLoader.cpp"
 
