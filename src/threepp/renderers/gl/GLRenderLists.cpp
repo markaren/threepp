@@ -65,7 +65,7 @@ gl::GLRenderList::GLRenderList(gl::GLProperties &properties) : properties(proper
 void gl::GLRenderList::init() {
 }
 
-gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group) {
+gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
@@ -103,7 +103,7 @@ gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeom
     return renderItems.at(renderItemsIndex - 1);
 }
 
-void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group) {
+void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto &renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
@@ -117,7 +117,7 @@ void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material
     }
 }
 
-void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group) {
+void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto &renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 

@@ -60,7 +60,7 @@ namespace threepp {
         bool receiveShadow = true;
 
         bool frustumCulled = true;
-        unsigned int renderOrder = 0;
+        int renderOrder = 0;
 
         virtual std::string type() const {
             return "Object3D";

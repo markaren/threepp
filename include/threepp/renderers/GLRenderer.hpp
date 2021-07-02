@@ -152,7 +152,7 @@ namespace threepp {
 
         void releaseMaterialProgramReferences(Material *material);
 
-        void renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, GeometryGroup *group);
+        void renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, std::optional<GeometryGroup> group);
 
         void compile(Scene *scene, Camera *camera);
 
@@ -160,9 +160,11 @@ namespace threepp {
 
         void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
 
+        void renderTransmissiveObjects( std::vector<gl::RenderItem> &opaqueObjects, std::vector<gl::RenderItem> &transmissiveObjects, Scene *scene, Camera *camera );
+
         void renderObjects(std::vector<gl::RenderItem> &renderList, Scene *scene, Camera *camera);
 
-        void renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group);
+        void renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, std::optional<GeometryGroup> group);
 
         std::shared_ptr<gl::GLProgram> getProgram(Material *material, Scene *scene, Object3D *object);
 

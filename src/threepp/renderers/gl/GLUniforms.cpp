@@ -11,8 +11,8 @@ namespace {
 
     struct ActiveUniformInfo {
 
-        int size;
-        unsigned int type;
+        int size{};
+        unsigned int type{};
         std::string name;
 
         ActiveUniformInfo(unsigned int program, unsigned int index) {

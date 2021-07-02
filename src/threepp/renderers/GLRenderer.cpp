@@ -5,6 +5,8 @@
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 
+#include "threepp/objects/Group.hpp"
+#include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
@@ -201,7 +203,7 @@ void GLRenderer::releaseMaterialProgramReferences(Material *material) {
     }
 }
 
-void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, GeometryGroup *group) {
+void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, std::optional<GeometryGroup> group) {
 
     //    if (scene == nullptr) scene = &_emptyScene;// renderBufferDirect second parameter used to be fog (could be nullptr)
 
@@ -267,8 +269,8 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
     const auto rangeStart = geometry->drawRange.start * rangeFactor;
     const auto rangeCount = geometry->drawRange.count * rangeFactor;
 
-    const auto groupStart = group != nullptr ? group->start * rangeFactor : 0;
-    const auto groupCount = group != nullptr ? group->count * rangeFactor : Infinity<int>;
+    const auto groupStart = group ? group->start * rangeFactor : 0;
+    const auto groupCount = group ? group->count * rangeFactor : Infinity<int>;
 
     const auto drawStart = std::max(rangeStart, groupStart);
     const auto drawEnd = std::min(dataCount, std::min(rangeStart + rangeCount, groupStart + groupCount)) - 1;
@@ -457,9 +459,9 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
     auto &transmissiveObjects = currentRenderList->transmissive;
     auto &transparentObjects = currentRenderList->transparent;
     //
-    if (opaqueObjects.size() > 0) renderObjects(opaqueObjects, scene.get(), camera.get());
-    //    if ( transmissiveObjects.size > 0 ) renderTransmissiveObjects( opaqueObjects, transmissiveObjects, scene, camera );
-    if (transparentObjects.size() > 0) renderObjects(transparentObjects, scene.get(), camera.get());
+    if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene.get(), camera.get());
+    if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene.get(), camera.get());
+    if (!transparentObjects.empty()) renderObjects(transparentObjects, scene.get(), camera.get());
 
     //
 
@@ -515,12 +517,176 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
 }
 
 void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
+
+    if (!object->visible) return;
+
+    bool visible = object->layers.test(camera->layers);
+
+    if (visible) {
+
+        if (instanceof <Group>(object)) {
+
+            groupOrder = object->renderOrder;
+
+        } else if (instanceof <LOD>(object)) {
+
+            auto lod = dynamic_cast<LOD *>(object);
+            if (lod->autoUpdate) lod->update(camera);
+
+        } else if (instanceof <Light>(object)) {
+
+            auto light = dynamic_cast<Light *>(object);
+
+            currentRenderState->pushLight(light);
+
+            if (light->castShadow) {
+
+                currentRenderState->pushShadow(light);
+            }
+
+            //        } else if ( object.isSprite ) {
+            //
+            //            if ( ! object.frustumCulled || _frustum.intersectsSprite( object ) ) {
+            //
+            //                if ( sortObjects ) {
+            //
+            //                    _vector3.setFromMatrixPosition( object.matrixWorld )
+            //                            .applyMatrix4( _projScreenMatrix );
+            //
+            //                }
+            //
+            //                const geometry = objects.update( object );
+            //                const material = object.material;
+            //
+            //                if ( material.visible ) {
+            //
+            //                    currentRenderList.push( object, geometry, material, groupOrder, _vector3.z, null );
+            //
+            //                }
+            //
+            //            }
+            //
+            //        } else if ( object.isImmediateRenderObject ) {
+            //
+            //            if ( sortObjects ) {
+            //
+            //                _vector3.setFromMatrixPosition( object.matrixWorld )
+            //                        .applyMatrix4( _projScreenMatrix );
+            //
+            //            }
+            //
+            //            currentRenderList.push( object, null, object.material, groupOrder, _vector3.z, null );
+
+        } else if (instanceof <Mesh>(object) || instanceof <Line>(object) || instanceof <Points>(object)) {
+
+            if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
+
+                if (sortObjects) {
+
+                    _vector3.setFromMatrixPosition(object->matrixWorld)
+                            .applyMatrix4(_projScreenMatrix);
+                }
+
+                auto geometry = objects.update(object);
+                auto material = object->material();
+
+                if (false /*Array.isArray( material )*/) {
+
+                    //                    const groups = geometry.groups;
+                    //
+                    //                    for ( let i = 0, l = groups.length; i < l; i ++ ) {
+                    //
+                    //                        const group = groups[ i ];
+                    //                        const groupMaterial = material[ group.materialIndex ];
+                    //
+                    //                        if ( groupMaterial && groupMaterial.visible ) {
+                    //
+                    //                            currentRenderList.push( object, geometry, groupMaterial, groupOrder, _vector3.z, group );
+                    //
+                    //                        }
+                    //
+                    //                    }
+
+                } else if (material->visible) {
+
+                    currentRenderList->push(object, geometry, material, groupOrder, _vector3.z, std::nullopt);
+                }
+            }
+        }
+    }
+
+    for (const auto &child : object->children) {
+
+        projectObject(child.get(), camera, groupOrder, sortObjects);
+    }
 }
+
+void GLRenderer::renderTransmissiveObjects(std::vector<gl::RenderItem> &opaqueObjects, std::vector<gl::RenderItem> &transmissiveObjects, Scene *scene, Camera *camera) {
+    //TODO
+}
+
 
 void GLRenderer::renderObjects(std::vector<gl::RenderItem> &renderList, Scene *scene, Camera *camera) {
+
+    auto overrideMaterial = scene->overrideMaterial;
+
+    for (const auto & renderItem : renderList) {
+
+        auto object = renderItem.object;
+        auto geometry = renderItem.geometry;
+        auto material = overrideMaterial == nullptr ? renderItem.material : overrideMaterial.get();
+        auto group = renderItem.group;
+
+        if (false /*camera.isArrayCamera*/) {
+
+            //            const cameras = camera.cameras;
+            //
+            //            for ( let j = 0, jl = cameras.length; j < jl; j ++ ) {
+            //
+            //                const camera2 = cameras[ j ];
+            //
+            //                if ( object.layers.test( camera2.layers ) ) {
+            //
+            //                    state.viewport( _currentViewport.copy( camera2.viewport ) );
+            //
+            //                    currentRenderState.setupLightsView( camera2 );
+            //
+            //                    renderObject( object, scene, camera2, geometry, material, group );
+            //
+            //                }
+            //
+            //            }
+
+        } else {
+
+            renderObject(object, scene, camera, geometry, material, group);
+        }
+    }
 }
 
-void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, int group) {
+void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, std::optional<GeometryGroup> group) {
+
+    //    object.onBeforeRender( _this, scene, camera, geometry, material, group );
+
+    object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, object->matrixWorld);
+    object->normalMatrix.getNormalMatrix(object->modelViewMatrix);
+
+    if (false /*object.isImmediateRenderObject*/) {
+
+        //        const program = setProgram( camera, scene, material, object );
+        //
+        //        state.setMaterial( material );
+        //
+        //        bindingStates.reset();
+        //
+        //        renderObjectImmediate( object, program );
+
+    } else {
+
+        renderBufferDirect(camera, scene, geometry, material, object, group);
+    }
+
+    //    object.onAfterRender( _this, scene, camera, geometry, material, group );
 }
 
 std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene *scene, Object3D *object) {
@@ -536,7 +702,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
     auto lightsStateVersion = lights.state.version;
 
-    auto parameters = programCache.getParameters(material, lights.state, shadowsArray.size(), scene, object);
+    auto parameters = programCache.getParameters(material, lights.state, (int) shadowsArray.size(), scene, object);
     auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;
@@ -552,11 +718,8 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
         // new material
 
         material->addEventListener("dispose", &onMaterialDispose);
-
-        //        programs = new Map();
-        //                materialProperties.programs = programs;
     }
-    
+
     std::shared_ptr<gl::GLProgram> program = nullptr;
 
     if (programs.count(programCacheKey)) {
@@ -578,43 +741,42 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
         // material.onBeforeCompile( parameters, this );
 
-        program = programCache.acquireProgram( parameters, programCacheKey );
+        program = programCache.acquireProgram(parameters, programCacheKey);
         programs[programCacheKey] = program;
 
         materialProperties.uniforms = parameters.uniforms;
-
     }
 
-    auto& uniforms = materialProperties.uniforms;
+    auto &uniforms = materialProperties.uniforms;
 
     if (! instanceof <ShaderMaterial>(material) && ! instanceof <ShaderMaterial>(material) || material->clipping) {
 
         uniforms["clippingPlanes"] = clipping.uniform;
     }
 
-    updateCommonMaterialProperties( material, parameters );
+    updateCommonMaterialProperties(material, parameters);
 
     // store the light setup it was created for
 
-    materialProperties.needsLights = materialNeedsLights( material );
+    materialProperties.needsLights = materialNeedsLights(material);
     materialProperties.lightsStateVersion = lightsStateVersion;
 
-    if ( materialProperties.needsLights ) {
+    if (materialProperties.needsLights) {
 
         // wire up the material to this renderer's lighting state
-        
+
         uniforms["ambientLightColor"].setValue(lights.state.ambient);
         uniforms["lightProbe"].setValue(lights.state.probe);
         uniforms["directionalLights"].setValue(lights.state.directional);
         uniforms["directionalLightShadows"].setValue(lights.state.directionalShadow);
         uniforms["spotLights"].setValue(lights.state.spot);
         uniforms["spotLightShadows"].setValue(lights.state.spotShadow);
-//        uniforms["rectAreaLights"].setValue(lights.state.rectArea);
-//        uniforms["ltc_1"].setValue(lights.state.rectAreaLTC1);
-//        uniforms["ltc_2"].setValue(lights.state.rectAreaLTC2);
+        //        uniforms["rectAreaLights"].setValue(lights.state.rectArea);
+        //        uniforms["ltc_1"].setValue(lights.state.rectAreaLTC1);
+        //        uniforms["ltc_2"].setValue(lights.state.rectAreaLTC2);
         uniforms["pointLights"].setValue(lights.state.point);
         uniforms["pointLightShadows"].setValue(lights.state.pointShadow);
-//        uniforms["hemisphereLights"].setValue(lights.state.hemi);
+        //        uniforms["hemisphereLights"].setValue(lights.state.hemi);
 
         uniforms["directionalShadowMap"].setValue(lights.state.directionalShadowMap);
         uniforms["directionalShadowMatrix"].setValue(lights.state.directionalShadowMatrix);
@@ -625,7 +787,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
     }
 
     auto progUniforms = program->getUniforms();
-    auto uniformsList = gl::GLUniforms::seqWithValue( progUniforms->seq, uniforms );
+    auto uniformsList = gl::GLUniforms::seqWithValue(progUniforms->seq, uniforms);
 
     materialProperties.currentProgram = program;
     materialProperties.uniformsList = uniformsList;
@@ -843,7 +1005,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             materials.refreshFogUniforms(m_uniforms, *fog);
         }
 
-        materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _height /*, _transmissionRenderTarget*/);
+        materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, (float) _height /*, _transmissionRenderTarget*/);
 
         gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }

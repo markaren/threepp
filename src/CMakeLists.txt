@@ -71,6 +71,7 @@ set(publicHeaders
         "threepp/objects/Line.hpp"
         "threepp/objects/LineLoop.hpp"
         "threepp/objects/LineSegments.hpp"
+        "threepp/objects/LOD.hpp"
         "threepp/objects/Mesh.hpp"
         "threepp/objects/Points.hpp"
         

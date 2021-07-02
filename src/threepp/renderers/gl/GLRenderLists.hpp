@@ -20,7 +20,7 @@ namespace threepp::gl {
         Material *material;
         std::shared_ptr<GLProgram> program;
         int groupOrder;
-        unsigned int renderOrder;
+        int renderOrder;
         float z;
         std::optional<GeometryGroup> group;
     };
@@ -39,11 +39,11 @@ namespace threepp::gl {
 
         void init();
 
-        RenderItem &getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group);
+        RenderItem &getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
 
-        void push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group);
+        void push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
 
-        void unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, GeometryGroup &group);
+        void unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void sort();
 
