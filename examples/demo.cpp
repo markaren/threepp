@@ -11,6 +11,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
 
     auto renderer = GLRenderer(canvas);
+    renderer.checkShaderErrors = true;
     renderer.setClearColor(Color(0xff0000));
     renderer.setSize(canvas.getWidth(), canvas.getHeight());
 
@@ -24,7 +25,6 @@ int main() {
     canvas.animate([&](float dt) {
         cube->rotation.x(cube->rotation.x() + 0.01f);
         cube->rotation.y(cube->rotation.y() + 0.01f);
-
 
         renderer.render(scene, camera);
     });

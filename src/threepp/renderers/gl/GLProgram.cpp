@@ -159,7 +159,7 @@ namespace {
 
     std::string replaceClippingPlaneNums(const std::string &str, const ProgramParameters &parameters) {
 
-        std::string result;
+        std::string result = str;
         result = std::regex_replace(result, std::regex("NUM_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes));
         result = std::regex_replace(result, std::regex("UNION_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes - parameters.numClipIntersection));
 
@@ -170,39 +170,49 @@ namespace {
 
     std::string resolveIncludes(const std::string &str) {
 
-        std::regex includePattern("^[ \\t]*#include +<([\\w\\d./]+)>", std::regex::extended);
+//        std::smatch sm;
+//        std::regex includePattern(R"(^[ \t]*#include +<([\w\d./]+)>)");
+//
+//        std::string content = str;
+//
+//        while (std::regex_search(content, sm, includePattern)) {
+//
+//            std::cout << sm[1] << std::endl;
+//
+//            content = sm.suffix();
+//
+//        }
+
+        std::string lookat = str;
+
+        static const std::regex rex("#include +<([\\w\\d.]+)>");
 
         std::string result;
 
-        std::sregex_iterator rex_it(str.begin(), str.end(), includePattern);
-        std::sregex_iterator end;
+        std::sregex_iterator rex_it(lookat.begin(), lookat.end(), rex);
+        std::sregex_iterator rex_end;
         size_t pos = 0;
 
-        while (rex_it != end) {
-
+        while(rex_it != rex_end) {
             std::smatch match = *rex_it;
-            result.append(str, pos, match.position(0) - pos);
+            result.append(lookat, pos, match.position(0) - pos);
+            pos = match.position(0) + match.length(0);
 
             std::ssub_match sub = match[1];
             std::string r = shaders::ShaderChunk::instance().get(sub.str(), "ShaderChunk");
-
-            if (r.empty()) {
-
+            if(r.empty()) {
                 std::stringstream ss;
                 ss << "unable to resolve #include <" << sub.str() << ">";
                 throw std::logic_error(ss.str());
             }
-
             result.append(r);
             rex_it++;
         }
 
-        if (pos == 0) {
-
-            return str;
-        } else {
-
-            result.append(str, pos, str.length());
+        if(pos == 0) return lookat;
+        else {
+            result.append(lookat, pos, lookat.length());
+//            std::cout << result << std::endl;
             return result;
         }
     }
@@ -591,7 +601,6 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
             prefixFragment = utils::join(v);
 
-            std::cout << prefixFragment << std::endl;
         }
     }
 
@@ -624,6 +633,8 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
             std::vector<std::string> v{
                     "#version 330 core\n",
                     "#define varying in",
+                    "out highp vec4 pc_fragColor;",
+                    "#define gl_FragColor pc_fragColor",
                     //                    ( parameters.glslVersion == GLSL3 ) ? "" : "out highp vec4 pc_fragColor;",
                     //                    ( parameters.glslVersion == GLSL3 ) ? "" : "#define gl_FragColor pc_fragColor",
                     "#define gl_FragDepthEXT gl_FragDepth",
@@ -643,8 +654,12 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
         }
     }
 
+
+
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
+
+//    std::cout << fragmentGlsl << std::endl;
 
     const auto glVertexShader = createShader(GL_VERTEX_SHADER, vertexGlsl.c_str());
     const auto glFragmentShader = createShader(GL_FRAGMENT_SHADER, fragmentGlsl.c_str());
@@ -661,8 +676,17 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
     if (renderer.checkShaderErrors) {
 
-        // TODO
+        int length;
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &length);
 
+        if (length != 0) {
+
+            std::string msg;
+            msg.resize(length);
+            glGetProgramInfoLog(program, length, nullptr, &msg.front());
+
+            std::cout << msg << std::endl;
+        }
     }
 
     glDeleteShader(glVertexShader);

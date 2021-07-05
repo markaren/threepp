@@ -15,7 +15,8 @@ namespace threepp {
                                public MaterialWithDisplacementMap,
                                public MaterialWithNormalMap,
                                public MaterialWithMatCap,
-                               public MaterialWithFlatShading {
+                               public MaterialWithFlatShading,
+                               public MaterialWithDefines {
 
         [[nodiscard]] std::string type() const override {
 
@@ -34,6 +35,8 @@ namespace threepp {
               MaterialWithBumpMap(1),
               MaterialWithDisplacementMap(1, 0),
               MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}) {
+
+            this->defines["MATCAP"] = "";
         }
     };
 

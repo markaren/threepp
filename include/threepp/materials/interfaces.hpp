@@ -102,6 +102,11 @@ namespace threepp {
         std::optional<Texture> envMap;
     };
 
+    struct MaterialWithGradientMap : virtual Material {
+
+        std::optional<Texture> gradientMap;
+    };
+
     struct MaterialWithAoMap : virtual Material {
 
         std::optional<Texture> aoMap;
@@ -149,6 +154,11 @@ namespace threepp {
         std::optional<Texture> matcap;
     };
 
+    struct MaterialWithSheen : virtual Material {
+
+        std::optional<Color> sheen;
+    };
+
     struct MaterialWithCombine : virtual Material {
 
         int combine;
@@ -183,6 +193,12 @@ namespace threepp {
         std::string linejoin;
 
         MaterialWithLineProperties(std::string linecap, std::string linejoin) : linecap(std::move(linecap)), linejoin(std::move(linejoin)) {}
+    };
+
+    struct MaterialWithDefines : virtual Material {
+
+        std::unordered_map<std::string, std::string> defines;
+
     };
 
 }// namespace threepp

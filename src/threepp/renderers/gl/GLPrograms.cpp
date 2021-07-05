@@ -14,6 +14,8 @@ using namespace threepp::gl;
 
 namespace {
 
+    std::optional<Texture> emptyMap;
+
     std::unordered_map<std::string, std::string> shaderIDs{
             {"MeshDepthMaterial", "depth"},
             {"MeshDistanceMaterial", "distanceRGBA"},
@@ -55,6 +57,7 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     auto aomapMaterial = dynamic_cast<MaterialWithAoMap*>(material);
     auto bumpmapMaterial = dynamic_cast<MaterialWithBumpMap*>(material);
     auto matcapMaterial = dynamic_cast<MaterialWithMatCap*>(material);
+    auto gradientMaterial = dynamic_cast<MaterialWithGradientMap*>(material);
     auto envmapMaterial = dynamic_cast<MaterialWithEnvMap*>(material);
     auto lightmapMaterial = dynamic_cast<MaterialWithLightMap*>(material);
     auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
@@ -65,15 +68,29 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     auto flatshadeMaterial = dynamic_cast<MaterialWithFlatShading*>(material);
     auto vertextangentsMaterial = dynamic_cast<MaterialWithVertexTangents*>(material);
     auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking*>(material);
-
-    std::optional<Texture> emptyMap;
-
-    // TODO rendertarget
+    auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
+    auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
 
     ProgramParameters p;
 
-    p.shaderID = shaderIDs[material->type()];
     p.shaderName = material->type();
+
+    if (shaderIDs.count(material->type())) {
+        p.shaderID = shaderIDs[material->type()];
+
+        const auto shader = shaders::ShaderLib::instance().get(*p.shaderID);
+        p.vertexShader = shader.vertexShader;
+        p.fragmentShader = shader.fragmentShader;
+    } else {
+
+        p.vertexShader = shaderMaterial->vertexShader;
+        p.fragmentShader = shaderMaterial->fragmentShader;
+    }
+
+    if (instanceof <MaterialWithDefines>(material)) {
+        auto m = dynamic_cast<MaterialWithDefines*>(material);
+        p.defines = m->defines;
+    }
 
     p.isRawShaderMaterial = instanceof <RawShaderMaterial>(material);
 
@@ -110,9 +127,11 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.specularMap = specularMapMaterial == nullptr ? false : specularMapMaterial->specularMap.has_value();
     p.alphaMap = alphaMaterial == nullptr ? false : alphaMaterial->alphaMap.has_value();
 
-//    gradientMap: !! material.gradientMap
+    p.gradientMap = gradientMaterial == nullptr ? false : gradientMaterial->gradientMap.has_value();
 
-//    sheen: !! material.sheen
+    if (sheenMaterial != nullptr) {
+        p.sheen = sheenMaterial->sheen;
+    }
 //
 //    transmission: !! material.transmission
 //    transmissionMap: !! material.transmissionMap
@@ -160,7 +179,10 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
         p.depthPacking = depthpackMaterial->depthPacking;
     }
 
-    p.index0AttributeName = std::nullopt;
+    if (shaderMaterial != nullptr) {
+        p.index0AttributeName = shaderMaterial->index0AttributeName;
+    }
+
 
     return p;
 }
@@ -242,8 +264,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer
 
     if (!program) {
 
-        program = GLProgram::create(renderer, cacheKey, parameters, bindingStates );
-        programs.emplace_back(program);
+        program = programs.emplace_back(GLProgram::create(renderer, cacheKey, parameters, bindingStates ));
     }
 
     return program;

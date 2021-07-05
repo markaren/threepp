@@ -9,7 +9,10 @@
 namespace threepp {
 
     class MeshToonMaterial : public virtual Material,
-                             public MaterialWithColor {
+                             public MaterialWithColor,
+                             public MaterialWithMap,
+                             public MaterialWithGradientMap,
+                             public MaterialWithDefines {
 
     public:
         [[nodiscard]] std::string type() const override {
@@ -23,7 +26,11 @@ namespace threepp {
 
     protected:
         MeshToonMaterial()
-            : MaterialWithColor(0xffffff) {}
+            : MaterialWithColor(0xffffff) {
+
+            this->defines["TOON"] = "";
+
+        }
     };
 
 }// namespace threepp

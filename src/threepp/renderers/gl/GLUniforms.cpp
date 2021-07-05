@@ -20,7 +20,7 @@ namespace {
             int length;
             char nameBuffer[256];
             glGetActiveUniform(program, index, 256, &length, &size, &type, nameBuffer);
-            name.assign(name, length);
+            name.assign(nameBuffer, length);
         }
     };
 
