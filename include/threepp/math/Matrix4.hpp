@@ -4,6 +4,7 @@
 #define THREEPP_MATRIX4_HPP
 
 #include <array>
+#include <ostream>
 
 namespace threepp {
 
@@ -14,7 +15,6 @@ namespace threepp {
     class Matrix4 {
 
     public:
-
         std::array<float, 16> elements{
                 1, 0, 0, 0,
                 0, 1, 0, 0,
@@ -134,6 +134,17 @@ namespace threepp {
             array[offset + 15] = te[15];
         }
 
+        friend std::ostream &operator<<(std::ostream &os, const Matrix4 &v) {
+            // clang-format off
+            os << "Matrix4(\n" <<
+                    v.elements[0] << ", " << v.elements[1] << ", " << v.elements[2] << ", " << v.elements[3] << "\n" <<
+                    v.elements[4] << ", " << v.elements[5] << ", " << v.elements[6] << ", " << v.elements[7] << "\n" <<
+                    v.elements[8] << ", " << v.elements[9] << ", " << v.elements[10] << ", " << v.elements[11] << "\n" <<
+                    v.elements[12] << ", " << v.elements[13] << ", " << v.elements[14] << ", " << v.elements[15] << "\n" <<
+                    ")";
+            // clang-format on
+            return os;
+        }
     };
 
 }// namespace threepp

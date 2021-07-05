@@ -127,7 +127,6 @@ namespace {
                                [&](Color arg) { setValueV3fHelper(arg); },
                        },
                        value);
-
         }
 
         template<class ArrayLike>
@@ -242,7 +241,7 @@ namespace {
 
         static std::regex rex(R"(([\w\d_]+)(\])?(\[|\.)?)");
 
-        auto name = activeInfo.name;
+        const auto name = activeInfo.name;
 
         std::sregex_iterator rex_it(name.cbegin(), name.cend(), rex);
         std::sregex_iterator rex_end;
