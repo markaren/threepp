@@ -48,7 +48,20 @@ int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
     return map ? map->encoding : LinearEncoding;
 }
 
-ProgramParameters GLPrograms::getParameters(Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
+ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
+
+    auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
+    auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
+    auto aomapMaterial = dynamic_cast<MaterialWithAoMap*>(material);
+    auto bumpmapMaterial = dynamic_cast<MaterialWithBumpMap*>(material);
+    auto matcapMaterial = dynamic_cast<MaterialWithMatCap*>(material);
+    auto envmapMaterial = dynamic_cast<MaterialWithEnvMap*>(material);
+    auto lightmapMaterial = dynamic_cast<MaterialWithLightMap*>(material);
+    auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
+    auto normalMaterial = dynamic_cast<MaterialWithNormalMap*>(material);
+    auto specularMapMaterial = dynamic_cast<MaterialWithSpecularMap*>(material);
+
+    std::optional<Texture> emptyMap;
 
     ProgramParameters p;
 
@@ -63,6 +76,42 @@ ProgramParameters GLPrograms::getParameters(Material *material, const GLLights::
 
     p.supportsVertexTextures = vertexTextures;
 
+    p.map = mapMaterial == nullptr ? false : mapMaterial->map.has_value();
+    p.mapEncoding = getTextureEncodingFromMap(mapMaterial == nullptr ? emptyMap : mapMaterial->map);
+    p.matcap = matcapMaterial == nullptr ? false : matcapMaterial->matcap.has_value();
+    p.matcapEncoding = getTextureEncodingFromMap(matcapMaterial == nullptr ? emptyMap : matcapMaterial->matcap);
+    p.envMap = envmapMaterial == nullptr ? false : envmapMaterial->envMap.has_value();
+    p.envMapMode = p.envMap && envmapMaterial->envMap->mapping.has_value();
+    p.envMapEncoding = getTextureEncodingFromMap(envmapMaterial == nullptr ? emptyMap : envmapMaterial->envMap);
+    p.envMapCubeUV = p.envMapMode ? (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping || envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping) : false;
+    p.lightMap = lightmapMaterial == nullptr ? false : lightmapMaterial->lightMap.has_value();
+    p.lightMapEncoding = getTextureEncodingFromMap(lightmapMaterial == nullptr ? emptyMap : envmapMaterial->envMap);
+    p.aoMap = aomapMaterial == nullptr ? false : aomapMaterial->aoMap.has_value();
+    p.emissiveMap = emissiveMaterial == nullptr ? false : emissiveMaterial->emissiveMap.has_value();
+    p.emissiveMapEncoding = getTextureEncodingFromMap(emissiveMaterial == nullptr ? emptyMap : emissiveMaterial->emissiveMap);
+    p.bumpMap = bumpmapMaterial == nullptr ? false : bumpmapMaterial->bumpMap.has_value();
+    p.normalMap = normalMaterial == nullptr ? false : normalMaterial->normalMap.has_value();
+    p.objectSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == ObjectSpaceNormalMap;
+    p.tangentSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == TangentSpaceNormalMap;
+//    clearcoatMap: !! material.clearcoatMap
+//    clearcoatRoughnessMap: !! material.clearcoatRoughnessMap
+//    clearcoatNormalMap: !! material.clearcoatNormalMap
+//    displacementMap: !! material.displacementMap
+//    roughnessMap: !! material.roughnessMap
+//    metalnessMap: !! material.metalnessMap
+    p.specularMap = specularMapMaterial == nullptr ? false : specularMapMaterial->specularMap.has_value();
+    p.alphaMap = alphaMaterial == nullptr ? false : alphaMaterial->alphaMap.has_value();
+
+//    gradientMap: !! material.gradientMap
+
+//    sheen: !! material.sheen
+//
+//    transmission: !! material.transmission
+//    transmissionMap: !! material.transmissionMap
+//    thicknessMap: !! material.thicknessMap
+//
+//    combine: material.combine
+
     p.numDirLights = (int) lights.directional.size();
     p.numPointLights = (int) lights.point.size();
     p.numSpotLights = (int) lights.spot.size();
@@ -73,7 +122,16 @@ ProgramParameters GLPrograms::getParameters(Material *material, const GLLights::
     p.numPointLightShadows = (int) lights.pointShadowMap.size();
     p.numSpotLightShadows = (int) lights.spotShadowMap.size();
 
+    p.numClippingPlanes = clipping.numPlanes;
+    p.numClipIntersection = clipping.numIntersection;
+
     p.dithering = material->dithering;
+
+    p.shadowMapEnabled = renderer.shadowMap.enabled && numShadows > 0;
+    p.shadowMapType = renderer.shadowMap.type;
+
+    p.toneMapping = material->toneMapped ? renderer.toneMapping : NoToneMapping;
+    p.physicallyCorrectLights = renderer.physicallyCorrectLights;
 
     p.premultipliedAlpha = material->premultipliedAlpha;
 

@@ -8,6 +8,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
+#include "threepp/materials/MeshMatcapMaterial.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/PointsMaterial.hpp"

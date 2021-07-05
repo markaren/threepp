@@ -25,8 +25,8 @@ namespace threepp::gl {
 
         Uniform uniform;
 
-        size_t numPlanes = 0;
-        unsigned int numIntersection = 0;
+        int numPlanes = 0;
+        int numIntersection = 0;
 
         explicit GLClipping(GLProperties &properties) : properties(properties) {
 
@@ -104,7 +104,7 @@ namespace threepp::gl {
                 }
 
                 materialProperties.clippingState = dstArray;
-                this->numIntersection = clipIntersection ? (unsigned int) this->numPlanes : 0;
+                this->numIntersection = clipIntersection ? this->numPlanes : 0;
                 this->numPlanes += nGlobal;
             }
         }
@@ -129,7 +129,7 @@ namespace threepp::gl {
 
         std::vector<float> projectPlanes(const std::vector<Plane> &planes, const Camera *camera, int dstOffset, bool skipTransform = false) {
 
-            const auto nPlanes = planes.size();
+            int nPlanes = (int) planes.size();
             std::vector<float> dstArray;
 
             if (nPlanes != 0) {

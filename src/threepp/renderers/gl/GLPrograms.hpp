@@ -46,7 +46,7 @@ namespace threepp {
 
             int getTextureEncodingFromMap(std::optional<Texture> &map) const;
 
-            ProgramParameters getParameters(Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
+            ProgramParameters getParameters(const GLRenderer &renderer, Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object);
 
             std::string getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters);
 

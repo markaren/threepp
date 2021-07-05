@@ -683,7 +683,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
     auto lightsStateVersion = lights.state.version;
 
-    auto parameters = programCache.getParameters(material, lights.state, (int) shadowsArray.size(), scene, object);
+    auto parameters = programCache.getParameters(*this, material, lights.state, (int) shadowsArray.size(), scene, object);
     auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;

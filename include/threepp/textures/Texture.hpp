@@ -30,7 +30,7 @@ namespace threepp {
         std::optional<Image> image;
         std::vector<Image> mipmaps;
 
-        int mapping;
+        std::optional<int> mapping;
 
         int wrapS;
         int wrapT;

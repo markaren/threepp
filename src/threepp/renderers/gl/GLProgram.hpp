@@ -24,8 +24,8 @@ namespace threepp {
             std::string cacheKey;
             int usedTimes = 1;
             std::optional<unsigned int> program;
-            unsigned int glVertexShader;
-            unsigned int glFragmentShader;
+            unsigned int vertexShader;
+            unsigned int fragmentShader;
 
             std::shared_ptr<GLUniforms> getUniforms();
 

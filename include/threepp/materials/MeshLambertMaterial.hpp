@@ -1,4 +1,4 @@
-//
+// https://github.com/mrdoob/three.js/blob/r129/src/materials/MeshLambertMaterial.js
 
 #ifndef THREEPP_MESHLAMBERTMATERIAL_HPP
 #define THREEPP_MESHLAMBERTMATERIAL_HPP
@@ -9,7 +9,8 @@
 namespace threepp {
 
     class MeshLambertMaterial : public virtual Material,
-                                public MaterialWithColor {
+                                public MaterialWithColor,
+                                public MaterialWithMap {
 
     public:
         [[nodiscard]] std::string type() const override {

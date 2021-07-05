@@ -84,22 +84,9 @@ namespace threepp {
         int toneMapping = NoToneMapping;
         float toneMappingExposure = 1.0f;
 
-    private:
-        struct OnMaterialDispose : EventListener {
+        bool checkShaderErrors = false;
 
-            explicit OnMaterialDispose(GLRenderer &scope);
 
-            void onEvent(Event &event) override;
-
-        private:
-            GLRenderer &scope_;
-        };
-
-        OnMaterialDispose onMaterialDispose;
-
-        //        EmptyScene _emptyScene;
-
-    public:
         explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
 
         [[nodiscard]] int getTargetPixelRatio() const;
@@ -176,12 +163,12 @@ namespace threepp {
 
         bool materialNeedsLights(Material *material);
 
-        int getActiveCubeFace() const {
+        [[nodiscard]] int getActiveCubeFace() const {
 
             return _currentActiveCubeFace;
         }
 
-        int getActiveMipmapLevel() const {
+        [[nodiscard]] int getActiveMipmapLevel() const {
 
             return _currentActiveMipmapLevel;
         }
@@ -192,6 +179,19 @@ namespace threepp {
         }
 
     private:
+
+        struct OnMaterialDispose : EventListener {
+
+            explicit OnMaterialDispose(GLRenderer &scope);
+
+            void onEvent(Event &event) override;
+
+        private:
+            GLRenderer &scope_;
+        };
+
+        OnMaterialDispose onMaterialDispose;
+
         Canvas &canvas_;
 
         std::shared_ptr<gl::GLRenderList> currentRenderList;
@@ -254,6 +254,8 @@ namespace threepp {
         gl::GLObjects objects;
         gl::GLPrograms programCache;
         gl::GLShadowMap shadowMap;
+
+        friend class gl::GLPrograms;
     };
 
 }// namespace threepp

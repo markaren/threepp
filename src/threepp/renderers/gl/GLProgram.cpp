@@ -6,10 +6,8 @@
 #include "GLUniforms.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
-#include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
-#include <any>
 #include <iostream>
 #include <regex>
 #include <vector>
@@ -610,7 +608,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
         {
             std::vector<std::string> v{
-                    "#version 330 core",
+                    "#version 330 core\n",
                     "#define attribute in",
                     "#define varying out",
                     "#define texture2D texture"
@@ -622,7 +620,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
         {
             std::vector<std::string> v{
-                    "#version 330 core",
+                    "#version 330 core\n",
                     "#define varying in",
                     //                    ( parameters.glslVersion == GLSL3 ) ? "" : "out highp vec4 pc_fragColor;",
                     //                    ( parameters.glslVersion == GLSL3 ) ? "" : "#define gl_FragColor pc_fragColor",
@@ -646,13 +644,30 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
 
-    auto glVertexShader = createShader(GL_VERTEX_SHADER, vertexGlsl.c_str());
-    auto glFragmentShader = createShader(GL_FRAGMENT_SHADER, fragmentGlsl.c_str());
+    const auto glVertexShader = createShader(GL_VERTEX_SHADER, vertexGlsl.c_str());
+    const auto glFragmentShader = createShader(GL_FRAGMENT_SHADER, fragmentGlsl.c_str());
 
     glAttachShader(program, glVertexShader);
     glAttachShader(program, glFragmentShader);
 
-    //TODO
+    if (parameters.index0AttributeName) {
+
+        glBindAttribLocation(program, 0, "position");
+    }
+
+    glLinkProgram(program);
+
+    if (renderer.checkShaderErrors) {
+
+        // TODO
+
+    }
+
+    glDeleteShader(glVertexShader);
+    glDeleteShader(glFragmentShader);
+
+    this->program = program;
+
 }
 
 std::shared_ptr<GLUniforms> GLProgram::getUniforms() {

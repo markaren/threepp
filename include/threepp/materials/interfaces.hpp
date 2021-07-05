@@ -144,6 +144,11 @@ namespace threepp {
         MaterialWithNormalMap(int normalMapType, Vector2 normalScale) : normalMapType(normalMapType), normalScale(normalScale) {}
     };
 
+    struct MaterialWithMatCap : virtual Material {
+
+        std::optional<Texture> matcap;
+    };
+
     struct MaterialWithLineProperties: virtual Material {
 
         std::string linecap;
