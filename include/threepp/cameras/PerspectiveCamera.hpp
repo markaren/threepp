@@ -168,7 +168,7 @@ namespace threepp {
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
 
-        std::string type() const override {
+        [[nodiscard]] std::string type() const override {
             return "PerspectiveCamera";
         }
 

@@ -54,6 +54,8 @@ namespace threepp {
             bool preserveDrawingBuffer;
         };
 
+        gl::GLInfo info;
+
         // clearing
 
         bool autoClear = true;
@@ -237,7 +239,6 @@ namespace threepp {
         Vector3 _vector3;
 
         gl::GLState state;
-        gl::GLInfo info;
 
         gl::GLBackground background;
         gl::GLProperties properties;
@@ -247,13 +248,13 @@ namespace threepp {
         gl::GLClipping clipping;
         gl::GLTextures textures;
         gl::GLMaterials materials;
-        gl::GLBufferRenderer bufferRenderer;
-        gl::GLIndexedBufferRenderer indexedBufferRenderer;
         gl::GLRenderStates renderStates;
         gl::GLRenderLists renderLists;
         gl::GLObjects objects;
         gl::GLPrograms programCache;
         gl::GLShadowMap shadowMap;
+        std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
+        std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
         friend struct gl::GLPrograms;
     };

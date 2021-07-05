@@ -33,7 +33,7 @@ namespace threepp {
         std::optional<Box3> boundingBox;
         std::optional<Sphere> boundingSphere;
 
-        DrawRange drawRange = DrawRange{0, Infinity<int>};
+        DrawRange drawRange = DrawRange{0, std::numeric_limits<int>::max() / 2};
 
         BufferGeometry() = default;
 

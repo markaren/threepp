@@ -28,7 +28,8 @@ namespace threepp::gl {
 
     struct GLBufferRenderer : BufferRenderer {
 
-        explicit GLBufferRenderer(GLInfo &info) : BufferRenderer(info) {}
+        explicit GLBufferRenderer(GLInfo &info)
+            : BufferRenderer(info) {}
 
         void render(int start, int count) override {
 
@@ -49,7 +50,7 @@ namespace threepp::gl {
 
     struct GLIndexedBufferRenderer : BufferRenderer {
 
-        GLIndexedBufferRenderer(GLInfo &info)
+        explicit GLIndexedBufferRenderer(GLInfo &info)
             : BufferRenderer(info) {}
 
         void setIndex(Buffer &value) {
@@ -60,14 +61,14 @@ namespace threepp::gl {
 
         void render(int start, int count) override {
 
-            glDrawElements(mode_, count, type_, reinterpret_cast<const void *>(start * bytesPerElement_));
+            glDrawElements(mode_, count, type_, (GLvoid*)(start * bytesPerElement_));
         }
 
         void renderInstances(int start, int count, int primcount) {
 
             if (primcount == 0) return;
 
-            glDrawElementsInstanced(mode_, count, type_, reinterpret_cast<const void *>(start * bytesPerElement_), primcount);
+            glDrawElementsInstanced(mode_, count, type_, (GLvoid*)(start * bytesPerElement_), primcount);
 
             info_.update(count, mode_, primcount);
         }

@@ -300,7 +300,7 @@ void GLUniforms::setValue(const std::string &name, const UniformValue &value, GL
 
     if (map.count(name)) {
 
-        map[name]->setValue(value, textures);
+        map.at(name)->setValue(value, textures);
     }
 }
 
@@ -310,7 +310,7 @@ void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>> &seq, std::u
 
         Uniform &v = values[u->id];
 
-        if (!v.needsUpdate || *v.needsUpdate) {
+        if (!v.needsUpdate || (v.needsUpdate && v.needsUpdate.value())) {
 
             // note: always updating when .needsUpdate is undefined
             u->setValue(v.value(), textures);

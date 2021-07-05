@@ -1,10 +1,6 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "threepp/cameras/OrthographicCamera.hpp"
-
-#include "threepp/renderers/gl/GLCapabilities.hpp"
-
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
@@ -18,8 +14,8 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       _viewport(0, 0, _width, _height),
       _scissor(0, 0, _width, _height), state(canvas),
       background(state, parameters.premultipliedAlpha),
-      bufferRenderer(info),
-      indexedBufferRenderer(info),
+      bufferRenderer(new gl::GLBufferRenderer(info)),
+      indexedBufferRenderer(new gl::GLIndexedBufferRenderer(info)),
       clipping(properties),
       bindingStates(attributes),
       geometries(attributes, info, bindingStates),
@@ -236,14 +232,14 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
     bindingStates.setup(object, material, program, geometry, index);
 
     gl::Buffer attribute{};
-    gl::BufferRenderer *renderer = &bufferRenderer;
+    gl::BufferRenderer *renderer = bufferRenderer.get();
 
     if (index != nullptr) {
 
         attribute = attributes.get(index);
 
-        renderer = &indexedBufferRenderer;
-        indexedBufferRenderer.setIndex(attribute);
+        renderer = indexedBufferRenderer.get();
+        indexedBufferRenderer->setIndex(attribute);
     }
 
     //
@@ -254,7 +250,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
     const auto rangeCount = geometry->drawRange.count * rangeFactor;
 
     const auto groupStart = group ? group->start * rangeFactor : 0;
-    const auto groupCount = group ? group->count * rangeFactor : Infinity<int>;
+    const auto groupCount = group ? group->count * rangeFactor : std::numeric_limits<int>::max();
 
     const auto drawStart = std::max(rangeStart, groupStart);
     const auto drawEnd = std::min(dataCount, std::min(rangeStart + rangeCount, groupStart + groupCount)) - 1;
@@ -267,13 +263,10 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
     if (isMesh) {
 
-        if (isWireframeMaterial) {
+        if (isWireframeMaterial && wireframeMaterial->wireframe) {
 
-            if (wireframeMaterial->wireframe) {
-
-                state.setLineWidth(wireframeMaterial->wireframeLinewidth * (float) getTargetPixelRatio());
-                renderer->setMode(GL_LINES);
-            }
+            state.setLineWidth(wireframeMaterial->wireframeLinewidth * (float) getTargetPixelRatio());
+            renderer->setMode(GL_LINES);
 
         } else {
 
@@ -308,7 +301,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
     } else if (false /*object.isSprite*/) {
 
-        //                renderer.setMode(GL_TRIANGLES);
+        renderer->setMode(GL_TRIANGLES);
     }
 
     if (instanceof <InstancedMesh>(object)) {
@@ -324,7 +317,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
         const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
         //TODO
-        //                renderer->renderInstances(drawStart, drawCount, instanceCount);
+        //                        renderer->renderInstances(drawStart, drawCount, instanceCount);
 
     } else {
 
@@ -360,12 +353,12 @@ void GLRenderer::compile(Scene *scene, Camera *camera) {
 
             if (false /*Array.isArray(material)*/) {
 
-//                for (let i = 0; i < material.length; i++) {
-//
-//                    const material2 = material[i];
-//
-//                    getProgram(material2, scene, object);
-//                }
+                //                for (let i = 0; i < material.length; i++) {
+                //
+                //                    const material2 = material[i];
+                //
+                //                    getProgram(material2, scene, object);
+                //                }
 
             } else {
 
@@ -938,7 +931,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
             if (p_uniforms->map.count("cameraPosition")) {
 
-                auto uCamPos = p_uniforms->map["cameraPosition"];
+                auto &uCamPos = p_uniforms->map["cameraPosition"];
                 _vector3.setFromMatrixPosition(camera->matrixWorld);
                 uCamPos->setValue(_vector3);
             }
