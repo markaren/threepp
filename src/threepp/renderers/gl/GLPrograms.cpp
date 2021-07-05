@@ -60,8 +60,15 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
     auto normalMaterial = dynamic_cast<MaterialWithNormalMap*>(material);
     auto specularMapMaterial = dynamic_cast<MaterialWithSpecularMap*>(material);
+    auto displacementMapMaterial = dynamic_cast<MaterialWithDisplacementMap*>(material);
+    auto combineMaterial = dynamic_cast<MaterialWithCombine*>(material);
+    auto flatshadeMaterial = dynamic_cast<MaterialWithFlatShading*>(material);
+    auto vertextangentsMaterial = dynamic_cast<MaterialWithVertexTangents*>(material);
+    auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking*>(material);
 
     std::optional<Texture> emptyMap;
+
+    // TODO rendertarget
 
     ProgramParameters p;
 
@@ -75,6 +82,7 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor != nullptr;
 
     p.supportsVertexTextures = vertexTextures;
+    p.outputEncoding = renderer.outputEncoding;
 
     p.map = mapMaterial == nullptr ? false : mapMaterial->map.has_value();
     p.mapEncoding = getTextureEncodingFromMap(mapMaterial == nullptr ? emptyMap : mapMaterial->map);
@@ -96,7 +104,7 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
 //    clearcoatMap: !! material.clearcoatMap
 //    clearcoatRoughnessMap: !! material.clearcoatRoughnessMap
 //    clearcoatNormalMap: !! material.clearcoatNormalMap
-//    displacementMap: !! material.displacementMap
+    p.displacementMap = displacementMapMaterial == nullptr ? false : displacementMapMaterial->displacementMap.has_value();
 //    roughnessMap: !! material.roughnessMap
 //    metalnessMap: !! material.metalnessMap
     p.specularMap = specularMapMaterial == nullptr ? false : specularMapMaterial->specularMap.has_value();
@@ -110,7 +118,16 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
 //    transmissionMap: !! material.transmissionMap
 //    thicknessMap: !! material.thicknessMap
 //
-//    combine: material.combine
+
+    if (combineMaterial != nullptr) {
+        p.combine = combineMaterial->combine;
+    }
+
+    p.vertexTangents = normalMaterial != nullptr && vertextangentsMaterial != nullptr && vertextangentsMaterial->vertexTangents;
+
+    if (flatshadeMaterial != nullptr) {
+        p.flatShading = flatshadeMaterial->flatShading;
+    }
 
     p.numDirLights = (int) lights.directional.size();
     p.numPointLights = (int) lights.point.size();
@@ -138,6 +155,10 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.alphaTest = material->alphaTest;
     p.doubleSided = material->side == DoubleSide;
     p.flipSided = material->side == BackSide;
+
+    if (depthpackMaterial != nullptr) {
+        p.depthPacking = depthpackMaterial->depthPacking;
+    }
 
     p.index0AttributeName = std::nullopt;
 

@@ -116,15 +116,12 @@ namespace threepp::gl {
 
             auto stateMap = programMap[program->id];
 
-            auto state = stateMap[wireframe];
-
             if (!stateMap.count(wireframe)) {
 
-                state = createBindingState(createVertexArrayObject());
-                stateMap[wireframe] = state;
+                stateMap[wireframe] = createBindingState(createVertexArrayObject());
             }
 
-            return state;
+            return stateMap[wireframe];
         }
 
         GLBindingState createBindingState(std::optional<GLuint> vao) {

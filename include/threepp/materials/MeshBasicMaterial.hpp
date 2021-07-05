@@ -23,10 +23,10 @@ namespace threepp {
                               public MaterialWithEnvMap,
                               public MaterialWithReflectivity,
                               public MaterialWithWireframe,
-                              public MaterialWithLineProperties {
+                              public MaterialWithLineProperties,
+                              public MaterialWithCombine {
 
     public:
-        int combine = MultiplyOperation;
 
         [[nodiscard]] std::string type() const override {
 
@@ -43,6 +43,7 @@ namespace threepp {
             : MaterialWithColor(0xffffff),
               MaterialWithAoMap(1),
               MaterialWithLightMap(1),
+              MaterialWithCombine(MultiplyOperation),
               MaterialWithReflectivity(1, 0.98f),
               MaterialWithWireframe(false, 1),
               MaterialWithLineProperties("round", "round") {}

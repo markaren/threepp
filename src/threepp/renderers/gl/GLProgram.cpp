@@ -289,9 +289,9 @@ namespace {
 
         std::string envMapBlendingDefine = "ENVMAP_BLENDING_NONE";
 
-        if (parameters.envMap) {
+        if (parameters.envMap && parameters.combine.has_value()) {
 
-            switch (parameters.combine) {
+            switch (*parameters.combine) {
 
                 case MultiplyOperation:
                     envMapBlendingDefine = "ENVMAP_BLENDING_MULTIPLY";
@@ -576,7 +576,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
                     parameters.lightMap ? getTexelDecodingFunction("lightMapTexelToLinear", parameters.lightMapEncoding) : "",
                     getTexelEncodingFunction("linearToOutputTexel", parameters.outputEncoding),
 
-                    parameters.depthPacking ? "#define DEPTH_PACKING " + std::to_string(parameters.depthPacking) : "",
+                    parameters.depthPacking ? "#define DEPTH_PACKING " + std::to_string(*parameters.depthPacking) : "",
 
                     "\n"
 
@@ -590,6 +590,8 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
                     v.end());
 
             prefixFragment = utils::join(v);
+
+            std::cout << prefixFragment << std::endl;
         }
     }
 

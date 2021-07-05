@@ -149,6 +149,34 @@ namespace threepp {
         std::optional<Texture> matcap;
     };
 
+    struct MaterialWithCombine : virtual Material {
+
+        int combine;
+
+        MaterialWithCombine(int combine) : combine(combine) {}
+    };
+
+    struct MaterialWithDepthPacking : virtual Material {
+
+        int depthPacking;
+
+        MaterialWithDepthPacking(int depthPacking) : depthPacking(depthPacking) {}
+    };
+
+    struct MaterialWithFlatShading : virtual Material {
+
+        bool flatShading;
+
+        MaterialWithFlatShading(bool flatShading) : flatShading(flatShading) {}
+    };
+
+    struct MaterialWithVertexTangents : virtual Material {
+
+        bool vertexTangents;
+
+        MaterialWithVertexTangents(bool vertexTangents) : vertexTangents(vertexTangents) {}
+    };
+
     struct MaterialWithLineProperties: virtual Material {
 
         std::string linecap;

@@ -12,10 +12,10 @@ namespace threepp {
                               public MaterialWithMap,
                               public MaterialWithAlphaMap,
                               public MaterialWithDisplacementMap,
-                              public MaterialWithWireframe {
+                              public MaterialWithWireframe,
+                              public MaterialWithDepthPacking {
 
     public:
-        int depthPacking = BasicDepthPacking;
 
         [[nodiscard]] std::string type() const override {
 
@@ -28,7 +28,10 @@ namespace threepp {
         }
 
     protected:
-        MeshDepthMaterial() : MaterialWithDisplacementMap(1, 0), MaterialWithWireframe(false, 1) {
+        MeshDepthMaterial()
+            : MaterialWithDepthPacking(BasicDepthPacking),
+              MaterialWithDisplacementMap(1, 0),
+              MaterialWithWireframe(false, 1) {
 
             this->fog = false;
         }

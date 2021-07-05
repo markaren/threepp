@@ -9,7 +9,8 @@
 namespace threepp {
 
     class MeshStandardMaterial : public virtual Material,
-                                 public MaterialWithColor {
+                                 public MaterialWithColor,
+                                 public MaterialWithFlatShading {
 
     public:
         [[nodiscard]] std::string type() const override {
@@ -22,7 +23,9 @@ namespace threepp {
         }
 
     protected:
-        MeshStandardMaterial() : MaterialWithColor(0xffffff) {}
+        MeshStandardMaterial()
+            : MaterialWithColor(0xffffff),
+              MaterialWithFlatShading(false) {}
     };
 
 }// namespace threepp

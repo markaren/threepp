@@ -14,9 +14,8 @@ namespace threepp {
                                public MaterialWithBumpMap,
                                public MaterialWithDisplacementMap,
                                public MaterialWithNormalMap,
-                               public MaterialWithMatCap {
-
-        bool flatShading = false;
+                               public MaterialWithMatCap,
+                               public MaterialWithFlatShading {
 
         [[nodiscard]] std::string type() const override {
 
@@ -31,6 +30,7 @@ namespace threepp {
     protected:
         MeshMatcapMaterial()
             : MaterialWithColor(0xffffff),
+              MaterialWithFlatShading(false),
               MaterialWithBumpMap(1),
               MaterialWithDisplacementMap(1, 0),
               MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}) {

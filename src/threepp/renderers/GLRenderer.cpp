@@ -773,7 +773,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
     materialProperties.currentProgram = program;
     materialProperties.uniformsList = uniformsList;
 
-    return program;
+    return materialProperties.currentProgram;
 }
 
 void GLRenderer::updateCommonMaterialProperties(Material *material, gl::ProgramParameters &parameters) {

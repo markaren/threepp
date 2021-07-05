@@ -22,12 +22,11 @@ namespace threepp {
                               public MaterialWithAlphaMap,
                               public MaterialWithEnvMap,
                               public MaterialWithReflectivity,
-                              public MaterialWithWireframe {
+                              public MaterialWithWireframe,
+                              public MaterialWithCombine,
+                              public MaterialWithFlatShading {
 
     public:
-        int combine = MultiplyOperation;
-        bool flatShading = false;
-
         [[nodiscard]] std::string type() const override {
 
             return "MeshPhongMaterial";
@@ -40,6 +39,8 @@ namespace threepp {
     protected:
         MeshPhongMaterial()
             : MaterialWithColor(0x000000),
+              MaterialWithCombine(MultiplyOperation),
+              MaterialWithFlatShading(false),
               MaterialWithSpecular(0x111111, 30),
               MaterialWithLightMap(1),
               MaterialWithAoMap(1),

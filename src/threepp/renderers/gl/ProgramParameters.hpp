@@ -61,7 +61,7 @@ namespace threepp::gl {
         bool transmissionMap;
         bool thicknessMap;
 
-        int combine;
+        std::optional<int> combine = std::nullopt;
 
         bool vertexTangents;
         bool vertexColors;
@@ -73,7 +73,7 @@ namespace threepp::gl {
         bool useFog;
         bool fogExp2;
 
-        bool flatShading;
+        bool flatShading = false;
 
         bool sizeAttenuation;
         bool logarithmicDepthBuffer;
@@ -105,7 +105,7 @@ namespace threepp::gl {
         bool doubleSided;
         bool flipSided;
 
-        bool depthPacking;
+        std::optional<int> depthPacking;
 
         std::optional<std::string> index0AttributeName;
 
@@ -155,7 +155,7 @@ namespace threepp::gl {
             s += std::to_string(transmissionMap) + '\n';
             s += std::to_string(thicknessMap) + '\n';
 
-            s += std::to_string(combine) + '\n';
+            s += combine.has_value() ? std::to_string(*combine) : std::string("undefined") + '\n';
 
             s += std::to_string(vertexTangents) + '\n';
             s += std::to_string(vertexColors) + '\n';
@@ -199,7 +199,7 @@ namespace threepp::gl {
             s += std::to_string(doubleSided) + '\n';
             s += std::to_string(flipSided) + '\n';
 
-            s += std::to_string(depthPacking) + '\n';
+            s += depthPacking.has_value() ? std::to_string(*depthPacking) : std::string ("undefined") + '\n';
 
             return s;
         }
