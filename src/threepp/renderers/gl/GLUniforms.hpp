@@ -5,9 +5,9 @@
 
 #include "threepp/core/Uniform.hpp"
 
+#include <memory>
 #include <unordered_map>
 #include <vector>
-#include <memory>
 
 namespace threepp::gl {
 
@@ -17,9 +17,11 @@ namespace threepp::gl {
 
         std::string id;
 
-        explicit UniformObject(std::string id): id(std::move(id)) {}
+        explicit UniformObject(std::string id) : id(std::move(id)) {}
 
         virtual void setValue(const UniformValue &value, GLTextures *textures = nullptr) = 0;
+
+        virtual ~UniformObject() = default;
     };
 
     struct Container {

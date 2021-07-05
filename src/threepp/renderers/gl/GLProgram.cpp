@@ -654,8 +654,6 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
         }
     }
 
-
-
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
 

@@ -255,7 +255,7 @@ namespace threepp {
         gl::GLPrograms programCache;
         gl::GLShadowMap shadowMap;
 
-        friend class gl::GLPrograms;
+        friend struct gl::GLPrograms;
     };
 
 }// namespace threepp

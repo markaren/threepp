@@ -17,6 +17,7 @@ int main() {
 
     const auto geometry = BoxGeometry::create();
     const auto material = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
+    material->opacity = 0.88f;
     const auto cube = Mesh::create(geometry, material);
     scene->add(cube);
 
