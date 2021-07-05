@@ -10,16 +10,19 @@ using namespace threepp::gl;
 
 namespace {
 
-    //    void setValueV1f(int addr, float value) {
-    //
-    //        glUniform1f(addr, value);
-    //    }
-    //
-    //    template <class ArrayLike>
-    //    void setValuev2f(int addr, ArrayLike value) {
-    //
-    //        glUniform2f(addr, value);
-    //    }
+    void ensureCapacity(std::vector<float> &v, unsigned int size) {
+
+        while (v.size() < size) {
+            v.emplace_back();
+        }
+    }
+
+    // helper type for the visitor
+    template<class... Ts>
+    struct overloaded : Ts... { using Ts::operator()...; };
+    // explicit deduction guide (not needed as of C++20)
+    template<class... Ts>
+    overloaded(Ts...) -> overloaded<Ts...>;
 
     struct ActiveUniformInfo {
 
@@ -48,21 +51,133 @@ namespace {
         void setValue(const UniformValue &value, GLTextures *textures) override {
 
             setValueFun(value, textures);
-
+            std::cout << "setting value of " << activeInfo.name << std::endl;
         }
 
 
     private:
         int addr;
+        std::vector<float> cache;
         ActiveUniformInfo activeInfo;
         std::function<void(const UniformValue &, GLTextures *)> setValueFun;
-        std::vector<float> cache;
 
-        void setValueV1f(const UniformValue &value) const {
+        void setValueV1f(const UniformValue &value) {
 
             float f = std::get<float>(value);
-            std::cout << "value=" << f << std::endl;
+
+            ensureCapacity(cache, 1);
+            if (cache[0] == f) return;
+
             glUniform1f(addr, f);
+            cache[0] = f;
+        }
+
+        template<class ArrayLike>
+        void setValueV2fHelper(ArrayLike &value) {
+
+            float x = value[0];
+            float y = value[1];
+
+            ensureCapacity(cache, 2);
+            if (cache[0] != x && cache[1] != y) {
+
+                glUniform2f(addr, x, y);
+
+                cache[0] = x;
+                cache[1] = y;
+            }
+        }
+
+        void setValueV2f(const UniformValue &value) {
+
+            std::visit(overloaded{
+                               [&](auto arg) { std::cout << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](Vector2 arg) { setValueV2fHelper(arg); },
+                       },
+                       value);
+
+            std::cout << "setValueV2f index:" << value.index() << std::endl;
+        }
+
+        template<class ArrayLike>
+        void setValueV3fHelper(ArrayLike &value) {
+
+            float x = value[0];
+            float y = value[1];
+            float z = value[2];
+
+            std::cout << value << std::endl;
+
+            ensureCapacity(cache, 3);
+            if (cache[0] != x && cache[1] != y && cache[2] != z) {
+
+                glUniform3f(addr, x, y, z);
+
+                cache[0] = x;
+                cache[1] = y;
+                cache[2] = z;
+            }
+        }
+
+        void setValueV3f(const UniformValue &value) {
+
+            std::visit(overloaded{
+                               [&](auto arg) { std::cout << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](Vector3 arg) { setValueV3fHelper(arg); },
+                               [&](Color arg) { setValueV3fHelper(arg); },
+                       },
+                       value);
+
+        }
+
+        template<class ArrayLike>
+        void setValueV4fHelper(ArrayLike &value) {
+
+            float x = value[0];
+            float y = value[1];
+            float z = value[2];
+            float w = value[3];
+
+            ensureCapacity(cache, 4);
+            if (cache[0] != x && cache[1] != y && cache[2] != z && cache[3] != w) {
+
+                glUniform4f(addr, x, y, z, w);
+
+                cache[0] = x;
+                cache[1] = y;
+                cache[2] = z;
+                cache[3] = w;
+            }
+        }
+
+        void setValueV4f(const UniformValue &value) {
+
+            std::visit(overloaded{
+                               [&](auto arg) { std::cout << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](Vector4 arg) { setValueV4fHelper(arg); },
+                               [&](Quaternion arg) { setValueV4fHelper(arg); },
+                       },
+                       value);
+        }
+
+        template<class ArrayLike>
+        void setValueM4Helper(ArrayLike &value) {
+
+            if (arraysEqual(cache, value)) return;
+
+            glUniformMatrix4fv(addr, 1, false, value.data());
+
+            ensureCapacity(cache, 16);
+            copyArray(cache, value);
+        }
+
+        void setValueM4(const UniformValue &value) {
+
+            std::visit(overloaded{
+                               [&](auto arg) { std::cout << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
+                       },
+                       value);
         }
 
         std::function<void(const UniformValue &, GLTextures *)> getSingularSetter(int type) {
@@ -71,6 +186,18 @@ namespace {
 
                 case 0x1406:
                     return [&](const UniformValue &value, GLTextures *) { setValueV1f(value); };
+
+                case 0x8b50:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV2f(value); };
+
+                case 0x8b51:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV3f(value); };
+
+                case 0x8b52:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV4f(value); };
+
+                case 0x8b5c:
+                    return [&](const UniformValue &value, GLTextures *) { setValueM4(value); };
 
                 default:
                     return [&](const UniformValue &value, GLTextures *) {

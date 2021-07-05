@@ -47,8 +47,8 @@ namespace {
         return r;
     }
 
-    template<class T>
-    bool arraysEqual(const T &a, const T &b) {
+    template<class ArrayLike1, class ArrayLike2>
+    bool arraysEqual(const ArrayLike1 &a, const ArrayLike2 &b) {
 
         if (a.size() != b.size()) return false;
 
@@ -60,8 +60,8 @@ namespace {
         return true;
     }
 
-    template<class ArrayLike>
-    void copyArray(const ArrayLike &a, ArrayLike &b) {
+    template<class ArrayLike1, class ArrayLike2>
+    void copyArray(ArrayLike1 &a, const ArrayLike2 &b) {
 
         for (int i = 0, l = b.size(); i < l; i++) {
 

@@ -271,7 +271,7 @@ void Object3D::getWorldDirection(Vector3 &target) {
 
     this->updateWorldMatrix(true, false);
 
-    auto e = this->matrixWorld.elements();
+    const auto& e = this->matrixWorld.elements;
 
     target.set(e[8], e[9], e[10]).normalize();
 }

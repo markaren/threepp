@@ -11,6 +11,21 @@ Vector4::Vector4(int x, int y, int z, int w) : x((float) x), y((float) y), z((fl
 
 Vector4::Vector4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
 
+float &Vector4::operator[](unsigned int index) {
+    switch (index) {
+        case 0:
+            return x;
+        case 1:
+            return y;
+        case 2:
+            return z;
+        case 3:
+            return w;
+        default:
+            throw std::runtime_error("index out of bound: " + std::to_string(index));
+    }
+}
+
 Vector4 &Vector4::set(float x, float y, float z, float w) {
 
     this->x = x;
@@ -101,7 +116,7 @@ Vector4 &Vector4::multiplyScalar(float scalar) {
 Vector4 &Vector4::applyMatrix4(const Matrix4 &m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z, w_ = this->w;
-    const auto &e = m.elements();
+    const auto &e = m.elements;
 
     this->x = e[0] * x_ + e[4] * y_ + e[8] * z_ + e[12] * w_;
     this->y = e[1] * x_ + e[5] * y_ + e[9] * z_ + e[13] * w_;

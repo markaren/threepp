@@ -27,6 +27,8 @@ namespace threepp {
 
         Vector4(float x, float y, float z, float w);
 
+        float &operator[](unsigned int index);
+
         Vector4 &set(float x, float y, float z, float w);
 
         Vector4 &setScalar(float value);

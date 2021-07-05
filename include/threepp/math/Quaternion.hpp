@@ -3,6 +3,8 @@
 #ifndef THREEPP_QUATERNION_HPP
 #define THREEPP_QUATERNION_HPP
 
+#include <iostream>
+#include <string>
 #include <functional>
 
 namespace threepp {
@@ -18,6 +20,8 @@ namespace threepp {
         Quaternion() = default;
 
         Quaternion(float x, float y, float z, float w);
+
+        float &operator[](unsigned int index);
 
         [[nodiscard]] float x() const {
             return x_;
@@ -129,6 +133,11 @@ namespace threepp {
             array[offset + 3] = this->w_;
         }
 
+        friend std::ostream &operator<<(std::ostream &os, const Quaternion &v) {
+            os << "Quaternion(x=" << v.x_ << ", y=" << v.y_ << ", z=" << v.z_ << ", w=" << v.w_ << ")";
+            return os;
+        }
+
     private:
         float x_ = 0.0;
         float y_ = 0.0;
@@ -137,7 +146,6 @@ namespace threepp {
 
         std::function<void()> onChangeCallback_ = [] {};
 
-        friend class Vector3;
     };
 
 }// namespace threepp

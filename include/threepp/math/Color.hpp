@@ -19,6 +19,8 @@ namespace threepp {
 
         explicit Color(int hex);
 
+        float &operator[](unsigned int index);
+
         Color(float r, float g, float b);
 
         Color &setScalar(float scalar);

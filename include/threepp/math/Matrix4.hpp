@@ -14,11 +14,14 @@ namespace threepp {
     class Matrix4 {
 
     public:
-        Matrix4() = default;
 
-        [[nodiscard]] const auto &elements() const {
-            return elements_;
-        }
+        std::array<float, 16> elements{
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1};
+
+        Matrix4() = default;
 
         float &operator[](unsigned int index);
 
@@ -99,7 +102,7 @@ namespace threepp {
 
             for (auto i = 0; i < 16; i++) {
 
-                this->elements_[i] = array[i + offset];
+                this->elements[i] = array[i + offset];
             }
 
             return *this;
@@ -108,7 +111,7 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) {
 
-            auto &te = this->elements_;
+            auto &te = this->elements;
 
             array[offset] = te[0];
             array[offset + 1] = te[1];
@@ -131,12 +134,6 @@ namespace threepp {
             array[offset + 15] = te[15];
         }
 
-    private:
-        std::array<float, 16> elements_{
-                1, 0, 0, 0,
-                0, 1, 0, 0,
-                0, 0, 1, 0,
-                0, 0, 0, 1};
     };
 
 }// namespace threepp

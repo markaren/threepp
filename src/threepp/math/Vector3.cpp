@@ -15,12 +15,12 @@
 
 using namespace threepp;
 
-Vector3 Vector3::X = Vector3(1,0,0);
-Vector3 Vector3::Y = Vector3(0,1,0);
-Vector3 Vector3::Z = Vector3(0,0,1);
+Vector3 Vector3::X = Vector3(1, 0, 0);
+Vector3 Vector3::Y = Vector3(0, 1, 0);
+Vector3 Vector3::Z = Vector3(0, 0, 1);
 
-Vector3 Vector3::ONES = Vector3(1,1,1);
-Vector3 Vector3::ZEROS = Vector3(0,0,0);
+Vector3 Vector3::ONES = Vector3(1, 1, 1);
+Vector3 Vector3::ZEROS = Vector3(0, 0, 0);
 
 Vector3::Vector3(float x, float y, float z) : x(x), y(y), z(z) {}
 
@@ -64,7 +64,6 @@ Vector3 &Vector3::setZ(float value) {
 }
 
 float &Vector3::operator[](unsigned int index) {
-    if (index >= 3) throw std::runtime_error("index out of bounds: " + std::to_string(index));
     switch (index) {
         case 0:
             return x;
@@ -196,7 +195,7 @@ Vector3 &Vector3::applyNormalMatrix(const Matrix3 &m) {
 Vector3 &Vector3::applyMatrix4(const Matrix4 &m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z;
-    const auto& e = m.elements();
+    const auto &e = m.elements;
 
     const auto w = 1.0f / (e[3] * x + e[7] * y + e[11] * z + e[15]);
 
@@ -210,7 +209,7 @@ Vector3 &Vector3::applyMatrix4(const Matrix4 &m) {
 Vector3 &Vector3::applyQuaternion(const Quaternion &q) {
 
     const auto x = this->x, y = this->y, z = this->z;
-    const auto qx = q.x_, qy = q.y_, qz = q.z_, qw = q.w_;
+    const auto qx = q.x(), qy = q.y(), qz = q.z(), qw = q.w();
 
     // calculate quat * vector
 
@@ -242,7 +241,7 @@ Vector3 &Vector3::transformDirection(const Matrix4 &m) {
     // vector interpreted as a direction
 
     const auto x = this->x, y = this->y, z = this->z;
-    const auto& e = m.elements();
+    const auto &e = m.elements;
 
     this->x = e[0] * x + e[4] * y + e[8] * z;
     this->y = e[1] * x + e[5] * y + e[9] * z;
@@ -439,7 +438,7 @@ float Vector3::manhattanDistanceTo(const Vector3 &v) const {
 
 Vector3 &Vector3::setFromMatrixPosition(const Matrix4 &m) {
 
-    const auto& e = m.elements();
+    const auto &e = m.elements;
 
     this->x = e[12];
     this->y = e[13];
@@ -463,7 +462,7 @@ Vector3 &Vector3::setFromMatrixScale(const Matrix4 &m) {
 
 Vector3 &Vector3::setFromMatrixColumn(const Matrix4 &m, unsigned int index) {
 
-    return this->fromArray(m.elements(), index * 4);
+    return this->fromArray(m.elements, index * 4);
 }
 
 Vector3 &Vector3::setFromMatrix3Column(const Matrix3 &m, unsigned int index) {

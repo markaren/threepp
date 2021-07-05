@@ -68,7 +68,7 @@ Matrix3 &Matrix3::extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis) {
 
 Matrix3 &Matrix3::setFromMatrix4(const Matrix4 &m) {
 
-    auto &me = m.elements();
+    auto &me = m.elements;
 
     this->set(
 

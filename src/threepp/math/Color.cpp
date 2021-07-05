@@ -12,6 +12,19 @@ Color::Color(int hex) {
     setHex(hex);
 }
 
+float &Color::operator[](unsigned int index) {
+    switch (index) {
+        case 0:
+            return r;
+        case 1:
+            return g;
+        case 2:
+            return b;
+        default:
+            throw std::runtime_error("index out of bound: " + std::to_string(index));
+    }
+}
+
 Color &Color::setScalar(float scalar) {
 
     this->r = scalar;

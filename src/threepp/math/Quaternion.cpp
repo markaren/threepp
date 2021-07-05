@@ -12,6 +12,21 @@ using namespace threepp;
 
 Quaternion::Quaternion(float x, float y, float z, float w) : x_(x), y_(y), z_(z), w_(w) {}
 
+float &Quaternion::operator[](unsigned int index) {
+    switch (index) {
+        case 0:
+            return x_;
+        case 1:
+            return y_;
+        case 2:
+            return z_;
+        case 3:
+            return w_;
+        default:
+            throw std::runtime_error("index out of bound: " + std::to_string(index));
+    }
+}
+
 Quaternion &Quaternion::set(float x, float y, float z, float w) {
 
     this->x_ = x;
@@ -129,7 +144,7 @@ Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
 
     // assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)
 
-    const auto& te = m.elements();
+    const auto& te = m.elements;
 
     const auto m11 = te[0], m12 = te[4], m13 = te[8],
                m21 = te[1], m22 = te[5], m23 = te[9],

@@ -31,7 +31,7 @@ Frustum &Frustum::copy(const Frustum &frustum) {
 
 Frustum &Frustum::setFromProjectionMatrix(const Matrix4 &m) {
 
-    const auto &me = m.elements();
+    const auto &me = m.elements;
     const auto me0 = me[0], me1 = me[1], me2 = me[2], me3 = me[3];
     const auto me4 = me[4], me5 = me[5], me6 = me[6], me7 = me[7];
     const auto me8 = me[8], me9 = me[9], me10 = me[10], me11 = me[11];
