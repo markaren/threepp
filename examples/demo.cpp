@@ -22,14 +22,18 @@ int main() {
     const auto geometry = BoxGeometry::create();
     const auto material = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
     material->color.setHex(0x00ff00);
-    const auto cube = Mesh::create(geometry, material);
+    auto cube = Mesh::create(geometry, material);
     scene->add(cube);
+
+    cube->geometry()->computeBoundingBox();
+
 
     camera->position.z = 5;
 
     canvas.animate([&](float dt) {
 //        cube->rotation.x(cube->rotation.x() + 0.01f);
 //        cube->rotation.y(cube->rotation.y() + 0.01f);
+camera->rotation.y(camera->rotation.y() + 0.01f);
 
         renderer.render(scene, camera);
     });

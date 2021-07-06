@@ -33,13 +33,13 @@ namespace threepp::gl {
             GLsizei bytesPerElement;
             if (instanceof <IntBufferAttribute>(attribute)) {
                 auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
-                auto array = attr->array();
+                const auto &array = attr->array();
                 glBufferData(bufferType, (GLsizei) array.size(), array.data(), usage);
                 type = GL_UNSIGNED_INT;
                 bytesPerElement = sizeof(int);
             } else if (instanceof <FloatBufferAttribute>(attribute)) {
                 auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
-                auto array = attr->array();
+                const auto &array = attr->array();
                 glBufferData(bufferType, (GLsizei) array.size(), array.data(), usage);
                 type = GL_FLOAT;
                 bytesPerElement = sizeof(float);

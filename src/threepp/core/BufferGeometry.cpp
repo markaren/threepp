@@ -5,8 +5,6 @@
 
 using namespace threepp;
 
-unsigned int BufferGeometry::_id = 0;
-
 namespace {
 
     Matrix4 _m1;
@@ -28,6 +26,7 @@ IntBufferAttribute *BufferGeometry::getIndex() {
 
     return this->index_.get();
 }
+
 BufferGeometry &BufferGeometry::setIndex(std::vector<int> index) {
 
     this->index_ = IntBufferAttribute::create(std::move(index), 1);

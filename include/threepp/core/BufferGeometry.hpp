@@ -14,6 +14,7 @@
 #include <any>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -24,7 +25,7 @@ namespace threepp {
     class BufferGeometry : public EventDispatcher {
 
     public:
-        const unsigned int id = _id++;
+        const unsigned int id = ++_id;
 
         const std::string uuid = math::generateUUID();
 
@@ -85,20 +86,18 @@ namespace threepp {
 
         [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &getAttributes() const;
 
-        virtual ~BufferGeometry() = default;
-
         static std::shared_ptr<BufferGeometry> create() {
-            return std::shared_ptr<BufferGeometry>(new BufferGeometry());
+            return std::make_shared<BufferGeometry>();
         }
+
+        virtual ~BufferGeometry() = default;
 
     private:
         std::unique_ptr<IntBufferAttribute> index_;
         std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
 
-        static unsigned int _id;
+        inline static unsigned int _id{0};
     };
-
-    typedef std::shared_ptr<BufferGeometry> BufferGeometryPtr;
 
 }// namespace threepp
 

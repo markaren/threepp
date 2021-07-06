@@ -44,7 +44,7 @@ namespace threepp {
                 vertex.x = radius * std::cos(segment);
                 vertex.y = radius * std::sin(segment);
 
-                vertices.insert(vertices.begin(), {vertex.x, vertex.y, vertex.z});
+                vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
 
                 // normal
 

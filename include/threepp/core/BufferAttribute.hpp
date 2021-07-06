@@ -19,7 +19,6 @@ namespace threepp {
     class BufferAttribute {
 
     public:
-
         UpdateRange updateRange{0, -1};
 
         unsigned int version = 0;
@@ -57,17 +56,17 @@ namespace threepp {
         const int itemSize_;
         const bool normalized_;
 
-        int usage_ = StaticDrawUsage;
+        int usage_{StaticDrawUsage};
 
         BufferAttribute(int itemSize, bool normalized)
             : itemSize_(itemSize), normalized_(normalized) {}
 
-        inline static Vector3 _vector = Vector3();
-        inline static Vector2 _vector2 = Vector2();
+        inline static Vector3 _vector{};
+        inline static Vector2 _vector2{};
     };
 
     template<class T>
-    class TypedBufferAttribute : public virtual BufferAttribute {
+    class TypedBufferAttribute : public BufferAttribute {
 
     public:
         [[nodiscard]] int count() const override {
@@ -100,13 +99,11 @@ namespace threepp {
             return *this;
         }
 
-        TypedBufferAttribute<T> &copyColorsArray(const std::vector<T> &colors) {
+        TypedBufferAttribute<T> &copyColorsArray(const std::vector<Color> &colors) {
 
             int offset = 0;
 
-            for (auto i = 0, l = colors.length; i < l; i++) {
-
-                auto color = colors[i];
+            for (const auto &color : colors) {
 
                 array_[offset++] = color.r;
                 array_[offset++] = color.g;
@@ -120,7 +117,7 @@ namespace threepp {
 
             int offset = 0;
 
-            for (auto vector : vectors) {
+            for (const auto &vector : vectors) {
 
                 array_[offset++] = vector.x;
                 array_[offset++] = vector.y;
@@ -133,7 +130,7 @@ namespace threepp {
 
             int offset = 0;
 
-            for (auto vector : vectors) {
+            for (const auto &vector : vectors) {
 
                 array_[offset++] = vector.x;
                 array_[offset++] = vector.y;
@@ -147,7 +144,7 @@ namespace threepp {
 
             int offset = 0;
 
-            for (auto vector : vectors) {
+            for (const auto &vector : vectors) {
 
                 array_[offset++] = vector.x;
                 array_[offset++] = vector.y;
