@@ -125,7 +125,7 @@ void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material 
 
         transmissive.insert(transmissive.begin(), renderItem);
 
-    } else if (material->transparent == true) {
+    } else if (material->transparent) {
 
         transparent.insert(transparent.begin(), renderItem);
 

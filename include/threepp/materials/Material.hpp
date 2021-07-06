@@ -32,9 +32,9 @@ namespace threepp {
         int blendSrc = SrcAlphaFactor;
         int blendDst = OneMinusSrcAlphaFactor;
         int blendEquation = AddEquation;
-        int blendSrcAlpha = -1;
-        int blendDstAlpha = -1;
-        int blendEquationAlpha = -1;
+        std::optional<int> blendSrcAlpha;
+        std::optional<int> blendDstAlpha;
+        std::optional<int> blendEquationAlpha;
 
         int depthFunc = LessEqualDepth;
         bool depthTest = true;

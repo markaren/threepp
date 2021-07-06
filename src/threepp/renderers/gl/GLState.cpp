@@ -335,7 +335,11 @@ gl::GLState::GLState(const Canvas &canvas)
     enable(GL_DEPTH_TEST);
     depthBuffer.setFunc(LessEqualDepth);
 
+    setFlipSided(false);
+    setCullFace(CullFaceBack);
     enable(GL_CULL_FACE);
+
+    setBlending(NoBlending);
 }
 
 void gl::GLState::enable(int id) {
