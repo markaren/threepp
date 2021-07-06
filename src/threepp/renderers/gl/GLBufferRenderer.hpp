@@ -64,6 +64,8 @@ namespace threepp::gl {
         void render(int start, int count) override {
 
             glDrawElements(mode_, count, type_, (GLvoid *) (start * bytesPerElement_));
+
+            info_.update(count, mode_, 1);
         }
 
         void renderInstances(int start, int count, int primcount) override {
