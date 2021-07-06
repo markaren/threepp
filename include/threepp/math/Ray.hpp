@@ -12,23 +12,21 @@ namespace threepp {
     public:
         explicit Ray(Vector3 origin = Vector3(), Vector3 direction = Vector3());
 
-        Ray &set( const Vector3 &origin, const Vector3 &direction );
+        Ray &set(const Vector3 &origin, const Vector3 &direction);
 
-        Ray &copy( const Ray &ray );
+        Ray &copy(const Ray &ray);
 
-        Vector3 &at( float t, Vector3 &target );
+        Vector3 &at(float t, Vector3 &target);
 
-        Ray &lookAt( const Vector3 &v );
+        Ray &lookAt(const Vector3 &v);
 
-        Ray &recast( float t );
+        Ray &recast(float t);
 
     private:
-
         Vector3 origin_;
         Vector3 direction_;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_RAY_HPP

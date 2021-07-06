@@ -23,11 +23,11 @@ namespace threepp::math {
 
     bool isPowerOfTwo(int value);
 
-    float ceilPowerOfTwo( float value );
+    float ceilPowerOfTwo(float value);
 
-    float floorPowerOfTwo( float value );
+    float floorPowerOfTwo(float value);
 
 
-}// namespace threepp
+}// namespace threepp::math
 
 #endif//THREEPP_MATHUTILS_HPP

@@ -17,7 +17,6 @@ using namespace threepp::gl;
 
 namespace {
 
-
     inline unsigned int createShader(int type, const char *str) {
 
         const auto shader = glCreateShader(type);
@@ -170,18 +169,18 @@ namespace {
 
     std::string resolveIncludes(const std::string &str) {
 
-//        std::smatch sm;
-//        std::regex includePattern(R"(^[ \t]*#include +<([\w\d./]+)>)");
-//
-//        std::string content = str;
-//
-//        while (std::regex_search(content, sm, includePattern)) {
-//
-//            std::cout << sm[1] << std::endl;
-//
-//            content = sm.suffix();
-//
-//        }
+        //        std::smatch sm;
+        //        std::regex includePattern(R"(^[ \t]*#include +<([\w\d./]+)>)");
+        //
+        //        std::string content = str;
+        //
+        //        while (std::regex_search(content, sm, includePattern)) {
+        //
+        //            std::cout << sm[1] << std::endl;
+        //
+        //            content = sm.suffix();
+        //
+        //        }
 
         std::string lookat = str;
 
@@ -193,14 +192,14 @@ namespace {
         std::sregex_iterator rex_end;
         size_t pos = 0;
 
-        while(rex_it != rex_end) {
+        while (rex_it != rex_end) {
             std::smatch match = *rex_it;
             result.append(lookat, pos, match.position(0) - pos);
             pos = match.position(0) + match.length(0);
 
             std::ssub_match sub = match[1];
             std::string r = shaders::ShaderChunk::instance().get(sub.str(), "ShaderChunk");
-            if(r.empty()) {
+            if (r.empty()) {
                 std::stringstream ss;
                 ss << "unable to resolve #include <" << sub.str() << ">";
                 throw std::logic_error(ss.str());
@@ -209,10 +208,9 @@ namespace {
             rex_it++;
         }
 
-        if(pos == 0) return lookat;
+        if (pos == 0) return lookat;
         else {
             result.append(lookat, pos, lookat.length());
-//            std::cout << result << std::endl;
             return result;
         }
     }
@@ -360,7 +358,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
                     std::remove_if(
                             v.begin(),
                             v.end(),
-                            [](const std::string &s) { return s.empty(); }),
+                            [](const std::string &s) { return filterEmptyLine(s); }),
                     v.end());
 
             prefixVertex = utils::join(v);
@@ -378,7 +376,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
                     std::remove_if(
                             v.begin(),
                             v.end(),
-                            [](const std::string &s) { return s.empty(); }),
+                            [](const std::string &s) { return filterEmptyLine(s); }),
                     v.end());
 
             prefixFragment = utils::join(v);
@@ -600,7 +598,6 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
                     v.end());
 
             prefixFragment = utils::join(v);
-
         }
     }
 
@@ -626,7 +623,8 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
             };
 
-            prefixVertex = utils::join(v) + "\n" + prefixVertex;
+            prefixVertex = utils::join(v) + '\n' + prefixVertex;
+
         }
 
         {
@@ -650,7 +648,8 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
             };
 
-            prefixFragment = utils::join(v) + "\n" + prefixFragment;
+            prefixFragment = utils::join(v) + '\n' + prefixFragment;
+
         }
     }
 
@@ -683,7 +682,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
             msg.resize(length);
             glGetProgramInfoLog(program, length, nullptr, &msg.front());
 
-            std::cout << msg << std::endl;
+            std::cerr << msg << std::endl;
         }
     }
 
@@ -691,7 +690,6 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
     glDeleteShader(glFragmentShader);
 
     this->program = program;
-
 }
 
 std::shared_ptr<GLUniforms> GLProgram::getUniforms() {

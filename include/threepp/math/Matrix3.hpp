@@ -13,11 +13,13 @@ namespace threepp {
     class Matrix3 {
 
     public:
-        Matrix3() = default;
 
-        [[nodiscard]] const auto &elements() const {
-            return elements_;
-        }
+        std::array<float, 16> elements{
+                1.f, 0.f, 0.f,
+                0.f, 1.f, 0.f,
+                0.f, 0.f, 1.f};
+
+        Matrix3() = default;
 
         float &operator[](unsigned int index);
 
@@ -50,7 +52,7 @@ namespace threepp {
         template<class ArrayLike>
         Matrix3 &transposeIntoArray(ArrayLike &r) {
 
-            const auto &m = this->elements_;
+            const auto &m = this->elements;
 
             r[0] = m[0];
             r[1] = m[3];
@@ -84,7 +86,7 @@ namespace threepp {
 
             for (auto i = 0; i < 9; i++) {
 
-                this->elements_[i] = array[i + offset];
+                this->elements[i] = array[i + offset];
             }
 
             return *this;
@@ -93,7 +95,7 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) const {
 
-            const auto &te = this->elements_;
+            const auto &te = this->elements;
 
             array[offset] = te[0];
             array[offset + 1] = te[1];
@@ -110,13 +112,7 @@ namespace threepp {
             return array;
         }
 
-    private:
-        std::array<float, 16> elements_{
-                1, 0, 0,
-                0, 1, 0,
-                0, 0, 1};
     };
-
 
 }// namespace threepp
 

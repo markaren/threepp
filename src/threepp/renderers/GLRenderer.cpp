@@ -867,7 +867,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     auto program = materialProperties.currentProgram;
 
-    if (needsProgramChange == true) {
+    if (needsProgramChange) {
 
         program = getProgram(material, scene, object);
     }

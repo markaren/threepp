@@ -64,7 +64,7 @@ namespace threepp {
             return *this;
         }
 
-        template <class ArrayLike>
+        template<class ArrayLike>
         Box3 &setFromPoints(const ArrayLike &points) {
 
             this->makeEmpty();
@@ -128,7 +128,7 @@ namespace threepp {
         Box3 &translate(const Vector3 &offset);
 
         friend std::ostream &operator<<(std::ostream &os, const Box3 &v) {
-            os << "Box3(max=" << v.min_  << ", max=" << v.max_ << ")";
+            os << "Box3(max=" << v.min_ << ", max=" << v.max_ << ")";
             return os;
         }
 

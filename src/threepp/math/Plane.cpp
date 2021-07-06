@@ -14,7 +14,7 @@ namespace {
 
 }
 
-Plane::Plane() : normal(Vector3(1, 0, 0)), constant(0) {}
+Plane::Plane() : normal({1, 0, 0}), constant(0.f) {}
 
 Plane::Plane(Vector3 normal, float constant) : normal(normal), constant(constant) {}
 

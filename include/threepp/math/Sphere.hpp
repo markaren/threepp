@@ -51,7 +51,6 @@ namespace threepp {
         Sphere &expandByPoint(const Vector3 &point);
 
         Sphere &union_(const Sphere &sphere);
-
     };
 
 }// namespace threepp

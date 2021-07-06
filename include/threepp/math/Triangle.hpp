@@ -70,9 +70,9 @@ namespace threepp {
         void closestPointToPoint(const Vector3 &p, Vector3 &target);
 
     private:
-        Vector3 a_ = Vector3();
-        Vector3 b_ = Vector3();
-        Vector3 c_ = Vector3();
+        Vector3 a_{};
+        Vector3 b_{};
+        Vector3 c_{};
     };
 
 

@@ -51,7 +51,7 @@ namespace {
         void setValue(const UniformValue &value, GLTextures *textures) override {
 
             setValueFun(value, textures);
-            std::cout << "setting value of " << activeInfo.name << std::endl;
+//            std::cout << "setting value of " << activeInfo.name << std::endl;
         }
 
 
@@ -106,7 +106,7 @@ namespace {
             float y = value[1];
             float z = value[2];
 
-            std::cout << value << std::endl;
+//            std::cout << value << std::endl;
 
             ensureCapacity(cache, 3);
             if (cache[0] != x && cache[1] != y && cache[2] != z) {

@@ -45,7 +45,6 @@ namespace threepp {
 
     private:
         std::array<Plane, 6> planes_;
-
     };
 
 }// namespace threepp

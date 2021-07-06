@@ -467,7 +467,7 @@ Vector3 &Vector3::setFromMatrixColumn(const Matrix4 &m, unsigned int index) {
 
 Vector3 &Vector3::setFromMatrix3Column(const Matrix3 &m, unsigned int index) {
 
-    return this->fromArray(m.elements(), index * 3);
+    return this->fromArray(m.elements, index * 3);
 }
 
 bool Vector3::equals(const Vector3 &v) const {

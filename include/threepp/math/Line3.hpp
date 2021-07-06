@@ -19,7 +19,7 @@ namespace threepp {
 
         Line3 &copy(const Line3 &line);
 
-        void getCenter(Vector3 &target) const ;
+        void getCenter(Vector3 &target) const;
 
         void delta(Vector3 &target) const;
 
@@ -38,7 +38,6 @@ namespace threepp {
     private:
         Vector3 start_;
         Vector3 end_;
-
     };
 
 }// namespace threepp

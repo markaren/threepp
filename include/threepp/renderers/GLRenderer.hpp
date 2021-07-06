@@ -39,8 +39,6 @@
 
 namespace threepp {
 
-    class GLBackground;
-
     class GLRenderer {
 
     public:

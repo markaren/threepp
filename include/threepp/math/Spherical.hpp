@@ -18,17 +18,16 @@ namespace threepp {
 
         explicit Spherical(float radius = 1, float phi = 1, float theta = 1);
 
-        Spherical &set( float radius, float phi, float theta );
+        Spherical &set(float radius, float phi, float theta);
 
-        Spherical &copy( const Spherical &other );
+        Spherical &copy(const Spherical &other);
 
         // restrict phi to be between EPS and PI-EPS
         Spherical &makeSafe();
 
-        Spherical &setFromVector3( const Vector3 &v );
+        Spherical &setFromVector3(const Vector3 &v);
 
-        Spherical &setFromCartesianCoords( float x, float y, float z );
-
+        Spherical &setFromCartesianCoords(float x, float y, float z);
     };
 
 }// namespace threepp

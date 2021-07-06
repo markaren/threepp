@@ -1,8 +1,6 @@
 
 #include "GLPrograms.hpp"
 
-#include "GLProgram.hpp"
-
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
@@ -101,33 +99,33 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.supportsVertexTextures = vertexTextures;
     p.outputEncoding = renderer.outputEncoding;
 
-    p.map = mapMaterial == nullptr ? false : mapMaterial->map.has_value();
+    p.map = mapMaterial != nullptr && mapMaterial->map.has_value();
     p.mapEncoding = getTextureEncodingFromMap(mapMaterial == nullptr ? emptyMap : mapMaterial->map);
-    p.matcap = matcapMaterial == nullptr ? false : matcapMaterial->matcap.has_value();
+    p.matcap = matcapMaterial != nullptr && matcapMaterial->matcap.has_value();
     p.matcapEncoding = getTextureEncodingFromMap(matcapMaterial == nullptr ? emptyMap : matcapMaterial->matcap);
-    p.envMap = envmapMaterial == nullptr ? false : envmapMaterial->envMap.has_value();
+    p.envMap = envmapMaterial != nullptr && envmapMaterial->envMap.has_value();
     p.envMapMode = p.envMap && envmapMaterial->envMap->mapping.has_value();
     p.envMapEncoding = getTextureEncodingFromMap(envmapMaterial == nullptr ? emptyMap : envmapMaterial->envMap);
-    p.envMapCubeUV = p.envMapMode ? (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping || envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping) : false;
-    p.lightMap = lightmapMaterial == nullptr ? false : lightmapMaterial->lightMap.has_value();
+    p.envMapCubeUV = p.envMapMode != 0 && (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping || envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping);
+    p.lightMap = lightmapMaterial != nullptr && lightmapMaterial->lightMap.has_value();
     p.lightMapEncoding = getTextureEncodingFromMap(lightmapMaterial == nullptr ? emptyMap : envmapMaterial->envMap);
-    p.aoMap = aomapMaterial == nullptr ? false : aomapMaterial->aoMap.has_value();
-    p.emissiveMap = emissiveMaterial == nullptr ? false : emissiveMaterial->emissiveMap.has_value();
+    p.aoMap = aomapMaterial != nullptr && aomapMaterial->aoMap.has_value();
+    p.emissiveMap = emissiveMaterial != nullptr && emissiveMaterial->emissiveMap.has_value();
     p.emissiveMapEncoding = getTextureEncodingFromMap(emissiveMaterial == nullptr ? emptyMap : emissiveMaterial->emissiveMap);
-    p.bumpMap = bumpmapMaterial == nullptr ? false : bumpmapMaterial->bumpMap.has_value();
-    p.normalMap = normalMaterial == nullptr ? false : normalMaterial->normalMap.has_value();
+    p.bumpMap = bumpmapMaterial != nullptr && bumpmapMaterial->bumpMap.has_value();
+    p.normalMap = normalMaterial != nullptr && normalMaterial->normalMap.has_value();
     p.objectSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == ObjectSpaceNormalMap;
     p.tangentSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == TangentSpaceNormalMap;
 //    clearcoatMap: !! material.clearcoatMap
 //    clearcoatRoughnessMap: !! material.clearcoatRoughnessMap
 //    clearcoatNormalMap: !! material.clearcoatNormalMap
-    p.displacementMap = displacementMapMaterial == nullptr ? false : displacementMapMaterial->displacementMap.has_value();
+    p.displacementMap = displacementMapMaterial != nullptr && displacementMapMaterial->displacementMap.has_value();
 //    roughnessMap: !! material.roughnessMap
 //    metalnessMap: !! material.metalnessMap
-    p.specularMap = specularMapMaterial == nullptr ? false : specularMapMaterial->specularMap.has_value();
-    p.alphaMap = alphaMaterial == nullptr ? false : alphaMaterial->alphaMap.has_value();
+    p.specularMap = specularMapMaterial != nullptr && specularMapMaterial->specularMap.has_value();
+    p.alphaMap = alphaMaterial != nullptr && alphaMaterial->alphaMap.has_value();
 
-    p.gradientMap = gradientMaterial == nullptr ? false : gradientMaterial->gradientMap.has_value();
+    p.gradientMap = gradientMaterial != nullptr && gradientMaterial->gradientMap.has_value();
 
     if (sheenMaterial != nullptr) {
         p.sheen = sheenMaterial->sheen;
@@ -183,7 +181,6 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
         p.index0AttributeName = shaderMaterial->index0AttributeName;
     }
 
-
     return p;
 }
 
@@ -224,7 +221,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
 
     //    array.emplace_back(parameters.customProgramCacheKey);
 
-    return utils::join(array, '\n');
+    return utils::join(array);
 }
 
 std::unordered_map<std::string, Uniform> GLPrograms::getUniforms(Material *material) {

@@ -16,10 +16,10 @@ namespace threepp {
 
     public:
         std::array<float, 16> elements{
-                1, 0, 0, 0,
-                0, 1, 0, 0,
-                0, 0, 1, 0,
-                0, 0, 0, 1};
+                1.f, 0.f, 0.f, 0.f,
+                0.f, 1.f, 0.f, 0.f,
+                0.f, 0.f, 1.f, 0.f,
+                0.f, 0.f, 0.f, 1.f};
 
         Matrix4() = default;
 

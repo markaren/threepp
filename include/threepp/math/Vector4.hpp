@@ -16,10 +16,10 @@ namespace threepp {
     class Vector4 {
 
     public:
-        float x = 0.0;
-        float y = 0.0;
-        float z = 0.0;
-        float w = 1.0;
+        float x{0.f};
+        float y{0.f};
+        float z{0.f};
+        float w{1.f};
 
         Vector4() = default;
 
@@ -39,9 +39,9 @@ namespace threepp {
 
         Vector4 &addScalar(float s);
 
-        Vector4 &addVectors( const Vector4 &a, const Vector4 &b );
+        Vector4 &addVectors(const Vector4 &a, const Vector4 &b);
 
-        Vector4 &addScaledVector( const Vector4 &v, float s );
+        Vector4 &addScaledVector(const Vector4 &v, float s);
 
         Vector4 &multiply(const Vector4 &v);
 

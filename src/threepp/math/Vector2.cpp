@@ -150,7 +150,7 @@ Vector2 &Vector2::divideScalar(float scalar) {
 Vector2 &Vector2::applyMatrix3(const Matrix3 &m) {
 
     const auto x_ = this->x, y_ = this->y;
-    const auto &e = m.elements();
+    const auto &e = m.elements;
 
     this->x = e[0] * x_ + e[3] * y_ + e[6];
     this->y = e[1] * x_ + e[4] * y_ + e[7];

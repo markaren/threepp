@@ -10,7 +10,8 @@
 
 using namespace threepp;
 
-Quaternion::Quaternion(float x, float y, float z, float w) : x_(x), y_(y), z_(z), w_(w) {}
+Quaternion::Quaternion(float x, float y, float z, float w)
+    : x_(x), y_(y), z_(z), w_(w) {}
 
 float &Quaternion::operator[](unsigned int index) {
     switch (index) {

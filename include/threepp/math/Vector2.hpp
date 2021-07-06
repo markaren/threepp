@@ -15,8 +15,8 @@ namespace threepp {
     class Vector2 {
 
     public:
-        float x = 0.0;
-        float y = 0.0;
+        float x{0.f};
+        float y{0.f};
 
         Vector2() = default;
 

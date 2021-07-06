@@ -3,9 +3,9 @@
 #ifndef THREEPP_QUATERNION_HPP
 #define THREEPP_QUATERNION_HPP
 
+#include <functional>
 #include <iostream>
 #include <string>
-#include <functional>
 
 namespace threepp {
 
@@ -139,13 +139,12 @@ namespace threepp {
         }
 
     private:
-        float x_ = 0.0;
-        float y_ = 0.0;
-        float z_ = 0.0;
-        float w_ = 1.0;
+        float x_{0.f};
+        float y_{0.f};
+        float z_{0.f};
+        float w_{1.f};
 
         std::function<void()> onChangeCallback_ = [] {};
-
     };
 
 }// namespace threepp
