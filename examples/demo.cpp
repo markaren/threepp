@@ -19,14 +19,11 @@ int main() {
 //    const auto light = AmbientLight::create(0xffffff);
 //    scene->add(light);
 
-    const auto geometry = BoxGeometry::create();
+    const auto geometry = SphereGeometry::create(2);
     const auto material = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
-    material->color.setHex(0x00ff00);
+    material->color.setHex(0xff0000);
     auto cube = Mesh::create(geometry, material);
     scene->add(cube);
-
-    cube->geometry()->computeBoundingBox();
-
 
     camera->position.z = 5;
 

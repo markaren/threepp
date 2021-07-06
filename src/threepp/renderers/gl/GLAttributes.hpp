@@ -115,6 +115,8 @@ namespace threepp::gl {
                 auto &data = buffers_.at(attribute);
 
                 glDeleteBuffers(1, &data.buffer);
+
+                buffers_.erase(attribute);
             }
         }
 
@@ -127,8 +129,11 @@ namespace threepp::gl {
             } else {
 
                 auto &data = buffers_.at(attribute);
-                updateBuffer(data.buffer, attribute, bufferType, data.bytesPerElement);
-                data.version++;
+
+                if (data.version < attribute->version) {
+                    updateBuffer(data.buffer, attribute, bufferType, data.bytesPerElement);
+                    data.version++;
+                }
             }
         }
 

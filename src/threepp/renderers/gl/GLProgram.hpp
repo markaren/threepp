@@ -23,9 +23,7 @@ namespace threepp {
             int id = programIdCount++;
             std::string cacheKey;
             int usedTimes = 1;
-            std::optional<unsigned int> program;
-            unsigned int vertexShader;
-            unsigned int fragmentShader;
+            unsigned int program;
 
             std::shared_ptr<GLUniforms> getUniforms();
 
@@ -42,7 +40,7 @@ namespace threepp {
 
             GLProgram(const GLRenderer &renderer, std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates);
 
-            inline static int programIdCount = 0;
+            inline static int programIdCount{0};
         };
 
     }// namespace gl

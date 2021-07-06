@@ -146,9 +146,9 @@ namespace {
         std::string result = str;
         result = std::regex_replace(result, std::regex("NUM_DIR_LIGHTS"), std::to_string(parameters.numDirLights));
         result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHTS"), std::to_string(parameters.numSpotLights));
-        result = std::regex_replace(result, std::regex("NUM_RECT_AREA_LIGHTS"), std::to_string(0));
+        result = std::regex_replace(result, std::regex("NUM_RECT_AREA_LIGHTS"), std::to_string(parameters.numRectAreaLights));
         result = std::regex_replace(result, std::regex("NUM_POINT_LIGHTS"), std::to_string(parameters.numPointLights));
-        result = std::regex_replace(result, std::regex("NUM_HEMI_LIGHTS"), std::to_string(0));
+        result = std::regex_replace(result, std::regex("NUM_HEMI_LIGHTS"), std::to_string(parameters.numHemiLights));
         result = std::regex_replace(result, std::regex("NUM_DIR_LIGHT_SHADOWS"), std::to_string(parameters.numDirLightShadows));
         result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHT_SHADOWS"), std::to_string(parameters.numSpotLightShadows));
         result = std::regex_replace(result, std::regex("NUM_POINT_LIGHT_SHADOWS"), std::to_string(parameters.numPointLightShadows));
@@ -169,32 +169,17 @@ namespace {
 
     std::string resolveIncludes(const std::string &str) {
 
-        //        std::smatch sm;
-        //        std::regex includePattern(R"(^[ \t]*#include +<([\w\d./]+)>)");
-        //
-        //        std::string content = str;
-        //
-        //        while (std::regex_search(content, sm, includePattern)) {
-        //
-        //            std::cout << sm[1] << std::endl;
-        //
-        //            content = sm.suffix();
-        //
-        //        }
-
-        std::string lookat = str;
-
         static const std::regex rex("#include +<([\\w\\d.]+)>");
 
         std::string result;
 
-        std::sregex_iterator rex_it(lookat.begin(), lookat.end(), rex);
+        std::sregex_iterator rex_it(str.begin(), str.end(), rex);
         std::sregex_iterator rex_end;
         size_t pos = 0;
 
         while (rex_it != rex_end) {
             std::smatch match = *rex_it;
-            result.append(lookat, pos, match.position(0) - pos);
+            result.append(str, pos, match.position(0) - pos);
             pos = match.position(0) + match.length(0);
 
             std::ssub_match sub = match[1];
@@ -208,16 +193,14 @@ namespace {
             rex_it++;
         }
 
-        if (pos == 0) return lookat;
+        if (pos == 0) return str;
         else {
-            result.append(lookat, pos, lookat.length());
+            result.append(str, pos, str.length());
             return result;
         }
     }
 
     // Unroll loops
-
-    //std::regex unrollLoopPattern("#pragma unroll_loop_start\\s+for\\s*\\(\\s*int\\s+i\\s*=\\s*(\\d+)\\s*;\\s*i\\s*<\\s*(\\d+)\\s*;\\s*i\\s*\\+\\+\\s*\\)\\s*{([\\s\\S]+?)}\\s+#pragma unroll_loop_end");
 
     std::string unrollLoops(const std::string &glsl) {
 
@@ -340,12 +323,11 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
     auto envMapModeDefine = generateEnvMapModeDefine(parameters);
     auto envMapBlendingDefine = generateEnvMapBlendingDefine(parameters);
 
-
     auto gammaFactorDefine = (renderer.gammaFactor > 0) ? renderer.gammaFactor : 1.f;
 
     auto customDefines = generateDefines(defines);
 
-    auto program = glCreateProgram();
+    this->program = glCreateProgram();
 
     std::string prefixVertex, prefixFragment;
 
@@ -688,14 +670,12 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
     glDeleteShader(glVertexShader);
     glDeleteShader(glFragmentShader);
-
-    this->program = program;
 }
 
 std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
 
     if (!cachedUniforms) {
-        cachedUniforms = std::make_shared<GLUniforms>(*program);
+        cachedUniforms = std::make_shared<GLUniforms>(program);
     }
 
     return cachedUniforms;
@@ -705,7 +685,7 @@ std::unordered_map<std::string, int> GLProgram::getAttributes() {
 
     if (cachedAttributes.empty()) {
 
-        cachedAttributes = fetchAttributeLocations(*program);
+        cachedAttributes = fetchAttributeLocations(program);
     }
 
     return cachedAttributes;
@@ -715,6 +695,6 @@ void GLProgram::destroy() {
 
     bindingStates.releaseStatesOfProgram(*this);
 
-    glDeleteProgram(*program);
-    this->program = std::nullopt;
+    glDeleteProgram(program);
+    this->program = -1;
 }

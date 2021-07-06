@@ -52,8 +52,6 @@ namespace threepp {
             bool preserveDrawingBuffer;
         };
 
-        gl::GLInfo info;
-
         // clearing
 
         bool autoClear = true;
@@ -141,8 +139,6 @@ namespace threepp {
 
         void renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, std::optional<GeometryGroup> group);
 
-        void compile(Scene *scene, Camera *camera);
-
         void render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera);
 
         void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
@@ -221,9 +217,11 @@ namespace threepp {
         Vector4 _scissor;
         bool _scissorTest = false;
 
+        std::vector<int> _currentDrawBuffers {GL_BACK};
+
         // frustum
 
-        Frustum _frustum;
+        Frustum _frustum{};
 
         // clipping
 
@@ -232,10 +230,11 @@ namespace threepp {
 
         // camera matrices cache
 
-        Matrix4 _projScreenMatrix;
+        Matrix4 _projScreenMatrix{};
 
-        Vector3 _vector3;
+        Vector3 _vector3{};
 
+        gl::GLInfo info;
         gl::GLState state;
 
         gl::GLBackground background;

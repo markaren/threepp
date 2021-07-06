@@ -43,6 +43,8 @@ void GLRenderer::setSize(int width, int height) {
     _height = height;
 
     canvas_.setSize(width * _pixelRatio, height * _pixelRatio);
+
+    this->setViewport(0, 0, width, height);
 }
 
 void GLRenderer::getDrawingBufferSize(Vector2 &target) const {
@@ -232,7 +234,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
     if (index != nullptr) {
 
-        const auto& attribute = attributes.get(index);
+        const auto &attribute = attributes.get(index);
 
         renderer = indexedBufferRenderer.get();
         indexedBufferRenderer->setIndex(*attribute);
@@ -317,49 +319,6 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         renderer->render(drawStart, drawCount);
     }
-}
-
-void GLRenderer::compile(Scene *scene, Camera *camera) {
-
-    currentRenderState = renderStates.get(scene);
-    currentRenderState->init();
-
-    scene->traverseVisible([&](Object3D &object) {
-        auto light = dynamic_cast<Light *>(&object);
-
-        if (light && object.layers.test(camera->layers)) {
-
-            currentRenderState->pushLight(light);
-
-            if (object.castShadow) {
-
-                currentRenderState->pushShadow(light);
-            }
-        }
-    });
-
-    currentRenderState->setupLights();
-
-    scene->traverse([&](Object3D &object) {
-        auto material = object.material();
-
-        if (material) {
-
-            if (false /*Array.isArray(material)*/) {
-
-                //                for (let i = 0; i < material.length; i++) {
-                //
-                //                    const material2 = material[i];
-                //
-                //                    getProgram(material2, scene, object);
-                //                }
-
-            } else {
-
-                getProgram(material, scene, &object);
-            }
-        }
-    });
 }
 
 void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera> &camera) {
@@ -789,7 +748,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
     bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
     bool isShadowMaterial = instanceof <ShadowMaterial>(material);
     bool isShaderMaterial = instanceof <ShaderMaterial>(material);
-    bool isEnvMap = instanceof <MaterialWithEnvMap>(material);
+    bool isEnvMap = instanceof <MaterialWithEnvMap>(material) && dynamic_cast<MaterialWithEnvMap*>(material)->envMap;
 
     textures.resetTextureUnits();
 
@@ -879,7 +838,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
     auto p_uniforms = program->getUniforms();
     auto &m_uniforms = materialProperties.uniforms;
 
-    if (state.useProgram(*program->program)) {
+    if (state.useProgram(program->program)) {
 
         refreshProgram = true;
         refreshMaterial = true;
