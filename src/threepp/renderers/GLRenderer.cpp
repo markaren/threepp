@@ -220,23 +220,19 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
     auto wireframeMaterial = dynamic_cast<MaterialWithWireframe *>(material);
     bool isWireframeMaterial = wireframeMaterial != nullptr;
 
-    if (isWireframeMaterial) {
+    if (isWireframeMaterial && wireframeMaterial->wireframe) {
 
-        if (wireframeMaterial->wireframe) {
-
-            index = geometries.getWireframeAttribute(geometry);
-            rangeFactor = 2;
-        }
+        index = geometries.getWireframeAttribute(geometry);
+        rangeFactor = 2;
     }
 
     bindingStates.setup(object, material, program, geometry, index);
 
-    gl::Buffer attribute{};
     gl::BufferRenderer *renderer = bufferRenderer.get();
 
     if (index != nullptr) {
 
-        attribute = attributes.get(index);
+        const auto& attribute = attributes.get(index);
 
         renderer = indexedBufferRenderer.get();
         indexedBufferRenderer->setIndex(attribute);

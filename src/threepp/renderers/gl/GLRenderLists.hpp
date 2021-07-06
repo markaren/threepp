@@ -25,7 +25,6 @@ namespace threepp::gl {
         std::optional<GeometryGroup> group;
     };
 
-
     struct GLRenderList {
 
         std::vector<RenderItem> opaque;

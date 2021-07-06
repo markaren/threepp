@@ -55,7 +55,7 @@ namespace threepp::gl {
         explicit GLIndexedBufferRenderer(GLInfo &info)
             : BufferRenderer(info) {}
 
-        void setIndex(Buffer &value) {
+        void setIndex(const Buffer &value) {
 
             type_ = value.type;
             bytesPerElement_ = value.bytesPerElement;

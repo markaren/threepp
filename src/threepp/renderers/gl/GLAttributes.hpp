@@ -99,7 +99,7 @@ namespace threepp::gl {
             }
         }
 
-        Buffer get(BufferAttribute *attribute) {
+        Buffer &get(BufferAttribute *attribute) {
 
             return buffers_.at(attribute);
         }
