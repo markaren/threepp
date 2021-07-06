@@ -3,9 +3,6 @@
 #ifndef THREEPP_GLPROPERTIES_HPP
 #define THREEPP_GLPROPERTIES_HPP
 
-//#include "GLUniforms.hpp"
-//#include "GLProgram.hpp"
-
 #include "threepp/scenes/Scene.hpp"
 
 #include <optional>
@@ -86,7 +83,11 @@ namespace threepp::gl {
         GLTypeProperties<TextureProperties> textureProperties;
         GLTypeProperties<MaterialProperties> materialProperties;
 
-        void dispose();
+        void dispose() {
+
+            textureProperties.dispose();
+            materialProperties.dispose();
+        }
     };
 
 }// namespace threepp::gl

@@ -42,7 +42,7 @@ namespace threepp::gl {
 
                     const auto &attribute = scope_.wireframeAttributes_.at(geometry->id);
 
-                    scope_.attributes_.remove(attribute);
+                    scope_.attributes_.remove(attribute.get());
                     scope_.wireframeAttributes_.erase(geometry->id);
                 }
 
@@ -66,7 +66,7 @@ namespace threepp::gl {
 
         BufferGeometry *get(BufferGeometry *geometry) {
 
-            if (geometries_.count(geometry->id)) {
+            if (geometries_[geometry->id]) {
                 return geometry;
             }
 
@@ -91,6 +91,62 @@ namespace threepp::gl {
             }
         }
 
+        void updateWireframeAttribute(BufferGeometry *geometry) {
+
+            std::vector<int> indices;
+
+            const auto geometryIndex = geometry->getIndex();
+            const auto geometryPosition = geometry->getAttribute<float>("position");
+            unsigned int version = 0;
+
+            if ( geometryIndex != nullptr ) {
+
+                const auto& array = geometryIndex->array();
+                version = geometryIndex->version;
+
+                for ( int i = 0, l = (int) array.size(); i < l; i += 3 ) {
+
+                    const auto a = array[ i + 0 ];
+                    const auto b = array[ i + 1 ];
+                    const auto c = array[ i + 2 ];
+
+                    indices.insert(indices.end(), { a, b, b, c, c, a });
+
+                }
+
+            } else {
+
+                const auto& array = geometryPosition->array();
+                version = geometryPosition->version;
+
+                for ( int i = 0, l = ( array.size() / 3 ) - 1; i < l; i += 3 ) {
+
+                    const auto a = i + 0;
+                    const auto b = i + 1;
+                    const auto c = i + 2;
+
+                    indices.insert(indices.end(), {a, b, b, c, c, a} );
+
+                }
+
+            }
+
+            auto attribute = IntBufferAttribute::create(indices, 1);
+            attribute->version = version;
+
+            // Updating index buffer in VAO now. See WebGLBindingStates
+
+            //
+
+            if ( wireframeAttributes_.count(geometry->id) ) {
+                auto previousAttribute = wireframeAttributes_.at(geometry->id).get();
+                attributes_.remove( previousAttribute );
+            }
+
+            //
+
+            wireframeAttributes_[geometry->id] = std::move(attribute);
+        }
 
         IntBufferAttribute *getWireframeAttribute(BufferGeometry *geometry) {
 
@@ -104,7 +160,7 @@ namespace threepp::gl {
 
                     // if the attribute is obsolete, create a new one
 
-                    if (currentAttribute->version() < geometryIndex->version()) {
+                    if (currentAttribute->version < geometryIndex->version) {
 
                         updateWireframeAttribute(geometry);
                     }
@@ -115,7 +171,7 @@ namespace threepp::gl {
                 updateWireframeAttribute(geometry);
             }
 
-            return wireframeAttributes_.at(geometry->id);
+            return wireframeAttributes_.at(geometry->id).get();
         }
 
     private:
@@ -126,11 +182,8 @@ namespace threepp::gl {
         OnGeometryDispose onGeometryDispose_;
 
         std::unordered_map<unsigned int, bool> geometries_;
-        std::unordered_map<unsigned int, IntBufferAttribute *> wireframeAttributes_;
+        std::unordered_map<unsigned int, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;
 
-
-        void updateWireframeAttribute(BufferGeometry *geometry) {
-        }
     };
 
 }// namespace threepp::gl

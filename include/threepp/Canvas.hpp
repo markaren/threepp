@@ -49,7 +49,7 @@ namespace threepp {
 
         [[nodiscard]] int getHeight() const;
 
-        [[nodiscard]] int getAspect() const;
+        [[nodiscard]] float getAspect() const;
 
         void setSize(int width, int height);
 

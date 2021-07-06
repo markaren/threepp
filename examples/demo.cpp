@@ -12,7 +12,7 @@ int main() {
 
     auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color(0xffffff));
+//    renderer.setClearColor(Color(0xffffff));
     renderer.setSize(canvas.getWidth(), canvas.getHeight());
 //    renderer.sortObjects = true;
 
@@ -21,7 +21,7 @@ int main() {
 
     const auto geometry = BoxGeometry::create();
     const auto material = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
-    material->color.setHex(0xffffff);
+    material->color.setHex(0x00ff00);
     const auto cube = Mesh::create(geometry, material);
     scene->add(cube);
 

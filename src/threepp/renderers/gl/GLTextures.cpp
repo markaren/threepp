@@ -78,7 +78,6 @@ gl::GLTextures::GLTextures(gl::GLState &state, gl::GLProperties &properties, gl:
     : state(state), properties(properties), info(info), onTextureDispose_(*this) {
 }
 
-
 void gl::GLTextures::generateMipmap(GLuint target, const Texture &texture, GLuint width, GLuint height) {
 
     glGenerateMipmap(target);

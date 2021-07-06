@@ -45,14 +45,8 @@ namespace threepp {
             inline static int programIdCount = 0;
         };
 
-        inline bool operator==(const GLProgram &p1, const GLProgram &p2) {
-            return p1.cacheKey == p2.cacheKey;
-        }
-
-        inline bool operator!=(const GLProgram &p1, const GLProgram &p2) {
-            return !(p1 == p2);
-        }
     }// namespace gl
+
 }// namespace threepp
 
 #endif//THREEPP_GLPROGRAM_HPP

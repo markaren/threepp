@@ -36,14 +36,14 @@ namespace threepp::gl {
 
         BufferGeometry *update(Object3D *object) {
 
-            const auto frame = info_.render.frame;
+            const int frame = info_.render.frame;
 
-            auto geometry = object->geometry();
-            auto buffergeometry = geometries_.get(geometry);
+            BufferGeometry* geometry = object->geometry();
+            BufferGeometry* buffergeometry = geometries_.get(geometry);
 
             // Update once per frame
 
-            if (!updateMap_.count(buffergeometry) || updateMap_[buffergeometry] != frame) {
+            if (updateMap_[buffergeometry] != frame) {
 
                 geometries_.update(buffergeometry);
 
@@ -76,9 +76,9 @@ namespace threepp::gl {
         }
 
     private:
-        GLInfo info_;
-        GLGeometries geometries_;
-        GLAttributes attributes_;
+        GLInfo& info_;
+        GLGeometries& geometries_;
+        GLAttributes& attributes_;
 
         OnInstancedMeshDispose onInstancedMeshDispose;
 

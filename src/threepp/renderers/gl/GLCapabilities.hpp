@@ -76,7 +76,6 @@ namespace threepp::gl {
               maxSamples(glGetParameter(GL_MAX_SAMPLES)) {}
 
 
-
     };
 
 }// namespace threepp::gl

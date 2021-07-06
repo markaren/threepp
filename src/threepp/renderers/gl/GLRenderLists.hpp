@@ -78,7 +78,6 @@ namespace threepp::gl {
             }
         }
 
-
         void dispose() {
 
             lists.clear();

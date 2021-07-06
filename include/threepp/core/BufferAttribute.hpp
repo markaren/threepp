@@ -19,6 +19,11 @@ namespace threepp {
     class BufferAttribute {
 
     public:
+
+        UpdateRange updateRange{0, -1};
+
+        unsigned int version = 0;
+
         [[nodiscard]] virtual int count() const = 0;
 
         [[nodiscard]] int itemSize() const {
@@ -38,7 +43,7 @@ namespace threepp {
 
         void needsUpdate() {
 
-            version_++;
+            version++;
         }
 
         void setUsage(int value) {
@@ -46,33 +51,23 @@ namespace threepp {
             this->usage_ = value;
         }
 
-        [[nodiscard]] unsigned int version() const {
-            return version_;
-        }
-
-        [[nodiscard]] UpdateRange &getUpdateRange() {
-            return updateRange;
-        }
+        virtual ~BufferAttribute() = default;
 
     protected:
         const int itemSize_;
         const bool normalized_;
 
         int usage_ = StaticDrawUsage;
-        UpdateRange updateRange = {0, -1};
-
-        unsigned int version_ = 0;
 
         BufferAttribute(int itemSize, bool normalized)
             : itemSize_(itemSize), normalized_(normalized) {}
-
 
         inline static Vector3 _vector = Vector3();
         inline static Vector2 _vector2 = Vector2();
     };
 
     template<class T>
-    class TypedBufferAttribute : public BufferAttribute {
+    class TypedBufferAttribute : public virtual BufferAttribute {
 
     public:
         [[nodiscard]] int count() const override {

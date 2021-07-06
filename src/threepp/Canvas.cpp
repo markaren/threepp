@@ -100,10 +100,11 @@ int threepp::Canvas::getHeight() const {
     return pimpl_->getHeight();
 }
 
-int threepp::Canvas::getAspect() const {
+float threepp::Canvas::getAspect() const {
 
-    return getWidth() / getWidth();
+    return (float) getWidth() / (float) getWidth();
 }
+
 void threepp::Canvas::setSize(int width, int height) {
 
     pimpl_->setSize(width, height);

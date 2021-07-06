@@ -456,7 +456,7 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
     //
     state.setPolygonOffset(false);
 
-    // finish);
+    // finish
 
     _currentMaterialId = -1;
     _currentCamera = nullptr;
