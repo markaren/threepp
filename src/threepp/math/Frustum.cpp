@@ -19,6 +19,18 @@ namespace {
 Frustum::Frustum(Plane p0, Plane p1, Plane p2, Plane p3, Plane p4, Plane p5)
     : planes_{p0, p1, p2, p3, p4, p5} {}
 
+Frustum &Frustum::set(const Plane &p0, const Plane &p1, const Plane &p2, const Plane &p3, const Plane &p4, const Plane &p5) {
+
+    planes_[0].copy(p0);
+    planes_[1].copy(p1);
+    planes_[2].copy(p2);
+    planes_[3].copy(p3);
+    planes_[4].copy(p4);
+    planes_[5].copy(p5);
+
+    return *this;
+}
+
 Frustum &Frustum::copy(const Frustum &frustum) {
 
     for (int i = 0; i < 6; i++) {
