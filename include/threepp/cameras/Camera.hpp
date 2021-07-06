@@ -13,8 +13,7 @@ namespace threepp {
     class Camera : public Object3D {
 
     public:
-
-        int zoom = 1;
+        float zoom = 1;
 
         float near;
         float far;
@@ -23,19 +22,43 @@ namespace threepp {
 
         Camera(const Camera &) = delete;
 
-        Matrix4 matrixWorldInverse = Matrix4();
+        Matrix4 matrixWorldInverse{};
 
-        Matrix4 projectionMatrix = Matrix4();
-        Matrix4 projectionMatrixInverse = Matrix4();
+        Matrix4 projectionMatrix{};
+        Matrix4 projectionMatrixInverse{};
+
+        void getWorldDirection(Vector3 &target) override {
+
+            this->updateWorldMatrix(true, false);
+
+            const auto &e = this->matrixWorld.elements;
+
+            target.set(-e[8], -e[9], -e[10]).normalize();
+        }
+
+        void updateMatrixWorld(bool force = false) override {
+
+            Object3D::updateMatrixWorld(force);
+
+            this->matrixWorldInverse.copy(this->matrixWorld).invert();
+        }
+
+        void updateWorldMatrix(bool updateParents, bool updateChildren) override {
+
+            Object3D::updateWorldMatrix(updateParents, updateChildren);
+
+            this->matrixWorldInverse.copy(this->matrixWorld).invert();
+        }
 
         std::string type() const override {
+
             return "Camera";
         }
 
         virtual void updateProjectionMatrix() = 0;
 
     protected:
-        Camera(float near, float far): near(near), far(far) {};
+        Camera(float near, float far) : near(near), far(far){};
     };
 
 }// namespace threepp

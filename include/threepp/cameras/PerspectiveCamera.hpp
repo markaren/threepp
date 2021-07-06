@@ -15,7 +15,7 @@ namespace threepp {
     class PerspectiveCamera : public Camera {
 
     public:
-        int fov;
+        float fov;
 
         float focus = 10;
 
@@ -107,7 +107,7 @@ namespace threepp {
          */
         void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
 
-            this->aspect = (float) fullWidth / (float) fullHeight;
+            this->aspect = (float) fullWidth / fullHeight;
 
             if (!this->view) {
 
@@ -144,10 +144,10 @@ namespace threepp {
 
         void updateProjectionMatrix() override {
 
-            int top = (int) (near * std::tan(math::DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
-            int height = (int) 2 * top;
-            int width = (int) (this->aspect * height);
-            int left = (int) -0.5f * width;
+            float top = (near * std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom);
+            float height = 2.f * top;
+            float width = this->aspect * height;
+            float left = -0.5f * width;
 
             if (this->view && this->view->enabled) {
 
@@ -161,9 +161,9 @@ namespace threepp {
             }
 
             const auto skew = this->filmOffset;
-            if (skew != 0) left += (int) (near * skew / this->getFilmWidth());
+            if (skew != 0) left += (near * skew / this->getFilmWidth());
 
-            this->projectionMatrix.makePerspective((float) left, (float) (left + width), (float) top, (float) (top - height), near, far);
+            this->projectionMatrix.makePerspective(left, (left + width), top, (top - height), near, far);
 
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
@@ -172,13 +172,17 @@ namespace threepp {
             return "PerspectiveCamera";
         }
 
-        static std::shared_ptr<PerspectiveCamera> create(int fov, float aspect = 1, float near = 0.1, float far = 2000) {
+        static std::shared_ptr<PerspectiveCamera> create(float fov, float aspect = 1, float near = 0.1, float far = 2000) {
             return std::shared_ptr<PerspectiveCamera>(new PerspectiveCamera(fov, aspect, near, far));
         }
 
     protected:
-        explicit PerspectiveCamera(int fov, float aspect, float near, float far)
-            : Camera(near, far), fov(fov), aspect(aspect) {}
+        explicit PerspectiveCamera(float fov, float aspect, float near, float far)
+            : Camera(near, far), fov(fov), aspect(aspect) {
+
+            PerspectiveCamera::updateProjectionMatrix();
+
+        }
     };
 
 }// namespace threepp

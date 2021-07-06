@@ -131,7 +131,7 @@ namespace threepp {
 
         void getWorldScale(Vector3 &target);
 
-        void getWorldDirection(Vector3 &target);
+        virtual void getWorldDirection(Vector3 &target);
 
         void traverse(const std::function<void(Object3D &)> &callback);
 
@@ -141,9 +141,9 @@ namespace threepp {
 
         void updateMatrix();
 
-        void updateMatrixWorld(bool force = false);
+        virtual void updateMatrixWorld(bool force = false);
 
-        void updateWorldMatrix(bool updateParents, bool updateChildren);
+        virtual void updateWorldMatrix(bool updateParents, bool updateChildren);
 
         static std::shared_ptr<Object3D> create() {
             return std::shared_ptr<Object3D>(new Object3D());
