@@ -48,7 +48,7 @@ namespace threepp::gl {
                 //TODO
             }
 
-            return {buffer, type, bytesPerElement, attribute->version};
+            return {buffer, type, bytesPerElement, attribute->version+1};
         }
 
         void updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenum bufferType, int bytesPerElement) {
@@ -99,13 +99,9 @@ namespace threepp::gl {
             }
         }
 
-        std::optional<Buffer> get(BufferAttribute *attribute) {
+        Buffer get(BufferAttribute *attribute) {
 
-            if (!buffers_.count(attribute)) {
-                return std::nullopt;
-            } else {
-                return buffers_.at(attribute);
-            }
+            return buffers_.at(attribute);
         }
 
         void remove(BufferAttribute *attribute) {

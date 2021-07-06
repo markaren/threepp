@@ -87,7 +87,7 @@ namespace threepp::gl {
 
                 if (index) {
 
-                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, attributes_.get(index)->buffer);
+                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, attributes_.get(index).buffer);
                 }
             }
         }
@@ -173,9 +173,7 @@ namespace threepp::gl {
             const auto &attributes = geometry->getAttributes();
             int attributesNum = 0;
 
-            for (const auto &[key, value] : attributes) {
-
-                const auto &attribute = attributes.at(key);
+            for (const auto &[key, attribute] : attributes) {
 
                 cache[key] = attribute.get();
 
@@ -276,46 +274,21 @@ namespace threepp::gl {
 
                         // TODO Attribute may not be available on context restore
 
-                        if (!attribute) continue;
+//                        if (!attribute) continue;
 
-                        const auto buffer = attribute->buffer;
-                        const auto type = attribute->type;
-                        const auto bytesPerElement = attribute->bytesPerElement;
+                        const auto buffer = attribute.buffer;
+                        const auto type = attribute.type;
+                        const auto bytesPerElement = attribute.bytesPerElement;
 
                         if (false /*geometryAttribute.isInterleavedBufferAttribute*/) {
 
-//                            const data = geometryAttribute.data;
-//                            const stride = data.stride;
-//                            const offset = geometryAttribute.offset;
+                            // TODO
 
-                            if (false /*data && data.isInstancedInterleavedBuffer*/) {
-
-//                                enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
-//
-//                                if ( geometry._maxInstanceCount === undefined ) {
-//
-//                                    geometry._maxInstanceCount = data.meshPerAttribute * data.count;
-//
-//                                }
-
-                            } else {
-
-                                enableAttribute(programAttribute);
-                            }
-
-//                            glBindBuffer(GL_ARRAY_BUFFER, buffer);
-//                            vertexAttribPointer(programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement);
                         } else {
 
                             if (false /*geometryAttribute.isInstancedBufferAttribute*/) {
 
-//                                enableAttributeAndDivisor( programAttribute, geometryAttribute.meshPerAttribute );
-//
-//                                if ( geometry._maxInstanceCount === undefined ) {
-//
-//                                    geometry._maxInstanceCount = geometryAttribute.meshPerAttribute * geometryAttribute.count;
-//
-//                                }
+                                // TODO
 
                             } else {
 
@@ -416,7 +389,7 @@ namespace threepp::gl {
     private:
         GLuint maxVertexAttributes_;
 
-        std::shared_ptr<GLBindingState> defaultState_;
+        const std::shared_ptr<GLBindingState> defaultState_;
         std::shared_ptr<GLBindingState> currentState_;
 
         GLAttributes &attributes_;

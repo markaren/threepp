@@ -237,7 +237,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
         const auto &attribute = attributes.get(index);
 
         renderer = indexedBufferRenderer.get();
-        indexedBufferRenderer->setIndex(*attribute);
+        indexedBufferRenderer->setIndex(attribute);
     }
 
     //
@@ -394,13 +394,8 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
 
     if (_currentRenderTarget) {
 
-        // Generate mipmap if we're using any kind of mipmap filtering
+        // TODO
 
-        //                textures.updateRenderTargetMipmap( _currentRenderTarget );
-
-        // resolve multisample renderbuffers to a single-sample texture if necessary
-
-        //        textures.updateMultisampleRenderTarget( _currentRenderTarget );
     }
 
     //

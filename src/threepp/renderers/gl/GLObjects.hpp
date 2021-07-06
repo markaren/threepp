@@ -38,16 +38,16 @@ namespace threepp::gl {
 
             const int frame = info_.render.frame;
 
-            BufferGeometry* geometry = object->geometry();
-            BufferGeometry* buffergeometry = geometries_.get(geometry);
+            BufferGeometry *geometry = object->geometry();
+            BufferGeometry *buffergeometry = geometries_.get(geometry);
 
             // Update once per frame
 
-            if (updateMap_[buffergeometry] != frame) {
+            if (!updateMap_.count(buffergeometry->id) || updateMap_[buffergeometry->id] != frame) {
 
                 geometries_.update(buffergeometry);
 
-                updateMap_[buffergeometry] = frame;
+                updateMap_[buffergeometry->id] = frame;
             }
 
             if (instanceof <InstancedMesh>(object)) {
@@ -76,13 +76,13 @@ namespace threepp::gl {
         }
 
     private:
-        GLInfo& info_;
-        GLGeometries& geometries_;
-        GLAttributes& attributes_;
+        GLInfo &info_;
+        GLGeometries &geometries_;
+        GLAttributes &attributes_;
 
         OnInstancedMeshDispose onInstancedMeshDispose;
 
-        std::unordered_map<BufferGeometry *, int> updateMap_;
+        std::unordered_map<unsigned int, int> updateMap_;
     };
 
 }// namespace threepp::gl
