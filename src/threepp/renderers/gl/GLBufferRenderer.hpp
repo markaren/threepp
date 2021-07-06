@@ -19,6 +19,8 @@ namespace threepp::gl {
 
         virtual void render(int start, int count) = 0;
 
+        virtual void renderInstances(int start, int count, int primcount) = 0;
+
         virtual ~BufferRenderer() = default;
 
     protected:
@@ -38,7 +40,7 @@ namespace threepp::gl {
             info_.update(count, mode_, 1);
         }
 
-        void renderInstances(int start, int count, int primcount) {
+        void renderInstances(int start, int count, int primcount) override {
 
             if (primcount == 0) return;
 
@@ -61,14 +63,14 @@ namespace threepp::gl {
 
         void render(int start, int count) override {
 
-            glDrawElements(mode_, count, type_, (GLvoid*)(start * bytesPerElement_));
+            glDrawElements(mode_, count, type_, (GLvoid *) (start * bytesPerElement_));
         }
 
-        void renderInstances(int start, int count, int primcount) {
+        void renderInstances(int start, int count, int primcount) override {
 
             if (primcount == 0) return;
 
-            glDrawElementsInstanced(mode_, count, type_, (GLvoid*)(start * bytesPerElement_), primcount);
+            glDrawElementsInstanced(mode_, count, type_, (GLvoid *) (start * bytesPerElement_), primcount);
 
             info_.update(count, mode_, primcount);
         }

@@ -5,7 +5,9 @@
 
 #include <iostream>
 
-void threepp::gl::GLInfo::update(int count, int mode, int instanceCount) {
+using namespace threepp;
+
+void gl::GLInfo::update(int count, unsigned int mode, int instanceCount) {
 
     render.calls++;
 
@@ -37,7 +39,7 @@ void threepp::gl::GLInfo::update(int count, int mode, int instanceCount) {
 
     }
 }
-void threepp::gl::GLInfo::reset() {
+void gl::GLInfo::reset() {
 
     render.frame ++;
     render.calls = 0;

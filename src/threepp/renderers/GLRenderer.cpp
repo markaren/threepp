@@ -308,16 +308,14 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
 
-        //TODO
-        //        renderer->renderInstances(drawStart, drawCount, object->count);
+        renderer->renderInstances(drawStart, drawCount, instancedMesh->count);
 
     } else if (instanceof <InstancedBufferGeometry>(geometry)) {
 
         auto g = dynamic_cast<InstancedBufferGeometry *>(geometry);
         const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
-        //TODO
-        //                        renderer->renderInstances(drawStart, drawCount, instanceCount);
+        renderer->renderInstances(drawStart, drawCount, instanceCount);
 
     } else {
 
@@ -1031,6 +1029,7 @@ bool GLRenderer::materialNeedsLights(Material *material) {
     bool isShadowMaterial = instanceof <ShadowMaterial>(material);
     bool isShaderMaterial = instanceof <ShaderMaterial>(material);
     bool lights = false;
+
     if (instanceof <MaterialWithLights>(material)) {
         lights = dynamic_cast<MaterialWithLights *>(material)->lights;
     }

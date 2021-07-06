@@ -12,31 +12,31 @@ namespace threepp::gl {
 
     struct MemoryInfo {
 
-        int geometries;
-        int textures;
+        int geometries {0};
+        int textures {0};
 
     };
 
     struct RenderInfo {
 
-        int frame;
-        int calls;
-        int triangles;
-        int points;
-        int lines;
+        int frame {0};
+        int calls {0};
+        int triangles {0};
+        int points {0};
+        int lines {0};
 
     };
 
     struct GLInfo {
 
-        MemoryInfo memory;
-        RenderInfo render;
+        MemoryInfo memory{};
+        RenderInfo render{};
 
         bool autoReset = true;
 
         std::vector<std::shared_ptr<GLProgram>> *programs;
 
-        void update(int count, int mode, int instanceCount);
+        void update(int count, unsigned int mode, int instanceCount);
 
         void reset ();
 
