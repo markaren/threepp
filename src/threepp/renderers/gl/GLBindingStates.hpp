@@ -14,8 +14,10 @@
 #include "threepp/utils/InstanceOf.hpp"
 
 #include <optional>
+#include <threepp/core/InstancedBufferAttribute.hpp>
 #include <threepp/objects/InstancedMesh.hpp>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace threepp::gl {
@@ -27,47 +29,47 @@ namespace threepp::gl {
         std::vector<int> attributeDivisors;
         std::optional<GLuint> object;
         std::unordered_map<std::string, BufferAttribute *> attributes;
-        BufferAttribute *index;
+        BufferAttribute *index = nullptr;
 
-        int attributesNum;
+        int attributesNum = 0;
 
-        bool operator==(const GLBindingState &state) const {
-            return newAttributes == state.newAttributes &&
-                   enabledAttributes == state.enabledAttributes &&
-                   attributeDivisors == state.attributeDivisors &&
-                   object == state.object &&
-                   attributes == state.attributes &&
-                   index == state.index &&
-                   attributesNum == state.attributesNum;
-        }
+        GLBindingState(
+                std::vector<int> newAttributes,
+                std::vector<int> enabledAttributes,
+                std::vector<int> attributeDivisors,
+                const std::optional<GLuint> &object)
+            : newAttributes(std::move(newAttributes)),
+              enabledAttributes(std::move(enabledAttributes)),
+              attributeDivisors(std::move(attributeDivisors)),
+              object(object) {}
     };
 
 
-    typedef std::unordered_map<bool, GLBindingState> StateMap;
+    typedef std::unordered_map<bool, std::shared_ptr<GLBindingState>> StateMap;
     typedef std::unordered_map<int, StateMap> ProgramMap;
 
     struct GLBindingStates {
 
         explicit GLBindingStates(GLAttributes &attributes)
-            : maxVertexAttributes_(glGetParameter(GL_MAX_VERTEX_ATTRIBS)), attributes_(attributes), defaultState_(createBindingState(std::nullopt)), currentState_(defaultState_) {
+            : maxVertexAttributes_(glGetParameter(GL_MAX_VERTEX_ATTRIBS)),
+              attributes_(attributes),
+              defaultState_(createBindingState(std::nullopt)),
+              currentState_(defaultState_) {
         }
 
         void setup(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry, BufferAttribute *index) {
-
-            bool updateBuffers = false;
 
             auto state = getBindingState(geometry, program, material);
 
             if (!(currentState_ == state)) {
 
                 currentState_ = state;
-                bindVertexArrayObject(*currentState_.object);
+                bindVertexArrayObject(*currentState_->object);
             }
 
-            updateBuffers = needsUpdate(geometry, index);
+            bool updateBuffers = needsUpdate(geometry, index);
 
             if (updateBuffers) saveCache(geometry, index);
-
 
             if (instanceof <InstancedMesh>(object)) {
 
@@ -81,11 +83,11 @@ namespace threepp::gl {
 
             if (updateBuffers) {
 
-                setupVertexAttributes(object, material, program, geometry);// TODO
+                setupVertexAttributes(object, material, program, geometry);
 
                 if (index) {
 
-                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, attributes_.get(index).buffer);
+                    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, attributes_.get(index)->buffer);
                 }
             }
         }
@@ -104,7 +106,7 @@ namespace threepp::gl {
             glDeleteVertexArrays(1, &vao);
         }
 
-        GLBindingState getBindingState(BufferGeometry *geometry, std::shared_ptr<GLProgram> &program, Material *material) {
+        std::shared_ptr<GLBindingState> getBindingState(BufferGeometry *geometry, std::shared_ptr<GLProgram> &program, Material *material) {
 
             bool wireframe = false;
 
@@ -112,9 +114,9 @@ namespace threepp::gl {
                 wireframe = dynamic_cast<MaterialWithWireframe *>(material)->wireframe;
             }
 
-            auto programMap = bindingStates[geometry->id];
+            auto& programMap = bindingStates[geometry->id];
 
-            auto stateMap = programMap[program->id];
+            auto& stateMap = programMap[program->id];
 
             if (!stateMap.count(wireframe)) {
 
@@ -124,20 +126,18 @@ namespace threepp::gl {
             return stateMap[wireframe];
         }
 
-        GLBindingState createBindingState(std::optional<GLuint> vao) {
+        std::shared_ptr<GLBindingState> createBindingState(std::optional<GLuint> vao) const {
 
-            return GLBindingState{
+            return std::make_shared<GLBindingState>(
                     std::vector<int>(maxVertexAttributes_),
                     std::vector<int>(maxVertexAttributes_),
                     std::vector<int>(maxVertexAttributes_),
-                    vao,
-                    {},
-                    nullptr};
+                    vao);
         }
 
         bool needsUpdate(BufferGeometry *geometry, BufferAttribute *index) {
 
-            const auto &cachedAttributes = currentState_.attributes;
+            const auto &cachedAttributes = currentState_->attributes;
             const auto &geometryAttributes = geometry->getAttributes();
 
             int attributesNum = 0;
@@ -160,9 +160,9 @@ namespace threepp::gl {
                 attributesNum++;
             }
 
-            if (currentState_.attributesNum != attributesNum) return true;
+            if (currentState_->attributesNum != attributesNum) return true;
 
-            if (currentState_.index != index) return true;
+            if (currentState_->index != index) return true;
 
             return false;
         }
@@ -182,15 +182,15 @@ namespace threepp::gl {
                 attributesNum++;
             }
 
-            currentState_.attributes = cache;
-            currentState_.attributesNum = attributesNum;
+            currentState_->attributes = cache;
+            currentState_->attributesNum = attributesNum;
 
-            currentState_.index = index;
+            currentState_->index = index;
         }
 
         void initAttributes() {
 
-            auto &newAttributes = currentState_.newAttributes;
+            auto &newAttributes = currentState_->newAttributes;
 
             for (int &newAttribute : newAttributes) {
 
@@ -205,9 +205,9 @@ namespace threepp::gl {
 
         void enableAttributeAndDivisor(int attribute, int meshPerAttribute) {
 
-            auto &newAttributes = currentState_.newAttributes;
-            auto &enabledAttributes = currentState_.enabledAttributes;
-            auto &attributeDivisors = currentState_.attributeDivisors;
+            auto &newAttributes = currentState_->newAttributes;
+            auto &enabledAttributes = currentState_->enabledAttributes;
+            auto &attributeDivisors = currentState_->attributeDivisors;
 
             newAttributes[attribute] = 1;
 
@@ -226,8 +226,8 @@ namespace threepp::gl {
 
         void disableUnusedAttributes() {
 
-            auto &newAttributes = currentState_.newAttributes;
-            auto &enabledAttributes = currentState_.enabledAttributes;
+            const auto &newAttributes = currentState_->newAttributes;
+            auto &enabledAttributes = currentState_->enabledAttributes;
 
             for (int i = 0, il = (int) enabledAttributes.size(); i < il; i++) {
 
@@ -243,15 +243,94 @@ namespace threepp::gl {
 
             if (type == GL_INT || type == GL_UNSIGNED_INT) {
 
-                glVertexAttribIPointer(index, size, type, stride, reinterpret_cast<const void *>(offset));
+                glVertexAttribIPointer(index, size, type, stride, (GLvoid*) offset);
 
             } else {
 
-                glVertexAttribPointer(index, size, type, normalized, stride, reinterpret_cast<const void *>(offset));
+                glVertexAttribPointer(index, size, type, normalized, stride, (GLvoid*) offset);
             }
         }
 
         void setupVertexAttributes(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry) {
+
+            initAttributes();
+
+            auto &geometryAttributes = geometry->getAttributes();
+
+            const auto &programAttributes = program->getAttributes();
+
+            //            const auto &materialDefaultAttributeValues = material.defaultAttributeValues;
+
+            for (const auto &[name, programAttribute] : programAttributes) {
+
+                if (programAttribute >= 0) {
+
+                    if (geometryAttributes.count(name)) {
+
+                        auto &geometryAttribute = geometryAttributes.at(name);
+
+                        const auto normalized = geometryAttribute->normalized();
+                        const auto size = geometryAttribute->itemSize();
+
+                        auto attribute = attributes_.get(geometryAttribute.get());
+
+                        // TODO Attribute may not be available on context restore
+
+                        if (!attribute) continue;
+
+                        const auto buffer = attribute->buffer;
+                        const auto type = attribute->type;
+                        const auto bytesPerElement = attribute->bytesPerElement;
+
+                        if (false /*geometryAttribute.isInterleavedBufferAttribute*/) {
+
+//                            const data = geometryAttribute.data;
+//                            const stride = data.stride;
+//                            const offset = geometryAttribute.offset;
+
+                            if (false /*data && data.isInstancedInterleavedBuffer*/) {
+
+//                                enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
+//
+//                                if ( geometry._maxInstanceCount === undefined ) {
+//
+//                                    geometry._maxInstanceCount = data.meshPerAttribute * data.count;
+//
+//                                }
+
+                            } else {
+
+                                enableAttribute(programAttribute);
+                            }
+
+//                            glBindBuffer(GL_ARRAY_BUFFER, buffer);
+//                            vertexAttribPointer(programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement);
+                        } else {
+
+                            if (false /*geometryAttribute.isInstancedBufferAttribute*/) {
+
+//                                enableAttributeAndDivisor( programAttribute, geometryAttribute.meshPerAttribute );
+//
+//                                if ( geometry._maxInstanceCount === undefined ) {
+//
+//                                    geometry._maxInstanceCount = geometryAttribute.meshPerAttribute * geometryAttribute.count;
+//
+//                                }
+
+                            } else {
+
+                                enableAttribute( programAttribute );
+                            }
+
+                            glBindBuffer( GL_ARRAY_BUFFER, buffer );
+                            vertexAttribPointer( programAttribute, size, type, normalized, 0, 0 );
+
+                        }
+                    }
+                }
+            }
+
+            disableUnusedAttributes();
         }
 
         void dispose() {
@@ -268,7 +347,7 @@ namespace threepp::gl {
 
                     for (const auto &wireframe : stateMap) {
 
-                        deleteVertexArrayObject(*stateMap.at(wireframe.first).object);
+                        deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
 
                         stateMap.erase(wireframe.first);
                     }
@@ -293,7 +372,7 @@ namespace threepp::gl {
 
                 for (const auto &wireframe : stateMap) {
 
-                    deleteVertexArrayObject(*stateMap.at(wireframe.first).object);
+                    deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
 
                     stateMap.erase(wireframe.first);
                 }
@@ -317,7 +396,7 @@ namespace threepp::gl {
                 for (const auto &wireframe : stateMap) {
 
                     auto &value = stateMap.at(wireframe.first);
-                    deleteVertexArrayObject(*value.object);
+                    deleteVertexArrayObject(*value->object);
 
                     stateMap.erase(wireframe.first);
                 }
@@ -331,18 +410,18 @@ namespace threepp::gl {
             if (currentState_ == defaultState_) return;
 
             currentState_ = defaultState_;
-            bindVertexArrayObject(*currentState_.object);
+            bindVertexArrayObject(*currentState_->object);
         }
 
     private:
         GLuint maxVertexAttributes_;
 
-        GLBindingState defaultState_;
-        GLBindingState currentState_;
+        std::shared_ptr<GLBindingState> defaultState_;
+        std::shared_ptr<GLBindingState> currentState_;
 
         GLAttributes &attributes_;
 
-        std::unordered_map<int, ProgramMap> bindingStates;
+        std::unordered_map<unsigned int, ProgramMap> bindingStates;
     };
 
 }// namespace threepp::gl

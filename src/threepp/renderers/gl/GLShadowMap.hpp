@@ -26,7 +26,7 @@ namespace threepp {
 
             int type = PCFShadowMap;
 
-            GLShadowMap(GLObjects &_objects)
+            explicit GLShadowMap(GLObjects &_objects)
                 : _objects(_objects),
                   _maxTextureSize(GLCapabilities::instance().maxTextureSize) {}
 
@@ -45,7 +45,7 @@ namespace threepp {
 
             std::unordered_map<std::string, Material *> _materialCache;
 
-            GLint _maxTextureSize;
+            int _maxTextureSize;
         };
 
     }// namespace gl

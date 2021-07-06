@@ -235,7 +235,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
         const auto& attribute = attributes.get(index);
 
         renderer = indexedBufferRenderer.get();
-        indexedBufferRenderer->setIndex(attribute);
+        indexedBufferRenderer->setIndex(*attribute);
     }
 
     //

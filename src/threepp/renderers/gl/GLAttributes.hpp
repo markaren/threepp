@@ -99,9 +99,13 @@ namespace threepp::gl {
             }
         }
 
-        Buffer &get(BufferAttribute *attribute) {
+        std::optional<Buffer> get(BufferAttribute *attribute) {
 
-            return buffers_.at(attribute);
+            if (!buffers_.count(attribute)) {
+                return std::nullopt;
+            } else {
+                return buffers_.at(attribute);
+            }
         }
 
         void remove(BufferAttribute *attribute) {

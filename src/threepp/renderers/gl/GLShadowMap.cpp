@@ -18,8 +18,8 @@ namespace {
 
 void GLShadowMap::render(GLRenderer &_renderer, const std::vector<Light *> &lights, Scene *scene, Camera *camera) {
 
-    if ( enabled == false ) return;
-    if ( autoUpdate == false && needsUpdate == false ) return;
+    if (!enabled) return;
+    if (!autoUpdate && !needsUpdate) return;
 
     if ( lights.empty() ) return;
 

@@ -390,7 +390,6 @@ bool gl::GLState::bindFramebuffer(int target, int framebuffer) {
             currentBoundFramebuffers[GL_DRAW_FRAMEBUFFER] = framebuffer;
         }
 
-
         return true;
     }
 

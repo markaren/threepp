@@ -13,18 +13,24 @@
 namespace threepp {
 
     class ShaderMaterial : public virtual Material,
-                           MaterialWithClipping,
-                           MaterialWithLights,
-                           MaterialWithWireframe,
-                           MaterialWithLineWidth {
+                           public MaterialWithClipping,
+                           public MaterialWithLights,
+                           public MaterialWithWireframe,
+                           public MaterialWithLineWidth,
+                           public MaterialWithDefines {
 
     public:
         std::string vertexShader;
         std::string fragmentShader;
 
-        bool uniformsNeedUpdate;
+       std::unordered_map<std::string, UniformValue> defaultAttributeValues {
+               {"color", Color(1,1,1)},
+               {"uv", Vector2(0,0)},
+               {"uv2", Vector2(0,0)}
+        };
 
         std::optional<std::string> index0AttributeName;
+        bool uniformsNeedUpdate = false;
 
         [[nodiscard]] std::string type() const override {
 
@@ -46,10 +52,11 @@ namespace threepp {
               fragmentShader(shaders::ShaderChunk::instance().default_fragment()) {
 
             this->fog = false;
+            this->lights = false;
+            this->clipping = false;
         }
 
     private:
-
         std::unordered_map<std::string, Uniform> uniforms_;
     };
 

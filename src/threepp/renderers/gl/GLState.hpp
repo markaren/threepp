@@ -28,7 +28,7 @@ namespace threepp::gl {
 
         Vector4 color;
         std::optional<bool> currentColorMask;
-        Vector4 currentColorClear = Vector4(0, 0, 0, 0);
+        Vector4 currentColorClear {0, 0, 0, 0};
 
         void setMask(bool colorMask);
 
