@@ -295,8 +295,8 @@ gl::GLState::GLState(const Canvas &canvas)
     glGetIntegerv(GL_SCISSOR_BOX, scissorParam);
     glGetIntegerv(GL_VIEWPORT, viewportParam);
 
-    currentScissor.fromArray((float *) scissorParam);
-    currentViewport.fromArray((float *) scissorParam);
+    currentScissor.set((float) scissorParam[0], (float) scissorParam[1], (float) scissorParam[2], (float) scissorParam[3]);
+    currentViewport.set((float) viewportParam[0], (float) viewportParam[1], (float) viewportParam[2], (float) viewportParam[3]);
 
     auto enableLambda = [&](int id) {
         enable(id);
@@ -330,7 +330,7 @@ gl::GLState::GLState(const Canvas &canvas)
 
     colorBuffer.setClear(0, 0, 0, 1);
     depthBuffer.setClear(1);
-    stencilBuffer.setClear(1);
+    stencilBuffer.setClear(0);
 
     enable(GL_DEPTH_TEST);
     depthBuffer.setFunc(LessEqualDepth);
@@ -343,7 +343,7 @@ gl::GLState::GLState(const Canvas &canvas)
 }
 
 void gl::GLState::enable(int id) {
-    if (!enabledCapabilities[id]) {
+    if (!enabledCapabilities.count(id) && !enabledCapabilities[id]) {
 
         glEnable(id);
         enabledCapabilities[id] = true;
@@ -351,7 +351,7 @@ void gl::GLState::enable(int id) {
 }
 
 void gl::GLState::disable(int id) {
-    if (enabledCapabilities[id]) {
+    if (enabledCapabilities.count(id) && enabledCapabilities[id]) {
 
         glDisable(id);
         enabledCapabilities[id] = false;
@@ -423,7 +423,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
         return;
     }
 
-    if (currentBlendingEnabled) {
+    if (!currentBlendingEnabled) {
 
         enable(GL_BLEND);
         currentBlendingEnabled = true;

@@ -26,7 +26,7 @@ namespace threepp::gl {
 
         bool locked = false;
 
-        Vector4 color;
+        Vector4 color{};
         std::optional<bool> currentColorMask;
         Vector4 currentColorClear {0, 0, 0, 0};
 
@@ -100,9 +100,9 @@ namespace threepp::gl {
 
     struct GLState {
 
-        ColorBuffer colorBuffer;
-        DepthBuffer depthBuffer;
-        StencilBuffer stencilBuffer;
+        ColorBuffer colorBuffer = ColorBuffer();
+        DepthBuffer depthBuffer = DepthBuffer();
+        StencilBuffer stencilBuffer = StencilBuffer();
 
         std::unordered_map<int, bool> enabledCapabilities;
 
