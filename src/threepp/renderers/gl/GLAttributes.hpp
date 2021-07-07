@@ -32,23 +32,24 @@ namespace threepp::gl {
             GLint type;
             GLsizei bytesPerElement;
             if (instanceof <IntBufferAttribute>(attribute)) {
-                auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
-                const auto &array = attr->array();
-                glBufferData(bufferType, (GLsizei) array.size(), array.data(), usage);
                 type = GL_UNSIGNED_INT;
                 bytesPerElement = sizeof(int);
-            } else if (instanceof <FloatBufferAttribute>(attribute)) {
-                auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
+                auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
                 const auto &array = attr->array();
-                glBufferData(bufferType, (GLsizei) array.size(), array.data(), usage);
+                glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
+
+            } else if (instanceof <FloatBufferAttribute>(attribute)) {
                 type = GL_FLOAT;
                 bytesPerElement = sizeof(float);
+                auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
+                const auto &array = attr->array();
+                glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
             } else {
 
                 //TODO
             }
 
-            return {buffer, type, bytesPerElement, attribute->version+1};
+            return {buffer, type, bytesPerElement, attribute->version + 1};
         }
 
         void updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenum bufferType, int bytesPerElement) {
@@ -63,13 +64,13 @@ namespace threepp::gl {
 
                     auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
                     const auto &array = attr->array();
-                    glBufferSubData(bufferType, 0, (GLsizei) array.size(), array.data());
+                    glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
 
                 } else if (instanceof <FloatBufferAttribute>(attribute)) {
 
                     auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
                     const auto &array = attr->array();
-                    glBufferSubData(bufferType, 0, (GLsizei) array.size(), array.data());
+                    glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
                 } else {
 
                     // TODO
@@ -82,14 +83,14 @@ namespace threepp::gl {
                     auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
                     const auto &array = attr->array();
                     std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
-                    glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) sub.size(), sub.data());
+                    glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size()*bytesPerElement), sub.data());
 
                 } else if (instanceof <FloatBufferAttribute>(attribute)) {
 
                     auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
                     const auto &array = attr->array();
                     std::vector<float> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
-                    glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) sub.size(), sub.data());
+                    glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size()*bytesPerElement), sub.data());
                 } else {
 
                     //TODO
