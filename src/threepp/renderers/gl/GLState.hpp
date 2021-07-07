@@ -135,7 +135,7 @@ namespace threepp::gl {
         unsigned int version = 0;
 
         std::optional<int> currentTextureSlot;
-        std::unordered_map<int, BoundTexture> currentBoundTextures;
+        std::unordered_map<int, std::shared_ptr<BoundTexture>> currentBoundTextures;
 
         std::unordered_map<int, int> emptyTextures;
 

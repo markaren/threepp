@@ -673,22 +673,20 @@ void gl::GLState::bindTexture(int glType, int glTexture) {
         activeTexture();
     }
 
-    BoundTexture &boundTexture = currentBoundTextures[*currentTextureSlot];
+    if (!currentBoundTextures.count(*currentTextureSlot)) {
 
-    // TODO
-    //            if ( boundTexture === undefined ) {
-    //
-    //                boundTexture = { type: undefined, texture: undefined };
-    //                currentBoundTextures[ currentTextureSlot ] = boundTexture;
-    //
-    //            }
+        auto boundTexture = std::make_shared<BoundTexture>();
+        currentBoundTextures[*currentTextureSlot] = boundTexture;
+    }
 
-    if (boundTexture.type != glType || boundTexture.texture != glTexture) {
+    auto boundTexture = currentBoundTextures.at(*currentTextureSlot);
+
+    if (boundTexture->type != glType || boundTexture->texture != glTexture) {
 
         glBindTexture(glType, glTexture || emptyTextures[glType]);
 
-        boundTexture.type = glType;
-        boundTexture.texture = glTexture;
+        boundTexture->type = glType;
+        boundTexture->texture = glTexture;
     }
 }
 
@@ -696,14 +694,14 @@ void gl::GLState::unbindTexture() {
 
     if (currentTextureSlot && currentBoundTextures.count(*currentTextureSlot)) {
 
-        BoundTexture &boundTexture = currentBoundTextures.at(*currentTextureSlot);
+        auto &boundTexture = currentBoundTextures.at(*currentTextureSlot);
 
-        if (boundTexture.type) {
+        if (boundTexture->type) {
 
-            glBindTexture(*boundTexture.type, 0);
+            glBindTexture(*boundTexture->type, 0);
 
-            boundTexture.type = std::nullopt;
-            boundTexture.texture = std::nullopt;
+            boundTexture->type = std::nullopt;
+            boundTexture->texture = std::nullopt;
         }
     }
 }
