@@ -545,7 +545,15 @@ void gl::GLState::setMaterial(const Material *material, bool frontFaceCW) {
 
     (material->blending == NormalBlending && !material->transparent)
             ? setBlending(NoBlending)
-            : setBlending(material->blending, material->blendEquation, material->blendSrc, material->blendDst, material->blendEquationAlpha, material->blendSrcAlpha, material->blendDstAlpha, material->premultipliedAlpha);
+            : setBlending(
+                      material->blending,
+                      material->blendEquation,
+                      material->blendSrc,
+                      material->blendDst,
+                      material->blendEquationAlpha,
+                      material->blendSrcAlpha,
+                      material->blendDstAlpha,
+                      material->premultipliedAlpha);
 
     depthBuffer.setFunc(material->depthFunc);
     depthBuffer.setTest(material->depthTest);

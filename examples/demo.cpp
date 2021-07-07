@@ -18,8 +18,8 @@ int main() {
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
     boxMaterial->color.setRGB(0,1,1);
-//    boxMaterial->transparent = true;
-//    boxMaterial->opacity = 0.1f;
+    boxMaterial->transparent = true;
+    boxMaterial->opacity = 0.5f;
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(1);
     scene->add(box);
@@ -31,6 +31,13 @@ int main() {
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(-1);
     scene->add(sphere);
+
+    const auto planeGeometry = PlaneGeometry::create(5, 5);
+    const auto planeMaterial = MeshBasicMaterial::create();
+    planeMaterial->color.setHex(Color::lightgray);
+    auto plane = Mesh::create(planeGeometry, planeMaterial);
+    plane->position.setZ(-2);
+    scene->add(plane);
 
     camera->position.z = 5;
 
