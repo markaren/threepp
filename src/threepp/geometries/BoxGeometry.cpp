@@ -25,7 +25,7 @@ namespace {
             buildPlane(g,0, 1, 2, -1, -1, g.width, g.height, -g.depth, g.widthSegments, g.heightSegments, 5);// nz
         }
 
-        void buildPlane( BoxGeometry &g, char u, char v, char w, int udir, int vdir, float width, float height, float depth, int gridX, int gridY, int materialIndex) {
+        void buildPlane( BoxGeometry &g, int u, int v, int w, int udir, int vdir, float width, float height, float depth, int gridX, int gridY, int materialIndex) {
 
             const auto segmentWidth = width / gridX;
             const auto segmentHeight = height / gridY;
