@@ -19,7 +19,7 @@ int main() {
     //    const auto light = AmbientLight::create(0xffffff);
     //    scene->add(light);
 
-    const auto geometry = BoxGeometry::create();
+    const auto geometry = SphereGeometry::create();
     const auto material = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
     material->side = DoubleSide;
     material->color.setHex(0xff0000);

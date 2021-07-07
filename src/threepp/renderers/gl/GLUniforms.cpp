@@ -51,7 +51,7 @@ namespace {
         void setValue(const UniformValue &value, GLTextures *textures) override {
 
             setValueFun(value, textures);
-//            std::cout << "setting value of " << activeInfo.name << std::endl;
+            //            std::cout << "setting value of " << activeInfo.name << std::endl;
         }
 
 
@@ -106,7 +106,7 @@ namespace {
             float y = value[1];
             float z = value[2];
 
-//            std::cout << value << std::endl;
+            //            std::cout << value << std::endl;
 
             ensureCapacity(cache, 3);
             if (cache[0] != x && cache[1] != y && cache[2] != z) {
@@ -160,6 +160,26 @@ namespace {
         }
 
         template<class ArrayLike>
+        void setValueM3Helper(ArrayLike &value) {
+
+            if (arraysEqual(cache, value)) return;
+
+            glUniformMatrix3fv(addr, 1, false, value.data());
+
+            ensureCapacity(cache, 9);
+            copyArray(cache, value);
+        }
+
+        void setValueM3(const UniformValue &value) {
+
+            std::visit(overloaded{
+                               [&](auto arg) { std::cout << "setValueM3: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](Matrix3 arg) { setValueM3Helper(arg.elements); },
+                       },
+                       value);
+        }
+
+        template<class ArrayLike>
         void setValueM4Helper(ArrayLike &value) {
 
             if (arraysEqual(cache, value)) return;
@@ -194,6 +214,9 @@ namespace {
 
                 case 0x8b52:
                     return [&](const UniformValue &value, GLTextures *) { setValueV4f(value); };
+
+                case 0x8b5a:
+                    return [&](const UniformValue &value, GLTextures *) { setValueM3(value); };
 
                 case 0x8b5c:
                     return [&](const UniformValue &value, GLTextures *) { setValueM4(value); };
