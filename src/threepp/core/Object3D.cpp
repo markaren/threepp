@@ -2,9 +2,9 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/core/BufferGeometry.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/lights/Light.hpp"
+#include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp;
 
@@ -12,16 +12,26 @@ Vector3 Object3D::defaultUp = Vector3(0, 1, 0);
 
 namespace {
 
-    Vector3 _v1;
-    Quaternion _q1;
-    Matrix4 _m1;
-    Vector3 _target;
+    Vector3 _v1{};
+    Quaternion _q1{};
+    Matrix4 _m1{};
+    Vector3 _target{};
 
-    Vector3 _scale;
-    Vector3 _position;
-    Quaternion _quaternion;
+    Vector3 _scale{};
+    Vector3 _position{};
+    Quaternion _quaternion{};
 
 }// namespace
+
+Object3D::Object3D() {
+    rotation._onChange([this] {
+        quaternion.setFromEuler(rotation, false);
+    });
+    quaternion._onChange([this] {
+        rotation.setFromQuaternion(quaternion, std::nullopt, false);
+    });
+}
+
 
 void Object3D::applyMatrix4(const Matrix4 &matrix) {
 
@@ -180,7 +190,7 @@ Object3D &Object3D::add(Object3D *object) {
 
     if (object->parent) {
 
-        object->parent->remove( object );
+        object->parent->remove(object);
     }
 
     object->parent = this;
@@ -269,7 +279,7 @@ void Object3D::getWorldDirection(Vector3 &target) {
 
     this->updateWorldMatrix(true, false);
 
-    const auto& e = this->matrixWorld.elements;
+    const auto &e = this->matrixWorld.elements;
 
     target.set(e[8], e[9], e[10]).normalize();
 }

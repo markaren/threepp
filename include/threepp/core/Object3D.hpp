@@ -162,19 +162,9 @@ namespace threepp {
         virtual ~Object3D() = default;
 
     protected:
-        Object3D() {
-            rotation._onChange(onRotationChange);
-            quaternion._onChange(onQuaternionChange);
-        };
+        Object3D();
 
     private:
-        std::function<void()> onRotationChange = [&] {
-            quaternion.setFromEuler(rotation, false);
-        };
-
-        std::function<void()> onQuaternionChange = [&] {
-            rotation.setFromQuaternion(quaternion, std::nullopt, false);
-        };
 
         inline static unsigned int _object3Did{0};
 

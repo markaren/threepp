@@ -101,9 +101,9 @@ namespace threepp {
 
 
     private:
-        float x_ = 0.0;
-        float y_ = 0.0;
-        float z_ = 0.0;
+        float x_{0.f};
+        float y_{0.f};
+        float z_{0.f};
         RotationOrders order_ = default_order;
 
         std::function<void()> onChangeCallback_ = [] {};

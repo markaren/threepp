@@ -84,7 +84,6 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
-
         explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
 
         [[nodiscard]] int getTargetPixelRatio() const;

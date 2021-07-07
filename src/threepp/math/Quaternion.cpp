@@ -1,12 +1,12 @@
 
 #include "threepp/math/Quaternion.hpp"
 
+#include "threepp/math/Euler.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
-#include "threepp/math/Euler.hpp"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 
 using namespace threepp;
 
@@ -61,15 +61,15 @@ Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
     // 	20696-function-to-convert-between-dcm-euler-angles-quaternions-and-euler-vectors/
     //	content/SpinCalc.m
 
-    const auto c1 = std::cos( x / 2 );
-    const auto c2 = std::cos( y / 2 );
-    const auto c3 = std::cos( z / 2 );
+    const float c1 = std::cos(x / 2.f);
+    const float c2 = std::cos(y / 2.f);
+    const float c3 = std::cos(z / 2.f);
 
-    const auto s1 = std::sin( x / 2 );
-    const auto s2 = std::sin( y / 2 );
-    const auto s3 = std::sin( z / 2 );
+    const float s1 = std::sin(x / 2.f);
+    const float s2 = std::sin(y / 2.f);
+    const float s3 = std::sin(z / 2.f);
 
-    switch ( order ) {
+    switch (order) {
 
         case Euler::RotationOrders::XYZ:
             this->x_ = s1 * c2 * c3 + c1 * s2 * s3;
@@ -112,13 +112,11 @@ Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
             this->z_ = c1 * c2 * s3 + s1 * s2 * c3;
             this->w_ = c1 * c2 * c3 + s1 * s2 * s3;
             break;
-
     }
 
-    if ( !update ) this->onChangeCallback_();
+    if (!update) this->onChangeCallback_();
 
     return *this;
-
 }
 
 Quaternion &Quaternion::setFromAxisAngle(const Vector3 &axis, float angle) {
@@ -127,7 +125,7 @@ Quaternion &Quaternion::setFromAxisAngle(const Vector3 &axis, float angle) {
 
     // assumes axis is normalized
 
-    const auto halfAngle = angle / 2, s = std::sin(halfAngle);
+    const float halfAngle = angle / 2.f, s = std::sin(halfAngle);
 
     this->x_ = axis.x * s;
     this->y_ = axis.y * s;
@@ -145,7 +143,7 @@ Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
 
     // assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)
 
-    const auto& te = m.elements;
+    const auto &te = m.elements;
 
     const auto m11 = te[0], m12 = te[4], m13 = te[8],
                m21 = te[1], m22 = te[5], m23 = te[9],
@@ -195,10 +193,9 @@ Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
     return *this;
 }
 
-float Quaternion::angleTo(const Quaternion &q) const{
+float Quaternion::angleTo(const Quaternion &q) const {
 
-    return 2 * std::acos( std::abs( std::clamp( this->dot( q ), - 1.0f, 1.0f ) ) );
-
+    return 2 * std::acos(std::abs(std::clamp(this->dot(q), -1.0f, 1.0f)));
 }
 
 Quaternion &Quaternion::identity() {
@@ -267,13 +264,11 @@ Quaternion &Quaternion::normalize() {
 
 Quaternion &Quaternion::multiply(const Quaternion &q) {
 
-    return this->multiplyQuaternions( *this, q );
-
+    return this->multiplyQuaternions(*this, q);
 }
 Quaternion &Quaternion::premultiply(const Quaternion &q) {
 
-    return this->multiplyQuaternions( q, *this );
-
+    return this->multiplyQuaternions(q, *this);
 }
 Quaternion &Quaternion::multiplyQuaternions(const Quaternion &a, const Quaternion &b) {
 
@@ -290,7 +285,6 @@ Quaternion &Quaternion::multiplyQuaternions(const Quaternion &a, const Quaternio
     this->onChangeCallback_();
 
     return *this;
-
 }
 
 bool Quaternion::equals(const Quaternion &v) const {
@@ -303,5 +297,4 @@ Quaternion &Quaternion::_onChange(std::function<void()> callback) {
     this->onChangeCallback_ = std::move(callback);
 
     return *this;
-
 }

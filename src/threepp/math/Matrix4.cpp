@@ -455,7 +455,7 @@ Matrix4 &Matrix4::invert() {
     // based on http://www.euclideanspace.com/maths/algebra/matrix/functions/inverse/fourD/index.htm
     auto &te = this->elements;
 
-    const auto n11 = te[0], n21 = te[1], n31 = te[2], n41 = te[3],
+    const float n11 = te[0], n21 = te[1], n31 = te[2], n41 = te[3],
                n12 = te[4], n22 = te[5], n32 = te[6], n42 = te[7],
                n13 = te[8], n23 = te[9], n33 = te[10], n43 = te[11],
                n14 = te[12], n24 = te[13], n34 = te[14], n44 = te[15],
@@ -466,11 +466,11 @@ Matrix4 &Matrix4::invert() {
             t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
             // clang.format on
 
-    const auto det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
+    const float det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
 
     if (det == 0) return this->set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
-    const auto detInv = 1.0f / det;
+    const float detInv = 1.0f / det;
 
     // clang.format off
     te[ 0 ] = t11 * detInv;

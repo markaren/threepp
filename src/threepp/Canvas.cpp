@@ -20,6 +20,8 @@ public:
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
+        glfwWindowHint(GLFW_SAMPLES, 8); // TODO
+
         window = glfwCreateWindow(params.width_, params.height_, params.title_.c_str(), nullptr, nullptr);
         if (!window) {
             glfwTerminate();
@@ -32,6 +34,8 @@ public:
         glfwMakeContextCurrent(window);
         gladLoadGL();
         glfwSwapInterval(1);
+
+        glEnable(GL_MULTISAMPLE);
     }
 
     [[nodiscard]] int getWidth() const {
