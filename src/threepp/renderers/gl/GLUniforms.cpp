@@ -106,8 +106,6 @@ namespace {
             float y = value[1];
             float z = value[2];
 
-            //            std::cout << value << std::endl;
-
             ensureCapacity(cache, 3);
             if (cache[0] != x && cache[1] != y && cache[2] != z) {
 
@@ -254,7 +252,7 @@ namespace {
         }
     };
 
-    void addUniform(Container *container, std::shared_ptr<UniformObject> uniformObject) {
+    void addUniform(Container *container, const std::shared_ptr<UniformObject>& uniformObject) {
 
         container->seq.emplace_back(uniformObject);
         container->map[uniformObject->id] = uniformObject;
