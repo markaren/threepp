@@ -63,7 +63,7 @@ namespace {
     template<class ArrayLike1, class ArrayLike2>
     void copyArray(ArrayLike1 &a, const ArrayLike2 &b) {
 
-        for (int i = 0, l = b.size(); i < l; i++) {
+        for (int i = 0, l = (int) b.size(); i < l; i++) {
 
             a[i] = b[i];
         }

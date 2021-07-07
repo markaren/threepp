@@ -42,7 +42,9 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas(Canvas::Parameters()
+                          .title("Raw Shader demo")
+                          .antialising(8));
 
     auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;

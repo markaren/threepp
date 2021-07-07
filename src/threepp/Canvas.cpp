@@ -22,8 +22,8 @@ public:
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-        if (params.antialiasing > 0) {
-            glfwWindowHint(GLFW_SAMPLES, params.antialiasing);
+        if (params.antialiasing_ > 0) {
+            glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
         }
 
         window = glfwCreateWindow(params.size_.width, params.size_.height, params.title_.c_str(), nullptr, nullptr);
@@ -41,7 +41,7 @@ public:
         gladLoadGL();
         glfwSwapInterval(1);
 
-        if (params.antialiasing > 0) {
+        if (params.antialiasing_ > 0) {
             glEnable(GL_MULTISAMPLE);
         }
     }

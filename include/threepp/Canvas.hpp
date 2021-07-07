@@ -16,13 +16,11 @@ namespace threepp {
         float getAspect() const {
             return (float) width / height;
         }
-
     };
 
     class Canvas {
 
     public:
-
         struct Parameters;
 
         explicit Canvas(const Parameters &params = Parameters());
@@ -46,9 +44,11 @@ namespace threepp {
     public:
         struct Parameters {
 
-            Parameters() : size_{640, 480} {}
+            Parameters()
+                : size_{640, 480},
+                  antialiasing_{0} {}
 
-            Parameters &title(std::string value) {
+            Parameters&title(std::string value) {
 
                 this->title_ = std::move(value);
 
@@ -67,17 +67,17 @@ namespace threepp {
                 return this->size({width, height});
             }
 
-            Parameters &antialising(WindowSize size) {
+            Parameters &antialising(int antialiasing) {
 
-                this->size_ = size;
+                this->antialiasing_ = antialiasing;
 
                 return *this;
             }
 
         private:
             WindowSize size_;
+            int antialiasing_;
             std::string title_ = "untitled";
-            int antialiasing = 0;
 
             friend class Canvas::Impl;
         };
