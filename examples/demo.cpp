@@ -26,14 +26,17 @@ int main() {
     const auto sphereMaterial = MeshBasicMaterial::create();
     sphereMaterial->color.setHex(0x00ff00);
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
+    sphereMaterial->wireframe = true;
     sphere->position.setX(-1);
     scene->add(sphere);
 
     camera->position.z = 5;
 
     canvas.animate([&](float dt) {
-        box->rotation.x(box->rotation.x() + 0.01f);
-        box->rotation.y(box->rotation.y() + 0.01f);
+        box->rotation.x(box->rotation.x() + 1.f * dt);
+        box->rotation.y(box->rotation.y() + 0.5f * dt);
+
+        sphere->rotation.x(sphere->rotation.x() + 1.f * dt);
 
         renderer.render(scene, camera);
     });
