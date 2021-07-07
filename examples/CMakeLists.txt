@@ -1,9 +1,6 @@
 include_directories(test ${CMAKE_SOURCE_DIR}/include)
 include_directories(test ${CMAKE_SOURCE_DIR}/src)
 
-add_executable(test test.cpp)
-target_link_libraries(test PUBLIC threepp)
-
 add_executable(test_event test_event.cpp)
 target_link_libraries(test_event PUBLIC threepp)
 
@@ -15,7 +12,6 @@ target_link_libraries(demo PUBLIC threepp)
 
 add_executable(raw_shader raw_shader.cpp)
 target_link_libraries(raw_shader PUBLIC threepp)
-
 
 add_executable(test_capabilites test_capabilites.cpp)
 target_link_libraries(test_capabilites

@@ -10,7 +10,6 @@ int main() {
     u.value<float>() = 0.5f;
     std::cout << "Color r=" << u.value<float>() << std::endl;
 
-
     Vector3 myVec(1.f, 1.f, 1.f);
     Uniform u1(myVec);
     Uniform u2 = u1;
@@ -32,8 +31,6 @@ int main() {
     uniforms["light"].value<Vector3>().x = 1;
 
     std::cout << uniforms["light"].value<Vector3>() << std::endl;
-
-
 
     return 0;
 

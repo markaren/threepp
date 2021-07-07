@@ -19,12 +19,6 @@ int main() {
 
     std::cout << texture.image->getData().size() << std::endl;
 
-//    std::ofstream myfile;
-//    myfile.open ("example.png");
-//    for (char i : texture.image->getData()) {
-//        myfile << i;
-//    }
-//    myfile.close();
     return 0;
 
 }
