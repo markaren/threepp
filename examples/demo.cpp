@@ -15,21 +15,25 @@ int main() {
     renderer.setClearColor(Color(0xffffff));
     renderer.setSize(canvas.getWidth(), canvas.getHeight());
 
-    //    const auto light = AmbientLight::create(0xffffff);
-    //    scene->add(light);
+    const auto boxGeometry = BoxGeometry::create();
+    const auto boxMaterial = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
+    boxMaterial->color.setHex(0xff0000);
+    auto box = Mesh::create(boxGeometry, boxMaterial);
+    box->position.setX(1);
+    scene->add(box);
 
-    const auto geometry = BoxGeometry::create();
-    const auto material = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
-    material->side = DoubleSide;
-    material->color.setHex(0xff0000);
-    auto cube = Mesh::create(geometry, material);
-    scene->add(cube);
+    const auto sphereGeometry = SphereGeometry::create();
+    const auto sphereMaterial = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
+    boxMaterial->color.setHex(0xff0000);
+    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
+    sphere->position.setX(-1);
+    scene->add(sphere);
 
     camera->position.z = 5;
 
     canvas.animate([&](float dt) {
-        cube->rotation.x(cube->rotation.x() + 0.01f);
-//        cube->rotation.y(cube->rotation.y() + 0.01f);
+        box->rotation.x(box->rotation.x() + 0.01f);
+        box->rotation.y(box->rotation.y() + 0.01f);
 
         renderer.render(scene, camera);
     });
