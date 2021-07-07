@@ -16,15 +16,15 @@ int main() {
     renderer.setSize(canvas.getWidth(), canvas.getHeight());
 
     const auto boxGeometry = BoxGeometry::create();
-    const auto boxMaterial = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
+    const auto boxMaterial = MeshBasicMaterial::create();
     boxMaterial->color.setHex(0xff0000);
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(1);
     scene->add(box);
 
     const auto sphereGeometry = SphereGeometry::create();
-    const auto sphereMaterial = MeshBasicMaterial::create(/*{ color: 0x00ff00 }*/);
-    boxMaterial->color.setHex(0xff0000);
+    const auto sphereMaterial = MeshBasicMaterial::create();
+//    sphereMaterial->color.setHex(0x00ff00);
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(-1);
     scene->add(sphere);
