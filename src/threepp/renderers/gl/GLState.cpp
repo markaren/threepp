@@ -781,8 +781,10 @@ void gl::GLState::reset() {
 
     glLineWidth(1);
 
-    glScissor(0, 0, canvas.getWidth(), canvas.getHeight());
-    glViewport(0, 0, canvas.getWidth(), canvas.getHeight());
+    auto windowSize = canvas.getSize();
+
+    glScissor(0, 0, windowSize.width, windowSize.height);
+    glViewport(0, 0, windowSize.width, windowSize.height);
 
     // reset internals
 
@@ -814,8 +816,8 @@ void gl::GLState::reset() {
     currentPolygonOffsetFactor = std::nullopt;
     currentPolygonOffsetUnits = std::nullopt;
 
-    currentScissor.set(0, 0, (float) canvas.getWidth(), (float) canvas.getHeight());
-    currentViewport.set(0, 0, (float) canvas.getWidth(), (float) canvas.getHeight());
+    currentScissor.set(0, 0, (float) windowSize.width, (float) windowSize.height);
+    currentViewport.set(0, 0, (float) windowSize.width, (float) windowSize.height);
 
     colorBuffer.reset();
     depthBuffer.reset();

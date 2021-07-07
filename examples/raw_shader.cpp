@@ -82,14 +82,18 @@ int main() {
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
+    canvas.onWindowResize([&](WindowSize size){
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+    });
+
     float value = 0.f;
     mesh->rotation.order(Euler::RotationOrders::YZX);
     canvas.animate([&](float dt) {
         value += 0.005f ;
         mesh->rotation.y(value);
         material->uniforms->operator[]("time").setValue(value * 10);
-//        material->uniforms["time"].needsUpdate = true;
-//        material->uniformsNeedUpdate = true;
 
         renderer.render(scene, camera);
     });

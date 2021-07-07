@@ -9,17 +9,44 @@
 
 namespace threepp {
 
+    struct WindowSize {
+        int width;
+        int height;
+
+        float getAspect() const {
+            return (float) width / height;
+        }
+
+    };
+
     class Canvas {
+
+    public:
+
+        struct Parameters;
+
+        explicit Canvas(const Parameters &params = Parameters());
+
+        [[nodiscard]] WindowSize getSize() const;
+
+        [[nodiscard]] float getAspect() const;
+
+        void setSize(WindowSize size);
+
+        void onWindowResize(std::function<void(WindowSize)> f);
+
+        void animate(const std::function<void(float)> &f) const;
+
+        ~Canvas();
+
+    private:
+        class Impl;
+        std::unique_ptr<Impl> pimpl_;
 
     public:
         struct Parameters {
 
-            int width_;
-            int height_;
-
-            std::string title_;
-
-            Parameters(): width_(640), height_(480) {}
+            Parameters() : size_{640, 480} {}
 
             Parameters &title(std::string value) {
 
@@ -28,39 +55,32 @@ namespace threepp {
                 return *this;
             }
 
-            Parameters &width(int value) {
+            Parameters &size(WindowSize size) {
 
-                this->width_ = value;
+                this->size_ = size;
+
+                return *this;
+            }
+
+            Parameters &size(int width, int height) {
+
+                return this->size({width, height});
+            }
+
+            Parameters &antialising(WindowSize size) {
+
+                this->size_ = size;
 
                 return *this;
             }
 
-            Parameters &height(int value) {
+        private:
+            WindowSize size_;
+            std::string title_ = "untitled";
+            int antialiasing = 0;
 
-                this->height_ = value;
-
-                return *this;
-            }
+            friend class Canvas::Impl;
         };
-
-        explicit Canvas(const Parameters &params = Parameters());
-
-        [[nodiscard]] int getWidth() const;
-
-        [[nodiscard]] int getHeight() const;
-
-        [[nodiscard]] float getAspect() const;
-
-        void setSize(int width, int height);
-
-        void animate(const std::function<void(float)> &f) const;
-
-        ~Canvas();
-
-    private:
-        class Impl;
-
-        std::unique_ptr<Impl> pimpl_;
     };
 
 }// namespace threepp

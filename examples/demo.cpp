@@ -9,11 +9,12 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    camera->position.z = 5;
 
     auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
     renderer.setClearColor(Color(Color::aliceblue));
-    renderer.setSize(canvas.getWidth(), canvas.getHeight());
+    renderer.setSize(canvas.getSize());
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
@@ -39,7 +40,11 @@ int main() {
     plane->position.setZ(-2);
     scene->add(plane);
 
-    camera->position.z = 5;
+    canvas.onWindowResize([&](WindowSize size){
+      camera->aspect = size.getAspect();
+      camera->updateProjectionMatrix();
+      renderer.setSize(size);
+    });
 
     canvas.animate([&](float dt) {
         box->rotation.x(box->rotation.x() + 1.f * dt);

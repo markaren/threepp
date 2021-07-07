@@ -88,9 +88,9 @@ namespace threepp {
 
         [[nodiscard]] int getTargetPixelRatio() const;
 
-        void getSize(Vector2 &target) const;
+        [[nodiscard]] WindowSize getSize() const;
 
-        void setSize(int width, int height);
+        void setSize(WindowSize size);
 
         void getDrawingBufferSize(Vector2 &target) const;
 
@@ -207,8 +207,7 @@ namespace threepp {
 
         //
 
-        int _width;
-        int _height;
+        WindowSize _size;
 
         int _pixelRatio = 1;
 

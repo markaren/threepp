@@ -5,12 +5,14 @@
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
 
+#include <utility>
+
 using namespace threepp;
 
 class Canvas::Impl {
 
 public:
-    explicit Impl(const Canvas::Parameters &params) : width_(params.width_), height_(params.height_) {
+    explicit Impl(const Canvas::Parameters &params) : size_(params.size_) {
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
@@ -20,13 +22,17 @@ public:
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
-        glfwWindowHint(GLFW_SAMPLES, 8); // TODO
+        if (params.antialiasing > 0) {
+            glfwWindowHint(GLFW_SAMPLES, params.antialiasing);
+        }
 
-        window = glfwCreateWindow(params.width_, params.height_, params.title_.c_str(), nullptr, nullptr);
+        window = glfwCreateWindow(params.size_.width, params.size_.height, params.title_.c_str(), nullptr, nullptr);
         if (!window) {
             glfwTerminate();
             exit(EXIT_FAILURE);
         }
+
+        glfwSetWindowUserPointer(window, this);
 
         glfwSetKeyCallback(window, key_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
@@ -35,19 +41,17 @@ public:
         gladLoadGL();
         glfwSwapInterval(1);
 
-        glEnable(GL_MULTISAMPLE);
+        if (params.antialiasing > 0) {
+            glEnable(GL_MULTISAMPLE);
+        }
     }
 
-    [[nodiscard]] int getWidth() const {
-        return width_;
+    [[nodiscard]] WindowSize getSize() const {
+        return size_;
     }
 
-    void setSize(int width, int height) const {
-        glfwSetWindowSize(window, width, height);
-    }
-
-    [[nodiscard]] int getHeight() const {
-        return height_;
+    void setSize(WindowSize size) const {
+        glfwSetWindowSize(window, size.width, size.height);
     }
 
     void animate(const std::function<void(float)> &f) const {
@@ -61,20 +65,26 @@ public:
         }
     }
 
+    void onWindowResize(std::function<void(WindowSize)> f) {
+        this->resizeListener = std::move(f);
+    }
+
     ~Impl() {
         glfwDestroyWindow(window);
         glfwTerminate();
     }
 
 private:
-    int width_;
-    int height_;
+    WindowSize size_;
+    std::function<void(WindowSize)> resizeListener;
 
     GLFWwindow *window;
 
-    static void window_size_callback(GLFWwindow *, int width, int height) {
-        //        this->width = width;
-        //        this->height = height;
+    static void window_size_callback(GLFWwindow *w, int width, int height) {
+        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+        p->size_.width = width;
+        p->size_.height = height;
+        p->resizeListener(p->size_);
     }
 
     static void error_callback(int error, const char *description) {
@@ -82,8 +92,9 @@ private:
     }
 
     static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
+        }
     }
 };
 
@@ -94,24 +105,21 @@ void Canvas::animate(const std::function<void(float)> &f) const {
     pimpl_->animate(f);
 }
 
-int threepp::Canvas::getWidth() const {
+WindowSize threepp::Canvas::getSize() const {
 
-    return pimpl_->getWidth();
-}
-
-int threepp::Canvas::getHeight() const {
-
-    return pimpl_->getHeight();
+    return pimpl_->getSize();
 }
 
 float threepp::Canvas::getAspect() const {
-
-    return (float) getWidth() / (float) getWidth();
+    return getSize().getAspect();
 }
 
-void threepp::Canvas::setSize(int width, int height) {
+void threepp::Canvas::setSize(WindowSize size) {
 
-    pimpl_->setSize(width, height);
+    pimpl_->setSize(size);
+}
+void threepp::Canvas::onWindowResize(std::function<void(WindowSize)> f) {
+    pimpl_->onWindowResize(std::move(f));
 }
 
 threepp::Canvas::~Canvas() = default;

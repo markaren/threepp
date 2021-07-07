@@ -10,9 +10,9 @@
 using namespace threepp;
 
 GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
-    : canvas_(canvas), _width(canvas.getWidth()), _height(canvas.getHeight()),
-      _viewport(0, 0, _width, _height),
-      _scissor(0, 0, _width, _height), state(canvas),
+    : canvas_(canvas), _size(canvas.getSize()),
+      _viewport(0, 0, _size.width, _size.height),
+      _scissor(0, 0, _size.width, _size.height), state(canvas),
       background(state, parameters.premultipliedAlpha),
       bufferRenderer(new gl::GLBufferRenderer(info)),
       indexedBufferRenderer(new gl::GLIndexedBufferRenderer(info)),
@@ -33,33 +33,35 @@ int GLRenderer::getTargetPixelRatio() const {
     return _pixelRatio;
 }
 
-void GLRenderer::getSize(Vector2 &target) const {
-    target.set((float) _width, (float) _height);
+WindowSize GLRenderer::getSize() const {
+    return _size;
 }
 
-void GLRenderer::setSize(int width, int height) {
+void GLRenderer::setSize(WindowSize size) {
 
-    _width = width;
-    _height = height;
+    _size = size;
 
-    canvas_.setSize(width * _pixelRatio, height * _pixelRatio);
+    int canvasWidth = _size.width * _pixelRatio;
+    int canvasHeight = _size.height * _pixelRatio;
 
-    this->setViewport(0, 0, width, height);
+    canvas_.setSize({canvasWidth, canvasHeight});
+
+    this->setViewport(0, 0, size.width, size.height);
 }
 
 void GLRenderer::getDrawingBufferSize(Vector2 &target) const {
 
-    target.set((float) (_width * _pixelRatio), (float) (_height * _pixelRatio)).floor();
+    target.set((float) (_size.width * _pixelRatio), (float) (_size.height * _pixelRatio)).floor();
 }
 
 void GLRenderer::setDrawingBufferSize(int width, int height, int pixelRatio) {
 
-    _width = width;
-    _height = height;
+    _size.width = width;
+    _size.height = height;
 
     _pixelRatio = pixelRatio;
 
-    canvas_.setSize(width * pixelRatio, height * pixelRatio);
+    canvas_.setSize({width * pixelRatio, height * pixelRatio});
 
     this->setViewport(0, 0, width, height);
 }
@@ -925,7 +927,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             materials.refreshFogUniforms(m_uniforms, *fog);
         }
 
-        materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, (float) _height /*, _transmissionRenderTarget*/);
+        materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, (float) _size.height /*, _transmissionRenderTarget*/);
 
         gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }

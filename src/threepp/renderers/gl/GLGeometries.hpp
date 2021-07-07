@@ -119,7 +119,7 @@ namespace threepp::gl {
                 const auto& array = geometryPosition->array();
                 version = geometryPosition->version;
 
-                for ( int i = 0, l = ( array.size() / 3 ) - 1; i < l; i += 3 ) {
+                for ( int i = 0, l = ( (int) array.size() / 3 ) - 1; i < l; i += 3 ) {
 
                     const auto a = i + 0;
                     const auto b = i + 1;
@@ -136,14 +136,10 @@ namespace threepp::gl {
 
             // Updating index buffer in VAO now. See WebGLBindingStates
 
-            //
-
             if ( wireframeAttributes_.count(geometry->id) ) {
                 auto previousAttribute = wireframeAttributes_.at(geometry->id).get();
                 attributes_.remove( previousAttribute );
             }
-
-            //
 
             wireframeAttributes_[geometry->id] = std::move(attribute);
         }
