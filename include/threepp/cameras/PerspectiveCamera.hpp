@@ -39,7 +39,7 @@ namespace threepp {
             /** see {@link http://www.bobatkins.com/photography/technical/field_of_view->html} */
             const auto vExtentSlope = 0.5f * this->getFilmHeight() / focalLength;
 
-            this->fov = (int) (math::RAD2DEG * 2 * std::atan(vExtentSlope));
+            this->fov = (math::RAD2DEG * 2 * std::atan(vExtentSlope));
             this->updateProjectionMatrix();
         }
 
@@ -48,14 +48,14 @@ namespace threepp {
          */
         [[nodiscard]] float getFocalLength() const {
 
-            const auto vExtentSlope = std::tan(math::DEG2RAD * 0.5f * (float) this->fov);
+            const auto vExtentSlope = std::tan(math::DEG2RAD * 0.5f * this->fov);
 
             return 0.5f * this->getFilmHeight() / vExtentSlope;
         }
 
         [[nodiscard]] float getEffectiveFOV() const {
 
-            return math::RAD2DEG * 2.f * std::atan(std::tan(math::DEG2RAD * 0.5f * (float) this->fov) / (float) this->zoom);
+            return math::RAD2DEG * 2.f * std::atan(std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom);
         }
 
         [[nodiscard]] float getFilmWidth() const {

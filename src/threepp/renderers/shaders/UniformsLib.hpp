@@ -17,63 +17,63 @@ namespace threepp::shaders {
     class UniformsLib {
 
     public:
-        std::unordered_map<std::string, Uniform> common{
+        UniformMap common{
                 {"diffuse", Uniform(Color(0xffffff))},
                 {"opacity", Uniform(1.f)},
                 {"map", Uniform()},
                 {"uvTransform", Uniform(Matrix3())},
                 {"alphaMap", Uniform()}};
 
-        std::unordered_map<std::string, Uniform> specularmap{
+        UniformMap specularmap{
                 {"specularMap", Uniform()}};
 
-        std::unordered_map<std::string, Uniform> envmap{
+        UniformMap envmap{
                 {"envmap", Uniform()},
                 {"flipEnvMap", Uniform(-1.f)},
                 {"reflectivity", Uniform()},
                 {"refractionRatio", Uniform(0.98f)},
                 {"maxMipMapLevel", Uniform(0)}};
 
-        std::unordered_map<std::string, Uniform> aomap{
+        UniformMap aomap{
                 {"aomap", Uniform()},
                 {"aoMapIntensity", Uniform(1)}};
 
-        std::unordered_map<std::string, Uniform> lightmap{
+        UniformMap lightmap{
                 {"lightMap", Uniform()},
                 {"lightMapIntesity", Uniform(1)}};
 
-        std::unordered_map<std::string, Uniform> emissivemap{
+        UniformMap emissivemap{
                 {"emissiveMap", Uniform()}};
 
-        std::unordered_map<std::string, Uniform> bumpmap{
+        UniformMap bumpmap{
                 {"bumpMap", Uniform()},
                 {"bumpScale", Uniform(1)}};
 
-        std::unordered_map<std::string, Uniform> normalmap{
+        UniformMap normalmap{
                 {"normalmap", Uniform()},
                 {"normalScale", Uniform(Vector2(1, 1))}};
 
-        std::unordered_map<std::string, Uniform> displacementmap{
+        UniformMap displacementmap{
                 {"displacementMap", Uniform()},
                 {"displacementScale", Uniform(1)},
                 {"displacementBias", Uniform(0)}};
 
-        std::unordered_map<std::string, Uniform> roughnessmap{
+        UniformMap roughnessmap{
                 {"roughnessMap", Uniform()}};
 
-        std::unordered_map<std::string, Uniform> metalnessmap{
+        UniformMap metalnessmap{
                 {"metalnessMap", Uniform()}};
 
-        std::unordered_map<std::string, Uniform> gradientmap{
+        UniformMap gradientmap{
                 {"gradientMap", Uniform()}};
 
-        std::unordered_map<std::string, Uniform> fog{
+        UniformMap fog{
                 {"fogDensity", Uniform(0.00025f)},
                 {"fogNear", Uniform(1.f)},
                 {"fogFar", Uniform(2000.f)},
                 {"fogColor", Uniform(Color(0xffffff))}};
 
-        std::unordered_map<std::string, Uniform> lights{
+        UniformMap lights{
                 {"ambientLightColor", Uniform()},
                 {"lightProbe", Uniform()},
                 {"directionalLights", Uniform()},
@@ -94,7 +94,7 @@ namespace threepp::shaders {
                 {"ltc_2", Uniform()},
         };
 
-        std::unordered_map<std::string, Uniform> points{
+        UniformMap points{
                 {"diffuse", Uniform(Color(0xffffff))},
                 {"opacity", Uniform(1.f)},
                 {"size", Uniform(1.f)},
@@ -103,7 +103,7 @@ namespace threepp::shaders {
                 {"alphaMap", Uniform()},
                 {"uvTransform", Uniform(Matrix3())}};
 
-        std::unordered_map<std::string, Uniform> sprite{
+        UniformMap sprite{
                 {"diffuse", Uniform(Color(0xffffff))},
                 {"opacity", Uniform(1.f)},
                 {"center", Uniform(Vector2(0.5f, 0.5f))},

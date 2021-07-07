@@ -46,10 +46,9 @@ namespace threepp::gl {
         unsigned int lightsStateVersion{};
 
         std::vector<std::shared_ptr<UniformObject>> uniformsList;
-        std::unordered_map<std::string, Uniform> uniforms;
+        std::shared_ptr<UniformMap> uniforms;
 
         unsigned int version{};
-
 
     };
 

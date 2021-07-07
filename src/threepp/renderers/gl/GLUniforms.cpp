@@ -51,7 +51,6 @@ namespace {
         void setValue(const UniformValue &value, GLTextures *textures) override {
 
             setValueFun(value, textures);
-            //            std::cout << "setting value of " << activeInfo.name << std::endl;
         }
 
 
@@ -325,11 +324,11 @@ void GLUniforms::setValue(const std::string &name, const UniformValue &value, GL
     }
 }
 
-void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures) {
+void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>> &seq, std::shared_ptr<UniformMap> &values, GLTextures *textures) {
 
     for (auto &u : seq) {
 
-        Uniform &v = values[u->id];
+        Uniform &v = values->at(u->id);
 
         if (!v.needsUpdate || (v.needsUpdate && v.needsUpdate.value())) {
 
@@ -339,13 +338,13 @@ void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>> &seq, std::u
     }
 }
 
-std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector<std::shared_ptr<UniformObject>> &seq, std::unordered_map<std::string, Uniform> &values) {
+std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector<std::shared_ptr<UniformObject>> &seq, std::shared_ptr<UniformMap> &values) {
 
     std::vector<std::shared_ptr<UniformObject>> r;
 
     for (const auto &u : seq) {
 
-        if (values.count(u->id)) r.emplace_back(u);
+        if (values->count(u->id)) r.emplace_back(u);
     }
 
     return r;

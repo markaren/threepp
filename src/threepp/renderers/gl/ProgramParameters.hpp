@@ -109,7 +109,7 @@ namespace threepp::gl {
 
         std::optional<std::string> index0AttributeName;
 
-        std::unordered_map<std::string, Uniform> uniforms;
+        std::shared_ptr<UniformMap> uniforms;
 
         [[nodiscard]] std::string hash() const {
 

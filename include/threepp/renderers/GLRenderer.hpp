@@ -154,7 +154,7 @@ namespace threepp {
 
         std::shared_ptr<gl::GLProgram> setProgram(Camera *camera, Scene *scene, Material *material, Object3D *object);
 
-        void markUniformsLightsNeedsUpdate(std::unordered_map<std::string, Uniform>& uniforms, bool value );
+        void markUniformsLightsNeedsUpdate(std::shared_ptr<UniformMap>& uniforms, bool value );
 
         bool materialNeedsLights(Material *material);
 

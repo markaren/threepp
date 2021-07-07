@@ -52,6 +52,8 @@ namespace threepp {
         std::optional<UniformValue> value_;
     };
 
+    typedef std::unordered_map<std::string, Uniform> UniformMap;
+
 }// namespace threepp
 
 #endif//THREEPP_UNIFORM_HPP

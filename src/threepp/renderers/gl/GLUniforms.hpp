@@ -38,9 +38,9 @@ namespace threepp::gl {
 
         void setValue(const std::string &name, const UniformValue &value, GLTextures *textures = nullptr);
 
-        static void upload(std::vector<std::shared_ptr<UniformObject>> &seq, std::unordered_map<std::string, Uniform> &values, GLTextures *textures);
+        static void upload(std::vector<std::shared_ptr<UniformObject>> &seq, std::shared_ptr<UniformMap> &values, GLTextures *textures);
 
-        static std::vector<std::shared_ptr<UniformObject>> seqWithValue(std::vector<std::shared_ptr<UniformObject>> &seq, std::unordered_map<std::string, Uniform> &values);
+        static std::vector<std::shared_ptr<UniformObject>> seqWithValue(std::vector<std::shared_ptr<UniformObject>> &seq, std::shared_ptr<UniformMap> &values);
     };
 
 }// namespace threepp::gl

@@ -72,7 +72,7 @@ namespace threepp {
 
         bool toneMapped = true;
 
-        std::unordered_map<std::string, Uniform> uniforms;
+        std::shared_ptr<UniformMap> uniforms;
 
         unsigned int version = 0;
 
@@ -91,7 +91,7 @@ namespace threepp {
         virtual ~Material() = default;
 
     protected:
-        Material() = default;
+        Material(): uniforms(std::make_shared<UniformMap>()) {}
 
     private:
         inline static unsigned int materialId = 0;

@@ -11,20 +11,15 @@
 
 namespace threepp::shaders {
 
-    std::unordered_map<std::string, Uniform> cloneUniforms(const std::unordered_map<std::string, Uniform> &src) {
+    inline std::shared_ptr<UniformMap> mergeUniforms(const std::vector<UniformMap> &uniforms) {
 
-        return src;
-    }
-
-    inline std::unordered_map<std::string, Uniform> mergeUniforms(const std::vector<std::unordered_map<std::string, Uniform>> &uniforms) {
-
-        std::unordered_map<std::string, Uniform> merged;
+        auto merged = std::make_shared<UniformMap>();
 
         for (const auto &u : uniforms) {
 
             for (const auto &[key, value] : u) {
 
-                merged[key] = value;
+                merged->operator[](key) = value;
             }
         }
 

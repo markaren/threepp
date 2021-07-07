@@ -37,7 +37,7 @@ namespace threepp::shaders {
                                       UniformsLib::instance().emissivemap,
                                       UniformsLib::instance().fog,
                                       UniformsLib::instance().lights,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"emissive", Uniform(Color(0x000000))}
                                       }
                               }),// clang-format on
@@ -58,7 +58,7 @@ namespace threepp::shaders {
                                       UniformsLib::instance().displacementmap,
                                       UniformsLib::instance().fog,
                                       UniformsLib::instance().lights,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                             {"emissive", Uniform(Color(0x000000))},
                                             {"specular", Uniform(Color(0x111111))},
                                             {"shininess", Uniform(30)}
@@ -82,7 +82,7 @@ namespace threepp::shaders {
                                       UniformsLib::instance().metalnessmap,
                                       UniformsLib::instance().fog,
                                       UniformsLib::instance().lights,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"emissive", Uniform(Color(0x000000))},
                                               {"roughness", Uniform(1.f)},
                                               {"metalness", Uniform(0.f)},
@@ -105,7 +105,7 @@ namespace threepp::shaders {
                                       UniformsLib::instance().gradientmap,
                                       UniformsLib::instance().fog,
                                       UniformsLib::instance().lights,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"emissive", Uniform(Color(0x000000))}
                                       }
                               }),// clang-format on
@@ -120,7 +120,7 @@ namespace threepp::shaders {
                                       UniformsLib::instance().normalmap,
                                       UniformsLib::instance().displacementmap,
                                       UniformsLib::instance().fog,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"matcap", Uniform()}
                                       }
                               }),// clang-format on
@@ -141,7 +141,7 @@ namespace threepp::shaders {
                 mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().fog,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"scale", Uniform(1)},
                                               {"dashSize", Uniform(1)},
                                               {"totalSize", Uniform(2)}
@@ -167,7 +167,7 @@ namespace threepp::shaders {
                                       UniformsLib::instance().bumpmap,
                                       UniformsLib::instance().normalmap,
                                       UniformsLib::instance().displacementmap,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"opacity", Uniform(1.f)}
                                       }
                               }),// clang-format on
@@ -187,7 +187,7 @@ namespace threepp::shaders {
 
         Shader background{
                 mergeUniforms({// clang-format off
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"uvTransform", Uniform(Matrix3())},
                                               {"t2D", Uniform()}
                                       }
@@ -199,7 +199,7 @@ namespace threepp::shaders {
         Shader cube{
                 mergeUniforms({// clang-format off
                                       UniformsLib::instance().envmap,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"opacity", Uniform(1.f)}
                                       }
                               }),// clang-format on
@@ -209,7 +209,7 @@ namespace threepp::shaders {
 
         Shader equirect{
                 mergeUniforms({// clang-format off
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"tEquirect", Uniform()}
                                       }
                               }),// clang-format on
@@ -221,7 +221,7 @@ namespace threepp::shaders {
                 mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().displacementmap,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"referencePosition", Uniform(Vector3())},
                                               {"nearDistance", Uniform(1)},
                                               {"farDistance", Uniform(1000)}
@@ -235,7 +235,7 @@ namespace threepp::shaders {
                 mergeUniforms({// clang-format off
                                       UniformsLib::instance().lights,
                                       UniformsLib::instance().fog,
-                                      std::unordered_map<std::string, Uniform>{
+                                      UniformMap{
                                               {"color", Uniform(Color(0x00000))},
                                               {"opacity", Uniform(1.f)}
                                       }
@@ -246,8 +246,8 @@ namespace threepp::shaders {
 
         Shader physical{
                 mergeUniforms({// clang-format off
-                                      standard.uniforms,
-                                      std::unordered_map<std::string, Uniform>{
+                                      *standard.uniforms,
+                                      UniformMap{
                                               {"clearcoat", Uniform(0)},
                                               {"clearcoatMap", Uniform()},
                                               {"clearcoatRoughness", Uniform(0)},
@@ -272,44 +272,43 @@ namespace threepp::shaders {
 
         [[nodiscard]] Shader get(const std::string &name) const {
 
-           if (name == "basic") {
-               return basic;
-           } else if (name == "lambert") {
-               return lambert;
-           } else if (name == "phong") {
-               return phong;
-           } else if (name == "standard") {
-               return standard;
-           } else if (name == "toon") {
-               return toon;
-           } else if (name == "matcap") {
-               return matcap;
-           } else if (name == "points") {
-               return points;
-           } else if (name == "dashed") {
-               return dashed;
-           } else if (name == "depth") {
-               return depth;
-           } else if (name == "normal") {
-               return normal;
-           } else if (name == "sprite") {
-               return sprite;
-           } else if (name == "background") {
-               return background;
-           } else if (name == "cube") {
-               return cube;
-           } else if (name == "equirect") {
-               return equirect;
-           } else if (name == "distanceRGBA") {
-               return distanceRGBA;
-           } else if (name == "shadow") {
-               return shadow;
-           } else if (name == "physical") {
-               return physical;
-           } else {
-               throw std::runtime_error("No shader with name: " + name);
-           }
-
+            if (name == "basic") {
+                return basic;
+            } else if (name == "lambert") {
+                return lambert;
+            } else if (name == "phong") {
+                return phong;
+            } else if (name == "standard") {
+                return standard;
+            } else if (name == "toon") {
+                return toon;
+            } else if (name == "matcap") {
+                return matcap;
+            } else if (name == "points") {
+                return points;
+            } else if (name == "dashed") {
+                return dashed;
+            } else if (name == "depth") {
+                return depth;
+            } else if (name == "normal") {
+                return normal;
+            } else if (name == "sprite") {
+                return sprite;
+            } else if (name == "background") {
+                return background;
+            } else if (name == "cube") {
+                return cube;
+            } else if (name == "equirect") {
+                return equirect;
+            } else if (name == "distanceRGBA") {
+                return distanceRGBA;
+            } else if (name == "shadow") {
+                return shadow;
+            } else if (name == "physical") {
+                return physical;
+            } else {
+                throw std::runtime_error("No shader with name: " + name);
+            }
         }
 
         ShaderLib(const ShaderLib &) = delete;

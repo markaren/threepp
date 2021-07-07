@@ -50,7 +50,7 @@ namespace threepp {
 
             std::string getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters);
 
-            std::unordered_map<std::string, Uniform> getUniforms(Material *material);
+            std::shared_ptr<UniformMap> getUniforms(Material *material);
 
             std::shared_ptr<GLProgram> acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey);
 

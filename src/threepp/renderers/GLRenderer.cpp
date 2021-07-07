@@ -395,7 +395,6 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
     if (_currentRenderTarget) {
 
         // TODO
-
     }
 
     //
@@ -672,7 +671,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
     if (! instanceof <ShaderMaterial>(material) && ! instanceof <ShaderMaterial>(material) || material->clipping) {
 
-        uniforms["clippingPlanes"] = clipping.uniform;
+        uniforms->operator[]("clippingPlanes") = clipping.uniform;
     }
 
     updateCommonMaterialProperties(material, parameters);
@@ -686,25 +685,25 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
         // wire up the material to this renderer's lighting state
 
-        uniforms["ambientLightColor"].setValue(lights.state.ambient);
-        uniforms["lightProbe"].setValue(lights.state.probe);
-        uniforms["directionalLights"].setValue(lights.state.directional);
-        uniforms["directionalLightShadows"].setValue(lights.state.directionalShadow);
-        uniforms["spotLights"].setValue(lights.state.spot);
-        uniforms["spotLightShadows"].setValue(lights.state.spotShadow);
-        //        uniforms["rectAreaLights"].setValue(lights.state.rectArea);
-        //        uniforms["ltc_1"].setValue(lights.state.rectAreaLTC1);
-        //        uniforms["ltc_2"].setValue(lights.state.rectAreaLTC2);
-        uniforms["pointLights"].setValue(lights.state.point);
-        uniforms["pointLightShadows"].setValue(lights.state.pointShadow);
-        //        uniforms["hemisphereLights"].setValue(lights.state.hemi);
+        uniforms->operator[]("ambientLightColor").setValue(lights.state.ambient);
+        uniforms->operator[]("lightProbe").setValue(lights.state.probe);
+        uniforms->operator[]("directionalLights").setValue(lights.state.directional);
+        uniforms->operator[]("directionalLightShadows").setValue(lights.state.directionalShadow);
+        uniforms->operator[]("spotLights").setValue(lights.state.spot);
+        uniforms->operator[]("spotLightShadows").setValue(lights.state.spotShadow);
+        //        uniforms["rectAreaLights").setValue(lights.state.rectArea);
+        //        uniforms["ltc_1").setValue(lights.state.rectAreaLTC1);
+        //        uniforms["ltc_2").setValue(lights.state.rectAreaLTC2);
+        uniforms->operator[]("pointLights").setValue(lights.state.point);
+        uniforms->operator[]("pointLightShadows").setValue(lights.state.pointShadow);
+        //        uniforms["hemisphereLights").setValue(lights.state.hemi);
 
-        uniforms["directionalShadowMap"].setValue(lights.state.directionalShadowMap);
-        uniforms["directionalShadowMatrix"].setValue(lights.state.directionalShadowMatrix);
-        uniforms["spotShadowMap"].setValue(lights.state.spotShadowMap);
-        uniforms["spotShadowMatrix"].setValue(lights.state.spotShadowMatrix);
-        uniforms["pointShadowMap"].setValue(lights.state.pointShadowMap);
-        uniforms["pointShadowMatrix"].setValue(lights.state.pointShadowMatrix);
+        uniforms->operator[]("directionalShadowMap").setValue(lights.state.directionalShadowMap);
+        uniforms->operator[]("directionalShadowMatrix").setValue(lights.state.directionalShadowMatrix);
+        uniforms->operator[]("spotShadowMap").setValue(lights.state.spotShadowMap);
+        uniforms->operator[]("spotShadowMatrix").setValue(lights.state.spotShadowMatrix);
+        uniforms->operator[]("pointShadowMap").setValue(lights.state.pointShadowMap);
+        uniforms->operator[]("pointShadowMatrix").setValue(lights.state.pointShadowMatrix);
     }
 
     auto progUniforms = program->getUniforms();
@@ -742,7 +741,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
     bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
     bool isShadowMaterial = instanceof <ShadowMaterial>(material);
     bool isShaderMaterial = instanceof <ShaderMaterial>(material);
-    bool isEnvMap = instanceof <MaterialWithEnvMap>(material) && dynamic_cast<MaterialWithEnvMap*>(material)->envMap;
+    bool isEnvMap = instanceof <MaterialWithEnvMap>(material) && dynamic_cast<MaterialWithEnvMap *>(material)->envMap;
 
     textures.resetTextureUnits();
 
@@ -941,10 +940,10 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
         }
     }
 
-    //                if (material.isSpriteMaterial) {
-    //
-    //                    p_uniforms->setValue("center", object.center);
-    //                }
+    if (false /*material.isSpriteMaterial*/) {
+
+        //                        p_uniforms->setValue("center", object->center);
+    }
 
     // common matrices
 
@@ -955,18 +954,18 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
     return program;
 }
 
-void GLRenderer::markUniformsLightsNeedsUpdate(std::unordered_map<std::string, Uniform> &uniforms, bool value) {
-    uniforms["ambientLightColor"].needsUpdate = value;
-    uniforms["lightProbe"].needsUpdate = value;
+void GLRenderer::markUniformsLightsNeedsUpdate(std::shared_ptr<UniformMap> &uniforms, bool value) {
+    uniforms->operator[]("ambientLightColor").needsUpdate = value;
+    uniforms->operator[]("lightProbe").needsUpdate = value;
 
-    uniforms["directionalLights"].needsUpdate = value;
-    uniforms["directionalLightShadows"].needsUpdate = value;
-    uniforms["pointLights"].needsUpdate = value;
-    uniforms["pointLightShadows"].needsUpdate = value;
-    uniforms["spotLights"].needsUpdate = value;
-    uniforms["spotLightShadows"].needsUpdate = value;
-    uniforms["rectAreaLights"].needsUpdate = value;
-    uniforms["hemisphereLights"].needsUpdate = value;
+    uniforms->operator[]("directionalLights").needsUpdate = value;
+    uniforms->operator[]("directionalLightShadows").needsUpdate = value;
+    uniforms->operator[]("pointLights").needsUpdate = value;
+    uniforms->operator[]("pointLightShadows").needsUpdate = value;
+    uniforms->operator[]("spotLights").needsUpdate = value;
+    uniforms->operator[]("spotLightShadows").needsUpdate = value;
+    uniforms->operator[]("rectAreaLights").needsUpdate = value;
+    uniforms->operator[]("hemisphereLights").needsUpdate = value;
 }
 
 bool GLRenderer::materialNeedsLights(Material *material) {

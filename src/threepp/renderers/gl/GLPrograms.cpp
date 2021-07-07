@@ -231,9 +231,9 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
     return utils::join(array);
 }
 
-std::unordered_map<std::string, Uniform> GLPrograms::getUniforms(Material *material) {
+std::shared_ptr<UniformMap> GLPrograms::getUniforms(Material *material) {
 
-    std::unordered_map<std::string, Uniform> uniforms;
+    std::shared_ptr<UniformMap> uniforms;
 
     if (shaderIDs.count(material->type())) {
 
