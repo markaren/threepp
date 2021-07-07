@@ -107,14 +107,14 @@ namespace {
             float z = value[2];
 
             ensureCapacity(cache, 3);
-            if (cache[0] != x && cache[1] != y && cache[2] != z) {
+//            if (cache[0] != x && cache[1] != y && cache[2] != z) {
 
                 glUniform3f(addr, x, y, z);
 
                 cache[0] = x;
                 cache[1] = y;
                 cache[2] = z;
-            }
+//            }
         }
 
         void setValueV3f(const UniformValue &value) {
@@ -343,7 +343,7 @@ std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector
 
     std::vector<std::shared_ptr<UniformObject>> r;
 
-    for (auto &u : seq) {
+    for (const auto &u : seq) {
 
         if (values.count(u->id)) r.emplace_back(u);
     }

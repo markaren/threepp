@@ -7,10 +7,10 @@ using namespace threepp;
 
 namespace {
 
-    Matrix4 _m1;
-    Vector3 _offset;
-    Box3 _box;
-    Vector3 _vector;
+    Matrix4 _m1{};
+    Vector3 _offset{};
+    Box3 _box{};
+    Vector3 _vector{};
 
 }// namespace
 

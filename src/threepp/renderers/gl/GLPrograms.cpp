@@ -50,26 +50,26 @@ int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
 
 ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
 
-    auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
-    auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
-    auto aomapMaterial = dynamic_cast<MaterialWithAoMap*>(material);
-    auto bumpmapMaterial = dynamic_cast<MaterialWithBumpMap*>(material);
-    auto matcapMaterial = dynamic_cast<MaterialWithMatCap*>(material);
-    auto gradientMaterial = dynamic_cast<MaterialWithGradientMap*>(material);
-    auto envmapMaterial = dynamic_cast<MaterialWithEnvMap*>(material);
-    auto lightmapMaterial = dynamic_cast<MaterialWithLightMap*>(material);
-    auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
-    auto normalMaterial = dynamic_cast<MaterialWithNormalMap*>(material);
-    auto specularMapMaterial = dynamic_cast<MaterialWithSpecularMap*>(material);
-    auto displacementMapMaterial = dynamic_cast<MaterialWithDisplacementMap*>(material);
-    auto combineMaterial = dynamic_cast<MaterialWithCombine*>(material);
-    auto flatshadeMaterial = dynamic_cast<MaterialWithFlatShading*>(material);
-    auto vertextangentsMaterial = dynamic_cast<MaterialWithVertexTangents*>(material);
-    auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking*>(material);
-    auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
-    auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
+    auto mapMaterial = dynamic_cast<MaterialWithMap *>(material);
+    auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap *>(material);
+    auto aomapMaterial = dynamic_cast<MaterialWithAoMap *>(material);
+    auto bumpmapMaterial = dynamic_cast<MaterialWithBumpMap *>(material);
+    auto matcapMaterial = dynamic_cast<MaterialWithMatCap *>(material);
+    auto gradientMaterial = dynamic_cast<MaterialWithGradientMap *>(material);
+    auto envmapMaterial = dynamic_cast<MaterialWithEnvMap *>(material);
+    auto lightmapMaterial = dynamic_cast<MaterialWithLightMap *>(material);
+    auto emissiveMaterial = dynamic_cast<MaterialWithEmissive *>(material);
+    auto normalMaterial = dynamic_cast<MaterialWithNormalMap *>(material);
+    auto specularMapMaterial = dynamic_cast<MaterialWithSpecularMap *>(material);
+    auto displacementMapMaterial = dynamic_cast<MaterialWithDisplacementMap *>(material);
+    auto combineMaterial = dynamic_cast<MaterialWithCombine *>(material);
+    auto flatshadeMaterial = dynamic_cast<MaterialWithFlatShading *>(material);
+    auto vertextangentsMaterial = dynamic_cast<MaterialWithVertexTangents *>(material);
+    auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking *>(material);
+    auto sheenMaterial = dynamic_cast<MaterialWithSheen *>(material);
+    auto shaderMaterial = dynamic_cast<ShaderMaterial *>(material);
 
-    ProgramParameters p;
+    ProgramParameters p = ProgramParameters();
 
     p.shaderName = material->type();
 
@@ -86,7 +86,7 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     }
 
     if (instanceof <MaterialWithDefines>(material)) {
-        auto m = dynamic_cast<MaterialWithDefines*>(material);
+        auto m = dynamic_cast<MaterialWithDefines *>(material);
         p.defines = m->defines;
     }
 
@@ -116,12 +116,12 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.normalMap = normalMaterial != nullptr && normalMaterial->normalMap.has_value();
     p.objectSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == ObjectSpaceNormalMap;
     p.tangentSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == TangentSpaceNormalMap;
-//    clearcoatMap: !! material.clearcoatMap
-//    clearcoatRoughnessMap: !! material.clearcoatRoughnessMap
-//    clearcoatNormalMap: !! material.clearcoatNormalMap
+    //    clearcoatMap: !! material.clearcoatMap
+    //    clearcoatRoughnessMap: !! material.clearcoatRoughnessMap
+    //    clearcoatNormalMap: !! material.clearcoatNormalMap
     p.displacementMap = displacementMapMaterial != nullptr && displacementMapMaterial->displacementMap.has_value();
-//    roughnessMap: !! material.roughnessMap
-//    metalnessMap: !! material.metalnessMap
+    //    roughnessMap: !! material.roughnessMap
+    //    metalnessMap: !! material.metalnessMap
     p.specularMap = specularMapMaterial != nullptr && specularMapMaterial->specularMap.has_value();
     p.alphaMap = alphaMaterial != nullptr && alphaMaterial->alphaMap.has_value();
 
@@ -130,17 +130,17 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     if (sheenMaterial != nullptr) {
         p.sheen = sheenMaterial->sheen;
     }
-//
-//    transmission: !! material.transmission
-//    transmissionMap: !! material.transmissionMap
-//    thicknessMap: !! material.thicknessMap
-//
+    //
+    //    transmission: !! material.transmission
+    //    transmissionMap: !! material.transmissionMap
+    //    thicknessMap: !! material.thicknessMap
+    //
 
     if (combineMaterial != nullptr) {
         p.combine = combineMaterial->combine;
     }
 
-//    p.vertexColors = material->vertexColors;
+    p.vertexColors = material->vertexColors;
     p.vertexAlphas = material->vertexColors && object->geometry() && object->geometry()->hasAttribute("color") && object->geometry()->getAttribute<float>("color")->itemSize() == 4;
 
     p.fog = scene->fog.has_value();
@@ -268,7 +268,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer
 
     if (!program) {
 
-        program = programs.emplace_back(GLProgram::create(renderer, cacheKey, parameters, bindingStates ));
+        program = programs.emplace_back(GLProgram::create(renderer, cacheKey, parameters, bindingStates));
     }
 
     return program;

@@ -6,21 +6,21 @@ namespace threepp {
 
     struct GeometryGroup {
 
-        int start;
-        int count;
-        int materialIndex;
+        int start{};
+        int count{};
+        int materialIndex{};
     };
 
     struct UpdateRange {
 
-        int offset;
-        int count;
+        int offset{};
+        int count{};
     };
 
     struct DrawRange {
 
-        int start;
-        int count;
+        int start{};
+        int count{};
     };
 
 }// namespace threepp

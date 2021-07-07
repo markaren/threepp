@@ -11,13 +11,13 @@ namespace threepp {
     class Color {
 
     public:
-        float r = 1.0;
-        float g = 1.0;
-        float b = 1.0;
+        float r{1.f};
+        float g{1.f};
+        float b{1.f};
 
         Color() = default;
 
-        explicit Color(int hex);
+        explicit Color(unsigned int hex);
 
         float &operator[](unsigned int index);
 
@@ -27,7 +27,7 @@ namespace threepp {
 
         Color &setRGB(float r, float g, float b);
 
-        Color &setHex(int hex);
+        Color &setHex(unsigned int hex);
 
         Color &copy(const Color &color);
 

@@ -15,45 +15,42 @@ namespace threepp::gl {
 
     struct TextureProperties {
 
-        unsigned int version;
-
-        bool glInit;
-
-        int maxMipLevel;
-
-        unsigned int glTexture;
+        unsigned int version{};
+        bool glInit{};
+        int maxMipLevel{};
+        unsigned int glTexture{};
     };
 
     struct MaterialProperties {
 
         std::shared_ptr<GLProgram> program;
+        std::shared_ptr<GLProgram> currentProgram;
         std::unordered_map<std::string, std::shared_ptr<GLProgram>> programs;
-
-        std::optional<Texture> environment;
 
         std::optional<FogVariant> fog;
 
+        int numIntersection{};
+        std::optional<int> numClippingPlanes;
         std::vector<float> clippingState;
 
         std::optional<Texture> envMap;
+        std::optional<Texture> environment;
+
+        int outputEncoding{};
+        bool instancing{};
+        bool vertexAlphas{};
+
+        bool needsLights{};
+        bool receiveShadow{};
+
+        unsigned int lightsStateVersion{};
 
         std::vector<std::shared_ptr<UniformObject>> uniformsList;
-
-        int outputEncoding;
-        bool instancing;
-        std::optional<int> numClippingPlanes;
-        int numIntersection;
-        bool vertexAlphas;
-
-        unsigned int version;
-
-        bool needsLights;
-        unsigned int lightsStateVersion;
-        std::shared_ptr<GLProgram> currentProgram;
         std::unordered_map<std::string, Uniform> uniforms;
-        bool receiveShadow;
 
-        MaterialProperties() = default;
+        unsigned int version{};
+
+
     };
 
     template<class T>

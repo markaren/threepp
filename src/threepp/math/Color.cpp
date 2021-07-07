@@ -8,7 +8,7 @@ using namespace threepp;
 
 Color::Color(float r, float g, float b) : r(r), g(g), b(b) {}
 
-Color::Color(int hex) {
+Color::Color(unsigned int hex) {
     setHex(hex);
 }
 
@@ -34,11 +34,11 @@ Color &Color::setScalar(float scalar) {
     return *this;
 }
 
-Color &Color::setHex(int hex) {
+Color &Color::setHex(unsigned int hex) {
 
-    this->r = (float) (hex >> 16 & 255) / 255;
-    this->g = (float) (hex >> 8 & 255) / 255;
-    this->b = (float) (hex & 255) / 255;
+    this->r = (hex >> 16 & 255) / 255.f;
+    this->g = (hex >> 8 & 255) / 255.f;
+    this->b = (hex & 255) / 255.f;
 
     return *this;
 }

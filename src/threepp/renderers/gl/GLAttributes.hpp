@@ -13,10 +13,10 @@
 namespace threepp::gl {
 
     struct Buffer {
-        GLuint buffer;
-        GLint type;
-        GLsizei bytesPerElement;
-        unsigned int version;
+        GLuint buffer{};
+        GLint type{};
+        GLsizei bytesPerElement{};
+        unsigned int version{};
     };
 
     struct GLAttributes {

@@ -41,11 +41,11 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
 
         if (iy == 0 && thetaStart == 0) {
 
-            uOffset = (0.5f / widthSegments);
+            uOffset = (float) (0.5f / widthSegments);
 
         } else if (iy == heightSegments && thetaEnd == math::PI) {
 
-            uOffset = (-0.5f / widthSegments);
+            uOffset = (float) (-0.5f / widthSegments);
         }
 
         for (int ix = 0; ix <= widthSegments; ix++) {

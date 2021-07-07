@@ -17,14 +17,14 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->color.setHex(0xff0000);
+    boxMaterial->color.setRGB(0,1,1);
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(1);
     scene->add(box);
 
     const auto sphereGeometry = SphereGeometry::create();
     const auto sphereMaterial = MeshBasicMaterial::create();
-//    sphereMaterial->color.setHex(0x00ff00);
+    sphereMaterial->color.setHex(0x00ff00);
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(-1);
     scene->add(sphere);

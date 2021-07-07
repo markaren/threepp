@@ -49,12 +49,12 @@ namespace threepp {
         int stencilZPass = KeepStencilOp;
         bool stencilWrite = false;
 
-        std::vector<Plane> clippingPlanes;
+        std::vector<Plane> clippingPlanes{};
         bool clipIntersection = false;
         bool clipShadows = false;
         bool clipping = false;
 
-        std::optional<int> shadowSide;
+        std::optional<int> shadowSide{};
 
         bool colorWrite = true;
 
