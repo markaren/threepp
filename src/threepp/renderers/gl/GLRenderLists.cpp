@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 
+#include <memory>
+
 using namespace threepp;
 using namespace threepp::gl;
 
@@ -8,52 +10,52 @@ namespace {
 
     struct {
 
-        bool operator()(const RenderItem &a, const RenderItem &b) {
-            if (a.groupOrder != b.groupOrder) {
+        bool operator()(const std::shared_ptr<RenderItem> &a, const std::shared_ptr<RenderItem> &b) {
+            if (a->groupOrder != b->groupOrder) {
 
-                return a.groupOrder < b.groupOrder;
+                return a->groupOrder < b->groupOrder;
 
-            } else if (a.renderOrder != b.renderOrder) {
+            } else if (a->renderOrder != b->renderOrder) {
 
-                return a.renderOrder < b.renderOrder;
+                return a->renderOrder < b->renderOrder;
 
-            } else if (a.program.get() != b.program.get()) {
+            } else if (a->program.get() != b->program.get()) {
 
-                return a.program->id < b.program->id;
+                return a->program->id < b->program->id;
 
-            } else if (a.material->id != b.material->id) {
+            } else if (a->material->id != b->material->id) {
 
-                return a.material->id < b.material->id;
+                return a->material->id < b->material->id;
 
-            } else if (a.z != b.z) {
+            } else if (a->z != b->z) {
 
-                return a.z < b.z;
+                return a->z < b->z;
 
             } else {
 
-                return a.id < b.id;
+                return a->id < b->id;
             }
         }
     } painterSortStable;
 
     struct {
-        bool operator()(const RenderItem &a, const RenderItem &b) {
+        bool operator()(const std::shared_ptr<RenderItem> &a, const std::shared_ptr<RenderItem> &b) {
 
-            if (a.groupOrder != b.groupOrder) {
+            if (a->groupOrder != b->groupOrder) {
 
-                return a.groupOrder < b.groupOrder;
+                return a->groupOrder < b->groupOrder;
 
-            } else if (a.renderOrder != b.renderOrder) {
+            } else if (a->renderOrder != b->renderOrder) {
 
-                return a.renderOrder < b.renderOrder;
+                return a->renderOrder < b->renderOrder;
 
-            } else if (a.z != b.z) {
+            } else if (a->z != b->z) {
 
-                return b.z < a.z;
+                return b->z < a->z;
 
             } else {
 
-                return a.id < b.id;
+                return a->id < b->id;
             }
         }
     } reversePainterSortStable;
@@ -63,15 +65,22 @@ namespace {
 gl::GLRenderList::GLRenderList(gl::GLProperties &properties) : properties(properties) {}
 
 void gl::GLRenderList::init() {
+
+    renderItemsIndex = 0;
+
+    renderItems.clear();
+    opaque.clear();
+    transmissive.clear();
+    transparent.clear();
 }
 
-gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
+std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
     if (renderItemsIndex >= renderItems.size()) {
 
-        renderItems.emplace_back(RenderItem{object->id,
+        renderItems.emplace_back(std::shared_ptr<RenderItem>(new RenderItem{(int) object->id,
                                             object,
                                             geometry,
                                             material,
@@ -79,23 +88,23 @@ gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeom
                                             groupOrder,
                                             object->renderOrder,
                                             z,
-                                            group});
+                                            group}));
 
     } else {
 
-        RenderItem &renderItem = renderItems.at(renderItemsIndex);
+        auto &renderItem = renderItems.at(renderItemsIndex);
 
-        renderItem.id = object->id;
-        renderItem.object = object;
-        renderItem.geometry = geometry;
-        renderItem.material = material;
+        renderItem->id = (int) object->id;
+        renderItem->object = object;
+        renderItem->geometry = geometry;
+        renderItem->material = material;
         if (materialProperties.program) {
-            renderItem.program = materialProperties.program;
+            renderItem->program = materialProperties.program;
         }
-        renderItem.groupOrder = groupOrder;
-        renderItem.renderOrder = object->renderOrder;
-        renderItem.z = z;
-        renderItem.group = group;
+        renderItem->groupOrder = groupOrder;
+        renderItem->renderOrder = object->renderOrder;
+        renderItem->z = z;
+        renderItem->group = group;
     }
 
     renderItemsIndex++;
@@ -105,7 +114,7 @@ gl::RenderItem &gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeom
 
 void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
 
-    auto &renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
+    auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
     if (material->transparent) {
 
@@ -119,7 +128,7 @@ void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material
 
 void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
 
-    auto &renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
+    auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
     if (false /*material->transmission > 0.0*/) {
 
@@ -147,15 +156,17 @@ void GLRenderList::finish() {
 
     // Clear references from inactive renderItems in the list
 
-    for (auto &renderItem : renderItems) {
+    for ( int i = renderItemsIndex, il = (int)renderItems.size(); i < il; i ++ ) {
 
-        if (renderItem.id == -1) break;
+        auto renderItem = renderItems.at(i);
 
-        renderItem.id = -1;
-        renderItem.object = nullptr;
-        renderItem.geometry = nullptr;
-        renderItem.material = nullptr;
-        renderItem.program = nullptr;
-        renderItem.group = std::nullopt;
+        if (renderItem->id == -1) break;
+
+        renderItem->id = -1;
+        renderItem->object = nullptr;
+        renderItem->geometry = nullptr;
+        renderItem->material = nullptr;
+        renderItem->program = nullptr;
+        renderItem->group = std::nullopt;
     }
 }

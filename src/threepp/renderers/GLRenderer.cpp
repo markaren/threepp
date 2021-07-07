@@ -543,21 +543,20 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
     }
 }
 
-void GLRenderer::renderTransmissiveObjects(std::vector<gl::RenderItem> &opaqueObjects, std::vector<gl::RenderItem> &transmissiveObjects, Scene *scene, Camera *camera) {
+void GLRenderer::renderTransmissiveObjects(std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects, std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects, Scene *scene, Camera *camera) {
     //TODO
 }
 
-
-void GLRenderer::renderObjects(std::vector<gl::RenderItem> &renderList, Scene *scene, Camera *camera) {
+void GLRenderer::renderObjects(std::vector<std::shared_ptr<gl::RenderItem>> &renderList, Scene *scene, Camera *camera) {
 
     auto overrideMaterial = scene->overrideMaterial;
 
     for (const auto &renderItem : renderList) {
 
-        auto object = renderItem.object;
-        auto geometry = renderItem.geometry;
-        auto material = overrideMaterial == nullptr ? renderItem.material : overrideMaterial.get();
-        auto group = renderItem.group;
+        auto object = renderItem->object;
+        auto geometry = renderItem->geometry;
+        auto material = overrideMaterial == nullptr ? renderItem->material : overrideMaterial.get();
+        auto group = renderItem->group;
 
         if (false /*camera.isArrayCamera*/) {
 

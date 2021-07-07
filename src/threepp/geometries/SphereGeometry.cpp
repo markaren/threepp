@@ -33,7 +33,7 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
 
         std::vector<int> verticesRow;
 
-        const auto v = iy / heightSegments;
+        const float v = (float) iy / heightSegments;
 
         // special case for the poles
 
@@ -41,16 +41,16 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
 
         if (iy == 0 && thetaStart == 0) {
 
-            uOffset = (int) 0.5 / widthSegments;
+            uOffset = (0.5f / widthSegments);
 
         } else if (iy == heightSegments && thetaEnd == math::PI) {
 
-            uOffset = (int) -0.5 / widthSegments;
+            uOffset = (-0.5f / widthSegments);
         }
 
         for (int ix = 0; ix <= widthSegments; ix++) {
 
-            const auto u = ix / widthSegments;
+            const float u = (float) ix / widthSegments;
 
             // vertex
 
@@ -67,7 +67,7 @@ SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegmen
 
             // uv
 
-            uvs.insert(uvs.end(), {(float) u + uOffset, (float) 1 - v});
+            uvs.insert(uvs.end(), {u + uOffset, 1 - v});
 
             verticesRow.emplace_back(index++);
         }

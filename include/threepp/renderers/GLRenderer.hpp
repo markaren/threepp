@@ -143,9 +143,9 @@ namespace threepp {
 
         void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
 
-        void renderTransmissiveObjects( std::vector<gl::RenderItem> &opaqueObjects, std::vector<gl::RenderItem> &transmissiveObjects, Scene *scene, Camera *camera );
+        void renderTransmissiveObjects( std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects, std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects, Scene *scene, Camera *camera );
 
-        void renderObjects(std::vector<gl::RenderItem> &renderList, Scene *scene, Camera *camera);
+        void renderObjects(std::vector<std::shared_ptr<gl::RenderItem>> &renderList, Scene *scene, Camera *camera);
 
         void renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, std::optional<GeometryGroup> group);
 

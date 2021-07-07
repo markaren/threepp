@@ -23,8 +23,6 @@ namespace {
 
 }// namespace
 
-unsigned int Object3D::_object3Did = 0;
-
 void Object3D::applyMatrix4(const Matrix4 &matrix) {
 
     if (this->matrixAutoUpdate) this->updateMatrix();

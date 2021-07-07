@@ -1,8 +1,8 @@
 
 #include "threepp/lights/PointLightShadow.hpp"
 
-#include "threepp/lights/PointLight.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/lights/PointLight.hpp"
 
 using namespace threepp;
 
@@ -38,10 +38,9 @@ PointLightShadow::PointLightShadow()
       _cubeUps({Vector3(0, 1, 0), Vector3(0, 1, 0), Vector3(0, 1, 0),
                 Vector3(0, 1, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)}) {
 
-    this->_frameExtents = Vector2( 4, 2 );
+    this->_frameExtents = Vector2(4, 2);
 
     this->_viewportCount = 6;
-
 }
 
 void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
@@ -53,25 +52,23 @@ void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
 
     auto far = light->distance > 0 ? light->distance : camera->far;
 
-    if ( far != camera->far ) {
+    if (far != camera->far) {
 
         camera->far = far;
         camera->updateProjectionMatrix();
-
     }
 
-    _lightPositionWorld.setFromMatrixPosition( light->matrixWorld );
-    camera->position.copy( _lightPositionWorld );
+    _lightPositionWorld.setFromMatrixPosition(light->matrixWorld);
+    camera->position.copy(_lightPositionWorld);
 
-    _lookTarget.copy( camera->position );
-    _lookTarget.add( this->_cubeDirections[ viewportIndex ] );
-    camera->up.copy( this->_cubeUps[ viewportIndex ] );
-    camera->lookAt( _lookTarget );
+    _lookTarget.copy(camera->position);
+    _lookTarget.add(this->_cubeDirections[viewportIndex]);
+    camera->up.copy(this->_cubeUps[viewportIndex]);
+    camera->lookAt(_lookTarget);
     camera->updateMatrixWorld();
 
-    shadowMatrix.makeTranslation( - _lightPositionWorld.x, - _lightPositionWorld.y, - _lightPositionWorld.z );
+    shadowMatrix.makeTranslation(-_lightPositionWorld.x, -_lightPositionWorld.y, -_lightPositionWorld.z);
 
-    _projScreenMatrix.multiplyMatrices( camera->projectionMatrix, camera->matrixWorldInverse );
-    this->_frustum.setFromProjectionMatrix( _projScreenMatrix );
-
+    _projScreenMatrix.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
+    this->_frustum.setFromProjectionMatrix(_projScreenMatrix);
 }

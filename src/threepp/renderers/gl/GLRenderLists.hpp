@@ -14,7 +14,7 @@ namespace threepp::gl {
 
     struct RenderItem {
 
-        unsigned int id;
+        int id;
         Object3D *object;
         BufferGeometry *geometry;
         Material *material;
@@ -27,18 +27,18 @@ namespace threepp::gl {
 
     struct GLRenderList {
 
-        std::vector<RenderItem> opaque;
-        std::vector<RenderItem> transmissive;
-        std::vector<RenderItem> transparent;
+        std::vector<std::shared_ptr<RenderItem>> opaque;
+        std::vector<std::shared_ptr<RenderItem>> transmissive;
+        std::vector<std::shared_ptr<RenderItem>> transparent;
 
-        std::vector<RenderItem> renderItems;
+        std::vector<std::shared_ptr<RenderItem>> renderItems;
         int renderItemsIndex = 0;
 
         explicit GLRenderList(GLProperties &properties);
 
         void init();
 
-        RenderItem &getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
+        std::shared_ptr<RenderItem> getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
 

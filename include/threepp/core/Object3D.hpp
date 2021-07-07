@@ -176,7 +176,7 @@ namespace threepp {
             rotation.setFromQuaternion(quaternion, std::nullopt, false);
         };
 
-        static unsigned int _object3Did;
+        inline static unsigned int _object3Did{0};
 
         friend class Box3;
         friend class Frustum;

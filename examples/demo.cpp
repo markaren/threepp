@@ -12,9 +12,8 @@ int main() {
 
     auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
-    //    renderer.setClearColor(Color(0xffffff));
+    renderer.setClearColor(Color(0xffffff));
     renderer.setSize(canvas.getWidth(), canvas.getHeight());
-    //    renderer.sortObjects = true;
 
     //    const auto light = AmbientLight::create(0xffffff);
     //    scene->add(light);
