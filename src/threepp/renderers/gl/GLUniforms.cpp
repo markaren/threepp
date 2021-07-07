@@ -107,14 +107,14 @@ namespace {
             float z = value[2];
 
             ensureCapacity(cache, 3);
-//            if (cache[0] != x && cache[1] != y && cache[2] != z) {
+            if (cache[0] != x || cache[1] != y || cache[2] != z) {
 
                 glUniform3f(addr, x, y, z);
 
                 cache[0] = x;
                 cache[1] = y;
                 cache[2] = z;
-//            }
+            }
         }
 
         void setValueV3f(const UniformValue &value) {
@@ -136,7 +136,7 @@ namespace {
             float w = value[3];
 
             ensureCapacity(cache, 4);
-            if (cache[0] != x && cache[1] != y && cache[2] != z && cache[3] != w) {
+            if (cache[0] != x || cache[1] != y && cache[2] != z || cache[3] != w) {
 
                 glUniform4f(addr, x, y, z, w);
 
