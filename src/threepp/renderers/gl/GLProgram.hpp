@@ -23,7 +23,7 @@ namespace threepp {
             int id = programIdCount++;
             std::string cacheKey;
             int usedTimes = 1;
-            unsigned int program;
+            unsigned int program = -1;
 
             std::shared_ptr<GLUniforms> getUniforms();
 

@@ -12,7 +12,7 @@ int main() {
 
     auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color(0xffffff));
+    renderer.setClearColor(Color(Color::aliceblue));
     renderer.setSize(canvas.getWidth(), canvas.getHeight());
 
     const auto boxGeometry = BoxGeometry::create();

@@ -140,6 +140,13 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
         p.combine = combineMaterial->combine;
     }
 
+//    p.vertexColors = material->vertexColors;
+    p.vertexAlphas = material->vertexColors && object->geometry() && object->geometry()->hasAttribute("color") && object->geometry()->getAttribute<float>("color")->itemSize() == 4;
+
+    p.fog = scene->fog.has_value();
+    p.useFog = material->fog;
+    p.fogExp2 = scene->fog.has_value() && std::holds_alternative<FogExp2>(*scene->fog);
+
     p.vertexTangents = normalMaterial != nullptr && vertextangentsMaterial != nullptr && vertextangentsMaterial->vertexTangents;
 
     if (flatshadeMaterial != nullptr) {

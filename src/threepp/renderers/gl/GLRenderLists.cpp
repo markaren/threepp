@@ -80,7 +80,7 @@ std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(Object3D *ob
 
     if (renderItemsIndex >= renderItems.size()) {
 
-        renderItems.emplace_back(std::shared_ptr<RenderItem>(new RenderItem{(int) object->id,
+        renderItems.emplace_back(std::make_shared<RenderItem>(RenderItem{(int) object->id,
                                             object,
                                             geometry,
                                             material,

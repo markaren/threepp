@@ -64,8 +64,7 @@ namespace threepp::gl {
 
             if (instanceof <MaterialWithMap>(material)) {
 
-                auto m = dynamic_cast<MaterialWithMap *>(material);
-                auto &map = m->map;
+                auto& map = dynamic_cast<MaterialWithMap *>(material)->map;
                 if (map) {
                     uniforms["map"].setValue(*map);
                 }
@@ -73,8 +72,7 @@ namespace threepp::gl {
 
             if (instanceof <MaterialWithAlphaMap>(material)) {
 
-                auto m = dynamic_cast<MaterialWithAlphaMap *>(material);
-                auto &alphaMap = m->alphaMap;
+                auto &alphaMap = dynamic_cast<MaterialWithAlphaMap *>(material)->alphaMap;
                 if (alphaMap) {
                     uniforms["alphaMap"].setValue(*alphaMap);
                 }
