@@ -56,8 +56,8 @@ namespace threepp {
         Layers layers;
         bool visible = true;
 
-        bool castShadow = true;
-        bool receiveShadow = true;
+        bool castShadow = false;
+        bool receiveShadow = false;
 
         bool frustumCulled = true;
         int renderOrder = 0;

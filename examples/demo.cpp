@@ -18,24 +18,26 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->color.setRGB(0,1,1);
+    boxMaterial->color.setRGB(1,0,0);
     boxMaterial->transparent = true;
-    boxMaterial->opacity = 0.5f;
+    boxMaterial->opacity = 0.1f;
     auto box = Mesh::create(boxGeometry, boxMaterial);
-    box->position.setX(1);
     scene->add(box);
 
-    const auto sphereGeometry = SphereGeometry::create();
+    const auto sphereGeometry = SphereGeometry::create(0.5f);
     const auto sphereMaterial = MeshBasicMaterial::create();
     sphereMaterial->color.setHex(0x00ff00);
     sphereMaterial->wireframe = true;
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(-1);
-    scene->add(sphere);
+    box->add(sphere);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->color.setHex(Color::lightgray);
+    planeMaterial->color.setHex(Color::yellow);
+    planeMaterial->transparent = true;
+    planeMaterial->opacity = 0.5f;
+    planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-2);
     scene->add(plane);
@@ -46,11 +48,10 @@ int main() {
       renderer.setSize(size);
     });
 
+    box->rotation.order(Euler::RotationOrders::YZX);
     canvas.animate([&](float dt) {
-        box->rotation.x(box->rotation.x() + 1.f * dt);
         box->rotation.y(box->rotation.y() + 0.5f * dt);
-
-        sphere->rotation.x(sphere->rotation.x() + 1.f * dt);
+        scene->rotation.x(scene->rotation.x() + 1.f * dt);
 
         renderer.render(scene, camera);
     });

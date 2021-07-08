@@ -19,7 +19,7 @@ namespace {
 
                 return a->renderOrder < b->renderOrder;
 
-            } else if (a->program.get() != b->program.get()) {
+            } else if (a->program != nullptr && b->program != nullptr && a->program.get() != b->program.get()) {
 
                 return a->program->id < b->program->id;
 
@@ -51,7 +51,7 @@ namespace {
 
             } else if (a->z != b->z) {
 
-                return b->z > a->z;
+                return a->z > b->z;
 
             } else {
 
@@ -76,23 +76,24 @@ void gl::GLRenderList::init() {
 
 std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
 
+    std::shared_ptr<gl::RenderItem> renderItem = nullptr;
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
     if (renderItemsIndex >= renderItems.size()) {
 
-        renderItems.emplace_back(std::make_shared<RenderItem>(RenderItem{(int) object->id,
-                                            object,
-                                            geometry,
-                                            material,
-                                            materialProperties.program,
-                                            groupOrder,
-                                            object->renderOrder,
-                                            z,
-                                            group}));
+        renderItem = renderItems.emplace_back(std::make_shared<RenderItem>(RenderItem{(int) object->id,
+                                                                                      object,
+                                                                                      geometry,
+                                                                                      material,
+                                                                                      materialProperties.program,
+                                                                                      groupOrder,
+                                                                                      object->renderOrder,
+                                                                                      z,
+                                                                                      group}));
 
     } else {
 
-        auto &renderItem = renderItems.at(renderItemsIndex);
+        renderItem = renderItems.at(renderItemsIndex);
 
         renderItem->id = (int) object->id;
         renderItem->object = object;
@@ -109,7 +110,7 @@ std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(Object3D *ob
 
     renderItemsIndex++;
 
-    return renderItems.at(renderItemsIndex - 1);
+    return renderItem;
 }
 
 void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
@@ -147,16 +148,16 @@ void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material 
 
 void GLRenderList::sort() {
 
-    if (opaque.size() > 1) std::sort(opaque.begin(), opaque.end(), painterSortStable);
-    if (transmissive.size() > 1) std::sort(transmissive.begin(), transmissive.end(), reversePainterSortStable);
-    if (transparent.size() > 1) std::sort(transparent.begin(), transparent.end(), reversePainterSortStable);
+    if (opaque.size() > 1) std::stable_sort(opaque.begin(), opaque.end(), painterSortStable);
+    if (transmissive.size() > 1) std::stable_sort(transmissive.begin(), transmissive.end(), reversePainterSortStable);
+    if (transparent.size() > 1) std::stable_sort(transparent.begin(), transparent.end(), reversePainterSortStable);
 }
 
 void GLRenderList::finish() {
 
     // Clear references from inactive renderItems in the list
 
-    for ( int i = renderItemsIndex, il = (int)renderItems.size(); i < il; i ++ ) {
+    for (int i = renderItemsIndex, il = (int) renderItems.size(); i < il; i++) {
 
         auto renderItem = renderItems.at(i);
 

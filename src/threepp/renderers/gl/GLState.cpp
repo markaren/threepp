@@ -348,7 +348,7 @@ void gl::GLState::enable(int id) {
         glEnable(id);
         enabledCapabilities[id] = true;
 
-    } else if (enabledCapabilities.at(id) == true) {
+    } else if (enabledCapabilities.at(id) == false) {
 
         glEnable(id);
         enabledCapabilities[id] = true;

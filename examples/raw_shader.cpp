@@ -69,10 +69,11 @@ int main() {
         colors.emplace_back(myRandom());
         colors.emplace_back(myRandom());
         colors.emplace_back(myRandom());
+        colors.emplace_back(myRandom());
     }
 
     geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-    geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
+    geometry->setAttribute("color", FloatBufferAttribute::create(colors, 4));
 
     auto material = RawShaderMaterial::create();
     material->uniforms->operator[]("time") = Uniform();
