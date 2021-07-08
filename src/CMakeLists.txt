@@ -189,6 +189,7 @@ set(sources
         "threepp/renderers/gl/GLLights.cpp"
         "threepp/renderers/gl/GLProgram.cpp"
         "threepp/renderers/gl/GLPrograms.cpp"
+        "threepp/renderers/gl/GLMaterials.cpp"
         "threepp/renderers/gl/GLShadowMap.cpp"
         "threepp/renderers/gl/GLState.cpp"
         "threepp/renderers/gl/GLTextures.cpp"
