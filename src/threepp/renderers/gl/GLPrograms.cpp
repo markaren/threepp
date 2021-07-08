@@ -154,7 +154,7 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.vertexTangents = normalMaterial && vertextangentsMaterial && vertextangentsMaterial->vertexTangents;
     p.vertexColors = material->vertexColors;
     p.vertexAlphas = material->vertexColors && object->geometry() && object->geometry()->hasAttribute("color") && object->geometry()->getAttribute<float>("color")->itemSize() == 4;
-    p.vertexUvs = false; // TODO
+    p.vertexUvs = true; // TODO
     p.uvsVertexOnly = false; // TODO;
 
     p.fog = scene->fog.has_value();

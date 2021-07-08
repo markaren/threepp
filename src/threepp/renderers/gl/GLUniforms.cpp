@@ -46,7 +46,6 @@ namespace {
             setValueFun(value, textures);
         }
 
-
     private:
         int addr;
         std::vector<float> cache;
@@ -75,12 +74,23 @@ namespace {
                 case 0x8b5c:
                     return [&](const UniformValue &value, GLTextures *) { setValueM4(value); };
 
+                case 0x8b5e:
+                case 0x8d66:
+                    return [&](const UniformValue &value, GLTextures *textures) { setValueT1(value, textures); };
+
                 default:
                     return [&](const UniformValue &value, GLTextures *) {
                         std::cout << "SingleUniform TODO: "
                                   << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
                     };
             }
+        }
+
+        void setValueT1(const UniformValue &value, GLTextures *textures) {
+            const auto unit = textures->allocateTextureUnit();
+            glUniform1i(addr, unit);
+            auto tex = std::get<Texture>(value);
+            textures->setTexture2D(tex, unit);
         }
 
         void setValueV1f(const UniformValue &value) {

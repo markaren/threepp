@@ -19,4 +19,6 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include "threepp/loaders/TextureLoader.hpp"
+
 #endif//THREEPP_THREEPP_HPP

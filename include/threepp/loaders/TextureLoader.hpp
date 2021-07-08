@@ -8,7 +8,6 @@
 
 #include <regex>
 
-
 namespace threepp {
 
     class TextureLoader {

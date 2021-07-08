@@ -240,9 +240,9 @@ void gl::GLTextures::setTexture2D(Texture &texture, GLuint slot) {
 
         const auto &image = texture.image;
 
-        if (image) {
+        if (!image) {
 
-            std::cerr << "THREE.WebGLRenderer: Texture marked for update but image is undefined" << std::endl;
+            std::cerr << "THREE.GLRenderer: Texture marked for update but image is undefined" << std::endl;
 
         } else {
 

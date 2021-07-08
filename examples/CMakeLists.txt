@@ -10,6 +10,9 @@ target_link_libraries(test_uniform PUBLIC threepp)
 add_executable(demo demo.cpp)
 target_link_libraries(demo PUBLIC threepp)
 
+add_executable(texture2d texture2d.cpp)
+target_link_libraries(texture2d PUBLIC threepp)
+
 add_executable(meshphong meshphong.cpp)
 target_link_libraries(meshphong PUBLIC threepp)
 
