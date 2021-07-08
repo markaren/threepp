@@ -10,6 +10,9 @@ target_link_libraries(test_uniform PUBLIC threepp)
 add_executable(demo demo.cpp)
 target_link_libraries(demo PUBLIC threepp)
 
+add_executable(points_demo points_demo.cpp)
+target_link_libraries(points_demo PUBLIC threepp)
+
 add_executable(raw_shader raw_shader.cpp)
 target_link_libraries(raw_shader PUBLIC threepp)
 

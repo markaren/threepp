@@ -12,7 +12,8 @@ using namespace threepp;
 GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
     : canvas_(canvas), _size(canvas.getSize()),
       _viewport(0, 0, _size.width, _size.height),
-      _scissor(0, 0, _size.width, _size.height), state(canvas),
+      _scissor(0, 0, _size.width, _size.height),
+      state(canvas),
       background(state, parameters.premultipliedAlpha),
       bufferRenderer(new gl::GLBufferRenderer(info)),
       indexedBufferRenderer(new gl::GLIndexedBufferRenderer(info)),

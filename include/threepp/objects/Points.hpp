@@ -22,7 +22,7 @@ namespace threepp {
             return material_.get();
         }
 
-        std::string type() const override {
+        [[nodiscard]] std::string type() const override {
 
             return "Points";
         }

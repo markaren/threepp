@@ -89,7 +89,7 @@ namespace threepp::gl {
 
             uniforms->operator[]("diffuse").value<Color>().copy(material->color);
             uniforms->operator[]("opacity").value<float>() = material->opacity;
-            uniforms->operator[]("size").value<int>() = (int) material->size * pixelRatio;
+            uniforms->operator[]("size").value<float>() = material->size * pixelRatio;
             uniforms->operator[]("scale").value<float>() = height * 0.5f;
         }
     };

@@ -10,7 +10,8 @@
 
 namespace threepp {
 
-    class PointsMaterial : public virtual MaterialWithColor,
+    class PointsMaterial : public virtual Material,
+                           public MaterialWithColor,
                            public MaterialWithMap,
                            public MaterialWithAlphaMap,
                            public MaterialWithSize {

@@ -44,6 +44,10 @@ public:
         if (params.antialiasing_ > 0) {
             glEnable(GL_MULTISAMPLE);
         }
+
+        glEnable(GL_PROGRAM_POINT_SIZE);
+//        glEnable(GL_POINT_SPRITE);
+//        glEnable(GL_POINT_SMOOTH);
     }
 
     [[nodiscard]] WindowSize getSize() const {

@@ -61,7 +61,7 @@ namespace {
 
 void gl::ColorBuffer::setMask(bool colorMask) {
 
-    if (!locked && currentColorMask && currentColorMask.value() != colorMask) {
+    if (!locked && currentColorMask != colorMask) {
 
         glColorMask(colorMask, colorMask, colorMask, colorMask);
         currentColorMask = colorMask;
@@ -75,7 +75,7 @@ void gl::ColorBuffer::setLocked(bool lock) {
 
 void gl::ColorBuffer::setClear(float r, float g, float b, float a, bool premultipliedAlpha) {
 
-    if (premultipliedAlpha) {
+    if (premultipliedAlpha == true) {
 
         r *= a;
         g *= a;
@@ -118,7 +118,7 @@ void gl::DepthBuffer::setTest(bool depthTest) {
 
 void gl::DepthBuffer::setMask(bool depthMask) {
 
-    if (!locked && currentDepthMask && currentDepthMask.value() != depthMask) {
+    if (!locked && currentDepthMask != depthMask) {
 
         glDepthMask(depthMask);
         currentDepthMask = depthMask;
@@ -127,7 +127,7 @@ void gl::DepthBuffer::setMask(bool depthMask) {
 
 void gl::DepthBuffer::setFunc(int depthFunc) {
 
-    if (currentDepthFunc && currentDepthFunc.value() != depthFunc) {
+    if (currentDepthFunc != depthFunc) {
 
         switch (depthFunc) {
 
@@ -224,7 +224,7 @@ void gl::StencilBuffer::setTest(bool stencilTest) {
 
 void gl::StencilBuffer::setMask(int stencilMask) {
 
-    if (!locked && currentStencilMask && currentStencilMask.value() != stencilMask) {
+    if (!locked && currentStencilMask != stencilMask) {
 
         glStencilMask(stencilMask);
         currentStencilMask = stencilMask;
@@ -339,11 +339,16 @@ gl::GLState::GLState(const Canvas &canvas)
     setCullFace(CullFaceBack);
     enable(GL_CULL_FACE);
 
-    setBlending(NoBlending);
+    setBlending(NormalBlending);
 }
 
 void gl::GLState::enable(int id) {
-    if (!enabledCapabilities.count(id) && !enabledCapabilities[id]) {
+    if (!enabledCapabilities.count(id)) {
+
+        glEnable(id);
+        enabledCapabilities[id] = true;
+
+    } else if (enabledCapabilities.at(id) == true) {
 
         glEnable(id);
         enabledCapabilities[id] = true;
@@ -351,7 +356,7 @@ void gl::GLState::enable(int id) {
 }
 
 void gl::GLState::disable(int id) {
-    if (enabledCapabilities.count(id) && enabledCapabilities[id]) {
+    if (enabledCapabilities.count(id) && enabledCapabilities.at(id) == true) {
 
         glDisable(id);
         enabledCapabilities[id] = false;
@@ -414,7 +419,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
 
     if (blending == NoBlending) {
 
-        if (currentBlendingEnabled) {
+        if (currentBlendingEnabled == true) {
 
             disable(GL_BLEND);
             currentBlendingEnabled = false;
@@ -423,7 +428,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
         return;
     }
 
-    if (!currentBlendingEnabled) {
+    if (currentBlendingEnabled == false) {
 
         enable(GL_BLEND);
         currentBlendingEnabled = true;
@@ -441,7 +446,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
                 currentBlendEquationAlpha = AddEquation;
             }
 
-            if (premultipliedAlpha) {
+            if (premultipliedAlpha == true) {
 
                 switch (blending) {
 
@@ -462,7 +467,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
                         break;
 
                     default:
-                        std::cerr << "THREE.WebGLState: Invalid blending: " << blending << std::endl;
+                        std::cerr << "THREE.GLState: Invalid blending: " << blending << std::endl;
                         break;
                 }
 
@@ -487,7 +492,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
                         break;
 
                     default:
-                        std::cerr << "THREE.WebGLState: Invalid blending: " << blending << std::endl;
+                        std::cerr << "THREE.GLState: Invalid blending: " << blending << std::endl;
                         break;
                 }
             }
