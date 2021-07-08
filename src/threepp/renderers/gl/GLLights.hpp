@@ -157,8 +157,8 @@ namespace threepp::gl {
 
             Hash hash;
 
-            Color ambient;
-            std::vector<Vector3> probe;
+            Color ambient{0,0,0};
+            std::vector<Vector3> probe{9};
             std::vector<LightUniforms> directional;
             std::vector<LightUniforms> directionalShadow;
             std::vector<Texture> directionalShadowMap;
