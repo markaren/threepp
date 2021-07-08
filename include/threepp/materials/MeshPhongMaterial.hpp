@@ -23,6 +23,7 @@ namespace threepp {
                               public MaterialWithEnvMap,
                               public MaterialWithReflectivity,
                               public MaterialWithWireframe,
+                              public MaterialWithLineProperties,
                               public MaterialWithCombine,
                               public MaterialWithFlatShading {
 
@@ -38,7 +39,7 @@ namespace threepp {
 
     protected:
         MeshPhongMaterial()
-            : MaterialWithColor(0x000000),
+            : MaterialWithColor(0xffffff),
               MaterialWithCombine(MultiplyOperation),
               MaterialWithFlatShading(false),
               MaterialWithSpecular(0x111111, 30),
@@ -49,7 +50,8 @@ namespace threepp {
               MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
               MaterialWithDisplacementMap(1, 0),
               MaterialWithReflectivity(1, 0.98f),
-              MaterialWithWireframe(false, 1) {}
+              MaterialWithWireframe(false, 1),
+              MaterialWithLineProperties("round", "round"){}
     };
 
 }// namespace threepp
