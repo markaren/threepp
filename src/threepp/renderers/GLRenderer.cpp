@@ -694,12 +694,12 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
         uniforms->operator[]("directionalLightShadows").setValue(lights.state.directionalShadow);
         uniforms->operator[]("spotLights").setValue(lights.state.spot);
         uniforms->operator[]("spotLightShadows").setValue(lights.state.spotShadow);
-        //        uniforms["rectAreaLights").setValue(lights.state.rectArea);
-        //        uniforms["ltc_1").setValue(lights.state.rectAreaLTC1);
-        //        uniforms["ltc_2").setValue(lights.state.rectAreaLTC2);
+        uniforms->operator[]("rectAreaLights").setValue(lights.state.rectArea);
+//        uniforms->operator[]("ltc_1").setValue(lights.state.rectAreaLTC1);
+//        uniforms->operator[]("ltc_2").setValue(lights.state.rectAreaLTC2);
         uniforms->operator[]("pointLights").setValue(lights.state.point);
         uniforms->operator[]("pointLightShadows").setValue(lights.state.pointShadow);
-        //        uniforms["hemisphereLights").setValue(lights.state.hemi);
+        uniforms->operator[]("hemisphereLights").setValue(lights.state.hemi);
 
         uniforms->operator[]("directionalShadowMap").setValue(lights.state.directionalShadowMap);
         uniforms->operator[]("directionalShadowMatrix").setValue(lights.state.directionalShadowMatrix);

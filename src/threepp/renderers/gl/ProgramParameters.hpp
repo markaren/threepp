@@ -22,6 +22,8 @@ namespace threepp::gl {
 
         bool isRawShaderMaterial;
 
+        std::string precision;
+
         bool instancing;
         bool instancingColor;
 
@@ -55,13 +57,13 @@ namespace threepp::gl {
 
         bool gradientMap;
 
-        std::optional<Color> sheen = std::nullopt;
+        std::optional<Color> sheen;
 
         bool transmission;
         bool transmissionMap;
         bool thicknessMap;
 
-        std::optional<int> combine = std::nullopt;
+        std::optional<int> combine;
 
         bool vertexTangents;
         bool vertexColors;
@@ -73,16 +75,23 @@ namespace threepp::gl {
         bool useFog;
         bool fogExp2;
 
-        bool flatShading = false;
+        bool flatShading;
 
         bool sizeAttenuation;
         bool logarithmicDepthBuffer;
 
+        bool skinning;
+        int maxBones;
+        bool useVertexTexture;
+
+        bool morphTargets;
+        bool morphNormals;
+
         int numDirLights;
         int numPointLights;
         int numSpotLights;
-        int numRectAreaLights = 0;
-        int numHemiLights = 0;
+        int numRectAreaLights;
+        int numHemiLights;
 
         int numDirLightShadows;
         int numPointLightShadows;
@@ -105,7 +114,7 @@ namespace threepp::gl {
         bool doubleSided;
         bool flipSided;
 
-        std::optional<int> depthPacking;
+        int depthPacking;
 
         std::optional<std::string> index0AttributeName;
 
@@ -203,7 +212,7 @@ namespace threepp::gl {
             s << std::to_string(doubleSided) << '\n';
             s << std::to_string(flipSided) << '\n';
 
-            s << (depthPacking.has_value() ? std::to_string(*depthPacking) : std::string ("undefined")) << '\n';
+            s << std::to_string(depthPacking) << '\n';
 
             return s.str();
         }

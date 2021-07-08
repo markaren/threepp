@@ -68,29 +68,41 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking *>(material);
     auto sheenMaterial = dynamic_cast<MaterialWithSheen *>(material);
     auto shaderMaterial = dynamic_cast<ShaderMaterial *>(material);
+    auto definesMaterial = dynamic_cast<MaterialWithDefines *>(material);
+    auto thicknessMaterial = dynamic_cast<MaterialWithThickness *>(material);
+    auto roughnessMaterial = dynamic_cast<MaterialWithRoughness *>(material);
+    auto metallnessMaterial = dynamic_cast<MaterialWithMetalness *>(material);
+
+    std::string shaderID;
+    std::string vShader, fShader;
+    if (shaderIDs.count(material->type())) {
+
+        shaderID = shaderIDs[material->type()];
+        const auto shader = shaders::ShaderLib::instance().get(shaderID);
+        vShader = shader.vertexShader;
+        fShader = shader.fragmentShader;
+
+    } else {
+
+        vShader = shaderMaterial->vertexShader;
+        fShader = shaderMaterial->fragmentShader;
+    }
 
     ProgramParameters p = ProgramParameters();
 
+    p.shaderID = shaderID;
     p.shaderName = material->type();
 
-    if (shaderIDs.count(material->type())) {
-        p.shaderID = shaderIDs[material->type()];
+    p.vertexShader = vShader;
+    p.fragmentShader = fShader;
 
-        const auto shader = shaders::ShaderLib::instance().get(*p.shaderID);
-        p.vertexShader = shader.vertexShader;
-        p.fragmentShader = shader.fragmentShader;
-    } else {
-
-        p.vertexShader = shaderMaterial->vertexShader;
-        p.fragmentShader = shaderMaterial->fragmentShader;
-    }
-
-    if (instanceof <MaterialWithDefines>(material)) {
-        auto m = dynamic_cast<MaterialWithDefines *>(material);
-        p.defines = m->defines;
+    if (definesMaterial) {
+        p.defines = definesMaterial->defines;
     }
 
     p.isRawShaderMaterial = instanceof <RawShaderMaterial>(material);
+
+    p.precision = "highp";
 
     auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
     p.instancing = instancedMesh != nullptr;
@@ -116,12 +128,12 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.normalMap = normalMaterial != nullptr && normalMaterial->normalMap.has_value();
     p.objectSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == ObjectSpaceNormalMap;
     p.tangentSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == TangentSpaceNormalMap;
-    //    clearcoatMap: !! material.clearcoatMap
-    //    clearcoatRoughnessMap: !! material.clearcoatRoughnessMap
-    //    clearcoatNormalMap: !! material.clearcoatNormalMap
+    p.clearcoatMap = false;         //TODO
+    p.clearcoatRoughnessMap = false;//TODO
+    p.clearcoatNormalMap = false;   //TODO
     p.displacementMap = displacementMapMaterial != nullptr && displacementMapMaterial->displacementMap.has_value();
-    //    roughnessMap: !! material.roughnessMap
-    //    metalnessMap: !! material.metalnessMap
+    p.roughnessMap = false;//TODO
+    p.metalnessMap = false;//TODO
     p.specularMap = specularMapMaterial != nullptr && specularMapMaterial->specularMap.has_value();
     p.alphaMap = alphaMaterial != nullptr && alphaMaterial->alphaMap.has_value();
 
@@ -130,28 +142,32 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     if (sheenMaterial != nullptr) {
         p.sheen = sheenMaterial->sheen;
     }
-    //
-    //    transmission: !! material.transmission
-    //    transmissionMap: !! material.transmissionMap
-    //    thicknessMap: !! material.thicknessMap
-    //
+
+    p.transmission = false;   //TODO
+    p.transmissionMap = false;//TODO
+    p.thicknessMap = false;   //TODO
 
     if (combineMaterial != nullptr) {
         p.combine = combineMaterial->combine;
     }
 
+    p.vertexTangents = normalMaterial && vertextangentsMaterial && vertextangentsMaterial->vertexTangents;
     p.vertexColors = material->vertexColors;
     p.vertexAlphas = material->vertexColors && object->geometry() && object->geometry()->hasAttribute("color") && object->geometry()->getAttribute<float>("color")->itemSize() == 4;
+    p.vertexUvs = false; // TODO
+    p.uvsVertexOnly = false; // TODO;
 
     p.fog = scene->fog.has_value();
     p.useFog = material->fog;
     p.fogExp2 = scene->fog.has_value() && std::holds_alternative<FogExp2>(*scene->fog);
 
-    p.vertexTangents = normalMaterial != nullptr && vertextangentsMaterial != nullptr && vertextangentsMaterial->vertexTangents;
-
     if (flatshadeMaterial != nullptr) {
         p.flatShading = flatshadeMaterial->flatShading;
     }
+
+    p.skinning = false; // TODO
+    p.maxBones = 0; // TODO
+    p.useVertexTexture = GLCapabilities::instance().floatVertexTextures;
 
     p.numDirLights = (int) lights.directional.size();
     p.numPointLights = (int) lights.point.size();
@@ -180,9 +196,8 @@ ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material
     p.doubleSided = material->side == DoubleSide;
     p.flipSided = material->side == BackSide;
 
-    if (depthpackMaterial != nullptr) {
-        p.depthPacking = depthpackMaterial->depthPacking;
-    }
+
+    p.depthPacking = depthpackMaterial == nullptr ? 0 : depthpackMaterial->depthPacking;
 
     if (shaderMaterial != nullptr) {
         p.index0AttributeName = shaderMaterial->index0AttributeName;

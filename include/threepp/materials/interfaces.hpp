@@ -154,6 +154,21 @@ namespace threepp {
         std::optional<Texture> matcap;
     };
 
+    struct MaterialWithRoughness : virtual Material {
+
+        std::optional<Texture> roughnessMap;
+    };
+
+    struct MaterialWithMetalness : virtual Material {
+
+        std::optional<Texture> metallnessMap;
+    };
+
+    struct MaterialWithThickness : virtual Material {
+
+        std::optional<Texture> thicknessMap;
+    };
+
     struct MaterialWithSheen : virtual Material {
 
         std::optional<Color> sheen;

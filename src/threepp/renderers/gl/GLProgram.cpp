@@ -386,6 +386,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
                     "#define GAMMA_FACTOR " + std::to_string(gammaFactorDefine),
 
+                    "#define MAX_BONES " + std::to_string(parameters.maxBones),
                     (parameters.useFog && parameters.fog) ? "#define USE_FOG" : "",
                     (parameters.useFog && parameters.fogExp2) ? "#define FOG_EXP2" : "",
 
@@ -420,6 +421,11 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
                     parameters.flatShading ? "#define FLAT_SHADED" : "",
 
+                    parameters.skinning ? "#define USE_SKINNING" : "",
+                    parameters.useVertexTexture ? "#define BONE_TEXTURE" : "",
+
+                    parameters.morphTargets ? "#define USE_MORPHTARGETS" : "",
+                    parameters.morphNormals && parameters.flatShading == false ? "#define USE_MORPHNORMALS" : "",
                     parameters.doubleSided ? "#define DOUBLE_SIDED" : "",
                     parameters.flipSided ? "#define FLIP_SIDED" : "",
 
@@ -566,7 +572,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
                     parameters.lightMap ? getTexelDecodingFunction("lightMapTexelToLinear", parameters.lightMapEncoding) : "",
                     getTexelEncodingFunction("linearToOutputTexel", parameters.outputEncoding),
 
-                    parameters.depthPacking ? "#define DEPTH_PACKING " + std::to_string(*parameters.depthPacking) : "",
+                    parameters.depthPacking ? "#define DEPTH_PACKING " + std::to_string(parameters.depthPacking) : "",
 
                     "\n"
 
@@ -605,7 +611,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
             };
 
-            prefixVertex = utils::join(v) + '\n' + prefixVertex;
+            prefixVertex = utils::join(v) + "\n" + prefixVertex;
 
         }
 
@@ -630,7 +636,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
             };
 
-            prefixFragment = utils::join(v) + '\n' + prefixFragment;
+            prefixFragment = utils::join(v) + "\n" + prefixFragment;
 
         }
     }

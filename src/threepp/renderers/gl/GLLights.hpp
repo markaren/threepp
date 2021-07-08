@@ -167,10 +167,12 @@ namespace threepp::gl {
             std::vector<LightUniforms> spotShadow;
             std::vector<Texture> spotShadowMap;
             std::vector<Matrix4> spotShadowMatrix;
+            std::vector<LightUniforms> rectArea;
             std::vector<LightUniforms> point;
             std::vector<LightUniforms> pointShadow;
             std::vector<Texture> pointShadowMap;
             std::vector<Matrix4> pointShadowMatrix;
+            std::vector<LightUniforms> hemi;
         };
 
         LightState state;
