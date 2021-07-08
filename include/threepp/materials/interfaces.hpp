@@ -202,14 +202,6 @@ namespace threepp {
         MaterialWithVertexTangents(bool vertexTangents) : vertexTangents(vertexTangents) {}
     };
 
-    struct MaterialWithLineProperties: virtual Material {
-
-        std::string linecap;
-        std::string linejoin;
-
-        MaterialWithLineProperties(std::string linecap, std::string linejoin) : linecap(std::move(linecap)), linejoin(std::move(linejoin)) {}
-    };
-
     struct MaterialWithDefines : virtual Material {
 
         std::unordered_map<std::string, std::string> defines;

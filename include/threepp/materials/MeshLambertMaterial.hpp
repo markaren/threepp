@@ -19,7 +19,6 @@ namespace threepp {
                                 public MaterialWithEnvMap,
                                 public MaterialWithReflectivity,
                                 public MaterialWithWireframe,
-                                public MaterialWithLineProperties,
                                 public MaterialWithCombine {
 
     public:
@@ -37,7 +36,6 @@ namespace threepp {
         MeshLambertMaterial()
             : MaterialWithColor(0xffffff),
               MaterialWithWireframe(false, 1),
-              MaterialWithLineProperties("round", "round"),
               MaterialWithReflectivity(1, 0.98f),
               MaterialWithLightMap(1),
               MaterialWithEmissive(0x000000, 1),

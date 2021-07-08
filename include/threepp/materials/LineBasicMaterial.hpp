@@ -9,8 +9,7 @@ namespace threepp {
 
     class LineBasicMaterial : public virtual Material,
                               public MaterialWithColor,
-                              public MaterialWithLineWidth,
-                              public MaterialWithLineProperties {
+                              public MaterialWithLineWidth {
 
     public:
         [[nodiscard]] std::string type() const override {
@@ -26,8 +25,7 @@ namespace threepp {
     protected:
         LineBasicMaterial()
             : MaterialWithColor(0xffffff),
-              MaterialWithLineWidth(1),
-              MaterialWithLineProperties("round", "round") {}
+              MaterialWithLineWidth(1) {}
     };
 
 }// namespace threepp

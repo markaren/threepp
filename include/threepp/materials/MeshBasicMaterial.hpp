@@ -23,7 +23,6 @@ namespace threepp {
                               public MaterialWithEnvMap,
                               public MaterialWithReflectivity,
                               public MaterialWithWireframe,
-                              public MaterialWithLineProperties,
                               public MaterialWithCombine {
 
     public:
@@ -45,8 +44,7 @@ namespace threepp {
               MaterialWithLightMap(1),
               MaterialWithCombine(MultiplyOperation),
               MaterialWithReflectivity(1, 0.98f),
-              MaterialWithWireframe(false, 1),
-              MaterialWithLineProperties("round", "round") {}
+              MaterialWithWireframe(false, 1) {}
     };
 
 }// namespace threepp
