@@ -10,13 +10,6 @@ using namespace threepp::gl;
 
 namespace {
 
-    void ensureCapacity(std::vector<float> &v, unsigned int size) {
-
-        while (v.size() < size) {
-            v.emplace_back();
-        }
-    }
-
     // helper type for the visitor
     template<class... Ts>
     struct overloaded : Ts... { using Ts::operator()...; };
@@ -26,8 +19,8 @@ namespace {
 
     struct ActiveUniformInfo {
 
-        int size{};
-        unsigned int type{};
+        int size;
+        unsigned int type;
         std::string name;
 
         ActiveUniformInfo(unsigned int program, unsigned int index) {
@@ -45,11 +38,11 @@ namespace {
             : UniformObject(std::move(id)),
               activeInfo(std::move(activeInfo)),
               addr(addr),
-              setValueFun(getSingularSetter(this->activeInfo.type)) {
+              setValueFun(getSingularSetter()) {
         }
 
         void setValue(const UniformValue &value, GLTextures *textures) override {
-
+            //            std::cout << "name=" << activeInfo.name << ", type=" << activeInfo.type << std::endl;
             setValueFun(value, textures);
         }
 
@@ -59,6 +52,36 @@ namespace {
         std::vector<float> cache;
         ActiveUniformInfo activeInfo;
         std::function<void(const UniformValue &, GLTextures *)> setValueFun;
+
+        std::function<void(const UniformValue &, GLTextures *)> getSingularSetter() {
+
+            switch (activeInfo.type) {
+
+                case 0x1406:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV1f(value); };
+
+                case 0x8b50:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV2f(value); };
+
+                case 0x8b51:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV3f(value); };
+
+                case 0x8b52:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV4f(value); };
+
+                case 0x8b5b:
+                    return [&](const UniformValue &value, GLTextures *) { setValueM3(value); };
+
+                case 0x8b5c:
+                    return [&](const UniformValue &value, GLTextures *) { setValueM4(value); };
+
+                default:
+                    return [&](const UniformValue &value, GLTextures *) {
+                        std::cout << "SingleUniform TODO: "
+                                  << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
+                    };
+            }
+        }
 
         void setValueV1f(const UniformValue &value) {
 
@@ -168,7 +191,7 @@ namespace {
         void setValueM3(const UniformValue &value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cout << "setValueM3: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cout << "setValueM3: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Matrix3 arg) { setValueM3Helper(arg.elements); },
                        },
                        value);
@@ -193,35 +216,6 @@ namespace {
                        },
                        value);
         }
-
-        std::function<void(const UniformValue &, GLTextures *)> getSingularSetter(int type) {
-
-            switch (type) {
-
-                case 0x1406:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV1f(value); };
-
-                case 0x8b50:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV2f(value); };
-
-                case 0x8b51:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV3f(value); };
-
-                case 0x8b52:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV4f(value); };
-
-                case 0x8b5a:
-                    return [&](const UniformValue &value, GLTextures *) { setValueM3(value); };
-
-                case 0x8b5c:
-                    return [&](const UniformValue &value, GLTextures *) { setValueM4(value); };
-
-                default:
-                    return [&](const UniformValue &value, GLTextures *) {
-                        std::cout << "TODO type:" << type << std::endl;
-                    };
-            }
-        }
     };
 
     struct PureArrayUniform : UniformObject {
@@ -229,24 +223,79 @@ namespace {
         explicit PureArrayUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
             : UniformObject(std::move(id)),
               activeInfo(std::move(activeInfo)),
-              addr(addr) {}
+              addr(addr),
+              setValueFun(getPureArraySetter()) {}
 
         void setValue(const UniformValue &value, GLTextures *textures) override {
-            std::cout << "PureArrayUniform '" << id << "'" << std::endl;
+            setValueFun(value, textures);
+            //            std::cout << "PureArrayUniform '" << id << "'" << std::endl;
+        }
+
+        std::function<void(const UniformValue &, GLTextures *)> getPureArraySetter() {
+
+            int size = activeInfo.size;
+
+            switch (activeInfo.type) {
+
+                case 0x1406:// FLOAT
+                    return [&](const UniformValue &value, GLTextures *) {
+                        auto &data = std::get<std::vector<float>>(value);
+                        glUniform2fv(addr, (int) data.size(), data.data());
+                    };
+                case 0x8b50:// VEC2"
+                    return [&](const UniformValue &value, GLTextures *) {
+                        auto &data = std::get<std::vector<Vector2>>(value);
+                        glUniform2fv(addr, (int) data.size(), flatten(data, size, 2).data());
+                    };
+                case 0x8b51:// VEC3"
+                    return [&](const UniformValue &value, GLTextures *) {
+                        auto &data = std::get<std::vector<Vector3>>(value);
+                        glUniform3fv(addr, (int) data.size(), flatten(data, size, 3).data());
+                    };
+
+                case 0x8b5b:// MAT3"
+                    return [&](const UniformValue &value, GLTextures *) {
+                        auto &data = std::get<std::vector<Matrix3>>(value);
+                        glUniformMatrix3fv(addr, (int) data.size(), false, flatten(data, size, 9).data());
+                    };
+                case 0x8b5c:// MAT4"
+                    return [&](const UniformValue &value, GLTextures *) {
+                        auto &data = std::get<std::vector<Matrix4>>(value);
+                        glUniformMatrix3fv(addr, (int) data.size(), false, flatten(data, size, 16).data());
+                    };
+                default:
+                    return [&](const UniformValue &value, GLTextures *) {
+                        std::cout << "PureArrayUniform TODO: "
+                                  << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
+                    };
+            }
         }
 
     private:
         int addr;
         ActiveUniformInfo activeInfo;
+        std::function<void(const UniformValue &, GLTextures *)> setValueFun;
     };
 
     struct StructuredUniform : UniformObject, Container {
 
-        explicit StructuredUniform(std::string id) : UniformObject(std::move(id)) {}
+        explicit StructuredUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
+            : UniformObject(std::move(id)),
+              activeInfo(std::move(activeInfo)),
+              addr(addr) {}
 
         void setValue(const UniformValue &value, GLTextures *textures) override {
-            std::cout << "StructuredUniform '" << id << "'" << std::endl;
+            std::cout << "StructuredUniform '" << id << "', index=" << value.index() << std::endl;
+
+            std::visit(overloaded{
+                               [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
+                               [&](NestedUniformValue arg) { std::cout << "nested" << std::endl; }},
+                       value);
         }
+
+    private:
+        int addr;
+        ActiveUniformInfo activeInfo;
     };
 
     void addUniform(Container *container, const std::shared_ptr<UniformObject> &uniformObject) {
@@ -259,13 +308,16 @@ namespace {
 
         static std::regex rex(R"(([\w\d_]+)(\])?(\[|\.)?)");
 
-        const auto name = activeInfo.name;
+        const auto path = activeInfo.name;
+        const auto pathLength = path.size();
 
-        std::sregex_iterator rex_it(name.cbegin(), name.cend(), rex);
+        std::sregex_iterator rex_it(path.cbegin(), path.cend(), rex);
         std::sregex_iterator rex_end;
 
         while (rex_it != rex_end) {
             std::smatch match = *rex_it;
+
+            const auto matchEnd = match.length();
 
             std::string id = match[1];
             bool isIndex = match[2] == "]";
@@ -273,7 +325,7 @@ namespace {
 
             if (isIndex) id = std::to_string(std::atoi(id.c_str()) | 0);
 
-            if (!match[3].matched || subscript == "[" && match[3].second == name.end()) {
+            if (!match[3].matched || subscript == "[" && matchEnd + 2 == pathLength) {
 
                 // bare name or "pure" bottom-level array "[0]" suffix
                 if (!match[3].matched) {
@@ -286,7 +338,7 @@ namespace {
             } else {
 
                 if (!container->map.count(id)) {
-                    addUniform(container, std::make_shared<StructuredUniform>(id));
+                    addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo, addr));
                 }
 
                 container = dynamic_cast<Container *>(container->map[id].get());

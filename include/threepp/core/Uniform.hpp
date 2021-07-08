@@ -20,7 +20,7 @@
 namespace threepp {
 
     typedef std::variant<int, float, Color, Vector2, Vector3> NestedUniformValue;
-    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, Texture, std::vector<float>, std::vector<Vector3>, std::vector<Matrix4>, std::vector<Texture>, std::vector<std::unordered_map<std::string, NestedUniformValue>>> UniformValue;
+    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, Texture, std::vector<float>, std::vector<Vector2>, std::vector<Vector3>, std::vector<Matrix3>, std::vector<Matrix4>, std::vector<Texture>, std::vector<std::unordered_map<std::string, NestedUniformValue>>> UniformValue;
 
     class Uniform {
 

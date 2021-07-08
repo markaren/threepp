@@ -21,7 +21,7 @@ namespace threepp::gl {
 
         bool shadowCastingLightsFirst(const Light *lightA, const Light *lightB) {
 
-            return (lightB->castShadow ? 1 : 0) - (lightA->castShadow ? 1 : 0);
+            return (lightB->castShadow ? 1 : 0) > (lightA->castShadow ? 1 : 0);
         }
 
     }// namespace
@@ -32,7 +32,8 @@ namespace threepp::gl {
 
         LightUniforms &get(const Light &light) {
 
-            if (!lights.count(light.id)) {
+            if (lights.count(light.id)) {
+
                 return lights.at(light.id);
             }
 
@@ -93,7 +94,8 @@ namespace threepp::gl {
 
         LightUniforms &get(const Light &light) {
 
-            if (!lights.count(light.id)) {
+            if (lights.count(light.id)) {
+
                 return lights.at(light.id);
             }
 

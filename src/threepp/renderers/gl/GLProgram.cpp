@@ -638,8 +638,6 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
 
-//    std::cout << fragmentGlsl << std::endl;
-
     const auto glVertexShader = createShader(GL_VERTEX_SHADER, vertexGlsl.c_str());
     const auto glFragmentShader = createShader(GL_FRAGMENT_SHADER, fragmentGlsl.c_str());
 

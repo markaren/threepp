@@ -14,7 +14,7 @@ namespace threepp {
 
     public:
 
-        std::array<float, 16> elements{
+        std::array<float, 9> elements{
                 1.f, 0.f, 0.f,
                 0.f, 1.f, 0.f,
                 0.f, 0.f, 1.f};
@@ -108,8 +108,6 @@ namespace threepp {
             array[offset + 6] = te[6];
             array[offset + 7] = te[7];
             array[offset + 8] = te[8];
-
-            return array;
         }
 
     };

@@ -17,30 +17,30 @@ namespace {
     std::array<float, 9> mat3array;
     std::array<float, 4> mat2array;
 
+
+    void ensureCapacity(std::vector<float> &v, unsigned int size) {
+
+        while (v.size() < size) {
+            v.emplace_back();
+        }
+    }
+
     template<class ArrayLike>
     std::vector<float> &flatten(const ArrayLike &array, int nBlocks, int blockSize) {
 
-        const auto firstElem = array[0];
-
-        if (!isnan(firstElem)) return array;
-
         const auto n = nBlocks * blockSize;
+        arrayCacheF32.resize(n+1);
         auto &r = arrayCacheF32[n];
 
-        if (r.empty()) {
-
-            r.resize(n);
-            arrayCacheF32[n] = r;
-        }
+        if (r.empty()) r.resize(n+1);
 
         if (nBlocks != 0) {
 
-            firstElem.toArray(r, 0);
+            int offset = 0;
+            for (int i = 0; i < nBlocks; ++i) {
 
-            for (int i = 1, offset = 0; i != nBlocks; ++i) {
-
-                offset += blockSize;
                 array[i].toArray(r, offset);
+                offset += blockSize;
             }
         }
 
@@ -89,6 +89,6 @@ namespace {
         return r;
     }
 
-}
+}// namespace
 
 #endif//THREEPP_UNIFORMUTILS_HPP

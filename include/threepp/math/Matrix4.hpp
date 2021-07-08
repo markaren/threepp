@@ -109,7 +109,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, unsigned int offset = 0) {
+        void toArray(ArrayLike &array, unsigned int offset = 0) const {
 
             auto &te = this->elements;
 

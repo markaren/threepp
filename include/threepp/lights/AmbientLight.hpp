@@ -12,7 +12,7 @@ namespace threepp {
     class AmbientLight : public Light {
 
     public:
-        std::string type() const override {
+        [[nodiscard]] std::string type() const override {
             return "AmbientLight";
         }
 
