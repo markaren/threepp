@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "threepp/core/Clock.hpp"
+#include "threepp/input/KeyListener.hpp"
 
 namespace threepp {
 
@@ -33,6 +34,12 @@ namespace threepp {
 
         void onWindowResize(std::function<void(WindowSize)> f);
 
+        void addKeyListener(const std::shared_ptr<KeyListener> &listener);
+
+        bool removeKeyListener(const std::shared_ptr<KeyListener> &listener);
+
+        void addKeyPressListener(const std::function<void(KeyEvent)> &f);
+
         void animate(const std::function<void(float)> &f) const;
 
         ~Canvas();
@@ -48,7 +55,7 @@ namespace threepp {
                 : size_{640, 480},
                   antialiasing_{0} {}
 
-            Parameters&title(std::string value) {
+            Parameters &title(std::string value) {
 
                 this->title_ = std::move(value);
 

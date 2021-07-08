@@ -46,8 +46,8 @@ public:
         }
 
         glEnable(GL_PROGRAM_POINT_SIZE);
-//        glEnable(GL_POINT_SPRITE);
-//        glEnable(GL_POINT_SMOOTH);
+        //        glEnable(GL_POINT_SPRITE);
+        //        glEnable(GL_POINT_SMOOTH);
     }
 
     [[nodiscard]] WindowSize getSize() const {
@@ -73,6 +73,19 @@ public:
         this->resizeListener = std::move(f);
     }
 
+    void addKeyListener(const std::shared_ptr<KeyListener> &listener) {
+        keyListeners.emplace_back(listener);
+    }
+
+    bool removeKeyListener(const std::shared_ptr<KeyListener> &listener) {
+        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
+        if (find != keyListeners.end()) {
+            keyListeners.erase(find);
+            return true;
+        }
+        return false;
+    }
+
     ~Impl() {
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -81,13 +94,13 @@ public:
 private:
     WindowSize size_;
     std::function<void(WindowSize)> resizeListener;
+    std::vector<std::shared_ptr<KeyListener>> keyListeners;
 
     GLFWwindow *window;
 
     static void window_size_callback(GLFWwindow *w, int width, int height) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
-        p->size_.width = width;
-        p->size_.height = height;
+        p->size_ = {width, height};
         p->resizeListener(p->size_);
     }
 
@@ -95,9 +108,28 @@ private:
         fprintf(stderr, "Error: %s\n", description);
     }
 
-    static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
+    static void key_callback(GLFWwindow *w, int key, int scancode, int action, int mods) {
         if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
+            glfwSetWindowShouldClose(w, GLFW_TRUE);
+            return;
+        }
+
+        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+        if (p->keyListeners.empty()) return;
+
+        KeyEvent evt{key, scancode, mods};
+        for (auto &l : p->keyListeners) {
+            switch (action) {
+                case GLFW_PRESS:
+                    l->onKeyPressed(evt);
+                    break;
+                case GLFW_RELEASE:
+                    l->onKeyReleased(evt);
+                    break;
+                case GLFW_REPEAT:
+                    l->onKeyRepeat(evt);
+                    break;
+            }
         }
     }
 };
@@ -124,6 +156,18 @@ void threepp::Canvas::setSize(WindowSize size) {
 }
 void threepp::Canvas::onWindowResize(std::function<void(WindowSize)> f) {
     pimpl_->onWindowResize(std::move(f));
+}
+
+void threepp::Canvas::addKeyListener(const std::shared_ptr<KeyListener> &listener) {
+    pimpl_->addKeyListener(listener);
+}
+
+bool threepp::Canvas::removeKeyListener(const std::shared_ptr<KeyListener> &listener) {
+    return pimpl_->removeKeyListener(listener);
+}
+
+void threepp::Canvas::addKeyPressListener(const std::function<void(KeyEvent)> &f) {
+    addKeyListener(std::make_shared<KeyPressAdapter>(f));
 }
 
 threepp::Canvas::~Canvas() = default;

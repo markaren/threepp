@@ -21,6 +21,8 @@ set(publicHeaders
         "threepp/cameras/OrthographicCamera.hpp"
         "threepp/cameras/View.hpp"
 
+        "threepp/input/KeyListener.hpp"
+
         "threepp/geometries/geometries.hpp"
         "threepp/geometries/BoxGeometry.hpp"
         "threepp/geometries/CircleGeometry.hpp"
