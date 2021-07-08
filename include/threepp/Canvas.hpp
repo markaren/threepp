@@ -13,8 +13,8 @@ namespace threepp {
         int width;
         int height;
 
-        float getAspect() const {
-            return (float) width / height;
+        [[nodiscard]] float getAspect() const {
+            return (float) width / (float) height;
         }
     };
 

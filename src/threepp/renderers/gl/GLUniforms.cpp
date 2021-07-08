@@ -78,7 +78,7 @@ namespace {
             float y = value[1];
 
             ensureCapacity(cache, 2);
-            if (cache[0] != x && cache[1] != y) {
+            if (cache[0] != x || cache[1] != y) {
 
                 glUniform2f(addr, x, y);
 
@@ -94,8 +94,6 @@ namespace {
                                [&](Vector2 arg) { setValueV2fHelper(arg); },
                        },
                        value);
-
-            std::cout << "setValueV2f index:" << value.index() << std::endl;
         }
 
         template<class ArrayLike>
@@ -251,7 +249,7 @@ namespace {
         }
     };
 
-    void addUniform(Container *container, const std::shared_ptr<UniformObject>& uniformObject) {
+    void addUniform(Container *container, const std::shared_ptr<UniformObject> &uniformObject) {
 
         container->seq.emplace_back(uniformObject);
         container->map[uniformObject->id] = uniformObject;
