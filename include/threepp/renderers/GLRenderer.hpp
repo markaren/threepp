@@ -251,7 +251,7 @@ namespace threepp {
         std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
         std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
-        friend struct gl::GLPrograms;
+        friend struct gl::ProgramParameters;
     };
 
 }// namespace threepp

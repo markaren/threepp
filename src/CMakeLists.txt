@@ -195,6 +195,7 @@ set(sources
         "threepp/renderers/gl/GLTextures.cpp"
         "threepp/renderers/gl/GLUniforms.cpp"
         "threepp/renderers/gl/GLRenderLists.cpp"
+        "threepp/renderers/gl/ProgramParameters.cpp"
 
         )
 

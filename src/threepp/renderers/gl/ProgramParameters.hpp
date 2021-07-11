@@ -2,222 +2,144 @@
 #ifndef THREEPP_PROGRAMPARAMETERS_HPP
 #define THREEPP_PROGRAMPARAMETERS_HPP
 
+#include "GLLights.hpp"
+#include "GLClipping.hpp"
 #include "threepp/core/Uniform.hpp"
 
 #include <optional>
 #include <string>
 #include <unordered_map>
 
-namespace threepp::gl {
+namespace threepp {
 
-    struct ProgramParameters {
+    class GLRenderer;
 
-        std::optional<std::string> shaderID;
-        std::string shaderName;
+    namespace gl {
 
-        std::unordered_map<std::string, std::string> defines;
+        struct ProgramParameters {
 
-        std::string vertexShader;
-        std::string fragmentShader;
+            std::optional<std::string> shaderID;
+            std::string shaderName;
 
-        bool isRawShaderMaterial;
+            std::unordered_map<std::string, std::string> defines;
 
-        std::string precision;
+            std::string vertexShader;
+            std::string fragmentShader;
 
-        bool instancing;
-        bool instancingColor;
+            bool isRawShaderMaterial{};
 
-        bool supportsVertexTextures;
-        int outputEncoding;
-        bool map;
-        int mapEncoding;
-        bool matcap;
-        int matcapEncoding;
-        bool envMap;
-        int envMapMode;
-        int envMapEncoding;
-        bool envMapCubeUV;
-        bool lightMap;
-        int lightMapEncoding;
-        bool aoMap;
-        bool emissiveMap;
-        int emissiveMapEncoding;
-        bool bumpMap;
-        bool normalMap;
-        bool objectSpaceNormalMap;
-        bool tangentSpaceNormalMap;
-        bool clearcoatMap;
-        bool clearcoatRoughnessMap;
-        bool clearcoatNormalMap;
-        bool displacementMap;
-        bool roughnessMap;
-        bool metalnessMap;
-        bool specularMap;
-        bool alphaMap;
+            std::string precision = "highp";
 
-        bool gradientMap;
+            bool instancing{};
+            bool instancingColor{};
 
-        std::optional<Color> sheen;
+            bool supportsVertexTextures;
+            int outputEncoding{};
+            bool map{};
+            int mapEncoding{};
+            bool matcap{};
+            int matcapEncoding{};
+            bool envMap{};
+            int envMapMode{};
+            int envMapEncoding{};
+            bool envMapCubeUV{};
+            bool lightMap{};
+            int lightMapEncoding{};
+            bool aoMap{};
+            bool emissiveMap{};
+            int emissiveMapEncoding{};
+            bool bumpMap{};
+            bool normalMap{};
+            bool objectSpaceNormalMap{};
+            bool tangentSpaceNormalMap{};
+            bool clearcoatMap;
+            bool clearcoatRoughnessMap;
+            bool clearcoatNormalMap;
+            bool displacementMap{};
+            bool roughnessMap;
+            bool metalnessMap;
+            bool specularMap{};
+            bool alphaMap{};
 
-        bool transmission;
-        bool transmissionMap;
-        bool thicknessMap;
+            bool gradientMap{};
 
-        std::optional<int> combine;
+            std::optional<Color> sheen;
 
-        bool vertexTangents;
-        bool vertexColors;
-        bool vertexAlphas;
-        bool vertexUvs;
-        bool uvsVertexOnly;
+            bool transmission;
+            bool transmissionMap;
+            bool thicknessMap;
 
-        bool fog;
-        bool useFog;
-        bool fogExp2;
+            std::optional<int> combine;
 
-        bool flatShading;
+            bool vertexTangents{};
+            bool vertexColors{};
+            bool vertexAlphas{};
+            bool vertexUvs;
+            bool uvsVertexOnly;
 
-        bool sizeAttenuation;
-        bool logarithmicDepthBuffer;
+            bool fog;
+            bool useFog{};
+            bool fogExp2{};
 
-        bool skinning;
-        int maxBones;
-        bool useVertexTexture;
+            bool flatShading{};
 
-        bool morphTargets;
-        bool morphNormals;
+            bool sizeAttenuation{};
+            bool logarithmicDepthBuffer{};
 
-        int numDirLights;
-        int numPointLights;
-        int numSpotLights;
-        int numRectAreaLights;
-        int numHemiLights;
+            bool skinning;
+            int maxBones;
+            bool useVertexTexture{};
 
-        int numDirLightShadows;
-        int numPointLightShadows;
-        int numSpotLightShadows;
+            bool morphTargets{};
+            bool morphNormals{};
 
-        int numClippingPlanes;
-        int numClipIntersection;
+            int numDirLights;
+            int numPointLights;
+            int numSpotLights;
+            int numRectAreaLights;
+            int numHemiLights;
 
-        bool dithering;
+            int numDirLightShadows;
+            int numPointLightShadows;
+            int numSpotLightShadows;
 
-        bool shadowMapEnabled;
-        int shadowMapType;
+            int numClippingPlanes;
+            int numClipIntersection{};
 
-        int toneMapping;
-        bool physicallyCorrectLights;
+            bool dithering{};
 
-        bool premultipliedAlpha;
+            bool shadowMapEnabled{};
+            int shadowMapType{};
 
-        float alphaTest;
-        bool doubleSided;
-        bool flipSided;
+            int toneMapping{};
+            bool physicallyCorrectLights{};
 
-        int depthPacking;
+            bool premultipliedAlpha{};
 
-        std::optional<std::string> index0AttributeName;
+            float alphaTest{};
+            bool doubleSided{};
+            bool flipSided{};
 
-        std::shared_ptr<UniformMap> uniforms;
+            int depthPacking{};
 
-        [[nodiscard]] std::string hash() const {
+            std::optional<std::string> index0AttributeName;
 
-            std::stringstream s;
+            std::shared_ptr<UniformMap> uniforms;
 
-            s << std::to_string(instancing) << '\n';
-            s << std::to_string(instancingColor) << '\n';
+            ProgramParameters(
+                    const GLRenderer &renderer,
+                    const GLLights::LightState &lights,
+                    int numShadows,
+                    Object3D* object,
+                    Scene *scene,
+                    Material *material,
+                    const std::unordered_map<std::string, std::string> &shaderIDs);
 
-            s << std::to_string(supportsVertexTextures) << '\n';
-            s << std::to_string(outputEncoding) << '\n';
-            s << std::to_string(map) << '\n';
-            s << std::to_string(mapEncoding) << '\n';
-            s << std::to_string(matcap) << '\n';
-            s << std::to_string(matcapEncoding) << '\n';
-            s << std::to_string(envMap) << '\n';
-            s << std::to_string(envMapEncoding) << '\n';
-            s << std::to_string(envMapMode) << '\n';
-            s << std::to_string(envMapEncoding) << '\n';
-            s << std::to_string(envMapCubeUV) << '\n';
-            s << std::to_string(lightMap) << '\n';
-            s << std::to_string(lightMapEncoding) << '\n';
-            s << std::to_string(aoMap) << '\n';
-            s << std::to_string(emissiveMap) << '\n';
-            s << std::to_string(emissiveMapEncoding) << '\n';
-            s << std::to_string(bumpMap) << '\n';
-            s << std::to_string(normalMap) << '\n';
-            s << std::to_string(objectSpaceNormalMap) << '\n';
-            s << std::to_string(tangentSpaceNormalMap) << '\n';
-            s << std::to_string(clearcoatMap) << '\n';
-            s << std::to_string(clearcoatRoughnessMap) << '\n';
-            s << std::to_string(clearcoatNormalMap) << '\n';
-            s << std::to_string(displacementMap) << '\n';
-            s << std::to_string(roughnessMap) << '\n';
-            s << std::to_string(metalnessMap) << '\n';
-            s << std::to_string(specularMap) << '\n';
-            s << std::to_string(alphaMap) << '\n';
+            [[nodiscard]] std::string hash() const;
+        };
 
-            s << std::to_string(gradientMap) << '\n';
+    }// namespace gl
 
-            if (sheen.has_value()) {
-                s << *sheen << '\n';
-            } else {
-                s << "undefined \n";
-            }
-
-            s << std::to_string(transmission) << '\n';
-            s << std::to_string(transmissionMap) << '\n';
-            s << std::to_string(thicknessMap) << '\n';
-
-            s << (combine.has_value() ? std::to_string(*combine) : std::string("undefined")) << '\n';
-
-            s << std::to_string(vertexTangents) << '\n';
-            s << std::to_string(vertexColors) << '\n';
-            s << std::to_string(vertexAlphas) << '\n';
-            s << std::to_string(vertexUvs) << '\n';
-            s << std::to_string(uvsVertexOnly) << '\n';
-
-            s << std::to_string(fog) << '\n';
-            s << std::to_string(useFog) << '\n';
-            s << std::to_string(fogExp2) << '\n';
-
-            s << std::to_string(flatShading) << '\n';
-
-            s << std::to_string(sizeAttenuation) << '\n';
-            s << std::to_string(logarithmicDepthBuffer) << '\n';
-
-            s << std::to_string(numDirLights) << '\n';
-            s << std::to_string(numPointLights) << '\n';
-            s << std::to_string(numSpotLights) << '\n';
-            s << std::to_string(numRectAreaLights) << '\n';
-            s << std::to_string(numHemiLights) << '\n';
-
-            s << std::to_string(numDirLightShadows) << '\n';
-            s << std::to_string(numPointLightShadows) << '\n';
-            s << std::to_string(numSpotLightShadows) << '\n';
-
-            s << std::to_string(numClippingPlanes) << '\n';
-            s << std::to_string(numClipIntersection) << '\n';
-
-            s << std::to_string(dithering) << '\n';
-
-            s << std::to_string(shadowMapEnabled) << '\n';
-            s << std::to_string(shadowMapType) << '\n';
-
-            s << std::to_string(toneMapping) << '\n';
-            s << std::to_string(physicallyCorrectLights) << '\n';
-
-            s << std::to_string(premultipliedAlpha) << '\n';
-
-            s << std::to_string(alphaTest) << '\n';
-            s << std::to_string(doubleSided) << '\n';
-            s << std::to_string(flipSided) << '\n';
-
-            s << std::to_string(depthPacking) << '\n';
-
-            return s.str();
-        }
-    };
-
-}// namespace threepp::gl
+}// namespace threepp
 
 #endif//THREEPP_PROGRAMPARAMETERS_HPP

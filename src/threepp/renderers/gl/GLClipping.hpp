@@ -68,7 +68,7 @@ namespace threepp::gl {
             auto clipIntersection = material->clipIntersection;
             auto clipShadows = material->clipShadows;
 
-            auto materialProperties = properties.materialProperties.get(material->uuid);
+            auto& materialProperties = properties.materialProperties.get(material->uuid);
 
             if (!localClippingEnabled || planes.empty() || renderingShadows && !clipShadows) {
 
@@ -78,9 +78,7 @@ namespace threepp::gl {
 
                     // there's no global clipping
 
-                    numPlanes = 0;
-                    numIntersection = 0;
-                    //projectPlanes();
+                    projectPlanes();
 
                 } else {
 

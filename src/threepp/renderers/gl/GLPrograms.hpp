@@ -34,7 +34,7 @@ namespace threepp {
 
             bool logarithmicDepthBuffer;
             bool floatVertexTextures;
-            GLint maxVertexUniforms;
+            int maxVertexUniforms;
             bool vertexTextures;
 
         private:
