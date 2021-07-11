@@ -12,6 +12,13 @@ namespace threepp {
                              public MaterialWithColor,
                              public MaterialWithMap,
                              public MaterialWithGradientMap,
+                             public MaterialWithBumpMap,
+                             public MaterialWithNormalMap,
+                             public MaterialWithLightMap,
+                             public MaterialWithAoMap,
+                             public MaterialWithDisplacementMap,
+                             public MaterialWithEmissive,
+                             public MaterialWithWireframe,
                              public MaterialWithDefines {
 
     public:
@@ -26,10 +33,16 @@ namespace threepp {
 
     protected:
         MeshToonMaterial()
-            : MaterialWithColor(0xffffff) {
+            : MaterialWithColor(0xffffff),
+              MaterialWithAoMap(1),
+              MaterialWithBumpMap(1),
+              MaterialWithLightMap(1),
+              MaterialWithDisplacementMap(1, 0),
+              MaterialWithEmissive(0x000000, 1),
+              MaterialWithWireframe(false, 1),
+              MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}) {
 
             this->defines["TOON"] = "";
-
         }
     };
 

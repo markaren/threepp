@@ -49,21 +49,21 @@ namespace threepp {
 
     struct MaterialWithEmissive : virtual Material {
 
-        Color emissiveColor;
+        Color emissive;
         float emissiveIntensity;
         std::optional<Texture> emissiveMap;
 
         template<class T>
-        MaterialWithEmissive(T emissiveColor, float emissiveIntensity) : emissiveColor(emissiveColor), emissiveIntensity(emissiveIntensity) {}
+        MaterialWithEmissive(T emissive, float emissiveIntensity) : emissive(emissive), emissiveIntensity(emissiveIntensity) {}
     };
 
     struct MaterialWithSpecular : virtual Material {
 
-        Color specularColor;
+        Color specular;
         float shininess;
 
         template<class T>
-        MaterialWithSpecular(T specularColor, float shininess) : specularColor(specularColor), shininess(shininess) {}
+        MaterialWithSpecular(T specular, float shininess) : specular(specular), shininess(shininess) {}
     };
 
     struct MaterialWithReflectivity : virtual Material {

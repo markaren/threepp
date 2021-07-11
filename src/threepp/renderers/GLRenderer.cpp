@@ -24,6 +24,7 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       objects(geometries, attributes, info),
       renderLists(properties),
       shadowMap(objects),
+      materials(properties),
       programCache(bindingStates, clipping),
       onMaterialDispose(*this) {
 
@@ -945,6 +946,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
     if (false /*material.isSpriteMaterial*/) {
 
+        // TODO
         //                        p_uniforms->setValue("center", object->center);
     }
 
