@@ -34,7 +34,7 @@ namespace {
 
         if (instanceof <MaterialWithAlphaMap>(material)) {
 
-            auto &alphaMap = dynamic_cast<MaterialWithAlphaMap *>(material)->alphaMap;
+            auto& alphaMap = dynamic_cast<MaterialWithAlphaMap *>(material)->alphaMap;
             if (alphaMap) {
                 uniforms->operator[]("alphaMap").setValue(*alphaMap);
             }

@@ -3,7 +3,7 @@
 #ifndef THREEPP_GLCAPABILITIES_HPP
 #define THREEPP_GLCAPABILITIES_HPP
 
-#include "glParameter.hpp"
+#include "glHelper.hpp"
 
 #include <string>
 #include <iostream>

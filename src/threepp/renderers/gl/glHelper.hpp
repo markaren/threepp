@@ -1,6 +1,6 @@
 
-#ifndef THREEPP_GLPARAMETER_HPP
-#define THREEPP_GLPARAMETER_HPP
+#ifndef THREEPP_GLHELPER_HPP
+#define THREEPP_GLHELPER_HPP
 
 #include <glad/glad.h>
 
@@ -14,4 +14,4 @@ namespace {
 
 }
 
-#endif//THREEPP_GLPARAMETER_HPP
+#endif//THREEPP_GLHELPER_HPP

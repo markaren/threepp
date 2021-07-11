@@ -6,7 +6,7 @@
 #include "GLAttributes.hpp"
 #include "GLCapabilities.hpp"
 #include "GLProgram.hpp"
-#include "glParameter.hpp"
+#include "glHelper.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/materials.hpp"

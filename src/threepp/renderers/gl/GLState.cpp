@@ -1,7 +1,7 @@
 
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include "glParameter.hpp"
+#include "glHelper.hpp"
 
 #include <cstdint>
 
@@ -343,12 +343,7 @@ gl::GLState::GLState(const Canvas &canvas)
 }
 
 void gl::GLState::enable(int id) {
-    if (!enabledCapabilities.count(id)) {
-
-        glEnable(id);
-        enabledCapabilities[id] = true;
-
-    } else if (enabledCapabilities.at(id) == false) {
+    if (!enabledCapabilities.count(id) || enabledCapabilities.at(id) == false) {
 
         glEnable(id);
         enabledCapabilities[id] = true;

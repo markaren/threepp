@@ -117,7 +117,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLLights.hpp"
         "threepp/renderers/gl/GLMaterials.hpp"
         "threepp/renderers/gl/GLObjects.hpp"
-        "threepp/renderers/gl/glParameter.hpp"
+        "threepp/renderers/gl/glHelper.hpp"
         "threepp/renderers/gl/GLProperties.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
         "threepp/renderers/gl/GLPrograms.hpp"
