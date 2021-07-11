@@ -42,7 +42,6 @@ target_link_libraries(test_image_loader
         PUBLIC
         threepp
         PRIVATE
-        CONAN_PKG::glad
-        CONAN_PKG::cimg)
+        CONAN_PKG::glad)
 
 

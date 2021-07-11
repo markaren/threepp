@@ -15,9 +15,9 @@ namespace threepp {
     public:
         Texture loadTexture(const char *path) {
 
-            auto image = ImageLoader().load(path);
-
             bool isJPEG = std::regex_match(path, std::regex(".*jpe?g", std::regex::icase));
+
+            auto image = imageLoader_.load(path, isJPEG ? 3 : 4);
 
             Texture texture(image);
 
@@ -28,7 +28,7 @@ namespace threepp {
         }
 
     private:
-        ImageLoader imageLoader_;
+        ImageLoader imageLoader_{};
     };
 
 }// namespace threepp

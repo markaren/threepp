@@ -14,19 +14,19 @@ namespace threepp {
         unsigned int height;
         unsigned int depth = 0;
 
-        Image(unsigned int width, unsigned int height, std::vector<unsigned char> data = {})
-            : width(width), height(height), data_(std::move(data)){};
+        Image(unsigned int width, unsigned int height, std::shared_ptr<unsigned char> data)
+            : width(width), height(height), data_(data){};
 
         Image(unsigned int width, unsigned int height, unsigned int depth)
                 : width(width), height(height), depth(depth){};
 
-        [[nodiscard]] const std::vector<unsigned char> &getData() const {
+        [[nodiscard]] const unsigned char *getData() const {
 
-            return data_;
+            return data_.get();
         }
 
     private:
-        std::vector<unsigned char> data_;
+        std::shared_ptr<unsigned char> data_{};
 
     };
 

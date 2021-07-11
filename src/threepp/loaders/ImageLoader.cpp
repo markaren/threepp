@@ -1,21 +1,16 @@
 
 #include "threepp/loaders/ImageLoader.hpp"
 
-#include <CImg.h>
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
 
 using namespace threepp;
-using namespace cimg_library;
 
-Image ImageLoader::load(const char *imagePath) {
+Image ImageLoader::load(const std::string &imagePath, int channels) {
 
-    CImg<unsigned char> image(imagePath);
+    int width, height, nrChannels;
+    unsigned char *img_data = stbi_load(imagePath.c_str(), &width, &height, &nrChannels, channels);
 
-    const size_t size = image.size() * sizeof (unsigned char);
-
-    std::vector<unsigned char> data(size);
-    for (int i = 0; i < size; i++) {
-        data.emplace_back(image.data()[i]);
-    }
-
-    return Image(image.width(), image.height(), data);
+    return Image(width, height, std::shared_ptr<unsigned char>(img_data));
 }
+

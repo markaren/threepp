@@ -12,7 +12,7 @@ namespace threepp {
 
     public:
 
-        Image load(const char *imagePath);
+        Image load(const std::string &imagePath, int channels = 4);
     };
 
 }// namespace threepp

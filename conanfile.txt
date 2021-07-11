@@ -1,13 +1,10 @@
 [requires]
 glfw/3.3.4
 glad/0.1.34
-cimg/2.9.4
+stb/20200203
 
 [generators]
 cmake
 
 [options]
 glad:gl_version=4.6
-cimg:enable_opencv=False
-cimg:enable_openexr=False
-cimg:enable_fftw=False

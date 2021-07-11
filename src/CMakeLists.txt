@@ -204,7 +204,7 @@ target_link_libraries(threepp
         CONAN_PKG::glfw
         CONAN_PKG::glad
         PRIVATE
-        CONAN_PKG::cimg)
+        CONAN_PKG::stb)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"

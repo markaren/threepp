@@ -16,13 +16,21 @@ int main() {
     renderer.setClearColor(Color(Color::aliceblue));
     renderer.setSize(canvas.getSize());
 
-    const auto boxGeometry = SphereGeometry::create();
+//    const auto sphereGeometry = SphereGeometry::create();
+//    const auto sphereMaterial = MeshBasicMaterial::create();
+//    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
+//    sphere->position.setX(1);
+//    scene->add(sphere);
+
+    const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
     auto box = Mesh::create(boxGeometry, boxMaterial);
+    box->position.setX(-1);
     scene->add(box);
 
     TextureLoader loader{};
-    boxMaterial->map = loader.loadTexture("textures/checker.png");
+    boxMaterial->map = loader.loadTexture("textures/crate.gif");
+//    sphereMaterial->map = loader.loadTexture("textures/checker.png");
 
     canvas.onWindowResize([&](WindowSize size){
       camera->aspect = size.getAspect();

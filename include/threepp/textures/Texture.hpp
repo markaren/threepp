@@ -50,7 +50,7 @@ namespace threepp {
         float rotation = 0;
 
         bool matrixAutoUpdate = true;
-        Matrix3 matrix;
+        Matrix3 matrix{};
 
         bool generateMipmaps = true;
         bool premultiplyAlpha = false;
