@@ -3,14 +3,14 @@
 #ifndef THREEPP_GLTEXTURES_HPP
 #define THREEPP_GLTEXTURES_HPP
 
-#include "GLProperties.hpp"
 #include "GLCapabilities.hpp"
 #include "GLInfo.hpp"
+#include "GLProperties.hpp"
 #include "GLState.hpp"
 
-#include "threepp/textures/Texture.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
 #include "GLUniforms.hpp"
+#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/textures/Texture.hpp"
 
 
 #include <memory>
@@ -32,13 +32,13 @@ namespace threepp::gl {
 
         void generateMipmap(GLuint target, const Texture &texture, GLuint width, GLuint height);
 
-        void setTextureParameters( GLuint textureType, Texture &texture, bool supportsMips );
+        void setTextureParameters(GLuint textureType, Texture &texture);
 
         void initTexture(TextureProperties &textureProperties, Texture &texture);
 
         void uploadTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot);
 
-        void uploadCubeTexture( TextureProperties &textureProperties, Texture &texture, GLuint slot );
+        void uploadCubeTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot);
 
         void deallocateTexture(Texture &texture);
 
@@ -50,25 +50,23 @@ namespace threepp::gl {
 
         void setTexture2DArray(Texture &texture, GLuint slot);
 
-        void setTexture3D( Texture &texture, GLuint slot );
+        void setTexture3D(Texture &texture, GLuint slot);
 
-        void setTextureCube( Texture &texture, GLuint slot );
+        void setTextureCube(Texture &texture, GLuint slot);
 
         // Setup storage for target texture and bind it to correct framebuffer
-        void setupFrameBufferTexture( GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget );
+        void setupFrameBufferTexture(GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget);
 
 
     private:
+        struct TextureEventListener : EventListener {
 
-        struct TextureEventListener: EventListener {
-
-            explicit TextureEventListener( GLTextures &scope): scope_(scope) {}
+            explicit TextureEventListener(GLTextures &scope) : scope_(scope) {}
 
             void onEvent(Event &event) override;
 
         private:
             GLTextures &scope_;
-
         };
 
         GLState &state;
@@ -78,7 +76,6 @@ namespace threepp::gl {
         TextureEventListener onTextureDispose_;
 
         int textureUnits = 0;
-
     };
 
 }// namespace threepp::gl

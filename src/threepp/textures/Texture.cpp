@@ -109,7 +109,7 @@ Texture &Texture::copy(const Texture &source) {
     this->anisotropy = source.anisotropy;
 
     this->format = source.format;
-//    this->internalFormat = source.internalFormat;
+    this->internalFormat = source.internalFormat;
     this->type = source.type;
 
     this->offset.copy(source.offset);

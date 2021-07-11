@@ -9,12 +9,12 @@ using namespace threepp;
 
 namespace {
 
-    std::unordered_map<int, GLuint> wrappingToGL{
+    std::unordered_map<int, int> wrappingToGL{
             {RepeatWrapping, GL_REPEAT},
             {ClampToEdgeWrapping, GL_CLAMP_TO_EDGE},
             {MirroredRepeatWrapping, GL_MIRRORED_REPEAT}};
 
-    std::unordered_map<int, GLuint> filterToGL{
+    std::unordered_map<int, int> filterToGL{
             {NearestFilter, GL_NEAREST},
             {NearestMipmapNearestFilter, GL_NEAREST_MIPMAP_NEAREST},
             {NearestMipmapLinearFilter, GL_NEAREST_MIPMAP_LINEAR},
@@ -23,14 +23,9 @@ namespace {
             {LinearMipmapNearestFilter, GL_LINEAR_MIPMAP_NEAREST},
             {LinearMipmapLinearFilter, GL_LINEAR_MIPMAP_LINEAR}};
 
-    bool isPowerOfTwo(const Image &image) {
+    bool textureNeedsGenerateMipmaps(const Texture &texture) {
 
-        return math::isPowerOfTwo(image.width) && math::isPowerOfTwo(image.height);
-    }
-
-    bool textureNeedsGenerateMipmaps(const Texture &texture, bool supportsMips) {
-
-        return texture.generateMipmaps && supportsMips &&
+        return texture.generateMipmaps &&
                texture.minFilter != NearestFilter && texture.minFilter != LinearFilter;
     }
 
@@ -87,44 +82,18 @@ void gl::GLTextures::generateMipmap(GLuint target, const Texture &texture, GLuin
     textureProperties.maxMipLevel = (int) std::log2(std::max(width, height));
 }
 
-void gl::GLTextures::setTextureParameters(GLuint textureType, Texture &texture, bool supportsMips) {
+void gl::GLTextures::setTextureParameters(GLuint textureType, Texture &texture) {
 
-    if (supportsMips) {
+    glTexParameteri(textureType, GL_TEXTURE_WRAP_S, wrappingToGL[texture.wrapS]);
+    glTexParameteri(textureType, GL_TEXTURE_WRAP_T, wrappingToGL[texture.wrapT]);
 
-        glTexParameteri(textureType, GL_TEXTURE_WRAP_S, wrappingToGL[texture.wrapS]);
-        glTexParameteri(textureType, GL_TEXTURE_WRAP_T, wrappingToGL[texture.wrapT]);
+    if (textureType == GL_TEXTURE_3D || textureType == GL_TEXTURE_2D_ARRAY) {
 
-        if (textureType == GL_TEXTURE_3D || textureType == GL_TEXTURE_2D_ARRAY) {
-
-            //            glTexParameteri( textureType, GL_TEXTURE_WRAP_R, wrappingToGL[ texture.wrapR ] );
-        }
-
-        glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);
-        glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[texture.minFilter]);
-
-    } else {
-
-        glTexParameteri(textureType, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(textureType, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        if (textureType == GL_TEXTURE_3D || textureType == GL_TEXTURE_2D_ARRAY) {
-
-            glTexParameteri(textureType, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
-        }
-
-        if (texture.wrapS != ClampToEdgeWrapping || texture.wrapT != ClampToEdgeWrapping) {
-
-            std::cerr << "THREE.WebGLRenderer: Texture is not power of two. Texture.wrapS and Texture.wrapT should be set to THREE.ClampToEdgeWrapping." << std::endl;
-        }
-
-        glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterFallback(texture.magFilter));
-        glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterFallback(texture.minFilter));
-
-        if (texture.minFilter != NearestFilter && texture.minFilter != LinearFilter) {
-
-            std::cerr << "THREE.WebGLRenderer: Texture is not power of two. Texture.minFilter should be set to THREE.NearestFilter or THREE.LinearFilter." << std::endl;
-        }
+        //            glTexParameteri( textureType, GL_TEXTURE_WRAP_R, wrappingToGL[ texture.wrapR ] );
     }
+
+    glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);
+    glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[texture.minFilter]);
 }
 
 void gl::GLTextures::uploadTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot) {
@@ -140,52 +109,48 @@ void gl::GLTextures::uploadTexture(TextureProperties &textureProperties, Texture
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
-    Image image = *texture.image;
-
-    const auto supportsMips = true;
+    const auto &image = *texture.image;
 
     GLuint glFormat = convert(texture.format);
 
     GLuint glType = convert(texture.type);
     auto glInternalFormat = getInternalFormat(glFormat, glType);
 
-    setTextureParameters(textureType, texture, supportsMips);
+    setTextureParameters(textureType, texture);
 
-        Image *mipmap;
-        auto &mipmaps = texture.mipmaps;
+    auto &mipmaps = texture.mipmaps;
 
-        // regular Texture (image, video, canvas)
+    // regular Texture (image, video, canvas)
 
-        // use manually created mipmaps if available
-        // if there are no manual mipmaps
-        // set 0 level mipmap and then use GL to generate other mipmap levels
+    // use manually created mipmaps if available
+    // if there are no manual mipmaps
+    // set 0 level mipmap and then use GL to generate other mipmap levels
 
-        if (mipmaps.size() > 0 && supportsMips) {
+    if (mipmaps.size() > 0) {
 
-            for (size_t i = 0, il = mipmaps.size(); i < il; i++) {
+        for (size_t i = 0, il = mipmaps.size(); i < il; i++) {
 
-                mipmap = &mipmaps[i];
-                state.texImage2D(GL_TEXTURE_2D, (GLint) i, glInternalFormat, mipmap->width, mipmap->height, glFormat, glType, mipmap);
-            }
-
-            texture.generateMipmaps = false;
-            textureProperties.maxMipLevel = (int) mipmaps.size() - 1;
-
-        } else {
-
-            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
-            textureProperties.maxMipLevel = 0;
+            const auto &mipmap = mipmaps[i];
+            state.texImage2D(GL_TEXTURE_2D, (GLint) i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());
         }
 
+        texture.generateMipmaps = false;
+        textureProperties.maxMipLevel = (int) mipmaps.size() - 1;
 
-        if (textureNeedsGenerateMipmaps(texture, supportsMips)) {
+    } else {
 
-            generateMipmap(textureType, texture, image.width, image.height);
-        }
+        state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
+        textureProperties.maxMipLevel = 0;
+    }
 
-        textureProperties.version = texture.version();
+    if (textureNeedsGenerateMipmaps(texture)) {
 
-        if (texture.onUpdate) texture.onUpdate.value()(texture);
+        generateMipmap(textureType, texture, image.width, image.height);
+    }
+
+    textureProperties.version = texture.version();
+
+    if (texture.onUpdate) texture.onUpdate.value()(texture);
 }
 
 void gl::GLTextures::initTexture(TextureProperties &textureProperties, Texture &texture) {
@@ -224,7 +189,7 @@ int gl::GLTextures::allocateTextureUnit() {
 
     if (textureUnit >= maxTextures) {
 
-        std::cerr << "THREE.WebGLTextures: Trying to use " << textureUnit << " texture units while this GPU supports only " << maxTextures << std::endl;
+        std::cerr << "THREE.GLTextures: Trying to use " << textureUnit << " texture units while this GPU supports only " << maxTextures << std::endl;
     }
 
     textureUnits += 1;

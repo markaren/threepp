@@ -31,6 +31,11 @@ namespace {
             {"ShadowMaterial", "shadow"},
             {"SpriteMaterial", "sprite"}};
 
+    int getTextureEncodingFromMap(std::optional<Texture> &map) {
+
+        return map ? map->encoding : LinearEncoding;
+    }
+
 }// namespace
 
 
@@ -43,10 +48,7 @@ GLPrograms::GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping)
       clipping(clipping) {}
 
 
-int GLPrograms::getTextureEncodingFromMap(std::optional<Texture> &map) const {
 
-    return map ? map->encoding : LinearEncoding;
-}
 
 ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
 

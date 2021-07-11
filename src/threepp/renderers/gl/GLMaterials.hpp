@@ -16,11 +16,6 @@ namespace threepp::gl {
 
         void refreshMaterialUniforms(std::shared_ptr<UniformMap> &uniforms, Material *material, int pixelRatio, float height);
 
-        void refreshUniformsCommon(std::shared_ptr<UniformMap> &uniforms, Material *material);
-
-        void refreshUniformsLine(std::shared_ptr<UniformMap> &uniforms, LineBasicMaterial *material);
-
-        void refreshUniformsPoints(std::shared_ptr<UniformMap> &uniforms, PointsMaterial *material, int pixelRatio, float height);
     };
 
 
