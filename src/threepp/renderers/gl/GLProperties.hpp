@@ -16,7 +16,7 @@ namespace threepp::gl {
     struct TextureProperties {
 
         bool glInit{};
-        int maxMipLevel{};
+        std::optional<int> maxMipLevel{};
         unsigned int glTexture{};
         unsigned int version{};
     };

@@ -61,7 +61,7 @@ namespace threepp::shaders {
                                       UniformMap{
                                             {"emissive", Uniform(Color(0x000000))},
                                             {"specular", Uniform(Color(0x111111))},
-                                            {"shininess", Uniform(30)}
+                                            {"shininess", Uniform(30.f)}
                                       }
                               }),// clang-format on
 
@@ -142,9 +142,9 @@ namespace threepp::shaders {
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().fog,
                                       UniformMap{
-                                              {"scale", Uniform(1)},
-                                              {"dashSize", Uniform(1)},
-                                              {"totalSize", Uniform(2)}
+                                              {"scale", Uniform(1.f)},
+                                              {"dashSize", Uniform(1.f)},
+                                              {"totalSize", Uniform(2.f)}
                                       }
                               }),// clang-format on
 
@@ -223,8 +223,8 @@ namespace threepp::shaders {
                                       UniformsLib::instance().displacementmap,
                                       UniformMap{
                                               {"referencePosition", Uniform(Vector3())},
-                                              {"nearDistance", Uniform(1)},
-                                              {"farDistance", Uniform(1000)}
+                                              {"nearDistance", Uniform(1.f)},
+                                              {"farDistance", Uniform(1000.f)}
                                       }
                               }),// clang-format on
 
@@ -248,20 +248,20 @@ namespace threepp::shaders {
                 mergeUniforms({// clang-format off
                                       *standard.uniforms,
                                       UniformMap{
-                                              {"clearcoat", Uniform(0)},
+                                              {"clearcoat", Uniform(0.f)},
                                               {"clearcoatMap", Uniform()},
-                                              {"clearcoatRoughness", Uniform(0)},
+                                              {"clearcoatRoughness", Uniform(0.f)},
                                               {"clearcoatRoughnessMap", Uniform()},
                                               {"clearcoatNormalScale", Uniform(Vector2(1,1))},
                                               {"clearcoatNormalMap", Uniform()},
                                               {"sheen", Uniform(Color(0x000000))},
-                                              {"transmission", Uniform(0)},
+                                              {"transmission", Uniform(0.f)},
                                               {"transmissionMap", Uniform()},
                                               {"transmissionSamplerSize", Uniform(Vector2(0,0))},
                                               {"transmissionSamplerMap", Uniform()},
-                                              {"thickness", Uniform(0)},
+                                              {"thickness", Uniform(0.f)},
                                               {"thicknessMap", Uniform()},
-                                              {"attenuationDistance", Uniform(0)},
+                                              {"attenuationDistance", Uniform(0.f)},
                                               {"attenuationColor", Uniform(Color(0x000000))}
                                       }
                               }),// clang-format on

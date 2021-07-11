@@ -36,18 +36,18 @@ namespace threepp::shaders {
 
         UniformMap aomap{
                 {"aomap", Uniform()},
-                {"aoMapIntensity", Uniform(1)}};
+                {"aoMapIntensity", Uniform(1.f)}};
 
         UniformMap lightmap{
                 {"lightMap", Uniform()},
-                {"lightMapIntesity", Uniform(1)}};
+                {"lightMapIntesity", Uniform(1.f)}};
 
         UniformMap emissivemap{
                 {"emissiveMap", Uniform()}};
 
         UniformMap bumpmap{
                 {"bumpMap", Uniform()},
-                {"bumpScale", Uniform(1)}};
+                {"bumpScale", Uniform(1.f)}};
 
         UniformMap normalmap{
                 {"normalmap", Uniform()},
@@ -55,8 +55,8 @@ namespace threepp::shaders {
 
         UniformMap displacementmap{
                 {"displacementMap", Uniform()},
-                {"displacementScale", Uniform(1)},
-                {"displacementBias", Uniform(0)}};
+                {"displacementScale", Uniform(1.f)},
+                {"displacementBias", Uniform(0.f)}};
 
         UniformMap roughnessmap{
                 {"roughnessMap", Uniform()}};
