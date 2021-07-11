@@ -18,14 +18,14 @@ int main() {
 
     TextureLoader loader{};
 
-    const auto sphereGeometry = SphereGeometry::create();
+    const auto sphereGeometry = SphereGeometry::create(0.5f);
     const auto sphereMaterial = MeshBasicMaterial::create();
     sphereMaterial->map = loader.loadTexture("textures/checker.png");
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(1);
     scene->add(sphere);
 
-    const auto sphereGeometry1 = SphereGeometry::create();
+    const auto sphereGeometry1 = SphereGeometry::create(0.5f);
     const auto sphereMaterial1 = MeshBasicMaterial::create();
     sphereMaterial1->map = loader.loadTexture("textures/brick_bump.jpg");
     auto sphere1 = Mesh::create(sphereGeometry1, sphereMaterial1);

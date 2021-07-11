@@ -679,7 +679,7 @@ void gl::GLState::activeTexture(std::optional<GLenum> glSlot) {
     }
 }
 
-void gl::GLState::bindTexture(int glType, int glTexture) {
+void gl::GLState::bindTexture(int glType, std::optional<int> glTexture) {
 
     if (!currentTextureSlot) {
 
@@ -696,7 +696,7 @@ void gl::GLState::bindTexture(int glType, int glTexture) {
 
     if (boundTexture.type != glType || boundTexture.texture != glTexture) {
 
-        glBindTexture(glType, glTexture || emptyTextures[glType]);
+        glBindTexture(glType, glTexture.value_or(emptyTextures[glType]));
 
         boundTexture.type = glType;
         boundTexture.texture = glTexture;

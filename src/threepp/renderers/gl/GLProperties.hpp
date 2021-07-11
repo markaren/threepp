@@ -15,10 +15,10 @@ namespace threepp::gl {
 
     struct TextureProperties {
 
-        unsigned int version{};
         bool glInit{};
         int maxMipLevel{};
         unsigned int glTexture{};
+        unsigned int version{};
     };
 
     struct MaterialProperties {

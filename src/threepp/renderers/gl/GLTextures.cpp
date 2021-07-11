@@ -236,7 +236,7 @@ void gl::GLTextures::setTexture2DArray(Texture &texture, GLuint slot) {
 
 void gl::GLTextures::setTexture3D(Texture &texture, GLuint slot) {
 
-    auto textureProperties = properties.textureProperties.get(texture.uuid);
+    auto &textureProperties = properties.textureProperties.get(texture.uuid);
 
     if (texture.version() > 0 && textureProperties.version != texture.version()) {
 

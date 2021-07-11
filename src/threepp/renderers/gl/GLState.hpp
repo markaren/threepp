@@ -183,7 +183,7 @@ namespace threepp::gl {
 
         void activeTexture(std::optional<GLenum> glSlot = std::nullopt);
 
-        void bindTexture(int glType, int glTexture);
+        void bindTexture(int glType, std::optional<int> glTexture);
 
         void unbindTexture();
 
