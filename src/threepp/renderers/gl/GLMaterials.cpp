@@ -287,7 +287,7 @@ void GLMaterials::refreshFogUniforms(std::shared_ptr<UniformMap> &uniforms, FogV
     }
 }
 
-void GLMaterials::refreshMaterialUniforms(std::shared_ptr<UniformMap> &uniforms, Material *material, int pixelRatio, float height) {
+void GLMaterials::refreshMaterialUniforms(std::shared_ptr<UniformMap> &uniforms, Material *material, int pixelRatio, int height) {
 
     if (instanceof <MeshBasicMaterial>(material)) {
 

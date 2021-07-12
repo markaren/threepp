@@ -18,7 +18,7 @@ namespace threepp::gl {
 
         void refreshFogUniforms(std::shared_ptr<UniformMap> &uniforms, FogVariant &fog);
 
-        void refreshMaterialUniforms(std::shared_ptr<UniformMap> &uniforms, Material *material, int pixelRatio, float height);
+        void refreshMaterialUniforms(std::shared_ptr<UniformMap> &uniforms, Material *material, int pixelRatio, int height);
 
     private:
         GLProperties &properties;

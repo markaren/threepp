@@ -929,7 +929,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             materials.refreshFogUniforms(m_uniforms, *fog);
         }
 
-        materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, (float) _size.height /*, _transmissionRenderTarget*/);
+        materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height /*, _transmissionRenderTarget*/);
 
         gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }
