@@ -120,12 +120,12 @@ namespace threepp::gl {
             } else if (type == "PointLight") {
 
                 uniforms = {
-                        {"shadowBias", 0},
-                        {"shadowNormalBias", 0},
-                        {"shadowRadius", 1},
+                        {"shadowBias", 0.f},
+                        {"shadowNormalBias", 0.f},
+                        {"shadowRadius", 1.f},
                         {"shadowMapSize", Vector2()},
-                        {"shadowCameraNear", 1},
-                        {"shadowCameraFar", 1000}};
+                        {"shadowCameraNear", 1.f},
+                        {"shadowCameraFar", 1000.f}};
             }
 
             lights[light.id] = uniforms;
@@ -155,7 +155,7 @@ namespace threepp::gl {
 
             unsigned int version = 0;
 
-            Hash hash;
+            Hash hash{};
 
             Color ambient{0,0,0};
             std::vector<Vector3> probe{9};
@@ -175,7 +175,7 @@ namespace threepp::gl {
             std::vector<LightUniforms> hemi;
         };
 
-        LightState state;
+        LightState state{};
 
         void setup(std::vector<Light *> &lights);
 

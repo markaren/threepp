@@ -351,7 +351,7 @@ namespace {
                     addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo, addr));
                 }
 
-                container = dynamic_cast<Container *>(container->map[id].get());
+                container = dynamic_cast<Container *>(container->map.at(id).get());
             }
 
             rex_it++;

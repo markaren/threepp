@@ -108,8 +108,8 @@ ProgramParameters::ProgramParameters(
     clearcoatRoughnessMap = false;//TODO
     clearcoatNormalMap = false;   //TODO
     displacementMap = displacementMapMaterial != nullptr && displacementMapMaterial->displacementMap.has_value();
-    roughnessMap = false;//TODO
-    metalnessMap = false;//TODO
+    roughnessMap = roughnessMaterial != nullptr && roughnessMaterial->roughnessMap.has_value();
+    metalnessMap = metallnessMaterial != nullptr && metallnessMaterial->metallnessMap.has_value();
     specularMap = specularMapMaterial != nullptr && specularMapMaterial->specularMap.has_value();
     alphaMap = alphaMaterial != nullptr && alphaMaterial->alphaMap.has_value();
 
@@ -171,7 +171,6 @@ ProgramParameters::ProgramParameters(
     alphaTest = material->alphaTest;
     doubleSided = material->side == DoubleSide;
     flipSided = material->side == BackSide;
-
 
     depthPacking = depthpackMaterial == nullptr ? 0 : depthpackMaterial->depthPacking;
 
