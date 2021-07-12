@@ -57,7 +57,7 @@ int main() {
     geometry->computeBoundingSphere();
 
     auto material = PointsMaterial::create();
-    material->size = 3;
+    material->size = 2;
     material->vertexColors = true;
 
     auto points = Points::create(geometry, material);

@@ -306,13 +306,12 @@ namespace {
 
     struct StructuredUniform : UniformObject, Container {
 
-        explicit StructuredUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
+        explicit StructuredUniform(std::string id, ActiveUniformInfo activeInfo)
             : UniformObject(std::move(id)),
-              activeInfo(std::move(activeInfo)),
-              addr(addr) {}
+              activeInfo(std::move(activeInfo)) {}
 
         void setValue(const UniformValue &value, GLTextures *textures) override {
-//            std::cout << "StructuredUniform '" << id << "', index=" << value.index() << std::endl;
+            //            std::cout << "StructuredUniform '" << id << "', index=" << value.index() << std::endl;
 
             std::visit(
                     overloaded{
@@ -340,7 +339,6 @@ namespace {
         }
 
     private:
-        int addr;
         ActiveUniformInfo activeInfo;
     };
 
@@ -384,7 +382,7 @@ namespace {
             } else {
 
                 if (!container->map.count(id)) {
-                    addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo, addr));
+                    addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo));
                 }
 
                 container = dynamic_cast<Container *>(container->map.at(id).get());
