@@ -648,7 +648,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
     if (programs.count(programCacheKey)) {
 
-        program = programs[programCacheKey];
+        program = programs.at(programCacheKey);
 
         if (materialProperties.currentProgram == program && materialProperties.lightsStateVersion == lightsStateVersion) {
 
@@ -673,7 +673,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
     auto &uniforms = materialProperties.uniforms;
 
-    if (! instanceof <ShaderMaterial>(material) && ! instanceof <ShaderMaterial>(material) || material->clipping) {
+    if (! instanceof <ShaderMaterial>(material) && ! instanceof <RawShaderMaterial>(material) || material->clipping) {
 
         uniforms->operator[]("clippingPlanes") = clipping.uniform;
     }
