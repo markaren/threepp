@@ -21,7 +21,7 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshPhongMaterial::create();
-    boxMaterial->color.setRGB(1,0,0);
+    boxMaterial->color.setHex(0xff0000);
     auto box = Mesh::create(boxGeometry, boxMaterial);
     scene->add(box);
 
