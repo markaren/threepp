@@ -14,8 +14,7 @@ namespace threepp {
 
         Color color;
 
-        template<class T>
-        explicit MaterialWithColor(T color) : color(color) {}
+        explicit MaterialWithColor(unsigned int color) : color(color) {}
     };
 
     struct MaterialWithClipping : virtual Material {
@@ -53,8 +52,7 @@ namespace threepp {
         float emissiveIntensity;
         std::optional<Texture> emissiveMap;
 
-        template<class T>
-        MaterialWithEmissive(T emissive, float emissiveIntensity) : emissive(emissive), emissiveIntensity(emissiveIntensity) {}
+        MaterialWithEmissive(unsigned int emissive, float emissiveIntensity) : emissive(emissive), emissiveIntensity(emissiveIntensity) {}
     };
 
     struct MaterialWithSpecular : virtual Material {
@@ -62,8 +60,7 @@ namespace threepp {
         Color specular;
         float shininess;
 
-        template<class T>
-        MaterialWithSpecular(T specular, float shininess) : specular(specular), shininess(shininess) {}
+        MaterialWithSpecular(unsigned int specular, float shininess) : specular(specular), shininess(shininess) {}
     };
 
     struct MaterialWithReflectivity : virtual Material {
