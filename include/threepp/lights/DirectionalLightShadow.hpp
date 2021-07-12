@@ -11,6 +11,8 @@ namespace threepp {
 
     class DirectionalLightShadow: public LightShadow {
 
+    public:
+
         DirectionalLightShadow()
             : LightShadow(OrthographicCamera::create(-5, 5, 5, -5, 0.5f, 500)) {}
 

@@ -13,7 +13,7 @@ namespace threepp {
     public:
 
         Vector3 position;
-        Object3D* target = nullptr;
+        std::shared_ptr<Object3D> target = Object3D::create();
 
         DirectionalLightShadow shadow;
 
@@ -28,7 +28,12 @@ namespace threepp {
 
             this->shadow.dispose();
         }
-        
+
+        std::string type() const override {
+
+            return "DirectionalLight";
+        }
+
     protected:
         template<class T>
         DirectionalLight(T color, std::optional<float> intensity) : Light(color, intensity) {

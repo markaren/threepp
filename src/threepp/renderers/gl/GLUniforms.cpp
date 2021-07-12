@@ -78,6 +78,10 @@ namespace {
                 case 0x8d66:
                     return [&](const UniformValue &value, GLTextures *textures) { setValueT1(value, textures); };
 
+                case 0x1404:
+                case 0x8b56:
+                    return [&](const UniformValue &value, GLTextures *) { setValueV1i(value); };
+
                 default:
                     return [&](const UniformValue &value, GLTextures *) {
                         std::cout << "SingleUniform TODO: "
@@ -91,6 +95,19 @@ namespace {
             glUniform1i(addr, unit);
             auto tex = std::get<Texture>(value);
             textures->setTexture2D(tex, unit);
+        }
+
+        void setValueV1i(const UniformValue &value) {
+
+            if (std::holds_alternative<bool>(value)) {
+                bool b = std::get<bool>(value);
+                glUniform1i(addr, b);
+            } else if (std::holds_alternative<int>(value)) {
+                int i = std::get<int>(value);
+                glUniform1i(addr, i);
+            } else {
+                throw std::runtime_error("Illegal variant index: " + std::to_string(value.index()));
+            }
         }
 
         void setValueV1f(const UniformValue &value) {
@@ -295,12 +312,31 @@ namespace {
               addr(addr) {}
 
         void setValue(const UniformValue &value, GLTextures *textures) override {
-            std::cout << "StructuredUniform '" << id << "', index=" << value.index() << std::endl;
+//            std::cout << "StructuredUniform '" << id << "', index=" << value.index() << std::endl;
 
-            std::visit(overloaded{
-                               [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
-                               [&](NestedUniformValue arg) { std::cout << "nested" << std::endl; }},
-                       value);
+            std::visit(
+                    overloaded{
+                            [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
+                            [&](std::unordered_map<std::string, NestedUniformValue> arg) {
+                                for (auto &u : seq) {
+                                    NestedUniformValue &v = arg.at(u->id);
+                                    std::visit(overloaded{
+                                                       [&](auto) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
+                                                       [&](int arg) { u->setValue(arg, textures); },
+                                                       [&](float arg) { u->setValue(arg, textures); },
+                                                       [&](Vector2 arg) { u->setValue(arg, textures); },
+                                                       [&](Vector3 arg) { u->setValue(arg, textures); },
+                                                       [&](Color arg) { u->setValue(arg, textures); }},
+                                               v);
+                                }
+                            },
+                            [&](std::vector<std::unordered_map<std::string, NestedUniformValue>> arg) {
+                                for (auto &u : seq) {
+                                    int index = std::atoi(u->id.c_str());
+                                    u->setValue(arg[index], textures);
+                                }
+                            }},
+                    value);
         }
 
     private:
