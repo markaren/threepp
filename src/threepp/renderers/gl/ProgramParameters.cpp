@@ -96,7 +96,7 @@ ProgramParameters::ProgramParameters(
     envMapEncoding = getTextureEncodingFromMap(envmapMaterial == nullptr ? emptyMap : envmapMaterial->envMap);
     envMapCubeUV = envMapMode != 0 && (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping || envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping);
     lightMap = lightmapMaterial != nullptr && lightmapMaterial->lightMap.has_value();
-    lightMapEncoding = getTextureEncodingFromMap(lightmapMaterial == nullptr ? emptyMap : envmapMaterial->envMap);
+    lightMapEncoding = getTextureEncodingFromMap(lightmapMaterial == nullptr ? emptyMap : lightmapMaterial->lightMap);
     aoMap = aomapMaterial != nullptr && aomapMaterial->aoMap.has_value();
     emissiveMap = emissiveMaterial != nullptr && emissiveMaterial->emissiveMap.has_value();
     emissiveMapEncoding = getTextureEncodingFromMap(emissiveMaterial == nullptr ? emptyMap : emissiveMaterial->emissiveMap);
