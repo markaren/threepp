@@ -22,6 +22,7 @@ namespace threepp::shaders {
                 {"opacity", Uniform(1.f)},
                 {"map", Uniform()},
                 {"uvTransform", Uniform(Matrix3())},
+                {"uv2Transform", Uniform(Matrix3())},
                 {"alphaMap", Uniform()}};
 
         UniformMap specularmap{
@@ -29,8 +30,8 @@ namespace threepp::shaders {
 
         UniformMap envmap{
                 {"envmap", Uniform()},
-                {"flipEnvMap", Uniform(-1.f)},
-                {"reflectivity", Uniform()},
+                {"flipEnvMap", Uniform(-1)},
+                {"reflectivity", Uniform(1.f)},
                 {"refractionRatio", Uniform(0.98f)},
                 {"maxMipMapLevel", Uniform(0)}};
 
