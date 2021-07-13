@@ -42,6 +42,7 @@ set(publicHeaders
         "threepp/materials/MeshBasicMaterial.hpp"
         "threepp/materials/MeshDepthMaterial.hpp"
         "threepp/materials/MeshLambertMaterial.hpp"
+        "threepp/materials/MeshNormalMaterial.hpp"
         "threepp/materials/MeshPhongMaterial.hpp"
         "threepp/materials/MeshStandardMaterial.hpp"
         "threepp/materials/MeshToonMaterial.hpp"

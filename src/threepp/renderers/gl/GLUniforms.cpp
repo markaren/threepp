@@ -90,14 +90,14 @@ namespace {
             }
         }
 
-        void setValueT1(const UniformValue &value, GLTextures *textures) {
+        void setValueT1(const UniformValue &value, GLTextures *textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
             auto tex = std::get<Texture>(value);
             textures->setTexture2D(tex, unit);
         }
 
-        void setValueV1i(const UniformValue &value) {
+        void setValueV1i(const UniformValue &value) const {
 
             if (std::holds_alternative<bool>(value)) {
                 bool b = std::get<bool>(value);
@@ -258,7 +258,7 @@ namespace {
             //            std::cout << "PureArrayUniform '" << id << "'" << std::endl;
         }
 
-        std::function<void(const UniformValue &, GLTextures *)> getPureArraySetter() {
+        std::function<void(const UniformValue &, GLTextures *)> getPureArraySetter() const {
 
             int size = activeInfo.size;
 
@@ -288,7 +288,7 @@ namespace {
                 case 0x8b5c:// MAT4"
                     return [&](const UniformValue &value, GLTextures *) {
                         auto &data = std::get<std::vector<Matrix4>>(value);
-                        glUniformMatrix3fv(addr, (int) data.size(), false, flatten(data, size, 16).data());
+                        glUniformMatrix4fv(addr, (int) data.size(), false, flatten(data, size, 16).data());
                     };
                 default:
                     return [&](const UniformValue &value, GLTextures *) {
