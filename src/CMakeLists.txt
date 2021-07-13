@@ -32,6 +32,7 @@ set(publicHeaders
         "threepp/geometries/SphereGeometry.hpp"
 
         "threepp/helpers/helpers.hpp"
+        "threepp/helpers/AxesHelper.hpp"
         "threepp/helpers/ArrowHelper.hpp"
 
         "threepp/loaders/ImageLoader.hpp"
