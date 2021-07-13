@@ -52,7 +52,7 @@ namespace {
 
         if (a.size() != b.size()) return false;
 
-        for (int i = 0, l = a.size(); i < l; i++) {
+        for (int i = 0, l = (int) a.size(); i < l; i++) {
 
             if (a[i] != b[i]) return false;
         }
