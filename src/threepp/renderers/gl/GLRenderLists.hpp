@@ -58,14 +58,14 @@ namespace threepp::gl {
 
         std::shared_ptr<GLRenderList> get(Scene *scene, int renderCallDepth) {
 
-            if (!lists.count(scene)) {
+            if (!lists.count(scene->uuid)) {
 
-                auto &l = lists[scene] = std::vector<std::shared_ptr<GLRenderList>>{ std::make_shared<GLRenderList>(properties)};
+                auto &l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{ std::make_shared<GLRenderList>(properties)};
                 return l.back();
 
             } else {
 
-                auto &l = lists.at(scene);
+                auto &l = lists.at(scene->uuid);
                 if (renderCallDepth >= l.size()) {
 
                     l.emplace_back(std::make_shared<GLRenderList>(properties));
@@ -73,7 +73,7 @@ namespace threepp::gl {
 
                 } else {
 
-                    return l[renderCallDepth];
+                    return l.at(renderCallDepth);
                 }
             }
         }
@@ -86,7 +86,7 @@ namespace threepp::gl {
     private:
         GLProperties &properties;
 
-        std::unordered_map<Scene *, std::vector<std::shared_ptr<GLRenderList>>> lists;
+        std::unordered_map<std::string, std::vector<std::shared_ptr<GLRenderList>>> lists;
     };
 
 }// namespace threepp::gl

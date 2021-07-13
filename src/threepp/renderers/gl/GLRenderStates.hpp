@@ -64,12 +64,12 @@ namespace threepp::gl {
 
         std::shared_ptr<GLRenderState> get(Scene *scene, int renderCallDepth = 1) {
 
-            if (renderCallDepth >= renderStates_[scene].size()) {
+            if (renderCallDepth >= renderStates_[scene->uuid].size()) {
 
-                renderStates_[scene].emplace_back(std::make_shared<GLRenderState>());
+                renderStates_[scene->uuid].emplace_back(std::make_shared<GLRenderState>());
             }
 
-            return renderStates_[scene][renderCallDepth];
+            return renderStates_[scene->uuid].at(renderCallDepth);
         }
 
         void dispose() {
@@ -78,7 +78,7 @@ namespace threepp::gl {
         }
 
     private:
-        std::unordered_map<Scene *, std::vector<std::shared_ptr<GLRenderState>>> renderStates_;
+        std::unordered_map<std::string, std::vector<std::shared_ptr<GLRenderState>>> renderStates_;
     };
 
 }// namespace threepp::gl
