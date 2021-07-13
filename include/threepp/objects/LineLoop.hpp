@@ -11,11 +11,6 @@ namespace threepp {
 
     public:
 
-        [[nodiscard]] std::string type() const override {
-
-            return "LineLoop";
-        }
-
         static std::shared_ptr<LineLoop> create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
 
             return std::shared_ptr<LineLoop>(new LineLoop(std::move(geometry), std::move((material))));

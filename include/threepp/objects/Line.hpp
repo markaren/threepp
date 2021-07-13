@@ -51,10 +51,6 @@ namespace threepp {
             }
         }
 
-        std::string type() const override {
-            return "Line";
-        }
-
         static std::shared_ptr<Line> create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
 
             return std::shared_ptr<Line>(new Line(std::move(geometry), std::move((material))));

@@ -85,11 +85,6 @@ namespace threepp {
             }
         }
 
-        std::string type() const override {
-
-            return "LOD";
-        }
-
         static std::shared_ptr<LOD> create() {
 
             return std::shared_ptr<LOD>(new LOD());

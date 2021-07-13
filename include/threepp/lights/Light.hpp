@@ -18,7 +18,8 @@ namespace threepp {
 
         Light(const Light &) = delete;
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] virtual std::string type() const {
+
             return "Light";
         }
 

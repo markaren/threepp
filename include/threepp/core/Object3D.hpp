@@ -62,11 +62,6 @@ namespace threepp {
         bool frustumCulled = true;
         int renderOrder = 0;
 
-        virtual std::string type() const {
-
-            return "Object3D";
-        }
-
         void applyMatrix4(const Matrix4 &matrix);
 
         Object3D &applyQuaternion(const Quaternion &q);

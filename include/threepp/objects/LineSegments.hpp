@@ -34,12 +34,6 @@ namespace threepp {
 
                 std::cerr << "THREE.LineSegments.computeLineDistances(): Computation only possible with non-indexed BufferGeometry." << std::endl;
             }
-
-        }
-
-        [[nodiscard]] std::string type() const override {
-
-            return "LineSegments";
         }
 
         static std::shared_ptr<LineSegments> create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {

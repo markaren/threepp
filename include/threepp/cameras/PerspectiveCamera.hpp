@@ -111,7 +111,7 @@ namespace threepp {
 
             if (!this->view) {
 
-                this->view = View{
+                this->view = CameraView{
                         true,
                         1,
                         1,
@@ -166,10 +166,6 @@ namespace threepp {
             this->projectionMatrix.makePerspective(left, (left + width), top, (top - height), near, far);
 
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
-        }
-
-        [[nodiscard]] std::string type() const override {
-            return "PerspectiveCamera";
         }
 
         static std::shared_ptr<PerspectiveCamera> create(float fov, float aspect = 1, float near = 0.1, float far = 2000) {

@@ -23,10 +23,6 @@ namespace threepp {
             return material_.get();
         }
 
-        std::string type() const override {
-            return "Mesh";
-        }
-
         static std::shared_ptr<Mesh> create(
                 std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
                 std::shared_ptr<Material> material = MeshBasicMaterial::create()) {

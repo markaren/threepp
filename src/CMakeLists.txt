@@ -19,7 +19,7 @@ set(publicHeaders
         "threepp/cameras/Camera.hpp"
         "threepp/cameras/PerspectiveCamera.hpp"
         "threepp/cameras/OrthographicCamera.hpp"
-        "threepp/cameras/View.hpp"
+        "threepp/cameras/CameraView.hpp"
 
         "threepp/input/KeyListener.hpp"
 
@@ -136,6 +136,7 @@ set(privateHeaders
         "threepp/renderers/shaders/UniformsLib.hpp"
         "threepp/renderers/shaders/UniformsUtil.hpp"
 
+        "threepp/utils/InstanceOf.hpp"
         "threepp/utils/StringUtils.hpp"
 
         )

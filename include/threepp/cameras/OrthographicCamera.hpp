@@ -79,10 +79,6 @@ namespace threepp {
             this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
         }
 
-        std::string type() const override {
-            return "OrthographicCamera";
-        }
-
         static std::shared_ptr<OrthographicCamera> create(int left = -1, int right = 1, int top = 1, int bottom = -1, float near = 0.1f, float far = 2000) {
 
             return std::shared_ptr<OrthographicCamera>(new OrthographicCamera(left, right, top, bottom, near, far));

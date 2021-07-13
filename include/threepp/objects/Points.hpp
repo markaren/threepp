@@ -22,11 +22,6 @@ namespace threepp {
             return material_.get();
         }
 
-        [[nodiscard]] std::string type() const override {
-
-            return "Points";
-        }
-
         static std::shared_ptr<Points> create(
                 std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
                 std::shared_ptr<Material> material = PointsMaterial::create()) {

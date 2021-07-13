@@ -3,7 +3,7 @@
 #ifndef THREEPP_CAMERA_HPP
 #define THREEPP_CAMERA_HPP
 
-#include "threepp/cameras/View.hpp"
+#include "threepp/cameras/CameraView.hpp"
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -18,7 +18,7 @@ namespace threepp {
         float near;
         float far;
 
-        std::optional<View> view;
+        std::optional<CameraView> view;
 
         Camera(const Camera &) = delete;
 
@@ -48,11 +48,6 @@ namespace threepp {
             Object3D::updateWorldMatrix(updateParents, updateChildren);
 
             this->matrixWorldInverse.copy(this->matrixWorld).invert();
-        }
-
-        std::string type() const override {
-
-            return "Camera";
         }
 
         virtual void updateProjectionMatrix() = 0;

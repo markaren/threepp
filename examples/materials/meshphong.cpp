@@ -8,7 +8,7 @@ int main() {
     Canvas canvas;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 5;
 
     auto renderer = GLRenderer(canvas);
@@ -16,7 +16,7 @@ int main() {
     renderer.setClearColor(Color(Color::aliceblue));
     renderer.setSize(canvas.getSize());
 
-    auto light = AmbientLight::create(0x00ff00);
+    auto light = AmbientLight::create(0xffffff);
     scene->add(light);
 
     const auto boxGeometry = BoxGeometry::create();

@@ -28,10 +28,6 @@ namespace threepp {
 
         bool autoUpdate = true;
 
-        std::string type() const override {
-            return "Scene";
-        }
-
         static std::shared_ptr<Scene> create() {
             return std::shared_ptr<Scene>(new Scene());
         }
@@ -39,8 +35,6 @@ namespace threepp {
     protected:
         Scene() = default;
     };
-
-    struct EmptyScene : Scene {};
 
     inline bool operator==(const FogVariant &f1, const FogVariant &f2) {
 
