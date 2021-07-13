@@ -260,35 +260,33 @@ namespace {
 
         std::function<void(const UniformValue &, GLTextures *)> getPureArraySetter() const {
 
-            int size = activeInfo.size;
-
             switch (activeInfo.type) {
 
                 case 0x1406:// FLOAT
                     return [&](const UniformValue &value, GLTextures *) {
                         auto &data = std::get<std::vector<float>>(value);
-                        glUniform2fv(addr, (int) data.size(), data.data());
+                        glUniform2fv(addr, activeInfo.size, data.data());
                     };
                 case 0x8b50:// VEC2"
                     return [&](const UniformValue &value, GLTextures *) {
                         auto &data = std::get<std::vector<Vector2>>(value);
-                        glUniform2fv(addr, (int) data.size(), flatten(data, size, 2).data());
+                        glUniform2fv(addr, activeInfo.size, flatten(data, activeInfo.size, 2).data());
                     };
                 case 0x8b51:// VEC3"
                     return [&](const UniformValue &value, GLTextures *) {
                         auto &data = std::get<std::vector<Vector3>>(value);
-                        glUniform3fv(addr, (int) data.size(), flatten(data, size, 3).data());
+                        glUniform3fv(addr, activeInfo.size, flatten(data, activeInfo.size, 3).data());
                     };
 
                 case 0x8b5b:// MAT3"
                     return [&](const UniformValue &value, GLTextures *) {
                         auto &data = std::get<std::vector<Matrix3>>(value);
-                        glUniformMatrix3fv(addr, (int) data.size(), false, flatten(data, size, 9).data());
+                        glUniformMatrix3fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 9).data());
                     };
                 case 0x8b5c:// MAT4"
                     return [&](const UniformValue &value, GLTextures *) {
                         auto &data = std::get<std::vector<Matrix4>>(value);
-                        glUniformMatrix4fv(addr, (int) data.size(), false, flatten(data, size, 16).data());
+                        glUniformMatrix4fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 16).data());
                     };
                 default:
                     return [&](const UniformValue &value, GLTextures *) {

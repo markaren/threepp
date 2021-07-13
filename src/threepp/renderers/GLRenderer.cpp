@@ -896,6 +896,17 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
             p_uniforms->setValue("isOrthographic", instanceof <OrthographicCamera>(camera));
         }
+
+        if (isMeshPhongMaterial ||
+            isMeshToonMaterial ||
+            isMeshLambertMaterial ||
+            isMeshBasicMaterial ||
+            isMeshStandardMaterial ||
+            isShaderMaterial ||
+            isShadowMaterial) {
+
+            p_uniforms->setValue("viewMatrix", camera->matrixWorldInverse);
+        }
     }
 
     if (refreshMaterial || materialProperties.receiveShadow != object->receiveShadow) {
