@@ -34,6 +34,7 @@ set(publicHeaders
         "threepp/helpers/helpers.hpp"
         "threepp/helpers/AxesHelper.hpp"
         "threepp/helpers/ArrowHelper.hpp"
+        "threepp/helpers/PlaneHelper.hpp"
 
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"

@@ -4,5 +4,6 @@
 
 #include "AxesHelper.hpp"
 #include "ArrowHelper.hpp"
+#include "PlaneHelper.hpp"
 
 #endif//THREEPP_HELPERS_HPP

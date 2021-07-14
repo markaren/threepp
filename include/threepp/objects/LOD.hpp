@@ -39,7 +39,7 @@ namespace threepp {
 
             levels.insert(levels.begin() + l, {distance, object});
 
-            this->add(object.get());
+            this->add(object);
 
             return *this;
         }

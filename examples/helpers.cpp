@@ -23,6 +23,10 @@ int main() {
     axes->position.setX(-0.5f);
     scene->add(axes);
 
+    Plane plane( Vector3( 0.5, 1, 0.5 ), 1 );
+    const auto planeHelper = PlaneHelper::create(plane);
+    scene->add(planeHelper);
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
@@ -34,6 +38,8 @@ int main() {
     canvas.animate([&](float dt) {
         arrow->rotation.z(arrow->rotation.z() + 0.5f * dt);
         axes->rotation.y(axes->rotation.y() + 0.5f * dt);
+
+//      planeHelper->rotation.y(planeHelper->rotation.y() + 0.5f * dt);
 
         renderer.render(scene, camera);
     });
