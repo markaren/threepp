@@ -1,10 +1,13 @@
 
 #include "threepp/Canvas.hpp"
 
+#include "threepp/math/Vector2.hpp"
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
 
+#include <optional>
 #include <utility>
 
 using namespace threepp;
@@ -89,6 +92,19 @@ public:
         return false;
     }
 
+    void addMouseListener(const std::shared_ptr<MouseListener> &listener) {
+        mouseListeners.emplace_back(listener);
+    }
+
+    bool removeMouseListener(const std::shared_ptr<MouseListener> &listener) {
+        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
+        if (find != mouseListeners.end()) {
+            mouseListeners.erase(find);
+            return true;
+        }
+        return false;
+    }
+
     ~Impl() {
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -96,15 +112,17 @@ public:
 
 private:
     WindowSize size_;
-    std::function<void(WindowSize)> resizeListener;
+    Vector2 lastMousePos{};
     std::vector<std::shared_ptr<KeyListener>> keyListeners;
+    std::vector<std::shared_ptr<MouseListener>> mouseListeners;
+    std::optional<std::function<void(WindowSize)>> resizeListener;
 
     GLFWwindow *window;
 
     static void window_size_callback(GLFWwindow *w, int width, int height) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
         p->size_ = {width, height};
-        p->resizeListener(p->size_);
+        if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
     }
 
     static void error_callback(int error, const char *description) {
@@ -113,21 +131,39 @@ private:
 
     static void scroll_callback(GLFWwindow *w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+        auto &listeners = p->mouseListeners;
+        if (listeners.empty()) return;
+        Vector2 delta {(float) xoffset, (float) yoffset};
+        for (auto &l :listeners) {
+            l->onMouseWheel(delta);
+        }
     }
 
     static void mouse_callback(GLFWwindow *w, int button, int action, int mods) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
 
-        switch (action) {
-            case GLFW_PRESS:
-                break;
-            case GLFW_RELEASE:
-                break;
+        auto &listeners = p->mouseListeners;
+        for (auto &l : listeners) {
+            switch (action) {
+                case GLFW_PRESS:
+                    l->onMouseDown(button, p->lastMousePos);
+                    break;
+                case GLFW_RELEASE:
+                    l->onMouseUp(button, p->lastMousePos);
+                    break;
+                default:
+                    break;
+            }
         }
     }
 
     static void cursor_callback(GLFWwindow *w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+        p->lastMousePos.set((float) xpos, (float) ypos);
+        auto &listeners = p->mouseListeners;
+        for (auto &l : listeners) {
+            l->onMouseMove(p->lastMousePos);
+        }
     }
 
     static void key_callback(GLFWwindow *w, int key, int scancode, int action, int mods) {
@@ -150,6 +186,8 @@ private:
                     break;
                 case GLFW_REPEAT:
                     l->onKeyRepeat(evt);
+                    break;
+                default:
                     break;
             }
         }
@@ -188,8 +226,42 @@ bool threepp::Canvas::removeKeyListener(const std::shared_ptr<KeyListener> &list
     return pimpl_->removeKeyListener(listener);
 }
 
-void threepp::Canvas::addKeyPressListener(const std::function<void(KeyEvent)> &f) {
-    addKeyListener(std::make_shared<KeyAdapter>(KeyAdapter::KEY_PRESSED, f));
+void threepp::Canvas::addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f) {
+    addKeyListener(std::make_shared<KeyAdapter>(mode, f));
+}
+
+void threepp::Canvas::addMouseListener(const std::shared_ptr<MouseListener> &listener) {
+    pimpl_->addMouseListener(listener);
+}
+
+bool threepp::Canvas::removeMouseListener(const std::shared_ptr<MouseListener> &listener) {
+    return pimpl_->removeMouseListener(listener);
 }
 
 threepp::Canvas::~Canvas() = default;
+
+Canvas::Parameters &threepp::Canvas::Parameters::title(std::string value) {
+
+    this->title_ = std::move(value);
+
+    return *this;
+}
+
+Canvas::Parameters &threepp::Canvas::Parameters::size(WindowSize size) {
+
+    this->size_ = size;
+
+    return *this;
+}
+
+Canvas::Parameters &threepp::Canvas::Parameters::size(int width, int height) {
+
+    return this->size({width, height});
+}
+
+Canvas::Parameters &threepp::Canvas::Parameters::antialising(int antialiasing) {
+
+    this->antialiasing_ = antialiasing;
+
+    return *this;
+}

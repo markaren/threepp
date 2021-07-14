@@ -7,6 +7,7 @@
 
 #include "threepp/core/Clock.hpp"
 #include "threepp/input/KeyListener.hpp"
+#include "threepp/input/MouseListener.hpp"
 
 namespace threepp {
 
@@ -38,7 +39,11 @@ namespace threepp {
 
         bool removeKeyListener(const std::shared_ptr<KeyListener> &listener);
 
-        void addKeyPressListener(const std::function<void(KeyEvent)> &f);
+        void addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f);
+
+        void addMouseListener(const std::shared_ptr<MouseListener> &listener);
+
+        bool removeMouseListener(const std::shared_ptr<MouseListener> &listener);
 
         void animate(const std::function<void(float)> &f) const;
 
@@ -55,31 +60,13 @@ namespace threepp {
                 : size_{640, 480},
                   antialiasing_{0} {}
 
-            Parameters &title(std::string value) {
+            Parameters &title(std::string value);
 
-                this->title_ = std::move(value);
+            Parameters &size(WindowSize size);
 
-                return *this;
-            }
+            Parameters &size(int width, int height);
 
-            Parameters &size(WindowSize size) {
-
-                this->size_ = size;
-
-                return *this;
-            }
-
-            Parameters &size(int width, int height) {
-
-                return this->size({width, height});
-            }
-
-            Parameters &antialising(int antialiasing) {
-
-                this->antialiasing_ = antialiasing;
-
-                return *this;
-            }
+            Parameters &antialising(int antialiasing);
 
         private:
             WindowSize size_;
