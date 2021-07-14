@@ -35,6 +35,9 @@ public:
         glfwSetWindowUserPointer(window, this);
 
         glfwSetKeyCallback(window, key_callback);
+        glfwSetMouseButtonCallback(window, mouse_callback);
+        glfwSetCursorPosCallback(window, cursor_callback);
+        glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
 
         glfwMakeContextCurrent(window);
@@ -106,6 +109,25 @@ private:
 
     static void error_callback(int error, const char *description) {
         fprintf(stderr, "Error: %s\n", description);
+    }
+
+    static void scroll_callback(GLFWwindow *w, double xoffset, double yoffset) {
+        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+    }
+
+    static void mouse_callback(GLFWwindow *w, int button, int action, int mods) {
+        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+
+        switch (action) {
+            case GLFW_PRESS:
+                break;
+            case GLFW_RELEASE:
+                break;
+        }
+    }
+
+    static void cursor_callback(GLFWwindow *w, double xpos, double ypos) {
+        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
     }
 
     static void key_callback(GLFWwindow *w, int key, int scancode, int action, int mods) {
