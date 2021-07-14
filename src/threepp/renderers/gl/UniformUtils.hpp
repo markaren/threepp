@@ -13,11 +13,6 @@ namespace {
     std::vector<std::vector<float>> arrayCacheF32;
     std::vector<std::vector<int>> arrayCacheI32;
 
-    std::array<float, 16> mat4array;
-    std::array<float, 9> mat3array;
-    std::array<float, 4> mat2array;
-
-
     void ensureCapacity(std::vector<float> &v, unsigned int size) {
 
         while (v.size() < size) {

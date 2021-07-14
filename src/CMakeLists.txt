@@ -189,7 +189,10 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
 
+        "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
+        "threepp/renderers/gl/GLBindingStates.cpp"
+        "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"
         "threepp/renderers/gl/GLLights.cpp"
         "threepp/renderers/gl/GLProgram.cpp"

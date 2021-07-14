@@ -18,7 +18,7 @@ namespace threepp {
         void updateMatrixWorld(bool force) override {
 
             auto scale = -plane.constant;
-            if (std::abs(scale) < 1e-8) scale = 1e-8;
+            if (std::abs(scale) < 1e-8) scale = 1e-8f;
 
             this->scale.set(0.5f * this->size, 0.5f * this->size, scale);
 
