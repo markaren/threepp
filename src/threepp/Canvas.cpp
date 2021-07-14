@@ -189,7 +189,7 @@ bool threepp::Canvas::removeKeyListener(const std::shared_ptr<KeyListener> &list
 }
 
 void threepp::Canvas::addKeyPressListener(const std::function<void(KeyEvent)> &f) {
-    addKeyListener(std::make_shared<KeyPressAdapter>(f));
+    addKeyListener(std::make_shared<KeyAdapter>(KeyAdapter::KEY_PRESSED, f));
 }
 
 threepp::Canvas::~Canvas() = default;

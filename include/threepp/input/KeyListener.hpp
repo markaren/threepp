@@ -24,19 +24,36 @@ namespace threepp {
         virtual void onKeyReleased(KeyEvent evt) {}
 
         virtual void onKeyRepeat(KeyEvent evt) {}
+
+        virtual ~KeyListener() = default;
     };
 
-    struct KeyPressAdapter: KeyListener {
+    struct KeyAdapter: KeyListener {
 
-        explicit KeyPressAdapter(std::function<void(KeyEvent)> f)
-            : f(std::move(f)) {}
+        enum Mode {
+            KEY_PRESSED,
+            KEY_RELEASED,
+            KEY_REPEAT
+        };
+
+        KeyAdapter(const Mode &mode, std::function<void(KeyEvent)> f)
+            : mode_(mode), f_(std::move(f)) {}
 
         void onKeyPressed(KeyEvent evt) override {
-            f(evt);
+            if (mode_ == KEY_PRESSED) f_(evt);
+        }
+
+        void onKeyReleased(KeyEvent evt) override {
+            if (mode_ == KEY_RELEASED) f_(evt);
+        }
+
+        void onKeyRepeat(KeyEvent evt) override {
+            if (mode_ == KEY_REPEAT) f_(evt);
         }
 
     private:
-        std::function<void(KeyEvent)> f;
+        const Mode mode_;
+        std::function<void(KeyEvent)> f_;
 
     };
 
