@@ -22,6 +22,7 @@ set(publicHeaders
         "threepp/cameras/CameraView.hpp"
 
         "threepp/input/KeyListener.hpp"
+        "threepp/input/MouseListener.hpp"
 
         "threepp/geometries/geometries.hpp"
         "threepp/geometries/BoxGeometry.hpp"
