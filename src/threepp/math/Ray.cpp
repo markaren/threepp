@@ -38,7 +38,7 @@ Ray &Ray::copy(const Ray &ray) {
 
 Vector3 &Ray::at(float t, Vector3 &target) {
 
-    return target.copy( this->direction_ ).multiply( t ).add( this->origin_ );
+    return target.copy(this->direction_).multiplyScalar(t).add( this->origin_ );
 
 }
 

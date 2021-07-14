@@ -107,7 +107,7 @@ void Sphere::clampPoint(const Vector3 &point, Vector3 &target) const {
     if (deltaLengthSq > (this->radius * this->radius)) {
 
         target.sub(this->center).normalize();
-        target.multiply(this->radius).add(this->center);
+        target.multiplyScalar(this->radius).add(this->center);
     }
 }
 
@@ -155,7 +155,7 @@ Sphere &Sphere::expandByPoint(const Vector3 &point) {
         // and the other half to position. This gives a tighter enclosure, instead of if
         // the whole missing distance were just added to radius.
 
-        this->center.add( _toPoint.multiply( missingRadiusHalf / length ) );
+        this->center.add(_toPoint.multiplyScalar(missingRadiusHalf / length) );
         this->radius += missingRadiusHalf;
 
     }
@@ -172,7 +172,7 @@ Sphere &Sphere::union_(const Sphere &sphere) {
     // 1) Enclose the farthest point on the other sphere into this sphere.
     // 2) Enclose the opposite point of the farthest point into this sphere.
 
-    _toFarthestPoint.subVectors( sphere.center, this->center ).normalize().multiply( sphere.radius );
+    _toFarthestPoint.subVectors(sphere.center, this->center).normalize().multiplyScalar(sphere.radius);
 
     this->expandByPoint( _v1.copy( sphere.center ).add( _toFarthestPoint ) );
     this->expandByPoint( _v1.copy( sphere.center ).sub( _toFarthestPoint ) );

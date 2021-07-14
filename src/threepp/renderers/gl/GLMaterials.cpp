@@ -316,7 +316,7 @@ void GLMaterials::refreshMaterialUniforms(std::shared_ptr<UniformMap> &uniforms,
 
     } else if (instanceof <PointsMaterial>(material)) {
 
-        refreshUniformsPoints(uniforms, dynamic_cast<PointsMaterial *>(material), pixelRatio, height);
+        refreshUniformsPoints(uniforms, dynamic_cast<PointsMaterial *>(material), pixelRatio, (float) height);
 
     } else if (instanceof <ShaderMaterial>(material)) {
 

@@ -122,7 +122,7 @@ Object3D &Object3D::translateOnAxis(const Vector3 &axis, float distance) {
 
     _v1.copy(axis).applyQuaternion(this->quaternion);
 
-    this->position.add(_v1.multiply(distance));
+    this->position.add(_v1.multiplyScalar(distance));
 
     return *this;
 }

@@ -42,7 +42,7 @@ namespace threepp {
         Vector3 position;
         Euler rotation;
         Quaternion quaternion;
-        Vector3 scale = Vector3(1, 1, 1);
+        Vector3 scale {1, 1, 1};
 
         Matrix4 modelViewMatrix;
         Matrix3 normalMatrix;

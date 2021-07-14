@@ -81,6 +81,8 @@ namespace threepp {
 
         Quaternion &setFromRotationMatrix(const Matrix4 &m);
 
+        Quaternion &setFromUnitVectors(const Vector3 &vFrom, const Vector3 &vTo);
+
         [[nodiscard]] float angleTo(const Quaternion &q) const;
 
         Quaternion &identity();

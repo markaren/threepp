@@ -12,6 +12,7 @@ namespace threepp {
 
     class Matrix3;
     class Matrix4;
+    class Spherical;
     class Quaternion;
     class Camera;
 
@@ -56,7 +57,7 @@ namespace threepp {
 
         Vector3 &multiply(const Vector3 &v);
 
-        Vector3 &multiply(float scalar);
+        Vector3 &multiplyScalar(float scalar);
 
         Vector3 &multiplyVectors(const Vector3 &a, const Vector3 &b);
 
@@ -121,6 +122,10 @@ namespace threepp {
         [[nodiscard]] float distanceToSquared(const Vector3 &v) const;
 
         [[nodiscard]] float manhattanDistanceTo(const Vector3 &v) const;
+
+        Vector3 &setFromSpherical(const Spherical &s);
+
+        Vector3 &setFromSphericalCoords(float radius, float phi, float theta);
 
         Vector3 &setFromMatrixPosition(const Matrix4 &m);
 

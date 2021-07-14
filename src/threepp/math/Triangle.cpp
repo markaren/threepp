@@ -32,7 +32,7 @@ void Triangle::getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, V
     const auto targetLengthSq = target.lengthSq();
     if (targetLengthSq > 0) {
 
-        target.multiply(1 / std::sqrt(targetLengthSq));
+        target.multiplyScalar(1 / std::sqrt(targetLengthSq));
 
     } else {
 
@@ -117,7 +117,7 @@ float Triangle::getArea() const {
 
 void Triangle::getMidpoint(Vector3 &target) {
 
-    target.addVectors(this->a_, this->b_).add(this->c_).multiply(1.0f / 3);
+    target.addVectors(this->a_, this->b_).add(this->c_).multiplyScalar(1.0f / 3);
 }
 
 void Triangle::getNormal(Vector3 &target) {

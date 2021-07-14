@@ -177,7 +177,6 @@ namespace threepp {
             : Camera(near, far), fov(fov), aspect(aspect) {
 
             PerspectiveCamera::updateProjectionMatrix();
-
         }
     };
 

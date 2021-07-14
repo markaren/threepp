@@ -4,6 +4,7 @@
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
+#include "threepp/math/Spherical.hpp"
 
 #include "threepp/math/MathUtils.hpp"
 
@@ -157,7 +158,7 @@ Vector3 &Vector3::multiply(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::multiply(float scalar) {
+Vector3 &Vector3::multiplyScalar(float scalar) {
 
     this->x *= scalar;
     this->y *= scalar;
@@ -368,7 +369,7 @@ Vector3 &Vector3::normalize() {
 
 Vector3 &Vector3::setLength(float length) {
 
-    return normalize().multiply(length);
+    return normalize().multiplyScalar(length);
 }
 
 Vector3 &Vector3::lerp(const Vector3 &v, float alpha) {
@@ -434,6 +435,22 @@ float Vector3::distanceToSquared(const Vector3 &v) const {
 float Vector3::manhattanDistanceTo(const Vector3 &v) const {
 
     return std::abs(this->x - v.x) + std::abs(this->y - v.y) + std::abs(this->z - v.z);
+}
+
+Vector3 &Vector3::setFromSpherical(const Spherical &s) {
+
+    return this->setFromSphericalCoords(s.radius, s.phi, s.theta);
+}
+
+Vector3 &Vector3::setFromSphericalCoords(float radius, float phi, float theta) {
+
+    const auto sinPhiRadius = std::sin(phi) * radius;
+
+    this->x = sinPhiRadius * std::sin(theta);
+    this->y = std::cos(phi) * radius;
+    this->z = sinPhiRadius * std::cos(theta);
+
+    return *this;
 }
 
 Vector3 &Vector3::setFromMatrixPosition(const Matrix4 &m) {

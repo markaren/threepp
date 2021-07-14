@@ -6,6 +6,8 @@
 
 #include "threepp/constants.hpp"
 
+#include "threepp/controls/OrbitControls.hpp"
+
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/geometries/geometries.hpp"
 

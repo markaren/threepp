@@ -66,7 +66,7 @@ Plane &Plane::normalize() {
     // Note: will lead to a divide by zero if the plane is invalid.
 
     const auto inverseNormalLength = 1.0f / this->normal.length();
-    this->normal.multiply(inverseNormalLength);
+    this->normal.multiplyScalar(inverseNormalLength);
     this->constant *= inverseNormalLength;
 
     return *this;
@@ -92,7 +92,7 @@ float Plane::distanceToSphere(const Sphere &sphere) const {
 
 void Plane::projectPoint(const Vector3 &point, Vector3 &target) const {
 
-    target.copy( this->normal ).multiply( - this->distanceToPoint( point ) ).add( point );
+    target.copy(this->normal).multiplyScalar(-this->distanceToPoint(point)).add( point );
 
 }
 
@@ -125,7 +125,7 @@ void Plane::intersectLine(const Line3 &line, Vector3 &target) const {
 
     }
 
-    target.copy( direction ).multiply( t ).add( line.getStart() );
+    target.copy(direction).multiplyScalar(t).add( line.getStart() );
 
 }
 
@@ -154,7 +154,7 @@ bool Plane::intersectsSphere(const Sphere &sphere) const {
 
 void Plane::coplanarPoint(Vector3 &target) const {
 
-    target.copy( this->normal ).multiply( - this->constant );
+    target.copy(this->normal).multiplyScalar(-this->constant);
 
 }
 

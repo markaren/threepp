@@ -6,6 +6,8 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
+        "threepp/controls/OrbitControls.hpp"
+
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
@@ -148,6 +150,8 @@ set(privateHeaders
 set(sources
 
         "threepp/Canvas.cpp"
+
+        "threepp/controls/OrbitControls.cpp"
 
         "threepp/core/BufferGeometry.cpp"
         "threepp/core/Object3D.cpp"

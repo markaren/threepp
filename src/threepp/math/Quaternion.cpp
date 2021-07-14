@@ -193,6 +193,48 @@ Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
     return *this;
 }
 
+Quaternion &Quaternion::setFromUnitVectors(const Vector3 &vFrom, const Vector3 &vTo) {
+    // assumes direction vectors vFrom and vTo are normalized
+
+    const auto EPS = 0.000001f;
+
+    auto r = vFrom.dot(vTo) + 1;
+
+    if (r < EPS) {
+
+        // vFrom and vTo point in opposite directions
+
+        r = 0;
+
+        if (std::abs(vFrom.x) > std::abs(vFrom.z)) {
+
+            this->x_ = -vFrom.y;
+            this->y_ = vFrom.x;
+            this->z_ = 0;
+            this->w_ = r;
+
+        } else {
+
+            this->x_ = 0;
+            this->y_ = -vFrom.z;
+            this->z_ = vFrom.y;
+            this->w_ = r;
+        }
+
+    } else {
+
+        // crossVectors( vFrom, vTo ); // inlined to avoid cyclic dependency on Vector3
+
+        this->x_ = vFrom.y * vTo.z - vFrom.z * vTo.y;
+        this->y_ = vFrom.z * vTo.x - vFrom.x * vTo.z;
+        this->z_ = vFrom.x * vTo.y - vFrom.y * vTo.x;
+        this->w_ = r;
+    }
+
+    return this->normalize();
+}
+
+
 float Quaternion::angleTo(const Quaternion &q) const {
 
     return 2 * std::acos(std::abs(std::clamp(this->dot(q), -1.0f, 1.0f)));

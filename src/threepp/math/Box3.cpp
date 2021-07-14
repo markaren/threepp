@@ -52,7 +52,7 @@ Box3 &Box3::set(float minX, float minY, float minZ, float maxX, float maxY, floa
 
 Box3 &Box3::setFromCenterAndSize(const Vector3 &center, const Vector3 &size) {
 
-    const auto halfSize = _vector.copy(size).multiply(0.5f);
+    const auto halfSize = _vector.copy(size).multiplyScalar(0.5f);
 
     this->min_.copy(center).sub(halfSize);
     this->max_.copy(center).add(halfSize);
@@ -92,7 +92,7 @@ bool Box3::isEmpty() const {
 
 void Box3::getCenter(Vector3 &target) const {
 
-    this->isEmpty() ? target.set(0, 0, 0) : target.addVectors(this->min_, this->max_).multiply(0.5f);
+    this->isEmpty() ? target.set(0, 0, 0) : target.addVectors(this->min_, this->max_).multiplyScalar(0.5f);
 }
 
 void Box3::getSize(Vector3 &target) const {

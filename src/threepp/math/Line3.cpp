@@ -42,7 +42,7 @@ Line3 &Line3::copy(const Line3 &line) {
 
 void Line3::getCenter(Vector3 &target) const {
 
-    target.addVectors(this->start_, this->end_).multiply(0.5f);
+    target.addVectors(this->start_, this->end_).multiplyScalar(0.5f);
 }
 
 void Line3::delta(Vector3 &target) const {
@@ -63,7 +63,7 @@ float Line3::distance() const {
 void Line3::at(float t, Vector3 &target) const {
 
     this->delta(target);
-    target.multiply(t).add(this->start_);
+    target.multiplyScalar(t).add(this->start_);
 }
 
 float Line3::closestPointToPointParameter(const Vector3 &point, bool clampToLine) {
@@ -89,7 +89,7 @@ void Line3::closestPointToPoint(const Vector3 &point, bool clampToLine, Vector3 
     const auto t = this->closestPointToPointParameter(point, clampToLine);
 
     this->delta(target);
-    target.multiply(t).add(this->start_);
+    target.multiplyScalar(t).add(this->start_);
 }
 
 Line3 &Line3::applyMatrix4(const Matrix4 &matrix) {

@@ -34,7 +34,7 @@ void SphericalHarmonis3::getAt(const Vector3 &normal, Vector3 &target) {
     const auto &coeff = this->coefficients_;
 
     // band 0
-    target.copy(coeff[0]).multiply(0.282095f);
+    target.copy(coeff[0]).multiplyScalar(0.282095f);
 
     // band 1
     target.addScaledVector(coeff[1], 0.488603f * y);
@@ -58,7 +58,7 @@ void SphericalHarmonis3::getIrradianceAt(const Vector3 &normal, Vector3 &target)
     const auto &coeff = this->coefficients_;
 
     // band 0
-    target.copy(coeff[0]).multiply(0.886227f);// π * 0.282095
+    target.copy(coeff[0]).multiplyScalar(0.886227f);// π * 0.282095
 
     // band 1
     target.addScaledVector(coeff[1], 2.0f * 0.511664f * y);// ( 2 * π / 3 ) * 0.488603
@@ -97,7 +97,7 @@ SphericalHarmonis3 &SphericalHarmonis3::scale(float s) {
 
     for (int i = 0; i < 9; i++) {
 
-        this->coefficients_[i].multiply(s);
+        this->coefficients_[i].multiplyScalar(s);
     }
 
     return *this;
