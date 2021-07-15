@@ -357,3 +357,9 @@ void OrbitControls::handleMouseWheel(const Vector2 &delta) {
 
     update();
 }
+
+OrbitControls::~OrbitControls() {
+
+    canvas.removeMouseListener(mouseListener->uuid);
+    canvas.removeKeyListener(keyListener->uuid);
+}

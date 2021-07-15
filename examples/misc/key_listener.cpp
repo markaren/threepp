@@ -39,7 +39,7 @@ int main() {
         t += dt;
 
         if (t > 2 && t < 4) {
-            if (canvas.removeKeyListener(l)) {
+            if (canvas.removeKeyListener(l->uuid)) {
                 std::cout << "removed listener" << std::endl;
             }
         } else if (!finish && t > 5) {

@@ -37,9 +37,9 @@ namespace threepp {
 
         void addKeyListener(const std::shared_ptr<KeyListener> &listener);
 
-        bool removeKeyListener(const std::shared_ptr<KeyListener> &listener);
+        bool removeKeyListener(const std::string &listenerUuid);
 
-        void addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f);
+        std::string addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f);
 
         void addMouseListener(const std::shared_ptr<MouseListener> &listener);
 

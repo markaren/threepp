@@ -102,17 +102,14 @@ namespace threepp {
 
         void dollyOut(float dollyScale);
 
+        ~OrbitControls();
+
     private:
         Canvas &canvas;
         std::shared_ptr<Camera> camera;
 
         std::shared_ptr<KeyListener> keyListener;
         std::shared_ptr<MouseListener> mouseListener;
-
-        // for reset
-        //    private var target0 = target.clone()
-        //    private var position0 = camera.position.clone()
-        //    private var zoom0 = (camera as CameraWithZoom).zoom
 
         // current position in spherical coordinates
         Spherical spherical{};

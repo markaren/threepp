@@ -80,13 +80,14 @@ public:
     }
 
     void addKeyListener(const std::shared_ptr<KeyListener> &listener) {
-        keyListeners.emplace_back(listener);
+        if (!keyListeners.count(listener->uuid)) {
+            keyListeners[listener->uuid] = listener;
+        }
     }
 
-    bool removeKeyListener(const std::shared_ptr<KeyListener> &listener) {
-        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
-        if (find != keyListeners.end()) {
-            keyListeners.erase(find);
+    bool removeKeyListener(const std::string &listenerUuid) {
+        if (keyListeners.count(listenerUuid)) {
+            keyListeners.erase(listenerUuid);
             return true;
         }
         return false;
@@ -112,13 +113,14 @@ public:
     }
 
 private:
+    GLFWwindow *window;
+
     WindowSize size_;
     Vector2 lastMousePos{};
-    std::vector<std::shared_ptr<KeyListener>> keyListeners;
-    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
-    std::optional<std::function<void(WindowSize)>> resizeListener;
 
-    GLFWwindow *window;
+    std::optional<std::function<void(WindowSize)>> resizeListener;
+    std::unordered_map<std::string, std::shared_ptr<KeyListener>> keyListeners;
+    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
 
     static void window_size_callback(GLFWwindow *w, int width, int height) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
@@ -178,7 +180,8 @@ private:
         if (p->keyListeners.empty()) return;
 
         KeyEvent evt{key, scancode, mods};
-        for (auto &l : p->keyListeners) {
+        auto listeners = p->keyListeners;
+        for (auto &[_, l] : listeners) {
             switch (action) {
                 case GLFW_PRESS:
                     l->onKeyPressed(evt);
@@ -209,6 +212,7 @@ WindowSize threepp::Canvas::getSize() const {
 }
 
 float threepp::Canvas::getAspect() const {
+
     return getSize().getAspect();
 }
 
@@ -217,26 +221,34 @@ void threepp::Canvas::setSize(WindowSize size) {
     pimpl_->setSize(size);
 }
 void threepp::Canvas::onWindowResize(std::function<void(WindowSize)> f) {
+
     pimpl_->onWindowResize(std::move(f));
 }
 
 void threepp::Canvas::addKeyListener(const std::shared_ptr<KeyListener> &listener) {
+
     pimpl_->addKeyListener(listener);
 }
 
-bool threepp::Canvas::removeKeyListener(const std::shared_ptr<KeyListener> &listener) {
-    return pimpl_->removeKeyListener(listener);
+bool threepp::Canvas::removeKeyListener(const std::string &listenerUuid) {
+
+    return pimpl_->removeKeyListener(listenerUuid);
 }
 
-void threepp::Canvas::addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f) {
-    addKeyListener(std::make_shared<KeyAdapter>(mode, f));
+std::string threepp::Canvas::addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f) {
+
+    auto listener = std::make_shared<KeyAdapter>(mode, f);
+    addKeyListener(listener);
+    return listener->uuid;
 }
 
 void threepp::Canvas::addMouseListener(const std::shared_ptr<MouseListener> &listener) {
+
     pimpl_->addMouseListener(listener);
 }
 
 bool threepp::Canvas::removeMouseListener(const std::string &listenerUuid) {
+
     return pimpl_->removeMouseListener(listenerUuid);
 }
 
