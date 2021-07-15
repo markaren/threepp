@@ -14,11 +14,12 @@
 #include "threepp/utils/InstanceOf.hpp"
 
 #include <limits>
+#include <utility>
 
 
 namespace threepp {
 
-    class OrbitControls : private EventDispatcher {
+    class OrbitControls {
 
     public:
         bool enabled = true;
@@ -26,18 +27,18 @@ namespace threepp {
         Vector3 target{};
 
         float minDistance = 0.f;
-        float maxDistance = std::numeric_limits<float>::max();
+        float maxDistance = std::numeric_limits<float>::infinity();
 
         float minZoom = 0.f;
-        float maxZoom = std::numeric_limits<float>::max();
+        float maxZoom = std::numeric_limits<float>::infinity();
 
         float minPolarAngle = 0.f;
         float maxPolarAngle = math::PI;
 
         // How far you can orbit horizontally, upper and lower limits.
         // If set, must be a sub-interval of the interval [ - Math.PI, Math.PI ].
-        float minAzimuthAngle = -std::numeric_limits<float>::max();// radians
-        float maxAzimuthAngle = std::numeric_limits<float>::max(); // radians
+        float minAzimuthAngle = -std::numeric_limits<float>::infinity();// radians
+        float maxAzimuthAngle = std::numeric_limits<float>::infinity(); // radians
 
         // Set to true to enable damping (inertia)
         // If damping is enabled, you must call controls.update() in your animation loop
@@ -170,27 +171,62 @@ namespace threepp {
             OrbitControls &scope;
         };
 
+        struct MyMouseMoveListener: MouseListener {
+
+            explicit MyMouseMoveListener(OrbitControls &scope) : scope(scope) {}
+
+            void onMouseMove(Vector2 pos) override {
+                if (scope.enabled) {
+
+                    switch (scope.state) {
+                        case State::ROTATE:
+                            if (scope.enableRotate) {
+                                scope.handleMouseMoveRotate(pos);
+                            }
+                            break;
+                        case State::DOLLY:
+                            if (scope.enableZoom) {
+                                scope.handleMouseMoveDolly(pos);
+                            }
+                            break;
+                        case State::PAN:
+                            if (scope.enablePan) {
+                                scope.handleMouseMovePan(pos);
+                            }
+                            break;
+                        default:
+                            //TODO ?
+                            break;
+                    }
+                }
+            }
+
+        private:
+            OrbitControls &scope;
+        };
+
         struct MyMouseListener : MouseListener {
 
             explicit MyMouseListener(OrbitControls &scope)
-                : scope(scope) {}
+                : scope(scope), mouseMoveListener(new MyMouseMoveListener(scope)) {}
 
             void onMouseDown(int button, Vector2 pos) override {
                 if (scope.enabled) {
                     switch (button) {
-                        case 0:
+                        case 0: // LEFT
                             if (scope.enableRotate) {
                                 scope.handleMouseDownRotate(pos);
                                 scope.state = State::ROTATE;
                             }
                             break;
-                        case 1:
+                        case 1: // RIGHT
                             if (scope.enablePan) {
                                 scope.handleMouseDownRotate(pos);
                                 scope.handleMouseDownPan(pos);
+                                scope.state = State::PAN;
                             }
                             break;
-                        case 2:
+                        case 2: // MIDDLE
                             if (scope.enableZoom) {
                                 scope.handleMouseDownDolly(pos);
                                 scope.state = State::DOLLY;
@@ -201,33 +237,41 @@ namespace threepp {
 
                 if (scope.state != State::NONE) {
 
-//                    val mouseMoveListener = MyMouseMoveListener()
-//                    eventSource.addMouseListener(mouseMoveListener)
-//                    eventSource.addMouseListener(MyMouseUpListener(mouseMoveListener))
-//
-//                    scope.dispatchEvent("start", this)
+                    scope.canvas.addMouseListener(mouseMoveListener);
+                    scope.canvas.addMouseListener(std::make_shared<MyMouseUpListener>(scope, mouseMoveListener));
 
                 }
 
-            }
-
-            void onMouseUp(int button, Vector2 pos) override {
-                if (scope.enabled) {
-                }
-            }
-
-            void onMouseMove(Vector2 pos) override {
-                if (scope.enabled) {
-                }
             }
 
             void onMouseWheel(Vector2 delta) override {
                 if (scope.enabled && scope.enableZoom && !(scope.state != State::NONE && scope.state != State::ROTATE)) {
+                    scope.handleMouseWheel(delta);
                 }
             }
 
         private:
             OrbitControls &scope;
+            std::shared_ptr<MyMouseMoveListener> mouseMoveListener;
+        };
+
+        struct MyMouseUpListener: MouseListener {
+
+            explicit MyMouseUpListener(OrbitControls &scope, std::shared_ptr<MouseListener> mouseMoveListener)
+                : scope(scope), mouseMoveListener(std::move(mouseMoveListener)) {}
+
+            void onMouseUp(int button, Vector2 pos) override {
+                if (scope.enabled) {
+
+                    scope.canvas.removeMouseListener(mouseMoveListener->uuid);
+                    scope.canvas.removeMouseListener(this->uuid);
+                    scope.state = State::NONE;
+                }
+            }
+
+        private:
+            OrbitControls &scope;
+            std::shared_ptr<MouseListener> mouseMoveListener;
         };
     };
 

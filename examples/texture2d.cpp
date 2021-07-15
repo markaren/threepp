@@ -11,6 +11,8 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 5;
 
+    OrbitControls controls{camera, canvas};
+
     auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
     renderer.setClearColor(Color(Color::aliceblue));
@@ -25,19 +27,21 @@ int main() {
     sphere->position.setX(1);
     scene->add(sphere);
 
-    const auto sphereGeometry1 = SphereGeometry::create(0.5f);
-    const auto sphereMaterial1 = MeshBasicMaterial::create();
-    sphereMaterial1->map = loader.loadTexture("textures/brick_bump.jpg");
-    auto sphere1 = Mesh::create(sphereGeometry1, sphereMaterial1);
-    sphere1->position.setX(2);
-    scene->add(sphere1);
-
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
     boxMaterial->map = loader.loadTexture("textures/crate.gif");
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
     scene->add(box);
+
+    const auto planeGeometry = PlaneGeometry::create(5, 5);
+    const auto planeMaterial = MeshBasicMaterial::create();
+    planeMaterial->side = DoubleSide;
+    planeMaterial->map = loader.loadTexture("textures/brick_bump.jpg");
+    auto plane = Mesh::create(planeGeometry, planeMaterial);
+    plane->position.setY(-1);
+    plane->rotateX(math::degToRad(-90));
+    scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -46,9 +50,10 @@ int main() {
     });
 
     box->rotation.order(Euler::RotationOrders::YZX);
+    sphere->rotation.order(Euler::RotationOrders::YZX);
     canvas.animate([&](float dt) {
         box->rotation.y(box->rotation.y() + 0.5f * dt);
-        scene->rotation.x(scene->rotation.x() + 1.f * dt);
+        sphere->rotation.y(sphere->rotation.y() + 0.5f * dt);
 
         renderer.render(scene, camera);
     });

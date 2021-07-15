@@ -8,8 +8,6 @@
 
 using namespace threepp;
 
-Vector3 Object3D::defaultUp = Vector3(0, 1, 0);
-
 namespace {
 
     Vector3 _v1{};
@@ -31,7 +29,6 @@ Object3D::Object3D() {
         rotation.setFromQuaternion(quaternion, std::nullopt, false);
     });
 }
-
 
 void Object3D::applyMatrix4(const Matrix4 &matrix) {
 

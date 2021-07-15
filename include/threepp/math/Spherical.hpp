@@ -16,7 +16,7 @@ namespace threepp {
         float phi;
         float theta;
 
-        explicit Spherical(float radius = 1, float phi = 1, float theta = 1);
+        explicit Spherical(float radius = 1, float phi = 0, float theta = 0);
 
         Spherical &set(float radius, float phi, float theta);
 

@@ -16,7 +16,7 @@ namespace {
 
     const int LEFT_BUTTON = 0;
     const int RIGHT_BUTTON = 1;
-    const int MIDDLE_BUTTON = 32;
+    const int MIDDLE_BUTTON = 2;
 
 }// namespace
 
@@ -37,7 +37,7 @@ bool OrbitControls::update() {
 
     // so camera.up is the orbit axis
     const auto quat = Quaternion().setFromUnitVectors(camera->up, Vector3(0, 1, 0));
-    auto quatInverse = Quaternion(quat).invert();
+    auto quatInverse = Quaternion().copy(quat).invert();
 
     Vector3 lastPosition{};
     Quaternion lastQuaternion{};
@@ -124,8 +124,6 @@ bool OrbitControls::update() {
     if (zoomChanged ||
         lastPosition.distanceToSquared(this->camera->position) > EPS ||
         8 * (1 - lastQuaternion.dot(this->camera->quaternion)) > EPS) {
-
-        this->dispatchEvent("change", this);
 
         lastPosition.copy(this->camera->position);
         lastQuaternion.copy(this->camera->quaternion);

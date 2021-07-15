@@ -43,7 +43,7 @@ namespace threepp {
 
         void addMouseListener(const std::shared_ptr<MouseListener> &listener);
 
-        bool removeMouseListener(const std::shared_ptr<MouseListener> &listener);
+        bool removeMouseListener(const std::string &listenerUuid);
 
         void animate(const std::function<void(float)> &f) const;
 

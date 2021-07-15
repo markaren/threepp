@@ -26,7 +26,7 @@ namespace threepp {
     class Object3D : public EventDispatcher {
 
     public:
-        static Vector3 defaultUp;
+        inline static Vector3 defaultUp{0,1,0};
 
         const unsigned int id = _object3Did++;
 
@@ -166,8 +166,6 @@ namespace threepp {
         friend class Box3;
         friend class Frustum;
     };
-
-    typedef std::shared_ptr<Object3D> Object3DPtr;
 
 }// namespace threepp
 

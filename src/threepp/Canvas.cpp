@@ -93,13 +93,14 @@ public:
     }
 
     void addMouseListener(const std::shared_ptr<MouseListener> &listener) {
-        mouseListeners.emplace_back(listener);
+        if (!mouseListeners.count(listener->uuid)) {
+            mouseListeners[listener->uuid] = listener;
+        }
     }
 
-    bool removeMouseListener(const std::shared_ptr<MouseListener> &listener) {
-        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
-        if (find != mouseListeners.end()) {
-            mouseListeners.erase(find);
+    bool removeMouseListener(const std::string &listenerUuid) {
+        if (mouseListeners.count(listenerUuid)) {
+            mouseListeners.erase(listenerUuid);
             return true;
         }
         return false;
@@ -114,7 +115,7 @@ private:
     WindowSize size_;
     Vector2 lastMousePos{};
     std::vector<std::shared_ptr<KeyListener>> keyListeners;
-    std::vector<std::shared_ptr<MouseListener>> mouseListeners;
+    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
     GLFWwindow *window;
@@ -131,10 +132,10 @@ private:
 
     static void scroll_callback(GLFWwindow *w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
-        auto &listeners = p->mouseListeners;
+        auto listeners = p->mouseListeners;
         if (listeners.empty()) return;
         Vector2 delta {(float) xoffset, (float) yoffset};
-        for (auto &l :listeners) {
+        for (auto &[_, l] :listeners) {
             l->onMouseWheel(delta);
         }
     }
@@ -142,8 +143,9 @@ private:
     static void mouse_callback(GLFWwindow *w, int button, int action, int mods) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
 
-        auto &listeners = p->mouseListeners;
-        for (auto &l : listeners) {
+        auto listeners = p->mouseListeners;
+        for (auto &[_, l] : listeners) {
+
             switch (action) {
                 case GLFW_PRESS:
                     l->onMouseDown(button, p->lastMousePos);
@@ -160,8 +162,8 @@ private:
     static void cursor_callback(GLFWwindow *w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
         p->lastMousePos.set((float) xpos, (float) ypos);
-        auto &listeners = p->mouseListeners;
-        for (auto &l : listeners) {
+        auto listeners = p->mouseListeners;
+        for (auto &[_, l] : listeners) {
             l->onMouseMove(p->lastMousePos);
         }
     }
@@ -234,8 +236,8 @@ void threepp::Canvas::addMouseListener(const std::shared_ptr<MouseListener> &lis
     pimpl_->addMouseListener(listener);
 }
 
-bool threepp::Canvas::removeMouseListener(const std::shared_ptr<MouseListener> &listener) {
-    return pimpl_->removeMouseListener(listener);
+bool threepp::Canvas::removeMouseListener(const std::string &listenerUuid) {
+    return pimpl_->removeMouseListener(listenerUuid);
 }
 
 threepp::Canvas::~Canvas() = default;
