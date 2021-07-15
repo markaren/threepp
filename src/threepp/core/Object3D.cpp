@@ -1,8 +1,9 @@
 
 #include "threepp/core/Object3D.hpp"
-#include "threepp/core/BufferGeometry.hpp"
 
-#include "threepp/cameras/Camera.hpp"
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Raycaster.hpp"
+
 #include "threepp/lights/Light.hpp"
 #include "threepp/utils/InstanceOf.hpp"
 

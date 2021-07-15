@@ -16,12 +16,12 @@ namespace {
 
 }
 
-Ray::Ray(Vector3 origin, Vector3 direction) : origin_(origin), direction_(direction){}
+Ray::Ray(Vector3 origin, Vector3 direction) : origin(origin), direction(direction){}
 
 Ray &Ray::set(const Vector3 &origin, const Vector3 &direction) {
 
-    this->origin_.copy( origin );
-    this->direction_.copy( direction );
+    this->origin.copy( origin );
+    this->direction.copy( direction );
 
     return *this;
 
@@ -29,8 +29,8 @@ Ray &Ray::set(const Vector3 &origin, const Vector3 &direction) {
 
 Ray &Ray::copy(const Ray &ray) {
 
-    this->origin_.copy( ray.origin_ );
-    this->direction_.copy( ray.direction_ );
+    this->origin.copy( ray.origin);
+    this->direction.copy( ray.direction);
 
     return *this;
 
@@ -38,13 +38,13 @@ Ray &Ray::copy(const Ray &ray) {
 
 Vector3 &Ray::at(float t, Vector3 &target) {
 
-    return target.copy(this->direction_).multiplyScalar(t).add( this->origin_ );
+    return target.copy(this->direction).multiplyScalar(t).add( this->origin);
 
 }
 
 Ray &Ray::lookAt(const Vector3 &v) {
 
-    this->direction_.copy( v ).sub( this->origin_ ).normalize();
+    this->direction.copy( v ).sub( this->origin).normalize();
 
     return *this;
 
@@ -52,7 +52,7 @@ Ray &Ray::lookAt(const Vector3 &v) {
 
 Ray &Ray::recast(float t) {
 
-    this->origin_.copy( this->at( t, _vector ) );
+    this->origin.copy( this->at( t, _vector ) );
 
     return *this;
 

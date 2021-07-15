@@ -12,14 +12,17 @@
 
 #include "threepp/materials/Material.hpp"
 
-#include "threepp/core/Layers.hpp"
 #include "threepp/core/EventDispatcher.hpp"
+#include "threepp/core/Layers.hpp"
 
 #include <functional>
 #include <memory>
 #include <optional>
 
 namespace threepp {
+
+    class Raycaster;
+    struct Intersection;
 
     class BufferGeometry;
 
@@ -127,6 +130,8 @@ namespace threepp {
         void getWorldScale(Vector3 &target);
 
         virtual void getWorldDirection(Vector3 &target);
+
+        virtual void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {}
 
         void traverse(const std::function<void(Object3D &)> &callback);
 

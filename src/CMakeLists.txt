@@ -16,6 +16,7 @@ set(publicHeaders
         "threepp/core/InstancedBufferAttribute.hpp"
         "threepp/core/InstancedBufferGeometry.hpp"
         "threepp/core/Object3D.hpp"
+        "threepp/core/Raycaster.hpp"
         "threepp/core/Uniform.hpp"
 
         "threepp/cameras/Camera.hpp"
@@ -152,10 +153,14 @@ set(sources
 
         "threepp/Canvas.cpp"
 
+        "threepp/cameras/PerspectiveCamera.cpp"
+        "threepp/cameras/OrthographicCamera.cpp"
+
         "threepp/controls/OrbitControls.cpp"
 
         "threepp/core/BufferGeometry.cpp"
         "threepp/core/Object3D.cpp"
+        "threepp/core/Raycaster.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CylinderGeometry.cpp"
@@ -197,6 +202,7 @@ set(sources
         "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
         "threepp/renderers/gl/GLBindingStates.cpp"
+        "threepp/renderers/gl/GLBufferRenderer.cpp"
         "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"
         "threepp/renderers/gl/GLLights.cpp"

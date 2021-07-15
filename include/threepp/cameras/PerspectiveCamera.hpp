@@ -34,41 +34,18 @@ namespace threepp {
          *
          * Values for focal length and film gauge must have the same unit.
          */
-        void setFocalLength(float focalLength) {
-
-            /** see {@link http://www.bobatkins.com/photography/technical/field_of_view->html} */
-            const auto vExtentSlope = 0.5f * this->getFilmHeight() / focalLength;
-
-            this->fov = (math::RAD2DEG * 2 * std::atan(vExtentSlope));
-            this->updateProjectionMatrix();
-        }
+        void setFocalLength(float focalLength);
 
         /**
          * Calculates the focal length from the current .fov and .filmGauge.
          */
-        [[nodiscard]] float getFocalLength() const {
+        [[nodiscard]] float getFocalLength() const;
 
-            const auto vExtentSlope = std::tan(math::DEG2RAD * 0.5f * this->fov);
+        [[nodiscard]] float getEffectiveFOV() const;
 
-            return 0.5f * this->getFilmHeight() / vExtentSlope;
-        }
+        [[nodiscard]] float getFilmWidth() const;
 
-        [[nodiscard]] float getEffectiveFOV() const {
-
-            return math::RAD2DEG * 2.f * std::atan(std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom);
-        }
-
-        [[nodiscard]] float getFilmWidth() const {
-
-            // film not completely covered in portrait format (aspect < 1)
-            return this->filmGauge * std::min(this->aspect, 1.f);
-        }
-
-        [[nodiscard]] float getFilmHeight() const {
-
-            // film not completely covered in landscape format (aspect > 1)
-            return this->filmGauge / std::max(this->aspect, 1.f);
-        }
+        [[nodiscard]] float getFilmHeight() const;
 
         /**
          * Sets an offset in a larger frustum. This is useful for multi-window or
@@ -105,79 +82,18 @@ namespace threepp {
          *
          *   Note there is no reason monitors have to be the same size or in a grid.
          */
-        void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
+        void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height);
 
-            this->aspect = (float) fullWidth / fullHeight;
+        void clearViewOffset();
 
-            if (!this->view) {
-
-                this->view = CameraView{
-                        true,
-                        1,
-                        1,
-                        0,
-                        0,
-                        1,
-                        1};
-            }
-
-            this->view->enabled = true;
-            this->view->fullWidth = fullWidth;
-            this->view->fullHeight = fullHeight;
-            this->view->offsetX = x;
-            this->view->offsetY = y;
-            this->view->width = width;
-            this->view->height = height;
-
-            this->updateProjectionMatrix();
-        }
-
-        void clearViewOffset() {
-
-            if (this->view) {
-
-                this->view->enabled = false;
-            }
-
-            this->updateProjectionMatrix();
-        }
-
-        void updateProjectionMatrix() override {
-
-            float top = (near * std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom);
-            float height = 2.f * top;
-            float width = this->aspect * height;
-            float left = -0.5f * width;
-
-            if (this->view && this->view->enabled) {
-
-                const auto fullWidth = view->fullWidth,
-                           fullHeight = view->fullHeight;
-
-                left += view->offsetX * width / fullWidth;
-                top -= view->offsetY * height / fullHeight;
-                width *= view->width / fullWidth;
-                height *= view->height / fullHeight;
-            }
-
-            const auto skew = this->filmOffset;
-            if (skew != 0) left += (near * skew / this->getFilmWidth());
-
-            this->projectionMatrix.makePerspective(left, (left + width), top, (top - height), near, far);
-
-            this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
-        }
+        void updateProjectionMatrix() override;
 
         static std::shared_ptr<PerspectiveCamera> create(float fov, float aspect = 1, float near = 0.1, float far = 2000) {
             return std::shared_ptr<PerspectiveCamera>(new PerspectiveCamera(fov, aspect, near, far));
         }
 
     protected:
-        explicit PerspectiveCamera(float fov, float aspect, float near, float far)
-            : Camera(near, far), fov(fov), aspect(aspect) {
-
-            PerspectiveCamera::updateProjectionMatrix();
-        }
+        explicit PerspectiveCamera(float fov, float aspect, float near, float far);
     };
 
 }// namespace threepp

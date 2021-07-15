@@ -10,6 +10,10 @@ namespace threepp {
     class Ray {
 
     public:
+
+        Vector3 origin;
+        Vector3 direction;
+
         explicit Ray(Vector3 origin = Vector3(), Vector3 direction = Vector3());
 
         Ray &set(const Vector3 &origin, const Vector3 &direction);
@@ -22,9 +26,6 @@ namespace threepp {
 
         Ray &recast(float t);
 
-    private:
-        Vector3 origin_;
-        Vector3 direction_;
     };
 
 }// namespace threepp

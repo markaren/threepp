@@ -3,6 +3,7 @@
 #ifndef THREEPP_GLBUFFERRENDERER_HPP
 #define THREEPP_GLBUFFERRENDERER_HPP
 
+#include "GLAttributes.hpp"
 #include "GLCapabilities.hpp"
 #include "GLInfo.hpp"
 
@@ -12,10 +13,7 @@ namespace threepp::gl {
 
         explicit BufferRenderer(GLInfo &info) : info_(info) {}
 
-        void setMode(GLenum mode) {
-
-            this->mode_ = mode;
-        }
+        void setMode(GLenum mode);
 
         virtual void render(int start, int count) = 0;
 
@@ -33,21 +31,9 @@ namespace threepp::gl {
         explicit GLBufferRenderer(GLInfo &info)
             : BufferRenderer(info) {}
 
-        void render(int start, int count) override {
+        void render(int start, int count) override;
 
-            glDrawArrays(mode_, start, count);
-
-            info_.update(count, mode_, 1);
-        }
-
-        void renderInstances(int start, int count, int primcount) override {
-
-            if (primcount == 0) return;
-
-            glDrawArraysInstanced(mode_, start, count, primcount);
-
-            info_.update(count, mode_, primcount);
-        }
+        void renderInstances(int start, int count, int primcount) override;
     };
 
     struct GLIndexedBufferRenderer : BufferRenderer {
@@ -55,27 +41,11 @@ namespace threepp::gl {
         explicit GLIndexedBufferRenderer(GLInfo &info)
             : BufferRenderer(info) {}
 
-        void setIndex(const Buffer &value) {
+        void setIndex(const Buffer &value);
 
-            type_ = value.type;
-            bytesPerElement_ = value.bytesPerElement;
-        }
+        void render(int start, int count) override;
 
-        void render(int start, int count) override {
-
-            glDrawElements(mode_, count, type_, (GLvoid *) (start * bytesPerElement_));
-
-            info_.update(count, mode_, 1);
-        }
-
-        void renderInstances(int start, int count, int primcount) override {
-
-            if (primcount == 0) return;
-
-            glDrawElementsInstanced(mode_, count, type_, (GLvoid *) (start * bytesPerElement_), primcount);
-
-            info_.update(count, mode_, primcount);
-        }
+        void renderInstances(int start, int count, int primcount) override;
 
 
     private:
