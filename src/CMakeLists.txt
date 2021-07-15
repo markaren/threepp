@@ -195,6 +195,8 @@ set(sources
         "threepp/lights/PointLight.cpp"
         "threepp/lights/PointLightShadow.cpp"
 
+        "threepp/objects/Mesh.cpp"
+
         "threepp/textures/Texture.cpp"
 
         "threepp/renderers/GLRenderer.cpp"

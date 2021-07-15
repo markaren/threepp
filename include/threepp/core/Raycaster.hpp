@@ -16,6 +16,7 @@ namespace threepp {
     struct Intersection {
 
         float distance;
+        std::optional<int> faceIndex;
         Vector3 point;
         Object3D *object;
     };
@@ -23,6 +24,11 @@ namespace threepp {
     class Raycaster {
 
     public:
+
+        float near;
+        float far;
+
+        Ray ray;
         Layers layers{};
 
         Raycaster(const Vector3 &origin, const Vector3 &direction, float near = 0, float far = std::numeric_limits<float>::infinity())
@@ -36,11 +42,6 @@ namespace threepp {
 
         std::vector<Intersection> intersectObjects(std::vector<Object3D *> &objects, bool recursive = false);
 
-    private:
-        float near;
-        float far;
-
-        Ray ray;
     };
 
 }// namespace threepp

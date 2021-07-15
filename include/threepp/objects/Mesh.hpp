@@ -23,6 +23,8 @@ namespace threepp {
             return material_.get();
         }
 
+        void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
+
         static std::shared_ptr<Mesh> create(
                 std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
                 std::shared_ptr<Material> material = MeshBasicMaterial::create()) {

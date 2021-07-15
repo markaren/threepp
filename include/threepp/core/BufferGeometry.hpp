@@ -49,7 +49,7 @@ namespace threepp {
         template<class T>
         TypedBufferAttribute<T> *getAttribute(const std::string &name) {
 
-            if (!hasAttribute(name)) throw std::runtime_error("No attribute named: " + name);
+            if (!hasAttribute(name)) return nullptr;
 
             return dynamic_cast<TypedBufferAttribute<T> *>(attributes_.at(name).get());
         }
