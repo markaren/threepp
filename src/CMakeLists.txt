@@ -11,6 +11,7 @@ set(publicHeaders
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
+        "threepp/core/Face3.hpp"
         "threepp/core/Layers.hpp"
         "threepp/core/misc.hpp"
         "threepp/core/InstancedBufferAttribute.hpp"

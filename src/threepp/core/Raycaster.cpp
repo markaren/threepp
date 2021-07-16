@@ -73,7 +73,7 @@ void Raycaster::setFromCamera(const Vector2 &coords, const std::shared_ptr<Camer
     if (instanceof <PerspectiveCamera>(camera.get())) {
 
         this->ray.origin.setFromMatrixPosition(camera->matrixWorld);
-        this->ray.direction.set(coords.x, coords.y, 0.5).unproject(*camera).sub(this->ray.origin).normalize();
+        this->ray.direction.set(coords.x, coords.y, 0.5f).unproject(*camera).sub(this->ray.origin).normalize();
 
     } else if (instanceof <OrthographicCamera>(camera.get())) {
 

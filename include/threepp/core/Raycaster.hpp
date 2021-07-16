@@ -5,6 +5,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/core/Layers.hpp"
+#include "threepp/core/Face3.hpp"
 #include "threepp/math/Ray.hpp"
 
 #include <vector>
@@ -16,9 +17,13 @@ namespace threepp {
     struct Intersection {
 
         float distance;
-        std::optional<int> faceIndex;
         Vector3 point;
         Object3D *object;
+
+        std::optional<int> faceIndex;
+        std::optional<Vector2> uv;
+        std::optional<Vector2> uv2;
+        std::optional<Face3> face;
     };
 
     class Raycaster {
@@ -31,7 +36,7 @@ namespace threepp {
         Ray ray;
         Layers layers{};
 
-        Raycaster(const Vector3 &origin, const Vector3 &direction, float near = 0, float far = std::numeric_limits<float>::infinity())
+        explicit Raycaster(const Vector3 &origin = Vector3(), const Vector3 &direction = Vector3(), float near = 0, float far = std::numeric_limits<float>::infinity())
             : near(near), far(far), ray(origin, direction) {}
 
         void set(const Vector3 &origin, const Vector3 &direction);
