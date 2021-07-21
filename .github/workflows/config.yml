@@ -27,7 +27,7 @@ jobs:
 
     - name: Run conan
       run: |
-        conan install . -s build_type=Release -s compiler.version=${{ matrix.compiler_version }} -s compiler.libcxx=libstdc++11 --install-folder=build
+        conan install . -s build_type=Release -s compiler.version=${{ matrix.compiler_version }} -s compiler.libcxx=libstdc++11 --install-folder=build --build=missing
 
     - name: Configure and build
       run: |
@@ -52,7 +52,7 @@ jobs:
 
       - name: Run conan
         run: |
-          conan install . -s build_type=Release --install-folder=build
+          conan install . -s build_type=Release --install-folder=build --build=missing
         shell: bash
 
       - name: Configure and build
