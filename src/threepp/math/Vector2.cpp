@@ -267,7 +267,7 @@ float Vector2::manhattanLength() const {
 Vector2 &Vector2::normalize() {
 
     const auto len = this->length();
-    return this->divideScalar(isnan(len) ? 1 : len );
+    return this->divideScalar(std::isnan(len) ? 1 : len );
 
 }
 
