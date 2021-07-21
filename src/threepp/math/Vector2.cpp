@@ -196,7 +196,7 @@ Vector2 &Vector2::clampLength(float min, float max) {
 
     const auto length = this->length();
 
-    return this->divideScalar(isnan(length) ? 1 : length).multiplyScalar(std::max(min, std::min(max, length)));
+    return this->divideScalar(std::isnan(length) ? 1 : length).multiplyScalar(std::max(min, std::min(max, length)));
 }
 
 Vector2 &Vector2::floor() {

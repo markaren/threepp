@@ -364,7 +364,7 @@ float Vector3::manhattanLength() const {
 Vector3 &Vector3::normalize() {
 
     auto l = length();
-    return divide(isnan(l) ? 0 : l);
+    return divide(std::isnan(l) ? 0 : l);
 }
 
 Vector3 &Vector3::setLength(float length) {
