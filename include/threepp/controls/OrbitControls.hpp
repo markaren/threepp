@@ -11,11 +11,8 @@
 #include "threepp/math/Vector3.hpp"
 #include <threepp/math/Spherical.hpp>
 
-#include "threepp/utils/InstanceOf.hpp"
-
+#include <memory>
 #include <limits>
-#include <utility>
-
 
 namespace threepp {
 

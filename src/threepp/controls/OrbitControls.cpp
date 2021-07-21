@@ -1,7 +1,10 @@
 
-#include <utility>
-
 #include "threepp/controls/OrbitControls.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
+
+#include <cmath>
+#include <utility>
 
 using namespace threepp;
 
