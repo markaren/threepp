@@ -4,7 +4,6 @@
 #define THREEPP_OBJECT3D_HPP
 
 #include "threepp/math/Euler.hpp"
-#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
@@ -33,7 +32,7 @@ namespace threepp {
 
         const unsigned int id = _object3Did++;
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid = utils::generateUUID();
 
         std::string name;
 

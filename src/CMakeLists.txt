@@ -92,6 +92,8 @@ set(publicHeaders
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
+        "threepp/utils/uuid.hpp"
+
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
         "threepp/lights/LightProbe.hpp"
@@ -199,6 +201,8 @@ set(sources
         "threepp/objects/Mesh.cpp"
 
         "threepp/textures/Texture.cpp"
+
+        "threepp/utils/uuid.cpp"
 
         "threepp/renderers/GLRenderer.cpp"
 

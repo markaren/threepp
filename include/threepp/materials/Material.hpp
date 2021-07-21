@@ -5,11 +5,10 @@
 
 #include <threepp/constants.hpp>
 #include <threepp/core/EventDispatcher.hpp>
-#include <threepp/math/MathUtils.hpp>
+#include <threepp/core/Uniform.hpp>
 #include <threepp/math/Plane.hpp>
 
 #include <optional>
-#include <threepp/core/Uniform.hpp>
 
 namespace threepp {
 
@@ -18,7 +17,7 @@ namespace threepp {
     public:
         const unsigned int id = materialId++;
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid = utils::generateUUID();
 
         bool fog = true;
 

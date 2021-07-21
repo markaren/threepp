@@ -11,7 +11,6 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Sphere.hpp"
 
-#include <any>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -27,7 +26,7 @@ namespace threepp {
     public:
         const unsigned int id = ++_id;
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid = utils::generateUUID();
 
         std::vector<GeometryGroup> groups;
 

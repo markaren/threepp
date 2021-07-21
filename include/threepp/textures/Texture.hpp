@@ -3,13 +3,13 @@
 #ifndef THREEPP_TEXTURE_HPP
 #define THREEPP_TEXTURE_HPP
 
-#include "threepp/math/Matrix3.hpp"
-#include "threepp/math/Vector2.hpp"
+#include "threepp/constants.hpp"
 
 #include "threepp/core/EventDispatcher.hpp"
 
-#include "threepp/constants.hpp"
-#include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Vector2.hpp"
+
 #include "threepp/textures/Image.hpp"
 
 #include <memory>
@@ -23,7 +23,7 @@ namespace threepp {
     public:
         unsigned int id = textureId++;
 
-        std::string uuid = math::generateUUID();
+        std::string uuid = utils::generateUUID();
 
         std::string name;
 

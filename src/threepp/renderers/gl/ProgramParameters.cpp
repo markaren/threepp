@@ -4,6 +4,8 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include <sstream>
+
 using namespace threepp;
 using namespace threepp::gl;
 

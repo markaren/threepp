@@ -3,7 +3,7 @@
 #define THREEPP_MOUSELISTENER_HPP
 
 #include "threepp/math/Vector2.hpp"
-#include "threepp/math/MathUtils.hpp"
+#include "threepp/utils/uuid.hpp"
 
 #include <functional>
 #include <utility>
@@ -22,7 +22,7 @@ namespace threepp {
 
     struct MouseListener {
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid = utils::generateUUID();
 
         virtual void onMouseDown(int button, Vector2 pos) {}
         virtual void onMouseUp(int button, Vector2 pos) {}

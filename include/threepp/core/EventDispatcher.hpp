@@ -3,13 +3,12 @@
 #ifndef THREEPP_EVENTDISPATCHER_HPP
 #define THREEPP_EVENTDISPATCHER_HPP
 
-#include <any>
 #include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "threepp/math/MathUtils.hpp"
+#include "threepp/utils/uuid.hpp"
 
 namespace threepp {
 
@@ -21,7 +20,7 @@ namespace threepp {
 
     struct EventListener {
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid = utils::generateUUID();
 
         virtual void onEvent(Event &event) = 0;
 

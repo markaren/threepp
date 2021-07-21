@@ -2,7 +2,7 @@
 #ifndef THREEPP_KEYLISTENER_HPP
 #define THREEPP_KEYLISTENER_HPP
 
-#include "threepp/math/MathUtils.hpp"
+#include "threepp/utils/uuid.hpp"
 
 #include <functional>
 #include <utility>
@@ -21,7 +21,7 @@ namespace threepp {
 
     struct KeyListener {
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid = utils::generateUUID();
 
         virtual void onKeyPressed(KeyEvent evt) {}
 
