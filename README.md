@@ -5,12 +5,23 @@ C++ port of the popular Javascript 3D library [three.js](https://github.com/mrdo
 
 #### Current state of the project
 
-Most of the core library has been ported, including basic rendering capabilities, but some vital parts of the rendering pipeline has yet to be completed.
-Thus, threepp is not yet in fully a functional state. 
+Most of the core library has been ported, including basic rendering capabilities, 
+however much remains to be done..
+
+##### What works?
+
+* Box, Sphere, Plane and Cylindrical geometries  
+* 2D Textures
+* Transparency
+* OrbitControls
+* AmbientLight  
+* Most materials (but using ambient light for materials that require lights...)
+* Raycasting against Mesh
+
 
 ### But, but why?
 
-This is mostly a personal exercise. Don't expect any support, although contributions are welcome. 
+This is mostly a personal exercise. Don't expect much support, although contributions are welcome. 
 
 
 ### How to build
