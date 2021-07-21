@@ -17,8 +17,6 @@ int main() {
     auto texture = TextureLoader().loadTexture(path);
     std::cout << "Image size: (" << texture.image->width << ", " << texture.image->height << ")" << std::endl;
 
-    std::cout << texture.image->getData().size() << std::endl;
-
     return 0;
 
 }
