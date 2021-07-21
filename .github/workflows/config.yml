@@ -21,7 +21,7 @@ jobs:
 
     - name: Install prerequisites
       run: |
-        sudo apt-get install -y g++-8
+        sudo apt-get install -y g++-8 libgl1-mesa-dev
         sudo pip3 install --upgrade setuptools pip
         sudo pip3 install conan
 

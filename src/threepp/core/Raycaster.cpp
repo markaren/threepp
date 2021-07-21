@@ -6,6 +6,8 @@
 
 #include "threepp/utils/InstanceOf.hpp"
 
+#include <algorithm>
+
 using namespace threepp;
 
 namespace {

@@ -1,6 +1,7 @@
 
 #include "GLLights.hpp"
 
+#include <algorithm>
 #include <unordered_map>
 
 using namespace threepp;
@@ -20,7 +21,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
     int numPointShadows = 0;
     int numSpotShadows = 0;
 
-    std::sort(lights.begin(), lights.end(), &shadowCastingLightsFirst);
+    std::stable_sort(lights.begin(), lights.end(), &shadowCastingLightsFirst);
 
     for (auto &light : lights) {
 
