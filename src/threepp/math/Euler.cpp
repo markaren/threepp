@@ -6,6 +6,7 @@
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
 
+#include <cmath>
 #include <algorithm>
 
 using namespace threepp;
