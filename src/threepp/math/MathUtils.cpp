@@ -1,6 +1,8 @@
 
 #include "threepp/math/MathUtils.hpp"
 
+#include <random>
+
 float threepp::math::degToRad(const float degrees) {
 
     return degrees * DEG2RAD;
@@ -11,17 +13,12 @@ float threepp::math::radToDeg(const float radians) {
     return radians * RAD2DEG;
 }
 
-bool threepp::math::isPowerOfTwo(int value) {
+float threepp::math::randomInRange(float min, float max) {
 
-    return (value & (value - 1)) == 0 && value != 0;
-}
+    static std::random_device rd;
+    static std::mt19937 e2(rd());
 
-float threepp::math::floorPowerOfTwo(float value) {
+    std::uniform_real_distribution<> dist(min, max);
 
-    return std::powf(2.f, floor(std::log(value) / LN2));
-}
-
-float threepp::math::ceilPowerOfTwo(float value) {
-
-    return std::powf(2.f, std::ceil(std::log(value) / LN2));
+    return static_cast<float>(dist(e2));
 }

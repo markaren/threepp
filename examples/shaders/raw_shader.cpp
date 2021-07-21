@@ -32,10 +32,6 @@ namespace {
                "\t\t\t}";
     }
 
-    float myRandom() {
-        return ((float) (rand() % 100)) / 100;
-    }
-
 }// namespace
 
 using namespace threepp;
@@ -62,14 +58,14 @@ int main() {
 
 
     for (int i = 0; i < triangles; i++) {
-        positions.emplace_back(myRandom() - .5f);
-        positions.emplace_back(myRandom() - .5f);
-        positions.emplace_back(myRandom() - .5f);
+        positions.emplace_back(math::randomInRange(0, 1) - .5f);
+        positions.emplace_back(math::randomInRange(0, 1) - .5f);
+        positions.emplace_back(math::randomInRange(0, 1) - .5f);
 
-        colors.emplace_back(myRandom());
-        colors.emplace_back(myRandom());
-        colors.emplace_back(myRandom());
-        colors.emplace_back(myRandom());
+        colors.emplace_back(math::randomInRange(0, 1));
+        colors.emplace_back(math::randomInRange(0, 1));
+        colors.emplace_back(math::randomInRange(0, 1));
+        colors.emplace_back(math::randomInRange(0, 1));
     }
 
     geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));

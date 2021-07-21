@@ -47,6 +47,8 @@ namespace threepp {
 
         Color &lerpColors(const Color &color1, const Color &color2, float alpha);
 
+        Color &randomize();
+
         [[nodiscard]] bool equals(const Color &c) const;
 
         template<class ArrayLike>

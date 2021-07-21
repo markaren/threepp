@@ -16,12 +16,7 @@ namespace threepp::math {
 
     float radToDeg(float radians);
 
-    bool isPowerOfTwo(int value);
-
-    float ceilPowerOfTwo(float value);
-
-    float floorPowerOfTwo(float value);
-
+    float randomInRange(float min, float max);
 
 }// namespace threepp::math
 
