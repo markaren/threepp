@@ -55,10 +55,10 @@ bool threepp::math::isPowerOfTwo(int value) {
 
 float threepp::math::floorPowerOfTwo(float value) {
 
-    return std::pow(2.f, floor(std::log(value) / LN2));
+    return std::powf(2.f, floor(std::log(value) / LN2));
 }
 
 float threepp::math::ceilPowerOfTwo(float value) {
 
-    return std::pow(2.f, std::ceil(std::log(value) / LN2));
+    return std::powf(2.f, std::ceil(std::log(value) / LN2));
 }
