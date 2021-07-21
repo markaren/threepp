@@ -9,19 +9,6 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _v1{};
-    Quaternion _q1{};
-    Matrix4 _m1{};
-    Vector3 _target{};
-
-    Vector3 _scale{};
-    Vector3 _position{};
-    Quaternion _quaternion{};
-
-}// namespace
-
 Object3D::Object3D() {
     rotation._onChange([this] {
         quaternion.setFromEuler(rotation, false);
@@ -78,6 +65,8 @@ Object3D &Object3D::rotateOnAxis(const Vector3 &axis, float angle) {
     // rotate object on axis in object space
     // axis is assumed to be normalized
 
+    Quaternion _q1{};
+
     _q1.setFromAxisAngle(axis, angle);
 
     this->quaternion.multiply(_q1);
@@ -90,6 +79,8 @@ Object3D &Object3D::rotateOnWorldAxis(const Vector3 &axis, float angle) {
     // rotate object on axis in world space
     // axis is assumed to be normalized
     // method assumes no rotated parent
+
+    Quaternion _q1{};
 
     _q1.setFromAxisAngle(axis, angle);
 
@@ -117,6 +108,8 @@ Object3D &Object3D::translateOnAxis(const Vector3 &axis, float distance) {
 
     // translate object by distance along axis in object space
     // axis is assumed to be normalized
+
+    Vector3 _v1{};
 
     _v1.copy(axis).applyQuaternion(this->quaternion);
 
@@ -147,6 +140,8 @@ void Object3D::localToWorld(Vector3 &vector) const {
 
 void Object3D::worldToLocal(Vector3 &vector) const {
 
+    Matrix4 _m1{};
+
     vector.applyMatrix4(_m1.copy(this->matrixWorld).invert());
 }
 
@@ -158,6 +153,11 @@ void Object3D::lookAt(const Vector3 &vector) {
 void Object3D::lookAt(float x, float y, float z) {
 
     // This method does not support objects having non-uniformly-scaled parent(s)
+
+    Vector3 _target{};
+    Vector3 _position{};
+    Quaternion _q1{};
+    Matrix4 _m1{};
 
     _target.set(x, y, z);
 
@@ -261,12 +261,18 @@ void Object3D::getWorldPosition(Vector3 &target) {
 
 void Object3D::getWorldQuaternion(Quaternion &target) {
 
+    Vector3 _position{};
+    Vector3 _scale{};
+
     this->updateWorldMatrix(true, false);
 
     this->matrixWorld.decompose(_position, target, _scale);
 }
 
 void Object3D::getWorldScale(Vector3 &target) {
+
+    Vector3 _position{};
+    Quaternion _quaternion{};
 
     this->updateWorldMatrix(true, false);
 
