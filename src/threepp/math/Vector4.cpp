@@ -205,7 +205,7 @@ float Vector4::manhattanLength() const {
 Vector4 &Vector4::normalize() {
 
     const auto len = this->length();
-    return this->divideScalar(isnan(len) ? 1 : len);
+    return this->divideScalar(std::isnan(len) ? 1 : len);
 }
 
 Vector4 &Vector4::setLength(float length) {

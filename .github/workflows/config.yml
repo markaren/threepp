@@ -1,0 +1,62 @@
+
+name: Build
+
+on: [push, workflow_dispatch]
+
+jobs:
+  conan-on-linux:
+
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-18.04]
+        compiler_version: [7, 8, 9]
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install prerequisites
+      run: |
+        sudo apt-get install -y g++-8 libgl1-mesa-dev
+        sudo pip3 install --upgrade setuptools pip
+        sudo pip3 install conan
+
+    - name: Run conan
+      run: |
+        conan install . -s build_type=Release -s compiler.version=${{ matrix.compiler_version }} -s compiler.libcxx=libstdc++11 --install-folder=build --build=missing
+
+    - name: Configure and build
+      run: |
+        cmake . -Bbuild
+        cmake --build build
+
+  conan-on-windows:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2016, windows-2019]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install prerequisites
+        run: |
+          pip3 install conan
+        shell: bash
+
+      - name: Run conan
+        run: |
+          conan install . -s build_type=Release --install-folder=build --build=missing
+        shell: bash
+
+      - name: Configure and build
+        run: |
+          cmake . -A x64 -Bbuild
+          cmake --build build --config Release
+        shell: bash

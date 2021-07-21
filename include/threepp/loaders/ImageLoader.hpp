@@ -2,8 +2,7 @@
 #ifndef THREEPP_IMAGELOADER_HPP
 #define THREEPP_IMAGELOADER_HPP
 
-#include <filesystem>
-
+#include <string>
 #include <threepp/textures/Image.hpp>
 
 namespace threepp {

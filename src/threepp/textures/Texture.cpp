@@ -1,6 +1,8 @@
 
 #include "threepp/textures/Texture.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 void Texture::updateMatrix() {

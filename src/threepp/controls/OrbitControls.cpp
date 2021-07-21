@@ -1,7 +1,10 @@
 
-#include <utility>
-
 #include "threepp/controls/OrbitControls.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
+
+#include <cmath>
+#include <utility>
 
 using namespace threepp;
 
@@ -142,7 +145,7 @@ float OrbitControls::getAutoRotationAngle() const {
 
 float OrbitControls::getZoomScale() const {
 
-    return std::powf(0.95f, this->zoomSpeed);
+    return std::pow(0.95f, this->zoomSpeed);
 }
 
 void OrbitControls::rotateLeft(float angle) {

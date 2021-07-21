@@ -1,6 +1,7 @@
 
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 
+#include <algorithm>
 #include <memory>
 
 using namespace threepp;

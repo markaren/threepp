@@ -2,9 +2,8 @@
 #include "threepp/math/Ray.hpp"
 
 #include "threepp/math/Box3.hpp"
-#include "threepp/math/Plane.hpp"
-#include "threepp/math/Sphere.hpp"
 
+#include <cmath>
 #include <algorithm>
 
 using namespace threepp;
@@ -15,10 +14,6 @@ namespace {
     Vector3 _segCenter;
     Vector3 _segDir;
     Vector3 _diff;
-
-    Vector3 _edge1;
-    Vector3 _edge2;
-    Vector3 _normal;
 
 }// namespace
 
@@ -440,7 +435,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
         return;
     }
 
-    const auto DdE1xQ = sign * this->direction.dot(_edge1.cross(_diff));
+    const auto DdE1xQ = (float) sign * this->direction.dot(_edge1.cross(_diff));
 
     // b2 < 0, no intersection
     if (DdE1xQ < 0) {
@@ -457,7 +452,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
     }
 
     // Line intersects triangle, check if ray does.
-    const auto QdN = -sign * _diff.dot(_normal);
+    const auto QdN = (float) -sign * _diff.dot(_normal);
 
     // t < 0, no intersection
     if (QdN < 0) {

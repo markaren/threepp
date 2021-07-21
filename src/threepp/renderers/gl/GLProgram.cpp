@@ -8,6 +8,7 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#include <cmath>
 #include <iostream>
 #include <regex>
 #include <vector>
@@ -499,7 +500,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
                     customDefines,
 
-                    (parameters.alphaTest != 0) ? "#define ALPHATEST " + std::to_string(parameters.alphaTest) + (!(isnan(std::fmod(parameters.alphaTest, 1.f))) ? "" : ".0") : "",// add ".0" if integer
+                    (parameters.alphaTest != 0) ? "#define ALPHATEST " + std::to_string(parameters.alphaTest) + (!(std::isnan(std::fmod(parameters.alphaTest, 1.f))) ? "" : ".0") : "",// add ".0" if integer
 
                     "#define GAMMA_FACTOR " + std::to_string(gammaFactorDefine),
 
@@ -612,7 +613,6 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
             };
 
             prefixVertex = utils::join(v) + "\n" + prefixVertex;
-
         }
 
         {
@@ -637,7 +637,6 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
             };
 
             prefixFragment = utils::join(v) + "\n" + prefixFragment;
-
         }
     }
 
