@@ -20,7 +20,17 @@ namespace threepp {
         }
 
         Material *material() override {
-            return material_.get();
+            return materials_[0].get();
+        }
+
+        [[nodiscard]] std::vector<std::shared_ptr<Material>> &materials() {
+
+            return materials_;
+        }
+
+        [[nodiscard]] size_t numMaterials() const {
+
+            return materials_.size();
         }
 
         void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
@@ -34,12 +44,12 @@ namespace threepp {
 
     protected:
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-            : geometry_(std::move(geometry)), material_(std::move(material)) {
+            : geometry_(std::move(geometry)), materials_{std::move(material)} {
         }
 
     private:
         std::shared_ptr<BufferGeometry> geometry_;
-        std::shared_ptr<Material> material_;
+        std::vector<std::shared_ptr<Material>> materials_;
     };
 
 }// namespace threepp

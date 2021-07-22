@@ -93,7 +93,7 @@ namespace {
 
 void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {
 
-    if (material_ == nullptr) return;
+    if (material() == nullptr) return;
 
     Sphere _sphere{};
 
@@ -134,35 +134,31 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
 
         // indexed buffer geometry
 
-        if (false /*Array.isArray( material )*/) {
+        if (numMaterials() > 1) {
 
-            //                for ( int i = 0, il = groups.size(); i < il; i ++ ) {
-            //
-            //                    const auto &group = groups[ i ];
-            //                    const auto &groupMaterial = material[ group.materialIndex ];
-            //
-            //                    const auto start = std::max( group.start, drawRange.start );
-            //                    const auto end = std::min( ( group.start + group.count ), ( drawRange.start + drawRange.count ) );
-            //
-            //                    for ( int j = start, jl = end; j < jl; j += 3 ) {
-            //
-            //                        const a = index.getX( j );
-            //                        const b = index.getX( j + 1 );
-            //                        const c = index.getX( j + 2 );
-            //
-            //                        intersection = checkBufferGeometryIntersection( this, groupMaterial, raycaster, _ray, position, morphPosition, morphTargetsRelative, uv, uv2, a, b, c );
-            //
-            //                        if ( intersection ) {
-            //
-            //                            intersection.faceIndex = std::floor( j / 3 ); // triangle number in indexed buffer semantics
-            //                            intersection.face.materialIndex = group.materialIndex;
-            //                            intersects.push( intersection );
-            //
-            //                        }
-            //
-            //                    }
-            //
-            //                }
+            for (auto &group : groups) {
+
+                auto groupMaterial = materials_[group.materialIndex].get();
+
+                const auto start = std::max(group.start, drawRange.start);
+                const auto end = std::min((group.start + group.count), (drawRange.start + drawRange.count));
+
+                for (int j = start, jl = end; j < jl; j += 3) {
+
+                    const auto a = index->getX(j);
+                    const auto b = index->getX(j + 1);
+                    const auto c = index->getX(j + 2);
+
+                    intersection = checkBufferGeometryIntersection(this, groupMaterial, raycaster, _ray, *position, uv, uv2, a, b, c);
+
+                    if (intersection) {
+
+                        intersection->faceIndex = (int) std::floor(j / 3);// triangle number in indexed buffer semantics
+                        intersection->face->materialIndex = group.materialIndex;
+                        intersects.emplace_back(*intersection);
+                    }
+                }
+            }
 
         } else {
 
@@ -189,35 +185,31 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
 
         // non-indexed buffer geometry
 
-        if (false /*Array.isArray( material )*/) {
+        if (numMaterials() > 1) {
 
-            //                for ( int i = 0, il = groups.length; i < il; i ++ ) {
-            //
-            //                    const group = groups[ i ];
-            //                    const groupMaterial = material[ group.materialIndex ];
-            //
-            //                    const start = std::max( group.start, drawRange.start );
-            //                    const end = std::min( ( group.start + group.count ), ( drawRange.start + drawRange.count ) );
-            //
-            //                    for ( let j = start, jl = end; j < jl; j += 3 ) {
-            //
-            //                        const a = j;
-            //                        const b = j + 1;
-            //                        const c = j + 2;
-            //
-            //                        intersection = checkBufferGeometryIntersection( this, groupMaterial, raycaster, _ray, position, morphPosition, morphTargetsRelative, uv, uv2, a, b, c );
-            //
-            //                        if ( intersection ) {
-            //
-            //                            intersection.faceIndex = std::floor( j / 3 ); // triangle number in non-indexed buffer semantics
-            //                            intersection.face.materialIndex = group.materialIndex;
-            //                            intersects.push( intersection );
-            //
-            //                        }
-            //
-            //                    }
-            //
-            //                }
+            for (auto &group : groups) {
+
+                auto groupMaterial = materials_[group.materialIndex].get();
+
+                const auto start = std::max(group.start, drawRange.start);
+                const auto end = std::min((group.start + group.count), (drawRange.start + drawRange.count));
+
+                for (int j = start, jl = end; j < jl; j += 3) {
+
+                    const auto a = j;
+                    const auto b = j + 1;
+                    const auto c = j + 2;
+
+                    intersection = checkBufferGeometryIntersection(this, groupMaterial, raycaster, _ray, *position, uv, uv2, a, b, c);
+
+                    if (intersection) {
+
+                        intersection->faceIndex = (int) std::floor(j / 3);// triangle number in non-indexed buffer semantics
+                        intersection->face->materialIndex = group.materialIndex;
+                        intersects.emplace_back(*intersection);
+                    }
+                }
+            }
 
         } else {
 
