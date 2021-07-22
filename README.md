@@ -14,8 +14,8 @@ however much remains to be done..
 * 2D Textures
 * Transparency
 * OrbitControls
-* AmbientLight  
-* Most materials (but using ambient light for materials that require lights...)
+* AmbientLight, DirectionalLight  
+* Most materials
 * Raycasting against Mesh
 
 

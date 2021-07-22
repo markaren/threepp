@@ -13,11 +13,14 @@ int main() {
 
     auto renderer = GLRenderer(canvas);
     renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color(Color::aliceblue));
     renderer.setSize(canvas.getSize());
 
-    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.75f));
-    scene->add(light);
+    OrbitControls controls{camera, canvas};
+
+    auto directional = DirectionalLight::create(Color(0xffffff).multiplyScalar(0.75f));
+    directional->position.set(100, 100, 100);
+    directional->lookAt(0, 0, 0);
+    scene->add(directional);
 
     auto group = Group::create();
 
@@ -42,25 +45,23 @@ int main() {
     scene->add(group);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->color.setHex(Color::yellow);
-    planeMaterial->transparent = true;
-    planeMaterial->opacity = 0.5f;
+    const auto planeMaterial = MeshLambertMaterial::create();
+    planeMaterial->color.setHex(Color::gray);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setY(-1);
     plane->rotateX(math::degToRad(90));
     scene->add(plane);
 
-    canvas.onWindowResize([&](WindowSize size){
-      camera->aspect = size.getAspect();
-      camera->updateProjectionMatrix();
-      renderer.setSize(size);
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
     });
 
     group->rotation.order(Euler::RotationOrders::YZX);
     canvas.animate([&](float dt) {
-      group->rotation.y(group->rotation.y() + 0.5f * dt);
+        group->rotation.y(group->rotation.y() + 0.5f * dt);
 
         renderer.render(scene, camera);
     });

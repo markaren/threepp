@@ -118,8 +118,8 @@ Box3 &Box3::expandByVector(const Vector3 &vector) {
 
 Box3 &Box3::expandByScalar(float scalar) {
 
-    this->min_.add(-scalar);
-    this->max_.add(scalar);
+    this->min_.addScalar(-scalar);
+    this->max_.addScalar(scalar);
 
     return *this;
 }

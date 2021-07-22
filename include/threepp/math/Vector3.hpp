@@ -43,7 +43,7 @@ namespace threepp {
 
         Vector3 &add(const Vector3 &v);
 
-        Vector3 &add(float s);
+        Vector3 &addScalar(float s);
 
         Vector3 &addVectors(const Vector3 &a, const Vector3 &b);
 
@@ -51,7 +51,7 @@ namespace threepp {
 
         Vector3 &sub(const Vector3 &v);
 
-        Vector3 &sub(float s);
+        Vector3 &subScalar(float s);
 
         Vector3 &subVectors(const Vector3 &a, const Vector3 &b);
 
@@ -77,7 +77,7 @@ namespace threepp {
 
         Vector3 &divide(const Vector3 &v);
 
-        Vector3 &divide(const float &v);
+        Vector3 &divideScalar(const float &v);
 
         Vector3 &min(const Vector3 &v);
 

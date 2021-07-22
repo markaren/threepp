@@ -95,7 +95,7 @@ Vector3 &Vector3::add(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::add(float s) {
+Vector3 &Vector3::addScalar(float s) {
 
     this->x += s;
     this->y += s;
@@ -131,7 +131,7 @@ Vector3 &Vector3::sub(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::sub(float s) {
+Vector3 &Vector3::subScalar(float s) {
 
     this->x -= s;
     this->y -= s;
@@ -259,7 +259,7 @@ Vector3 &Vector3::divide(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::divide(const float &v) {
+Vector3 &Vector3::divideScalar(const float &v) {
     this->x /= v;
     this->y /= v;
     this->z /= v;
@@ -364,7 +364,9 @@ float Vector3::manhattanLength() const {
 Vector3 &Vector3::normalize() {
 
     auto l = length();
-    return divide(std::isnan(l) ? 0 : l);
+    this->divideScalar(std::isnan(l) ? 1 : l);
+
+    return *this;
 }
 
 Vector3 &Vector3::setLength(float length) {

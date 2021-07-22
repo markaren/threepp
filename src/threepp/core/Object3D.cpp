@@ -342,7 +342,7 @@ void Object3D::updateMatrixWorld(bool force) {
 
         if (!this->parent) {
 
-            this->matrixWorld = (this->matrix);
+            this->matrixWorld.copy(this->matrix);
 
         } else {
 

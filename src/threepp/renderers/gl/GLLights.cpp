@@ -75,6 +75,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
             directionalLength++;
         } else if (instanceof <SpotLight>(light)) {
 
+            // TODO
 
         } else if (instanceof <PointLight>(light)) {
 
