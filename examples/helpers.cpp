@@ -43,12 +43,12 @@ int main() {
         renderer.setSize(size);
     });
 
-    arrow->rotation.order(Euler::RotationOrders::ZXY);
-    axes->rotation.order(Euler::RotationOrders::YZX);
+    arrow->rotation.setOrder(Euler::ZXY);
+    axes->rotation.setOrder(Euler::YZX);
     float t = 0;
     canvas.animate([&](float dt) {
-        arrow->rotation.z(arrow->rotation.z() + 0.5f * dt);
-        axes->rotation.y(axes->rotation.y() + 0.5f * dt);
+        arrow->rotation.z += 0.5f * dt;
+        axes->rotation.y += 0.5f * dt;
 
         float sineWave = 0.5f * std::sin(2 * math::PI * 0.1f * t) + 1;
         box.setFromCenterAndSize(

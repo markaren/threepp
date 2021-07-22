@@ -3,8 +3,7 @@
 #ifndef THREEPP_EULER_HPP
 #define THREEPP_EULER_HPP
 
-#include <functional>
-#include <optional>
+#include "float_view.hpp"
 
 namespace threepp {
 
@@ -27,43 +26,18 @@ namespace threepp {
 
         const static RotationOrders default_order = XYZ;
 
+        float_view x;
+        float_view y;
+        float_view z;
+        
         Euler() = default;
 
-        [[nodiscard]] float x() const {
-            return x_;
-        }
+        [[nodiscard]] RotationOrders getOrder() const {
 
-        void x(float value) {
-
-            this->x_ = value;
-            onChangeCallback_();
-        }
-
-        [[nodiscard]] float y() const {
-            return y_;
-        }
-
-        void y(float value) {
-
-            this->y_ = value;
-            onChangeCallback_();
-        }
-
-        [[nodiscard]] float z() const {
-            return z_;
-        }
-
-        void z(float value) {
-
-            this->z_ = value;
-            onChangeCallback_();
-        }
-
-        [[nodiscard]] RotationOrders order() const {
             return order_;
         }
 
-        void order(RotationOrders value) {
+        void setOrder(RotationOrders value) {
 
             this->order_ = value;
             onChangeCallback_();
@@ -82,9 +56,9 @@ namespace threepp {
         template<class ArrayLike>
         Euler &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
-            this->x_ = array[offset];
-            this->y_ = array[offset + 1];
-            this->z_ = array[offset + 2];
+            this->x.value = array[offset];
+            this->y.value = array[offset + 1];
+            this->z.value = array[offset + 2];
 
             this->onChangeCallback_();
 
@@ -94,16 +68,13 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) const {
 
-            array[offset] = this->x_;
-            array[offset + 1] = this->y_;
-            array[offset + 2] = this->z_;
+            array[offset] = this->x();
+            array[offset + 1] = this->y();
+            array[offset + 2] = this->z();
         }
 
 
     private:
-        float x_{0.f};
-        float y_{0.f};
-        float z_{0.f};
         RotationOrders order_ = default_order;
 
         std::function<void()> onChangeCallback_ = [] {};

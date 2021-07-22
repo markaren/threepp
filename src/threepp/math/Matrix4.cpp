@@ -165,7 +165,7 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
     const auto c = std::cos(y), d = std::sin(y);
     const auto e = std::cos(z), f = std::sin(z);
 
-    if (ee.order() == Euler::XYZ) {
+    if (ee.getOrder() == Euler::XYZ) {
 
         const auto ae = a * e, af = a * f, be = b * e, bf = b * f;
 
@@ -181,7 +181,7 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
         te[6] = be + af * d;
         te[10] = a * c;
 
-    } else if (ee.order() == Euler::YXZ) {
+    } else if (ee.getOrder() == Euler::YXZ) {
 
         const auto ce = c * e, cf = c * f, de = d * e, df = d * f;
 
@@ -197,7 +197,7 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
         te[6] = df + ce * b;
         te[10] = a * c;
 
-    } else if (ee.order() == Euler::ZXY) {
+    } else if (ee.getOrder() == Euler::ZXY) {
 
         const auto ce = c * e, cf = c * f, de = d * e, df = d * f;
 
@@ -213,7 +213,7 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
         te[6] = b;
         te[10] = a * c;
 
-    } else if (ee.order() == Euler::ZYX) {
+    } else if (ee.getOrder() == Euler::ZYX) {
 
         const auto ae = a * e, af = a * f, be = b * e, bf = b * f;
 
@@ -229,7 +229,7 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
         te[6] = b * c;
         te[10] = a * c;
 
-    } else if (ee.order() == Euler::YZX) {
+    } else if (ee.getOrder() == Euler::YZX) {
 
         const auto ac = a * c, ad = a * d, bc = b * c, bd = b * d;
 
@@ -245,7 +245,7 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
         te[6] = ad * f + bc;
         te[10] = ac - bd * f;
 
-    } else if (ee.order() == Euler::XZY) {
+    } else if (ee.getOrder() == Euler::XZY) {
 
         const auto ac = a * c, ad = a * d, bc = b * c, bd = b * d;
 

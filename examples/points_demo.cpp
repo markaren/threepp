@@ -54,11 +54,11 @@ int main() {
     scene->add(points);
 
     float time = 0;
-    points->rotation.order(Euler::RotationOrders::YZX);
+    points->rotation.order(Euler::YZX);
     canvas.animate([&](float dt) {
         time += dt;
-        points->rotation.x(time * 0.25f);
-        points->rotation.y(time * 0.5f);
+        points->rotation.x = time * 0.25f;
+        points->rotation.y = time * 0.5f;
 
         renderer.render(scene, camera);
     });

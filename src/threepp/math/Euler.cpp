@@ -20,9 +20,9 @@ namespace {
 
 Euler &Euler::set(float x, float y, float z, const std::optional<RotationOrders> &order) {
 
-    this->x_ = x;
-    this->y_ = y;
-    this->z_ = z;
+    this->x.value = x;
+    this->y.value = y;
+    this->z.value = z;
     this->order_ = order.value_or(this->order_);
 
     this->onChangeCallback_();
@@ -45,102 +45,102 @@ Euler &Euler::setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrde
 
         case XYZ:
 
-            this->y_ = std::asin(std::clamp(m13, -1.0f, 1.0f));
+            this->y.value = std::asin(std::clamp(m13, -1.0f, 1.0f));
 
             if (std::abs(m13) < 0.9999999f) {
 
-                this->x_ = std::atan2(-m23, m33);
-                this->z_ = std::atan2(-m12, m11);
+                this->x.value = std::atan2(-m23, m33);
+                this->z.value = std::atan2(-m12, m11);
 
             } else {
 
-                this->x_ = std::atan2(m32, m22);
-                this->z_ = 0;
+                this->x.value = std::atan2(m32, m22);
+                this->z.value = 0;
             }
 
             break;
 
         case YXZ:
 
-            this->x_ = std::asin(-std::clamp(m23, -1.0f, 1.0f));
+            this->x.value = std::asin(-std::clamp(m23, -1.0f, 1.0f));
 
             if (std::abs(m23) < 0.9999999f) {
 
-                this->y_ = std::atan2(m13, m33);
-                this->z_ = std::atan2(m21, m22);
+                this->y.value = std::atan2(m13, m33);
+                this->z.value = std::atan2(m21, m22);
 
             } else {
 
-                this->y_ = std::atan2(-m31, m11);
-                this->z_ = 0;
+                this->y.value = std::atan2(-m31, m11);
+                this->z.value = 0;
             }
 
             break;
 
         case ZXY:
 
-            this->x_ = std::asin(std::clamp(m32, -1.0f, 1.0f));
+            this->x.value = std::asin(std::clamp(m32, -1.0f, 1.0f));
 
             if (std::abs(m32) < 0.9999999f) {
 
-                this->y_ = std::atan2(-m31, m33);
-                this->z_ = std::atan2(-m12, m22);
+                this->y.value = std::atan2(-m31, m33);
+                this->z.value = std::atan2(-m12, m22);
 
             } else {
 
-                this->y_ = 0;
-                this->z_ = std::atan2(m21, m11);
+                this->y.value = 0;
+                this->z.value = std::atan2(m21, m11);
             }
 
             break;
 
         case ZYX:
 
-            this->y_ = std::asin(-std::clamp(m31, -1.0f, 1.0f));
+            this->y.value = std::asin(-std::clamp(m31, -1.0f, 1.0f));
 
             if (std::abs(m31) < 0.9999999f) {
 
-                this->x_ = std::atan2(m32, m33);
-                this->z_ = std::atan2(m21, m11);
+                this->x.value = std::atan2(m32, m33);
+                this->z.value = std::atan2(m21, m11);
 
             } else {
 
-                this->x_ = 0;
-                this->z_ = std::atan2(-m12, m22);
+                this->x.value = 0;
+                this->z.value = std::atan2(-m12, m22);
             }
 
             break;
 
         case YZX:
 
-            this->z_ = std::asin(std::clamp(m21, -1.0f, 1.0f));
+            this->z.value = std::asin(std::clamp(m21, -1.0f, 1.0f));
 
             if (std::abs(m21) < 0.9999999f) {
 
-                this->x_ = std::atan2(-m23, m22);
-                this->y_ = std::atan2(-m31, m11);
+                this->x.value = std::atan2(-m23, m22);
+                this->y.value = std::atan2(-m31, m11);
 
             } else {
 
-                this->x_ = 0;
-                this->y_ = std::atan2(m13, m33);
+                this->x.value = 0;
+                this->y.value = std::atan2(m13, m33);
             }
 
             break;
 
         case XZY:
 
-            this->z_ = std::asin(-std::clamp(m12, -1.0f, 1.0f));
+            this->z.value = std::asin(-std::clamp(m12, -1.0f, 1.0f));
 
             if (std::abs(m12) < 0.9999999f) {
 
-                this->x_ = std::atan2(m32, m22);
-                this->y_ = std::atan2(m13, m11);
+                this->x.value = std::atan2(m32, m22);
+                this->y.value = std::atan2(m13, m11);
 
             } else {
 
-                this->x_ = std::atan2(-m23, m33);
-                this->y_ = 0;
+                this->x.value = std::atan2(-m23, m33);
+                this->y.value = 0;
             }
 
             break;
@@ -166,6 +166,9 @@ Euler &Euler::setFromVector3(const Vector3 &v, std::optional<RotationOrders> ord
 Euler &Euler::_onChange(std::function<void()> callback) {
 
     this->onChangeCallback_ = std::move(callback);
+    this->x.setCallback(this->onChangeCallback_);
+    this->y.setCallback(this->onChangeCallback_);
+    this->z.setCallback(this->onChangeCallback_);
 
     return *this;
 }

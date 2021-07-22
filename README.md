@@ -99,9 +99,9 @@ int main() {
         renderer.setSize(size);
     });
 
-    group->rotation.order(Euler::RotationOrders::YZX);
+    group->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
-        group->rotation.y(group->rotation.y() + 0.5f * dt);
+        group->rotation.y += 0.5f * dt;
 
         renderer.render(scene, camera);
     });

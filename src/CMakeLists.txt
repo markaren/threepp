@@ -66,6 +66,7 @@ set(publicHeaders
         "threepp/math/Color.hpp"
         "threepp/math/Cylindrical.hpp"
         "threepp/math/Euler.hpp"
+        "threepp/math/float_view.hpp"
         "threepp/math/Frustum.hpp"
         "threepp/math/Line3.hpp"
         "threepp/math/MathUtils.hpp"

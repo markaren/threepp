@@ -48,10 +48,10 @@ int main() {
       renderer.setSize(size);
     });
 
-    box->rotation.order(Euler::RotationOrders::YZX);
+    box->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
-        box->rotation.y(box->rotation.y() + 0.5f * dt);
-        scene->rotation.x(scene->rotation.x() + 1.f * dt);
+        box->rotation.y +=  0.5f * dt;
+        scene->rotation.x += 1.f * dt;
 
         renderer.render(scene, camera);
     });

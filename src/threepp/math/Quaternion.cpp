@@ -54,7 +54,7 @@ Quaternion &Quaternion::copy(const Quaternion &quaternion) {
 
 Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
 
-    const auto x = euler.x_, y = euler.y_, z = euler.z_;
+    const auto x = euler.x(), y = euler.y(), z = euler.z();
     const auto order = euler.order_;
 
     // http://www.mathworks.com/matlabcentral/fileexchange/
