@@ -43,7 +43,7 @@ namespace threepp {
         }
 
         float_view &operator-=(float f) {
-            value += f;
+            value -= f;
             if (f_) f_.value()();
             return *this;
         }
