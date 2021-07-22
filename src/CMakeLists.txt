@@ -149,6 +149,7 @@ set(privateHeaders
         "threepp/renderers/shaders/UniformsUtil.hpp"
 
         "threepp/utils/InstanceOf.hpp"
+        "threepp/utils/regex_util.hpp"
         "threepp/utils/StringUtils.hpp"
 
         )

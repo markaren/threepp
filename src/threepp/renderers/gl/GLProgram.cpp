@@ -7,10 +7,10 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
+#include "threepp/utils/regex_util.hpp"
 
 #include <cmath>
 #include <iostream>
-#include <regex>
 #include <vector>
 
 using namespace threepp;
@@ -52,6 +52,22 @@ namespace {
                 std::cerr << "THREE.WebGLProgram: Unsupported encoding:" << encoding << std::endl;
                 return {"Linear", "( value )"};
         }
+    }
+
+    std::string loopReplacer(const std::smatch &match) {
+
+        std::string s;
+
+        auto start = std::atoi(match[1].str().c_str());
+        auto end = std::atoi(match[2].str().c_str());
+
+        for (int i = start; i < end; i++) {
+
+            s += std::regex_replace(match[3].str(), std::regex("\\[\\s*i\\s*\\]"), "[ " + std::to_string(i) + " ]");
+            s = std::regex_replace(s, std::regex("UNROLLED_LOOP_INDEX"), std::to_string(i));
+        }
+
+        return s;
     }
 
     std::string getTexelDecodingFunction(const std::string &functionName, int encoding) {
@@ -205,9 +221,9 @@ namespace {
 
     std::string unrollLoops(const std::string &glsl) {
 
-        //TODO
+        static const std::regex rex("#pragma unroll_loop_start\\s+for\\s*\\(\\s*int\\s+i\\s*=\\s*(\\d+)\\s*;\\s*i\\s*<\\s*(\\d+)\\s*;\\s*i\\s*\\+\\+\\s*\\)\\s*\\{([\\s\\S]+?)\\}\\s+#pragma unroll_loop_end");
 
-        return glsl;
+        return regex_replace(glsl, rex, loopReplacer);
     }
 
     std::string generatePrecision() {
