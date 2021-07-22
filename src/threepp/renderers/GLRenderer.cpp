@@ -786,7 +786,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
 
             needsProgramChange = true;
 
-        } else if (isInstancedMesh && materialProperties.instancing) {
+        } else if (isInstancedMesh && !materialProperties.instancing) {
 
             needsProgramChange = true;
 
