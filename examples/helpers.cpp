@@ -25,6 +25,9 @@ int main() {
     axes->position.setX(-0.5f);
     scene->add(axes);
 
+    const auto grid = GridHelper::create(5);
+    scene->add(grid);
+
     Box3 box({-1, -1, -1}, {1, 1, 1});
     const auto boxHelper = Box3Helper::create(box);
     boxHelper->position.setY(1);

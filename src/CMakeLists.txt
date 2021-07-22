@@ -40,6 +40,7 @@ set(publicHeaders
         "threepp/helpers/AxesHelper.hpp"
         "threepp/helpers/ArrowHelper.hpp"
         "threepp/helpers/Box3Helper.hpp"
+        "threepp/helpers/GridHelper.hpp"
         "threepp/helpers/PlaneHelper.hpp"
 
         "threepp/loaders/ImageLoader.hpp"
