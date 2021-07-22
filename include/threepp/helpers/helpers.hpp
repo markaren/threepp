@@ -5,6 +5,7 @@
 #include "AxesHelper.hpp"
 #include "ArrowHelper.hpp"
 #include "Box3Helper.hpp"
+#include "DirectionalLightHelper.hpp"
 #include "GridHelper.hpp"
 #include "PlaneHelper.hpp"
 

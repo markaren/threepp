@@ -186,10 +186,6 @@ namespace threepp::gl {
         ShadowUniformsCache shadowCache_;
 
         unsigned int nextVersion = 0;
-
-        Vector3 vector3;
-        Matrix4 matrix4;
-        Matrix4 matrix42;
     };
 
 }// namespace threepp::gl

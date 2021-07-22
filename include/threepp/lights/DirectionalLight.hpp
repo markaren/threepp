@@ -20,6 +20,7 @@ namespace threepp {
 
         template<class T>
         static std::shared_ptr<DirectionalLight> create(T color, std::optional<float> intensity = std::nullopt) {
+
             return std::shared_ptr<DirectionalLight>(new DirectionalLight(color, intensity));
         }
 

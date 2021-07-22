@@ -17,9 +17,8 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto directional = DirectionalLight::create(Color(0xffffff).multiplyScalar(0.75f));
-    directional->position.set(100, 100, 100);
-    directional->lookAt(0, 0, 0);
+    auto directional = DirectionalLight::create(0xffffff);
+    directional->position.set(10, 10, 10);
     scene->add(directional);
 
     auto group = Group::create();
