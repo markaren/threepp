@@ -237,19 +237,18 @@ int main() {
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
-    canvas.onWindowResize([&](WindowSize size){
+    canvas.onWindowResize([&](WindowSize size) {
         renderer.setSize(size);
-      material->uniforms->operator[]("iResolution").value<Vector2>().set(size.width, size.height);
+        material->uniforms->operator[]("iResolution").value<Vector2>().set(size.width, size.height);
     });
 
     float value = 0.f;
-    mesh->rotation.order(Euler::RotationOrders::YZX);
+    mesh->rotation.setOrder(Euler::RotationOrders::YZX);
     canvas.animate([&](float dt) {
         value += 1 * dt;
-        mesh->rotation.y(value);
+        mesh->rotation.y = value;
         material->uniforms->operator[]("iTime").setValue(value);
 
         renderer.render(scene, camera);
     });
-
 }

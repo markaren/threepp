@@ -88,10 +88,10 @@ int main() {
     });
 
     float value = 0.f;
-    mesh->rotation.order(Euler::RotationOrders::YZX);
+    mesh->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         value += 0.005f ;
-        mesh->rotation.y(value);
+        mesh->rotation.y = value;
         material->uniforms->operator[]("time").setValue(value * 10);
 
         renderer.render(scene, camera);

@@ -49,8 +49,8 @@ int main() {
         renderer.setSize(size);
     });
 
-    box->rotation.order(Euler::RotationOrders::YZX);
-    sphere->rotation.order(Euler::RotationOrders::YZX);
+    box->rotation.setOrder(Euler::YZX);
+    sphere->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         box->rotation.y += 0.5f * dt;
         sphere->rotation.y += 0.5f * dt;
