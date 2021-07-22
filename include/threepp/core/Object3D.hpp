@@ -37,7 +37,7 @@ namespace threepp {
         std::string name;
 
         Object3D *parent = nullptr;
-        std::vector<Object3D*> children;
+        std::vector<std::shared_ptr<Object3D>> children;
 
         Vector3 up = defaultUp;
 
@@ -102,17 +102,9 @@ namespace threepp {
 
         void lookAt(float x, float y, float z);
 
-        Object3D &add(const std::shared_ptr<Object3D> &object) {
+        Object3D &add(const std::shared_ptr<Object3D> &object);
 
-            return add(object.get());
-        }
-
-        Object3D &add(Object3D *object);
-
-        Object3D &remove(const std::shared_ptr<Object3D> &object) {
-
-            return remove(object.get());
-        }
+        Object3D &remove(const std::shared_ptr<Object3D> &object);
 
         Object3D &remove(Object3D *object);
 

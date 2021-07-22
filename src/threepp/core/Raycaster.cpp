@@ -30,7 +30,7 @@ namespace {
 
             for (auto &child : children) {
 
-                intersectObject(child, raycaster, intersects, true);
+                intersectObject(child.get(), raycaster, intersects, true);
             }
         }
     }
@@ -56,13 +56,13 @@ std::vector<Intersection> Raycaster::intersectObject(Object3D *object, bool recu
     return intersects;
 }
 
-std::vector<Intersection> Raycaster::intersectObjects(std::vector<Object3D *> &objects, bool recursive) {
+std::vector<Intersection> Raycaster::intersectObjects(std::vector<std::shared_ptr<Object3D>> &objects, bool recursive) {
 
     std::vector<Intersection> intersects;
 
     for (auto &object : objects) {
 
-        ::intersectObject(object, *this, intersects, recursive);
+        ::intersectObject(object.get(), *this, intersects, recursive);
     }
 
     std::stable_sort(intersects.begin(), intersects.end(), &ascSort);
