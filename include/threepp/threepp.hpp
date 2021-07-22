@@ -18,6 +18,7 @@
 #include "threepp/core/Object3D.hpp"
 
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Group.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 

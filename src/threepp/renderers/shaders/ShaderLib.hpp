@@ -246,7 +246,7 @@ namespace threepp::shaders {
 
         Shader physical{
                 mergeUniforms({// clang-format off
-                                      *standard.uniforms,
+                                      standard.uniforms,
                                       UniformMap{
                                               {"clearcoat", Uniform(0.f)},
                                               {"clearcoatMap", Uniform()},

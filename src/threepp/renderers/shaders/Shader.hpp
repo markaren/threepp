@@ -11,7 +11,7 @@ namespace threepp::shaders {
 
     struct Shader {
 
-        std::shared_ptr<UniformMap> uniforms;
+        UniformMap uniforms;
         std::string vertexShader;
         std::string fragmentShader;
 

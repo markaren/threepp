@@ -16,14 +16,30 @@ int main() {
     renderer.setClearColor(Color(Color::aliceblue));
     renderer.setSize(canvas.getSize());
 
-    auto light = AmbientLight::create(0xffffff);
+    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.75f));
     scene->add(light);
 
-    const auto boxGeometry = BoxGeometry::create();
-    const auto boxMaterial = MeshPhongMaterial::create();
-    boxMaterial->color.setHex(0xff0000);
-    auto box = Mesh::create(boxGeometry, boxMaterial);
-    scene->add(box);
+    auto group = Group::create();
+
+    {
+        const auto boxGeometry = BoxGeometry::create();
+        const auto boxMaterial = MeshPhongMaterial::create();
+        boxMaterial->color.setHex(0xff0000);
+        auto box = Mesh::create(boxGeometry, boxMaterial);
+        box->position.setX(-1);
+        group->add(box);
+    }
+
+    {
+        const auto boxGeometry = BoxGeometry::create();
+        const auto boxMaterial = MeshPhongMaterial::create();
+        boxMaterial->color.setHex(0x00ff00);
+        auto box = Mesh::create(boxGeometry, boxMaterial);
+        box->position.setX(1);
+        group->add(box);
+    }
+
+    scene->add(group);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create();
@@ -42,9 +58,9 @@ int main() {
       renderer.setSize(size);
     });
 
-    box->rotation.order(Euler::RotationOrders::YZX);
+    group->rotation.order(Euler::RotationOrders::YZX);
     canvas.animate([&](float dt) {
-        box->rotation.y(box->rotation.y() + 0.5f * dt);
+      group->rotation.y(group->rotation.y() + 0.5f * dt);
 
         renderer.render(scene, camera);
     });

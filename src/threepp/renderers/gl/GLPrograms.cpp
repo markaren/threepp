@@ -98,7 +98,7 @@ std::shared_ptr<UniformMap> GLPrograms::getUniforms(Material *material) {
         auto shaderID = shaderIDs.at(material->type());
 
         auto shader = shaders::ShaderLib::instance().get(shaderID);
-        uniforms = shader.uniforms;
+        uniforms = std::make_shared<UniformMap>(shader.uniforms);
 
     } else {
 

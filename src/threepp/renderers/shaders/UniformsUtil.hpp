@@ -11,15 +11,15 @@
 
 namespace threepp::shaders {
 
-    inline std::shared_ptr<UniformMap> mergeUniforms(const std::vector<UniformMap> &uniforms) {
+    inline UniformMap mergeUniforms(const std::vector<UniformMap> &uniforms) {
 
-        auto merged = std::make_shared<UniformMap>();
+        auto merged = UniformMap();
 
         for (const auto &u : uniforms) {
 
             for (const auto &[key, value] : u) {
 
-                merged->operator[](key) = value;
+                merged[key] = value;
             }
         }
 
