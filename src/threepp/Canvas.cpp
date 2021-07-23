@@ -1,14 +1,13 @@
 
 #include "threepp/Canvas.hpp"
 
-#include "threepp/math/Vector2.hpp"
-
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
 
+#include "threepp/loaders/stb.hpp"
+
 #include <optional>
-#include <utility>
 
 using namespace threepp;
 
@@ -34,6 +33,12 @@ public:
             glfwTerminate();
             exit(EXIT_FAILURE);
         }
+
+        GLFWimage images[1];
+        auto favicon = stb_load("favicon.bmp", 4);
+        images[0] = {favicon.width, favicon.height, favicon.pixels};
+        glfwSetWindowIcon(window, 1, images);
+        delete favicon.pixels;
 
         glfwSetWindowUserPointer(window, this);
 
@@ -114,6 +119,7 @@ public:
 
 private:
     GLFWwindow *window;
+    std::unique_ptr<unsigned char> favicon_data;
 
     WindowSize size_;
     Vector2 lastMousePos{};

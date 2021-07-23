@@ -120,6 +120,8 @@ endforeach ()
 
 set(privateHeaders
 
+        "threepp/loaders/stb.hpp"
+
         "threepp/renderers/gl/GLAttributes.hpp"
         "threepp/renderers/gl/GLBackground.hpp"
         "threepp/renderers/gl/GLBindingStates.hpp"
@@ -176,6 +178,7 @@ set(sources
 
         "threepp/helpers/ArrowHelper.cpp"
 
+        "threepp/loaders/stb.cpp"
         "threepp/loaders/ImageLoader.cpp"
 
         "threepp/math/Box2.cpp"
