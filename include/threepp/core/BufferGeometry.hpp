@@ -53,6 +53,8 @@ namespace threepp {
             return dynamic_cast<TypedBufferAttribute<T> *>(attributes_.at(name).get());
         }
 
+        [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &getAttributes() const;
+
         void setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute);
 
         bool hasAttribute(const std::string &name);
@@ -83,7 +85,9 @@ namespace threepp {
 
         void computeBoundingSphere();
 
-        [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &getAttributes() const;
+        void normalizeNormals();
+
+        void dispose();
 
         static std::shared_ptr<BufferGeometry> create() {
             return std::make_shared<BufferGeometry>();

@@ -5,16 +5,6 @@
 
 using namespace threepp;
 
-namespace {
-
-    Matrix4 _m1{};
-    Vector3 _offset{};
-    Box3 _box{};
-    Vector3 _vector{};
-
-}// namespace
-
-
 bool BufferGeometry::hasIndex() const {
 
     return index_ != nullptr;
@@ -39,6 +29,10 @@ BufferGeometry &BufferGeometry::setIndex(std::unique_ptr<IntBufferAttribute> ind
     this->index_ = std::move(index);
 
     return *this;
+}
+
+const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &BufferGeometry::getAttributes() const {
+    return attributes_;
 }
 
 void BufferGeometry::setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute) {
@@ -117,6 +111,7 @@ BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
 
 BufferGeometry &BufferGeometry::applyQuaternion(const Quaternion &q) {
 
+    Matrix4 _m1{};
     _m1.makeRotationFromQuaternion(q);
 
     this->applyMatrix4(_m1);
@@ -128,6 +123,7 @@ BufferGeometry &BufferGeometry::rotateX(float angle) {
 
     // rotate geometry around world x-axis
 
+    Matrix4 _m1{};
     _m1.makeRotationX(angle);
 
     this->applyMatrix4(_m1);
@@ -139,6 +135,7 @@ BufferGeometry &BufferGeometry::rotateY(float angle) {
 
     // rotate geometry around world y-axis
 
+    Matrix4 _m1{};
     _m1.makeRotationY(angle);
 
     this->applyMatrix4(_m1);
@@ -150,6 +147,7 @@ BufferGeometry &BufferGeometry::rotateZ(float angle) {
 
     // rotate geometry around world z-axis
 
+    Matrix4 _m1{};
     _m1.makeRotationZ(angle);
 
     this->applyMatrix4(_m1);
@@ -160,6 +158,7 @@ BufferGeometry &BufferGeometry::translate(float x, float y, float z) {
 
     // translate geometry
 
+    Matrix4 _m1{};
     _m1.makeTranslation(x, y, z);
 
     this->applyMatrix4(_m1);
@@ -170,6 +169,7 @@ BufferGeometry &BufferGeometry::scale(float x, float y, float z) {
 
     // scale geometry
 
+    Matrix4 _m1{};
     _m1.makeScale(x, y, z);
 
     this->applyMatrix4(_m1);
@@ -180,6 +180,7 @@ BufferGeometry &BufferGeometry::center() {
 
     this->computeBoundingBox();
 
+    Vector3 _offset{};
     this->boundingBox->getCenter(_offset);
     _offset.negate();
 
@@ -225,6 +226,7 @@ void BufferGeometry::computeBoundingSphere() {
 
         auto center = this->boundingSphere->center;
 
+        Box3 _box{};
         position->setFromBufferAttribute(_box);
 
         // process morph attributes if present
@@ -238,6 +240,7 @@ void BufferGeometry::computeBoundingSphere() {
 
         for (auto i = 0, il = position->count(); i < il; i++) {
 
+            Vector3 _vector{};
             position->setFromBufferAttribute(_vector, i);
 
             maxRadiusSq = std::max(maxRadiusSq, center.distanceToSquared(_vector));
@@ -252,6 +255,22 @@ void BufferGeometry::computeBoundingSphere() {
     }
 }
 
-const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &BufferGeometry::getAttributes() const {
-    return attributes_;
+void BufferGeometry::normalizeNormals() {
+
+    auto normals = getAttribute<float>("normal");
+
+    Vector3 _vector{};
+    for (int i = 0, il = normals->count(); i < il; i++) {
+
+        normals->setFromBufferAttribute(_vector, i);
+
+        _vector.normalize();
+
+        normals->setXYZ(i, _vector.x, _vector.y, _vector.z);
+    }
+}
+
+void BufferGeometry::dispose() {
+
+    this->dispatchEvent("dispose", this);
 }
