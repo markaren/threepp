@@ -20,11 +20,12 @@ namespace threepp {
 
             } else {
 
+                auto m = dynamic_cast<MaterialWithColor *>(this->material());
                 dynamic_cast<MaterialWithColor *>(this->material())->color.copy(this->light->color);
             }
         }
 
-        static std::shared_ptr<PointLightHelper> create(const std::shared_ptr<PointLight> &light, float sphereSize, std::optional<unsigned int> color) {
+        static std::shared_ptr<PointLightHelper> create(const std::shared_ptr<PointLight> &light, float sphereSize, std::optional<unsigned int> color = std::nullopt) {
 
             return std::shared_ptr<PointLightHelper>(new PointLightHelper(light, sphereSize, color));
         }
@@ -42,7 +43,7 @@ namespace threepp {
             material->wireframe = true;
             material->fog = false;
             material->toneMapped = false;
-            this->materials_.emplace_back(std::move(material));
+            this->materials_[0] = std::move(material);
 
             this->matrixAutoUpdate = false;
 

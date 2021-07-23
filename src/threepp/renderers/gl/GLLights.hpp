@@ -60,7 +60,6 @@ namespace threepp::gl {
 
                 uniforms = {
                         {"position", Vector3()},
-                        {"direction", Vector3()},
                         {"color", Color()},
                         {"distance", 0.f},
                         {"decay", 0.f}};

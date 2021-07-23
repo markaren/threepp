@@ -12,26 +12,32 @@ namespace threepp {
     class PointLight : public Light {
 
     public:
-
         float distance;
         float decay;
 
         PointLightShadow shadow;
 
-        float getPower() const;
+        [[nodiscard]] float getPower() const;
 
         void setPower(float power);
 
         void dispose() override;
 
+        [[nodiscard]] std::string type() const override {
+
+            return "PointLight";
+        }
+
         template<class T>
         static std::shared_ptr<PointLight> create(T color, std::optional<float> intensity = std::nullopt, float distance = 0, float decay = 1) {
+
             return std::shared_ptr<PointLight>(new PointLight(color, intensity, distance, decay));
         }
 
     protected:
         template<class T>
-        PointLight(T color, std::optional<float> intensity, float distance, float decay);
+        PointLight(T color, std::optional<float> intensity, float distance, float decay)
+            : Light(color, intensity), distance(distance), decay(decay) {}
     };
 
 }// namespace threepp

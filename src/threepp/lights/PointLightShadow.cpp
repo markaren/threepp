@@ -48,8 +48,6 @@ void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
     auto camera = this->camera;
     auto shadowMatrix = this->matrix;
 
-    // TODO
-
     auto far = light->distance > 0 ? light->distance : camera->far;
 
     if (far != camera->far) {
@@ -58,9 +56,11 @@ void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
         camera->updateProjectionMatrix();
     }
 
+    Vector3 _lightPositionWorld{};
     _lightPositionWorld.setFromMatrixPosition(light->matrixWorld);
     camera->position.copy(_lightPositionWorld);
 
+    Vector3 _lookTarget{};
     _lookTarget.copy(camera->position);
     _lookTarget.add(this->_cubeDirections[viewportIndex]);
     camera->up.copy(this->_cubeUps[viewportIndex]);
@@ -69,6 +69,7 @@ void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
 
     shadowMatrix.makeTranslation(-_lightPositionWorld.x, -_lightPositionWorld.y, -_lightPositionWorld.z);
 
+    Matrix4 _projScreenMatrix{};
     _projScreenMatrix.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
     this->_frustum.setFromProjectionMatrix(_projScreenMatrix);
 }

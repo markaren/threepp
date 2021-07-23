@@ -99,6 +99,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 shadowUniforms["shadowCameraNear"] = shadow.camera->near;
                 shadowUniforms["shadowCameraFar"] = shadow.camera->far;
 
+                state.pointShadow.resize(pointLength+1);
                 state.pointShadow[pointLength] = shadowUniforms;
                 //                state.pointShadowMap[ pointLength ] = shadowMap;
                 //                state.pointShadowMatrix[ pointLength ] = light.shadow.matrix;
@@ -106,6 +107,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 numPointShadows++;
             }
 
+            state.point.resize(pointLength+1);
             state.point[pointLength] = uniforms;
 
             pointLength++;
@@ -197,7 +199,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
         } else if (instanceof <PointLight>(light)) {
 
-            auto &uniforms = state.spot.at(pointLength);
+            auto &uniforms = state.point.at(pointLength);
 
             auto &position = std::get<Vector3>(uniforms.at("position"));
 

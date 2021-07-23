@@ -17,8 +17,12 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.5f));
+    auto light = DirectionalLight::create(0xffffff);
+    light->position.set(1, 1, 1);
     scene->add(light);
+
+    auto helper = DirectionalLightHelper::create(light);
+    light->add(helper);
 
     auto group = Group::create();
 

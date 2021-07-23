@@ -15,4 +15,5 @@ target_link_libraries(points_demo PUBLIC threepp)
 
 add_subdirectory(materials)
 add_subdirectory(shaders)
+add_subdirectory(lights)
 add_subdirectory(misc)

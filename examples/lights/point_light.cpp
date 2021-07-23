@@ -1,5 +1,5 @@
 
-#include "threepp/threepp.hpp"
+#include <threepp/threepp.hpp>
 
 using namespace threepp;
 
@@ -17,8 +17,12 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.5f));
+    auto light = PointLight::create(0xffffff);
+    light->position.set(0, 0.5, 0);
     scene->add(light);
+
+    auto helper = PointLightHelper::create(light, 0.25f);
+    light->add(helper);
 
     auto group = Group::create();
 
@@ -52,15 +56,15 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
-        renderer.setSize(size);
+      camera->aspect = size.getAspect();
+      camera->updateProjectionMatrix();
+      renderer.setSize(size);
     });
 
     group->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
-        group->rotation.y += 0.5f * dt;
+      group->rotation.y += 0.5f * dt;
 
-        renderer.render(scene, camera);
+      renderer.render(scene, camera);
     });
 }

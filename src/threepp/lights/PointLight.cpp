@@ -5,10 +5,6 @@
 
 using namespace threepp;
 
-template<class T>
-PointLight::PointLight(T color, std::optional<float> intensity, float distance, float decay)
-    : Light(color, intensity), distance(distance), decay(decay) {}
-
 float PointLight::getPower() const {
 
     // intensity = power per solid angle.

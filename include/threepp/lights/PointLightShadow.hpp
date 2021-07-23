@@ -13,7 +13,7 @@ namespace threepp {
 
     public:
 
-        explicit PointLightShadow();
+        PointLightShadow();
 
         void updateMatrices(PointLight *light, int viewportIndex = 0);
 

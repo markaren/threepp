@@ -46,21 +46,24 @@ namespace threepp {
             const auto &shadowCamera = this->camera;
             auto &shadowMatrix = this->matrix;
 
+            Vector3 _lightPositionWorld{};
             _lightPositionWorld.setFromMatrixPosition(light.matrixWorld);
             shadowCamera->position.copy(_lightPositionWorld);
 
+            Vector3 _lookTarget{};
             _lookTarget.setFromMatrixPosition(target.matrixWorld);
             shadowCamera->lookAt(_lookTarget);
             shadowCamera->updateMatrixWorld();
 
+            Matrix4 _projScreenMatrix{};
             _projScreenMatrix.multiplyMatrices(shadowCamera->projectionMatrix, shadowCamera->matrixWorldInverse);
             this->_frustum.setFromProjectionMatrix(_projScreenMatrix);
 
             shadowMatrix.set(
-                    0.5, 0.0, 0.0, 0.5,
-                    0.0, 0.5, 0.0, 0.5,
-                    0.0, 0.0, 0.5, 0.5,
-                    0.0, 0.0, 0.0, 1.0);
+                    0.5f, 0.0f, 0.0f, 0.5f,
+                    0.0f, 0.5f, 0.0f, 0.5f,
+                    0.0f, 0.0f, 0.5f, 0.5f,
+                    0.0f, 0.0f, 0.0f, 1.0f);
 
             shadowMatrix.multiply(shadowCamera->projectionMatrix);
             shadowMatrix.multiply(shadowCamera->matrixWorldInverse);
@@ -104,9 +107,6 @@ namespace threepp {
 
         std::vector<Vector4> _viewports{Vector4(0, 0, 1, 1)};
 
-        static Matrix4 _projScreenMatrix;
-        static Vector3 _lightPositionWorld;
-        static Vector3 _lookTarget;
     };
 
 }// namespace threepp
