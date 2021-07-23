@@ -14,7 +14,7 @@ however much remains to be done..
 * 2D Textures
 * Transparency
 * OrbitControls
-* AmbientLight, DirectionalLight  
+* AmbientLight, DirectionalLight, PointLight  
 * Most materials
 * Raycasting against Mesh
 
@@ -34,7 +34,7 @@ With conan installed, invoke `run_conan_install.sh`.
 
 _note that this command is hardcoded to use the default CLion build folders (cmake-build-\<target>)_
 
-You can now build the project as a regular CMake project using e.g. the command line.
+You can now build the project as a regular CMake project using e.g., the command line.
 
 ### Example
 
@@ -57,10 +57,8 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto directional = DirectionalLight::create(Color(0xffffff).multiplyScalar(0.75f));
-    directional->position.set(100, 100, 100);
-    directional->lookAt(0, 0, 0);
-    scene->add(directional);
+    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.75f));
+    scene->add(light);
 
     auto group = Group::create();
 
