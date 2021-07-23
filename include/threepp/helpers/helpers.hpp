@@ -8,5 +8,6 @@
 #include "DirectionalLightHelper.hpp"
 #include "GridHelper.hpp"
 #include "PlaneHelper.hpp"
+#include "PointLightHelper.hpp"
 
 #endif//THREEPP_HELPERS_HPP

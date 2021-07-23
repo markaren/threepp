@@ -43,13 +43,14 @@ namespace threepp {
         }
 
     protected:
+
+        std::shared_ptr<BufferGeometry> geometry_;
+        std::vector<std::shared_ptr<Material>> materials_;
+
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
             : geometry_(std::move(geometry)), materials_{std::move(material)} {
         }
 
-    private:
-        std::shared_ptr<BufferGeometry> geometry_;
-        std::vector<std::shared_ptr<Material>> materials_;
     };
 
 }// namespace threepp

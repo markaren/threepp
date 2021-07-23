@@ -43,6 +43,7 @@ set(publicHeaders
         "threepp/helpers/DirectionalLightHelper.hpp"
         "threepp/helpers/GridHelper.hpp"
         "threepp/helpers/PlaneHelper.hpp"
+        "threepp/helpers/PointLightHelper.hpp"
 
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
