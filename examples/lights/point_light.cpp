@@ -19,7 +19,7 @@ int main() {
 
     auto light = PointLight::create(0xffffff);
     light->distance = 10;
-    light->position.set(0, 0.5, 0);
+    light->position.set(0, 1, 0);
     scene->add(light);
 
     auto helper = PointLightHelper::create(light, 0.25f);

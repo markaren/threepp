@@ -54,7 +54,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 auto l = dynamic_cast<DirectionalLight *>(light);
                 auto shadow = l->shadow;
 
-                auto shadowUniforms = shadowCache_.get(*light);
+                auto &shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms["shadowBias"] = shadow->bias;
                 shadowUniforms["shadowNormalBias"] = shadow->normalBias;
@@ -84,7 +84,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 auto l = dynamic_cast<SpotLight *>(light);
                 auto shadow = l->shadow;
 
-                auto shadowUniforms = shadowCache_.get(*light);
+                auto &shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms["shadowBias"] = shadow->bias;
                 shadowUniforms["shadowNormalBias"] = shadow->normalBias;
@@ -117,7 +117,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
 
             if (light->castShadow) {
 
-                auto shadowUniforms = shadowCache_.get(*light);
+                auto &shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms["shadowBias"] = shadow->bias;
                 shadowUniforms["shadowNormalBias"] = shadow->normalBias;

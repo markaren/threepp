@@ -98,7 +98,9 @@ void PerspectiveCamera::updateProjectionMatrix() {
     }
 
     const auto skew = this->filmOffset;
-    if (skew != 0) left += (near * skew / this->getFilmWidth());
+    if (skew != 0) {
+        left += (near * skew / this->getFilmWidth());
+    }
 
     this->projectionMatrix.makePerspective(left, (left + width), top, (top - height), near, far);
 
