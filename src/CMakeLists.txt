@@ -44,6 +44,7 @@ set(publicHeaders
         "threepp/helpers/GridHelper.hpp"
         "threepp/helpers/PlaneHelper.hpp"
         "threepp/helpers/PointLightHelper.hpp"
+        "threepp/helpers/SpotLightHelper.hpp"
 
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
@@ -108,6 +109,7 @@ set(publicHeaders
         "threepp/lights/PointLight.hpp"
         "threepp/lights/PointLightShadow.hpp"
         "threepp/lights/SpotLight.hpp"
+        "threepp/lights/SpotLightShadow.hpp"
 
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
@@ -205,6 +207,8 @@ set(sources
 
         "threepp/lights/PointLight.cpp"
         "threepp/lights/PointLightShadow.cpp"
+        "threepp/lights/SpotLight.cpp"
+        "threepp/lights/SpotLightShadow.cpp"
 
         "threepp/objects/Mesh.cpp"
 

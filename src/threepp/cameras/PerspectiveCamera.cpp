@@ -81,7 +81,7 @@ void PerspectiveCamera::clearViewOffset() {
 
 void PerspectiveCamera::updateProjectionMatrix() {
 
-    float top = (near * std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom);
+    float top = near * std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom;
     float height = 2.f * top;
     float width = this->aspect * height;
     float left = -0.5f * width;

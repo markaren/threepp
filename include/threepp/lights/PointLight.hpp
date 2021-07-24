@@ -4,27 +4,20 @@
 #define THREEPP_POINTLIGHT_HPP
 
 #include "threepp/lights/Light.hpp"
-#include "threepp/lights/LightWithShadow.hpp"
 #include "threepp/lights/PointLightShadow.hpp"
+#include "threepp/lights/light_interfaces.hpp"
 
 namespace threepp {
 
-    class PointLight : public Light, public LightWithShadow {
+    class PointLight : public Light, public LightWithShadow<PointLightShadow> {
 
     public:
         float distance;
         float decay;
 
-        std::shared_ptr<PointLightShadow> shadow;
-
         [[nodiscard]] float getPower() const;
 
         void setPower(float power);
-
-        LightShadow *getLightShadow() override {
-
-            return shadow.get();
-        }
 
         void dispose() override;
 
@@ -42,7 +35,7 @@ namespace threepp {
     protected:
         template<class T>
         PointLight(T color, std::optional<float> intensity, float distance, float decay)
-            : Light(color, intensity), distance(distance), decay(decay) {}
+            : Light(color, intensity), LightWithShadow(PointLightShadow::create()), distance(distance), decay(decay) {}
     };
 
 }// namespace threepp

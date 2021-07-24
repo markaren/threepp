@@ -9,5 +9,6 @@
 #include "GridHelper.hpp"
 #include "PlaneHelper.hpp"
 #include "PointLightHelper.hpp"
+#include "SpotLightHelper.hpp"
 
 #endif//THREEPP_HELPERS_HPP

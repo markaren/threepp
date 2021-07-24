@@ -45,6 +45,7 @@ namespace threepp {
             material->toneMapped = false;
             this->materials_[0] = std::move(material);
 
+            this->matrix.copy(this->light->matrixWorld);
             this->matrixAutoUpdate = false;
 
             update();

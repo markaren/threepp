@@ -30,16 +30,16 @@ namespace threepp {
     public:
         inline static Vector3 defaultUp{0,1,0};
 
-        const unsigned int id = _object3Did++;
+        const unsigned int id{_object3Did++};
 
-        const std::string uuid = utils::generateUUID();
+        const std::string uuid{utils::generateUUID()};
 
         std::string name;
 
         Object3D *parent = nullptr;
         std::vector<std::shared_ptr<Object3D>> children;
 
-        Vector3 up = defaultUp;
+        Vector3 up{defaultUp};
 
         Vector3 position;
         Euler rotation;

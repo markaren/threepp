@@ -17,12 +17,12 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = PointLight::create(0xffffff);
-    light->distance = 10;
-    light->position.set(0, 0.5, 0);
+    auto light = SpotLight::create(0xffffff);
+    light->distance = 3;
+    light->position.set(0, 2, 0);
     scene->add(light);
 
-    auto helper = PointLightHelper::create(light, 0.25f);
+    auto helper = SpotLightHelper::create(light);
     scene->add(helper);
 
     auto group = Group::create();

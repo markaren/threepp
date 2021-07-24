@@ -48,7 +48,7 @@ void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
     auto camera = this->camera;
     auto shadowMatrix = this->matrix;
 
-    auto far = light->distance > 0 ? light->distance : camera->far;
+    auto far = (light->distance > 0) ? light->distance : camera->far;
 
     if (far != camera->far) {
 

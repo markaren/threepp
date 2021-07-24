@@ -75,7 +75,34 @@ void GLLights::setup(std::vector<Light *> &lights) {
             directionalLength++;
         } else if (instanceof <SpotLight>(light)) {
 
-            // TODO
+            auto &uniforms = cache_.get(*light);
+
+            std::get<Color>(uniforms["color"]).copy(light->color).multiplyScalar(light->intensity);
+
+            if (light->castShadow) {
+
+                auto l = dynamic_cast<SpotLight *>(light);
+                auto shadow = l->shadow;
+
+                auto shadowUniforms = shadowCache_.get(*light);
+
+                shadowUniforms["shadowBias"] = shadow->bias;
+                shadowUniforms["shadowNormalBias"] = shadow->normalBias;
+                shadowUniforms["shadowRadius"] = shadow->radius;
+                shadowUniforms["shadowMapSize"] = shadow->mapSize;
+
+                state.spotShadow.resize(spotLength + 1);
+                state.spotShadow[spotLength] = shadowUniforms;
+                state.spotShadowMap[spotLength] = shadow->map->texture;
+                state.spotShadowMatrix[spotLength] = shadow->matrix;
+
+                numSpotShadows++;
+            }
+
+            state.spot.resize(spotLength + 1);
+            state.spot[spotLength] = uniforms;
+
+            spotLength++;
 
         } else if (instanceof <PointLight>(light)) {
 

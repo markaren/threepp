@@ -5,21 +5,14 @@
 
 #include "threepp/lights/DirectionalLightShadow.hpp"
 #include "threepp/lights/Light.hpp"
-#include "threepp/lights/LightWithShadow.hpp"
+#include "threepp/lights/light_interfaces.hpp"
 
 namespace threepp {
 
-    class DirectionalLight : public Light, public LightWithShadow {
+    class DirectionalLight : public Light, public LightWithShadow<DirectionalLightShadow>, public LightWithTarget {
 
     public:
         std::shared_ptr<Object3D> target = Object3D::create();
-
-        std::shared_ptr<DirectionalLightShadow> shadow;
-
-        LightShadow *getLightShadow() override {
-
-            return shadow.get();
-        }
 
         void dispose() override {
 
@@ -39,7 +32,8 @@ namespace threepp {
 
     protected:
         template<class T>
-        DirectionalLight(T color, std::optional<float> intensity) : Light(color, intensity) {
+        DirectionalLight(T color, std::optional<float> intensity)
+            : Light(color, intensity), LightWithShadow<DirectionalLightShadow>(DirectionalLightShadow::create()) {
 
             this->position.copy(Object3D::defaultUp);
             this->updateMatrix();

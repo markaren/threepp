@@ -18,11 +18,11 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = DirectionalLight::create(0xffffff);
-    light->position.set(1, 1, 1);
+    light->position.set(2, 2, 2);
     scene->add(light);
 
     auto helper = DirectionalLightHelper::create(light);
-    light->add(helper);
+    scene->add(helper);
 
     auto group = Group::create();
 

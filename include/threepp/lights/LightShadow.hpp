@@ -5,6 +5,7 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/lights/Light.hpp"
+#include "threepp/lights/light_interfaces.hpp"
 
 #include "threepp/math/Frustum.hpp"
 #include "threepp/math/Vector2.hpp"
@@ -43,17 +44,19 @@ namespace threepp {
             return this->_frustum;
         }
 
-        void updateMatrices(const Light &light, const Object3D &target) {
+        void updateMatrices(Light *light) {
+
+            auto lightWithTarget = dynamic_cast<LightWithTarget *>(light);
 
             const auto &shadowCamera = this->camera;
             auto &shadowMatrix = this->matrix;
 
             Vector3 _lightPositionWorld{};
-            _lightPositionWorld.setFromMatrixPosition(light.matrixWorld);
+            _lightPositionWorld.setFromMatrixPosition(light->matrixWorld);
             shadowCamera->position.copy(_lightPositionWorld);
 
             Vector3 _lookTarget{};
-            _lookTarget.setFromMatrixPosition(target.matrixWorld);
+            _lookTarget.setFromMatrixPosition(lightWithTarget->target->matrixWorld);
             shadowCamera->lookAt(_lookTarget);
             shadowCamera->updateMatrixWorld();
 
