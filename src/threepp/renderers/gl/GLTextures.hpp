@@ -57,6 +57,8 @@ namespace threepp::gl {
         // Setup storage for target texture and bind it to correct framebuffer
         void setupFrameBufferTexture(GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget);
 
+        void setupRenderBufferStorage(GLuint renderbuffer, GLRenderTarget &renderTarget, bool isMultisample);
+
 
     private:
         struct TextureEventListener : EventListener {

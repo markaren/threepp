@@ -40,12 +40,17 @@ namespace threepp {
             Vector2 _shadowMapSize;
             Vector2 _viewportSize;
 
+            Vector4 _viewport;
+
             std::vector<Material *> _depthMaterials;
             std::vector<Material *> _distanceMaterials;
 
-            std::unordered_map<std::string, Material *> _materialCache;
+            std::unordered_map<std::string, std::string> _materialCache;
 
             int _maxTextureSize;
+
+            void VSMPass(GLRenderer &_renderer, LightShadow *shadow, Camera *camera);
+
         };
 
     }// namespace gl

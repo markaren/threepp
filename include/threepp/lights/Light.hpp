@@ -30,9 +30,6 @@ namespace threepp {
         Light(T color, std::optional<float> intensity)
             : color(color), intensity(intensity.value_or(1)) {}
 
-        virtual std::optional<Object3D> target() {
-            return std::nullopt;
-        }
     };
 
 }// namespace threepp

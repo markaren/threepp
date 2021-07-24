@@ -152,7 +152,7 @@ namespace threepp::gl {
 
         void bindXRFramebuffer(int framebuffer);
 
-        bool bindFramebuffer(int target, int framebuffer);
+        bool bindFramebuffer(int target, std::optional<int> framebuffer);
 
         bool useProgram(unsigned int program);
 
@@ -188,6 +188,8 @@ namespace threepp::gl {
         void unbindTexture();
 
         void texImage2D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLuint format, GLuint type, const void *pixels);
+
+        void texImage3D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLint depth, GLuint format, GLuint type, const void *pixels);
 
         //
 

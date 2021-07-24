@@ -52,24 +52,24 @@ void GLLights::setup(std::vector<Light *> &lights) {
             if (light->castShadow) {
 
                 auto l = dynamic_cast<DirectionalLight *>(light);
-                auto& shadow = l->shadow;
+                auto shadow = l->shadow;
 
                 auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms["shadowBias"] = shadow.bias;
-                shadowUniforms["shadowNormalBias"] = shadow.normalBias;
-                shadowUniforms["shadowRadius"] = shadow.radius;
-                shadowUniforms["shadowMapSize"] = shadow.mapSize;
+                shadowUniforms["shadowBias"] = shadow->bias;
+                shadowUniforms["shadowNormalBias"] = shadow->normalBias;
+                shadowUniforms["shadowRadius"] = shadow->radius;
+                shadowUniforms["shadowMapSize"] = shadow->mapSize;
 
-                state.directionalShadow.resize(directionalLength+1);
+                state.directionalShadow.resize(directionalLength + 1);
                 state.directionalShadow[directionalLength] = shadowUniforms;
-                //                state.directionalShadowMap[ directionalLength ] = shadowMap;
-                //                state.directionalShadowMatrix[ directionalLength ] = light.shadow.matrix;
+                state.directionalShadowMap[directionalLength] = shadow->map->texture;
+                state.directionalShadowMatrix[directionalLength] = shadow->matrix;
 
                 numDirectionalShadows++;
             }
 
-            state.directional.resize(directionalLength+1);
+            state.directional.resize(directionalLength + 1);
             state.directional[directionalLength] = uniforms;
 
             directionalLength++;
@@ -80,7 +80,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
         } else if (instanceof <PointLight>(light)) {
 
             auto l = dynamic_cast<PointLight *>(light);
-            auto& shadow = l->shadow;
+            auto &shadow = l->shadow;
 
             auto &uniforms = cache_.get(*light);
 
@@ -92,22 +92,22 @@ void GLLights::setup(std::vector<Light *> &lights) {
 
                 auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms["shadowBias"] = shadow.bias;
-                shadowUniforms["shadowNormalBias"] = shadow.normalBias;
-                shadowUniforms["shadowRadius"] = shadow.radius;
-                shadowUniforms["shadowMapSize"] = shadow.mapSize;
-                shadowUniforms["shadowCameraNear"] = shadow.camera->near;
-                shadowUniforms["shadowCameraFar"] = shadow.camera->far;
+                shadowUniforms["shadowBias"] = shadow->bias;
+                shadowUniforms["shadowNormalBias"] = shadow->normalBias;
+                shadowUniforms["shadowRadius"] = shadow->radius;
+                shadowUniforms["shadowMapSize"] = shadow->mapSize;
+                shadowUniforms["shadowCameraNear"] = shadow->camera->near;
+                shadowUniforms["shadowCameraFar"] = shadow->camera->far;
 
-                state.pointShadow.resize(pointLength+1);
+                state.pointShadow.resize(pointLength + 1);
                 state.pointShadow[pointLength] = shadowUniforms;
-                //                state.pointShadowMap[ pointLength ] = shadowMap;
-                //                state.pointShadowMatrix[ pointLength ] = light.shadow.matrix;
+                state.pointShadowMap[pointLength] = shadow->map->texture;
+                state.pointShadowMatrix[pointLength] = shadow->matrix;
 
                 numPointShadows++;
             }
 
-            state.point.resize(pointLength+1);
+            state.point.resize(pointLength + 1);
             state.point[pointLength] = uniforms;
 
             pointLength++;

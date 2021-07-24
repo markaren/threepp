@@ -193,7 +193,10 @@ void GLRenderer::releaseMaterialProgramReferences(Material *material) {
 
 void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, std::optional<GeometryGroup> group) {
 
-    //    if (scene == nullptr) scene = &_emptyScene;// renderBufferDirect second parameter used to be fog (could be nullptr)
+    if (scene == nullptr) {
+        throw std::runtime_error("TODO");
+        //scene = &_emptyScene; // renderBufferDirect second parameter used to be fog (could be nullptr)
+    }
 
     bool isMesh = instanceof <Mesh>(object);
 
@@ -1001,6 +1004,141 @@ bool GLRenderer::materialNeedsLights(Material *material) {
     return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
            isMeshStandardMaterial || isShadowMaterial ||
            (isShaderMaterial && lights);
+}
+
+void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget, int activeCubeFace, int activeMipmapLevel) {
+
+    // TODO
+
+//    _currentRenderTarget = renderTarget;
+//    _currentActiveCubeFace = activeCubeFace;
+//    _currentActiveMipmapLevel = activeMipmapLevel;
+//
+//    if ( renderTarget && !properties.renderTargetProperties.get( renderTarget->uuid ).glFramebuffer.empty()) {
+//
+//        textures.setupRenderTarget( renderTarget );
+//
+//    }
+//
+//    int framebuffer = null;
+//    bool isCube = false;
+//    bool isRenderTarget3D = false;
+//
+//    if ( renderTarget ) {
+//
+//        const auto &texture = renderTarget->texture;
+//
+//        if ( false /*texture.isDataTexture3D || texture.isDataTexture2DArray*/ ) {
+//
+//            isRenderTarget3D = true;
+//
+//        }
+//
+//        auto glFramebuffer = properties.renderTargetProperties.get( renderTarget->uuid ).glFramebuffer;
+//
+//        if ( false /*renderTarget.isWebGLCubeRenderTarget*/ ) {
+//
+//            framebuffer = glFramebuffer.at(activeCubeFace);
+//            isCube = true;
+//
+//        } else if ( false /*renderTarget.isWebGLMultisampleRenderTarget*/ ) {
+//
+//            framebuffer = *properties.renderTargetProperties.get( renderTarget->uuid ).glMultisampledFramebuffer;
+//
+//        } else {
+//
+//            framebuffer = glFramebuffer[0];
+//
+//        }
+//
+//        _currentViewport.copy( renderTarget->viewport );
+//        _currentScissor.copy( renderTarget->scissor );
+//        _currentScissorTest = renderTarget->scissorTest;
+//
+//    } else {
+//
+//        _currentViewport.copy( _viewport ).multiplyScalar( _pixelRatio ).floor();
+//        _currentScissor.copy( _scissor ).multiplyScalar( _pixelRatio ).floor();
+//        _currentScissorTest = _scissorTest;
+//
+//    }
+//
+//    const bool framebufferBound = state.bindFramebuffer( GL_FRAMEBUFFER, framebuffer );
+//
+//    if ( framebufferBound && capabilities.drawBuffers ) {
+//
+//        bool needsUpdate = false;
+//
+//        if ( renderTarget ) {
+//
+//            if ( renderTarget.isWebGLMultipleRenderTargets ) {
+//
+//                const auto &textures = renderTarget->texture;
+//
+//                if ( _currentDrawBuffers.size() != textures.length || _currentDrawBuffers[ 0 ] != GL_COLOR_ATTACHMENT0 ) {
+//
+//                    for ( int i = 0, il = textures.length; i < il; i ++ ) {
+//
+//                        _currentDrawBuffers[ i ] = GL_COLOR_ATTACHMENT0 + i;
+//
+//                    }
+//
+//                    _currentDrawBuffers.length = textures.length;
+//
+//                    needsUpdate = true;
+//
+//                }
+//
+//            } else {
+//
+//                if ( _currentDrawBuffers.size() != 1 || _currentDrawBuffers[ 0 ] != GL_COLOR_ATTACHMENT0 ) {
+//
+//                    _currentDrawBuffers[ 0 ] = GL_COLOR_ATTACHMENT0;
+//                    _currentDrawBuffers.resize(1);
+//
+//                    needsUpdate = true;
+//
+//                }
+//
+//            }
+//
+//        } else {
+//
+//            if ( _currentDrawBuffers.size() != 1 || _currentDrawBuffers[ 0 ] != GL_BACK ) {
+//
+//                _currentDrawBuffers.clear();
+//                _currentDrawBuffers.emplace_back(GL_BACK);
+//
+//                needsUpdate = true;
+//
+//            }
+//
+//        }
+//
+//        if ( needsUpdate ) {
+//
+//                glDrawBuffers( (int) _currentDrawBuffers.size(), _currentDrawBuffers.data() );
+//
+//        }
+//
+//    }
+//
+//    state.viewport( _currentViewport );
+//    state.scissor( _currentScissor );
+//    state.setScissorTest( _currentScissorTest );
+//
+//    if ( isCube ) {
+//
+//        const auto &textureProperties = properties.textureProperties.get( renderTarget->texture.uuid );
+//        glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + activeCubeFace, textureProperties.glTexture, activeMipmapLevel );
+//
+//    } else if ( isRenderTarget3D ) {
+//
+//        const auto &textureProperties = properties.textureProperties.get( renderTarget->texture.uuid );
+//        const int layer = activeCubeFace || 0;
+//        glFramebufferTextureLayer( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, textureProperties.glTexture, activeMipmapLevel || 0, layer );
+//
+//    }
 }
 
 

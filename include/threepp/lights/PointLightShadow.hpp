@@ -12,15 +12,18 @@ namespace threepp {
     class PointLightShadow : public LightShadow {
 
     public:
-
-        PointLightShadow();
-
         void updateMatrices(PointLight *light, int viewportIndex = 0);
 
-    private:
-        std::vector<Vector4> _viewports;
+        static std::shared_ptr<PointLightShadow> create() {
+
+            return std::shared_ptr<PointLightShadow>(new PointLightShadow());
+        }
+
+    protected:
         std::vector<Vector3> _cubeDirections;
         std::vector<Vector3> _cubeUps;
+
+        PointLightShadow();
     };
 
 }// namespace threepp

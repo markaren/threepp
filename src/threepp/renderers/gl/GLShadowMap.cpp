@@ -2,155 +2,195 @@
 #include "GLShadowMap.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
 
 namespace {
 
-    inline std::unordered_map<int, int> shadowSide {
+    inline std::unordered_map<int, int> shadowSide{
             {0, BackSide},
             {1, FrontSide},
-            {2, DoubleSide}
-    };
+            {2, DoubleSide}};
 
-}
+    std::shared_ptr<ShaderMaterial> createShadowMaterialVertical() {
+
+        auto shadowMaterialVertical = ShaderMaterial::create();
+        shadowMaterialVertical->vertexShader = shaders::ShaderChunk::instance().get("vsm_vert", "ShaderLib");
+        shadowMaterialVertical->fragmentShader = shaders::ShaderChunk::instance().get("vsm_frag", "ShaderLib");
+
+        shadowMaterialVertical->defines["SAMPLE_RATE"] = std::to_string(2.f / 8.f);
+        shadowMaterialVertical->defines["HALF_SAMPLE_RATE"], std::to_string(1.f / 8.f);
+
+        shadowMaterialVertical->uniforms = std::make_shared<UniformMap>(UniformMap{
+                {"shadow_pass", Uniform()},
+                {"resolution", Uniform(Vector2())},
+                {"radius", Uniform(4.f)}});
+
+        return shadowMaterialVertical;
+    }
+
+
+    std::shared_ptr<ShaderMaterial> createShadowMaterialHorizontal() {
+
+        auto horizontal = createShadowMaterialVertical();
+        horizontal->defines["HORIZONTAL_PASS "] = "1";
+
+        return horizontal;
+    }
+
+    std::shared_ptr<ShaderMaterial> shadowMaterialVertical = createShadowMaterialVertical();
+    std::shared_ptr<ShaderMaterial> shadowMaterialHorizontal = createShadowMaterialHorizontal();
+
+}// namespace
 
 void GLShadowMap::render(GLRenderer &_renderer, const std::vector<Light *> &lights, Scene *scene, Camera *camera) {
 
-    if (!enabled) return;
-    if (!autoUpdate && !needsUpdate) return;
-
-    if ( lights.empty() ) return;
-
-    auto currentRenderTarget = _renderer.getRenderTarget();
-    auto activeCubeFace = _renderer.getActiveCubeFace();
-    auto activeMipmapLevel = _renderer.getActiveMipmapLevel();
-
+//    if (!enabled) return;
+//    if (!autoUpdate && !needsUpdate) return;
+//
+//    if (lights.empty()) return;
+//
+//    auto currentRenderTarget = _renderer.getRenderTarget();
+//    auto activeCubeFace = _renderer.getActiveCubeFace();
+//    auto activeMipmapLevel = _renderer.getActiveMipmapLevel();
+//
 //    auto _state = _renderer.state;
 //
 //    // Set GL state for depth map.
-//    _state.setBlending( NoBlending );
-//    _state.buffers.color.setClear( 1, 1, 1, 1 );
-//    _state.buffers.depth.setTest( true );
-//    _state.setScissorTest( false );
+//    _state.setBlending(NoBlending);
+//    _state.colorBuffer.setClear(1, 1, 1, 1);
+//    _state.depthBuffer.setTest(true);
+//    _state.setScissorTest(false);
 //
 //    // render depth map
 //
-//    for ( int i = 0, il = lights.size(); i < il; i ++ ) {
+//    for (auto &light : lights) {
 //
-//        auto& light = lights[ i ];
-//        const shadow = light.shadow;
+//        auto lightWithShadow = dynamic_cast<LightWithShadow *>(light);
 //
-//        if ( shadow === undefined ) {
+//        if (!lightWithShadow) {
 //
-//            console.warn( 'THREE.WebGLShadowMap:', light, 'has no shadow.' );
+//            std::cerr << "THREE.GLShadowMap:'" << light->type() << "'has no shadow." << std::endl;
 //            continue;
-//
 //        }
 //
-//        if ( shadow.autoUpdate == false && shadow.needsUpdate == false ) continue;
+//        auto shadow = lightWithShadow->getLightShadow();
 //
-//        _shadowMapSize.copy( shadow.mapSize );
+//        if (shadow->autoUpdate == false && shadow->needsUpdate == false) continue;
 //
-//        auto shadowFrameExtents = shadow.getFrameExtents();
+//        _shadowMapSize.copy(shadow->mapSize);
 //
-//        _shadowMapSize.multiply( shadowFrameExtents );
+//        auto shadowFrameExtents = shadow->getFrameExtents();
 //
-//        _viewportSize.copy( shadow.mapSize );
+//        _shadowMapSize.multiply(shadowFrameExtents);
 //
-//        if ( _shadowMapSize.x > _maxTextureSize || _shadowMapSize.y > _maxTextureSize ) {
+//        _viewportSize.copy(shadow->mapSize);
 //
-//            if ( _shadowMapSize.x > _maxTextureSize ) {
+//        if (_shadowMapSize.x > _maxTextureSize || _shadowMapSize.y > _maxTextureSize) {
 //
-//                _viewportSize.x = std::floor( _maxTextureSize / shadowFrameExtents.x );
+//            if (_shadowMapSize.x > _maxTextureSize) {
+//
+//                _viewportSize.x = std::floor((float) _maxTextureSize / shadowFrameExtents.x);
 //                _shadowMapSize.x = _viewportSize.x * shadowFrameExtents.x;
-//                shadow.mapSize.x = _viewportSize.x;
-//
+//                shadow->mapSize.x = _viewportSize.x;
 //            }
 //
-//            if ( _shadowMapSize.y > _maxTextureSize ) {
+//            if (_shadowMapSize.y > _maxTextureSize) {
 //
-//                _viewportSize.y = std::floor( _maxTextureSize / shadowFrameExtents.y );
+//                _viewportSize.y = std::floor((float) _maxTextureSize / shadowFrameExtents.y);
 //                _shadowMapSize.y = _viewportSize.y * shadowFrameExtents.y;
-//                shadow.mapSize.y = _viewportSize.y;
-//
+//                shadow->mapSize.y = _viewportSize.y;
 //            }
-//
 //        }
 //
-//        if ( shadow.map === null && ! shadow.isPointLightShadow && this.type === VSMShadowMap ) {
+//        if (!shadow->map && ! instanceof <PointLightShadow>(shadow) && this->type == VSMShadowMap) {
 //
-//            std::unordered_map<std::string, int> pars {
-//                    {"minFilter", LinearFilter},
-//                    {"magFilter", LinearFilter},
-//                    {"format", RGBAFormat}
-//            };
+//            GLRenderTarget::Options pars{};
+//            pars.minFilter = LinearFilter;
+//            pars.magFilter = LinearFilter;
+//            pars.format = RGBAFormat;
 //
-//            shadow.map = GLRenderTarget( _shadowMapSize.x, _shadowMapSize.y, pars );
-//            shadow.map.texture.name = light->name + ".shadowMap";
+//            shadow->map = GLRenderTarget::create(_shadowMapSize.x, _shadowMapSize.y, pars);
+//            shadow->map->texture.name = light->name + ".shadowMap";
 //
-//            shadow.mapPass = GLRenderTarget( _shadowMapSize.x, _shadowMapSize.y, pars );
+//            shadow->mapPass = GLRenderTarget::create(_shadowMapSize.x, _shadowMapSize.y, pars);
 //
-//            shadow.camera.updateProjectionMatrix();
-//
+//            shadow->camera->updateProjectionMatrix();
 //        }
 //
-//        if ( shadow.map == nullptr ) {
+//        if (!shadow->map) {
 //
-//            std::unordered_map<std::string, int> pars {
-//                    {"minFilter", NearestFilter},
-//                    {"magFilter", NearestFilter},
-//                    {"format", RGBAFormat}
-//            };
+//            GLRenderTarget::Options pars{};
+//            pars.minFilter = NearestFilter;
+//            pars.magFilter = NearestFilter;
+//            pars.format = RGBAFormat;
 //
-//            shadow.map = GLRenderTarget( _shadowMapSize.x, _shadowMapSize.y, pars );
-//            shadow.map.texture.name = light->name + ".shadowMap";
+//            shadow->map = GLRenderTarget::create(_shadowMapSize.x, _shadowMapSize.y, pars);
+//            shadow->map->texture.name = light->name + ".shadowMap";
 //
-//            shadow.camera.updateProjectionMatrix();
-//
+//            shadow->camera->updateProjectionMatrix();
 //        }
 //
-//        _renderer.setRenderTarget( shadow.map );
+//        _renderer.setRenderTarget(shadow->map);
 //        _renderer.clear();
 //
-//        auto viewportCount = shadow.getViewportCount();
+//        auto viewportCount = shadow->getViewportCount();
 //
-//        for ( int vp = 0; vp < viewportCount; vp ++ ) {
+//        for (int vp = 0; vp < viewportCount; vp++) {
 //
-//            auto viewport = shadow.getViewport( vp );
+//            auto &viewport = shadow->getViewport(vp);
 //
 //            _viewport.set(
 //                    _viewportSize.x * viewport.x,
 //                    _viewportSize.y * viewport.y,
 //                    _viewportSize.x * viewport.z,
-//                    _viewportSize.y * viewport.w
-//            );
+//                    _viewportSize.y * viewport.w);
 //
-//            _state.viewport( _viewport );
+//            _state.viewport(_viewport);
 //
-//            shadow.updateMatrices( light, vp );
+//            shadow->updateMatrices(*light, vp);
 //
-//            _frustum = shadow.getFrustum();
+//            _frustum = shadow->getFrustum();
 //
-//            renderObject( scene, camera, shadow.camera, light, this.type );
-//
+//            renderObject(scene, camera, shadow->camera, light, this->type);
 //        }
 //
 //        // do blur pass for VSM
 //
-//        if ( ! shadow.isPointLightShadow && this.type === VSMShadowMap ) {
+//        if (! instanceof <PointLightShadow>(shadow) && this->type == VSMShadowMap) {
 //
-//            VSMPass( shadow, camera );
-//
+//            VSMPass(_renderer, shadow, camera);
 //        }
 //
-//        shadow.needsUpdate = false;
-//
+//        shadow->needsUpdate = false;
 //    }
 //
 //    needsUpdate = false;
 //
-//    _renderer.setRenderTarget( currentRenderTarget, activeCubeFace, activeMipmapLevel );
+//    _renderer.setRenderTarget(currentRenderTarget, activeCubeFace, activeMipmapLevel);
+}
 
+void GLShadowMap::VSMPass(GLRenderer &_renderer, LightShadow *shadow, Camera *camera) {
+
+//    const auto &geometry = _objects.update( fullScreenMesh );
+//
+//    // vertical pass
+//
+//    shadowMaterialVertical->uniforms->operator[]("shadow_pass").setValue(shadow->map->texture);
+//    shadowMaterialVertical->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
+//    shadowMaterialVertical->uniforms->operator[]("radius").value<float>() = shadow->radius;
+//    _renderer.setRenderTarget( shadow->mapPass );
+//    _renderer.clear();
+//    _renderer.renderBufferDirect( camera, nullptr, geometry, shadowMaterialVertical, fullScreenMesh, std::nullopt );
+//
+//    // horizontal pass
+//
+//    shadowMaterialHorizontal->uniforms->operator[]("shadow_pass").setValue(shadow->mapPass->texture);
+//    shadowMaterialHorizontal->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
+//    shadowMaterialHorizontal->uniforms->operator[]("radius").value<float>() = shadow->radius;
+//    _renderer.setRenderTarget( shadow->map );
+//    _renderer.clear();
+//    _renderer.renderBufferDirect( camera, nullptr, geometry, shadowMaterialHorizontal, fullScreenMesh, std::nullopt );
 }

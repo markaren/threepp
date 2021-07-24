@@ -9,11 +9,15 @@
 
 #include "threepp/math/Vector4.hpp"
 
+#include "threepp/utils/uuid.hpp"
+
 #include <optional>
 
 namespace threepp {
 
     class GLRenderTarget : public EventDispatcher {
+
+    public:
 
         struct Options {
 
@@ -22,6 +26,7 @@ namespace threepp {
             int wrapT;
             int magFilter;
             int minFilter = LinearFilter;
+            int format;
             int type;
             int anisotropy;
             int encoding;
@@ -32,29 +37,23 @@ namespace threepp {
             std::optional<Texture> depthTexture;
         };
 
-    public:
+
+        const std::string uuid = utils::generateUUID();
+
         unsigned int width;
         unsigned int height;
         unsigned int depth = 1;
 
-        Vector4 scissor;
+        Vector4 scissor{};
         bool scissorTest = false;
 
-        Vector4 viewport;
+        Vector4 viewport{};
 
         Texture texture;
 
         bool depthBuffer;
         bool stencilBuffer;
         std::optional<Texture> depthTexture;
-
-        GLRenderTarget(unsigned int width, unsigned int height, const Options &options)
-            : width(width), height(height),
-              scissor(0.f, 0.f, (float) width, (float) height),
-              viewport(0.f, 0.f, (float) width, (float) height),
-              depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
-              texture(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding) {
-        }
 
         void setTexture(Texture &texture) {
 
@@ -103,6 +102,20 @@ namespace threepp {
         void dispose() {
 
             this->dispatchEvent("dispose");
+        }
+
+        static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options &options) {
+
+            return std::shared_ptr<GLRenderTarget>(new GLRenderTarget(width, height, options));
+        }
+
+    protected:
+        GLRenderTarget(unsigned int width, unsigned int height, const Options &options)
+                : width(width), height(height),
+                  scissor(0.f, 0.f, (float) width, (float) height),
+                  viewport(0.f, 0.f, (float) width, (float) height),
+                  depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
+                  texture(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding) {
         }
     };
 

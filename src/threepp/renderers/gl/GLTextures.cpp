@@ -268,7 +268,97 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties &textureProperties, Tex
 
 void gl::GLTextures::setupFrameBufferTexture(GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget) {
 
-    //TODO
+    const auto glFormat = convert(texture.format);
+    const auto glType = convert(texture.type);
+    const auto glInternalFormat = getInternalFormat(/*texture.internalFormat,*/ glFormat, glType);
+
+    if (textureTarget == GL_TEXTURE_3D || textureTarget == GL_TEXTURE_2D_ARRAY) {
+
+        state.texImage3D(textureTarget, 0, glInternalFormat, renderTarget.width, renderTarget.height, renderTarget.depth, glFormat, glType, nullptr);
+
+    } else {
+
+        state.texImage2D(textureTarget, 0, glInternalFormat, renderTarget.width, renderTarget.height, glFormat, glType, nullptr);
+    }
+
+    state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, textureTarget, properties.textureProperties.get(texture.uuid).glTexture, 0);
+    state.bindFramebuffer(GL_FRAMEBUFFER, std::nullopt);
+}
+
+void gl::GLTextures::setupRenderBufferStorage(GLuint renderbuffer, GLRenderTarget &renderTarget, bool isMultisample) {
+
+//    glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+//
+//    if (renderTarget.depthBuffer && !renderTarget.stencilBuffer) {
+//
+//        auto glInternalFormat = GL_DEPTH_COMPONENT16;
+//
+//        if (isMultisample) {
+//
+//            const auto &depthTexture = renderTarget.depthTexture;
+//
+//            if (depthTexture && depthTexture.isDepthTexture) {
+//
+//                if (depthTexture->type == FloatType) {
+//
+//                    glInternalFormat = GL_DEPTH_COMPONENT32F;
+//
+//                } else if (depthTexture->type == UnsignedIntType) {
+//
+//                    glInternalFormat = GL_DEPTH_COMPONENT24;
+//                }
+//            }
+//
+//            const samples = getRenderTargetSamples(renderTarget);
+//
+//            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, glInternalFormat, renderTarget.width, renderTarget.height);
+//
+//        } else {
+//
+//            glrenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, renderTarget.width, renderTarget.height);
+//        }
+//
+//        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, renderbuffer);
+//
+//    } else if (renderTarget.depthBuffer && renderTarget.stencilBuffer) {
+//
+//        if (isMultisample) {
+//
+//            const samples = getRenderTargetSamples(renderTarget);
+//
+//            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8, renderTarget.width, renderTarget.height);
+//
+//        } else {
+//
+//            GL_.renderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_STENCIL, renderTarget.width, renderTarget.height);
+//        }
+//
+//
+//        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, renderbuffer);
+//
+//    } else {
+//
+//        // Use the first texture for MRT so far
+//        const texture = renderTarget.isWebGLMultipleRenderTargets == = true ? renderTarget.texture[0] : renderTarget.texture;
+//
+//        const glFormat = convert(texture.format);
+//        const glType = convert(texture.type);
+//        const glInternalFormat = getInternalFormat(texture.internalFormat, glFormat, glType);
+//
+//        if (isMultisample) {
+//
+//            const samples = getRenderTargetSamples(renderTarget);
+//
+//            glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, glInternalFormat, renderTarget.width, renderTarget.height);
+//
+//        } else {
+//
+//            glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, renderTarget.width, renderTarget.height);
+//        }
+//    }
+//
+//    glBindRenderbuffer(GL_RENDERBUFFER, nullptr);
 }
 
 void gl::GLTextures::TextureEventListener::onEvent(Event &event) {

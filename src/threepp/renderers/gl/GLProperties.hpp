@@ -21,6 +21,12 @@ namespace threepp::gl {
         unsigned int version{};
     };
 
+    struct RenderTargetProperties {
+
+        std::unordered_map<int, int> glFramebuffer;
+        std::optional<int> glMultisampledFramebuffer;
+    };
+
     struct MaterialProperties {
 
         std::shared_ptr<GLProgram> program;
@@ -78,11 +84,13 @@ namespace threepp::gl {
 
         GLTypeProperties<TextureProperties> textureProperties;
         GLTypeProperties<MaterialProperties> materialProperties;
+        GLTypeProperties<RenderTargetProperties> renderTargetProperties;
 
         void dispose() {
 
             textureProperties.dispose();
             materialProperties.dispose();
+            renderTargetProperties.dispose();
         }
     };
 

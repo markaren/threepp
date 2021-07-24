@@ -3,14 +3,14 @@
 #ifndef THREEPP_LIGHTSHADOW_HPP
 #define THREEPP_LIGHTSHADOW_HPP
 
-#include "threepp/lights/Light.hpp"
 #include "threepp/cameras/Camera.hpp"
+#include "threepp/lights/Light.hpp"
 
 #include "threepp/math/Frustum.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
 
-#include "threepp/textures/Texture.hpp"
+#include "threepp/renderers/GLRenderTarget.hpp"
 
 namespace threepp {
 
@@ -23,17 +23,19 @@ namespace threepp {
         float normalBias = 0;
         float radius = 1;
 
-        Vector2 mapSize = Vector2(512, 512);
+        Vector2 mapSize{512, 512};
 
-        std::optional<Texture> map;
-        Matrix4 matrix;
+        std::shared_ptr<GLRenderTarget> map;
+        std::shared_ptr<GLRenderTarget> mapPass;
+
+        Matrix4 matrix{};
 
         bool autoUpdate = true;
         bool needsUpdate = false;
 
-        [[nodiscard]] int getViewportCount() const {
+        [[nodiscard]] size_t getViewportCount() const {
 
-            return this->_viewportCount;
+            return this->_viewports.size();
         }
 
         Frustum &getFrustum() {
@@ -85,11 +87,11 @@ namespace threepp {
 
                 this->map->dispose();
             }
-            // TODO
-            //            if (this.mapPass) {
-            //
-            //                this.mapPass.dispose();
-            //            }
+
+            if (this->mapPass) {
+
+                this->mapPass->dispose();
+            }
         }
 
         virtual ~LightShadow() = default;
@@ -99,14 +101,10 @@ namespace threepp {
             : camera(std::move(camera)) {}
 
     protected:
-
-        Frustum _frustum;
-        Vector2 _frameExtents;
-
-        int _viewportCount = 1;
+        Frustum _frustum{};
+        Vector2 _frameExtents{};
 
         std::vector<Vector4> _viewports{Vector4(0, 0, 1, 1)};
-
     };
 
 }// namespace threepp

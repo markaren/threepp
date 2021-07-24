@@ -21,5 +21,5 @@ void PointLight::setPower(float power) {
 
 void PointLight::dispose() {
 
-    this->shadow.dispose();
+    this->shadow->dispose();
 }

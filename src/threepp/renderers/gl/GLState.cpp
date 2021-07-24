@@ -368,26 +368,26 @@ void gl::GLState::bindXRFramebuffer(int framebuffer) {
     }
 }
 
-bool gl::GLState::bindFramebuffer(int target, int framebuffer) {
+bool gl::GLState::bindFramebuffer(int target, std::optional<int> framebuffer) {
 
     if (!framebuffer && xrFramebuffer) framebuffer = *xrFramebuffer;// use active XR framebuffer if available
 
     if (currentBoundFramebuffers.count(target) && currentBoundFramebuffers[target] != framebuffer) {
 
-        glBindFramebuffer(target, framebuffer);
+        glBindFramebuffer(target, *framebuffer);
 
-        currentBoundFramebuffers[target] = framebuffer;
+        currentBoundFramebuffers[target] = *framebuffer;
 
         // GL_DRAW_FRAMEBUFFER is equivalent to GL_FRAMEBUFFER
 
         if (target == GL_DRAW_FRAMEBUFFER) {
 
-            currentBoundFramebuffers[GL_FRAMEBUFFER] = framebuffer;
+            currentBoundFramebuffers[GL_FRAMEBUFFER] = *framebuffer;
         }
 
         if (target == GL_FRAMEBUFFER) {
 
-            currentBoundFramebuffers[GL_DRAW_FRAMEBUFFER] = framebuffer;
+            currentBoundFramebuffers[GL_DRAW_FRAMEBUFFER] = *framebuffer;
         }
 
         return true;
@@ -717,6 +717,11 @@ void gl::GLState::unbindTexture() {
 void gl::GLState::texImage2D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLuint format, GLuint type, const void *pixels) {
 
     glTexImage2D(target, level, internalFormat, width, height, 0, format, type, pixels);
+}
+
+void gl::GLState::texImage3D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLint depth, GLuint format, GLuint type, const void *pixels) {
+
+    glTexImage3D(target, level, internalFormat, width, height, depth, 0, format, type, pixels);
 }
 
 void gl::GLState::scissor(const Vector4 &scissor) {

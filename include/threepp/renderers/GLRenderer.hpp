@@ -173,6 +173,8 @@ namespace threepp {
             return _currentRenderTarget;
         }
 
+        void setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
+
     private:
 
         struct OnMaterialDispose : EventListener {
@@ -215,7 +217,7 @@ namespace threepp {
         Vector4 _scissor;
         bool _scissorTest = false;
 
-        std::vector<int> _currentDrawBuffers {GL_BACK};
+        std::vector<GLenum> _currentDrawBuffers {GL_BACK};
 
         // frustum
 
@@ -252,6 +254,7 @@ namespace threepp {
         std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
         friend struct gl::ProgramParameters;
+        friend struct gl::GLShadowMap;
     };
 
 }// namespace threepp
