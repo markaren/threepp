@@ -114,7 +114,9 @@ Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
             break;
     }
 
-    if (!update) this->onChangeCallback_();
+    if (update) {
+        this->onChangeCallback_();
+    }
 
     return *this;
 }
