@@ -178,12 +178,12 @@ Vector3 &Vector3::multiplyVectors(const Vector3 &a, const Vector3 &b) {
 
 Vector3 &Vector3::applyMatrix3(const Matrix3 &m) {
 
-    //    const auto x_ = this->x, y_ = this->y, z_ = this->z;
-    //    const auto e = m.elements_;
-    //
-    //    this->x = e[0] * x_ + e[3] * y_ + e[6] * z_;
-    //    this->y = e[1] * x_ + e[4] * y_ + e[7] * z_;
-    //    this->z = e[2] * x_ + e[5] * y_ + e[8] * z_;
+    const auto x_ = this->x, y_ = this->y, z_ = this->z;
+    const auto &e = m.elements;
+
+    this->x = e[0] * x_ + e[3] * y_ + e[6] * z_;
+    this->y = e[1] * x_ + e[4] * y_ + e[7] * z_;
+    this->z = e[2] * x_ + e[5] * y_ + e[8] * z_;
 
     return *this;
 }
