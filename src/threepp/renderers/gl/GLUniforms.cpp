@@ -322,8 +322,8 @@ namespace {
                                                        [&](int arg) { u->setValue(arg, textures); },
                                                        [&](float arg) { u->setValue(arg, textures); },
                                                        [&](Vector2 arg) { u->setValue(arg, textures); },
-                                                       [&](Vector3 arg) { u->setValue(arg, textures); },
-                                                       [&](Color arg) { u->setValue(arg, textures); }},
+                                                       [&](std::shared_ptr<Vector3> arg) { u->setValue(*arg, textures); },
+                                                       [&](std::shared_ptr<Color> arg) { u->setValue(*arg, textures); }},
                                                v);
                                 }
                             },
