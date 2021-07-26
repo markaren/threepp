@@ -310,10 +310,12 @@ Quaternion &Quaternion::multiply(const Quaternion &q) {
 
     return this->multiplyQuaternions(*this, q);
 }
+
 Quaternion &Quaternion::premultiply(const Quaternion &q) {
 
     return this->multiplyQuaternions(q, *this);
 }
+
 Quaternion &Quaternion::multiplyQuaternions(const Quaternion &a, const Quaternion &b) {
 
     // from http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/code/index.htm

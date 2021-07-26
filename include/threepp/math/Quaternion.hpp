@@ -24,6 +24,7 @@ namespace threepp {
         float &operator[](unsigned int index);
 
         [[nodiscard]] float x() const {
+
             return x_;
         }
 
@@ -36,6 +37,7 @@ namespace threepp {
         }
 
         [[nodiscard]] float y() const {
+
             return y_;
         }
 
@@ -48,6 +50,7 @@ namespace threepp {
         }
 
         [[nodiscard]] float z() const {
+
             return z_;
         }
 
@@ -60,6 +63,7 @@ namespace threepp {
         }
 
         [[nodiscard]] float w() const {
+
             return w_;
         }
 

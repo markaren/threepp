@@ -137,6 +137,7 @@ namespace threepp {
         virtual void updateWorldMatrix(bool updateParents, bool updateChildren);
 
         static std::shared_ptr<Object3D> create() {
+
             return std::shared_ptr<Object3D>(new Object3D());
         }
 
