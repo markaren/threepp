@@ -39,7 +39,7 @@ bool OrbitControls::update() {
     Vector3 offset{};
 
     // so camera.up is the orbit axis
-    const auto quat = Quaternion().setFromUnitVectors(camera->up, Vector3(0, 1, 0));
+    const auto quat = Quaternion().setFromUnitVectors(camera->up, {0, 1, 0});
     auto quatInverse = Quaternion().copy(quat).invert();
 
     Vector3 lastPosition{};
@@ -231,12 +231,16 @@ void OrbitControls::pan(float deltaX, float deltaY) {
 void OrbitControls::dollyIn(float dollyScale) {
 
     if (instanceof <PerspectiveCamera>(camera.get())) {
+
         scale /= dollyScale;
+
     } else if (instanceof <OrthographicCamera>(camera.get())) {
+
         this->camera->zoom = std::max(this->minZoom, std::min(this->maxZoom, this->camera->zoom * dollyScale));
         this->camera->updateProjectionMatrix();
         zoomChanged = true;
     } else {
+
         std::cerr << "encountered an unknown camera type - dolly/zoom disabled." << std::endl;
         this->enableZoom = false;
     }
@@ -305,9 +309,9 @@ void OrbitControls::handleMouseMoveRotate(const Vector2 &pos) {
     rotateDelta.subVectors(rotateEnd, rotateStart).multiplyScalar(rotateSpeed);
 
     const auto size = canvas.getSize();
-    rotateLeft(2 * math::PI * rotateDelta.x / size.width);// yes, height
+    rotateLeft(2 * math::PI * rotateDelta.x / static_cast<float>(size.height));// yes, height
 
-    rotateUp(2 * math::PI * rotateDelta.y / size.height);
+    rotateUp(2 * math::PI * rotateDelta.y / static_cast<float>(size.height));
 
     rotateStart.copy(rotateEnd);
 
