@@ -119,7 +119,6 @@ public:
 
 private:
     GLFWwindow *window;
-    std::unique_ptr<unsigned char> favicon_data;
 
     WindowSize size_;
     Vector2 lastMousePos{};
