@@ -593,7 +593,9 @@ void GLRenderer::renderObjects(std::vector<std::shared_ptr<gl::RenderItem>> &ren
 
 void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, std::optional<GeometryGroup> group) {
 
-    //    object.onBeforeRender( _this, scene, camera, geometry, material, group );
+    if (object->onBeforeRender) {
+        object->onBeforeRender.value()(this, scene, camera, geometry, material, group);
+    }
 
     object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, object->matrixWorld);
     object->normalMatrix.getNormalMatrix(object->modelViewMatrix);
@@ -613,7 +615,9 @@ void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, Bu
         renderBufferDirect(camera, scene, geometry, material, object, group);
     }
 
-    //    object.onAfterRender( _this, scene, camera, geometry, material, group );
+    if (object->onAfterRender) {
+        object->onAfterRender.value()(this, scene, camera, geometry, material, group);
+    }
 }
 
 std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene *scene, Object3D *object) {

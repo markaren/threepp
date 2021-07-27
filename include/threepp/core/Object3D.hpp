@@ -11,6 +11,7 @@
 
 #include "threepp/materials/Material.hpp"
 
+#include "misc.hpp"
 #include "threepp/core/EventDispatcher.hpp"
 #include "threepp/core/Layers.hpp"
 
@@ -23,6 +24,7 @@ namespace threepp {
     class Raycaster;
     struct Intersection;
 
+    class Scene;
     class BufferGeometry;
 
     class Object3D : public EventDispatcher {
@@ -63,6 +65,9 @@ namespace threepp {
 
         bool frustumCulled = true;
         int renderOrder = 0;
+
+        std::optional<std::function<void(void*, Scene*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)>> onBeforeRender;
+        std::optional<std::function<void(void*, Scene*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)>> onAfterRender;
 
         void applyMatrix4(const Matrix4 &matrix);
 
