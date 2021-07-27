@@ -358,36 +358,24 @@ void gl::GLState::disable(int id) {
     }
 }
 
-void gl::GLState::bindXRFramebuffer(int framebuffer) {
+bool gl::GLState::bindFramebuffer(int target, unsigned int framebuffer) {
 
-    if (framebuffer != xrFramebuffer) {
+    if (!currentBoundFramebuffers.count(target) || (currentBoundFramebuffers.count(target) && currentBoundFramebuffers[target] != framebuffer)) {
 
-        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        glBindFramebuffer(target, framebuffer);
 
-        xrFramebuffer = framebuffer;
-    }
-}
-
-bool gl::GLState::bindFramebuffer(int target, std::optional<int> framebuffer) {
-
-    if (!framebuffer && xrFramebuffer) framebuffer = *xrFramebuffer;// use active XR framebuffer if available
-
-    if (currentBoundFramebuffers.count(target) && currentBoundFramebuffers[target] != framebuffer) {
-
-        glBindFramebuffer(target, *framebuffer);
-
-        currentBoundFramebuffers[target] = *framebuffer;
+        currentBoundFramebuffers[target] = framebuffer;
 
         // GL_DRAW_FRAMEBUFFER is equivalent to GL_FRAMEBUFFER
 
         if (target == GL_DRAW_FRAMEBUFFER) {
 
-            currentBoundFramebuffers[GL_FRAMEBUFFER] = *framebuffer;
+            currentBoundFramebuffers[GL_FRAMEBUFFER] = framebuffer;
         }
 
         if (target == GL_FRAMEBUFFER) {
 
-            currentBoundFramebuffers[GL_DRAW_FRAMEBUFFER] = *framebuffer;
+            currentBoundFramebuffers[GL_DRAW_FRAMEBUFFER] = framebuffer;
         }
 
         return true;
@@ -798,7 +786,6 @@ void gl::GLState::reset() {
     currentTextureSlot = std::nullopt;
     currentBoundTextures.clear();
 
-    xrFramebuffer = std::nullopt;
     currentBoundFramebuffers.clear();
 
     currentProgram = std::nullopt;

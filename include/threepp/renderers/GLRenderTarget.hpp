@@ -5,8 +5,8 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
-#include "threepp/textures/Texture.hpp"
 #include "threepp/textures/DepthTexture.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include "threepp/math/Vector4.hpp"
 
@@ -19,18 +19,17 @@ namespace threepp {
     class GLRenderTarget : public EventDispatcher {
 
     public:
-
         struct Options {
 
-            int mapping;
-            int wrapS;
-            int wrapT;
-            int magFilter;
-            int minFilter = LinearFilter;
-            int format;
-            int type;
-            int anisotropy;
-            int encoding;
+            std::optional<int> mapping;
+            std::optional<int> wrapS;
+            std::optional<int> wrapT;
+            std::optional<int> magFilter;
+            std::optional<int> minFilter;
+            std::optional<int> format;
+            std::optional<int> type;
+            std::optional<int> anisotropy;
+            std::optional<int> encoding;
 
             bool generateMipmaps = false;
             bool depthBuffer = true;
@@ -55,11 +54,11 @@ namespace threepp {
         bool stencilBuffer;
         std::shared_ptr<DepthTexture> depthTexture;
 
-        void setTexture(const std::shared_ptr<Texture> &texture) {
+        void setTexture(const std::shared_ptr<Texture> &tex) {
 
             texture->image = Image{width, height, depth};
 
-            this->texture = texture;
+            this->texture = tex;
         }
 
         void setSize(unsigned int width, unsigned int height, unsigned int depth = 1) {
@@ -111,11 +110,21 @@ namespace threepp {
 
     protected:
         GLRenderTarget(unsigned int width, unsigned int height, const Options &options)
-                : width(width), height(height),
-                  scissor(0.f, 0.f, (float) width, (float) height),
-                  viewport(0.f, 0.f, (float) width, (float) height),
-                  depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
-                  texture(Texture::create(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding)) {
+            : width(width), height(height),
+              scissor(0.f, 0.f, (float) width, (float) height),
+              viewport(0.f, 0.f, (float) width, (float) height),
+              depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
+              texture(Texture::create(std::nullopt)) {
+
+            if (options.mapping) texture->mapping = *options.mapping;
+            if (options.wrapS) texture->wrapS = *options.wrapS;
+            if (options.wrapT) texture->wrapT = *options.wrapT;
+            if (options.magFilter) texture->magFilter = *options.magFilter;
+            if (options.minFilter) texture->minFilter = *options.minFilter;
+            if (options.format) texture->format = *options.format;
+            if (options.type) texture->type = *options.type;
+            if (options.anisotropy) texture->anisotropy = *options.anisotropy;
+            if (options.encoding) texture->encoding = *options.encoding;
         }
     };
 

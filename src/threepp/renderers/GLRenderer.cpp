@@ -407,7 +407,9 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
 
     if (_currentRenderTarget) {
 
-        // TODO
+        // Generate mipmap if we're using any kind of mipmap filtering
+
+        textures.updateRenderTargetMipmap(_currentRenderTarget);
     }
 
     //
@@ -614,7 +616,7 @@ void GLRenderer::renderObject(
 
     if (object->onBeforeRender) {
 
-        object->onBeforeRender.value()(this, scene, camera, geometry, material, group);
+        object->onBeforeRender.value()((void *) this, scene, camera, geometry, material, group);
     }
 
     object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, object->matrixWorld);

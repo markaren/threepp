@@ -42,7 +42,7 @@ namespace threepp::gl {
 
         void deallocateTexture(Texture *texture);
 
-        void deallocateRenderTarget( GLRenderTarget *renderTarget );
+        void deallocateRenderTarget(GLRenderTarget *renderTarget);
 
         void resetTextureUnits();
 
@@ -57,18 +57,20 @@ namespace threepp::gl {
         void setTextureCube(Texture &texture, GLuint slot);
 
         // Setup storage for target texture and bind it to correct framebuffer
-        void setupFrameBufferTexture(GLuint framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget);
+        void setupFrameBufferTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget);
 
-        void setupRenderBufferStorage(GLuint renderbuffer, const std::shared_ptr<GLRenderTarget> &renderTarget);
+        void setupRenderBufferStorage(unsigned int renderbuffer, const std::shared_ptr<GLRenderTarget> &renderTarget);
 
         // Setup resources for a Depth Texture for a FBO (needs an extension)
-        void setupDepthTexture(GLuint framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget);
+        void setupDepthTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget);
 
         // Setup GL resources for a non-texture depth buffer
         void setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget> &renderTarget);
 
         // Set up GL resources for the render target
         void setupRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget);
+
+        void updateRenderTargetMipmap(const std::shared_ptr<GLRenderTarget> &renderTarget);
 
     private:
         struct TextureEventListener : EventListener {

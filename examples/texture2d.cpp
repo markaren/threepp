@@ -1,5 +1,6 @@
 
 #include "threepp/threepp.hpp"
+#include "threepp/objects/Reflector.hpp"
 
 using namespace threepp;
 
@@ -39,9 +40,16 @@ int main() {
     planeMaterial->side = DoubleSide;
     planeMaterial->map = loader.loadTexture("textures/brick_bump.jpg");
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.setY(-1);
-    plane->rotateX(math::degToRad(-90));
+    plane->position.setZ(-1);
     scene->add(plane);
+
+    Reflector::Options opt;
+    opt.clipBias = 0.003f;
+    opt.color = 0x777777;
+    auto reflector = Reflector::create(PlaneGeometry::create(10, 10), opt);
+    reflector->rotateX(math::degToRad(-90));
+    reflector->position.setY(-2.5f);
+    scene->add(reflector);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
