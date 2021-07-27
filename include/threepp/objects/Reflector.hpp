@@ -27,7 +27,7 @@ namespace threepp {
             return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));
         }
 
-        ~Reflector() override = default;
+        ~Reflector() override;
 
     private:
         struct Impl;
