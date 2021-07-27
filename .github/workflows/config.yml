@@ -48,15 +48,36 @@ jobs:
       - name: Install prerequisites
         run: |
           pip3 install conan
-        shell: bash
 
       - name: Run conan
         run: |
           conan install . -s build_type=Release --install-folder=build --build=missing
-        shell: bash
 
       - name: Configure and build
         run: |
           cmake . -A x64 -Bbuild
           cmake --build build --config Release
-        shell: bash
+
+  conan-on-darwin:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-10.15]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install prerequisites
+        run: |
+          pip3 install conan
+
+      - name: Run conan
+        run: |
+          conan install . -s build_type=Release --install-folder=build --build=missing
+
+      - name: Configure and build
+        run: |
+          cmake . -Bbuild
+          cmake --build build
