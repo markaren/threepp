@@ -38,7 +38,7 @@ You can now build the project as a regular CMake project using e.g., the command
 
 ### Implementation notes
 
-In general you'll find that math classes are value types, while other threepp expect smart pointers for other types. 
+In general, you'll find that math classes are value types, while threepp expect smart pointers for other types. 
 For convenience, geometries, materials etc. has a static `::create` function that returns a `std::shared_ptr`.
 There should never be a need to handle memory explicitly using threepp. Yay!
 
