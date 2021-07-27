@@ -27,11 +27,16 @@ namespace threepp {
             return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));
         }
 
-    private:
-        class Impl;
-        std::unique_ptr<Impl> pimpl_;
+        ~Reflector() override = default;
+
+    protected:
 
         Reflector(const std::shared_ptr<BufferGeometry> &geometry, Options options);
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
+
     };
 
 }// namespace threepp

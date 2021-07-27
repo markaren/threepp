@@ -49,9 +49,8 @@ namespace {
 
 }// namespace
 
-class Reflector::Impl {
+struct Reflector::Impl {
 
-public:
     Impl(Reflector &reflector, Reflector::Options options)
         : reflector_(reflector), clipBias((options.clipBias) ? *options.clipBias : 0) {
 
@@ -179,5 +178,4 @@ private:
 };
 
 Reflector::Reflector(const std::shared_ptr<BufferGeometry> &geometry, Reflector::Options options)
-    : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {
-}
+    : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {}
