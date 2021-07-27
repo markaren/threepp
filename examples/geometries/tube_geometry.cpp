@@ -36,7 +36,7 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto curve = std::make_shared<CustomSineCurve>(10);
+    auto curve = std::make_shared<CustomSineCurve>(10.f);
 
     const auto geometry = TubeGeometry::create(curve);
     const auto material = MeshBasicMaterial::create();

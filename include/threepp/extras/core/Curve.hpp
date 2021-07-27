@@ -119,7 +119,7 @@ namespace threepp {
             this->getPoint(0, last);
             float sum = 0;
 
-            cache.emplace_back(0);
+            cache.emplace_back(0.f);
 
             for (int p = 1; p <= divisions; p++) {
 
@@ -157,7 +157,7 @@ namespace threepp {
 
             } else {
 
-                targetArcLength = u * arcLengths[il - 1];
+                targetArcLength = u * arcLengths[static_cast<int>(il) - 1];
             }
 
             // binary search for the index with largest value smaller than target u distance
@@ -166,9 +166,9 @@ namespace threepp {
 
             while (low <= high) {
 
-                i = std::floor(low + (high - low) / 2);// less likely to overflow, though probably not issue here, JS doesn't really have integers, all numbers are floats
+                i = std::floor(low + (high - low) / 2);
 
-                comparison = arcLengths[i] - targetArcLength;
+                comparison = arcLengths[static_cast<int>(i)] - targetArcLength;
 
                 if (comparison < 0) {
 
@@ -196,8 +196,8 @@ namespace threepp {
 
             // we could get finer grain at lengths, or use simple interpolation between two points
 
-            const float lengthBefore = arcLengths[i];
-            const float lengthAfter = arcLengths[i + 1];
+            const float lengthBefore = arcLengths[static_cast<int>(i)];
+            const float lengthAfter = arcLengths[static_cast<int>(i) + 1];
 
             const float segmentLength = lengthAfter - lengthBefore;
 
