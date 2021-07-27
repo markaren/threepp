@@ -21,7 +21,7 @@ namespace threepp {
 
     public:
         std::optional<Color> background;
-        std::optional<Texture> environment;
+        std::shared_ptr<Texture> environment;
         std::optional<FogVariant> fog;
 
         std::shared_ptr<Material> overrideMaterial;
@@ -29,6 +29,7 @@ namespace threepp {
         bool autoUpdate = true;
 
         static std::shared_ptr<Scene> create() {
+
             return std::shared_ptr<Scene>(new Scene());
         }
 

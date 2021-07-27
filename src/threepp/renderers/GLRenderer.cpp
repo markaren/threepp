@@ -171,16 +171,16 @@ void GLRenderer::dispose() {
     bindingStates.dispose();
 }
 
-void GLRenderer::deallocateMaterial(Material *material) {
+void GLRenderer::deallocateMaterial(Material &material) {
 
     releaseMaterialProgramReferences(material);
 
-    properties.materialProperties.remove(material->uuid);
+    properties.materialProperties.remove(material.uuid);
 }
 
-void GLRenderer::releaseMaterialProgramReferences(Material *material) {
+void GLRenderer::releaseMaterialProgramReferences(Material &material) {
 
-    auto &programs = properties.materialProperties.get(material->uuid).programs;
+    auto &programs = properties.materialProperties.get(material.uuid).programs;
 
     if (!programs.empty()) {
 
@@ -191,20 +191,26 @@ void GLRenderer::releaseMaterialProgramReferences(Material *material) {
     }
 }
 
-void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, std::optional<GeometryGroup> group) {
+void GLRenderer::renderBufferDirect(
+        const std::shared_ptr<Camera> &camera,
+        const std::shared_ptr<Scene> &scene,
+        const std::shared_ptr<BufferGeometry> &geometry,
+        const std::shared_ptr<Material> &material,
+        const std::shared_ptr<Object3D> &object,
+        std::optional<GeometryGroup> group) {
 
     if (scene == nullptr) {
         throw std::runtime_error("TODO");
         //scene = &_emptyScene; // renderBufferDirect second parameter used to be fog (could be nullptr)
     }
 
-    bool isMesh = instanceof <Mesh>(object);
+    bool isMesh = instanceof <Mesh>(object.get());
 
     const auto frontFaceCW = (isMesh && object->matrixWorld.determinant() < 0);
 
     auto program = setProgram(camera, scene, material, object);
 
-    state.setMaterial(material, frontFaceCW);
+    state.setMaterial(material.get(), frontFaceCW);
 
     //
 
@@ -226,16 +232,16 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
     int rangeFactor = 1;
 
-    auto wireframeMaterial = dynamic_cast<MaterialWithWireframe *>(material);
+    auto wireframeMaterial = dynamic_cast<MaterialWithWireframe *>(material.get());
     bool isWireframeMaterial = wireframeMaterial != nullptr;
 
     if (isWireframeMaterial && wireframeMaterial->wireframe) {
 
-        index = geometries.getWireframeAttribute(geometry);
+        index = geometries.getWireframeAttribute(*geometry);
         rangeFactor = 2;
     }
 
-    bindingStates.setup(object, material, program, geometry, index);
+    bindingStates.setup(object.get(), material.get(), program, geometry.get(), index);
 
     gl::BufferRenderer *renderer = bufferRenderer.get();
 
@@ -278,7 +284,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
             renderer->setMode(GL_TRIANGLES);
         }
 
-    } else if (instanceof <Line>(object)) {
+    } else if (instanceof <Line>(object.get())) {
 
         float lineWidth = 1;
         if (isWireframeMaterial) {
@@ -287,11 +293,11 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
 
         state.setLineWidth(lineWidth * getTargetPixelRatio());
 
-        if (instanceof <LineSegments>(object)) {
+        if (instanceof <LineSegments>(object.get())) {
 
             renderer->setMode(GL_LINES);
 
-        } else if (instanceof <LineLoop>(object)) {
+        } else if (instanceof <LineLoop>(object.get())) {
 
             renderer->setMode(GL_LINE_LOOP);
 
@@ -300,7 +306,7 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
             renderer->setMode(GL_LINE_STRIP);
         }
 
-    } else if (instanceof <Points>(object)) {
+    } else if (instanceof <Points>(object.get())) {
 
         renderer->setMode(GL_POINTS);
 
@@ -309,15 +315,15 @@ void GLRenderer::renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry
         renderer->setMode(GL_TRIANGLES);
     }
 
-    if (instanceof <InstancedMesh>(object)) {
+    if (instanceof <InstancedMesh>(object.get())) {
 
-        auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
+        auto instancedMesh = dynamic_cast<InstancedMesh *>(object.get());
 
         renderer->renderInstances(drawStart, drawCount, instancedMesh->count);
 
-    } else if (instanceof <InstancedBufferGeometry>(geometry)) {
+    } else if (instanceof <InstancedBufferGeometry>(geometry.get())) {
 
-        auto g = dynamic_cast<InstancedBufferGeometry *>(geometry);
+        auto g = dynamic_cast<InstancedBufferGeometry *>(geometry.get());
         const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
         renderer->renderInstances(drawStart, drawCount, instanceCount);
@@ -350,14 +356,14 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
     _frustum.setFromProjectionMatrix(_projScreenMatrix);
 
     _localClippingEnabled = this->localClippingEnabled;
-    _clippingEnabled = clipping.init(this->clippingPlanes, _localClippingEnabled, camera.get());
+    _clippingEnabled = clipping.init(this->clippingPlanes, _localClippingEnabled, camera);
 
     currentRenderList = renderLists.get(scene.get(), (int) renderListStack.size());
     currentRenderList->init();
 
     renderListStack.emplace_back(currentRenderList);
 
-    projectObject(scene.get(), camera.get(), 0, sortObjects);
+    projectObject(scene, camera, 0, sortObjects);
 
     currentRenderList->finish();
 
@@ -393,9 +399,9 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
     auto &transmissiveObjects = currentRenderList->transmissive;
     auto &transparentObjects = currentRenderList->transparent;
     //
-    if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene.get(), camera.get());
-    if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene.get(), camera.get());
-    if (!transparentObjects.empty()) renderObjects(transparentObjects, scene.get(), camera.get());
+    if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene, camera);
+    if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene, camera);
+    if (!transparentObjects.empty()) renderObjects(transparentObjects, scene, camera);
 
     //
 
@@ -444,7 +450,7 @@ void GLRenderer::render(const std::shared_ptr<Scene> &scene, const std::shared_p
     }
 }
 
-void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
+void GLRenderer::projectObject(const std::shared_ptr<Object3D> &object, const std::shared_ptr<Camera> &camera, int groupOrder, bool sortObjects) {
 
     if (!object->visible) return;
 
@@ -452,18 +458,18 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
 
     if (visible) {
 
-        if (instanceof <Group>(object)) {
+        if (instanceof <Group>(object.get())) {
 
             groupOrder = object->renderOrder;
 
-        } else if (instanceof <LOD>(object)) {
+        } else if (instanceof <LOD>(object.get())) {
 
-            auto lod = dynamic_cast<LOD *>(object);
-            if (lod->autoUpdate) lod->update(camera);
+            auto lod = dynamic_cast<LOD *>(object.get());
+            if (lod->autoUpdate) lod->update(camera.get());
 
-        } else if (instanceof <Light>(object)) {
+        } else if (instanceof <Light>(object.get())) {
 
-            auto light = dynamic_cast<Light *>(object);
+            auto light = dynamic_cast<Light *>(object.get());
 
             currentRenderState->pushLight(light);
 
@@ -505,7 +511,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
             //
             //            currentRenderList.push( object, null, object.material, groupOrder, _vector3.z, null );
 
-        } else if (instanceof <Mesh>(object) || instanceof <Line>(object) || instanceof <Points>(object)) {
+        } else if (instanceof <Mesh>(object.get()) || instanceof <Line>(object.get()) || instanceof <Points>(object.get())) {
 
             if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
 
@@ -545,15 +551,22 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
 
     for (const auto &child : object->children) {
 
-        projectObject(child.get(), camera, groupOrder, sortObjects);
+        projectObject(child, camera, groupOrder, sortObjects);
     }
 }
 
-void GLRenderer::renderTransmissiveObjects(std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects, std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects, Scene *scene, Camera *camera) {
+void GLRenderer::renderTransmissiveObjects(
+        std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects,
+        std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects,
+        const std::shared_ptr<Scene> &scene,
+        const std::shared_ptr<Camera> &camera) {
     //TODO
 }
 
-void GLRenderer::renderObjects(std::vector<std::shared_ptr<gl::RenderItem>> &renderList, Scene *scene, Camera *camera) {
+void GLRenderer::renderObjects(
+        std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
+        const std::shared_ptr<Scene> &scene,
+        const std::shared_ptr<Camera> &camera) {
 
     auto overrideMaterial = scene->overrideMaterial;
 
@@ -561,7 +574,7 @@ void GLRenderer::renderObjects(std::vector<std::shared_ptr<gl::RenderItem>> &ren
 
         auto object = renderItem->object;
         auto geometry = renderItem->geometry;
-        auto material = overrideMaterial == nullptr ? renderItem->material : overrideMaterial.get();
+        auto material = overrideMaterial == nullptr ? renderItem->material : overrideMaterial;
         auto group = renderItem->group;
 
         if (false /*camera.isArrayCamera*/) {
@@ -591,9 +604,16 @@ void GLRenderer::renderObjects(std::vector<std::shared_ptr<gl::RenderItem>> &ren
     }
 }
 
-void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, std::optional<GeometryGroup> group) {
+void GLRenderer::renderObject(
+        const std::shared_ptr<Object3D> &object,
+        const std::shared_ptr<Scene> &scene,
+        const std::shared_ptr<Camera> &camera,
+        const std::shared_ptr<BufferGeometry> &geometry,
+        const std::shared_ptr<Material> &material,
+        std::optional<GeometryGroup> group) {
 
     if (object->onBeforeRender) {
+
         object->onBeforeRender.value()(this, scene, camera, geometry, material, group);
     }
 
@@ -616,11 +636,15 @@ void GLRenderer::renderObject(Object3D *object, Scene *scene, Camera *camera, Bu
     }
 
     if (object->onAfterRender) {
+
         object->onAfterRender.value()(this, scene, camera, geometry, material, group);
     }
 }
 
-std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene *scene, Object3D *object) {
+std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
+        const std::shared_ptr<Material> &material,
+        const std::shared_ptr<Scene> &scene,
+        const std::shared_ptr<Object3D> &object) {
 
     //    bool isScene = instanceof <Scene>(scene);
     //
@@ -633,14 +657,14 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
     auto lightsStateVersion = lights.state.version;
 
-    auto parameters = programCache.getParameters(*this, material, lights.state, (int) shadowsArray.size(), scene, object);
+    auto parameters = programCache.getParameters(*this, material.get(), lights.state, (int) shadowsArray.size(), scene, object);
     auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;
 
     // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
 
-    materialProperties.environment = instanceof <MeshStandardMaterial>(material) ? scene->environment : std::nullopt;
+    materialProperties.environment = instanceof <MeshStandardMaterial>(material.get()) ? scene->environment : nullptr;
     materialProperties.fog = scene->fog;
     //    materialProperties.envMap = cubemaps.get( material.envMap || materialProperties.environment );
 
@@ -680,7 +704,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
 
     auto &uniforms = materialProperties.uniforms;
 
-    if (! instanceof <ShaderMaterial>(material) && ! instanceof <RawShaderMaterial>(material) || material->clipping) {
+    if (! instanceof <ShaderMaterial>(material.get()) && ! instanceof <RawShaderMaterial>(material.get()) || material->clipping) {
 
         uniforms->operator[]("clippingPlanes") = clipping.uniform;
     }
@@ -703,8 +727,8 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
         uniforms->operator[]("spotLights").setValue(lights.state.spot);
         uniforms->operator[]("spotLightShadows").setValue(lights.state.spotShadow);
         uniforms->operator[]("rectAreaLights").setValue(lights.state.rectArea);
-//        uniforms->operator[]("ltc_1").setValue(lights.state.rectAreaLTC1);
-//        uniforms->operator[]("ltc_2").setValue(lights.state.rectAreaLTC2);
+        //        uniforms->operator[]("ltc_1").setValue(lights.state.rectAreaLTC1);
+        //        uniforms->operator[]("ltc_2").setValue(lights.state.rectAreaLTC2);
         uniforms->operator[]("pointLights").setValue(lights.state.point);
         uniforms->operator[]("pointLightShadows").setValue(lights.state.pointShadow);
         uniforms->operator[]("hemisphereLights").setValue(lights.state.hemi);
@@ -726,7 +750,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(Material *material, Scene 
     return materialProperties.currentProgram;
 }
 
-void GLRenderer::updateCommonMaterialProperties(Material *material, gl::ProgramParameters &parameters) {
+void GLRenderer::updateCommonMaterialProperties(const std::shared_ptr<Material> &material, gl::ProgramParameters &parameters) {
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
@@ -738,29 +762,36 @@ void GLRenderer::updateCommonMaterialProperties(Material *material, gl::ProgramP
 }
 
 
-std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *scene, Material *material, Object3D *object) {
+std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
+        const std::shared_ptr<Camera> &camera,
+        const std::shared_ptr<Scene> &scene,
+        const std::shared_ptr<Material> &material,
+        const std::shared_ptr<Object3D> &object) {
 
     //    bool isScene = instanceof <Scene>(scene);
 
     //            if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
     //
 
-    bool isMeshBasicMaterial = instanceof <MeshBasicMaterial>(material);
-    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material);
-    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material);
-    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material);
-    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
-    bool isShadowMaterial = instanceof <ShadowMaterial>(material);
-    bool isShaderMaterial = instanceof <ShaderMaterial>(material);
-    bool isEnvMap = instanceof <MaterialWithEnvMap>(material) && dynamic_cast<MaterialWithEnvMap *>(material)->envMap;
+    bool isMeshBasicMaterial = instanceof <MeshBasicMaterial>(material.get());
+    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material.get());
+    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material.get());
+    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material.get());
+    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material.get());
+    bool isShadowMaterial = instanceof <ShadowMaterial>(material.get());
+    bool isShaderMaterial = instanceof <ShaderMaterial>(material.get());
+    bool isEnvMap = instanceof <MaterialWithEnvMap>(material.get()) && dynamic_cast<MaterialWithEnvMap *>(material.get())->envMap;
 
     textures.resetTextureUnits();
 
     auto fog = scene->fog;
-    auto environment = instanceof <MeshStandardMaterial>(material) ? scene->environment : std::nullopt;
-    int encoding = (_currentRenderTarget == nullptr) ? outputEncoding : _currentRenderTarget->texture.encoding;
+    auto environment = instanceof <MeshStandardMaterial>(material.get()) ? scene->environment : nullptr;
+    int encoding = (_currentRenderTarget == nullptr) ? outputEncoding : _currentRenderTarget->texture->encoding;
     //                const envMap = cubemaps.get(material.envMap || environment);
-    bool vertexAlphas = material->vertexColors && object->geometry() && object->geometry()->hasAttribute("color") && object->geometry()->getAttribute<float>("color")->itemSize() == 4;
+    bool vertexAlphas = material->vertexColors &&
+                        object->geometry() &&
+                        object->geometry()->hasAttribute("color") &&
+                        object->geometry()->getAttribute<float>("color")->itemSize() == 4;
 
     auto &materialProperties = properties.materialProperties.get(material->uuid);
     auto &lights = currentRenderState->getLights();
@@ -781,7 +812,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
     //
 
     bool needsProgramChange = false;
-    bool isInstancedMesh = instanceof <InstancedMesh>(object);
+    bool isInstancedMesh = instanceof <InstancedMesh>(object.get());
 
     if (material->version == materialProperties.version) {
 
@@ -901,7 +932,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             isMeshStandardMaterial ||
             isShaderMaterial) {
 
-            p_uniforms->setValue("isOrthographic", instanceof <OrthographicCamera>(camera));
+            p_uniforms->setValue("isOrthographic", instanceof <OrthographicCamera>(camera.get()));
         }
 
         if (isMeshPhongMaterial ||
@@ -947,14 +978,14 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(Camera *camera, Scene *sce
             materials.refreshFogUniforms(m_uniforms, *fog);
         }
 
-        materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height /*, _transmissionRenderTarget*/);
+        materials.refreshMaterialUniforms(m_uniforms, material.get(), _pixelRatio, _size.height /*, _transmissionRenderTarget*/);
 
         gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }
 
     if (isShaderMaterial) {
 
-        auto m = dynamic_cast<ShaderMaterial *>(material);
+        auto m = dynamic_cast<ShaderMaterial *>(material.get());
         if (m->uniformsNeedUpdate) {
 
             gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
@@ -991,18 +1022,18 @@ void GLRenderer::markUniformsLightsNeedsUpdate(std::shared_ptr<UniformMap> &unif
     uniforms->operator[]("hemisphereLights").needsUpdate = value;
 }
 
-bool GLRenderer::materialNeedsLights(Material *material) {
+bool GLRenderer::materialNeedsLights(const std::shared_ptr<Material> &material) {
 
-    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material);
-    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material);
-    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material);
-    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material);
-    bool isShadowMaterial = instanceof <ShadowMaterial>(material);
-    bool isShaderMaterial = instanceof <ShaderMaterial>(material);
+    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material.get());
+    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material.get());
+    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material.get());
+    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material.get());
+    bool isShadowMaterial = instanceof <ShadowMaterial>(material.get());
+    bool isShaderMaterial = instanceof <ShaderMaterial>(material.get());
     bool lights = false;
 
-    if (instanceof <MaterialWithLights>(material)) {
-        lights = dynamic_cast<MaterialWithLights *>(material)->lights;
+    if (instanceof <MaterialWithLights>(material.get())) {
+        lights = dynamic_cast<MaterialWithLights *>(material.get())->lights;
     }
 
     return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
@@ -1012,137 +1043,70 @@ bool GLRenderer::materialNeedsLights(Material *material) {
 
 void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
-    // TODO
+    _currentRenderTarget = renderTarget;
+    _currentActiveCubeFace = activeCubeFace;
+    _currentActiveMipmapLevel = activeMipmapLevel;
 
-//    _currentRenderTarget = renderTarget;
-//    _currentActiveCubeFace = activeCubeFace;
-//    _currentActiveMipmapLevel = activeMipmapLevel;
-//
-//    if ( renderTarget && !properties.renderTargetProperties.get( renderTarget->uuid ).glFramebuffer.empty()) {
-//
-//        textures.setupRenderTarget( renderTarget );
-//
-//    }
-//
-//    int framebuffer = null;
-//    bool isCube = false;
-//    bool isRenderTarget3D = false;
-//
-//    if ( renderTarget ) {
-//
-//        const auto &texture = renderTarget->texture;
-//
-//        if ( false /*texture.isDataTexture3D || texture.isDataTexture2DArray*/ ) {
-//
-//            isRenderTarget3D = true;
-//
-//        }
-//
-//        auto glFramebuffer = properties.renderTargetProperties.get( renderTarget->uuid ).glFramebuffer;
-//
-//        if ( false /*renderTarget.isWebGLCubeRenderTarget*/ ) {
-//
-//            framebuffer = glFramebuffer.at(activeCubeFace);
-//            isCube = true;
-//
-//        } else if ( false /*renderTarget.isWebGLMultisampleRenderTarget*/ ) {
-//
-//            framebuffer = *properties.renderTargetProperties.get( renderTarget->uuid ).glMultisampledFramebuffer;
-//
-//        } else {
-//
-//            framebuffer = glFramebuffer[0];
-//
-//        }
-//
-//        _currentViewport.copy( renderTarget->viewport );
-//        _currentScissor.copy( renderTarget->scissor );
-//        _currentScissorTest = renderTarget->scissorTest;
-//
-//    } else {
-//
-//        _currentViewport.copy( _viewport ).multiplyScalar( _pixelRatio ).floor();
-//        _currentScissor.copy( _scissor ).multiplyScalar( _pixelRatio ).floor();
-//        _currentScissorTest = _scissorTest;
-//
-//    }
-//
-//    const bool framebufferBound = state.bindFramebuffer( GL_FRAMEBUFFER, framebuffer );
-//
-//    if ( framebufferBound && capabilities.drawBuffers ) {
-//
-//        bool needsUpdate = false;
-//
-//        if ( renderTarget ) {
-//
-//            if ( renderTarget.isWebGLMultipleRenderTargets ) {
-//
-//                const auto &textures = renderTarget->texture;
-//
-//                if ( _currentDrawBuffers.size() != textures.length || _currentDrawBuffers[ 0 ] != GL_COLOR_ATTACHMENT0 ) {
-//
-//                    for ( int i = 0, il = textures.length; i < il; i ++ ) {
-//
-//                        _currentDrawBuffers[ i ] = GL_COLOR_ATTACHMENT0 + i;
-//
-//                    }
-//
-//                    _currentDrawBuffers.length = textures.length;
-//
-//                    needsUpdate = true;
-//
-//                }
-//
-//            } else {
-//
-//                if ( _currentDrawBuffers.size() != 1 || _currentDrawBuffers[ 0 ] != GL_COLOR_ATTACHMENT0 ) {
-//
-//                    _currentDrawBuffers[ 0 ] = GL_COLOR_ATTACHMENT0;
-//                    _currentDrawBuffers.resize(1);
-//
-//                    needsUpdate = true;
-//
-//                }
-//
-//            }
-//
-//        } else {
-//
-//            if ( _currentDrawBuffers.size() != 1 || _currentDrawBuffers[ 0 ] != GL_BACK ) {
-//
-//                _currentDrawBuffers.clear();
-//                _currentDrawBuffers.emplace_back(GL_BACK);
-//
-//                needsUpdate = true;
-//
-//            }
-//
-//        }
-//
-//        if ( needsUpdate ) {
-//
-//                glDrawBuffers( (int) _currentDrawBuffers.size(), _currentDrawBuffers.data() );
-//
-//        }
-//
-//    }
-//
-//    state.viewport( _currentViewport );
-//    state.scissor( _currentScissor );
-//    state.setScissorTest( _currentScissorTest );
-//
-//    if ( isCube ) {
-//
-//        const auto &textureProperties = properties.textureProperties.get( renderTarget->texture.uuid );
-//        glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_CUBE_MAP_POSITIVE_X + activeCubeFace, textureProperties.glTexture, activeMipmapLevel );
-//
-//    } else if ( isRenderTarget3D ) {
-//
-//        const auto &textureProperties = properties.textureProperties.get( renderTarget->texture.uuid );
-//        const int layer = activeCubeFace || 0;
-//        glFramebufferTextureLayer( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, textureProperties.glTexture, activeMipmapLevel || 0, layer );
-//
-//    }
+    if (renderTarget && !properties.renderTargetProperties.get(renderTarget->uuid).glFramebuffer) {
+
+        textures.setupRenderTarget(renderTarget);
+    }
+
+    unsigned int framebuffer = 0;
+
+    if (renderTarget) {
+
+        const auto &texture = renderTarget->texture;
+
+        framebuffer = *properties.renderTargetProperties.get(renderTarget->uuid).glFramebuffer;
+
+        _currentViewport.copy(renderTarget->viewport);
+        _currentScissor.copy(renderTarget->scissor);
+        _currentScissorTest = renderTarget->scissorTest;
+
+    } else {
+
+        _currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor();
+        _currentScissor.copy(_scissor).multiplyScalar(static_cast<float>(_pixelRatio)).floor();
+        _currentScissorTest = _scissorTest;
+    }
+
+    const bool framebufferBound = state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+
+    if (framebufferBound && gl::GLCapabilities::instance().drawBuffers) {
+
+        bool needsUpdate = false;
+
+        if (renderTarget) {
+
+            if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers[0] != GL_COLOR_ATTACHMENT0) {
+
+                _currentDrawBuffers[0] = GL_COLOR_ATTACHMENT0;
+                _currentDrawBuffers.resize(1);
+
+                needsUpdate = true;
+            }
+
+        } else {
+
+            if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers[0] != GL_BACK) {
+
+                _currentDrawBuffers.clear();
+                _currentDrawBuffers.emplace_back(GL_BACK);
+
+                needsUpdate = true;
+            }
+        }
+
+        if (needsUpdate) {
+
+            glDrawBuffers((int) _currentDrawBuffers.size(), _currentDrawBuffers.data());
+        }
+    }
+
+    state.viewport(_currentViewport);
+    state.scissor(_currentScissor);
+    state.setScissorTest(_currentScissorTest.value_or(false));
 }
 
 
@@ -1153,5 +1117,5 @@ void GLRenderer::OnMaterialDispose::onEvent(Event &event) {
 
     material->removeEventListener("dispose", this);
 
-    scope_.deallocateMaterial(material);
+    scope_.deallocateMaterial(*material);
 }

@@ -18,7 +18,7 @@ namespace threepp {
 
         float distance;
         Vector3 point;
-        Object3D *object;
+        Object3D* object;
 
         std::optional<int> faceIndex;
         std::optional<Vector2> uv;

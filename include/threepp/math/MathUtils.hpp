@@ -18,6 +18,17 @@ namespace threepp::math {
 
     float randomInRange(float min, float max);
 
+    bool isPowerOfTwo(int value);
+
+    float ceilPowerOfTwo(float value);
+
+    float floorPowerOfTwo(float value);
+
+    template <typename T>
+    inline int sgn(T val) {
+        return (T(0) < val) - (val < T(0));
+    }
+
 }// namespace threepp::math
 
 #endif//THREEPP_MATHUTILS_HPP

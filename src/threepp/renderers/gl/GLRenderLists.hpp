@@ -15,9 +15,9 @@ namespace threepp::gl {
     struct RenderItem {
 
         int id;
-        Object3D *object;
-        BufferGeometry *geometry;
-        Material *material;
+        std::shared_ptr<Object3D> object;
+        std::shared_ptr<BufferGeometry> geometry;
+        std::shared_ptr<Material> material;
         std::shared_ptr<GLProgram> program;
         int groupOrder;
         int renderOrder;
@@ -38,11 +38,23 @@ namespace threepp::gl {
 
         void init();
 
-        std::shared_ptr<RenderItem> getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
+        std::shared_ptr<RenderItem> getNextRenderItem(
+                const std::shared_ptr<Object3D> &object,
+                const std::shared_ptr<BufferGeometry> &geometry,
+                const std::shared_ptr<Material> &material,
+                int groupOrder, float z, std::optional<GeometryGroup> group);
 
-        void push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
+        void push(
+                const std::shared_ptr<Object3D> &object,
+                const std::shared_ptr<BufferGeometry> &geometry,
+                const std::shared_ptr<Material> &material,
+                int groupOrder, float z, std::optional<GeometryGroup> group);
 
-        void unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group);
+        void unshift(
+                const std::shared_ptr<Object3D> &object,
+                const std::shared_ptr<BufferGeometry> &geometry,
+                const std::shared_ptr<Material> &material,
+                int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void sort();
 
@@ -60,7 +72,7 @@ namespace threepp::gl {
 
             if (!lists.count(scene->uuid)) {
 
-                auto &l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{ std::make_shared<GLRenderList>(properties)};
+                auto &l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{std::make_shared<GLRenderList>(properties)};
                 return l.back();
 
             } else {

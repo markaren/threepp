@@ -59,14 +59,12 @@ int main() {
         for (auto &intersect : intersects) {
 
             auto object = intersect.object;
-            if (instanceof <Mesh>(object)) {
-                auto mesh = dynamic_cast<Mesh *>(object);
-                if (instanceof <MaterialWithColor>(mesh->material())) {
-                    auto m = dynamic_cast<MaterialWithColor*>(mesh->material());
-                    m->color.randomize();
-                }
-            }
 
+            auto mesh = dynamic_cast<Mesh *>(object);
+            if (mesh) {
+                auto colorMaterial = std::dynamic_pointer_cast<MaterialWithColor>(mesh->material());
+                if (colorMaterial) colorMaterial->color.randomize();
+            }
         }
 
         renderer.render(scene, camera);

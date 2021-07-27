@@ -6,6 +6,7 @@
 #include "threepp/core/EventDispatcher.hpp"
 
 #include "threepp/textures/Texture.hpp"
+#include "threepp/textures/DepthTexture.hpp"
 
 #include "threepp/math/Vector4.hpp"
 
@@ -34,9 +35,8 @@ namespace threepp {
             bool generateMipmaps = false;
             bool depthBuffer = true;
             bool stencilBuffer = false;
-            std::optional<Texture> depthTexture;
+            std::shared_ptr<DepthTexture> depthTexture;
         };
-
 
         const std::string uuid = utils::generateUUID();
 
@@ -49,15 +49,15 @@ namespace threepp {
 
         Vector4 viewport{};
 
-        Texture texture;
+        std::shared_ptr<Texture> texture;
 
         bool depthBuffer;
         bool stencilBuffer;
-        std::optional<Texture> depthTexture;
+        std::shared_ptr<DepthTexture> depthTexture;
 
-        void setTexture(Texture &texture) {
+        void setTexture(const std::shared_ptr<Texture> &texture) {
 
-            texture.image = Image{width, height, depth};
+            texture->image = Image{width, height, depth};
 
             this->texture = texture;
         }
@@ -70,9 +70,9 @@ namespace threepp {
                 this->height = height;
                 this->depth = depth;
 
-                this->texture.image->width = width;
-                this->texture.image->height = height;
-                this->texture.image->depth = depth;
+                this->texture->image->width = width;
+                this->texture->image->height = height;
+                this->texture->image->depth = depth;
 
                 this->dispose();
             }
@@ -101,7 +101,7 @@ namespace threepp {
 
         void dispose() {
 
-            this->dispatchEvent("dispose");
+            this->dispatchEvent("dispose", this);
         }
 
         static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options &options) {
@@ -115,7 +115,7 @@ namespace threepp {
                   scissor(0.f, 0.f, (float) width, (float) height),
                   viewport(0.f, 0.f, (float) width, (float) height),
                   depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
-                  texture(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding) {
+                  texture(Texture::create(std::nullopt, options.mapping, options.wrapS, options.wrapT, options.magFilter, options.minFilter, options.type, options.anisotropy, options.encoding)) {
         }
     };
 

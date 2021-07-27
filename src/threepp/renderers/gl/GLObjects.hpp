@@ -34,30 +34,30 @@ namespace threepp::gl {
         GLObjects(GLGeometries &geometries, GLAttributes &attributes, GLInfo &info)
             : attributes_(attributes), geometries_(geometries), info_(info), onInstancedMeshDispose(*this) {}
 
-        BufferGeometry *update(Object3D *object) {
+        std::shared_ptr<BufferGeometry> update(const std::shared_ptr<Object3D> &object) {
 
             const int frame = info_.render.frame;
 
-            BufferGeometry *geometry = object->geometry();
-            BufferGeometry *buffergeometry = geometries_.get(geometry);
+            auto geometry = object->geometry();
+            geometries_.get(*geometry);
 
             // Update once per frame
 
-            if (!updateMap_.count(buffergeometry->id) || updateMap_[buffergeometry->id] != frame) {
+            if (!updateMap_.count(geometry->id) || updateMap_[geometry->id] != frame) {
 
-                geometries_.update(buffergeometry);
+                geometries_.update(*geometry);
 
-                updateMap_[buffergeometry->id] = frame;
+                updateMap_[geometry->id] = frame;
             }
 
-            if (instanceof <InstancedMesh>(object)) {
+            if (instanceof <InstancedMesh>(object.get())) {
 
                 if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
 
                     object->addEventListener("dispose", &onInstancedMeshDispose);
                 }
 
-                auto o = dynamic_cast<InstancedMesh *>(object);
+                auto o = dynamic_cast<InstancedMesh *>(object.get());
 
                 attributes_.update(o->instanceMatrix.get(), GL_ARRAY_BUFFER);
 
@@ -67,7 +67,7 @@ namespace threepp::gl {
                 }
             }
 
-            return buffergeometry;
+            return geometry;
         }
 
         void dispose() {

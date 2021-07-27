@@ -17,14 +17,14 @@ namespace threepp::gl {
 
         bool glInit{};
         std::optional<int> maxMipLevel{};
-        unsigned int glTexture{};
+        std::optional<unsigned int> glTexture{};
         unsigned int version{};
     };
 
     struct RenderTargetProperties {
 
-        std::unordered_map<int, int> glFramebuffer;
-        std::optional<int> glMultisampledFramebuffer;
+        std::optional<unsigned int> glFramebuffer;
+        std::optional<unsigned int> glDepthbuffer;
     };
 
     struct MaterialProperties {
@@ -39,8 +39,8 @@ namespace threepp::gl {
         std::optional<int> numClippingPlanes;
         std::vector<float> clippingState;
 
-        std::optional<Texture> envMap;
-        std::optional<Texture> environment;
+        std::shared_ptr<Texture> envMap;
+        std::shared_ptr<Texture> environment;
 
         int outputEncoding{};
         bool instancing{};
