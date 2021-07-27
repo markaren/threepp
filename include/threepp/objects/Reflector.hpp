@@ -29,14 +29,11 @@ namespace threepp {
 
         ~Reflector() override = default;
 
-    protected:
-
-        Reflector(const std::shared_ptr<BufferGeometry> &geometry, Options options);
-
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
 
+        Reflector(const std::shared_ptr<BufferGeometry> &geometry, Options options);
     };
 
 }// namespace threepp
