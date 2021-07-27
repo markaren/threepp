@@ -47,7 +47,7 @@ void GLBindingStates::setup(Object3D *object, Material *material, std::shared_pt
 GLuint GLBindingStates::createVertexArrayObject() const {
 
     GLuint vao;
-    glCreateVertexArrays(1, &vao);
+    glGenVertexArrays(1, &vao);
     return vao;
 }
 
