@@ -227,10 +227,12 @@ Vector3 &Vector3::applyQuaternion(const Quaternion &q) {
 
     return *this;
 }
+
 Vector3 &Vector3::project(const Camera &camera) {
 
     return this->applyMatrix4(camera.matrixWorldInverse).applyMatrix4(camera.projectionMatrix);
 }
+
 Vector3 &Vector3::unproject(const Camera &camera) {
 
     return this->applyMatrix4(camera.projectionMatrixInverse).applyMatrix4(camera.matrixWorld);
@@ -489,7 +491,13 @@ Vector3 &Vector3::setFromMatrix3Column(const Matrix3 &m, unsigned int index) {
     return this->fromArray(m.elements, index * 3);
 }
 
+Vector3 Vector3::clone() const {
+
+    return Vector3{x,y,z};
+}
+
 bool Vector3::equals(const Vector3 &v) const {
 
     return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z));
 }
+

@@ -10,7 +10,7 @@ however much remains to be done..
 
 ##### What works?
 
-* Box, Sphere, Plane and Cylindrical geometries  
+* Box, Sphere, Plane, Cylindrical and Tube geometries  
 * 2D Textures
 * Transparency
 * OrbitControls
@@ -26,15 +26,21 @@ This is mostly a personal exercise. Don't expect much support, although contribu
 
 ### How to build
 
-In order to successfully build threepp, you'll need [conan](https://conan.io/).
+In order to successfully build threepp, you'll need [conan](https://conan.io/) in order to handle dependencies.
 
 `pip install conan`
 
-With conan installed, invoke `run_conan_install.sh`.
+With conan installed, invoke `run_conan_install.sh`. This will fetch all necessary third party libraries as listed in `conanfile.txt`.
 
 _note that this command is hardcoded to use the default CLion build folders (cmake-build-\<target>)_
 
 You can now build the project as a regular CMake project using e.g., the command line.
+
+### Implementation notes
+
+In general you'll find that math classes are value types, while other threepp expect smart pointers for other types. 
+For convenience, geometries, materials etc. has a static `::create` function that returns a `std::shared_ptr`.
+There should never be a need to handle memory explicitly using threepp. Yay!
 
 ### Example
 
@@ -51,7 +57,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 5;
 
-    auto renderer = GLRenderer(canvas);
+    GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
     renderer.setSize(canvas.getSize());
 

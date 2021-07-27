@@ -133,53 +133,48 @@ Vector4 &Vector4::divideScalar(float scalar) {
 
 Vector4 &Vector4::floor() {
 
-    this->x = std::floor( this->x );
-    this->y = std::floor( this->y );
-    this->z = std::floor( this->z );
-    this->w = std::floor( this->w );
+    this->x = std::floor(this->x);
+    this->y = std::floor(this->y);
+    this->z = std::floor(this->z);
+    this->w = std::floor(this->w);
 
     return *this;
-
 }
 Vector4 &Vector4::ceil() {
 
-    this->x = std::ceil( this->x );
-    this->y = std::ceil( this->y );
-    this->z = std::ceil( this->z );
-    this->w = std::ceil( this->w );
+    this->x = std::ceil(this->x);
+    this->y = std::ceil(this->y);
+    this->z = std::ceil(this->z);
+    this->w = std::ceil(this->w);
 
     return *this;
-
 }
 Vector4 &Vector4::round() {
 
-    this->x = std::round( this->x );
-    this->y = std::round( this->y );
-    this->z = std::round( this->z );
-    this->w = std::round( this->w );
+    this->x = std::round(this->x);
+    this->y = std::round(this->y);
+    this->z = std::round(this->z);
+    this->w = std::round(this->w);
 
     return *this;
-
 }
 Vector4 &Vector4::roundToZero() {
 
-    this->x = ( this->x < 0 ) ? std::ceil( this->x ) : std::floor( this->x );
-    this->y = ( this->y < 0 ) ? std::ceil( this->y ) : std::floor( this->y );
-    this->z = ( this->z < 0 ) ? std::ceil( this->z ) : std::floor( this->z );
-    this->w = ( this->w < 0 ) ? std::ceil( this->w ) : std::floor( this->w );
+    this->x = (this->x < 0) ? std::ceil(this->x) : std::floor(this->x);
+    this->y = (this->y < 0) ? std::ceil(this->y) : std::floor(this->y);
+    this->z = (this->z < 0) ? std::ceil(this->z) : std::floor(this->z);
+    this->w = (this->w < 0) ? std::ceil(this->w) : std::floor(this->w);
 
     return *this;
-
 }
 Vector4 &Vector4::negate() {
 
-    this->x = - this->x;
-    this->y = - this->y;
-    this->z = - this->z;
-    this->w = - this->w;
+    this->x = -this->x;
+    this->y = -this->y;
+    this->z = -this->z;
+    this->w = -this->w;
 
     return *this;
-
 }
 
 float Vector4::dot(const Vector4 &v) const {
@@ -211,6 +206,11 @@ Vector4 &Vector4::normalize() {
 Vector4 &Vector4::setLength(float length) {
 
     return this->normalize().multiplyScalar(length);
+}
+
+Vector4 Vector4::clone() const {
+
+    return Vector4{x, y, z, w};
 }
 
 bool Vector4::equals(const Vector4 &v) const {

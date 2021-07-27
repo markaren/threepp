@@ -8,5 +8,6 @@
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
+#include "threepp/geometries/TubeGeometry.hpp"
 
 #endif//THREEPP_GEOMETRIES_HPP

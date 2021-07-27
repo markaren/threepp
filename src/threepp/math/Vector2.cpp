@@ -324,8 +324,14 @@ Vector2 &Vector2::lerpVectors(const Vector2 &v1, const Vector2 &v2, float alpha)
 
 }
 
+Vector2 Vector2::clone() const {
+
+    return Vector2{x, y};
+}
+
 bool Vector2::equals(const Vector2 &v) const {
 
     return ( ( v.x == this->x ) && ( v.y == this->y ) );
 
 }
+

@@ -25,6 +25,9 @@ set(publicHeaders
         "threepp/cameras/OrthographicCamera.hpp"
         "threepp/cameras/CameraView.hpp"
 
+        "threepp/extras/core/Curve.hpp"
+        "threepp/extras/curve/CatmullRomCurve3.hpp"
+
         "threepp/input/KeyListener.hpp"
         "threepp/input/MouseListener.hpp"
 
@@ -35,6 +38,7 @@ set(publicHeaders
         "threepp/geometries/CylinderGeometry.hpp"
         "threepp/geometries/PlaneGeometry.hpp"
         "threepp/geometries/SphereGeometry.hpp"
+        "threepp/geometries/TubeGeometry.hpp"
 
         "threepp/helpers/helpers.hpp"
         "threepp/helpers/AxesHelper.hpp"

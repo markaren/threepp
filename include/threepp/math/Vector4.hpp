@@ -73,6 +73,8 @@ namespace threepp {
 
         Vector4 &setLength(float length);
 
+        Vector4 clone() const;
+
         [[nodiscard]] bool equals(const Vector4 &v) const;
 
         bool operator==(const Vector4 &other) const {
