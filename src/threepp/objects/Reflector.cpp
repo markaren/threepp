@@ -81,7 +81,6 @@ public:
         material->uniforms->operator[]("color").setValue(color);
 
         reflector.onBeforeRender = RenderCallback([this](void *renderer, auto scene, auto camera, auto, auto, auto) {
-
             reflectorWorldPosition.setFromMatrixPosition(reflector_.matrixWorld);
             cameraWorldPosition.setFromMatrixPosition(camera->matrixWorld);
             rotationMatrix.extractRotation(reflector_.matrixWorld);

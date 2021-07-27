@@ -616,7 +616,7 @@ void GLRenderer::renderObject(
 
     if (object->onBeforeRender) {
 
-        object->onBeforeRender.value()((void*)this, scene, camera, geometry, material, group);
+        object->onBeforeRender.value()((void *) this, scene, camera, geometry, material, group);
     }
 
     object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, object->matrixWorld);

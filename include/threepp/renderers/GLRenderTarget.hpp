@@ -5,8 +5,8 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
-#include "threepp/textures/Texture.hpp"
 #include "threepp/textures/DepthTexture.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include "threepp/math/Vector4.hpp"
 
@@ -19,7 +19,6 @@ namespace threepp {
     class GLRenderTarget : public EventDispatcher {
 
     public:
-
         struct Options {
 
             std::optional<int> mapping;
@@ -111,11 +110,11 @@ namespace threepp {
 
     protected:
         GLRenderTarget(unsigned int width, unsigned int height, const Options &options)
-                : width(width), height(height),
-                  scissor(0.f, 0.f, (float) width, (float) height),
-                  viewport(0.f, 0.f, (float) width, (float) height),
-                  depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
-                  texture(Texture::create(std::nullopt)) {
+            : width(width), height(height),
+              scissor(0.f, 0.f, (float) width, (float) height),
+              viewport(0.f, 0.f, (float) width, (float) height),
+              depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
+              texture(Texture::create(std::nullopt)) {
 
             if (options.mapping) texture->mapping = *options.mapping;
             if (options.wrapS) texture->wrapS = *options.wrapS;
@@ -126,7 +125,6 @@ namespace threepp {
             if (options.type) texture->type = *options.type;
             if (options.anisotropy) texture->anisotropy = *options.anisotropy;
             if (options.encoding) texture->encoding = *options.encoding;
-
         }
     };
 
