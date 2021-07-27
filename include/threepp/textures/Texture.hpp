@@ -63,8 +63,36 @@ namespace threepp {
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding;
 
-        std::optional<std::function<void(Texture&)>> onUpdate;
+        std::optional<std::function<void(Texture &)>> onUpdate;
 
+        void updateMatrix();
+
+        void dispose();
+
+        void transformUv(Vector2 &uv) const;
+
+        void needsUpdate();
+
+        [[nodiscard]] unsigned int version() const;
+
+        Texture &copy(const Texture &source);
+
+        static std::shared_ptr<Texture> create(
+                std::optional<Image> image = std::nullopt,
+                int mapping = Texture::DEFAULT_MAPPING,
+                int wrapS = ClampToEdgeWrapping,
+                int wrapT = ClampToEdgeWrapping,
+                int magFilter = LinearFilter,
+                int minFilter = LinearMipmapLinearFilter,
+                int format = RGBAFormat,
+                int type = UnsignedByteType,
+                int anisotropy = 1,
+                int encoding = LinearEncoding) {
+
+            return std::shared_ptr<Texture>(new Texture(std::move(image), mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding));
+        }
+
+    protected:
         explicit Texture(
                 std::optional<Image> image = std::nullopt,
                 int mapping = Texture::DEFAULT_MAPPING,
@@ -78,23 +106,14 @@ namespace threepp {
                 int encoding = LinearEncoding)
             : image(std::move(image)),
               mapping(mapping),
-              wrapS(wrapS), wrapT(wrapT),
-              magFilter(magFilter), minFilter(minFilter),
-              format(format), type(type),
-              anisotropy(anisotropy), encoding(encoding) {}
-
-
-        void updateMatrix();
-
-        void dispose();
-
-        void transformUv(Vector2 &uv) const;
-
-        void needsUpdate();
-
-        [[nodiscard]] unsigned int version() const;
-
-        Texture &copy(const Texture &source);
+              wrapS(wrapS),
+              wrapT(wrapT),
+              magFilter(magFilter),
+              minFilter(minFilter),
+              format(format),
+              type(type),
+              anisotropy(anisotropy),
+              encoding(encoding) {}
 
     private:
         unsigned int version_ = 0;

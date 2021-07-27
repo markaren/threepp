@@ -8,24 +8,20 @@ GLGeometries::GLGeometries(GLAttributes &attributes, GLInfo &info, GLBindingStat
         : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(*this) {
 }
 
-BufferGeometry *GLGeometries::get(BufferGeometry *geometry) {
+void GLGeometries::get(BufferGeometry &geometry) {
 
-    if (geometries_[geometry->id]) {
-        return geometry;
-    }
+    if (geometries_[geometry.id]) return;
 
-    geometry->addEventListener("dispose", &onGeometryDispose_);
+    geometry.addEventListener("dispose", &onGeometryDispose_);
 
-    geometries_[geometry->id] = true;
+    geometries_[geometry.id] = true;
 
     info_.memory.geometries++;
-
-    return geometry;
 }
 
-void GLGeometries::update(BufferGeometry *geometry) {
+void GLGeometries::update(BufferGeometry &geometry) {
 
-    auto &geometryAttributes = geometry->getAttributes();
+    auto &geometryAttributes = geometry.getAttributes();
 
     // Updating index buffer in VAO now. See WebGLBindingStates.
 
@@ -35,12 +31,12 @@ void GLGeometries::update(BufferGeometry *geometry) {
     }
 }
 
-void GLGeometries::updateWireframeAttribute(BufferGeometry *geometry) {
+void GLGeometries::updateWireframeAttribute(BufferGeometry &geometry) {
 
     std::vector<int> indices;
 
-    const auto geometryIndex = geometry->getIndex();
-    const auto geometryPosition = geometry->getAttribute<float>("position");
+    const auto geometryIndex = geometry.getIndex();
+    const auto geometryPosition = geometry.getAttribute<float>("position");
     unsigned int version = 0;
 
     if ( geometryIndex != nullptr ) {
@@ -80,23 +76,23 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry *geometry) {
 
     // Updating index buffer in VAO now. See WebGLBindingStates
 
-    if ( wireframeAttributes_.count(geometry->id) ) {
-        auto previousAttribute = wireframeAttributes_.at(geometry->id).get();
+    if ( wireframeAttributes_.count(geometry.id) ) {
+        auto previousAttribute = wireframeAttributes_.at(geometry.id).get();
         attributes_.remove( previousAttribute );
     }
 
-    wireframeAttributes_[geometry->id] = std::move(attribute);
+    wireframeAttributes_[geometry.id] = std::move(attribute);
 }
 
-IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry *geometry) {
+IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry &geometry) {
 
-    if (wireframeAttributes_.count(geometry->id)) {
+    if (wireframeAttributes_.count(geometry.id)) {
 
-        const auto &currentAttribute = wireframeAttributes_.at(geometry->id);
+        const auto &currentAttribute = wireframeAttributes_.at(geometry.id);
 
-        if (geometry->hasIndex()) {
+        if (geometry.hasIndex()) {
 
-            auto geometryIndex = geometry->getIndex();
+            auto geometryIndex = geometry.getIndex();
 
             // if the attribute is obsolete, create a new one
 
@@ -111,7 +107,7 @@ IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry *geometry
         updateWireframeAttribute(geometry);
     }
 
-    return wireframeAttributes_.at(geometry->id).get();
+    return wireframeAttributes_.at(geometry.id).get();
 }
 
 

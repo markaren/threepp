@@ -411,6 +411,34 @@ Vector3 &Vector3::crossVectors(const Vector3 &a, const Vector3 &b) {
     return *this;
 }
 
+Vector3 &Vector3::projectOnVector(const Vector3 &v) {
+
+    const auto denominator = v.lengthSq();
+
+    if (denominator == 0) return this->set(0, 0, 0);
+
+    const auto scalar = v.dot(*this) / denominator;
+
+    return this->copy(v).multiplyScalar(scalar);
+}
+
+Vector3 &Vector3::projectOnPlane(const Vector3 &planeNormal) {
+
+    Vector3 _vector;
+    _vector.copy(*this).projectOnVector(planeNormal);
+
+    return this->sub(_vector);
+}
+
+Vector3 &Vector3::reflect(const Vector3 &normal) {
+
+    // reflect incident vector off plane orthogonal to normal
+    // normal is assumed to have unit length
+
+    Vector3 _vector;
+    return this->sub(_vector.copy(normal).multiplyScalar(2 * this->dot(normal)));
+}
+
 float Vector3::angleTo(const Vector3 &v) const {
 
     const auto denominator = std::sqrt(lengthSq() * v.lengthSq());
@@ -500,4 +528,3 @@ bool Vector3::equals(const Vector3 &v) const {
 
     return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z));
 }
-

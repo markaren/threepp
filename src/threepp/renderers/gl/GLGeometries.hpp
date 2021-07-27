@@ -27,13 +27,13 @@ namespace threepp::gl {
 
         GLGeometries(GLAttributes &attributes, GLInfo &info, GLBindingStates &bindingStates);
 
-        BufferGeometry *get(BufferGeometry *geometry);
+        void get(BufferGeometry &geometry);
 
-        void update(BufferGeometry *geometry);
+        void update(BufferGeometry &geometry);
 
-        void updateWireframeAttribute(BufferGeometry *geometry);
+        void updateWireframeAttribute(BufferGeometry &geometry);
 
-        IntBufferAttribute *getWireframeAttribute(BufferGeometry *geometry);
+        IntBufferAttribute *getWireframeAttribute(BufferGeometry &geometry);
 
     private:
         GLInfo& info_;

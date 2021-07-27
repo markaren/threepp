@@ -18,6 +18,7 @@ set(publicHeaders
         "threepp/core/InstancedBufferGeometry.hpp"
         "threepp/core/Object3D.hpp"
         "threepp/core/Raycaster.hpp"
+        "threepp/core/Shader.hpp"
         "threepp/core/Uniform.hpp"
 
         "threepp/cameras/Camera.hpp"
@@ -97,7 +98,9 @@ set(publicHeaders
         "threepp/objects/LOD.hpp"
         "threepp/objects/Mesh.hpp"
         "threepp/objects/Points.hpp"
-        
+        "threepp/objects/Reflector.hpp"
+
+        "threepp/textures/DepthTexture.hpp"
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
@@ -153,7 +156,6 @@ set(privateHeaders
         "threepp/renderers/gl/GLUtils.hpp"
         "threepp/renderers/gl/ProgramParameters.hpp"
 
-        "threepp/renderers/shaders/Shader.hpp"
         "threepp/renderers/shaders/ShaderChunk.hpp"
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
@@ -187,6 +189,7 @@ set(sources
 
         "threepp/loaders/stb.cpp"
         "threepp/loaders/ImageLoader.cpp"
+        "threepp/loaders/TextureLoader.cpp"
 
         "threepp/math/Box2.cpp"
         "threepp/math/Box3.cpp"
@@ -215,6 +218,7 @@ set(sources
         "threepp/lights/SpotLightShadow.cpp"
 
         "threepp/objects/Mesh.cpp"
+        "threepp/objects/Reflector.cpp"
 
         "threepp/textures/Texture.cpp"
 

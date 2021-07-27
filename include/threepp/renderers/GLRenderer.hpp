@@ -29,9 +29,9 @@
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 #include "threepp/renderers/gl/GLRenderStates.hpp"
+#include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
-#include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include <memory>
@@ -132,31 +132,60 @@ namespace threepp {
 
         void dispose();
 
-        void deallocateMaterial(Material *material);
+        void deallocateMaterial(Material &material);
 
-        void releaseMaterialProgramReferences(Material *material);
+        void releaseMaterialProgramReferences(Material &material);
 
-        void renderBufferDirect(Camera *camera, Scene *scene, BufferGeometry *geometry, Material *material, Object3D *object, std::optional<GeometryGroup> group);
+        void renderBufferDirect(
+                const std::shared_ptr<Camera> &camera,
+                const std::shared_ptr<Scene> &scene,
+                const std::shared_ptr<BufferGeometry> &geometry,
+                const std::shared_ptr<Material> &material,
+                const std::shared_ptr<Object3D> &object,
+                std::optional<GeometryGroup> group);
 
-        void render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera);
+        void render(const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera> &camera);
 
-        void projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects);
+        void projectObject(
+                const std::shared_ptr<Object3D> &object,
+                const std::shared_ptr<Camera> &camera,
+                int groupOrder, bool sortObjects);
 
-        void renderTransmissiveObjects( std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects, std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects, Scene *scene, Camera *camera );
+        void renderTransmissiveObjects(
+                std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects,
+                std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects,
+                const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera> &camera);
 
-        void renderObjects(std::vector<std::shared_ptr<gl::RenderItem>> &renderList, Scene *scene, Camera *camera);
+        void renderObjects(
+                std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
+                const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera> &camera);
 
-        void renderObject(Object3D *object, Scene *scene, Camera *camera, BufferGeometry *geometry, Material *material, std::optional<GeometryGroup> group);
+        void renderObject(
+                const std::shared_ptr<Object3D> &object,
+                const std::shared_ptr<Scene> &scene,
+                const std::shared_ptr<Camera> &camera,
+                const std::shared_ptr<BufferGeometry> &geometry,
+                const std::shared_ptr<Material> &material,
+                std::optional<GeometryGroup> group);
 
-        std::shared_ptr<gl::GLProgram> getProgram(Material *material, Scene *scene, Object3D *object);
+        std::shared_ptr<gl::GLProgram> getProgram(
+                const std::shared_ptr<Material> &material,
+                const std::shared_ptr<Scene> &scene,
+                const std::shared_ptr<Object3D> &object);
 
-        void updateCommonMaterialProperties(Material *material, gl::ProgramParameters &parameters);
+        void updateCommonMaterialProperties(
+                const std::shared_ptr<Material> &material,
+                gl::ProgramParameters &parameters);
 
-        std::shared_ptr<gl::GLProgram> setProgram(Camera *camera, Scene *scene, Material *material, Object3D *object);
+        std::shared_ptr<gl::GLProgram> setProgram(
+                const std::shared_ptr<Camera> &camera,
+                const std::shared_ptr<Scene> &scene,
+                const std::shared_ptr<Material> &material,
+                const std::shared_ptr<Object3D> &object);
 
-        void markUniformsLightsNeedsUpdate(std::shared_ptr<UniformMap>& uniforms, bool value );
+        void markUniformsLightsNeedsUpdate(std::shared_ptr<UniformMap> &uniforms, bool value);
 
-        bool materialNeedsLights(Material *material);
+        bool materialNeedsLights(const std::shared_ptr<Material> &material);
 
         [[nodiscard]] int getActiveCubeFace() const {
 
@@ -176,7 +205,6 @@ namespace threepp {
         void setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
 
     private:
-
         struct OnMaterialDispose : EventListener {
 
             explicit OnMaterialDispose(GLRenderer &scope);
@@ -202,7 +230,7 @@ namespace threepp {
         std::shared_ptr<GLRenderTarget> _currentRenderTarget = nullptr;
         unsigned int _currentMaterialId = -1;
 
-        Camera *_currentCamera = nullptr;
+        std::shared_ptr<Camera> _currentCamera = nullptr;
         Vector4 _currentViewport;
         Vector4 _currentScissor;
         std::optional<bool> _currentScissorTest;
@@ -217,7 +245,7 @@ namespace threepp {
         Vector4 _scissor;
         bool _scissorTest = false;
 
-        std::vector<GLenum> _currentDrawBuffers {GL_BACK};
+        std::vector<GLenum> _currentDrawBuffers{GL_BACK};
 
         // frustum
 
@@ -255,6 +283,8 @@ namespace threepp {
 
         friend struct gl::ProgramParameters;
         friend struct gl::GLShadowMap;
+
+        friend class Reflector;
     };
 
 }// namespace threepp

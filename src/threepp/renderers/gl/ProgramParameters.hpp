@@ -130,8 +130,8 @@ namespace threepp {
                     const GLRenderer &renderer,
                     const GLLights::LightState &lights,
                     int numShadows,
-                    Object3D* object,
-                    Scene *scene,
+                    const std::shared_ptr<Object3D> &object,
+                    const std::shared_ptr<Scene> &scene,
                     Material *material,
                     const std::unordered_map<std::string, std::string> &shaderIDs);
 

@@ -93,8 +93,8 @@ namespace {
         void setValueT1(const UniformValue &value, GLTextures *textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
-            auto tex = std::get<Texture>(value);
-            textures->setTexture2D(tex, unit);
+            auto tex = std::get<std::shared_ptr<Texture>>(value);
+            textures->setTexture2D(*tex, unit);
         }
 
         void setValueV1i(const UniformValue &value) const {

@@ -17,12 +17,14 @@ namespace threepp {
     class Line : public Object3D {
 
     public:
-        BufferGeometry *geometry() override {
-            return geometry_.get();
+        std::shared_ptr<BufferGeometry> geometry() override {
+
+            return geometry_;
         }
 
-        Material *material() override {
-            return material_.get();
+        std::shared_ptr<Material> material() override {
+
+            return material_;
         }
 
         virtual void computeLineDistances() {

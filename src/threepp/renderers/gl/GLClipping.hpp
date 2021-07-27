@@ -33,7 +33,10 @@ namespace threepp::gl {
             uniform.needsUpdate = false;
         }
 
-        bool init(const std::vector<Plane> &planes, bool enableLocalClipping, Camera *camera) {
+        bool init(
+                const std::vector<Plane> &planes,
+                bool enableLocalClipping,
+                const std::shared_ptr<Camera> &camera) {
 
             bool enabled =
                     !planes.empty() ||
@@ -62,13 +65,13 @@ namespace threepp::gl {
             resetGlobalState();
         }
 
-        void setState(Material *material, Camera *camera, bool useCache) {
+        void setState(const std::shared_ptr<Material> &material, const std::shared_ptr<Camera> &camera, bool useCache) {
 
             auto &planes = material->clippingPlanes;
             auto clipIntersection = material->clipIntersection;
             auto clipShadows = material->clipShadows;
 
-            auto& materialProperties = properties.materialProperties.get(material->uuid);
+            auto &materialProperties = properties.materialProperties.get(material->uuid);
 
             if (!localClippingEnabled || planes.empty() || renderingShadows && !clipShadows) {
 
@@ -90,7 +93,7 @@ namespace threepp::gl {
                 const auto nGlobal = renderingShadows ? 0 : numGlobalPlanes,
                            lGlobal = nGlobal * 4;
 
-                auto& dstArray = materialProperties.clippingState;
+                auto &dstArray = materialProperties.clippingState;
 
                 uniform.setValue(dstArray);// ensure unique state
 
@@ -125,7 +128,10 @@ namespace threepp::gl {
             numIntersection = 0;
         }
 
-        std::vector<float> projectPlanes(const std::vector<Plane> &planes, const Camera *camera, int dstOffset, bool skipTransform = false) {
+        std::vector<float> projectPlanes(
+                const std::vector<Plane> &planes,
+                const std::shared_ptr<Camera> &camera,
+                int dstOffset, bool skipTransform = false) {
 
             int nPlanes = (int) planes.size();
             std::vector<float> dstArray;

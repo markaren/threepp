@@ -16,6 +16,8 @@ namespace threepp::gl {
 
         const std::string precision = "highp";
 
+        const bool drawBuffers = true;
+
         const bool logarithmicDepthBuffer = false;
 
         const GLint maxTextures;

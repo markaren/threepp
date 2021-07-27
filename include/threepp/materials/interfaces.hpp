@@ -50,7 +50,7 @@ namespace threepp {
 
         Color emissive;
         float emissiveIntensity;
-        std::optional<Texture> emissiveMap;
+        std::shared_ptr<Texture> emissiveMap;
 
         MaterialWithEmissive(unsigned int emissive, float emissiveIntensity) : emissive(emissive), emissiveIntensity(emissiveIntensity) {}
     };
@@ -81,32 +81,32 @@ namespace threepp {
 
     struct MaterialWithMap : virtual Material {
 
-        std::optional<Texture> map;
+        std::shared_ptr<Texture> map;
     };
 
     struct MaterialWithAlphaMap : virtual Material {
 
-        std::optional<Texture> alphaMap;
+        std::shared_ptr<Texture> alphaMap;
     };
 
     struct MaterialWithSpecularMap : virtual Material {
 
-        std::optional<Texture> specularMap;
+        std::shared_ptr<Texture> specularMap;
     };
 
     struct MaterialWithEnvMap : virtual Material {
 
-        std::optional<Texture> envMap;
+        std::shared_ptr<Texture> envMap;
     };
 
     struct MaterialWithGradientMap : virtual Material {
 
-        std::optional<Texture> gradientMap;
+        std::shared_ptr<Texture> gradientMap;
     };
 
     struct MaterialWithAoMap : virtual Material {
 
-        std::optional<Texture> aoMap;
+        std::shared_ptr<Texture> aoMap;
         float aoMapIntensity;
 
         explicit MaterialWithAoMap(float aoMapIntensity) : aoMapIntensity(aoMapIntensity) {}
@@ -114,7 +114,7 @@ namespace threepp {
 
     struct MaterialWithBumpMap : virtual Material {
 
-        std::optional<Texture> bumpMap;
+        std::shared_ptr<Texture> bumpMap;
         float bumpScale;
 
         explicit MaterialWithBumpMap(float bumpScale) : bumpScale(bumpScale) {}
@@ -122,7 +122,7 @@ namespace threepp {
 
     struct MaterialWithLightMap : virtual Material {
 
-        std::optional<Texture> lightMap;
+        std::shared_ptr<Texture> lightMap;
         float lightMapIntensity;
 
         explicit MaterialWithLightMap(float lightMapIntensity) : lightMapIntensity(lightMapIntensity) {}
@@ -130,7 +130,7 @@ namespace threepp {
 
     struct MaterialWithDisplacementMap : virtual Material {
 
-        std::optional<Texture> displacementMap;
+        std::shared_ptr<Texture> displacementMap;
         float displacementScale;
         float displacementBias;
 
@@ -139,7 +139,7 @@ namespace threepp {
 
     struct MaterialWithNormalMap : virtual Material {
 
-        std::optional<Texture> normalMap;
+        std::shared_ptr<Texture> normalMap;
         int normalMapType;
         Vector2 normalScale;
 
@@ -148,22 +148,22 @@ namespace threepp {
 
     struct MaterialWithMatCap : virtual Material {
 
-        std::optional<Texture> matcap;
+        std::shared_ptr<Texture> matcap;
     };
 
     struct MaterialWithRoughness : virtual Material {
 
-        std::optional<Texture> roughnessMap;
+        std::shared_ptr<Texture> roughnessMap;
     };
 
     struct MaterialWithMetalness : virtual Material {
 
-        std::optional<Texture> metallnessMap;
+        std::shared_ptr<Texture> metallnessMap;
     };
 
     struct MaterialWithThickness : virtual Material {
 
-        std::optional<Texture> thicknessMap;
+        std::shared_ptr<Texture> thicknessMap;
     };
 
     struct MaterialWithSheen : virtual Material {

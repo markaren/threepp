@@ -27,10 +27,15 @@ namespace threepp {
     class Scene;
     class BufferGeometry;
 
+    typedef std::function<void(void *, const std::shared_ptr<Scene> &,
+                               const std::shared_ptr<Camera> &, const std::shared_ptr<BufferGeometry> &,
+                               const std::shared_ptr<Material> &, std::optional<GeometryGroup>)>
+            RenderCallback;
+
     class Object3D : public EventDispatcher {
 
     public:
-        inline static Vector3 defaultUp{0,1,0};
+        inline static Vector3 defaultUp{0, 1, 0};
 
         const unsigned int id{_object3Did++};
 
@@ -46,7 +51,7 @@ namespace threepp {
         Vector3 position;
         Euler rotation;
         Quaternion quaternion;
-        Vector3 scale {1, 1, 1};
+        Vector3 scale{1, 1, 1};
 
         Matrix4 modelViewMatrix;
         Matrix3 normalMatrix;
@@ -66,8 +71,8 @@ namespace threepp {
         bool frustumCulled = true;
         int renderOrder = 0;
 
-        std::optional<std::function<void(void*, Scene*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)>> onBeforeRender;
-        std::optional<std::function<void(void*, Scene*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)>> onAfterRender;
+        std::optional<RenderCallback> onBeforeRender;
+        std::optional<RenderCallback> onAfterRender;
 
         void applyMatrix4(const Matrix4 &matrix);
 
@@ -146,12 +151,12 @@ namespace threepp {
             return std::shared_ptr<Object3D>(new Object3D());
         }
 
-        virtual BufferGeometry *geometry() {
+        virtual std::shared_ptr<BufferGeometry> geometry() {
 
             return nullptr;
         }
 
-        virtual Material *material() {
+        virtual std::shared_ptr<Material> material() {
 
             return nullptr;
         }
@@ -162,7 +167,6 @@ namespace threepp {
         Object3D();
 
     private:
-
         inline static unsigned int _object3Did{0};
 
         friend class Box3;

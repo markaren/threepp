@@ -8,8 +8,6 @@
 
 namespace {
 
-    threepp::Texture emptyTexture;
-
     std::vector<std::vector<float>> arrayCacheF32;
     std::vector<std::vector<int>> arrayCacheI32;
 
