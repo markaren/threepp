@@ -12,7 +12,7 @@ void Texture::updateMatrix() {
 
 void Texture::dispose() {
 
-    this->dispatchEvent("dispose");
+    this->dispatchEvent("dispose", this);
 }
 
 void Texture::transformUv(Vector2 &uv) const {

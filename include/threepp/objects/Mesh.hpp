@@ -15,12 +15,14 @@ namespace threepp {
     class Mesh : public Object3D {
 
     public:
-        BufferGeometry *geometry() override {
-            return geometry_.get();
+        std::shared_ptr<BufferGeometry> geometry() override {
+
+            return geometry_;
         }
 
-        Material *material() override {
-            return materials_[0].get();
+        std::shared_ptr<Material> material() override {
+
+            return materials_[0];
         }
 
         [[nodiscard]] std::vector<std::shared_ptr<Material>> &materials() {

@@ -75,7 +75,11 @@ void gl::GLRenderList::init() {
     transparent.clear();
 }
 
-std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
+std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
+        const std::shared_ptr<Object3D> &object,
+        const std::shared_ptr<BufferGeometry> &geometry,
+        const std::shared_ptr<Material> &material,
+        int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     std::shared_ptr<gl::RenderItem> renderItem = nullptr;
     auto &materialProperties = properties.materialProperties.get(material->uuid);
@@ -114,7 +118,11 @@ std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(Object3D *ob
     return renderItem;
 }
 
-void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
+void gl::GLRenderList::push(
+        const std::shared_ptr<Object3D> &object,
+        const std::shared_ptr<BufferGeometry> &geometry,
+        const std::shared_ptr<Material> &material,
+        int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
@@ -128,7 +136,11 @@ void gl::GLRenderList::push(Object3D *object, BufferGeometry *geometry, Material
     }
 }
 
-void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material *material, int groupOrder, float z, std::optional<GeometryGroup> group) {
+void GLRenderList::unshift(
+        const std::shared_ptr<Object3D> &object,
+        const std::shared_ptr<BufferGeometry> &geometry,
+        const std::shared_ptr<Material> &material,
+        int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
@@ -145,7 +157,6 @@ void GLRenderList::unshift(Object3D *object, BufferGeometry *geometry, Material 
         opaque.insert(opaque.begin(), renderItem);
     }
 }
-
 
 void GLRenderList::sort() {
 

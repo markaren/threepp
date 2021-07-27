@@ -16,7 +16,6 @@ namespace threepp {
     class DirectionalLightHelper : public Object3D {
 
     public:
-
         void update() {
 
             Vector3 _v1{};
@@ -31,13 +30,13 @@ namespace threepp {
 
             if (this->color) {
 
-                dynamic_cast<MaterialWithColor *>(this->lightPlane->material())->color.copy(*this->color);
-                dynamic_cast<MaterialWithColor *>(this->targetLine->material())->color.copy(*this->color);
+                std::dynamic_pointer_cast<MaterialWithColor>(this->lightPlane->material())->color.copy(*this->color);
+                std::dynamic_pointer_cast<MaterialWithColor>(this->targetLine->material())->color.copy(*this->color);
 
             } else {
 
-                dynamic_cast<MaterialWithColor *>(this->lightPlane->material())->color.copy(this->light->color);
-                dynamic_cast<MaterialWithColor *>(this->targetLine->material())->color.copy(this->light->color);
+                std::dynamic_pointer_cast<MaterialWithColor>(this->lightPlane->material())->color.copy(this->light->color);
+                std::dynamic_pointer_cast<MaterialWithColor>(this->targetLine->material())->color.copy(this->light->color);
             }
 
             this->targetLine->lookAt(_v2);
@@ -89,7 +88,6 @@ namespace threepp {
 
             this->update();
         }
-
     };
 
 }// namespace threepp

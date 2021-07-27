@@ -40,7 +40,9 @@ namespace threepp::gl {
 
         void uploadCubeTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot);
 
-        void deallocateTexture(Texture &texture);
+        void deallocateTexture(Texture *texture);
+
+        void deallocateRenderTarget( GLRenderTarget *renderTarget );
 
         void resetTextureUnits();
 
@@ -55,10 +57,18 @@ namespace threepp::gl {
         void setTextureCube(Texture &texture, GLuint slot);
 
         // Setup storage for target texture and bind it to correct framebuffer
-        void setupFrameBufferTexture(GLuint framebuffer, GLRenderTarget &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget);
+        void setupFrameBufferTexture(GLuint framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget);
 
-        void setupRenderBufferStorage(GLuint renderbuffer, GLRenderTarget &renderTarget, bool isMultisample);
+        void setupRenderBufferStorage(GLuint renderbuffer, const std::shared_ptr<GLRenderTarget> &renderTarget);
 
+        // Setup resources for a Depth Texture for a FBO (needs an extension)
+        void setupDepthTexture(GLuint framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget);
+
+        // Setup GL resources for a non-texture depth buffer
+        void setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget> &renderTarget);
+
+        // Set up GL resources for the render target
+        void setupRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget);
 
     private:
         struct TextureEventListener : EventListener {
@@ -71,11 +81,22 @@ namespace threepp::gl {
             GLTextures &scope_;
         };
 
+        struct RenderTargetEventListener : EventListener {
+
+            explicit RenderTargetEventListener(GLTextures &scope) : scope_(scope) {}
+
+            void onEvent(Event &event) override;
+
+        private:
+            GLTextures &scope_;
+        };
+
         GLState &state;
         GLProperties &properties;
         GLInfo &info;
 
         TextureEventListener onTextureDispose_;
+        RenderTargetEventListener onRenderTargetDispose_;
 
         int textureUnits = 0;
     };

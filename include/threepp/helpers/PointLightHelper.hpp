@@ -16,12 +16,11 @@ namespace threepp {
 
             if (this->color) {
 
-                dynamic_cast<MaterialWithColor *>(this->material())->color.setHex(*this->color);
+                std::dynamic_pointer_cast<MaterialWithColor>(this->material())->color.setHex(*this->color);
 
             } else {
 
-                auto m = dynamic_cast<MaterialWithColor *>(this->material());
-                dynamic_cast<MaterialWithColor *>(this->material())->color.copy(this->light->color);
+                std::dynamic_pointer_cast<MaterialWithColor>(this->material())->color.copy(this->light->color);
             }
         }
 

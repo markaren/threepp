@@ -115,6 +115,12 @@ namespace threepp {
 
         Vector3 &crossVectors(const Vector3 &a, const Vector3 &b);
 
+        Vector3 &projectOnVector(const Vector3 &v);
+
+        Vector3 &projectOnPlane(const Vector3 &planeNormal);
+
+        Vector3 &reflect(const Vector3 &normal);
+
         [[nodiscard]] float angleTo(const Vector3 &v) const;
 
         [[nodiscard]] float distanceTo(const Vector3 &v) const;

@@ -22,3 +22,18 @@ float threepp::math::randomInRange(float min, float max) {
 
     return static_cast<float>(dist(e2));
 }
+
+bool threepp::math::isPowerOfTwo(int value) {
+
+    return (value & (value - 1)) == 0 && value != 0;
+}
+
+float threepp::math::floorPowerOfTwo(float value) {
+
+    return std::pow(2.f, floor(std::log(value) / LN2));
+}
+
+float threepp::math::ceilPowerOfTwo(float value) {
+
+    return std::pow(2.f, std::ceil(std::log(value) / LN2));
+}

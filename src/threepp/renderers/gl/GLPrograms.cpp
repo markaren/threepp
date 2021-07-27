@@ -41,12 +41,15 @@ GLPrograms::GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping)
       clipping(clipping) {}
 
 
-
-
-ProgramParameters GLPrograms::getParameters(const GLRenderer &renderer, Material *material, const GLLights::LightState &lights, int numShadows, Scene *scene, Object3D *object) {
+ProgramParameters GLPrograms::getParameters(
+        const GLRenderer &renderer,
+        Material *material,
+        const GLLights::LightState &lights,
+        int numShadows,
+        const std::shared_ptr<Scene> &scene,
+        const std::shared_ptr<Object3D> &object) {
 
     return ProgramParameters(renderer, lights, numShadows, object, scene, material, shaderIDs);
-
 }
 
 std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters) {
@@ -89,7 +92,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
     return utils::join(array);
 }
 
-std::shared_ptr<UniformMap> GLPrograms::getUniforms(Material *material) {
+std::shared_ptr<UniformMap> GLPrograms::getUniforms(const std::shared_ptr<Material> &material) {
 
     std::shared_ptr<UniformMap> uniforms;
 

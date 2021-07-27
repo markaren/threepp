@@ -40,23 +40,23 @@ namespace {
 
         if (mapMaterial && mapMaterial->map) {
 
-            uniforms->operator[]("map").setValue(*mapMaterial->map);
+            uniforms->operator[]("map").setValue(mapMaterial->map);
         }
 
         if (alphaMaterial && alphaMaterial->alphaMap) {
 
-            uniforms->operator[]("alphaMap").setValue(*alphaMaterial->alphaMap);
+            uniforms->operator[]("alphaMap").setValue(alphaMaterial->alphaMap);
         }
 
         if (specularMaterial && specularMaterial->specularMap) {
 
-            uniforms->operator[]("specularMap").setValue(*specularMaterial->specularMap);
+            uniforms->operator[]("specularMap").setValue(specularMaterial->specularMap);
         }
 
-        auto &envMap = properties.materialProperties.get(material->uuid).envMap;
+        auto envMap = properties.materialProperties.get(material->uuid).envMap;
         if (envMap) {
 
-            uniforms->operator[]("envMap").setValue(*envMap);
+            uniforms->operator[]("envMap").setValue(envMap);
             uniforms->operator[]("flipEnvMap").value<bool>() = false;//TODO
 
             auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity *>(material);
@@ -74,7 +74,7 @@ namespace {
         if (lightMaterial) {
 
             if (lightMaterial->lightMap) {
-                uniforms->operator[]("lightMap").setValue(*lightMaterial->lightMap);
+                uniforms->operator[]("lightMap").setValue(lightMaterial->lightMap);
             }
             uniforms->operator[]("lightMapIntensity").setValue(lightMaterial->lightMapIntensity);
         }
@@ -82,7 +82,7 @@ namespace {
         if (aoMaterial) {
 
             if (aoMaterial->aoMap) {
-                uniforms->operator[]("aoMap").setValue(*aoMaterial->aoMap);
+                uniforms->operator[]("aoMap").setValue(aoMaterial->aoMap);
             }
             uniforms->operator[]("aoMapIntensity").setValue(aoMaterial->aoMapIntensity);
         }
@@ -165,7 +165,7 @@ namespace {
 
         auto &emissiveMap = material->emissiveMap;
         if (emissiveMap) {
-            uniforms->operator[]("emissiveMap").setValue(*emissiveMap);
+            uniforms->operator[]("emissiveMap").setValue(emissiveMap);
         }
     }
 
@@ -177,13 +177,13 @@ namespace {
         auto &emissiveMap = material->emissiveMap;
         if (emissiveMap) {
 
-            uniforms->operator[]("emissiveMap").setValue(*emissiveMap);
+            uniforms->operator[]("emissiveMap").setValue(emissiveMap);
         }
 
         auto &bumpMap = material->bumpMap;
         if (bumpMap) {
 
-            uniforms->operator[]("bumpMap").setValue(*bumpMap);
+            uniforms->operator[]("bumpMap").setValue(bumpMap);
             uniforms->operator[]("bumpScale").setValue(material->bumpScale);
             if (material->side == BackSide) {
                 uniforms->operator[]("bumpScale").value<float>() *= -1;
@@ -193,7 +193,7 @@ namespace {
         auto &normalMap = material->normalMap;
         if (normalMap) {
 
-            uniforms->operator[]("normalMap").setValue(*normalMap);
+            uniforms->operator[]("normalMap").setValue(normalMap);
             uniforms->operator[]("normalScale").value<Vector2>().copy(material->normalScale);
             if (material->side == BackSide) {
                 uniforms->operator[]("normalScale").value<Vector2>().negate();
@@ -203,7 +203,7 @@ namespace {
         auto &displacementMap = material->displacementMap;
         if (displacementMap) {
 
-            uniforms->operator[]("displacementMap").setValue(*displacementMap);
+            uniforms->operator[]("displacementMap").setValue(displacementMap);
             uniforms->operator[]("displacementScale").value<float>() = material->displacementScale;
             uniforms->operator[]("displacementBias").value<float>() = material->displacementBias;
         }
@@ -214,19 +214,19 @@ namespace {
         auto &gradientMap = material->gradientMap;
         if (gradientMap) {
 
-            uniforms->operator[]("gradientMap").setValue(*gradientMap);
+            uniforms->operator[]("gradientMap").setValue(gradientMap);
         }
 
         auto &emissiveMap = material->emissiveMap;
         if (emissiveMap) {
 
-            uniforms->operator[]("emissiveMap").setValue(*emissiveMap);
+            uniforms->operator[]("emissiveMap").setValue(emissiveMap);
         }
 
         auto &bumpMap = material->bumpMap;
         if (bumpMap) {
 
-            uniforms->operator[]("bumpMap").setValue(*bumpMap);
+            uniforms->operator[]("bumpMap").setValue(bumpMap);
             uniforms->operator[]("bumpScale").value<float>() = material->bumpScale;
             if (material->side == BackSide) {
                 uniforms->operator[]("bumpScale").value<float>() *= -1;
@@ -236,7 +236,7 @@ namespace {
         auto &normalMap = material->normalMap;
         if (normalMap) {
 
-            uniforms->operator[]("normalMap").setValue(*normalMap);
+            uniforms->operator[]("normalMap").setValue(normalMap);
             uniforms->operator[]("normalScale").value<Vector2>().copy(material->normalScale);
             if (material->side == BackSide) {
                 uniforms->operator[]("normalScale").value<Vector2>().negate();
@@ -246,7 +246,7 @@ namespace {
         auto &displacementMap = material->displacementMap;
         if (displacementMap) {
 
-            uniforms->operator[]("displacementMap").setValue(*displacementMap);
+            uniforms->operator[]("displacementMap").setValue(displacementMap);
             uniforms->operator[]("displacementScale").value<float>() = material->displacementScale;
             uniforms->operator[]("displacementBias").value<float>() = material->displacementBias;
         }

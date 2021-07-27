@@ -88,7 +88,7 @@ namespace threepp {
 
         void updateProjectionMatrix() override;
 
-        static std::shared_ptr<PerspectiveCamera> create(float fov, float aspect = 1, float near = 0.1, float far = 2000) {
+        static std::shared_ptr<PerspectiveCamera> create(float fov = 60, float aspect = 1, float near = 0.1, float far = 2000) {
 
             return std::shared_ptr<PerspectiveCamera>(new PerspectiveCamera(fov, aspect, near, far));
         }

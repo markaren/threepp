@@ -171,7 +171,7 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
                 const auto b = index->getX(i + 1);
                 const auto c = index->getX(i + 2);
 
-                intersection = checkBufferGeometryIntersection(this, material(), raycaster, _ray, *position, uv, uv2, a, b, c);
+                intersection = checkBufferGeometryIntersection(this, material().get(), raycaster, _ray, *position, uv, uv2, a, b, c);
 
                 if (intersection) {
 
@@ -222,7 +222,7 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
                 const int b = i + 1;
                 const int c = i + 2;
 
-                intersection = checkBufferGeometryIntersection(this, material(), raycaster, _ray, *position, uv, uv2, a, b, c);
+                intersection = checkBufferGeometryIntersection(this, material().get(), raycaster, _ray, *position, uv, uv2, a, b, c);
 
                 if (intersection) {
 

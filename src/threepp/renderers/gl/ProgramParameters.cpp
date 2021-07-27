@@ -11,9 +11,7 @@ using namespace threepp::gl;
 
 namespace {
 
-    std::optional<Texture> emptyMap;
-
-    int getTextureEncodingFromMap(std::optional<Texture> &map) {
+    int getTextureEncodingFromMap(const std::shared_ptr<Texture> &map) {
 
         return map ? map->encoding : LinearEncoding;
     }
@@ -24,8 +22,8 @@ ProgramParameters::ProgramParameters(
         const GLRenderer &renderer,
         const GLLights::LightState &lights,
         int numShadows,
-        Object3D *object,
-        Scene *scene,
+        const std::shared_ptr<Object3D> &object,
+        const std::shared_ptr<Scene> &scene,
         Material *material,
         const std::unordered_map<std::string, std::string> &shaderIDs) {
 
@@ -82,40 +80,42 @@ ProgramParameters::ProgramParameters(
 
     precision = "highp";
 
-    auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
+    auto instancedMesh = dynamic_cast<InstancedMesh *>(object.get());
     instancing = instancedMesh != nullptr;
     instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor != nullptr;
 
     supportsVertexTextures = GLCapabilities::instance().vertexTextures;
     outputEncoding = renderer.outputEncoding;
 
-    map = mapMaterial != nullptr && mapMaterial->map.has_value();
-    mapEncoding = getTextureEncodingFromMap(mapMaterial == nullptr ? emptyMap : mapMaterial->map);
-    matcap = matcapMaterial != nullptr && matcapMaterial->matcap.has_value();
-    matcapEncoding = getTextureEncodingFromMap(matcapMaterial == nullptr ? emptyMap : matcapMaterial->matcap);
-    envMap = envmapMaterial != nullptr && envmapMaterial->envMap.has_value();
+    map = mapMaterial != nullptr && mapMaterial->map;
+    mapEncoding = getTextureEncodingFromMap(map ? mapMaterial->map : nullptr);
+    matcap = matcapMaterial != nullptr && matcapMaterial->matcap;
+    matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
+    envMap = envmapMaterial != nullptr && envmapMaterial->envMap;
     envMapMode = envMap && envmapMaterial->envMap->mapping.has_value();
-    envMapEncoding = getTextureEncodingFromMap(envmapMaterial == nullptr ? emptyMap : envmapMaterial->envMap);
-    envMapCubeUV = envMapMode != 0 && (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping || envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping);
-    lightMap = lightmapMaterial != nullptr && lightmapMaterial->lightMap.has_value();
-    lightMapEncoding = getTextureEncodingFromMap(lightmapMaterial == nullptr ? emptyMap : lightmapMaterial->lightMap);
-    aoMap = aomapMaterial != nullptr && aomapMaterial->aoMap.has_value();
-    emissiveMap = emissiveMaterial != nullptr && emissiveMaterial->emissiveMap.has_value();
-    emissiveMapEncoding = getTextureEncodingFromMap(emissiveMaterial == nullptr ? emptyMap : emissiveMaterial->emissiveMap);
-    bumpMap = bumpmapMaterial != nullptr && bumpmapMaterial->bumpMap.has_value();
-    normalMap = normalMaterial != nullptr && normalMaterial->normalMap.has_value();
+    envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
+    envMapCubeUV = envMapMode != 0 &&
+                   (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping ||
+                    envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping);
+    lightMap = lightmapMaterial != nullptr && lightmapMaterial->lightMap;
+    lightMapEncoding = getTextureEncodingFromMap(lightMap ? lightmapMaterial->lightMap : nullptr);
+    aoMap = aomapMaterial != nullptr && aomapMaterial->aoMap;
+    emissiveMap = emissiveMaterial != nullptr && emissiveMaterial->emissiveMap;
+    emissiveMapEncoding = getTextureEncodingFromMap(emissiveMap ? emissiveMaterial->emissiveMap : nullptr);
+    bumpMap = bumpmapMaterial != nullptr && bumpmapMaterial->bumpMap;
+    normalMap = normalMaterial != nullptr && normalMaterial->normalMap;
     objectSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == ObjectSpaceNormalMap;
     tangentSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == TangentSpaceNormalMap;
     clearcoatMap = false;         //TODO
     clearcoatRoughnessMap = false;//TODO
     clearcoatNormalMap = false;   //TODO
-    displacementMap = displacementMapMaterial != nullptr && displacementMapMaterial->displacementMap.has_value();
-    roughnessMap = roughnessMaterial != nullptr && roughnessMaterial->roughnessMap.has_value();
-    metalnessMap = metallnessMaterial != nullptr && metallnessMaterial->metallnessMap.has_value();
-    specularMap = specularMapMaterial != nullptr && specularMapMaterial->specularMap.has_value();
-    alphaMap = alphaMaterial != nullptr && alphaMaterial->alphaMap.has_value();
+    displacementMap = displacementMapMaterial != nullptr && displacementMapMaterial->displacementMap;
+    roughnessMap = roughnessMaterial != nullptr && roughnessMaterial->roughnessMap;
+    metalnessMap = metallnessMaterial != nullptr && metallnessMaterial->metallnessMap;
+    specularMap = specularMapMaterial != nullptr && specularMapMaterial->specularMap;
+    alphaMap = alphaMaterial != nullptr && alphaMaterial->alphaMap;
 
-    gradientMap = gradientMaterial != nullptr && gradientMaterial->gradientMap.has_value();
+    gradientMap = gradientMaterial != nullptr && gradientMaterial->gradientMap;
 
     if (sheenMaterial != nullptr) {
         sheen = sheenMaterial->sheen;
@@ -131,7 +131,10 @@ ProgramParameters::ProgramParameters(
 
     vertexTangents = normalMaterial && vertextangentsMaterial && vertextangentsMaterial->vertexTangents;
     vertexColors = material->vertexColors;
-    vertexAlphas = material->vertexColors && object->geometry() && object->geometry()->hasAttribute("color") && object->geometry()->getAttribute<float>("color")->itemSize() == 4;
+    vertexAlphas = material->vertexColors &&
+                   object->geometry() &&
+                   object->geometry()->hasAttribute("color") &&
+                   object->geometry()->getAttribute<float>("color")->itemSize() == 4;
     vertexUvs = true;     // TODO
     uvsVertexOnly = false;// TODO;
 
