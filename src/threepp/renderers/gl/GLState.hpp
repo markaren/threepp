@@ -106,8 +106,7 @@ namespace threepp::gl {
 
         std::unordered_map<int, bool> enabledCapabilities;
 
-        std::optional<int> xrFramebuffer;
-        std::unordered_map<int, int> currentBoundFramebuffers;
+        std::unordered_map<int, unsigned int> currentBoundFramebuffers;
 
         std::optional<int> currentProgram;
 
@@ -150,9 +149,7 @@ namespace threepp::gl {
 
         void disable(int id);
 
-        void bindXRFramebuffer(int framebuffer);
-
-        bool bindFramebuffer(int target, std::optional<int> framebuffer);
+        bool bindFramebuffer(int target, unsigned int framebuffer);
 
         bool useProgram(unsigned int program);
 

@@ -21,6 +21,8 @@ namespace threepp {
     class Texture : public EventDispatcher {
 
     public:
+        inline static int DEFAULT_MAPPING = UVMapping;
+
         unsigned int id = textureId++;
 
         std::string uuid = utils::generateUUID();
@@ -30,19 +32,19 @@ namespace threepp {
         std::optional<Image> image;
         std::vector<Image> mipmaps;
 
-        std::optional<int> mapping;
+        std::optional<int> mapping = Texture::DEFAULT_MAPPING;
 
-        int wrapS;
-        int wrapT;
+        int wrapS = ClampToEdgeWrapping;
+        int wrapT = ClampToEdgeWrapping;
 
-        int magFilter;
-        int minFilter;
+        int magFilter = LinearFilter;
+        int minFilter = LinearMipmapLinearFilter;
 
-        int anisotropy;
+        int anisotropy = 1;
 
-        int format;
+        int format = RGBAFormat;
         std::optional<std::string> internalFormat;
-        int type;
+        int type = UnsignedByteType;
 
         Vector2 offset = Vector2(0, 0);
         Vector2 repeat = Vector2(1, 1);
@@ -61,7 +63,7 @@ namespace threepp {
         //
         // Also changing the encoding after already used by a Material will not automatically make the Material
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
-        int encoding;
+        int encoding = LinearEncoding;
 
         std::optional<std::function<void(Texture &)>> onUpdate;
 
@@ -77,50 +79,19 @@ namespace threepp {
 
         Texture &copy(const Texture &source);
 
-        static std::shared_ptr<Texture> create(
-                std::optional<Image> image = std::nullopt,
-                int mapping = Texture::DEFAULT_MAPPING,
-                int wrapS = ClampToEdgeWrapping,
-                int wrapT = ClampToEdgeWrapping,
-                int magFilter = LinearFilter,
-                int minFilter = LinearMipmapLinearFilter,
-                int format = RGBAFormat,
-                int type = UnsignedByteType,
-                int anisotropy = 1,
-                int encoding = LinearEncoding) {
+        static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt) {
 
-            return std::shared_ptr<Texture>(new Texture(std::move(image), mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy, encoding));
+            return std::shared_ptr<Texture>(new Texture(std::move(image)));
         }
 
     protected:
-        explicit Texture(
-                std::optional<Image> image = std::nullopt,
-                int mapping = Texture::DEFAULT_MAPPING,
-                int wrapS = ClampToEdgeWrapping,
-                int wrapT = ClampToEdgeWrapping,
-                int magFilter = LinearFilter,
-                int minFilter = LinearMipmapLinearFilter,
-                int format = RGBAFormat,
-                int type = UnsignedByteType,
-                int anisotropy = 1,
-                int encoding = LinearEncoding)
-            : image(std::move(image)),
-              mapping(mapping),
-              wrapS(wrapS),
-              wrapT(wrapT),
-              magFilter(magFilter),
-              minFilter(minFilter),
-              format(format),
-              type(type),
-              anisotropy(anisotropy),
-              encoding(encoding) {}
+        explicit Texture(std::optional<Image> image = std::nullopt)
+            : image(std::move(image)) {}
 
     private:
         unsigned int version_ = 0;
 
         inline static unsigned int textureId = 0;
-
-        inline static int DEFAULT_MAPPING = UVMapping;
     };
 
 }// namespace threepp

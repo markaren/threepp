@@ -297,7 +297,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties &textureProperties, Tex
 }
 
 void gl::GLTextures::setupFrameBufferTexture(
-        GLuint framebuffer,
+        unsigned int framebuffer,
         const std::shared_ptr<GLRenderTarget> &renderTarget,
         Texture &texture, GLuint attachment, GLuint textureTarget) {
 
@@ -316,10 +316,10 @@ void gl::GLTextures::setupFrameBufferTexture(
 
     state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, textureTarget, *properties.textureProperties.get(texture.uuid).glTexture, 0);
-    state.bindFramebuffer(GL_FRAMEBUFFER, std::nullopt);
+    state.bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gl::GLTextures::setupRenderBufferStorage(GLuint renderbuffer, const std::shared_ptr<GLRenderTarget> &renderTarget) {
+void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, const std::shared_ptr<GLRenderTarget> &renderTarget) {
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
@@ -355,7 +355,7 @@ void gl::GLTextures::setupRenderBufferStorage(GLuint renderbuffer, const std::sh
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
 }
 
-void gl::GLTextures::setupDepthTexture(GLuint framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget) {
+void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget) {
 
     state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
@@ -402,7 +402,7 @@ void gl::GLTextures::setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget
 
     } else {
 
-        state.bindFramebuffer(GL_FRAMEBUFFER, renderTargetProperties.glFramebuffer);
+        state.bindFramebuffer(GL_FRAMEBUFFER, renderTargetProperties.glFramebuffer.value());
         GLuint glDepthbuffer;
         glGenRenderbuffers(1, &glDepthbuffer);
         renderTargetProperties.glDepthbuffer = glDepthbuffer;
@@ -463,6 +463,21 @@ void gl::GLTextures::setupRenderTarget(const std::shared_ptr<GLRenderTarget> &re
     if (renderTarget->depthBuffer) {
 
         setupDepthRenderbuffer(renderTarget);
+    }
+}
+
+void gl::GLTextures::updateRenderTargetMipmap(const std::shared_ptr<GLRenderTarget> &renderTarget) {
+
+    const auto texture = renderTarget->texture;
+
+    if (textureNeedsGenerateMipmaps(*texture)) {
+
+        const auto target = GL_TEXTURE_2D;
+        const auto glTexture = properties.textureProperties.get(texture->uuid).glTexture;
+
+        state.bindTexture(target, *glTexture);
+        generateMipmap(target, *texture, renderTarget->width, renderTarget->height);
+        state.bindTexture(target, 0);
     }
 }
 

@@ -5,15 +5,14 @@
 
 #include <utility>
 
-#include "threepp/objects/Mesh.hpp"
 #include "threepp/core/Shader.hpp"
+#include "threepp/objects/Mesh.hpp"
 
 namespace threepp {
 
-    class Reflector: public Mesh {
+    class Reflector : public Mesh {
 
     public:
-
         struct Options {
 
             std::optional<unsigned int> color;
@@ -21,7 +20,6 @@ namespace threepp {
             std::optional<unsigned int> textureHeight;
             std::optional<float> clipBias;
             std::optional<Shader> shader;
-
         };
 
         static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry> &geometry, Options options = Options()) {
@@ -29,11 +27,13 @@ namespace threepp {
             return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));
         }
 
-    protected:
-        Reflector(const std::shared_ptr<BufferGeometry> &geometry, Options options);
+    private:
+        class Impl;
+        std::unique_ptr<Impl> pimpl_;
 
+        Reflector(const std::shared_ptr<BufferGeometry> &geometry, Options options);
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_REFLECTOR_HPP

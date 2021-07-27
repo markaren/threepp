@@ -27,9 +27,9 @@ namespace threepp {
     class Scene;
     class BufferGeometry;
 
-    typedef std::function<void(void *, const std::shared_ptr<Scene> &,
-                               const std::shared_ptr<Camera> &, const std::shared_ptr<BufferGeometry> &,
-                               const std::shared_ptr<Material> &, std::optional<GeometryGroup>)>
+    typedef std::function<void(void *, const std::shared_ptr<Scene>&,
+                               const std::shared_ptr<Camera>&, const std::shared_ptr<BufferGeometry>&,
+                               const std::shared_ptr<Material>&, std::optional<GeometryGroup>)>
             RenderCallback;
 
     class Object3D : public EventDispatcher {
