@@ -9,7 +9,7 @@ Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType)
     const auto usage = attribute->getUsage();
 
     GLuint buffer;
-    glCreateBuffers(1, &buffer);
+    glGenBuffers(1, &buffer);
     glBindBuffer(bufferType, buffer);
 
     GLint type;

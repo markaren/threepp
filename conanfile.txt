@@ -7,4 +7,4 @@ stb/20200203
 cmake
 
 [options]
-glad:gl_version=4.6
+glad:gl_version=4.1

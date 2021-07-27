@@ -61,7 +61,7 @@ namespace threepp::gl {
 
     private:
         GLCapabilities()
-            : maxAnisotropy(glGetParameter(GL_MAX_TEXTURE_MAX_ANISOTROPY)),
+            : maxAnisotropy(0),
 
               maxTextures(glGetParameter(GL_MAX_TEXTURE_IMAGE_UNITS)),
               maxVertexTextures(glGetParameter(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS)),
