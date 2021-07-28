@@ -787,7 +787,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     textures.resetTextureUnits();
 
     auto fog = scene->fog;
-    auto environment = instanceof <MeshStandardMaterial>(material.get()) ? scene->environment : nullptr;
+    auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
     int encoding = (_currentRenderTarget == nullptr) ? outputEncoding : _currentRenderTarget->texture->encoding;
     //                const envMap = cubemaps.get(material.envMap || environment);
     bool vertexAlphas = material->vertexColors &&

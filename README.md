@@ -16,6 +16,7 @@ however much remains to be done..
 * OrbitControls
 * AmbientLight, DirectionalLight, PointLight  
 * Most materials
+* RenderTarget
 * Raycasting against Mesh
 
 

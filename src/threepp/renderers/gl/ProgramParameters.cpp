@@ -87,37 +87,37 @@ ProgramParameters::ProgramParameters(
     supportsVertexTextures = GLCapabilities::instance().vertexTextures;
     outputEncoding = renderer.outputEncoding;
 
-    map = mapMaterial != nullptr && mapMaterial->map;
+    map = mapMaterial && mapMaterial->map;
     mapEncoding = getTextureEncodingFromMap(map ? mapMaterial->map : nullptr);
-    matcap = matcapMaterial != nullptr && matcapMaterial->matcap;
+    matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
-    envMap = envmapMaterial != nullptr && envmapMaterial->envMap;
+    envMap = envmapMaterial && envmapMaterial->envMap;
     envMapMode = envMap && envmapMaterial->envMap->mapping.has_value();
     envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
     envMapCubeUV = envMapMode != 0 &&
                    (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping ||
                     envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping);
-    lightMap = lightmapMaterial != nullptr && lightmapMaterial->lightMap;
+    lightMap = lightmapMaterial && lightmapMaterial->lightMap;
     lightMapEncoding = getTextureEncodingFromMap(lightMap ? lightmapMaterial->lightMap : nullptr);
-    aoMap = aomapMaterial != nullptr && aomapMaterial->aoMap;
-    emissiveMap = emissiveMaterial != nullptr && emissiveMaterial->emissiveMap;
+    aoMap = aomapMaterial && aomapMaterial->aoMap;
+    emissiveMap = emissiveMaterial && emissiveMaterial->emissiveMap;
     emissiveMapEncoding = getTextureEncodingFromMap(emissiveMap ? emissiveMaterial->emissiveMap : nullptr);
-    bumpMap = bumpmapMaterial != nullptr && bumpmapMaterial->bumpMap;
-    normalMap = normalMaterial != nullptr && normalMaterial->normalMap;
-    objectSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == ObjectSpaceNormalMap;
-    tangentSpaceNormalMap = normalMaterial != nullptr && normalMaterial->normalMapType == TangentSpaceNormalMap;
+    bumpMap = bumpmapMaterial && bumpmapMaterial->bumpMap;
+    normalMap = normalMaterial && normalMaterial->normalMap;
+    objectSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == ObjectSpaceNormalMap;
+    tangentSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == TangentSpaceNormalMap;
     clearcoatMap = false;         //TODO
     clearcoatRoughnessMap = false;//TODO
     clearcoatNormalMap = false;   //TODO
-    displacementMap = displacementMapMaterial != nullptr && displacementMapMaterial->displacementMap;
-    roughnessMap = roughnessMaterial != nullptr && roughnessMaterial->roughnessMap;
-    metalnessMap = metallnessMaterial != nullptr && metallnessMaterial->metallnessMap;
-    specularMap = specularMapMaterial != nullptr && specularMapMaterial->specularMap;
-    alphaMap = alphaMaterial != nullptr && alphaMaterial->alphaMap;
+    displacementMap = displacementMapMaterial && displacementMapMaterial->displacementMap;
+    roughnessMap = roughnessMaterial && roughnessMaterial->roughnessMap;
+    metalnessMap = metallnessMaterial && metallnessMaterial->metallnessMap;
+    specularMap = specularMapMaterial && specularMapMaterial->specularMap;
+    alphaMap = alphaMaterial && alphaMaterial->alphaMap;
 
-    gradientMap = gradientMaterial != nullptr && gradientMaterial->gradientMap;
+    gradientMap = gradientMaterial && gradientMaterial->gradientMap;
 
-    if (sheenMaterial != nullptr) {
+    if (sheenMaterial) {
         sheen = sheenMaterial->sheen;
     }
 
@@ -125,7 +125,7 @@ ProgramParameters::ProgramParameters(
     transmissionMap = false;//TODO
     thicknessMap = false;   //TODO
 
-    if (combineMaterial != nullptr) {
+    if (combineMaterial) {
         combine = combineMaterial->combine;
     }
 
@@ -142,7 +142,7 @@ ProgramParameters::ProgramParameters(
     useFog = material->fog;
     fogExp2 = scene->fog.has_value() && std::holds_alternative<FogExp2>(*scene->fog);
 
-    if (flatshadeMaterial != nullptr) {
+    if (flatshadeMaterial) {
         flatShading = flatshadeMaterial->flatShading;
     }
 
@@ -150,15 +150,15 @@ ProgramParameters::ProgramParameters(
     maxBones = 0;    // TODO
     useVertexTexture = GLCapabilities::instance().floatVertexTextures;
 
-    numDirLights = (int) lights.directional.size();
-    numPointLights = (int) lights.point.size();
-    numSpotLights = (int) lights.spot.size();
-    numRectAreaLights = 0;
-    numHemiLights = 0;
+    numDirLights = static_cast<int>(lights.directional.size());
+    numPointLights = static_cast<int>(lights.point.size());
+    numSpotLights = static_cast<int>(lights.spot.size());
+    numRectAreaLights = static_cast<int>(lights.rectArea.size());
+    numHemiLights = static_cast<int>(lights.hemi.size());
 
-    numDirLightShadows = (int) lights.directionalShadowMap.size();
-    numPointLightShadows = (int) lights.pointShadowMap.size();
-    numSpotLightShadows = (int) lights.spotShadowMap.size();
+    numDirLightShadows = static_cast<int>(lights.directionalShadowMap.size());
+    numPointLightShadows = static_cast<int>(lights.pointShadowMap.size());
+    numSpotLightShadows = static_cast<int>(lights.spotShadowMap.size());
 
     numClippingPlanes = renderer.clipping.numPlanes;
     numClipIntersection = renderer.clipping.numIntersection;
@@ -177,9 +177,9 @@ ProgramParameters::ProgramParameters(
     doubleSided = material->side == DoubleSide;
     flipSided = material->side == BackSide;
 
-    depthPacking = depthpackMaterial == nullptr ? 0 : depthpackMaterial->depthPacking;
+    depthPacking = depthpackMaterial ? depthpackMaterial->depthPacking : 0;
 
-    if (shaderMaterial != nullptr) {
+    if (shaderMaterial) {
         index0AttributeName = shaderMaterial->index0AttributeName;
     }
 }

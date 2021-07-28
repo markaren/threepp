@@ -96,7 +96,10 @@ namespace threepp {
 
     struct MaterialWithEnvMap : virtual Material {
 
+        std::optional<float> envMapIntensity;
         std::shared_ptr<Texture> envMap;
+
+        explicit MaterialWithEnvMap(std::optional<float> envMapIntensity = std::nullopt) : envMapIntensity(envMapIntensity) {}
     };
 
     struct MaterialWithGradientMap : virtual Material {
@@ -153,12 +156,18 @@ namespace threepp {
 
     struct MaterialWithRoughness : virtual Material {
 
+        float roughness;
         std::shared_ptr<Texture> roughnessMap;
+
+        explicit MaterialWithRoughness(float roughness) : roughness(roughness) {}
     };
 
     struct MaterialWithMetalness : virtual Material {
 
+        float metalness;
         std::shared_ptr<Texture> metallnessMap;
+
+        explicit MaterialWithMetalness(float metalness) : metalness(metalness) {}
     };
 
     struct MaterialWithThickness : virtual Material {
@@ -175,34 +184,33 @@ namespace threepp {
 
         int combine;
 
-        MaterialWithCombine(int combine) : combine(combine) {}
+        explicit MaterialWithCombine(int combine) : combine(combine) {}
     };
 
     struct MaterialWithDepthPacking : virtual Material {
 
         int depthPacking;
 
-        MaterialWithDepthPacking(int depthPacking) : depthPacking(depthPacking) {}
+        explicit MaterialWithDepthPacking(int depthPacking) : depthPacking(depthPacking) {}
     };
 
     struct MaterialWithFlatShading : virtual Material {
 
         bool flatShading;
 
-        MaterialWithFlatShading(bool flatShading) : flatShading(flatShading) {}
+        explicit MaterialWithFlatShading(bool flatShading) : flatShading(flatShading) {}
     };
 
     struct MaterialWithVertexTangents : virtual Material {
 
         bool vertexTangents;
 
-        MaterialWithVertexTangents(bool vertexTangents) : vertexTangents(vertexTangents) {}
+        explicit MaterialWithVertexTangents(bool vertexTangents) : vertexTangents(vertexTangents) {}
     };
 
     struct MaterialWithDefines : virtual Material {
 
         std::unordered_map<std::string, std::string> defines;
-
     };
 
 }// namespace threepp
