@@ -99,6 +99,7 @@ set(publicHeaders
         "threepp/objects/Mesh.hpp"
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
+        "threepp/objects/Water.hpp"
 
         "threepp/textures/DepthTexture.hpp"
         "threepp/textures/Image.hpp"
@@ -219,6 +220,7 @@ set(sources
 
         "threepp/objects/Mesh.cpp"
         "threepp/objects/Reflector.cpp"
+        "threepp/objects/Water.cpp"
 
         "threepp/textures/Texture.cpp"
 
