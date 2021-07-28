@@ -52,12 +52,12 @@ namespace {
 struct Reflector::Impl {
 
     Impl(Reflector &reflector, Reflector::Options options)
-        : reflector_(reflector), clipBias((options.clipBias) ? *options.clipBias : 0) {
+        : reflector_(reflector), clipBias(options.clipBias.value_or(0.f)) {
 
-        Color color = (options.color) ? Color(*options.color) : Color(0x7f7f7f);
+        Color color{options.color.value_or(0x7f7f7f)};
         unsigned int textureWidth = (options.textureWidth) ? *options.textureWidth : 512;
         unsigned int textureHeight = (options.textureHeight) ? *options.textureHeight : 512;
-        Shader shader = (options.shader) ? *options.shader : reflectorShader();
+        Shader shader = options.shader.value_or(reflectorShader());
 
         GLRenderTarget::Options parameters;
         parameters.minFilter = LinearFilter;
@@ -107,13 +107,17 @@ struct Reflector::Impl {
             virtualCamera->updateMatrixWorld();
             virtualCamera->projectionMatrix.copy(camera->projectionMatrix);// Update the texture matrix
 
-            textureMatrix.set(0.5, 0.0, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0);
+            textureMatrix.set(0.5f, 0.f, 0.f, 0.5f,
+                              0.f, 0.5f, 0.f, 0.5f,
+                              0.f, 0.f, 0.5f, 0.5f,
+                              0.f, 0.f, 0.f, 1.f);
             textureMatrix.multiply(virtualCamera->projectionMatrix);
             textureMatrix.multiply(virtualCamera->matrixWorldInverse);
             textureMatrix.multiply(reflector_.matrixWorld);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
             // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
 
-            std::dynamic_pointer_cast<ShaderMaterial>(reflector_.material())->uniforms->operator[]("textureMatrix").value<Matrix4>().copy(textureMatrix);
+            auto m = std::dynamic_pointer_cast<ShaderMaterial>(reflector_.material());
+            m->uniforms->operator[]("textureMatrix").value<Matrix4>().copy(textureMatrix);
 
             reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition);
             reflectorPlane.applyMatrix4(virtualCamera->matrixWorldInverse);

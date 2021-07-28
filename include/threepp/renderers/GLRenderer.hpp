@@ -84,6 +84,9 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
+        gl::GLState state;
+        gl::GLShadowMap shadowMap;
+
         explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
 
         [[nodiscard]] int getTargetPixelRatio() const;
@@ -263,7 +266,6 @@ namespace threepp {
         Vector3 _vector3{};
 
         gl::GLInfo info;
-        gl::GLState state;
 
         gl::GLBackground background;
         gl::GLProperties properties;
@@ -277,14 +279,12 @@ namespace threepp {
         gl::GLRenderLists renderLists;
         gl::GLObjects objects;
         gl::GLPrograms programCache;
-        gl::GLShadowMap shadowMap;
+
         std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
         std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
         friend struct gl::ProgramParameters;
         friend struct gl::GLShadowMap;
-
-        friend class Reflector;
     };
 
 }// namespace threepp
