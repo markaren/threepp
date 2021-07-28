@@ -8,15 +8,6 @@
 
 using namespace threepp;
 
-namespace {
-
-    Box3 _box;
-    Vector3 _v1;
-    Vector3 _toFarthestPoint;
-    Vector3 _toPoint;
-
-}
-
 Sphere::Sphere(Vector3 center, float radius) : center(center), radius(radius) {}
 
 Sphere &Sphere::set(const Vector3 &center, float radius) {
@@ -35,6 +26,7 @@ Sphere &Sphere::setFromPoints(const std::vector<Vector3> &points, Vector3 *optio
 
     } else {
 
+        Box3 _box{};
         _box.setFromPoints(points).getCenter(center);
     }
 
@@ -142,26 +134,26 @@ Sphere &Sphere::expandByPoint(const Vector3 &point) {
 
     // from https://github.com/juj/MathGeoLib/blob/2940b99b99cfe575dd45103ef20f4019dee15b54/src/Geometry/Sphere.cpp#L649-L671
 
-    _toPoint.subVectors( point, this->center );
+    Vector3 _toPoint{};
 
-    const auto lengthSq = _toPoint.lengthSq();
+    _toPoint.subVectors(point, this->center);
 
-    if ( lengthSq > ( this->radius * this->radius ) ) {
+    const float lengthSq = _toPoint.lengthSq();
 
-        const auto length = std::sqrt( lengthSq );
-        const auto missingRadiusHalf = ( length - this->radius ) * 0.5f;
+    if (lengthSq > (this->radius * this->radius)) {
+
+        const float length = std::sqrt(lengthSq);
+        const float missingRadiusHalf = (length - this->radius) * 0.5f;
 
         // Nudge this sphere towards the target point. Add half the missing distance to radius,
         // and the other half to position. This gives a tighter enclosure, instead of if
         // the whole missing distance were just added to radius.
 
-        this->center.add(_toPoint.multiplyScalar(missingRadiusHalf / length) );
+        this->center.add(_toPoint.multiplyScalar(missingRadiusHalf / length));
         this->radius += missingRadiusHalf;
-
     }
 
     return *this;
-
 }
 
 Sphere &Sphere::union_(const Sphere &sphere) {
@@ -172,11 +164,12 @@ Sphere &Sphere::union_(const Sphere &sphere) {
     // 1) Enclose the farthest point on the other sphere into this sphere.
     // 2) Enclose the opposite point of the farthest point into this sphere.
 
+    Vector3 _v1{};
+    Vector3 _toFarthestPoint{};
     _toFarthestPoint.subVectors(sphere.center, this->center).normalize().multiplyScalar(sphere.radius);
 
-    this->expandByPoint( _v1.copy( sphere.center ).add( _toFarthestPoint ) );
-    this->expandByPoint( _v1.copy( sphere.center ).sub( _toFarthestPoint ) );
+    this->expandByPoint(_v1.copy(sphere.center).add(_toFarthestPoint));
+    this->expandByPoint(_v1.copy(sphere.center).sub(_toFarthestPoint));
 
     return *this;
-
 }

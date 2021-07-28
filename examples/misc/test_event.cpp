@@ -15,18 +15,18 @@ namespace {
         }
     };
 
-    struct OnMaterialDispose: EventListener {
+    struct OnMaterialDispose : EventListener {
 
         void onEvent(Event &event) override {
 
             std::cout << "Material disposed" << std::endl;
 
-            auto* material = static_cast<Material*>(event.target);
+            auto *material = static_cast<Material *>(event.target);
             material->removeEventListener("dispose", this);
         }
     };
 
-}
+}// namespace
 
 int main() {
 
@@ -35,7 +35,7 @@ int main() {
     MyEventListener l;
 
     LambdaEventListener l1([](Event &e) {
-      std::cout << "Event type:" << e.type << std::endl;
+        std::cout << "Event type:" << e.type << std::endl;
     });
 
     evt.addEventListener("per", &l);
@@ -56,10 +56,9 @@ int main() {
     auto material = MeshBasicMaterial::create();
     material->addEventListener("dispose", &onDispose);
 
-    std::cout << "Has listener should be 1: " <<  material->hasEventListener("dispose", &onDispose) << std::endl;
+    std::cout << "Has listener should be 1: " << material->hasEventListener("dispose", &onDispose) << std::endl;
     material->dispose();
     std::cout << "Has listener should be 0: " << material->hasEventListener("dispose", &onDispose) << std::endl;
 
     return 0;
-
 }

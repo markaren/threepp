@@ -182,7 +182,7 @@ Matrix3 &Matrix3::invert() {
 Matrix3 &Matrix3::transpose() {
 
     float tmp;
-    auto& m = this->elements;
+    auto &m = this->elements;
 
     // clang-format off
     tmp = m[ 1 ]; m[ 1 ] = m[ 3 ]; m[ 3 ] = tmp;
@@ -200,8 +200,8 @@ Matrix3 &Matrix3::getNormalMatrix(const Matrix4 &m) {
 
 Matrix3 &Matrix3::setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy) {
 
-    const auto c = std::cos(rotation);
-    const auto s = std::sin(rotation);
+    const float c = std::cos(rotation);
+    const float s = std::sin(rotation);
 
     this->set(
             sx * c, sx * s, -sx * (c * cx + s * cy) + cx + tx,
@@ -225,13 +225,13 @@ Matrix3 &Matrix3::scale(float sx, float sy) {
 
 Matrix3 &Matrix3::rotate(float theta) {
 
-    const auto c = std::cos(theta);
-    const auto s = std::sin(theta);
+    const float c = std::cos(theta);
+    const float s = std::sin(theta);
 
     auto &te = this->elements;
 
-    const auto a11 = te[0], a12 = te[3], a13 = te[6];
-    const auto a21 = te[1], a22 = te[4], a23 = te[7];
+    const float a11 = te[0], a12 = te[3], a13 = te[6];
+    const float a21 = te[1], a22 = te[4], a23 = te[7];
 
     te[0] = c * a11 + s * a21;
     te[3] = c * a12 + s * a22;

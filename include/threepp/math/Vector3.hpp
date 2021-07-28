@@ -167,12 +167,12 @@ namespace threepp {
             array[offset + 2] = this->z;
         }
 
-        static Vector3 X;
-        static Vector3 Y;
-        static Vector3 Z;
+        static const Vector3 X;
+        static const Vector3 Y;
+        static const Vector3 Z;
 
-        static Vector3 ONES;
-        static Vector3 ZEROS;
+        static const Vector3 ONES;
+        static const Vector3 ZEROS;
 
         friend std::ostream &operator<<(std::ostream &os, const Vector3 &v) {
             os << "Vector3(x=" << v.x << ", y=" << v.y << ", z=" << v.z << ")";

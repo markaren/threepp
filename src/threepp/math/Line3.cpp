@@ -7,13 +7,6 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _startP;
-    Vector3 _startEnd;
-
-}// namespace
-
 Line3::Line3(Vector3 start, Vector3 end) : start_(start), end_(end) {}
 
 const Vector3 &Line3::getStart() const {
@@ -68,13 +61,16 @@ void Line3::at(float t, Vector3 &target) const {
 
 float Line3::closestPointToPointParameter(const Vector3 &point, bool clampToLine) {
 
+    Vector3 _startP{};
+    Vector3 _startEnd{};
+
     _startP.subVectors(point, this->start_);
     _startEnd.subVectors(this->end_, this->start_);
 
-    const auto startEnd2 = _startEnd.dot(_startEnd);
-    const auto startEnd_startP = _startEnd.dot(_startP);
+    const float startEnd2 = _startEnd.dot(_startEnd);
+    const float startEnd_startP = _startEnd.dot(_startP);
 
-    auto t = startEnd_startP / startEnd2;
+    float t = startEnd_startP / startEnd2;
 
     if (clampToLine) {
 

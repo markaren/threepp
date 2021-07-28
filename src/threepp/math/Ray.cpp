@@ -8,15 +8,6 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _vector;
-    Vector3 _segCenter;
-    Vector3 _segDir;
-    Vector3 _diff;
-
-}// namespace
-
 Ray::Ray(Vector3 origin, Vector3 direction) : origin(origin), direction(direction) {}
 
 Ray &Ray::set(const Vector3 &origin, const Vector3 &direction) {
@@ -88,18 +79,24 @@ float Ray::distanceSqToPoint(const Vector3 &point) const {
         return this->origin.distanceToSquared(point);
     }
 
+    Vector3 _vector{};
     _vector.copy(this->direction).multiplyScalar(directionDistance).add(this->origin);
 
     return _vector.distanceToSquared(point);
 }
 
 float Ray::distanceSqToSegment(const Vector3 &v0, const Vector3 &v1) const {
+
     // from http://www.geometrictools.com/GTEngine/Include/Mathematics/GteDistRaySegment.h
     // It returns the min distance between the ray and the segment
     // defined by v0 and v1
     // It can also set two optional targets :
     // - The closest point on the ray
     // - The closest point on the segment
+
+    Vector3 _segCenter{};
+    Vector3 _segDir{};
+    Vector3 _diff{};
 
     _segCenter.copy(v0).add(v1).addScalar(0.5f);
     _segDir.copy(v1).sub(v0).normalize();
@@ -403,7 +400,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
     //   |Dot(D,N)|*b2 = sign(Dot(D,N))*Dot(D,Cross(E1,Q))
     //   |Dot(D,N)|*t = -sign(Dot(D,N))*Dot(Q,N)
     float DdN = this->direction.dot(_normal);
-    int sign;
+    float sign;
 
     if (DdN > 0) {
 
@@ -412,11 +409,11 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
             target.set(NAN, NAN, NAN);
             return;
         }
-        sign = 1;
+        sign = 1.f;
 
     } else if (DdN < 0) {
 
-        sign = -1;
+        sign = -1.f;
         DdN = -DdN;
 
     } else {
@@ -425,8 +422,9 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
         return;
     }
 
+    Vector3 _diff{};
     _diff.subVectors(this->origin, a);
-    const auto DdQxE2 = sign * this->direction.dot(_edge2.crossVectors(_diff, _edge2));
+    const float DdQxE2 = sign * this->direction.dot(_edge2.crossVectors(_diff, _edge2));
 
     // b1 < 0, no intersection
     if (DdQxE2 < 0) {
@@ -435,7 +433,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
         return;
     }
 
-    const auto DdE1xQ = (float) sign * this->direction.dot(_edge1.cross(_diff));
+    const float DdE1xQ = sign * this->direction.dot(_edge1.cross(_diff));
 
     // b2 < 0, no intersection
     if (DdE1xQ < 0) {
@@ -452,7 +450,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
     }
 
     // Line intersects triangle, check if ray does.
-    const auto QdN = (float) -sign * _diff.dot(_normal);
+    const float QdN = -sign * _diff.dot(_normal);
 
     // t < 0, no intersection
     if (QdN < 0) {

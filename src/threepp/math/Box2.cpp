@@ -5,13 +5,9 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector2 _vector;
-
-}
-
-Box2::Box2() : min_(+Infinity<float>, +Infinity<float>), max_(-Infinity<float>, -Infinity<float>) {}
+Box2::Box2()
+    : min_(+Infinity<float>, +Infinity<float>),
+      max_(-Infinity<float>, -Infinity<float>) {}
 
 Box2::Box2(const Vector2 &min, const Vector2 &max) : min_(min), max_(max) {}
 
@@ -27,7 +23,7 @@ Box2 &Box2::setFromPoints(const std::vector<Vector2> &points) {
 
     this->makeEmpty();
 
-    for (auto point : points) {
+    for (const auto &point : points) {
 
         this->expandByPoint(point);
     }

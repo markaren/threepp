@@ -33,5 +33,4 @@ int main() {
     std::cout << uniforms["light"].value<Vector3>() << std::endl;
 
     return 0;
-
 }

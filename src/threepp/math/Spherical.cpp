@@ -6,7 +6,6 @@
 
 using namespace threepp;
 
-
 Spherical::Spherical(float radius, float phi, float theta)
     : radius(radius), phi(phi), theta(theta) {}
 

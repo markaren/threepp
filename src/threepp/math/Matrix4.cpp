@@ -12,21 +12,10 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _v1{};
-    Matrix4 _m1{};
-    Vector3 _zero{};
-    Vector3 _one{1, 1, 1};
-    Vector3 _x {1, 0, 0};
-    Vector3 _y {0, 1, 0};
-    Vector3 _z {0, 0, 1};
-
-}// namespace
-
 float &Matrix4::operator[](unsigned int index) {
 
-    if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
+    if (index >= 16) throw std::runtime_error("index out of bounds: " + std::to_string(index));
+
     return elements[index];
 }
 
@@ -129,9 +118,10 @@ Matrix4 &Matrix4::extractRotation(const Matrix4 &m) {
     auto &te = this->elements;
     const auto &me = m.elements;
 
-    const auto scaleX = 1.0f / _v1.setFromMatrixColumn(m, 0).length();
-    const auto scaleY = 1.0f / _v1.setFromMatrixColumn(m, 1).length();
-    const auto scaleZ = 1.0f / _v1.setFromMatrixColumn(m, 2).length();
+    Vector3 _v1{};
+    const float scaleX = 1.0f / _v1.setFromMatrixColumn(m, 0).length();
+    const float scaleY = 1.0f / _v1.setFromMatrixColumn(m, 1).length();
+    const float scaleZ = 1.0f / _v1.setFromMatrixColumn(m, 2).length();
 
     te[0] = me[0] * scaleX;
     te[1] = me[1] * scaleX;
@@ -160,10 +150,10 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
 
     auto &te = this->elements;
 
-    const auto x = ee.x(), y = ee.y(), z = ee.z();
-    const auto a = std::cos(x), b = std::sin(x);
-    const auto c = std::cos(y), d = std::sin(y);
-    const auto e = std::cos(z), f = std::sin(z);
+    const float x = ee.x(), y = ee.y(), z = ee.z();
+    const float a = std::cos(x), b = std::sin(x);
+    const float c = std::cos(y), d = std::sin(y);
+    const float e = std::cos(z), f = std::sin(z);
 
     if (ee.getOrder() == Euler::XYZ) {
 
@@ -278,12 +268,16 @@ Matrix4 &Matrix4::makeRotationFromEuler(const Euler &ee) {
 
 Matrix4 &Matrix4::makeRotationFromQuaternion(const Quaternion &q) {
 
-    return this->compose(_zero, q, _one);
+    return this->compose(Vector3::ZEROS, q, Vector3::ONES);
 }
 
 Matrix4 &Matrix4::lookAt(const Vector3 &eye, const Vector3 &target, const Vector3 &up) {
 
     auto &te = this->elements;
+
+    Vector3 _x{};
+    Vector3 _y{};
+    Vector3 _z{};
 
     _z.subVectors(eye, target);
 
@@ -342,15 +336,15 @@ Matrix4 &Matrix4::multiplyMatrices(const Matrix4 &a, const Matrix4 &b) {
     const auto &be = b.elements;
     auto &te = this->elements;
 
-    const auto a11 = ae[0], a12 = ae[4], a13 = ae[8], a14 = ae[12];
-    const auto a21 = ae[1], a22 = ae[5], a23 = ae[9], a24 = ae[13];
-    const auto a31 = ae[2], a32 = ae[6], a33 = ae[10], a34 = ae[14];
-    const auto a41 = ae[3], a42 = ae[7], a43 = ae[11], a44 = ae[15];
+    const float a11 = ae[0], a12 = ae[4], a13 = ae[8], a14 = ae[12];
+    const float a21 = ae[1], a22 = ae[5], a23 = ae[9], a24 = ae[13];
+    const float a31 = ae[2], a32 = ae[6], a33 = ae[10], a34 = ae[14];
+    const float a41 = ae[3], a42 = ae[7], a43 = ae[11], a44 = ae[15];
 
-    const auto b11 = be[0], b12 = be[4], b13 = be[8], b14 = be[12];
-    const auto b21 = be[1], b22 = be[5], b23 = be[9], b24 = be[13];
-    const auto b31 = be[2], b32 = be[6], b33 = be[10], b34 = be[14];
-    const auto b41 = be[3], b42 = be[7], b43 = be[11], b44 = be[15];
+    const float b11 = be[0], b12 = be[4], b13 = be[8], b14 = be[12];
+    const float b21 = be[1], b22 = be[5], b23 = be[9], b24 = be[13];
+    const float b31 = be[2], b32 = be[6], b33 = be[10], b34 = be[14];
+    const float b41 = be[3], b42 = be[7], b43 = be[11], b44 = be[15];
 
     te[0] = a11 * b11 + a12 * b21 + a13 * b31 + a14 * b41;
     te[4] = a11 * b12 + a12 * b22 + a13 * b32 + a14 * b42;
@@ -393,10 +387,10 @@ float Matrix4::determinant() const {
 
     const auto &te = this->elements;
 
-    const auto n11 = te[0], n12 = te[4], n13 = te[8], n14 = te[12];
-    const auto n21 = te[1], n22 = te[5], n23 = te[9], n24 = te[13];
-    const auto n31 = te[2], n32 = te[6], n33 = te[10], n34 = te[14];
-    const auto n41 = te[3], n42 = te[7], n43 = te[11], n44 = te[15];
+    const float n11 = te[0], n12 = te[4], n13 = te[8], n14 = te[12];
+    const float n21 = te[1], n22 = te[5], n23 = te[9], n24 = te[13];
+    const float n31 = te[2], n32 = te[6], n33 = te[10], n34 = te[14];
+    const float n41 = te[3], n42 = te[7], n43 = te[11], n44 = te[15];
 
     //TODO: make this more efficient
     //( based on http://www.euclideanspace.com/maths/algebra/matrix/functions/inverse/fourD/index.htm )
@@ -501,7 +495,7 @@ Matrix4 &Matrix4::invert() {
 Matrix4 &Matrix4::scale(const Vector3 &v) {
 
     auto &te = this->elements;
-    const auto x = v.x, y = v.y, z = v.z;
+    const float x = v.x, y = v.y, z = v.z;
 
     // clang-format off
     te[ 0 ] *= x; te[ 4 ] *= y; te[ 8 ] *= z;
@@ -517,9 +511,9 @@ float Matrix4::getMaxScaleOnAxis() const {
 
     const auto &te = this->elements;
 
-    const auto scaleXSq = te[0] * te[0] + te[1] * te[1] + te[2] * te[2];
-    const auto scaleYSq = te[4] * te[4] + te[5] * te[5] + te[6] * te[6];
-    const auto scaleZSq = te[8] * te[8] + te[9] * te[9] + te[10] * te[10];
+    const float scaleXSq = te[0] * te[0] + te[1] * te[1] + te[2] * te[2];
+    const float scaleYSq = te[4] * te[4] + te[5] * te[5] + te[6] * te[6];
+    const float scaleZSq = te[8] * te[8] + te[9] * te[9] + te[10] * te[10];
 
     return std::sqrt(std::max(scaleXSq, std::max(scaleYSq, scaleZSq)));
 }
@@ -540,7 +534,7 @@ Matrix4 &Matrix4::makeTranslation(float x, float y, float z) {
 
 Matrix4 &Matrix4::makeRotationX(float theta) {
 
-    const auto c = std::cos(theta), s = std::sin(theta);
+    const float c = std::cos(theta), s = std::sin(theta);
 
     this->set(
 
@@ -556,7 +550,7 @@ Matrix4 &Matrix4::makeRotationX(float theta) {
 
 Matrix4 &Matrix4::makeRotationY(float theta) {
 
-    const auto c = std::cos(theta), s = std::sin(theta);
+    const float c = std::cos(theta), s = std::sin(theta);
 
     this->set(
 
@@ -572,7 +566,7 @@ Matrix4 &Matrix4::makeRotationY(float theta) {
 
 Matrix4 &Matrix4::makeRotationZ(float theta) {
 
-    const auto c = std::cos(theta), s = std::sin(theta);
+    const float c = std::cos(theta), s = std::sin(theta);
 
     this->set(
 
@@ -590,11 +584,11 @@ Matrix4 &Matrix4::makeRotationAxis(const Vector3 &axis, float angle) {
 
     // Based on http://www.gamedev.net/reference/articles/article1199.asp
 
-    const auto c = std::cos(angle);
-    const auto s = std::sin(angle);
-    const auto t = 1 - c;
-    const auto x = axis.x, y = axis.y, z = axis.z;
-    const auto tx = t * x, ty = t * y;
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    const float t = 1 - c;
+    const float x = axis.x, y = axis.y, z = axis.z;
+    const float tx = t * x, ty = t * y;
 
     this->set(
 
@@ -640,13 +634,13 @@ Matrix4 &Matrix4::compose(const Vector3 &position, const Quaternion &quaternion,
 
     auto &te = this->elements;
 
-    const auto x = quaternion.x(), y = quaternion.y(), z = quaternion.z(), w = quaternion.w();
-    const auto x2 = x + x, y2 = y + y, z2 = z + z;
-    const auto xx = x * x2, xy = x * y2, xz = x * z2;
-    const auto yy = y * y2, yz = y * z2, zz = z * z2;
-    const auto wx = w * x2, wy = w * y2, wz = w * z2;
+    const float x = quaternion.x(), y = quaternion.y(), z = quaternion.z(), w = quaternion.w();
+    const float x2 = x + x, y2 = y + y, z2 = z + z;
+    const float xx = x * x2, xy = x * y2, xz = x * z2;
+    const float yy = y * y2, yz = y * z2, zz = z * z2;
+    const float wx = w * x2, wy = w * y2, wz = w * z2;
 
-    const auto sx = scale.x, sy = scale.y, sz = scale.z;
+    const float sx = scale.x, sy = scale.y, sz = scale.z;
 
     te[0] = (1 - (yy + zz)) * sx;
     te[1] = (xy + wz) * sx;
@@ -675,12 +669,15 @@ Matrix4 &Matrix4::decompose(Vector3 &position, Quaternion &quaternion, Vector3 &
 
     const auto &te = this->elements;
 
-    auto sx = _v1.set(te[0], te[1], te[2]).length();
-    const auto sy = _v1.set(te[4], te[5], te[6]).length();
-    const auto sz = _v1.set(te[8], te[9], te[10]).length();
+    Vector3 _v1{};
+    Matrix4 _m1{};
+
+    float sx = _v1.set(te[0], te[1], te[2]).length();
+    const float sy = _v1.set(te[4], te[5], te[6]).length();
+    const float sz = _v1.set(te[8], te[9], te[10]).length();
 
     // if determine is negative, we need to invert one scale
-    const auto det = this->determinant();
+    const float det = this->determinant();
     if (det < 0) sx = -sx;
 
     position.x = te[12];
@@ -688,11 +685,11 @@ Matrix4 &Matrix4::decompose(Vector3 &position, Quaternion &quaternion, Vector3 &
     position.z = te[14];
 
     // scale the rotation part
-    _m1 = *this;
+    _m1.copy(*this);
 
-    const auto invSX = 1.0f / sx;
-    const auto invSY = 1.0f / sy;
-    const auto invSZ = 1.0f / sz;
+    const float invSX = 1.0f / sx;
+    const float invSY = 1.0f / sy;
+    const float invSZ = 1.0f / sz;
 
     _m1.elements[0] *= invSX;
     _m1.elements[1] *= invSX;
@@ -718,13 +715,13 @@ Matrix4 &Matrix4::decompose(Vector3 &position, Quaternion &quaternion, Vector3 &
 Matrix4 &Matrix4::makePerspective(float left, float right, float top, float bottom, float near, float far) {
 
     auto &te = this->elements;
-    const auto x = 2 * near / (right - left);
-    const auto y = 2 * near / (top - bottom);
+    const float x = 2 * near / (right - left);
+    const float y = 2 * near / (top - bottom);
 
-    const auto a = (right + left) / (right - left);
-    const auto b = (top + bottom) / (top - bottom);
-    const auto c = -(far + near) / (far - near);
-    const auto d = -2 * far * near / (far - near);
+    const float a = (right + left) / (right - left);
+    const float b = (top + bottom) / (top - bottom);
+    const float c = -(far + near) / (far - near);
+    const float d = -2 * far * near / (far - near);
 
     // clang-format off
     te[ 0 ] = x;	te[ 4 ] = 0;	te[ 8 ] = a;	te[ 12 ] = 0;
@@ -739,19 +736,19 @@ Matrix4 &Matrix4::makePerspective(float left, float right, float top, float bott
 Matrix4 &Matrix4::makeOrthographic(float left, float right, float top, float bottom, float near, float far) {
 
     auto &te = this->elements;
-    const auto w = 1.0f / (right - left);
-    const auto h = 1.0f / (top - bottom);
-    const auto p = 1.0f / (far - near);
+    const float w = 1.0f / (right - left);
+    const float h = 1.0f / (top - bottom);
+    const float p = 1.0f / (far - near);
 
-    const auto x = (right + left) * w;
-    const auto y = (top + bottom) * h;
-    const auto z = (far + near) * p;
+    const float x = (right + left) * w;
+    const float y = (top + bottom) * h;
+    const float z = (far + near) * p;
 
     // clang-format off
-    te[ 0 ] = 2 * w;	te[ 4 ] = 0;	te[ 8 ] = 0;	te[ 12 ] = - x;
-    te[ 1 ] = 0;	te[ 5 ] = 2 * h;	te[ 9 ] = 0;	te[ 13 ] = - y;
-    te[ 2 ] = 0;	te[ 6 ] = 0;	te[ 10 ] = - 2 * p;	te[ 14 ] = - z;
-    te[ 3 ] = 0;	te[ 7 ] = 0;	te[ 11 ] = 0;	te[ 15 ] = 1;
+    te[ 0 ] = 2 * w;	te[ 4 ] = 0;	    te[ 8 ] = 0;	    te[ 12 ] = - x;
+    te[ 1 ] = 0;	    te[ 5 ] = 2 * h;	te[ 9 ] = 0;	    te[ 13 ] = - y;
+    te[ 2 ] = 0;	    te[ 6 ] = 0;	    te[ 10 ] = - 2 * p;	te[ 14 ] = - z;
+    te[ 3 ] = 0;	    te[ 7 ] = 0;	    te[ 11 ] = 0;	    te[ 15 ] = 1;
     // clang-format on
 
     return *this;

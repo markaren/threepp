@@ -5,25 +5,11 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _v0;
-    Vector3 _v1;
-    Vector3 _v2;
-    Vector3 _v3;
-
-    Vector3 _vab;
-    Vector3 _vac;
-    Vector3 _vbc;
-    Vector3 _vap;
-    Vector3 _vbp;
-    Vector3 _vcp;
-
-}// namespace
-
 Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c) : a_(a), b_(b), c_(c) {}
 
 void Triangle::getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target) {
+
+    Vector3 _v0{};
 
     target.subVectors(c, b);
     _v0.subVectors(a, b);
@@ -42,6 +28,10 @@ void Triangle::getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, V
 
 void Triangle::getBarycoord(const Vector3 &point, const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target) {
 
+    Vector3 _v0{};
+    Vector3 _v1{};
+    Vector3 _v2{};
+
     _v0.subVectors(c, a);
     _v1.subVectors(b, a);
     _v2.subVectors(point, a);
@@ -52,7 +42,7 @@ void Triangle::getBarycoord(const Vector3 &point, const Vector3 &a, const Vector
     const auto dot11 = _v1.dot(_v1);
     const auto dot12 = _v1.dot(_v2);
 
-    const auto denom = (dot00 * dot11 - dot01 * dot01);
+    const float denom = (dot00 * dot11 - dot01 * dot01);
 
     // collinear or singular Triangle
     if (denom == 0) {
@@ -74,12 +64,16 @@ void Triangle::getBarycoord(const Vector3 &point, const Vector3 &a, const Vector
 
 bool Triangle::containsPoint(const Vector3 &point, const Vector3 &a, const Vector3 &b, const Vector3 &c) {
 
+    Vector3 _v3{};
+
     getBarycoord(point, a, b, c, _v3);
 
     return (_v3.x >= 0) && (_v3.y >= 0) && ((_v3.x + _v3.y) <= 1);
 }
 
 void Triangle::getUV(const Vector3 &point, const Vector3 &p1, const Vector3 &p2, const Vector3 &p3, const Vector2 &uv1, const Vector2 &uv2, const Vector2 &uv3, Vector2 &target) {
+
+    Vector3 _v3{};
 
     getBarycoord(point, p1, p2, p3, _v3);
 
@@ -90,6 +84,9 @@ void Triangle::getUV(const Vector3 &point, const Vector3 &p1, const Vector3 &p2,
 }
 
 bool Triangle::isFrontFacing(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &direction) {
+
+    Vector3 _v0{};
+    Vector3 _v1{};
 
     _v0.subVectors(c, b);
     _v1.subVectors(a, b);
@@ -108,6 +105,9 @@ Triangle &Triangle::set(const Vector3 &a, const Vector3 &b, const Vector3 &c) {
 }
 
 float Triangle::getArea() const {
+
+    Vector3 _v0{};
+    Vector3 _v1{};
 
     _v0.subVectors(this->c_, this->b_);
     _v1.subVectors(this->a_, this->b_);
@@ -150,6 +150,14 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
     const auto a = this->a_, b = this->b_, c = this->c_;
     float v, w;
 
+    Vector3 _vab{};
+    Vector3 _vac{};
+    Vector3 _vap{};
+    Vector3 _vbp{};
+    Vector3 _vcp{};
+    Vector3 _vbc{};
+    ;
+
     // algorithm thanks to Real-Time Collision Detection by Christer Ericson,
     // published by Morgan Kaufmann Publishers, (c) 2005 Elsevier Inc.,
     // under the accompanying license; see chapter 5.1.5 for detailed explanation.
@@ -159,8 +167,8 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
     _vab.subVectors(b, a);
     _vac.subVectors(c, a);
     _vap.subVectors(p, a);
-    const auto d1 = _vab.dot(_vap);
-    const auto d2 = _vac.dot(_vap);
+    const float d1 = _vab.dot(_vap);
+    const float d2 = _vac.dot(_vap);
     if (d1 <= 0 && d2 <= 0) {
 
         // vertex region of A; barycentric coords (1, 0, 0)
@@ -169,8 +177,8 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
     }
 
     _vbp.subVectors(p, b);
-    const auto d3 = _vab.dot(_vbp);
-    const auto d4 = _vac.dot(_vbp);
+    const float d3 = _vab.dot(_vbp);
+    const float d4 = _vac.dot(_vbp);
     if (d3 >= 0 && d4 <= d3) {
 
         // vertex region of B; barycentric coords (0, 1, 0)
@@ -178,7 +186,7 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
         return;
     }
 
-    const auto vc = d1 * d4 - d3 * d2;
+    const float vc = d1 * d4 - d3 * d2;
     if (vc <= 0 && d1 >= 0 && d3 <= 0) {
 
         v = d1 / (d1 - d3);
@@ -189,8 +197,8 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
     }
 
     _vcp.subVectors(p, c);
-    const auto d5 = _vab.dot(_vcp);
-    const auto d6 = _vac.dot(_vcp);
+    const float d5 = _vab.dot(_vcp);
+    const float d6 = _vac.dot(_vcp);
     if (d6 >= 0 && d5 <= d6) {
 
         // vertex region of C; barycentric coords (0, 0, 1)
@@ -198,7 +206,7 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
         return;
     }
 
-    const auto vb = d5 * d2 - d1 * d6;
+    const float vb = d5 * d2 - d1 * d6;
     if (vb <= 0 && d2 >= 0 && d6 <= 0) {
 
         w = d2 / (d2 - d6);
@@ -208,7 +216,7 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
         return;
     }
 
-    const auto va = d3 * d6 - d5 * d4;
+    const float va = d3 * d6 - d5 * d4;
     if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
 
         _vbc.subVectors(c, b);
@@ -220,7 +228,7 @@ void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
     }
 
     // face region
-    const auto denom = 1.0f / (va + vb + vc);
+    const float denom = 1.0f / (va + vb + vc);
     // u = va * denom
     v = vb * denom;
     w = vc * denom;
