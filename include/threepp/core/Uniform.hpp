@@ -20,7 +20,7 @@
 namespace threepp {
 
     typedef std::variant<int, float, std::shared_ptr<Color>, Vector2, std::shared_ptr<Vector3>> NestedUniformValue;
-    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, std::shared_ptr<Texture>, std::vector<float>, std::vector<Vector2>, std::vector<Vector3>, std::vector<Matrix3>, std::vector<Matrix4>, std::vector<std::shared_ptr<Texture>>, std::unordered_map<std::string, NestedUniformValue>, std::vector<std::unordered_map<std::string, NestedUniformValue>>> UniformValue;
+    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, Matrix4*, std::shared_ptr<Texture>, std::vector<float>, std::vector<Vector2>, std::vector<Vector3>, std::vector<Matrix3>, std::vector<Matrix4>, std::vector<std::shared_ptr<Texture>>, std::unordered_map<std::string, NestedUniformValue>, std::vector<std::unordered_map<std::string, NestedUniformValue>>> UniformValue;
 
     class Uniform {
 

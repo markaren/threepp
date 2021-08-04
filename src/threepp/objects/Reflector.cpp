@@ -78,6 +78,7 @@ struct Reflector::Impl {
 
         material->uniforms->operator[]("tDiffuse").setValue(renderTarget->texture);
         material->uniforms->operator[]("color").setValue(color);
+        material->uniforms->operator[]("textureMatrix").setValue(&textureMatrix);
 
         reflector.onBeforeRender = RenderCallback([this](void *renderer, auto scene, auto camera, auto, auto, auto) {
             reflectorWorldPosition.setFromMatrixPosition(reflector_.matrixWorld);
@@ -115,9 +116,6 @@ struct Reflector::Impl {
             textureMatrix.multiply(virtualCamera->matrixWorldInverse);
             textureMatrix.multiply(reflector_.matrixWorld);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
             // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
-
-            auto m = std::dynamic_pointer_cast<ShaderMaterial>(reflector_.material());
-            m->uniforms->operator[]("textureMatrix").value<Matrix4>().copy(textureMatrix);
 
             reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition);
             reflectorPlane.applyMatrix4(virtualCamera->matrixWorldInverse);

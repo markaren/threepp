@@ -1,12 +1,12 @@
 
-#include "threepp/threepp.hpp"
 #include "threepp/objects/Reflector.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas{Canvas::Parameters().antialising(8)};
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
@@ -29,16 +29,38 @@ int main() {
 
     Reflector::Options opt;
     opt.clipBias = 0.003f;
-    opt.color = 0x777777;
-    auto reflector = Reflector::create(PlaneGeometry::create(10, 10), opt);
-    reflector->rotateX(math::degToRad(-90));
-    reflector->position.setY(-1);
-    scene->add(reflector);
+    opt.color = 0x7f7f7f;
+
+    float planeSize{5.f};
+    float halfPlaneSize = planeSize / 2;
+    {
+        auto reflector = Reflector::create(PlaneGeometry::create(planeSize, planeSize), opt);
+        reflector->position.setZ(-halfPlaneSize);
+        scene->add(reflector);
+    }
+    {
+        auto reflector = Reflector::create(PlaneGeometry::create(planeSize, planeSize), opt);
+        reflector->rotateX(math::degToRad(-90));
+        reflector->position.setY(-halfPlaneSize);
+        scene->add(reflector);
+    }
+    {
+        auto reflector = Reflector::create(PlaneGeometry::create(planeSize, planeSize), opt);
+        reflector->rotateY(math::degToRad(-90));
+        reflector->position.setX(halfPlaneSize);
+        scene->add(reflector);
+    }
+    {
+        auto reflector = Reflector::create(PlaneGeometry::create(planeSize, planeSize), opt);
+        reflector->rotateY(math::degToRad(90));
+        reflector->position.setX(-halfPlaneSize);
+        scene->add(reflector);
+    }
 
     canvas.onWindowResize([&](WindowSize size) {
-      camera->aspect = size.getAspect();
-      camera->updateProjectionMatrix();
-      renderer.setSize(size);
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
     });
 
     sphere->rotation.setOrder(Euler::YZX);
@@ -47,5 +69,4 @@ int main() {
 
         renderer.render(scene, camera);
     });
-
 }

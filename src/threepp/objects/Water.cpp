@@ -166,7 +166,7 @@ struct Water::Impl {
         material->fog = options.fog.value_or(false);
 
         material->uniforms->operator[]("mirrorSampler").setValue(renderTarget->texture);
-        // textureMatrix is updated during onBeforeRender
+        material->uniforms->operator[]("textureMatrix").setValue(&textureMatrix);
         material->uniforms->operator[]("alpha").setValue(alpha);
         material->uniforms->operator[]("time").setValue(time);
         material->uniforms->operator[]("normalSampler").setValue(options.waterNormals);
@@ -211,9 +211,6 @@ struct Water::Impl {
             textureMatrix.multiply(mirrorCamera->projectionMatrix);
             textureMatrix.multiply(mirrorCamera->matrixWorldInverse);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
                                                                      // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
-
-            auto m = std::dynamic_pointer_cast<ShaderMaterial>(water_.material());
-            m->uniforms->operator[]("textureMatrix").value<Matrix4>().copy(textureMatrix);
 
             mirrorPlane.setFromNormalAndCoplanarPoint(normal, mirrorWorldPosition);
             mirrorPlane.applyMatrix4(mirrorCamera->matrixWorldInverse);
