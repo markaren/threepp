@@ -1073,7 +1073,7 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
         _currentScissorTest = _scissorTest;
     }
 
-    const bool framebufferBound = state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    const bool framebufferBound = state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer) && framebuffer;
 
     if (framebufferBound && gl::GLCapabilities::instance().drawBuffers) {
 
