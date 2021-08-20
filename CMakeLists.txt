@@ -31,6 +31,8 @@ conan_cmake_run(
         glad:gl_version=4.1
         GENERATORS
         cmake
+        BUILD missing
+        SETTINGS build_type=${CMAKE_BUILD_TYPE}
         BASIC_SETUP CMAKE_TARGETS)
 
 
