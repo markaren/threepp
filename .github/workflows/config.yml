@@ -14,24 +14,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-18.04]
-        compiler_version: [7, 8, 9]
+        compiler_version: [7, 9]
 
     steps:
     - uses: actions/checkout@v2
 
     - name: Install prerequisites
       run: |
-        sudo apt-get install -y g++-8 libgl1-mesa-dev
+        sudo apt-get install -y libgl1-mesa-dev
         sudo pip3 install --upgrade setuptools pip
         sudo pip3 install conan
 
-    - name: Run conan
-      run: |
-        conan install . -s build_type=Release -s compiler.version=${{ matrix.compiler_version }} -s compiler.libcxx=libstdc++11 --install-folder=build --build=missing
-
     - name: Configure and build
       run: |
-        cmake . -Bbuild
+        cmake . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build
 
   conan-on-windows:
@@ -49,13 +45,9 @@ jobs:
         run: |
           pip3 install conan
 
-      - name: Run conan
-        run: |
-          conan install . -s build_type=Release --install-folder=build --build=missing
-
       - name: Configure and build
         run: |
-          cmake . -A x64 -Bbuild
+          cmake . -A x64 -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
 
   conan-on-darwin:
@@ -73,11 +65,7 @@ jobs:
         run: |
           pip3 install conan
 
-      - name: Run conan
-        run: |
-          conan install . -s build_type=Release --install-folder=build --build=missing
-
       - name: Configure and build
         run: |
-          cmake . -Bbuild
+          cmake . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build

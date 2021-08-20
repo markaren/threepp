@@ -31,11 +31,8 @@ In order to successfully build threepp, you'll need [conan](https://conan.io/) i
 
 `pip install conan`
 
-With conan installed, invoke `run_conan_install.sh`. This will fetch all necessary third party libraries as listed in `conanfile.txt`.
+Conan is automatically invoked when configuring the project.
 
-_note that this command is hardcoded to use the default CLion build folders (cmake-build-\<target>)_
-
-You can now build the project as a regular CMake project using e.g., the command line.
 
 ### Implementation notes
 
