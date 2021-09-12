@@ -23,12 +23,7 @@ if(CONAN_EXPORTED) # in conan local cache
     conan_basic_setup(TARGETS)
 else()
 
-    # Download automatically, you can also just copy the conan.cmake file
-    if (NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
-        file(COPY cmake/conan.cmake DESTINATION "${CMAKE_BINARY_DIR}/conan.cmake")
-    endif ()
-
-    include(${CMAKE_BINARY_DIR}/conan.cmake)
+    include(cmake/conan.cmake)
 
     conan_cmake_run(
             CONANFILE conanfile.py
