@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-18.04, ubuntu-20.04]
+        os: [ubuntu-18.04]
         build_type: [Debug, Release]
         compiler_version: [7, 9]
         compiler_libcxx: [libstdc++11]
