@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@v2
       - name: Install prerequisites
         run: |
+          sudo apt-get install -y libgl1-mesa-dev
           sudo pip3 install --upgrade setuptools pip
           sudo pip3 install conan
       - name: Configure Conan
