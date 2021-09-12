@@ -16,27 +16,27 @@ endif()
 # Conan setup
 # ==============================================================================
 
-# Download automatically, you can also just copy the conan.cmake file
-if (NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
-    message(STATUS "Downloading conan.cmake from https://github.com/conan-io/cmake-conan")
-    file(DOWNLOAD "https://raw.githubusercontent.com/conan-io/cmake-conan/master/conan.cmake"
-            "${CMAKE_BINARY_DIR}/conan.cmake")
-endif ()
+if(CONAN_EXPORTED) # in conan local cache
+    # standard conan installation, deps will be defined in conanfile.py
+    # and not necessary to call conan again, conan is already running
+    include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
+    conan_basic_setup(TARGETS)
+else()
 
-include(${CMAKE_BINARY_DIR}/conan.cmake)
+    # Download automatically, you can also just copy the conan.cmake file
+    if (NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
+        file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/cmake/conan.cmake "${CMAKE_BINARY_DIR}/conan.cmake")
+    endif ()
 
-conan_cmake_run(
-        REQUIRES
-        glfw/3.3.4
-        glad/0.1.34
-        stb/20200203
-        OPTIONS
-        glad:gl_version=4.1
-        GENERATORS
-        cmake
-        BUILD missing
-        SETTINGS build_type=${CMAKE_BUILD_TYPE}
-        BASIC_SETUP CMAKE_TARGETS)
+    include(${CMAKE_BINARY_DIR}/conan.cmake)
+
+    conan_cmake_run(
+            CONANFILE conanfile.py
+            BUILD missing
+            SETTINGS build_type=${CMAKE_BUILD_TYPE}
+            BASIC_SETUP CMAKE_TARGETS)
+
+endif()
 
 
 # ==============================================================================
