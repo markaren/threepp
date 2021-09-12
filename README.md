@@ -36,7 +36,7 @@ Conan is automatically invoked when configuring the project.
 
 ### Installing
 
-`fmilibcpp` is available through the conan remote ais:
+`threepp` is available through the conan remote ais:
 
 `conan remote add ais https://ais.jfrog.io/artifactory/api/conan/ais-conan-local`
 
