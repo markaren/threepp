@@ -25,7 +25,7 @@ else()
 
     # Download automatically, you can also just copy the conan.cmake file
     if (NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
-        file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/cmake/conan.cmake "${CMAKE_BINARY_DIR}/conan.cmake")
+        file(COPY cmake/conan.cmake DESTINATION "${CMAKE_BINARY_DIR}/conan.cmake")
     endif ()
 
     include(${CMAKE_BINARY_DIR}/conan.cmake)
