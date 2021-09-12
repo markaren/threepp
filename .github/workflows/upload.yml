@@ -78,4 +78,4 @@ jobs:
           fi
           conan create -s build_type=${{ matrix.build_type }} -b missing . ais/${CHANNEL}
       - name: Conan upload
-        run: conan upload --all --confirm --remote ais 'threpp*'
+        run: conan upload --all --confirm --remote ais 'threepp*'
