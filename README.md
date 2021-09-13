@@ -42,7 +42,8 @@ Conan is automatically invoked when configuring the project.
 
 Then add a dependency to: </br>
 `threepp/<version>@ais/stable` (stable channel -> releases) </br>
-`threepp/<version>@ais/testing` (development builds -> master)
+`threepp/<version>@ais/testing` (development builds -> master) </br>
+`threepp/<version>@ais/testing-<branch>` (development builds -> branches)
 
 ### Implementation notes
 
