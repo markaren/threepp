@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.10)
-project(threepp)
+file(STRINGS "${CMAKE_SOURCE_DIR}/version.txt" projectVersion)
+project(threepp VERSION ${projectVersion})
+message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
 # ==============================================================================
 # Global internal configuration
@@ -12,31 +14,41 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release")
 endif()
 
+# Prepare for export and installation.
+set(THREEPP_HEADER_INSTALL_DIR "include")
+if (WIN32)
+    set(THREEPP_CMAKE_INSTALL_DIR "cmake")
+else ()
+    set(THREEPP_CMAKE_INSTALL_DIR "share/${PROJECT_NAME}/cmake")
+endif ()
+set(THREEPP_INSTALL_DESTINATIONS
+        ARCHIVE DESTINATION "lib"
+        LIBRARY DESTINATION "lib"
+        RUNTIME DESTINATION "bin"
+        INCLUDES DESTINATION "${THREEPP_HEADER_INSTALL_DIR}")
+set(THREEPP_EXPORT_TARGET "${PROJECT_NAME}-targets")
+
+
 # ==============================================================================
 # Conan setup
 # ==============================================================================
 
-# Download automatically, you can also just copy the conan.cmake file
-if (NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
-    message(STATUS "Downloading conan.cmake from https://github.com/conan-io/cmake-conan")
-    file(DOWNLOAD "https://raw.githubusercontent.com/conan-io/cmake-conan/master/conan.cmake"
-            "${CMAKE_BINARY_DIR}/conan.cmake")
-endif ()
+if(CONAN_EXPORTED) # in conan local cache
+    # standard conan installation, deps will be defined in conanfile.py
+    # and not necessary to call conan again, conan is already running
+    include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
+    conan_basic_setup(TARGETS)
+else()
 
-include(${CMAKE_BINARY_DIR}/conan.cmake)
+    include(cmake/conan.cmake)
 
-conan_cmake_run(
-        REQUIRES
-        glfw/3.3.4
-        glad/0.1.34
-        stb/20200203
-        OPTIONS
-        glad:gl_version=4.1
-        GENERATORS
-        cmake
-        BUILD missing
-        SETTINGS build_type=${CMAKE_BUILD_TYPE}
-        BASIC_SETUP CMAKE_TARGETS)
+    conan_cmake_run(
+            CONANFILE conanfile.py
+            BUILD missing
+            SETTINGS build_type=${CMAKE_BUILD_TYPE}
+            BASIC_SETUP CMAKE_TARGETS)
+
+endif()
 
 
 # ==============================================================================
@@ -60,3 +72,36 @@ file(COPY "${CMAKE_SOURCE_DIR}/data/textures" DESTINATION ${CMAKE_CURRENT_BINARY
 
 # favicon
 file(COPY "${CMAKE_SOURCE_DIR}/data/favicon.bmp" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
+
+
+# ==============================================================================
+# Exports and remaining installation
+# ==============================================================================
+
+install(
+        EXPORT "${THREEPP_EXPORT_TARGET}"
+        DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}"
+        NAMESPACE "${PROJECT_NAME}::"
+)
+
+include(CMakePackageConfigHelpers)
+
+# Generate and install package-config file.
+set(configFile "${CMAKE_BINARY_DIR}/${PROJECT_NAME}-config.cmake")
+set(targetsFile "${THREEPP_CMAKE_INSTALL_DIR}/${THREEPP_EXPORT_TARGET}.cmake")
+configure_package_config_file(
+        "${CMAKE_SOURCE_DIR}/cmake/project-config.cmake.in"
+        "${configFile}"
+        INSTALL_DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}"
+        PATH_VARS targetsFile
+)
+install(FILES "${configFile}" DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}")
+
+# Generate and install package-version file
+set(versionFile "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake")
+write_basic_package_version_file(
+        "${versionFile}"
+        VERSION "${PROJECT_VERSION}"
+        COMPATIBILITY "SameMajorVersion")
+install(FILES "${versionFile}" DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}")
+

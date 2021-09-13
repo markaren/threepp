@@ -1,0 +1,81 @@
+name: Upload conan recipe
+
+env:
+  CONAN_LOGIN_USERNAME_AIS: ${{ secrets.CONAN_LOGIN_USERNAME_AIS }}
+  CONAN_PASSWORD_AIS: ${{ secrets.CONAN_PASSWORD_AIS }}
+  CONAN_REVISIONS_ENABLED: 1
+  CONAN_NON_INTERACTIVE: True
+
+on: [push, workflow_dispatch]
+
+jobs:
+  conan-on-linux:
+    name: Conan
+    runs-on: ${{matrix.os}}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-18.04]
+        build_type: [Debug, Release]
+        compiler_version: [7, 9]
+        compiler_libcxx: [libstdc++11]
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install prerequisites
+        run: |
+          sudo apt-get install -y libgl1-mesa-dev
+          sudo pip3 install --upgrade setuptools pip
+          sudo pip3 install conan
+      - name: Configure Conan
+        run: |
+          conan remote add ais https://ais.jfrog.io/artifactory/api/conan/ais-conan --force
+      - name: Conan create
+        run: |
+          REFNAME="${GITHUB_REF#refs/*/}"
+          VERSION="v$(<version.txt)"
+          if [[ $GITHUB_REF == refs/tags/* ]] && [[ $REFNAME == $VERSION ]]; then CHANNEL="stable"
+          elif [[ $REFNAME == master ]]; then CHANNEL="testing"
+          else
+            SHORT_REFNAME="${REFNAME:0:40}"
+            CHANNEL="testing-${SHORT_REFNAME//\//_}"
+          fi
+          conan create -s build_type=${{ matrix.build_type }} -s compiler.version=${{ matrix.compiler_version }} -s compiler.libcxx=${{ matrix.compiler_libcxx }} -b missing . ais/${CHANNEL}
+      - name: Conan upload
+        run: conan upload --all --confirm --remote ais 'threepp*'
+
+  conan-on-windows:
+    name: Conan
+    runs-on: ${{matrix.os}}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2016, windows-2019]
+        build_type: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install prerequisites
+        run: |
+          pip3 install --upgrade setuptools pip
+          pip3 install conan
+      - name: Configure Conan
+        run: |
+          conan remote add ais https://ais.jfrog.io/artifactory/api/conan/ais-conan --force
+      - name: Conan create
+        shell: bash
+        run: |
+          REFNAME="${GITHUB_REF#refs/*/}"
+          VERSION="v$(<version.txt)"
+          if [[ $GITHUB_REF == refs/tags/* ]] && [[ $REFNAME == $VERSION ]]; then CHANNEL="stable"
+          elif [[ $REFNAME == master ]]; then CHANNEL="testing"
+          else
+            SHORT_REFNAME="${REFNAME:0:40}"
+            CHANNEL="testing-${SHORT_REFNAME//\//_}"
+          fi
+          conan create -s build_type=${{ matrix.build_type }} -b missing . ais/${CHANNEL}
+      - name: Conan upload
+        run: conan upload --all --confirm --remote ais 'threepp*'

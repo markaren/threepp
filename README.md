@@ -34,6 +34,17 @@ In order to successfully build threepp, you'll need [conan](https://conan.io/) i
 Conan is automatically invoked when configuring the project.
 
 
+### Installing
+
+`threepp` is available through the conan remote ais:
+
+`conan remote add ais https://ais.jfrog.io/artifactory/api/conan/ais-conan-local`
+
+Then add a dependency to: </br>
+`threepp/<version>@ais/stable` (stable channel -> releases) </br>
+`threepp/<version>@ais/testing` (development builds -> master) </br>
+`threepp/<version>@ais/testing-<branch>` (development builds -> branches)
+
 ### Implementation notes
 
 In general, you'll find that math classes are value types, while threepp expect smart pointers for other types. 
