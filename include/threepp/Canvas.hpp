@@ -45,6 +45,8 @@ namespace threepp {
 
         bool removeMouseListener(const std::string &listenerUuid);
 
+        void animate(const std::function<void()> &f) const;
+
         void animate(const std::function<void(float)> &f) const;
 
         ~Canvas();

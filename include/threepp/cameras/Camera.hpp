@@ -29,7 +29,6 @@ namespace threepp {
         Camera(float near, float far) : near(near), far(far){};
         Camera(const Camera &) = delete;
 
-
         void getWorldDirection(Vector3 &target) override {
 
             this->updateWorldMatrix(true, false);

@@ -23,7 +23,7 @@ int main() {
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
         renderer.render(scene, camera);
     });
 }

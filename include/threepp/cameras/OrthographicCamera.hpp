@@ -5,16 +5,19 @@
 
 #include "threepp/cameras/Camera.hpp"
 
+#include <memory>
+
 namespace threepp {
 
     class OrthographicCamera : public Camera {
 
     public:
-
         int left;
         int right;
         int top;
         int bottom;
+
+        OrthographicCamera(int left, int right, int top, int bottom, float near, float far);
 
         void setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height);
 
@@ -24,11 +27,8 @@ namespace threepp {
 
         static std::shared_ptr<OrthographicCamera> create(int left = -1, int right = 1, int top = 1, int bottom = -1, float near = 0.1f, float far = 2000) {
 
-            return std::shared_ptr<OrthographicCamera>(new OrthographicCamera(left, right, top, bottom, near, far));
+            return std::make_shared<OrthographicCamera>(left, right, top, bottom, near, far);
         }
-
-    protected:
-        OrthographicCamera(int left, int right, int top, int bottom, float near, float far);
     };
 
 }// namespace threepp

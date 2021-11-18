@@ -42,7 +42,7 @@ int main() {
                           .title("Raw Shader demo")
                           .antialising(8));
 
-    auto renderer = GLRenderer(canvas);
+    GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
     auto scene = Scene::create();
 

@@ -3,8 +3,6 @@
 
 using namespace threepp;
 
-const int frustumSize = 600;
-
 int main() {
 
     Canvas canvas;

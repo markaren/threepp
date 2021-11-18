@@ -72,6 +72,16 @@ public:
         glfwSetWindowSize(window, size.width, size.height);
     }
 
+    void animate(const std::function<void()> &f) const {
+        while (!glfwWindowShouldClose(window)) {
+
+            f();
+
+            glfwSwapBuffers(window);
+            glfwPollEvents();
+        }
+    }
+
     void animate(const std::function<void(float)> &f) const {
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
@@ -208,6 +218,11 @@ private:
 };
 
 Canvas::Canvas(const Canvas::Parameters &params) : pimpl_(new Impl(params)) {}
+
+void Canvas::animate(const std::function<void()> &f) const {
+
+    pimpl_->animate(f);
+}
 
 void Canvas::animate(const std::function<void(float)> &f) const {
 

@@ -30,11 +30,8 @@ namespace threepp {
 
         static std::shared_ptr<Scene> create() {
 
-            return std::shared_ptr<Scene>(new Scene());
+            return std::make_shared<Scene>();
         }
-
-    protected:
-        Scene() = default;
     };
 
     inline bool operator==(const FogVariant &f1, const FogVariant &f2) {

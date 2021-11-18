@@ -13,7 +13,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 5;
 
-    auto renderer = GLRenderer(canvas);
+    GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
     renderer.setClearColor(Color(Color::aliceblue));
     renderer.setSize(canvas.getSize());

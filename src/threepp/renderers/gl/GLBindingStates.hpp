@@ -56,7 +56,7 @@ namespace threepp::gl {
 
         [[nodiscard]] GLuint createVertexArrayObject() const;
 
-        void bindVertexArrayObject(const GLuint vao) const;
+        void bindVertexArrayObject(GLuint vao) const;
 
         void deleteVertexArrayObject(GLuint vao);
 

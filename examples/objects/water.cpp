@@ -26,7 +26,7 @@ int main() {
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
     renderer.toneMapping = ACESFilmicToneMapping;
-    renderer.setClearColor(Color(Color::aliceblue));
+    renderer.setClearColor(Color::aliceblue);
     renderer.setSize(canvas.getSize());
 
     const auto sphereGeometry = SphereGeometry::create(30);

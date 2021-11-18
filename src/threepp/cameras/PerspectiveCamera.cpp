@@ -4,7 +4,7 @@
 using namespace threepp;
 
 PerspectiveCamera::PerspectiveCamera(float fov, float aspect, float near, float far)
-        : Camera(near, far), fov(fov), aspect(aspect) {
+    : Camera(near, far), fov(fov), aspect(aspect) {
 
     PerspectiveCamera::updateProjectionMatrix();
 }
@@ -44,7 +44,7 @@ float PerspectiveCamera::getFilmHeight() const {
 
 void PerspectiveCamera::setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {
 
-    this->aspect = (float) fullWidth / fullHeight;
+    this->aspect = static_cast<float>(fullWidth) / static_cast<float>(fullHeight);
 
     if (!this->view) {
 
@@ -88,13 +88,13 @@ void PerspectiveCamera::updateProjectionMatrix() {
 
     if (this->view && this->view->enabled) {
 
-        const auto fullWidth = view->fullWidth,
-                fullHeight = view->fullHeight;
+        const auto fullWidth = static_cast<float>(view->fullWidth),
+                    fullHeight = static_cast<float>(view->fullHeight);
 
-        left += view->offsetX * width / fullWidth;
-        top -= view->offsetY * height / fullHeight;
-        width *= view->width / fullWidth;
-        height *= view->height / fullHeight;
+        left += static_cast<float>(view->offsetX) * width / fullWidth;
+        top -= static_cast<float>(view->offsetY) * height / fullHeight;
+        width *= static_cast<float>(view->width) / fullWidth;
+        height *= static_cast<float>(view->height) / fullHeight;
     }
 
     const auto skew = this->filmOffset;

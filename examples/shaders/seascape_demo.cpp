@@ -218,7 +218,7 @@ int main() {
 
     auto size = canvas.getSize();
 
-    auto renderer = GLRenderer(canvas);
+    GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
     auto scene = Scene::create();
 

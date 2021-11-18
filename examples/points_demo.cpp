@@ -8,7 +8,7 @@ int main() {
     Canvas canvas(Canvas::Parameters().antialising(8));
 
     auto scene = Scene::create();
-    scene->background = Color(0x050505);
+    scene->background = 0x050505;
     scene->fog = Fog(0x050505, 2000, 3500);
     auto camera = PerspectiveCamera::create(27, canvas.getAspect(), 5, 3500);
     camera->position.z = 2750;

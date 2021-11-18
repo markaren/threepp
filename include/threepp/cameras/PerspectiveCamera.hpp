@@ -24,6 +24,7 @@ namespace threepp {
         float filmGauge = 35;// width of the film (default in millimeters)
         float filmOffset = 0;// horizontal film offset (same unit as gauge)
 
+        PerspectiveCamera(float fov, float aspect, float near, float far);
         PerspectiveCamera(const PerspectiveCamera &) = delete;
 
         /**
@@ -90,11 +91,8 @@ namespace threepp {
 
         static std::shared_ptr<PerspectiveCamera> create(float fov = 60, float aspect = 1, float near = 0.1, float far = 2000) {
 
-            return std::shared_ptr<PerspectiveCamera>(new PerspectiveCamera(fov, aspect, near, far));
+            return std::make_shared<PerspectiveCamera>(fov, aspect, near, far);
         }
-
-    protected:
-        explicit PerspectiveCamera(float fov, float aspect, float near, float far);
     };
 
 }// namespace threepp
