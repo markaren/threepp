@@ -48,7 +48,7 @@ namespace threepp {
                 vertices.insert(vertices.end(), {0, 0, 0});
                 colors.insert(colors.end(), {color.r, color.g, color.b});
 
-                pointMap[id].emplace_back(vertices.size() / 3 - 1);
+                pointMap[id].emplace_back(static_cast<float>(vertices.size()) / 3 - 1);
             };
 
             auto addLine = [&](const std::string &a, const std::string &b, const Color &color) {

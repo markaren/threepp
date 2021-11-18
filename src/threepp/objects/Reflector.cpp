@@ -81,9 +81,9 @@ struct Reflector::Impl {
         material->uniforms->operator[]("textureMatrix").setValue(&textureMatrix);
 
         reflector.onBeforeRender = RenderCallback([this](void *renderer, auto scene, auto camera, auto, auto, auto) {
-            reflectorWorldPosition.setFromMatrixPosition(reflector_.matrixWorld);
-            cameraWorldPosition.setFromMatrixPosition(camera->matrixWorld);
-            rotationMatrix.extractRotation(reflector_.matrixWorld);
+            reflectorWorldPosition.setFromMatrixPosition(*reflector_.matrixWorld);
+            cameraWorldPosition.setFromMatrixPosition(*camera->matrixWorld);
+            rotationMatrix.extractRotation(*reflector_.matrixWorld);
             normal.set(0, 0, 1);
             normal.applyMatrix4(rotationMatrix);
             view.subVectors(reflectorWorldPosition, cameraWorldPosition);// Avoid rendering when reflector is facing away
@@ -91,7 +91,7 @@ struct Reflector::Impl {
             if (view.dot(normal) > 0) return;
             view.reflect(normal).negate();
             view.add(reflectorWorldPosition);
-            rotationMatrix.extractRotation(camera->matrixWorld);
+            rotationMatrix.extractRotation(*camera->matrixWorld);
             lookAtPosition.set(0, 0, -1);
             lookAtPosition.applyMatrix4(rotationMatrix);
             lookAtPosition.add(cameraWorldPosition);
@@ -114,7 +114,7 @@ struct Reflector::Impl {
                               0.f, 0.f, 0.f, 1.f);
             textureMatrix.multiply(virtualCamera->projectionMatrix);
             textureMatrix.multiply(virtualCamera->matrixWorldInverse);
-            textureMatrix.multiply(reflector_.matrixWorld);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
+            textureMatrix.multiply(*reflector_.matrixWorld);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
             // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
 
             reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition);

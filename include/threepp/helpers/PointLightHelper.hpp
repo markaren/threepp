@@ -46,7 +46,7 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
-            this->matrix.copy(this->light->matrixWorld);
+            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             update();

@@ -34,7 +34,7 @@ namespace threepp {
 
             this->updateWorldMatrix(true, false);
 
-            const auto &e = this->matrixWorld.elements;
+            const auto &e = this->matrixWorld->elements;
 
             target.set(-e[8], -e[9], -e[10]).normalize();
         }
@@ -43,14 +43,14 @@ namespace threepp {
 
             Object3D::updateMatrixWorld(force);
 
-            this->matrixWorldInverse.copy(this->matrixWorld).invert();
+            this->matrixWorldInverse.copy(*this->matrixWorld).invert();
         }
 
         void updateWorldMatrix(bool updateParents, bool updateChildren) override {
 
             Object3D::updateWorldMatrix(updateParents, updateChildren);
 
-            this->matrixWorldInverse.copy(this->matrixWorld).invert();
+            this->matrixWorldInverse.copy(*this->matrixWorld).invert();
         }
 
         virtual void updateProjectionMatrix() {};

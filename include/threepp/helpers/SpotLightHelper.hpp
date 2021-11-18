@@ -16,15 +16,13 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
-            this->matrix.copy(this->light->matrixWorld);
-
             const auto coneLength = (this->light->distance > 0) ? this->light->distance : 1000;
             const auto coneWidth = coneLength * std::tan(this->light->angle);
 
             this->cone->scale.set(coneWidth, coneWidth, coneLength);
 
             Vector3 _vector{};
-            _vector.setFromMatrixPosition(this->light->target->matrixWorld);
+            _vector.setFromMatrixPosition(*this->light->target->matrixWorld);
 
             this->cone->lookAt(_vector);
 
@@ -59,7 +57,7 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
-            this->matrix.copy(this->light->matrixWorld);
+            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             auto geometry = BufferGeometry::create();

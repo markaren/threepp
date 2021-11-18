@@ -14,18 +14,22 @@ int main() {
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 10);
 
-    auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 1000);
-    camera2->position.z = 10;
-    OrbitControls controls{camera2, canvas};
-
-    auto helper = CameraHelper::create(camera);
-    scene->add(helper);
-
     auto sphereGeometry = SphereGeometry::create();
     auto sphereMaterial = MeshBasicMaterial::create();
     auto sphereMesh = Mesh::create(sphereGeometry, sphereMaterial);
     sphereMesh->position.z = -10;
     scene->add(sphereMesh);
+
+    auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 1000);
+    camera2->position.z = 5;
+    camera2->position.x = 10;
+
+    OrbitControls controls{camera2, canvas};
+    controls.target = sphereMesh->position;
+    controls.update();
+
+    auto helper = CameraHelper::create(camera);
+    scene->add(helper);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = 0.5f* size.getAspect();
@@ -49,6 +53,8 @@ int main() {
 
         renderer.setViewport({0, 0, size.width / 2, size.height});
         renderer.render(scene, camera2);
+
+        camera->position.z -= dt;
 
     });
 }

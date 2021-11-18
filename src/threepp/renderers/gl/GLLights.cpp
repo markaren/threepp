@@ -195,10 +195,10 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto direction = std::get<std::shared_ptr<Vector3>>(uniforms.at("direction"));
 
-            direction->setFromMatrixPosition(light->matrixWorld);
+            direction->setFromMatrixPosition(*light->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target->matrixWorld);
             direction->sub(vector3);
             direction->transformDirection(viewMatrix);
 
@@ -212,13 +212,13 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             auto position = std::get<std::shared_ptr<Vector3>>(uniforms.at("position"));
             auto direction = std::get<std::shared_ptr<Vector3>>(uniforms.at("direction"));
 
-            position->setFromMatrixPosition(light->matrixWorld);
+            position->setFromMatrixPosition(*light->matrixWorld);
             position->applyMatrix4(viewMatrix);
 
-            direction->setFromMatrixPosition(light->matrixWorld);
+            direction->setFromMatrixPosition(*light->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target->matrixWorld);
             direction->sub(vector3);
             direction->transformDirection(viewMatrix);
 
@@ -230,7 +230,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto position = std::get<std::shared_ptr<Vector3>>(uniforms.at("position"));
 
-            position->setFromMatrixPosition(light->matrixWorld);
+            position->setFromMatrixPosition(*light->matrixWorld);
             position->applyMatrix4(viewMatrix);
 
             pointLength++;
