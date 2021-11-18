@@ -17,7 +17,7 @@ namespace threepp {
 
         Color() = default;
 
-        explicit Color(unsigned int hex);
+        Color(unsigned int hex);
 
         float &operator[](unsigned int index);
 

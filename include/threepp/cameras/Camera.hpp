@@ -20,12 +20,15 @@ namespace threepp {
 
         std::optional<CameraView> view;
 
-        Camera(const Camera &) = delete;
-
         Matrix4 matrixWorldInverse{};
 
         Matrix4 projectionMatrix{};
         Matrix4 projectionMatrixInverse{};
+
+        Camera() = default;
+        Camera(float near, float far) : near(near), far(far){};
+        Camera(const Camera &) = delete;
+
 
         void getWorldDirection(Vector3 &target) override {
 
@@ -50,10 +53,8 @@ namespace threepp {
             this->matrixWorldInverse.copy(this->matrixWorld).invert();
         }
 
-        virtual void updateProjectionMatrix() = 0;
+        virtual void updateProjectionMatrix() {};
 
-    protected:
-        Camera(float near, float far) : near(near), far(far){};
     };
 
 }// namespace threepp

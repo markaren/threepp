@@ -45,6 +45,7 @@ set(publicHeaders
         "threepp/helpers/AxesHelper.hpp"
         "threepp/helpers/ArrowHelper.hpp"
         "threepp/helpers/Box3Helper.hpp"
+        "threepp/helpers/CameraHelper.hpp"
         "threepp/helpers/DirectionalLightHelper.hpp"
         "threepp/helpers/GridHelper.hpp"
         "threepp/helpers/PlaneHelper.hpp"

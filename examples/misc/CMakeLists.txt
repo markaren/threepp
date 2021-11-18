@@ -1,5 +1,3 @@
-include_directories(test ${CMAKE_SOURCE_DIR}/include)
-include_directories(test ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(test_event test_event.cpp)
 target_link_libraries(test_event PUBLIC threepp)

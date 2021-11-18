@@ -1,5 +1,3 @@
-include_directories(test ${CMAKE_SOURCE_DIR}/include)
-include_directories(test ${CMAKE_SOURCE_DIR}/src)
 
 add_executable(raw_shader raw_shader.cpp)
 target_link_libraries(raw_shader PUBLIC threepp)

@@ -1,9 +1,6 @@
 include_directories(test ${CMAKE_SOURCE_DIR}/include)
 include_directories(test ${CMAKE_SOURCE_DIR}/src)
 
-add_executable(helpers helpers.cpp)
-target_link_libraries(helpers PUBLIC threepp)
-
 add_executable(demo demo.cpp)
 target_link_libraries(demo PUBLIC threepp)
 
@@ -19,3 +16,4 @@ add_subdirectory(shaders)
 add_subdirectory(objects)
 add_subdirectory(lights)
 add_subdirectory(misc)
+add_subdirectory(helpers)
