@@ -296,7 +296,7 @@ Canvas::Parameters &threepp::Canvas::Parameters::size(int width, int height) {
     return this->size({width, height});
 }
 
-Canvas::Parameters &threepp::Canvas::Parameters::antialising(int antialiasing) {
+Canvas::Parameters &threepp::Canvas::Parameters::antialiasing(int antialiasing) {
 
     this->antialiasing_ = antialiasing;
 

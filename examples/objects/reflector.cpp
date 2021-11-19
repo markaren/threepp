@@ -6,7 +6,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialising(8)};
+    Canvas canvas{Canvas::Parameters().antialiasing(8)};
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);

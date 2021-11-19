@@ -68,7 +68,7 @@ namespace threepp {
 
             Parameters &size(int width, int height);
 
-            Parameters &antialising(int antialiasing);
+            Parameters &antialiasing(int antialiasing);
 
         private:
             WindowSize size_;

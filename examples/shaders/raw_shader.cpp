@@ -40,7 +40,7 @@ int main() {
 
     Canvas canvas(Canvas::Parameters()
                           .title("Raw Shader demo")
-                          .antialising(8));
+                          .antialiasing(8));
 
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;

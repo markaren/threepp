@@ -5,7 +5,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialising(8));
+    Canvas canvas(Canvas::Parameters().antialiasing(8));
 
     auto scene = Scene::create();
     scene->background = 0x050505;

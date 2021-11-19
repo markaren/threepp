@@ -214,7 +214,7 @@ int main() {
 
     Canvas canvas(Canvas::Parameters()
                           .title("Seascape demo")
-                          .antialising(8));
+                          .antialiasing(8));
 
     auto size = canvas.getSize();
 
