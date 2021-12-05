@@ -8,6 +8,7 @@
 #include "threepp/core/Face3.hpp"
 #include "threepp/math/Ray.hpp"
 
+#include <limits>
 #include <vector>
 
 namespace threepp {
