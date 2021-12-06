@@ -35,6 +35,11 @@ int GLRenderer::getTargetPixelRatio() const {
     return _pixelRatio;
 }
 
+void GLRenderer::setPixelRatio(int value) {
+    _pixelRatio = value;
+    this->setSize({_size.width, _size.height});
+}
+
 WindowSize GLRenderer::getSize() const {
     return _size;
 }

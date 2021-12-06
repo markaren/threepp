@@ -91,6 +91,8 @@ namespace threepp {
 
         [[nodiscard]] int getTargetPixelRatio() const;
 
+        void setPixelRatio(int value);
+
         [[nodiscard]] WindowSize getSize() const;
 
         void setSize(WindowSize size);
