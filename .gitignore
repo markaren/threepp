@@ -2,6 +2,6 @@
 .vscode
 .cache
 
-cmake-build-debug
-cmake-build-release
+build
+cmake-build-*
 compile_commands.json
