@@ -268,7 +268,7 @@ target_include_directories(threepp
 install(
         TARGETS threepp
         EXPORT "${THREEPP_EXPORT_TARGET}"
-        ${FMILIBCPP_INSTALL_DESTINATIONS}
+        ${THREEPP_INSTALL_DESTINATIONS}
 )
 install(
         DIRECTORY "${publicHeaderDir}/threepp"
