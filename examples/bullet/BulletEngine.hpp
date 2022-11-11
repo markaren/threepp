@@ -10,15 +10,17 @@
 #include <memory>
 #include <unordered_map>
 
-btVector3 convert(const threepp::Vector3 &v) {
-    return {v.x, v.y, v.z};
-}
+namespace {
+    btVector3 convert(const threepp::Vector3 &v) {
+        return {v.x, v.y, v.z};
+    }
 
-struct Rbinfo {
-    btCollisionShape* shape;
-    btMotionState* state;
-    btRigidBody* body;
-};
+    struct Rbinfo {
+        std::unique_ptr<btCollisionShape> shape;
+        std::unique_ptr<btMotionState> state;
+        std::unique_ptr<btRigidBody> body;
+    };
+}
 
 class BulletEngine {
 
@@ -36,19 +38,19 @@ public:
         if (std::dynamic_pointer_cast<const threepp::BoxGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<threepp::BoxGeometry>(geometry);
 
-            Rbinfo rbInfo;
-            rbInfo.shape = new btBoxShape(btVector3(g->width, g->height, g->depth) / 2);
-            rbInfo.state = new btDefaultMotionState();
+            auto rbInfo = std::make_unique<Rbinfo>();
+            rbInfo->shape = std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
+            rbInfo->state = std::make_unique< btDefaultMotionState>();
 
-
-            btTransform t;
+            btTransform t{};
+            t.setIdentity();
             t.setOrigin(convert(m->position));
-            rbInfo.state->setWorldTransform(t);
+            rbInfo->state->setWorldTransform(t);
 
-            rbInfo.body = new btRigidBody(mass, rbInfo.state, rbInfo.shape);
-            world.addRigidBody(rbInfo.body);
+            rbInfo->body = std::make_unique<btRigidBody>(mass, rbInfo->state.get(), rbInfo->shape.get());
+            world.addRigidBody(rbInfo->body.get());
 
-            bodies[m] = rbInfo;
+            bodies[m] = std::move(rbInfo);
         }
     }
 
@@ -56,16 +58,17 @@ public:
 
         world.stepSimulation(dt);
 
-        for (auto &[m, rb] : bodies) {
-            auto p = rb.body->getWorldTransform().getOrigin();
-            m->position.set(p.x(), p.y(), std::isnan(p.z()) ? 0 : p.z());
+        for (auto &[m, info] : bodies) {
+            auto p = info->body->getWorldTransform().getOrigin();
+            m->position.set(p.x(), p.y(), p.z());
         }
     }
 
 private:
-    btDiscreteDynamicsWorld world;
 
-    btDbvtBroadphase broadphase = btDbvtBroadphase{};
+    std::unordered_map<std::shared_ptr<threepp::Mesh>, std::unique_ptr<Rbinfo>> bodies{};
+
+    btDbvtBroadphase broadphase{};
 
     ///the default constraint solver. For parallel processing you can use a different solver (see Extras/BulletMultiThreaded)
     btSequentialImpulseConstraintSolver solver{};
@@ -76,7 +79,8 @@ private:
     ///use the default collision dispatcher. For parallel processing you can use a different dispatcher (see Extras/BulletMultiThreaded)
     btCollisionDispatcher dispatcher;
 
-    std::unordered_map<std::shared_ptr<threepp::Mesh>, Rbinfo> bodies{};
+    btDiscreteDynamicsWorld world;
+
 };
 
 #endif//THREEPP_BULLETENGINE_HPP
