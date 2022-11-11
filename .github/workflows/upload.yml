@@ -18,10 +18,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-18.04]
+        os: [ubuntu-20.04]
         build_type: [Debug, Release]
-        compiler_version: [7, 9]
-        compiler_libcxx: [libstdc++11]
+        compiler_version: [9]
 
     steps:
       - uses: actions/checkout@v2
@@ -53,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2016, windows-2019]
+        os: [windows-2019, windows-2020]
         build_type: [Debug, Release]
 
     steps:
