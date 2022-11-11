@@ -13,15 +13,47 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-18.04]
-        compiler_version: [7, 9]
+        os: [ubuntu-20.04]
+        compiler_version: [9]
 
     steps:
     - uses: actions/checkout@v2
 
     - name: Install prerequisites
       run: |
-        sudo apt-get install -y libgl1-mesa-dev
+        sudo apt install -y \
+        libgl-dev \
+        libfontenc-dev \
+        libxaw7-dev \
+        libxkbfile-dev \
+        libxmu-dev \
+        libxmuu-dev \
+        libxpm-dev \
+        libxres-dev \
+        libxss-dev \
+        libxt-dev \
+        libxtst-dev \
+        libxv-dev \
+        libxvmc-dev \
+        libxxf86vm-dev \
+        libxcb-render-util0-dev \
+        libxcb-xkb-dev \
+        libxcb-icccm4-dev \
+        libxcb-image0-dev \
+        libxcb-keysyms1-dev \
+        libxcb-randr0-dev \
+        libxcb-shape0-dev \
+        libxcb-sync-dev \
+        libxcb-xfixes0-dev \
+        libxcb-xinerama0-dev \
+        libxcb-dri3-dev \
+        libx11-xcb-dev \
+        libxcomposite-dev \
+        libxcursor-dev \
+        libxdamage-dev \
+        libxinerama-dev \
+        libxrandr-dev \
+        libxcb-util-dev
         sudo pip3 install --upgrade setuptools pip
         sudo pip3 install conan
 
@@ -36,7 +68,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2016, windows-2019]
+        os: [windows-2019]
 
     steps:
       - uses: actions/checkout@v2

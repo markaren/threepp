@@ -15,9 +15,9 @@ class ThreeppConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     generators = "cmake"
     requires = (
-        "glfw/3.3.4",
-        "glad/0.1.34",
-        "stb/20200203"
+        "glfw/3.3.8",
+        "glad/0.1.36",
+        "stb/cci.20210910"
     )
 
     default_options = (
@@ -29,6 +29,7 @@ class ThreeppConan(ConanFile):
 
     def configure_cmake(self):
         cmake = CMake(self)
+        cmake.definitions["THREEPP_BUILD_EXAMPLES"] = "OFF"
         cmake.configure()
         return cmake
 
