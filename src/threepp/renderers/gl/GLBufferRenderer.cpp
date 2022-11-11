@@ -1,4 +1,6 @@
 
+#pragma warning( disable : 4312 )
+
 #include "GLBufferRenderer.hpp"
 
 using namespace threepp;
