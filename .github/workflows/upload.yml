@@ -27,6 +27,33 @@ jobs:
 
       - name: Install prerequisites
         run: |
+          sudo apt update
+          sudo apt install -y \
+          libgl-dev \
+          libfontenc-dev \
+          libxaw7-dev \
+          libxkbfile-dev \
+          libxmu-dev \
+          libxmuu-dev \
+          libxpm-dev \
+          libxres-dev \
+          libxss-dev \
+          libxt-dev \
+          libxtst-dev \
+          libxv-dev \
+          libxvmc-dev \
+          libxxf86vm-dev \
+          libxcb-render-util0-dev \
+          libxcb-xkb-dev \
+          libxcb-icccm4-dev \
+          libxcb-image0-dev \
+          libxcb-keysyms1-dev \
+          libxcb-randr0-dev \
+          libxcb-shape0-dev \
+          libxcb-sync-dev \
+          libxcb-xfixes0-dev \
+          libxcb-xinerama0-dev \
+          libxcb-dri3-dev
           sudo pip3 install --upgrade setuptools pip
           sudo pip3 install conan
 
