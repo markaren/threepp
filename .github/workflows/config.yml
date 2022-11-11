@@ -46,7 +46,13 @@ jobs:
         libxcb-sync-dev \
         libxcb-xfixes0-dev \
         libxcb-xinerama0-dev \
-        libxcb-dri3-dev
+        libxcb-dri3-dev \
+        libx11-xcb-dev \
+        libxcomposite-dev \
+        libxcursor-dev \
+        libxdamage-dev \
+        libxinerama-dev \
+        libxrandr-dev
         sudo pip3 install --upgrade setuptools pip
         sudo pip3 install conan
 
