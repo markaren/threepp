@@ -4,7 +4,7 @@
 using namespace threepp;
 
 
-PlaneGeometry::PlaneGeometry(float width, float height, int widthSegments, int heightSegments) {
+PlaneGeometry::PlaneGeometry(float width, float height, int widthSegments, int heightSegments): width(width), height(height) {
 
     const auto width_half = width / 2;
     const auto height_half = height / 2;
