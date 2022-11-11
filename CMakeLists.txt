@@ -4,6 +4,7 @@ project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
+option(THREEPP_EXAMPLES_WITH_BULLET "Build examples requiring Bullet" OFF)
 
 # ==============================================================================
 # Global internal configuration
@@ -44,9 +45,15 @@ else()
 
     include(cmake/conan.cmake)
 
+    set(bullet_option False)
+    if (THREEPP_EXAMPLES_WITH_BULLET)
+        set(bullet_option True)
+    endif()
+
     conan_cmake_run(
             CONANFILE conanfile.py
             BUILD missing
+            OPTIONS with_bullet=${bullet_option}
             SETTINGS build_type=${CMAKE_BUILD_TYPE}
             BASIC_SETUP CMAKE_TARGETS)
 
