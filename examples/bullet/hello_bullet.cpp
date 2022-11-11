@@ -16,8 +16,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     GLRenderer renderer(canvas);
-    renderer.setClearColor(Color(Color::aliceblue));
-    renderer.setSize(canvas.getSize());
+    renderer.setClearColor(Color::aliceblue);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
@@ -27,7 +26,6 @@ int main() {
     scene->add(box);
 
     const auto planeGeometry = BoxGeometry::create(10, 0.1, 10);
-    //    planeGeometry->rotateX(math::degToRad(-90));
     const auto planeMaterial = MeshBasicMaterial::create();
     planeMaterial->color.setRGB(0, 0, 1);
     auto plane = Mesh::create(planeGeometry, planeMaterial);
