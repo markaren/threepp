@@ -1,7 +1,9 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.15)
 file(STRINGS "${CMAKE_SOURCE_DIR}/version.txt" projectVersion)
 project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
+
+option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 
 # ==============================================================================
 # Global internal configuration
@@ -56,7 +58,10 @@ endif()
 # ==============================================================================
 
 add_subdirectory(src)
-add_subdirectory(examples)
+
+if (THREEPP_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
 
 
 # ==============================================================================
@@ -104,4 +109,3 @@ write_basic_package_version_file(
         VERSION "${PROJECT_VERSION}"
         COMPATIBILITY "SameMajorVersion")
 install(FILES "${versionFile}" DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}")
-

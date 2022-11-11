@@ -29,6 +29,7 @@ class ThreeppConan(ConanFile):
 
     def configure_cmake(self):
         cmake = CMake(self)
+        cmake.definitions["THREEPP_BUILD_EXAMPLES"] = "OFF"
         cmake.configure()
         return cmake
 
