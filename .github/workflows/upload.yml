@@ -59,7 +59,8 @@ jobs:
           libxcursor-dev \
           libxdamage-dev \
           libxinerama-dev \
-          libxrandr-dev
+          libxrandr-dev \
+          libxcb-util-dev
           sudo pip3 install --upgrade setuptools pip
           sudo pip3 install conan
 
