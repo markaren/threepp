@@ -42,7 +42,7 @@ jobs:
             SHORT_REFNAME="${REFNAME:0:40}"
             CHANNEL="testing-${SHORT_REFNAME//\//_}"
           fi
-          conan create -s build_type=${{ matrix.build_type }} -s compiler.version=${{ matrix.compiler_version }} -s compiler.libcxx=${{ matrix.compiler_libcxx }} -b missing . ais/${CHANNEL}
+          conan create -s build_type=${{ matrix.build_type }} -s compiler.version=${{ matrix.compiler_version }} -b missing . ais/${CHANNEL}
       - name: Conan upload
         run: conan upload --all --confirm --remote ais 'threepp*'
 
