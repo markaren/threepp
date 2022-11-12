@@ -10,6 +10,8 @@
 #include <memory>
 #include <unordered_map>
 
+#include <threepp/utils/InstanceOf.hpp>
+
 namespace {
     btVector3 convert(const threepp::Vector3 &v) {
         return {v.x, v.y, v.z};
@@ -19,8 +21,21 @@ namespace {
         std::unique_ptr<btCollisionShape> shape;
         std::unique_ptr<btMotionState> state;
         std::unique_ptr<btRigidBody> body;
+
+        Rbinfo(std::unique_ptr<btCollisionShape> shape, btScalar mass, const threepp::Vector3 &origin)
+            : shape(std::move(shape)),
+              state(std::make_unique<btDefaultMotionState>()) {
+
+            btTransform t{};
+            t.setIdentity();
+            t.setOrigin(convert(origin));
+            state->setWorldTransform(t);
+
+            body = std::make_unique<btRigidBody>(mass, state.get(), this->shape.get());
+        }
+
     };
-}
+}// namespace
 
 class BulletEngine {
 
@@ -35,21 +50,22 @@ public:
 
         auto geometry = m->geometry();
 
-        if (std::dynamic_pointer_cast<const threepp::BoxGeometry>(geometry)) {
+        if (instanceof <const threepp::BoxGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<threepp::BoxGeometry>(geometry);
 
-            auto rbInfo = std::make_unique<Rbinfo>();
-            rbInfo->shape = std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
-            rbInfo->state = std::make_unique< btDefaultMotionState>();
+            auto shape = std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
+            auto rbInfo = std::make_unique<Rbinfo>(std::move(shape), mass, m->position);
 
-            btTransform t{};
-            t.setIdentity();
-            t.setOrigin(convert(m->position));
-            rbInfo->state->setWorldTransform(t);
-
-            rbInfo->body = std::make_unique<btRigidBody>(mass, rbInfo->state.get(), rbInfo->shape.get());
             world.addRigidBody(rbInfo->body.get());
+            bodies[m] = std::move(rbInfo);
 
+        } else if (instanceof <const threepp::SphereGeometry>(geometry)) {
+            auto g = std::dynamic_pointer_cast<threepp::SphereGeometry>(geometry);
+
+            auto shape = std::make_unique<btSphereShape>(g->radius);
+            auto rbInfo = std::make_unique<Rbinfo>(std::move(shape), mass, m->position);
+
+            world.addRigidBody(rbInfo->body.get());
             bodies[m] = std::move(rbInfo);
         }
     }
@@ -59,13 +75,15 @@ public:
         world.stepSimulation(dt);
 
         for (auto &[m, info] : bodies) {
-            auto p = info->body->getWorldTransform().getOrigin();
+            auto t = info->body->getWorldTransform();
+            auto p = t.getOrigin();
+            auto r = t.getRotation();
             m->position.set(p.x(), p.y(), p.z());
+            m->quaternion.set(r.x(), r.y(), r.z(), r.w());
         }
     }
 
 private:
-
     std::unordered_map<std::shared_ptr<threepp::Mesh>, std::unique_ptr<Rbinfo>> bodies{};
 
     btDbvtBroadphase broadphase{};
@@ -80,7 +98,6 @@ private:
     btCollisionDispatcher dispatcher;
 
     btDiscreteDynamicsWorld world;
-
 };
 
 #endif//THREEPP_BULLETENGINE_HPP

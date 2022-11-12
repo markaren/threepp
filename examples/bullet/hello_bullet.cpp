@@ -20,17 +20,24 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->color.setRGB(1, 0, 0);
+    boxMaterial->color = Color::blue;
     auto box = Mesh::create(boxGeometry, boxMaterial);
-    box->position.setY(5);
+    box->position.setY(6);
     scene->add(box);
+
+    const auto sphereGeometry = SphereGeometry::create(0.5);
+    const auto sphereMaterial = MeshBasicMaterial::create();
+    sphereMaterial->color = Color::gray;
+    sphereMaterial->wireframe = true;
+    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
+    sphere->position.set(0, 5, 0.5);
+    scene->add(sphere);
 
     const auto planeGeometry = BoxGeometry::create(10, 0.1, 10);
     const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->color.setRGB(0, 0, 1);
+    planeMaterial->color = Color::red;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     scene->add(plane);
-
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -42,6 +49,7 @@ int main() {
     BulletEngine engine;
 
     engine.register_mesh(box, 1);
+    engine.register_mesh(sphere, 0.1);
     engine.register_mesh(plane, 0);
 
     box->rotation.setOrder(Euler::YZX);
