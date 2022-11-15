@@ -20,7 +20,17 @@ namespace threepp {
             return geometry_;
         }
 
+        std::shared_ptr<const BufferGeometry> geometry() const override {
+
+            return geometry_;
+        }
+
         std::shared_ptr<Material> material() override {
+
+            return materials_[0];
+        }
+
+        std::shared_ptr<const Material> material() const override {
 
             return materials_[0];
         }

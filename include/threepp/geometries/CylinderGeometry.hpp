@@ -10,6 +10,10 @@ namespace threepp {
     class CylinderGeometry : public BufferGeometry {
 
     public:
+        const float radiusTop;
+        const float radiusBottom;
+        const float height;
+
         static std::shared_ptr<CylinderGeometry> create(
                 float radiusTop = 1,
                 float radiusBottom = 1,

@@ -156,7 +156,17 @@ namespace threepp {
             return nullptr;
         }
 
+        virtual std::shared_ptr<const BufferGeometry> geometry() const {
+
+            return nullptr;
+        }
+
         virtual std::shared_ptr<Material> material() {
+
+            return nullptr;
+        }
+
+        virtual std::shared_ptr<const Material> material() const {
 
             return nullptr;
         }

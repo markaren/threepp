@@ -3,8 +3,8 @@
 
 #include <bullet/btBulletDynamicsCommon.h>
 
-#include <threepp/utils/InstanceOf.hpp>
 #include <threepp/geometries/geometries.hpp>
+#include <threepp/utils/InstanceOf.hpp>
 
 #include <unordered_map>
 
@@ -31,23 +31,50 @@ namespace {
             btVector3 inertia{};
             this->shape->calculateLocalInertia(mass, inertia);
 
-            btTransform t{};
-            t.setIdentity();
-            t.setOrigin(convert(Vector3().setFromMatrixPosition(origin)));
-            t.setRotation(convert(Quaternion().setFromRotationMatrix(origin)));
+            btTransform t{convert(Quaternion().setFromRotationMatrix(origin)), convert(Vector3().setFromMatrixPosition(origin))};
             state->setWorldTransform(t);
 
             body = std::make_unique<btRigidBody>(mass, state.get(), this->shape.get(), inertia);
         }
     };
+
+    std::unique_ptr<Rbinfo> createFromMesh(const Mesh &m, float mass) {
+        auto geometry = m.geometry();
+        if (instanceof <const BoxGeometry>(geometry)) {
+            auto g = std::dynamic_pointer_cast<const BoxGeometry>(geometry);
+
+            auto shape = std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
+            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+
+        } else if (instanceof <const PlaneGeometry>(geometry)) {
+            auto g = std::dynamic_pointer_cast<const PlaneGeometry>(geometry);
+
+            auto shape = std::make_unique<btBoxShape>(btVector3(g->width / 2, 0.01, g->height / 2));
+            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+        } else if (instanceof <const SphereGeometry>(geometry)) {
+            auto g = std::dynamic_pointer_cast<const SphereGeometry>(geometry);
+
+            auto shape = std::make_unique<btSphereShape>(g->radius);
+            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+
+        } else if (instanceof <const CylinderGeometry>(geometry)) {
+            auto g = std::dynamic_pointer_cast<const CylinderGeometry>(geometry);
+
+            auto shape = std::make_unique<btCylinderShape>(btVector3(g->radiusTop, g->height/2, g->radiusTop));
+            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+        }
+
+        return nullptr;
+    }
+
 }// namespace
 
 struct BulletEngine::Impl {
 
-    Impl()
+    explicit Impl(float gravity)
         : dispatcher{&collisionConfiguration},
           world{&dispatcher, &broadphase, &solver, &collisionConfiguration} {
-        world.setGravity(btVector3(0, -9.81, 0));
+        world.setGravity(btVector3(0, gravity, 0));
     }
 
     void register_mesh(std::shared_ptr<Mesh> m, float mass) {
@@ -55,25 +82,12 @@ struct BulletEngine::Impl {
         auto geometry = m->geometry();
 
         m->updateMatrixWorld();
-        m->matrixAutoUpdate = false;
 
-        if (instanceof <const BoxGeometry>(geometry)) {
-            auto g = std::dynamic_pointer_cast<BoxGeometry>(geometry);
+        auto rb = createFromMesh(*m, mass);
 
-            auto shape = std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
-            auto rbInfo = std::make_unique<Rbinfo>(std::move(shape), mass, *m->matrixWorld);
-
-            world.addRigidBody(rbInfo->body.get());
-            bodies[m] = std::move(rbInfo);
-
-        } else if (instanceof <const SphereGeometry>(geometry)) {
-            auto g = std::dynamic_pointer_cast<threepp::SphereGeometry>(geometry);
-
-            auto shape = std::make_unique<btSphereShape>(g->radius);
-            auto rbInfo = std::make_unique<Rbinfo>(std::move(shape), mass, *m->matrixWorld);
-
-            world.addRigidBody(rbInfo->body.get());
-            bodies[m] = std::move(rbInfo);
+        if (rb) {
+            world.addRigidBody(rb->body.get());
+            bodies[m] = std::move(rb);
         }
     }
 
@@ -86,9 +100,8 @@ struct BulletEngine::Impl {
             auto p = t.getOrigin();
             auto r = t.getRotation();
 
-            m->matrix->makeRotationFromQuaternion(Quaternion(r.x(), r.y(), r.z(), r.w()));
-            m->matrix->setPosition(Vector3(p.x(), p.y(), p.z()));
-
+            m->quaternion.set(r.x(), r.y(), r.z(), r.w());
+            m->position.set(p.x(), p.y(), p.z());
         }
     }
 
@@ -112,8 +125,8 @@ private:
     btDiscreteDynamicsWorld world;
 };
 
-BulletEngine::BulletEngine()
-    : pimpl_(std::make_unique<Impl>()) {}
+BulletEngine::BulletEngine(float gravity)
+    : pimpl_(std::make_unique<Impl>(gravity)) {}
 
 void BulletEngine::register_mesh(std::shared_ptr<Mesh> m, float mass) {
     pimpl_->register_mesh(std::move(m), mass);

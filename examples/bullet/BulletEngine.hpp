@@ -11,7 +11,7 @@
 class BulletEngine {
 
 public:
-    BulletEngine();
+    explicit BulletEngine(float gravity = -9.81f);
 
     void register_mesh(std::shared_ptr<threepp::Mesh> m, float mass);
 

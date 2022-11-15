@@ -33,11 +33,20 @@ int main() {
     sphere->position.set(0, 5, 0.5);
     scene->add(sphere);
 
-    const auto planeGeometry = BoxGeometry::create(10, 0.1, 10);
+    const auto cylinderGeometry = CylinderGeometry::create(0.5, 0.5);
+    const auto cylinderMaterial = MeshBasicMaterial::create();
+    cylinderMaterial->color = Color::gray;
+    cylinderMaterial->wireframe = true;
+    auto cylinder = Mesh::create(cylinderGeometry, cylinderMaterial);
+    cylinder->position.set(0, 5, -0.5);
+    cylinder->rotateZ(math::DEG2RAD*45);
+    scene->add(cylinder);
+
+    const auto planeGeometry = PlaneGeometry::create(10, 10);
+    planeGeometry->rotateX(math::DEG2RAD*-90);
     const auto planeMaterial = MeshBasicMaterial::create();
     planeMaterial->color = Color::red;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->rotateZ(math::DEG2RAD*25);
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -46,11 +55,11 @@ int main() {
         renderer.setSize(size);
     });
 
-
     BulletEngine engine;
 
     engine.register_mesh(box, 1);
-    engine.register_mesh(sphere, 0.1);
+    engine.register_mesh(sphere, 2);
+    engine.register_mesh(cylinder, 1);
     engine.register_mesh(plane, 0);
 
     box->rotation.setOrder(Euler::YZX);
@@ -59,4 +68,5 @@ int main() {
 
         renderer.render(scene, camera);
     });
+
 }

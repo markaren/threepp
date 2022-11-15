@@ -10,8 +10,8 @@ namespace threepp {
     class PlaneGeometry : public BufferGeometry {
 
     public:
-        float width;
-        float height;
+        const float width;
+        const float height;
 
         PlaneGeometry(const PlaneGeometry &) = delete;
 
@@ -25,4 +25,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_SPHEREGEOMETRY_HPP
+#endif //THREEPP_SPHEREGEOMETRY_HPP
