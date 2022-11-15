@@ -17,3 +17,7 @@ add_subdirectory(objects)
 add_subdirectory(lights)
 add_subdirectory(misc)
 add_subdirectory(helpers)
+
+if (THREEPP_EXAMPLES_WITH_BULLET)
+    add_subdirectory(bullet)
+endif()

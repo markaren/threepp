@@ -3,7 +3,18 @@
 
 using namespace threepp;
 
-CylinderGeometry::CylinderGeometry(float radiusTop, float radiusBottom, float height, int radialSegments, int heightSegments, bool openEnded, float thetaStart, float thetaLength) {
+CylinderGeometry::CylinderGeometry(
+        float radiusTop,
+        float radiusBottom,
+        float height,
+        int radialSegments,
+        int heightSegments,
+        bool openEnded,
+        float thetaStart,
+        float thetaLength)
+    : radiusTop(radiusTop),
+      radiusBottom(radiusBottom),
+      height(height) {
 
     std::vector<int> indices;
     std::vector<float> vertices;
@@ -15,98 +26,93 @@ CylinderGeometry::CylinderGeometry(float radiusTop, float radiusBottom, float he
     std::vector<std::vector<int>> indexArray;
     int groupStart = 0;
 
-    auto generateTorso = [&]{
+    auto generateTorso = [&] {
+        Vector3 normal;
+        Vector3 vertex;
 
-      Vector3 normal;
-      Vector3 vertex;
+        int groupCount = 0;
 
-      int groupCount = 0;
+        // this will be used to calculate the normal
+        const auto slope = (radiusBottom - radiusTop) / height;
 
-      // this will be used to calculate the normal
-      const auto slope = ( radiusBottom - radiusTop ) / height;
+        // generate vertices, normals and uvs
 
-      // generate vertices, normals and uvs
+        for (int y = 0; y <= heightSegments; y++) {
 
-      for ( int y = 0; y <= heightSegments; y ++ ) {
+            std::vector<int> indexRow;
 
-          std::vector<int> indexRow;
+            const auto v = (float) y / heightSegments;
 
-          const auto v = (float) y / heightSegments;
+            // calculate the radius of the current row
 
-          // calculate the radius of the current row
+            const auto radius = v * (radiusBottom - radiusTop) + radiusTop;
 
-          const auto radius = v * ( radiusBottom - radiusTop ) + radiusTop;
+            for (int x = 0; x <= radialSegments; x++) {
 
-          for ( int x = 0; x <= radialSegments; x ++ ) {
+                const auto u = (float) x / radialSegments;
 
-              const auto u =  (float) x / radialSegments;
+                const auto theta = u * thetaLength + thetaStart;
 
-              const auto theta = u * thetaLength + thetaStart;
+                const auto sinTheta = std::sin(theta);
+                const auto cosTheta = std::cos(theta);
 
-              const auto sinTheta = std::sin( theta );
-              const auto  cosTheta = std::cos( theta );
+                // vertex
 
-              // vertex
+                vertex.x = radius * sinTheta;
+                vertex.y = -v * height + halfHeight;
+                vertex.z = radius * cosTheta;
+                vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
 
-              vertex.x = radius * sinTheta;
-              vertex.y = - v * height + halfHeight;
-              vertex.z = radius * cosTheta;
-              vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z} );
+                // normal
 
-              // normal
+                normal.set(sinTheta, slope, cosTheta).normalize();
+                normals.insert(normals.end(), {normal.x, normal.y, normal.z});
 
-              normal.set( sinTheta, slope, cosTheta ).normalize();
-              normals.insert(normals.end(), {normal.x, normal.y, normal.z} );
+                // uv
 
-              // uv
+                uvs.insert(uvs.end(), {u, 1 - v});
 
-              uvs.insert(uvs.end(), {u, 1 - v} );
+                // save index of vertex in respective row
 
-              // save index of vertex in respective row
+                indexRow.emplace_back(index++);
+            }
 
-              indexRow.emplace_back( index ++ );
+            // now save vertices of the row in our index array
 
-          }
+            indexArray.emplace_back(indexRow);
+        }
 
-          // now save vertices of the row in our index array
+        // generate indices
 
-          indexArray.emplace_back( indexRow );
+        for (int x = 0; x < radialSegments; x++) {
 
-      }
+            for (int y = 0; y < heightSegments; y++) {
 
-      // generate indices
+                // we use the index array to access the correct indices
 
-      for ( int x = 0; x < radialSegments; x ++ ) {
+                const auto a = indexArray[y][x];
+                const auto b = indexArray[y + 1][x];
+                const auto c = indexArray[y + 1][x + 1];
+                const auto d = indexArray[y][x + 1];
 
-          for ( int y = 0; y < heightSegments; y ++ ) {
+                // faces
 
-              // we use the index array to access the correct indices
+                indices.insert(indices.end(), {a, b, d});
+                indices.insert(indices.end(), {b, c, d});
 
-              const auto a = indexArray[ y ][ x ];
-              const auto b = indexArray[ y + 1 ][ x ];
-              const auto c = indexArray[ y + 1 ][ x + 1 ];
-              const auto d = indexArray[ y ][ x + 1 ];
+                // update group counter
 
-              // faces
+                groupCount += 6;
+            }
+        }
 
-              indices.insert(indices.end(), {a, b, d} );
-              indices.insert(indices.end(), {b, c, d} );
+        // add a group to the geometry. this will ensure multi material support
 
-              // update group counter
+        addGroup(groupStart, groupCount, 0);
 
-              groupCount += 6;
+        // calculate new start value for groups
 
-          }
-
-      }
-
-      // add a group to the geometry. this will ensure multi material support
-
-      addGroup( groupStart, groupCount, 0 );
-
-      // calculate new start value for groups
-
-      groupStart += groupCount;
+        groupStart += groupCount;
     };
 
     generateTorso();
@@ -116,19 +122,16 @@ CylinderGeometry::CylinderGeometry(float radiusTop, float radiusBottom, float he
 
     };
 
-    if ( !openEnded ) {
+    if (!openEnded) {
 
-        if ( radiusTop > 0 ) generateCap( true );
-        if ( radiusBottom > 0 ) generateCap( false );
-
+        if (radiusTop > 0) generateCap(true);
+        if (radiusBottom > 0) generateCap(false);
     }
 
     // build geometry
 
-    this->setIndex( indices );
-    this->setAttribute( "position", FloatBufferAttribute::create( vertices, 3 ) );
-    this->setAttribute( "normal", FloatBufferAttribute::create( normals, 3 ) );
-    this->setAttribute( "uv", FloatBufferAttribute::create( uvs, 2 ) );
-
+    this->setIndex(indices);
+    this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
+    this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+    this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
-
