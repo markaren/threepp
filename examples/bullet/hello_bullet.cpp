@@ -37,6 +37,7 @@ int main() {
     const auto planeMaterial = MeshBasicMaterial::create();
     planeMaterial->color = Color::red;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
+    plane->rotateZ(math::DEG2RAD*25);
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
