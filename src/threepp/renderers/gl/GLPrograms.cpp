@@ -49,7 +49,7 @@ ProgramParameters GLPrograms::getParameters(
         const std::shared_ptr<Scene> &scene,
         const std::shared_ptr<Object3D> &object) {
 
-    return ProgramParameters(renderer, lights, numShadows, object, scene, material, shaderIDs);
+    return {renderer, lights, numShadows, object, scene, material, shaderIDs};
 }
 
 std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters) {
