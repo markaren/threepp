@@ -13,7 +13,7 @@ class ThreeppConan(ConanFile):
         "revision": "auto"
     }
     settings = "os", "compiler", "build_type", "arch"
-    generators = "cmake_find_package"
+    generators = "cmake", "cmake_find_package"
     requires = (
         "glfw/3.3.8",
         "glad/0.1.36",
