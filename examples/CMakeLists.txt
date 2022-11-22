@@ -18,6 +18,6 @@ add_subdirectory(lights)
 add_subdirectory(misc)
 add_subdirectory(helpers)
 
-if (THREEPP_EXAMPLES_WITH_BULLET)
+if (BULLET_FOUND)
     add_subdirectory(bullet)
 endif()

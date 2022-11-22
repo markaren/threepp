@@ -1,6 +1,6 @@
 from os import path
 from conans import ConanFile, CMake, tools
-
+from conan.tools.cmake import CMakeDeps
 
 class ThreeppConan(ConanFile):
     name = "threepp"
@@ -13,7 +13,7 @@ class ThreeppConan(ConanFile):
         "revision": "auto"
     }
     settings = "os", "compiler", "build_type", "arch"
-    generators = "cmake"
+    generators = "CMakeDeps"
     requires = (
         "glfw/3.3.8",
         "glad/0.1.36",

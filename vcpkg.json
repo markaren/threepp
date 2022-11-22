@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
+  "name": "threepp",
+  "dependencies": [
+    "glad",
+    "glfw3",
+    "stb"
+  ],
+  "features": {
+    "bullet": {
+      "description": "Enable bullet physics in examples",
+      "dependencies": [
+        "bullet3"
+      ]
+    }
+  }
+}

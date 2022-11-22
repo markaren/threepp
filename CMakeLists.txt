@@ -4,7 +4,6 @@ project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
-option(THREEPP_EXAMPLES_WITH_BULLET "Build examples requiring Bullet" OFF)
 
 # ==============================================================================
 # Global internal configuration
@@ -13,9 +12,12 @@ option(THREEPP_EXAMPLES_WITH_BULLET "Build examples requiring Bullet" OFF)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release")
-endif()
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
+list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Prepare for export and installation.
 set(THREEPP_HEADER_INSTALL_DIR "include")
@@ -31,34 +33,25 @@ set(THREEPP_INSTALL_DESTINATIONS
         INCLUDES DESTINATION "${THREEPP_HEADER_INSTALL_DIR}")
 set(THREEPP_EXPORT_TARGET "${PROJECT_NAME}-targets")
 
+find_package(glfw3 CONFIG REQUIRED)
+find_package(glad CONFIG REQUIRED)
+find_package(Bullet CONFIG)
+find_package(stb CONFIG)
 
-# ==============================================================================
-# Conan setup
-# ==============================================================================
+add_library(glfw::glfw INTERFACE IMPORTED)
+target_link_libraries(glfw::glfw INTERFACE glfw)
 
-if(CONAN_EXPORTED) # in conan local cache
-    # standard conan installation, deps will be defined in conanfile.py
-    # and not necessary to call conan again, conan is already running
-    include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    conan_basic_setup(TARGETS)
-else()
-
-    include(cmake/conan.cmake)
-
-    set(bullet_option False)
-    if (THREEPP_EXAMPLES_WITH_BULLET)
-        set(bullet_option True)
-    endif()
-
-    conan_cmake_run(
-            CONANFILE conanfile.py
-            BUILD missing
-            OPTIONS with_bullet=${bullet_option}
-            SETTINGS build_type=${CMAKE_BUILD_TYPE}
-            BASIC_SETUP CMAKE_TARGETS)
-
+if (NOT TARGET stb::stb)
+    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
+    add_library("stb::stb" INTERFACE IMPORTED)
 endif()
 
+target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
+
+if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
+    add_library(Bullet::Bullet INTERFACE IMPORTED)
+    target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
+endif()
 
 # ==============================================================================
 # Source code

@@ -27,11 +27,17 @@ This is mostly a personal exercise. Don't expect much support, although contribu
 
 ### How to build
 
-In order to successfully build threepp, you'll need [conan](https://conan.io/) in order to handle dependencies.
+threepp can be used in conjunction with both `vcpkg` and `conan`.
 
-`pip install conan`
+#### vcpkg (using manifest mode)
 
-Conan is automatically invoked when configuring the project.
+Call CMake with `-DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcpkg.cmake`
+
+#### conan
+
+Run something akin to:
+`conan install . -s build_type=Debug -if cmake-build-debug -b missing` _before_ calling CMake.
+You might also use the supplied `run_conan_XXX.sh` scripts.
 
 
 ### Installing
@@ -40,10 +46,12 @@ Conan is automatically invoked when configuring the project.
 
 `conan remote add ais https://ais.jfrog.io/artifactory/api/conan/ais-conan-local`
 
-Then add a dependency to: </br>
-`threepp/<version>@ais/stable` (stable channel -> releases) </br>
-`threepp/<version>@ais/testing` (development builds -> master) </br>
-`threepp/<version>@ais/testing-<branch>` (development builds -> branches)
+Then add a dependency to:
+```bash
+threepp/<version>@ais/stable # (stable channel -> releases) </br>
+threepp/<version>@ais/testing # (development builds -> master) </br>
+threepp/<version>@ais/testing-<branch> # (development builds -> branches)
+```
 
 ### Implementation notes
 
@@ -67,7 +75,6 @@ int main() {
     camera->position.z = 5;
 
     GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
     renderer.setSize(canvas.getSize());
 
     OrbitControls controls{camera, canvas};
