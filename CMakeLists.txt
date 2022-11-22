@@ -12,9 +12,8 @@ option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release")
-endif()
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
+list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -49,7 +48,7 @@ endif()
 
 target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 
-if (BULLET_FOUND)
+if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
     add_library(Bullet::Bullet INTERFACE IMPORTED)
     target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
 endif()
