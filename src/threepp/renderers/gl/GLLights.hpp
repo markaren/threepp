@@ -42,15 +42,15 @@ namespace threepp::gl {
             if (type == "DirectionalLight") {
 
                 uniforms = {
-                        {"direction", std::make_shared<Vector3>()},
-                        {"color", std::make_shared<Color>()}};
+                        {"direction", Vector3()},
+                        {"color", Color()}};
 
             } else if (type == "SpotLight") {
 
                 uniforms = {
-                        {"position", std::make_shared<Vector3>()},
-                        {"direction", std::make_shared<Vector3>()},
-                        {"color", std::make_shared<Color>()},
+                        {"position", Vector3()},
+                        {"direction", Vector3()},
+                        {"color", Color()},
                         {"distance", 0.f},
                         {"coneCos", 0.f},
                         {"penumbraCos", 0.f},
@@ -59,25 +59,25 @@ namespace threepp::gl {
             } else if (type == "PointLight") {
 
                 uniforms = {
-                        {"position", std::make_shared<Vector3>()},
-                        {"color", std::make_shared<Color>()},
+                        {"position", Vector3()},
+                        {"color", Color()},
                         {"distance", 0.f},
                         {"decay", 0.f}};
 
             } else if (type == "HemisphereLight") {
 
                 uniforms = {
-                        {"direction", std::make_shared<Vector3>()},
-                        {"skyColor", std::make_shared<Color>()},
-                        {"groundColor", std::make_shared<Color>()}};
+                        {"direction", Vector3()},
+                        {"skyColor", Color()},
+                        {"groundColor", Color()}};
 
             } else if (type == "RectAreaLight") {
 
                 uniforms = {
-                        {"color", std::make_shared<Color>()},
-                        {"position", std::make_shared<Vector3>()},
-                        {"halfWidth", std::make_shared<Vector3>()},
-                        {"halfHeight", std::make_shared<Vector3>()}};
+                        {"color", Color()},
+                        {"position", Vector3()},
+                        {"halfWidth", Vector3()},
+                        {"halfHeight", Vector3()}};
             }
 
             lights[light.id] = uniforms;

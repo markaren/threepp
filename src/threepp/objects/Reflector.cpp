@@ -78,9 +78,9 @@ struct Reflector::Impl {
 
         material->uniforms->operator[]("tDiffuse").setValue(renderTarget->texture);
         material->uniforms->operator[]("color").setValue(color);
-        material->uniforms->operator[]("textureMatrix").setValue(&textureMatrix);
+        material->uniforms->operator[]("textureMatrix").setValue(textureMatrix);
 
-        reflector.onBeforeRender = RenderCallback([this](void *renderer, auto scene, auto camera, auto, auto, auto) {
+        reflector.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
             reflectorWorldPosition.setFromMatrixPosition(*reflector_.matrixWorld);
             cameraWorldPosition.setFromMatrixPosition(*camera->matrixWorld);
             rotationMatrix.extractRotation(*reflector_.matrixWorld);
@@ -151,6 +151,8 @@ struct Reflector::Impl {
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
 
             reflector_.visible = true;
+
+            material->uniforms->operator[]("textureMatrix").setValue(textureMatrix);
         });
 
         reflector.materials_[0] = material;
