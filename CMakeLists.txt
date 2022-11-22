@@ -48,6 +48,7 @@ if(NOT CMAKE_TOOLCHAIN_FILE AND CONAN_EXPORTED) # in conan local cache
     # standard conan installation, deps will be defined in conanfile.py
     # and not necessary to call conan again, conan is already running
     include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
+    conan_basic_setup()
 elseif (NOT CMAKE_TOOLCHAIN_FILE)
 
     include(cmake/conan.cmake)
