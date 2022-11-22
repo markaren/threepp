@@ -251,10 +251,10 @@ set(sources
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 target_link_libraries(threepp
         PUBLIC
-        CONAN_PKG::glfw
-        CONAN_PKG::glad
+        glfw::glfw
+        glad::glad
         PRIVATE
-        CONAN_PKG::stb)
+        stb::stb)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"

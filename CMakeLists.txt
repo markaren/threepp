@@ -6,6 +6,7 @@ message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 option(THREEPP_EXAMPLES_WITH_BULLET "Build examples requiring Bullet" OFF)
 
+
 # ==============================================================================
 # Global internal configuration
 # ==============================================================================
@@ -16,6 +17,13 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release")
 endif()
+
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
+list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
+
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Prepare for export and installation.
 set(THREEPP_HEADER_INSTALL_DIR "include")
@@ -36,12 +44,11 @@ set(THREEPP_EXPORT_TARGET "${PROJECT_NAME}-targets")
 # Conan setup
 # ==============================================================================
 
-if(CONAN_EXPORTED) # in conan local cache
+if(NOT CMAKE_TOOLCHAIN_FILE AND CONAN_EXPORTED) # in conan local cache
     # standard conan installation, deps will be defined in conanfile.py
     # and not necessary to call conan again, conan is already running
     include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
-    conan_basic_setup(TARGETS)
-else()
+elseif (NOT CMAKE_TOOLCHAIN_FILE)
 
     include(cmake/conan.cmake)
 
@@ -50,12 +57,37 @@ else()
         set(bullet_option True)
     endif()
 
-    conan_cmake_run(
-            CONANFILE conanfile.py
+    conan_cmake_autodetect(settings)
+
+    conan_cmake_install(
+            PATH_OR_REFERENCE "${CMAKE_SOURCE_DIR}/conanfile.py"
             BUILD missing
             OPTIONS with_bullet=${bullet_option}
-            SETTINGS build_type=${CMAKE_BUILD_TYPE}
-            BASIC_SETUP CMAKE_TARGETS)
+            SETTINGS build_type=${CMAKE_BUILD_TYPE})
+
+
+    find_package(glfw3 REQUIRED)
+    find_package(glad REQUIRED)
+    find_package(stb REQUIRED)
+    find_package(Bullet)
+
+else()
+
+    find_package(glfw3 CONFIG REQUIRED)
+    find_package(glad CONFIG REQUIRED)
+    find_package(Bullet CONFIG)
+    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
+
+    add_library(glfw::glfw INTERFACE IMPORTED)
+    target_link_libraries(glfw::glfw INTERFACE glfw)
+
+    add_library("stb::stb" INTERFACE IMPORTED)
+    target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
+
+    if (BULLET_FOUND)
+        add_library(Bullet::Bullet INTERFACE IMPORTED)
+        target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
+    endif()
 
 endif()
 

@@ -82,6 +82,22 @@ jobs:
           cmake . -A x64 -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
 
+  vcpkg-on-windows:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2019]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Configure and build
+        run: |
+          cmake . -A x64 -B build -D-DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg" -DCMAKE_BUILD_TYPE="Release"
+          cmake --build build --config Release
+
   conan-on-darwin:
 
     runs-on: ${{ matrix.os }}
