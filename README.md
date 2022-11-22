@@ -46,11 +46,12 @@ You might also use the supplied `run_conan_XXX.sh` scripts.
 
 `conan remote add ais https://ais.jfrog.io/artifactory/api/conan/ais-conan-local`
 
-Then add a dependency to: </br>
-`threepp/<version>@ais/stable` (stable channel -> releases) </br>
-`threepp/<version>@ais/testing` (development builds -> master) </br>
-`threepp/<version>@ais/testing-<branch>` (development builds -> branches)
-
+Then add a dependency to:
+```bash
+threepp/<version>@ais/stable # (stable channel -> releases) </br>
+threepp/<version>@ais/testing # (development builds -> master) </br>
+threepp/<version>@ais/testing-<branch> # (development builds -> branches)
+```
 
 ### Implementation notes
 
@@ -74,7 +75,6 @@ int main() {
     camera->position.z = 5;
 
     GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
     renderer.setSize(canvas.getSize());
 
     OrbitControls controls{camera, canvas};
