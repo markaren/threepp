@@ -95,7 +95,7 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg" -DCMAKE_BUILD_TYPE="Release"
+          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT" -DCMAKE_BUILD_TYPE="Release"
           cmake --build build --config Release
 
   conan-on-darwin:
