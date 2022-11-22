@@ -58,13 +58,13 @@ elseif (NOT CMAKE_TOOLCHAIN_FILE)
         set(bullet_option True)
     endif()
 
-    conan_cmake_autodetect(settings)
+    conan_cmake_autodetect(settings build_type=${CMAKE_BUILD_TYPE})
 
     conan_cmake_install(
             PATH_OR_REFERENCE "${CMAKE_SOURCE_DIR}/conanfile.py"
             BUILD missing
             OPTIONS with_bullet=${bullet_option}
-            SETTINGS build_type=${CMAKE_BUILD_TYPE})
+            SETTINGS ${settings})
 
 
     find_package(glfw3 REQUIRED)
