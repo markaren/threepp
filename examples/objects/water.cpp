@@ -38,7 +38,7 @@ int main() {
     scene->add(sphere);
 
     TextureLoader textureLoader{};
-    auto texture = textureLoader.loadTexture("textures/waternormals.jpg");
+    auto texture = textureLoader.loadTexture("data/textures/waternormals.jpg");
     texture->wrapS = RepeatWrapping;
     texture->wrapT = RepeatWrapping;
 

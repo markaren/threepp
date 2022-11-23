@@ -38,7 +38,7 @@ public:
         }
 
         GLFWimage images[1];
-        auto favicon = stb_load("favicon.bmp", 4);
+        auto favicon = stb_load("data/favicon.bmp", 4);
         images[0] = {favicon.width, favicon.height, favicon.pixels};
         glfwSetWindowIcon(window, 1, images);
         delete favicon.pixels;
