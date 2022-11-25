@@ -52,7 +52,10 @@ set(publicHeaders
         "threepp/helpers/PointLightHelper.hpp"
         "threepp/helpers/SpotLightHelper.hpp"
 
+        "threepp/loaders/MTLLoader.hpp"
         "threepp/loaders/ImageLoader.hpp"
+        "threepp/loaders/OBJLoader.hpp"
+        "threepp/loaders/STLLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
@@ -189,9 +192,10 @@ set(sources
 
         "threepp/helpers/ArrowHelper.cpp"
 
+        "threepp/loaders/ImageLoader.cpp"
+        "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/stb.cpp"
         "threepp/loaders/STLLoader.cpp"
-        "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
 
         "threepp/math/Box2.cpp"
