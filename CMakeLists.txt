@@ -36,7 +36,7 @@ set(THREEPP_EXPORT_TARGET "${PROJECT_NAME}-targets")
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(Bullet CONFIG)
-find_package(stb CONFIG)
+find_package(stb CONFIG QUIET)
 
 add_library(glfw::glfw INTERFACE IMPORTED)
 target_link_libraries(glfw::glfw INTERFACE glfw)
