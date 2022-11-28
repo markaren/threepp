@@ -8,15 +8,32 @@
 #include <vector>
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/materials/materials.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/utils/InstanceOf.hpp"
 #include "threepp/utils/StringUtils.hpp"
 #include "threepp/utils/regex_util.hpp"
 
 using namespace threepp;
 
 namespace {
+
+    size_t parseVertexIndex(const std::string &value, size_t len) {
+        int index = std::stoi(value);
+        return (index > 0 ? (index - 1) : index + len / 3) * 3;
+    }
+
+    size_t parseNormalIndex(const std::string &value, size_t len) {
+        int index = std::stoi(value);
+        return (index > 0 ? (index - 1) : index + len / 3) * 3;
+    }
+
+    size_t parseUvIndex(const std::string &value, size_t len) {
+        int index = std::stoi(value);
+        return (index > 0 ? (index - 1) : index + len / 2) * 2;
+    }
 
     template<class T>
     void splice(std::vector<T> list, int start, int deleteCount, const std::optional<std::vector<T>> &elements = std::nullopt) {
@@ -42,7 +59,7 @@ namespace {
 
     struct OBJMaterial {
         std::optional<size_t> index;
-        std::optional<std::string> name;
+        std::string name;
         std::string mtlib;
         bool smooth = false;
         int groupStart = 0;
@@ -151,7 +168,7 @@ namespace {
             }
 
             object = std::make_shared<OBJObject>(name, fromDeclaration, true);
-            if (previousMaterial && previousMaterial->name) {
+            if (previousMaterial && !previousMaterial->name.empty()) {
 
                 auto declared = std::make_shared<OBJMaterial>(*previousMaterial);
                 declared->index = 0;
@@ -162,23 +179,8 @@ namespace {
             objects.emplace_back(object);
         }
 
-        void finalize() {
+        void finalize() const {
             object->finalize(true);
-        }
-
-        size_t parseVertexIndex(const std::string &value, size_t len) {
-            int index = std::stoi(value);
-            return (index > 0 ? (index - 1) : index + len / 3) * 3;
-        }
-
-        size_t parseNormalIndex(const std::string &value, size_t len) {
-            int index = std::stoi(value);
-            return (index > 0 ? (index - 1) : index + len / 3) * 3;
-        }
-
-        size_t parseUvIndex(const std::string &value, size_t len) {
-            int index = std::stoi(value);
-            return (index > 0 ? (index - 1) : index + len / 2) * 2;
         }
 
         void addVertex(size_t a, size_t b, size_t c) {
@@ -291,14 +293,21 @@ namespace {
 }// namespace
 
 
-std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path) {
+std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool tryLoadMtl) {
 
     std::ifstream in(path);
+
+    if (tryLoadMtl) {
+        std::filesystem::path mtlFile{path.parent_path() / path.stem() / ".mtl"};
+        if (std::filesystem::exists(mtlFile)) {
+            materials = MTLLoader().load(mtlFile).preload();
+        }
+    }
 
     ParserState state;
 
     std::string line;
-    while(std::getline(in, line)) {
+    while (std::getline(in, line)) {
         line = utils::trimStart(line);
 
         auto lineLength = line.size();
@@ -346,12 +355,12 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path) {
                 }
             }
 
-            auto& v1 = faceVertices[0];
+            auto &v1 = faceVertices[0];
 
             for (unsigned j = 1; j < faceVertices.size() - 1; ++j) {
 
-                auto& v2 = faceVertices[j];
-                auto& v3 = faceVertices[j + 1];
+                auto &v2 = faceVertices[j];
+                auto &v3 = faceVertices[j + 1];
 
                 state.addFace(v1[0], v2[0], v3[0],
                               v1[1], v2[1], v3[1],
@@ -436,9 +445,10 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path) {
         if (!geometry.normals.empty()) {
 
             bufferGeometry->setAttribute("normal", FloatBufferAttribute::create(geometry.normals, 3));
+
         } else {
 
-
+            //TODO
         }
 
         if (!geometry.colors.empty()) {
@@ -457,13 +467,58 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path) {
 
             std::shared_ptr<Material> material;
 
-            //TODO
+            if (this->materials) {
+                material = this->materials->create(sourceMaterial->name);
+
+                if (isLine && material && ! instanceof <const LineBasicMaterial>(material)) {
+
+                    // TODO
+
+                } else if (isPoints && material && ! instanceof <const PointsMaterial>(material)) {
+
+                    // TODO
+                }
+            }
+
+            if (!material) {
+
+                if (isLine) {
+                    material = LineBasicMaterial::create();
+                } else if (isPoints) {
+                    material = PointsMaterial::create();
+                } else {
+                    material = MeshPhongMaterial::create();
+                }
+
+                material->name = sourceMaterial->name;
+
+            }
+
+            material->vertexColors = hasVertexColors;
+
+            createdMaterials.emplace_back(material);
+
         }
 
         std::shared_ptr<Object3D> mesh;
 
         if (!createdMaterials.empty()) {
-            //TODO
+
+            for (int mi = 0; mi < materials.size(); ++mi) {
+
+                auto& sourceMaterial = materials.at(mi);
+                bufferGeometry->addGroup(sourceMaterial->groupStart, sourceMaterial->groupCount, mi);
+
+            }
+
+            if (isLine) {
+                mesh = LineSegments::create(bufferGeometry, createdMaterials.front());
+            } else if (isPoints) {
+                mesh = Points::create(bufferGeometry, createdMaterials.front());
+            } else {
+                mesh = Mesh::create(bufferGeometry, createdMaterials.front()); //TODO
+            }
+
         } else {
 
             if (isLine) {
@@ -471,7 +526,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path) {
             } else if (isPoints) {
                 mesh = Points::create(bufferGeometry, createdMaterials.front());
             } else {
-                mesh = Mesh::create(bufferGeometry, MeshBasicMaterial::create());//TODO
+                mesh = Mesh::create(bufferGeometry, createdMaterials.front());
             }
         }
 
@@ -481,5 +536,4 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path) {
     }
 
     return container;
-
 }

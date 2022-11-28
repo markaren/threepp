@@ -21,8 +21,9 @@ int main() {
 
     scene->add(obj);
 
-    auto light = AmbientLight::create(0xffffff);
-   // scene->add(light);
+    auto light = DirectionalLight::create(0xffffff, 0.5f);
+    light->position.set(-1, -1, -1);
+    scene->add(light);
 
     canvas.animate([&](float dt) {
 

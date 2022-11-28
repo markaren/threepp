@@ -19,6 +19,8 @@ namespace threepp {
 
         const std::string uuid = utils::generateUUID();
 
+        std::string name;
+
         bool fog = true;
 
         int blending = NormalBlending;
@@ -86,6 +88,8 @@ namespace threepp {
         }
 
         [[nodiscard]] virtual std::string type() const = 0;
+
+
 
         virtual ~Material() = default;
 

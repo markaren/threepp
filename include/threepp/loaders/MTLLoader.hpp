@@ -18,26 +18,10 @@
 
 namespace threepp {
 
-
     struct TexParams {
         Vector2 scale;
         Vector2 offset;
         std::string url;
-    };
-
-    struct MaterialParams {
-
-        std::string name;
-        int side;
-        float bumpScale;
-
-        std::shared_ptr<Texture>& operator [](const std::string& mapType) {
-            return params_[mapType];
-        }
-
-    private:
-        std::unordered_map<std::string, std::shared_ptr<Texture>> params_;
-
     };
 
     struct MaterialOptions {
@@ -78,13 +62,13 @@ namespace threepp {
             wrap = this->options ? this->options->wrap : RepeatWrapping;
         }
 
-        MaterialsInfo convert(const MaterialsInfo& materialsInfo) {
+        MaterialsInfo convert(const MaterialsInfo& mi) {
 
-            if (!options) return materialsInfo;
+            if (!options) return mi;
 
             MaterialsInfo converted = MaterialsInfo{};
 
-            for (auto& [key, mat]: materialsInfo) {
+            for (auto& [key, mat]: mi) {
 
                 auto covMat = std::unordered_map<std::string, MatVariant>{};
 
@@ -108,7 +92,6 @@ namespace threepp {
 
                     }
 
-
                 }
 
             }
@@ -117,22 +100,32 @@ namespace threepp {
 
         }
 
-        void setMaterials(const MaterialsInfo& materialsInfo) {
-            this->materialsInfo = convert(materialsInfo);
+        MaterialCreator& preload() {
+            for (auto& [mn, _] : materialsInfo) {
+                create(mn);
+            }
+            return *this;
         }
 
-        size_t getIndex(const std::string& materialName) {
-            return nameLookup.at(materialName);
+        void setMaterials(const MaterialsInfo& mi) {
+            this->materialsInfo = convert(mi);
         }
+
+        std::shared_ptr<Material> create(const std::string& materialName) {
+
+            if (materials.find(materialName) == materials.end()) {
+                createMaterial(materialName);
+            }
+
+            return materials.at(materialName);
+        }
+
 
     private:
 
         void createMaterial(const std::string& materialName);
 
-        TexParams getTextureParams(const std::string& value, MaterialParams& params);
-
         std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<int> mapping = std::nullopt);
-
 
     };
 
