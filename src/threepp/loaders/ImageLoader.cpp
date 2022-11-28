@@ -5,9 +5,9 @@
 
 using namespace threepp;
 
-Image ImageLoader::load(const std::string &imagePath, int channels) {
+Image ImageLoader::load(const std::filesystem::path &imagePath, int channels) {
 
-    auto image = stb_load(imagePath, channels);
+    auto image = stb_load(imagePath.string(), channels);
 
     return Image(image.width, image.height, std::shared_ptr<unsigned char>(image.pixels));
 }

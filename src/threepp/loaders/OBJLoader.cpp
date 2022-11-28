@@ -288,207 +288,198 @@ namespace {
         }
     };
 
-    std::shared_ptr<Group> parse(const std::string &text) {
-
-        ParserState state;
-
-        auto text2 = utils::replaceAll(text, "\r\n", "\n");
-
-        auto lines = utils::split(text2, '\n');
-
-        for (auto line : lines) {
-            line = utils::trimStart(line);
-
-            auto lineLength = line.size();
-
-            if (lineLength == 0) continue;
-
-            auto &lineFirstChar = line[0];
-
-            if (lineFirstChar == '#') continue;
-
-            if (lineFirstChar == 'v') {
-
-                auto data = utils::regexSplit(line, std::regex("\\s+"));
-
-                if (data[0] == "v") {
-                    state.vertices.insert(state.vertices.end(), {std::stof(data[1]),
-                                                                   std::stof(data[2]),
-                                                                   std::stof(data[3])});
-
-                    if (data.size() == 8) {
-                        state.colors.insert(state.colors.end(), {std::stof(data[4]),
-                                                                   std::stof(data[5]),
-                                                                   std::stof(data[6])});
-                    }
-                } else if (data[0] == "vn") {
-                    state.normals.insert(state.normals.end(), {std::stof(data[1]),
-                                                                  std::stof(data[2]),
-                                                                  std::stof(data[3])});
-                } else if (data[0] == "vt") {
-                    state.uvs.insert(state.uvs.end(), {std::stof(data[1]),
-                                                         std::stof(data[2])});
-                }
-            } else if (lineFirstChar == 'f') {
-
-                std::string lineData{line.begin() + 1, line.end()};
-                lineData = utils::trim(lineData);
-                auto vertexData = utils::regexSplit(lineData, std::regex("\\s+"));
-                std::vector<std::vector<std::string>> faceVertices;
-
-                for (const auto &vertex : vertexData) {
-
-                    if (!vertexData.empty()) {
-                        auto vertexParts = utils::split(vertex, '/');
-                        faceVertices.insert(faceVertices.end(), vertexParts);
-                    }
-                }
-
-                auto& v1 = faceVertices[0];
-
-                for (unsigned j = 1; j < faceVertices.size() - 1; ++j) {
-
-                    auto& v2 = faceVertices[j];
-                    auto& v3 = faceVertices[j + 1];
-
-                    state.addFace(v1[0], v2[0], v3[0],
-                                  v1[1], v2[1], v3[1],
-                                  v1[2], v2[2], v3[2]);
-                }
-
-
-            } else if (lineFirstChar == 'l') {
-
-            } else if (lineFirstChar == 'p') {
-
-                auto lineData = utils::trim(line.substr(1));
-                auto pointData = utils::split(lineData, ' ');
-
-                state.addPointGeometry(pointData);
-
-            } else if (lineFirstChar == 's') {
-
-                auto result = utils::split(line, ' ');
-
-                if (!result.empty()) {
-
-                    auto value = utils::trim(result[1]);
-                    value = utils::toLower(value);
-                    state.object->smooth = (value != "0" && value != "off");
-
-                } else {
-
-                    state.object->smooth = true;
-                }
-
-                auto material = state.object->currentMaterial();
-                if (material) {
-                    material->smooth = state.object->smooth;
-                }
-
-            } else {
-
-                std::vector<std::string> result = findAll(line, std::regex("^[og]\\s*(.+)?"));
-                if (!result.empty()) {
-                    std::string name = utils::trim(result.front().substr(1));
-                    state.startObject(name);
-                    continue;
-                }
-
-                result = findAll(line, std::regex("^usemtl "));
-                if (!result.empty()) {
-                    state.object->startMaterial(utils::trim(line.substr(7)), state.materialLibraries);
-                    continue;
-                }
-                result = findAll(line, std::regex("^mtllib "));
-                if (!result.empty()) {
-                    state.materialLibraries.emplace_back(utils::trim(line.substr(7)));
-                    continue;
-                }
-
-
-                if (line == "\\0") continue;
-
-                throw std::runtime_error("Unexpected line: " + line);
-            }
-        }
-
-        state.finalize();
-
-        auto container = Group::create();
-
-        for (const auto &object : state.objects) {
-
-            auto &geometry = object->geometry;
-            auto &materials = object->materials;
-            bool isLine = geometry.type == "Line";
-            bool isPoints = geometry.type == "Points";
-            bool hasVertexColors = false;
-
-            if (geometry.vertices.empty()) continue;
-
-            auto bufferGeometry = BufferGeometry::create();
-
-            bufferGeometry->setAttribute("position", FloatBufferAttribute::create(geometry.vertices, 3));
-
-            if (!geometry.normals.empty()) {
-
-                bufferGeometry->setAttribute("normal", FloatBufferAttribute::create(geometry.normals, 3));
-            } else {
-
-
-            }
-
-            if (!geometry.colors.empty()) {
-
-                bufferGeometry->setAttribute("color", FloatBufferAttribute::create(geometry.colors, 3));
-            }
-
-            if (!geometry.uvs.empty()) {
-
-                bufferGeometry->setAttribute("uv", FloatBufferAttribute::create(geometry.uvs, 2));
-            }
-
-            std::vector<std::shared_ptr<Material>> createdMaterials;
-
-            for (auto &sourceMaterial : materials) {
-
-                std::shared_ptr<Material> material;
-
-                //TODO
-            }
-
-            std::shared_ptr<Object3D> mesh;
-
-            if (!createdMaterials.empty()) {
-                //TODO
-            } else {
-
-                if (isLine) {
-                    mesh = LineSegments::create(bufferGeometry, createdMaterials.front());
-                } else if (isPoints) {
-                    mesh = Points::create(bufferGeometry, createdMaterials.front());
-                } else {
-                    mesh = Mesh::create(bufferGeometry, MeshBasicMaterial::create());//TODO
-                }
-            }
-
-            mesh->name = object->name;
-
-            container->add(mesh);
-        }
-
-        return container;
-    }
-
 }// namespace
 
 
 std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path) {
 
-    std::ifstream file(path);
-    std::stringstream strStream;
-    strStream << file.rdbuf();
+    std::ifstream in(path);
 
-    return parse(strStream.str());
+    ParserState state;
+
+    std::string line;
+    while(std::getline(in, line)) {
+        line = utils::trimStart(line);
+
+        auto lineLength = line.size();
+
+        if (lineLength == 0) continue;
+
+        auto &lineFirstChar = line.front();
+
+        if (lineFirstChar == '#') continue;
+
+        if (lineFirstChar == 'v') {
+
+            auto data = utils::regexSplit(line, std::regex("\\s+"));
+
+            if (data[0] == "v") {
+                state.vertices.insert(state.vertices.end(), {std::stof(data[1]),
+                                                             std::stof(data[2]),
+                                                             std::stof(data[3])});
+
+                if (data.size() == 8) {
+                    state.colors.insert(state.colors.end(), {std::stof(data[4]),
+                                                             std::stof(data[5]),
+                                                             std::stof(data[6])});
+                }
+            } else if (data[0] == "vn") {
+                state.normals.insert(state.normals.end(), {std::stof(data[1]),
+                                                           std::stof(data[2]),
+                                                           std::stof(data[3])});
+            } else if (data[0] == "vt") {
+                state.uvs.insert(state.uvs.end(), {std::stof(data[1]),
+                                                   std::stof(data[2])});
+            }
+        } else if (lineFirstChar == 'f') {
+
+            std::string lineData{line.begin() + 1, line.end()};
+            lineData = utils::trim(lineData);
+            auto vertexData = utils::regexSplit(lineData, std::regex("\\s+"));
+            std::vector<std::vector<std::string>> faceVertices;
+
+            for (const auto &vertex : vertexData) {
+
+                if (!vertexData.empty()) {
+                    auto vertexParts = utils::split(vertex, '/');
+                    faceVertices.insert(faceVertices.end(), vertexParts);
+                }
+            }
+
+            auto& v1 = faceVertices[0];
+
+            for (unsigned j = 1; j < faceVertices.size() - 1; ++j) {
+
+                auto& v2 = faceVertices[j];
+                auto& v3 = faceVertices[j + 1];
+
+                state.addFace(v1[0], v2[0], v3[0],
+                              v1[1], v2[1], v3[1],
+                              v1[2], v2[2], v3[2]);
+            }
+
+
+        } else if (lineFirstChar == 'l') {
+
+        } else if (lineFirstChar == 'p') {
+
+            auto lineData = utils::trim(line.substr(1));
+            auto pointData = utils::split(lineData, ' ');
+
+            state.addPointGeometry(pointData);
+
+        } else if (lineFirstChar == 's') {
+
+            auto result = utils::split(line, ' ');
+
+            if (!result.empty()) {
+
+                auto value = utils::trim(result[1]);
+                utils::toLowerInplace(value);
+                state.object->smooth = (value != "0" && value != "off");
+
+            } else {
+
+                state.object->smooth = true;
+            }
+
+            auto material = state.object->currentMaterial();
+            if (material) {
+                material->smooth = state.object->smooth;
+            }
+
+        } else {
+
+            std::vector<std::string> result = findAll(line, std::regex("^[og]\\s*(.+)?"));
+            if (!result.empty()) {
+                std::string name = utils::trim(result.front().substr(1));
+                state.startObject(name);
+                continue;
+            }
+
+            result = findAll(line, std::regex("^usemtl "));
+            if (!result.empty()) {
+                state.object->startMaterial(utils::trim(line.substr(7)), state.materialLibraries);
+                continue;
+            }
+            result = findAll(line, std::regex("^mtllib "));
+            if (!result.empty()) {
+                state.materialLibraries.emplace_back(utils::trim(line.substr(7)));
+                continue;
+            }
+
+
+            if (line == "\\0") continue;
+
+            throw std::runtime_error("Unexpected line: " + line);
+        }
+    }
+
+    state.finalize();
+
+    auto container = Group::create();
+
+    for (const auto &object : state.objects) {
+
+        auto &geometry = object->geometry;
+        auto &materials = object->materials;
+        bool isLine = geometry.type == "Line";
+        bool isPoints = geometry.type == "Points";
+        bool hasVertexColors = false;
+
+        if (geometry.vertices.empty()) continue;
+
+        auto bufferGeometry = BufferGeometry::create();
+
+        bufferGeometry->setAttribute("position", FloatBufferAttribute::create(geometry.vertices, 3));
+
+        if (!geometry.normals.empty()) {
+
+            bufferGeometry->setAttribute("normal", FloatBufferAttribute::create(geometry.normals, 3));
+        } else {
+
+
+        }
+
+        if (!geometry.colors.empty()) {
+
+            bufferGeometry->setAttribute("color", FloatBufferAttribute::create(geometry.colors, 3));
+        }
+
+        if (!geometry.uvs.empty()) {
+
+            bufferGeometry->setAttribute("uv", FloatBufferAttribute::create(geometry.uvs, 2));
+        }
+
+        std::vector<std::shared_ptr<Material>> createdMaterials;
+
+        for (auto &sourceMaterial : materials) {
+
+            std::shared_ptr<Material> material;
+
+            //TODO
+        }
+
+        std::shared_ptr<Object3D> mesh;
+
+        if (!createdMaterials.empty()) {
+            //TODO
+        } else {
+
+            if (isLine) {
+                mesh = LineSegments::create(bufferGeometry, createdMaterials.front());
+            } else if (isPoints) {
+                mesh = Points::create(bufferGeometry, createdMaterials.front());
+            } else {
+                mesh = Mesh::create(bufferGeometry, MeshBasicMaterial::create());//TODO
+            }
+        }
+
+        mesh->name = object->name;
+
+        container->add(mesh);
+    }
+
+    return container;
+
 }

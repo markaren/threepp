@@ -74,8 +74,23 @@ namespace threepp::utils {
         return s;
     }
 
+    inline std::string trimStartInplace(std::string& s) {
+        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
+                    return !std::isspace(ch);
+                }));
+        return s;
+    }
+
     // trim from end (in place)
     inline std::string trimEnd(std::string s) {
+        s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
+                    return !std::isspace(ch);
+                }).base(),
+                s.end());
+        return s;
+    }
+
+    inline std::string trimEndInplace(std::string& s) {
         s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
                     return !std::isspace(ch);
                 }).base(),
@@ -90,8 +105,21 @@ namespace threepp::utils {
         return s;
     }
 
-    inline std::string toLower(std::string s) {
+    // trim from both sides
+    inline std::string trimInplace(std::string& s) {
+        trimStart(s);
+        trimEnd(s);
+        return s;
+    }
 
+    inline std::string toLower(std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return std::tolower(c); }// correct
+        );
+        return s;
+    }
+
+    inline std::string toLowerInplace(std::string& s) {
         std::transform(s.begin(), s.end(), s.begin(),
                        [](unsigned char c) { return std::tolower(c); }// correct
         );
