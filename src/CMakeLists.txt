@@ -193,6 +193,7 @@ set(sources
         "threepp/helpers/ArrowHelper.cpp"
 
         "threepp/loaders/ImageLoader.cpp"
+        "threepp/loaders/MTLLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/stb.cpp"
         "threepp/loaders/STLLoader.cpp"
