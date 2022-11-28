@@ -3,16 +3,16 @@
 
 #include <fstream>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "threepp/objects/Mesh.hpp"
-#include "threepp/objects/LineSegments.hpp"
-#include "threepp/objects/Points.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Points.hpp"
 #include "threepp/utils/StringUtils.hpp"
+#include "threepp/utils/regex_util.hpp"
 
 using namespace threepp;
 
@@ -41,7 +41,7 @@ namespace {
     };
 
     struct OBJMaterial {
-        std::optional<int> index;
+        std::optional<size_t> index;
         std::optional<std::string> name;
         std::string mtlib;
         bool smooth = false;
@@ -58,38 +58,38 @@ namespace {
         bool smooth = false;
 
         OBJGeometry geometry;
-        std::vector<OBJMaterial> materials;
+        std::vector<std::shared_ptr<OBJMaterial>> materials;
 
         OBJObject(std::string name, bool fromDeclaration, bool smooth)
             : name(std::move(name)),
               fromDeclaration(fromDeclaration),
               smooth(smooth) {}
 
-        std::optional<OBJMaterial> currentMaterial() {
-            if (materials.empty()) return std::nullopt;
-            return *materials.end();
+        std::shared_ptr<OBJMaterial> currentMaterial() {
+            if (materials.empty()) return nullptr;
+            return materials.back();
         }
 
-        OBJMaterial startMaterial(const std::string &mname, const std::vector<std::string> &libraries) {
+        std::shared_ptr<OBJMaterial> startMaterial(const std::string &mname, const std::vector<std::string> &libraries) {
 
             auto previous = finalize(false);
 
-            OBJMaterial material{
-                    materials.size(),
-                    mname,
-                    !libraries.empty() ? libraries.back() : "",
-                    previous ? previous->smooth : smooth,
-                    previous ? previous->groupEnd : 0,
-                    -1,
-                    -1,
-                    false};
+            auto material = std::make_shared<OBJMaterial>();
+            material->index = materials.size();
+            material->name = mname;
+            material->mtlib = !libraries.empty() ? libraries.back() : "",
+            material->smooth = previous ? previous->smooth : smooth,
+            material->groupStart = previous ? previous->groupEnd : 0,
+            material->groupCount = -1,
+            material->groupEnd = -1,
+            material->inherited = false;
 
             materials.emplace_back(material);
 
             return materials.back();
         }
 
-        std::optional<OBJMaterial> finalize(bool end) {
+        std::shared_ptr<OBJMaterial> finalize(bool end) {
             auto lastMultiMaterial = currentMaterial();
             if (lastMultiMaterial && lastMultiMaterial->groupCount == 1) {
                 lastMultiMaterial->groupEnd = static_cast<int>(geometry.vertices.size()) / 3;
@@ -99,16 +99,16 @@ namespace {
 
             if (end && !materials.empty()) {
                 for (int mi = static_cast<int>(materials.size()) - 1; mi >= 0; --mi) {
-                    if (materials.at(mi).groupCount <= 0) {
+                    if (materials.at(mi)->groupCount <= 0) {
                         splice(materials, mi, 1);
                     }
                 }
             }
 
             if (end && materials.empty()) {
-                OBJMaterial m;
-                m.name = "";
-                m.smooth = smooth;
+                auto m = std::make_shared<OBJMaterial>();
+                m->name = "";
+                m->smooth = smooth;
                 materials.emplace_back(m);
             }
 
@@ -120,8 +120,8 @@ namespace {
     class ParserState {
 
     public:
-        std::optional<OBJObject> object;
-        std::vector<OBJObject> objects;
+        std::shared_ptr<OBJObject> object;
+        std::vector<std::shared_ptr<OBJObject>> objects;
 
         std::vector<float> vertices;
         std::vector<float> normals;
@@ -144,22 +144,22 @@ namespace {
                 }
             }
 
-            std::optional<OBJMaterial> previousMaterial;
+            std::shared_ptr<OBJMaterial> previousMaterial;
             if (object) {
                 previousMaterial = object->currentMaterial();
                 object->finalize(true);
             }
 
-            object = OBJObject(name, fromDeclaration, true);
+            object = std::make_shared<OBJObject>(name, fromDeclaration, true);
             if (previousMaterial && previousMaterial->name) {
 
-                OBJMaterial declared = *previousMaterial;
-                declared.index = 0;
-                declared.inherited = true;
+                auto declared = std::make_shared<OBJMaterial>(*previousMaterial);
+                declared->index = 0;
+                declared->inherited = true;
                 object->materials.emplace_back(declared);
             }
 
-            objects.emplace_back(*object);
+            objects.emplace_back(object);
         }
 
         void finalize() {
@@ -168,17 +168,17 @@ namespace {
 
         size_t parseVertexIndex(const std::string &value, size_t len) {
             int index = std::stoi(value);
-            return index > 0 ? (index - 1) : (index + len / 3) * 3;
+            return (index > 0 ? (index - 1) : index + len / 3) * 3;
         }
 
         size_t parseNormalIndex(const std::string &value, size_t len) {
             int index = std::stoi(value);
-            return index > 0 ? (index - 1) : (index + len / 3) * 3;
+            return (index > 0 ? (index - 1) : index + len / 3) * 3;
         }
 
         size_t parseUvIndex(const std::string &value, size_t len) {
             int index = std::stoi(value);
-            return index > 0 ? (index - 1) : (index + len / 2) * 2;
+            return (index > 0 ? (index - 1) : index + len / 2) * 2;
         }
 
         void addVertex(size_t a, size_t b, size_t c) {
@@ -295,10 +295,9 @@ namespace {
         auto text2 = utils::replaceAll(text, "\r\n", "\n");
 
         auto lines = utils::split(text2, '\n');
-        std::vector<std::string> result;
 
         for (auto line : lines) {
-            utils::trimStart(line);
+            line = utils::trimStart(line);
 
             auto lineLength = line.size();
 
@@ -313,50 +312,48 @@ namespace {
                 auto data = utils::regexSplit(line, std::regex("\\s+"));
 
                 if (data[0] == "v") {
-                    state.vertices.insert(state.vertices.begin(), {std::stof(data[1]),
+                    state.vertices.insert(state.vertices.end(), {std::stof(data[1]),
                                                                    std::stof(data[2]),
                                                                    std::stof(data[3])});
 
                     if (data.size() == 8) {
-                        state.colors.insert(state.colors.begin(), {std::stof(data[4]),
+                        state.colors.insert(state.colors.end(), {std::stof(data[4]),
                                                                    std::stof(data[5]),
                                                                    std::stof(data[6])});
                     }
                 } else if (data[0] == "vn") {
-                    state.vertices.insert(state.normals.begin(), {std::stof(data[1]),
+                    state.normals.insert(state.normals.end(), {std::stof(data[1]),
                                                                   std::stof(data[2]),
                                                                   std::stof(data[3])});
-                } else if (data[0] == "vr") {
-                    state.uvs.insert(state.uvs.begin(), {std::stof(data[1]),
+                } else if (data[0] == "vt") {
+                    state.uvs.insert(state.uvs.end(), {std::stof(data[1]),
                                                          std::stof(data[2])});
                 }
             } else if (lineFirstChar == 'f') {
 
-                std::string lineData{line.begin()+1, line.end()};
-                utils::trim(lineData);
+                std::string lineData{line.begin() + 1, line.end()};
+                lineData = utils::trim(lineData);
                 auto vertexData = utils::regexSplit(lineData, std::regex("\\s+"));
                 std::vector<std::vector<std::string>> faceVertices;
 
-                for (const auto& vertex : vertexData) {
+                for (const auto &vertex : vertexData) {
 
                     if (!vertexData.empty()) {
                         auto vertexParts = utils::split(vertex, '/');
-                        faceVertices.insert(faceVertices.begin(), vertexParts);
+                        faceVertices.insert(faceVertices.end(), vertexParts);
                     }
-
                 }
 
-                auto v1 = faceVertices[0];
+                auto& v1 = faceVertices[0];
 
-                for (unsigned j = 1; j < faceVertices.size()-1; ++j) {
+                for (unsigned j = 1; j < faceVertices.size() - 1; ++j) {
 
-                    auto v2 = faceVertices[j];
-                    auto v3 = faceVertices[j+1];
+                    auto& v2 = faceVertices[j];
+                    auto& v3 = faceVertices[j + 1];
 
                     state.addFace(v1[0], v2[0], v3[0],
                                   v1[1], v2[1], v3[1],
                                   v1[2], v2[2], v3[2]);
-
                 }
 
 
@@ -364,9 +361,51 @@ namespace {
 
             } else if (lineFirstChar == 'p') {
 
+                auto lineData = utils::trim(line.substr(1));
+                auto pointData = utils::split(lineData, ' ');
+
+                state.addPointGeometry(pointData);
+
             } else if (lineFirstChar == 's') {
 
+                auto result = utils::split(line, ' ');
+
+                if (!result.empty()) {
+
+                    auto value = utils::trim(result[1]);
+                    value = utils::toLower(value);
+                    state.object->smooth = (value != "0" && value != "off");
+
+                } else {
+
+                    state.object->smooth = true;
+                }
+
+                auto material = state.object->currentMaterial();
+                if (material) {
+                    material->smooth = state.object->smooth;
+                }
+
             } else {
+
+                std::vector<std::string> result = findAll(line, std::regex("^[og]\\s*(.+)?"));
+                if (!result.empty()) {
+                    std::string name = utils::trim(result.front().substr(1));
+                    state.startObject(name);
+                    continue;
+                }
+
+                result = findAll(line, std::regex("^usemtl "));
+                if (!result.empty()) {
+                    state.object->startMaterial(utils::trim(line.substr(7)), state.materialLibraries);
+                    continue;
+                }
+                result = findAll(line, std::regex("^mtllib "));
+                if (!result.empty()) {
+                    state.materialLibraries.emplace_back(utils::trim(line.substr(7)));
+                    continue;
+                }
+
 
                 if (line == "\\0") continue;
 
@@ -380,8 +419,8 @@ namespace {
 
         for (const auto &object : state.objects) {
 
-            auto &geometry = object.geometry;
-            auto &materials = object.materials;
+            auto &geometry = object->geometry;
+            auto &materials = object->materials;
             bool isLine = geometry.type == "Line";
             bool isPoints = geometry.type == "Points";
             bool hasVertexColors = false;
@@ -395,6 +434,9 @@ namespace {
             if (!geometry.normals.empty()) {
 
                 bufferGeometry->setAttribute("normal", FloatBufferAttribute::create(geometry.normals, 3));
+            } else {
+
+
             }
 
             if (!geometry.colors.empty()) {
@@ -409,13 +451,11 @@ namespace {
 
             std::vector<std::shared_ptr<Material>> createdMaterials;
 
-            for (auto& sourceMaterial : materials) {
+            for (auto &sourceMaterial : materials) {
 
                 std::shared_ptr<Material> material;
 
                 //TODO
-
-
             }
 
             std::shared_ptr<Object3D> mesh;
@@ -429,15 +469,13 @@ namespace {
                 } else if (isPoints) {
                     mesh = Points::create(bufferGeometry, createdMaterials.front());
                 } else {
-                    mesh = Mesh::create(bufferGeometry, createdMaterials.front()); //TODO
+                    mesh = Mesh::create(bufferGeometry, MeshBasicMaterial::create());//TODO
                 }
-
             }
 
-            mesh->name = object.name;
+            mesh->name = object->name;
 
             container->add(mesh);
-
         }
 
         return container;

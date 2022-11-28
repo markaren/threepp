@@ -2,10 +2,11 @@
 #ifndef THREEPP_STRINGUTILS_HPP
 #define THREEPP_STRINGUTILS_HPP
 
+#include <algorithm>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <regex>
 
 namespace threepp::utils {
 
@@ -22,7 +23,7 @@ namespace threepp::utils {
         return tokens;
     }
 
-    std::vector<std::string> regexSplit(const std::string &s, const std::regex &sep_regex) {
+    inline std::vector<std::string> regexSplit(const std::string &s, const std::regex &sep_regex) {
         std::sregex_token_iterator iter(s.begin(), s.end(), sep_regex, -1);
         std::sregex_token_iterator end;
         return {iter, end};
@@ -54,7 +55,7 @@ namespace threepp::utils {
         return join(lines, '\n');
     }
 
-    inline std::string replaceAll(const std::string& text, const std::string& replaceFrom, const std::string& replaceTo) {
+    inline std::string replaceAll(const std::string &text, const std::string &replaceFrom, const std::string &replaceTo) {
         std::string result = text;
         size_t start_pos = 0;
         while (((start_pos = text.find(replaceFrom, start_pos)) != std::string::npos)) {
@@ -66,23 +67,35 @@ namespace threepp::utils {
     }
 
     // trim from start (in place)
-    inline void trimStart(std::string &s) {
+    inline std::string trimStart(std::string s) {
         s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
                     return !std::isspace(ch);
                 }));
+        return s;
     }
 
     // trim from end (in place)
-    inline void trimEnd(std::string &s) {
+    inline std::string trimEnd(std::string s) {
         s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
                     return !std::isspace(ch);
-                }).base(), s.end());
+                }).base(),
+                s.end());
+        return s;
     }
 
     // trim from both sides
-    inline void trim(std::string &s) {
-        trimStart(s);
-        trimEnd(s);
+    inline std::string trim(std::string s) {
+        s = trimStart(s);
+        s = trimEnd(s);
+        return s;
+    }
+
+    inline std::string toLower(std::string s) {
+
+        std::transform(s.begin(), s.end(), s.begin(),
+                       [](unsigned char c) { return std::tolower(c); }// correct
+        );
+        return s;
     }
 
 
