@@ -55,7 +55,7 @@ std::shared_ptr<BufferGeometry> STLLoader::load(const std::string &path) const {
     }
 
     geometry->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
-    geometry->setAttribute("normals", FloatBufferAttribute::create(normals, 3));
+    geometry->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
 
     return geometry;
 }
