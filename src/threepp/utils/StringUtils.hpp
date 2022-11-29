@@ -107,8 +107,8 @@ namespace threepp::utils {
 
     // trim from both sides
     inline std::string trimInplace(std::string& s) {
-        trimStart(s);
-        trimEnd(s);
+        trimStartInplace(s);
+        trimEndInplace(s);
         return s;
     }
 

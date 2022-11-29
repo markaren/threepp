@@ -20,12 +20,7 @@ using namespace threepp;
 
 namespace {
 
-    size_t parseVertexIndex(const std::string &value, size_t len) {
-        int index = std::stoi(value);
-        return (index > 0 ? (index - 1) : index + len / 3) * 3;
-    }
-
-    size_t parseNormalIndex(const std::string &value, size_t len) {
+    size_t parseVertexOrNormalIndex(const std::string &value, size_t len) {
         int index = std::stoi(value);
         return (index > 0 ? (index - 1) : index + len / 3) * 3;
     }
@@ -34,20 +29,6 @@ namespace {
         int index = std::stoi(value);
         return (index > 0 ? (index - 1) : index + len / 2) * 2;
     }
-
-    template<class T>
-    void splice(std::vector<T> list, int start, int deleteCount, const std::optional<std::vector<T>> &elements = std::nullopt) {
-        if (deleteCount > 0) {
-            list.erase(list.begin() + start, list.begin() + start + deleteCount);
-        }
-
-        if (elements) {
-            for (const T &t : *elements) {
-                list.emplace_back(t);
-            }
-        }
-    }
-
 
     struct OBJGeometry {
         std::string type;
@@ -91,6 +72,12 @@ namespace {
 
             auto previous = finalize(false);
 
+            if (previous) {
+                if (previous->inherited || previous->groupCount <= 0) {
+                    materials.erase(materials.begin() + static_cast<int>(previous->index.value()));
+                }
+            }
+
             auto material = std::make_shared<OBJMaterial>();
             material->index = materials.size();
             material->name = mname;
@@ -119,7 +106,7 @@ namespace {
             if (end && !materials.empty()) {
                 for (int mi = static_cast<int>(materials.size()) - 1; mi >= 0; --mi) {
                     if (materials.at(mi)->groupCount <= 0) {
-                        splice(materials, mi, 1);
+                        materials.erase(materials.begin() + mi);
                     }
                 }
             }
@@ -247,9 +234,9 @@ namespace {
 
             auto vLen = vertices.size();
 
-            auto ia = parseVertexIndex(a, vLen);
-            auto ib = parseVertexIndex(b, vLen);
-            auto ic = parseVertexIndex(c, vLen);
+            auto ia = parseVertexOrNormalIndex(a, vLen);
+            auto ib = parseVertexOrNormalIndex(b, vLen);
+            auto ic = parseVertexOrNormalIndex(c, vLen);
 
             addVertex(ia, ib, ic);
 
@@ -257,8 +244,8 @@ namespace {
 
                 auto uvlen = uvs.size();
                 ia = parseUvIndex(ua, uvlen);
-                ib = parseUvIndex(ua, uvlen);
-                ic = parseUvIndex(ua, uvlen);
+                ib = parseUvIndex(ub, uvlen);
+                ic = parseUvIndex(uc, uvlen);
 
                 addUv(ia, ib, ic);
             }
@@ -266,10 +253,10 @@ namespace {
             if (!na.empty()) {
 
                 auto nLen = normals.size();
-                ia = parseNormalIndex(na, nLen);
+                ia = parseVertexOrNormalIndex(na, nLen);
 
-                ib = (na == nb) ? ia : parseNormalIndex(nb, nLen);
-                ic = (na == nc) ? ia : parseNormalIndex(nc, nLen);
+                ib = (na == nb) ? ia : parseVertexOrNormalIndex(nb, nLen);
+                ic = (na == nc) ? ia : parseVertexOrNormalIndex(nc, nLen);
 
                 addNormal(ia, ib, ic);
             }
@@ -287,7 +274,7 @@ namespace {
             auto vLen = verts.size();
 
             for (const auto &v : verts) {
-                addVertexPointOrLine(parseVertexIndex(v, vLen));
+                addVertexPointOrLine(parseVertexOrNormalIndex(v, vLen));
             }
         }
     };
@@ -310,7 +297,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
     std::string line;
     while (std::getline(in, line)) {
-        line = utils::trimStart(line);
+        utils::trimStartInplace(line);
 
         auto lineLength = line.size();
 
@@ -345,7 +332,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
         } else if (lineFirstChar == 'f') {
 
             std::string lineData{line.begin() + 1, line.end()};
-            lineData = utils::trim(lineData);
+            utils::trimInplace(lineData);
             auto vertexData = utils::regexSplit(lineData, std::regex("\\s+"));
             std::vector<std::vector<std::string>> faceVertices;
 
@@ -371,6 +358,8 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
 
         } else if (lineFirstChar == 'l') {
+
+            // TODO
 
         } else if (lineFirstChar == 'p') {
 
@@ -487,7 +476,10 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
                 if (isLine) {
                     material = LineBasicMaterial::create();
                 } else if (isPoints) {
-                    material = PointsMaterial::create();
+                    auto pointsMaterial = PointsMaterial::create();
+                    pointsMaterial->size = 1;
+                    pointsMaterial->sizeAttenuation = false;
+                    material = std::move(pointsMaterial);
                 } else {
                     material = MeshPhongMaterial::create();
                 }

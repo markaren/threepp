@@ -10,7 +10,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
-    camera->position.set(0, 100, 175);
+    camera->position.set(0, 100, 150);
 
     GLRenderer renderer(canvas);
 
@@ -29,6 +29,12 @@ int main() {
     auto light3 = PointLight::create(Color(0xffffff), 1.f);
     light3->position.set(0, 25, -30);
     scene->add(light3);
+
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+    });
 
     canvas.animate([&](float dt) {
 

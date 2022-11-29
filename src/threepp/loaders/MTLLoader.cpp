@@ -194,7 +194,7 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
 
             _setMapForType("emissiveMap", std::get<std::string>(value));
 
-        } else if (lower == "norm") {
+        } else if (lower == "normal") {
 
             _setMapForType("normalMap", std::get<std::string>(value));
 
