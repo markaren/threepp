@@ -12,20 +12,20 @@ using namespace threepp;
 
 namespace {
 
-    std::shared_ptr<Texture> getMapForType(MeshPhongMaterial &mat, const std::string &mapType) {
+    bool getMapForType(const MeshPhongMaterial &mat, const std::string &mapType) {
 
         if (mapType == "map") {
-            return mat.map;
+            return mat.map != nullptr;
         } else if (mapType == "specularMap") {
-            return mat.specularMap;
+            return mat.specularMap != nullptr;
         } else if (mapType == "emissiveMap") {
-            return mat.emissiveMap;
+            return mat.emissiveMap != nullptr;
         } else if (mapType == "normalMap") {
-            return mat.normalMap;
+            return mat.normalMap != nullptr;
         } else if (mapType == "bumpMap") {
-            return mat.bumpMap;
+            return mat.bumpMap != nullptr;
         } else if (mapType == "alphaMap") {
-            return mat.alphaMap;
+            return mat.alphaMap != nullptr;
         } else {
             throw std::runtime_error("Illegal map type: " + mapType);
         }
@@ -53,7 +53,7 @@ namespace {
     TexParams getTextureParams(const std::string &value, MeshPhongMaterial &params) {
         TexParams texParams{Vector2(1, 1), Vector2(0, 0)};
 
-        auto items = utils::regexSplit(value, std::regex(" \\s+ "));
+        auto items = utils::regexSplit(value, std::regex("\\s+"));
         auto pos = std::find(items.begin(), items.end(), "-bm");
 
         if (pos != items.end()) {
@@ -194,7 +194,7 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
 
             _setMapForType("emissiveMap", std::get<std::string>(value));
 
-        } else if (lower == "normal") {
+        } else if (lower == "norm") {
 
             _setMapForType("normalMap", std::get<std::string>(value));
 
@@ -206,14 +206,16 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
 
             _setMapForType("alphamap", std::get<std::string>(value));
             params->transparent = true;
+
         } else if (lower == "ns") {
 
             params->shininess = std::stof(std::get<std::string>(value));
+
         } else if (lower == "d") {
 
             auto n = std::stof(std::get<std::string>(value));
 
-            if (n > 1) {
+            if (n < 1) {
 
                 params->opacity = n;
                 params->transparent = true;
