@@ -92,7 +92,7 @@ ProgramParameters::ProgramParameters(
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
     envMap = envmapMaterial && envmapMaterial->envMap;
-    envMapMode = envMap && envmapMaterial->envMap->mapping.has_value();
+    envMapMode = envMap && envmapMaterial->envMap->mapping;
     envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
     envMapCubeUV = envMapMode != 0 &&
                    (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping ||

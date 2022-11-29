@@ -14,7 +14,7 @@ namespace {
 
     std::shared_ptr<Texture> getMapForType(MeshPhongMaterial &mat, const std::string &mapType) {
 
-        if (mapType == "mat") {
+        if (mapType == "map") {
             return mat.map;
         } else if (mapType == "specularMap") {
             return mat.specularMap;
@@ -27,13 +27,13 @@ namespace {
         } else if (mapType == "alphaMap") {
             return mat.alphaMap;
         } else {
-            return nullptr;
+            throw std::runtime_error("Illegal map type: " + mapType);
         }
     }
 
     void setMapForType(MeshPhongMaterial &mat, const std::string &mapType, std::shared_ptr<Texture> map) {
 
-        if (mapType == "mat") {
+        if (mapType == "map") {
             mat.map = std::move(map);
         } else if (mapType == "specularMap") {
             mat.specularMap = std::move(map);
@@ -45,6 +45,8 @@ namespace {
             mat.bumpMap = std::move(map);
         } else if (mapType == "alphaMap") {
             mat.alphaMap = std::move(map);
+        } else {
+            throw std::runtime_error("Illegal map type: " + mapType);
         }
     }
 
@@ -134,7 +136,9 @@ MaterialCreator MTLLoader::load(const std::filesystem::path &path) {
 std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path &path, std::optional<int> mapping) {
 
     auto texture = TextureLoader().loadTexture(path);
-    texture->mapping = mapping;
+    if (mapping) {
+        texture->mapping = *mapping;
+    }
     return texture;
 }
 
