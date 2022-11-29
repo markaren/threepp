@@ -79,7 +79,7 @@ void Texture::transformUv(Vector2 &uv) const {
         }
     }
 
-    if (this->flipY) {
+    if (this->image && (*this->image).flipped()) {
 
         uv.y = 1 - uv.y;
     }
@@ -124,7 +124,6 @@ Texture &Texture::copy(const Texture &source) {
 
     this->generateMipmaps = source.generateMipmaps;
     this->premultiplyAlpha = source.premultiplyAlpha;
-    this->flipY = source.flipY;
     this->unpackAlignment = source.unpackAlignment;
     this->encoding = source.encoding;
 
