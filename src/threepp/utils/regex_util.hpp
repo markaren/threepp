@@ -49,6 +49,21 @@ namespace {
         return regex_replace(s.cbegin(), s.cend(), re, f);
     }
 
+    std::vector<std::string> findAll(const std::string& str, const std::regex& exp) {
+
+        std::smatch res;
+        std::vector<std::string> result;
+        std::string::const_iterator searchStart(str.cbegin());
+        while(std::regex_search(searchStart, str.cend(), res, exp)) {
+            auto r = res[0].str();
+            if (!r.empty()) result.emplace_back(r);
+            searchStart = res.suffix().first;
+        }
+
+        return result;
+
+    }
+
 }
 
 #endif//THREEPP_REGEX_CALLBACK_HPP

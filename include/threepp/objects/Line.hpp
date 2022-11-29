@@ -27,6 +27,10 @@ namespace threepp {
             return material_;
         }
 
+        std::vector<std::shared_ptr<Material>> materials() override {
+            return {material_};
+        }
+
         virtual void computeLineDistances() {
 
             // we assume non-indexed geometry

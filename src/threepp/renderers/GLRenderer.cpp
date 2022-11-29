@@ -529,28 +529,25 @@ void GLRenderer::projectObject(const std::shared_ptr<Object3D> &object, const st
                 }
 
                 auto geometry = objects.update(object);
-                auto material = object->material();
+                const auto materials = object->materials();
 
-                if (false /*Array.isArray( material )*/) {
+                if (materials.size() > 1) {
 
-                    //                    const groups = geometry.groups;
-                    //
-                    //                    for ( let i = 0, l = groups.length; i < l; i ++ ) {
-                    //
-                    //                        const group = groups[ i ];
-                    //                        const groupMaterial = material[ group.materialIndex ];
-                    //
-                    //                        if ( groupMaterial && groupMaterial.visible ) {
-                    //
-                    //                            currentRenderList.push( object, geometry, groupMaterial, groupOrder, _vector3.z, group );
-                    //
-                    //                        }
-                    //
-                    //                    }
+                    const auto& groups = geometry->groups;
 
-                } else if (material->visible) {
+                    for (const auto &group : groups) {
 
-                    currentRenderList->push(object, geometry, material, groupOrder, _vector3.z, std::nullopt);
+                        auto &groupMaterial = materials.at(group.materialIndex);
+
+                        if (groupMaterial && groupMaterial->visible) {
+
+                            currentRenderList->push(object, geometry, groupMaterial, groupOrder, _vector3.z, group);
+                        }
+                    }
+
+                } else if (materials.front()->visible) {
+
+                    currentRenderList->push(object, geometry, materials.front(), groupOrder, _vector3.z, std::nullopt);
                 }
             }
         }
@@ -664,7 +661,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     auto lightsStateVersion = lights.state.version;
 
-    auto parameters = programCache.getParameters(*this, material.get(), lights.state, (int) shadowsArray.size(), scene, object);
+    auto parameters = programCache.getParameters(*this, material.get(), lights.state, static_cast<int>(shadowsArray.size()), scene, object);
     auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;
