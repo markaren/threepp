@@ -13,17 +13,19 @@ int main() {
     camera->position.set(0, 100, 175);
 
     GLRenderer renderer(canvas);
-    renderer.setClearColor(Color::aliceblue);
-    renderer.setSize(canvas.getSize());
 
     OBJLoader loader;
     auto obj = loader.load("data/models/obj/female02/female02.obj");
 
     scene->add(obj);
 
-    auto light = DirectionalLight::create(0xffffff, 0.5f);
-    light->position.set(-1, -1, -1);
-    scene->add(light);
+    auto light1 = PointLight::create(Color(0xffffff).multiplyScalar(0.5f), 1.f);
+    light1->position.set(25, 115, 25);
+    scene->add(light1);
+
+    auto light2 = PointLight::create(Color(0xffffff).multiplyScalar(0.5f), 1.f);
+    light1->position.set(-25, 115, 125);
+    scene->add(light2);
 
     canvas.animate([&](float dt) {
 

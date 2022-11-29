@@ -82,11 +82,11 @@ namespace {
 
 }// namespace
 
-MaterialCreator MTLLoader::load(std::filesystem::path &path) {
+MaterialCreator MTLLoader::load(const std::filesystem::path &path) {
 
     std::ifstream in(path);
 
-    std::unordered_map<std::string, MatVariant> info;
+    std::unordered_map<std::string, MatVariant>* info;
     std::regex delimiterPattern{"\\s+"};
     MaterialsInfo materialsInfo;
 
@@ -109,24 +109,24 @@ MaterialCreator MTLLoader::load(std::filesystem::path &path) {
 
         if (key == "newmtl") {
 
-            info = std::unordered_map<std::string, MatVariant>{{"name", value}};
-            materialsInfo[value] = info;
+            materialsInfo[value] = std::unordered_map<std::string, MatVariant>{{"name", value}};
+            info = &materialsInfo[value];
 
         } else {
 
             if (key == "ka" || key == "kd" || key == "ks" || key == "ke") {
 
                 auto ss = utils::split(value, ' ');
-                info[key] = std::vector<float>{std::stof(ss[0]), std::stof(ss[1]), std::stof(ss[2])};
+                (*info)[key] = std::vector<float>{std::stof(ss[0]), std::stof(ss[1]), std::stof(ss[2])};
 
             } else {
 
-                info[key] = value;
+                (*info)[key] = value;
             }
         }
     }
 
-    MaterialCreator materialCreator(resourcePath_ ? *resourcePath_ : path, materialOptions);
+    MaterialCreator materialCreator(resourcePath_ ? *resourcePath_ : path.parent_path(), materialOptions);
     materialCreator.setMaterials(materialsInfo);
     return materialCreator;
 }
@@ -141,7 +141,7 @@ std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::pat
 void MaterialCreator::createMaterial(const std::string &materialName) {
 
     auto mat = materialsInfo.at(materialName);
-    std::shared_ptr<MeshPhongMaterial> params;
+    auto params = MeshPhongMaterial::create();
     params->name = materialName;
     params->side = side;
 
@@ -149,7 +149,7 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
         if (getMapForType(*params, mapType)) return;
 
         auto texParams = getTextureParams(value, *params);
-        auto map = loadTexture(baseUrl.string() + texParams.url);
+        auto map = loadTexture(baseUrl / texParams.url);
 
         map->repeat.copy(texParams.scale);
         map->offset.copy(texParams.offset);

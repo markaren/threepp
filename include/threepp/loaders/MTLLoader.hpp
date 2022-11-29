@@ -2,17 +2,17 @@
 #ifndef THREEPP_MTLLOADER_HPP
 #define THREEPP_MTLLOADER_HPP
 
+#include <array>
+#include <filesystem>
 #include <optional>
 #include <string>
-#include <utility>
-#include <filesystem>
 #include <unordered_map>
+#include <utility>
 #include <variant>
-#include <array>
 
 #include "threepp/constants.hpp"
-#include "threepp/math/Vector2.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/math/Vector2.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 
@@ -62,56 +62,71 @@ namespace threepp {
             wrap = this->options ? this->options->wrap : RepeatWrapping;
         }
 
-        MaterialsInfo convert(const MaterialsInfo& mi) {
+        MaterialsInfo convert(const MaterialsInfo &mi) {
 
             if (!options) return mi;
 
             MaterialsInfo converted = MaterialsInfo{};
 
-            for (auto& [key, mat]: mi) {
+            for (auto &[key, mat] : mi) {
 
                 auto covMat = std::unordered_map<std::string, MatVariant>{};
 
                 converted[key] = covMat;
 
-                for (auto& [prop, value] : mat) {
+                loop:
+                for (auto &[prop, value] : mat) {
 
                     bool save = true;
                     auto lprop = utils::toLower(prop);
 
                     if (lprop == "kd" || lprop == "ka" || lprop == "ks") {
 
-                        if (options->normalizeRGB){
-                            auto& v = const_cast<std::vector<float>&>(std::get<std::vector<float>>(value));
+                        if (options->normalizeRGB) {
+                            auto &v = const_cast<std::vector<float> &>(std::get<std::vector<float>>(value));
 
                             v[0] /= 255;
                             v[1] /= 255;
                             v[2] /= 255;
+                        }
+
+                        if (options->ignoreZeroRGBs) {
+
+                            auto &v = std::get<std::vector<float>>(value);
+
+                            if (v[0] == 0 && v[1] == 0 && v[2] == 0) {
+                                save = false;
+                            }
 
                         }
+                    } else {
+                        goto loop;
+                    }
+
+                    if (save) {
+
+                        covMat[lprop] = value;
 
                     }
 
                 }
-
             }
 
             return converted;
-
         }
 
-        MaterialCreator& preload() {
-            for (auto& [mn, _] : materialsInfo) {
+        MaterialCreator &preload() {
+            for (auto &[mn, _] : materialsInfo) {
                 create(mn);
             }
             return *this;
         }
 
-        void setMaterials(const MaterialsInfo& mi) {
+        void setMaterials(const MaterialsInfo &mi) {
             this->materialsInfo = convert(mi);
         }
 
-        std::shared_ptr<Material> create(const std::string& materialName) {
+        std::shared_ptr<Material> create(const std::string &materialName) {
 
             if (materials.find(materialName) == materials.end()) {
                 createMaterial(materialName);
@@ -122,11 +137,9 @@ namespace threepp {
 
 
     private:
+        void createMaterial(const std::string &materialName);
 
-        void createMaterial(const std::string& materialName);
-
-        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<int> mapping = std::nullopt);
-
+        std::shared_ptr<Texture> loadTexture(const std::filesystem::path &path, std::optional<int> mapping = std::nullopt);
     };
 
 
@@ -137,7 +150,6 @@ namespace threepp {
         std::optional<std::filesystem::path> resourcePath_;
 
     public:
-
         std::optional<MaterialOptions> materialOptions;
 
         void setPath(const std::filesystem::path &path) {
@@ -148,8 +160,7 @@ namespace threepp {
             resourcePath_ = resourcePath;
         }
 
-        MaterialCreator load(std::filesystem::path& path);
-
+        MaterialCreator load(const std::filesystem::path &path);
     };
 
 }// namespace threepp

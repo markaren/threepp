@@ -108,10 +108,12 @@ namespace {
 
         std::shared_ptr<OBJMaterial> finalize(bool end) {
             auto lastMultiMaterial = currentMaterial();
-            if (lastMultiMaterial && lastMultiMaterial->groupCount == 1) {
+            if (lastMultiMaterial && lastMultiMaterial->groupEnd == -1) {
+
                 lastMultiMaterial->groupEnd = static_cast<int>(geometry.vertices.size()) / 3;
                 lastMultiMaterial->groupCount = lastMultiMaterial->groupEnd - lastMultiMaterial->groupStart;
                 lastMultiMaterial->inherited = false;
+
             }
 
             if (end && !materials.empty()) {
@@ -298,9 +300,9 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
     std::ifstream in(path);
 
     if (tryLoadMtl) {
-        std::filesystem::path mtlFile{path.parent_path() / path.stem() / ".mtl"};
+        std::filesystem::path mtlFile{path.parent_path() / (path.stem().string() + ".mtl")};
         if (std::filesystem::exists(mtlFile)) {
-            materials = MTLLoader().load(mtlFile).preload();
+            materials = MTLLoader().load(absolute(mtlFile)).preload();
         }
     }
 
@@ -495,6 +497,9 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             }
 
             material->vertexColors = hasVertexColors;
+            if (instanceof <const MaterialWithFlatShading>(material)) {
+                std::dynamic_pointer_cast<MaterialWithFlatShading>(material)->flatShading = !sourceMaterial->smooth;
+            }
 
             createdMaterials.emplace_back(material);
 
@@ -516,7 +521,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             } else if (isPoints) {
                 mesh = Points::create(bufferGeometry, createdMaterials.front());
             } else {
-                mesh = Mesh::create(bufferGeometry, createdMaterials.front()); //TODO
+                mesh = Mesh::create(bufferGeometry, createdMaterials);
             }
 
         } else {
