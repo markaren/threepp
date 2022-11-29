@@ -16,6 +16,20 @@ int main() {
 
     OBJLoader loader;
     auto obj = loader.load("data/models/obj/female02/female02.obj");
+
+//    TextureLoader tl;
+//    auto tex = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+//    obj->traverse([tex](Object3D& child){
+//
+//        if (dynamic_cast<Mesh*>(&child)) {
+//            Mesh*mesh = dynamic_cast<Mesh*>(&child);
+//            for (auto m : mesh->materials()) {
+//                if (std::dynamic_pointer_cast<MaterialWithMap>(m)) {
+//                    std::dynamic_pointer_cast<MaterialWithMap>(m)->map = tex;
+//                }
+//            }
+//        }
+//    });
     scene->add(obj);
 
     auto light1 = PointLight::create(Color(0xffffff), 1.f);
