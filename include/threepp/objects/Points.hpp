@@ -22,6 +22,10 @@ namespace threepp {
             return material_;
         }
 
+        std::vector<std::shared_ptr<Material>> materials() override {
+            return {material_};
+        }
+
         static std::shared_ptr<Points> create(
                 std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
                 std::shared_ptr<Material> material = PointsMaterial::create()) {

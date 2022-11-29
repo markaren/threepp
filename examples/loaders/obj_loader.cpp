@@ -18,8 +18,6 @@ int main() {
     auto obj = loader.load("data/models/obj/female02/female02.obj");
     scene->add(obj);
 
-    OrbitControls c{camera, canvas};
-
     auto light1 = PointLight::create(Color(0xffffff), 1.f);
     light1->position.set(25, 115, 25);
     scene->add(light1);
