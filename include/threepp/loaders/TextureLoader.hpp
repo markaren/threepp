@@ -12,7 +12,7 @@ namespace threepp {
     class TextureLoader {
 
     public:
-        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path);
+        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, bool flipY = true);
 
     private:
         ImageLoader imageLoader_{};

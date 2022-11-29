@@ -56,7 +56,6 @@ namespace threepp {
 
         bool generateMipmaps = true;
         bool premultiplyAlpha = false;
-        bool flipY = true;
         int unpackAlignment = 4;// valid values: 1, 2, 4, 8 (see http://www.khronos.org/opengles/sdk/docs/man/xhtml/glPixelStorei.xml)
 
         // Values of encoding !== THREE.LinearEncoding only supported on map, envMap and emissiveMap.

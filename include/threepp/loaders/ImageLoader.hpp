@@ -13,7 +13,7 @@ namespace threepp {
 
     public:
 
-        Image load(const std::filesystem::path &imagePath, int channels = 4);
+        Image load(const std::filesystem::path &imagePath, int channels = 4, bool flipY = true);
     };
 
 }// namespace threepp

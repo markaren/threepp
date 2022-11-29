@@ -449,12 +449,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
         if (!geometry.uvs.empty()) {
 
-            // TODO dirty haack
-            auto& uvs = geometry.uvs;
-            for (unsigned i = 0; i < uvs.size(); i+=2) {
-                uvs[i+1] = 1 - uvs[i+1];
-            }
-
             bufferGeometry->setAttribute("uv", FloatBufferAttribute::create(geometry.uvs, 2));
         }
 
