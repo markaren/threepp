@@ -138,7 +138,18 @@ namespace threepp {
 
         void traverseVisible(const std::function<void(Object3D &)> &callback);
 
-        void traverseAncestors(const std::function<void(Object3D &)> &callback) const;
+        void traverseAncestors(const std::function<void(Object3D &)> &callback);
+
+        template<class T>
+        void traverseType(const std::function<void(T &)> &callback) {
+            traverse([&](Object3D& o){
+                auto dyn = dynamic_cast<T*>(&o);
+                if (dyn) {
+                    callback(*dyn);
+                }
+            });
+        }
+
 
         void updateMatrix();
 

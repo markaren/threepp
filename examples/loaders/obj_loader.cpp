@@ -5,6 +5,8 @@ using namespace threepp;
 
 int main() {
 
+    bool debugUv = false;
+
     Canvas canvas{Canvas::Parameters().antialiasing(8)};
 
     auto scene = Scene::create();
@@ -15,20 +17,18 @@ int main() {
 
     OBJLoader loader;
     auto obj = loader.load("data/models/obj/female02/female02.obj");
+    if (debugUv) {
 
-//    TextureLoader tl;
-//    auto tex = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
-//    obj->traverse([tex](Object3D& child){
-//
-//        if (dynamic_cast<Mesh*>(&child)) {
-//            Mesh*mesh = dynamic_cast<Mesh*>(&child);
-//            for (auto m : mesh->materials()) {
-//                if (std::dynamic_pointer_cast<MaterialWithMap>(m)) {
-//                    std::dynamic_pointer_cast<MaterialWithMap>(m)->map = tex;
-//                }
-//            }
-//        }
-//    });
+        TextureLoader tl;
+        auto tex = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        obj->traverseType<Mesh>([tex](Mesh &child) {
+            for (auto m : child.materials()) {
+                if (std::dynamic_pointer_cast<MaterialWithMap>(m)) {
+                    std::dynamic_pointer_cast<MaterialWithMap>(m)->map = tex;
+                }
+            }
+        });
+    }
     scene->add(obj);
 
     auto light1 = PointLight::create(Color(0xffffff), 1.f);
@@ -50,7 +50,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         obj->rotation.y += 1 * dt;
 
         renderer.render(scene, camera);
