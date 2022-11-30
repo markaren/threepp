@@ -1,7 +1,7 @@
 
 #include "threepp/loaders/ImageLoader.hpp"
 
-#ifdef STB_IMAGE_IMPLEMENTATION
+#ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #endif
 #include <stb_image.h>

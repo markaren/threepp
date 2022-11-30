@@ -1,6 +1,7 @@
 
 #include "threepp/loaders/AssimpLoader.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 
 #include <assimp/Importer.hpp>
@@ -31,6 +32,7 @@ struct AssimpLoader::Impl {
 
                 std::vector<float> vertices;
                 std::vector<float> normals;
+                std::vector<float> colors;
                 std::vector<float> uvs;
 
                 if (aiMesh->HasFaces()) {
@@ -51,6 +53,11 @@ struct AssimpLoader::Impl {
                                     uvs.emplace_back(texCoord.x);
                                     uvs.emplace_back(texCoord.y);
                                 }
+                                if (aiMesh->mColors[0]) {
+                                    colors.emplace_back(aiMesh->mColors[0][vertexIndex].r);
+                                    colors.emplace_back(aiMesh->mColors[0][vertexIndex].g);
+                                    colors.emplace_back(aiMesh->mColors[0][vertexIndex].b);
+                                }
 
                                 vertices.emplace_back(aiMesh->mVertices[vertexIndex].x);
                                 vertices.emplace_back(aiMesh->mVertices[vertexIndex].y);
@@ -61,28 +68,53 @@ struct AssimpLoader::Impl {
 
                 }
 
+                auto material = MeshBasicMaterial::create();
+
                 geometry->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
                 if (!normals.empty()) {
-                    geometry->setAttribute("normals", FloatBufferAttribute::create(normals, 3));
+                    geometry->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+                }
+                if (!colors.empty()) {
+                    material->vertexColors = true;
+                    geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
                 }
                 if (!uvs.empty()) {
                     geometry->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
                 }
 
-                auto material = MeshBasicMaterial::create();
+
                 if (aiScene->HasMaterials()) {
+                    aiString p;
                     auto mi = aiMesh->mMaterialIndex;
                     auto mat = aiScene->mMaterials[mi];
                     if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
-                        aiString p;
                         if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                             auto texPath = path.parent_path() / p.C_Str();
                             auto tex = TextureLoader().loadTexture(texPath);
+//                            tex->encoding = sRGBEncoding;
                             material->map = tex;
                         }
+                    } else {
+                        C_STRUCT aiColor4D diffuse;
+                        if(AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_DIFFUSE, &diffuse)) {
+                            material->color.setRGB(diffuse.r, diffuse.g, diffuse.b);
+                        }
                     }
-                }
+                    if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
+                        if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
+                            auto texPath = path.parent_path() / p.C_Str();
+                            auto tex = TextureLoader().loadTexture(texPath);
+//                            tex->encoding = sRGBEncoding;
+                            material->specularMap = tex;
+                        }
+                    } else {
+//                        C_STRUCT aiColor4D specular;
+//                        if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
+//                            material->specular.setRGB(specular.r, specular.g, specular.b);
+//                        }
+                    }
 
+                }
 
                 auto mesh = Mesh::create(geometry, material);
                 group->add(mesh);

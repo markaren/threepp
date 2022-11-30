@@ -10,16 +10,19 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
-    camera->position.set(0, 1, 2);
+    camera->position.set(0, 1, 10);
 
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
-    renderer.setSize(canvas.getSize());
+    renderer.outputEncoding = sRGBEncoding;
 
     AssimpLoader loader;
-    auto objModel = loader.load("data/models/obj/female02/female02.obj");
-    objModel->scale.multiplyScalar(0.01);
+    auto objModel = loader.load("data/models/gltf/zedm.glb");
+    objModel->scale.multiplyScalar(0.1);
     scene->add(objModel);
+
+    auto light = AmbientLight::create(Color(0xfffff));
+    scene->add(light);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
