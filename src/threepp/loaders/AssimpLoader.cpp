@@ -15,6 +15,10 @@ struct AssimpLoader::Impl {
 
         auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
+        if (!aiScene) {
+            throw std::runtime_error(importer_.GetErrorString());
+        }
+
         auto group = Group::create();
 
         if (aiScene->HasMeshes()) {
