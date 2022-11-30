@@ -239,8 +239,7 @@ namespace {
 
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
-                               [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
-                               [&](Matrix4* arg) { setValueM4Helper(arg->elements); },
+                               [&](Matrix4 arg) { setValueM4Helper(arg.elements); }
                        },
                        value);
         }
@@ -259,7 +258,7 @@ namespace {
             //            std::cout << "PureArrayUniform '" << id << "'" << std::endl;
         }
 
-        std::function<void(const UniformValue &, GLTextures *)> getPureArraySetter() const {
+        [[nodiscard]] std::function<void(const UniformValue &, GLTextures *)> getPureArraySetter() const {
 
             switch (activeInfo.type) {
 
@@ -323,14 +322,14 @@ namespace {
                                                        [&](int arg) { u->setValue(arg, textures); },
                                                        [&](float arg) { u->setValue(arg, textures); },
                                                        [&](Vector2 arg) { u->setValue(arg, textures); },
-                                                       [&](std::shared_ptr<Vector3> arg) { u->setValue(*arg, textures); },
-                                                       [&](std::shared_ptr<Color> arg) { u->setValue(*arg, textures); }},
+                                                       [&](Vector3 arg) { u->setValue(arg, textures); },
+                                                       [&](Color arg) { u->setValue(arg, textures); }},
                                                v);
                                 }
                             },
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>> arg) {
                                 for (auto &u : seq) {
-                                    int index = std::atoi(u->id.c_str());
+                                    int index = std::stoi(u->id);
                                     u->setValue(arg[index], textures);
                                 }
                             }},
@@ -366,7 +365,7 @@ namespace {
             bool isIndex = match[2] == "]";
             std::string subscript = match[3];
 
-            if (isIndex) id = std::to_string(std::atoi(id.c_str()) | 0);
+            if (isIndex) id = std::to_string(std::stoi(id) | 0);
 
             if (!match[3].matched || subscript == "[" && matchEnd + 2 == pathLength) {
 

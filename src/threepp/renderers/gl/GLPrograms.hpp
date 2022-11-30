@@ -44,7 +44,7 @@ namespace threepp {
         public:
             GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping);
 
-            ProgramParameters getParameters(
+            static ProgramParameters getParameters(
                     const GLRenderer &renderer,
                     Material *material,
                     const GLLights::LightState &lights,
@@ -52,9 +52,9 @@ namespace threepp {
                     const std::shared_ptr<Scene> &scene,
                     const std::shared_ptr<Object3D> &object);
 
-            std::string getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters);
+            static std::string getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters);
 
-            std::shared_ptr<UniformMap> getUniforms(const std::shared_ptr<Material> &material);
+            static std::shared_ptr<UniformMap> getUniforms(const std::shared_ptr<Material> &material);
 
             std::shared_ptr<GLProgram> acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey);
 

@@ -1,11 +1,10 @@
 
 #include "threepp/Canvas.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
-
-#include "threepp/loaders/stb.hpp"
 
 #include <optional>
 #include <unordered_map>
@@ -24,8 +23,8 @@ public:
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-        glfwWindowHint (GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        glfwWindowHint (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
         if (params.antialiasing_ > 0) {
             glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
@@ -37,11 +36,15 @@ public:
             exit(EXIT_FAILURE);
         }
 
-        GLFWimage images[1];
-        auto favicon = stb_load("favicon.bmp", 4);
-        images[0] = {favicon.width, favicon.height, favicon.pixels};
-        glfwSetWindowIcon(window, 1, images);
-        delete favicon.pixels;
+        {
+            GLFWimage images[1];
+            ImageLoader imageLoader;
+            Image favicon = imageLoader.load("data/favicon.bmp", 4);
+            images[0] = {static_cast<int>(favicon.width),
+                         static_cast<int>(favicon.height),
+                         favicon.getData()};
+            glfwSetWindowIcon(window, 1, images);
+        }
 
         glfwSetWindowUserPointer(window, this);
 
@@ -154,8 +157,8 @@ private:
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
         auto listeners = p->mouseListeners;
         if (listeners.empty()) return;
-        Vector2 delta {(float) xoffset, (float) yoffset};
-        for (auto &[_, l] :listeners) {
+        Vector2 delta{(float) xoffset, (float) yoffset};
+        for (auto &[_, l] : listeners) {
             l->onMouseWheel(delta);
         }
     }

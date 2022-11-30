@@ -1,4 +1,6 @@
 
+#pragma warning(disable : 4312)
+
 #include "GLBindingStates.hpp"
 
 using namespace threepp;

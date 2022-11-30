@@ -19,5 +19,5 @@ target_link_libraries(test_capabilites
         PUBLIC
         threepp
         PRIVATE
-        CONAN_PKG::glfw
-        CONAN_PKG::glad)
+        glfw::glfw
+        glad::glad)

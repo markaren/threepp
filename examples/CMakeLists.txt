@@ -17,3 +17,8 @@ add_subdirectory(objects)
 add_subdirectory(lights)
 add_subdirectory(misc)
 add_subdirectory(helpers)
+add_subdirectory(loaders)
+
+if (BULLET_FOUND)
+    add_subdirectory(bullet)
+endif()

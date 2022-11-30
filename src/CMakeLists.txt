@@ -52,7 +52,11 @@ set(publicHeaders
         "threepp/helpers/PointLightHelper.hpp"
         "threepp/helpers/SpotLightHelper.hpp"
 
+        "threepp/loaders/loaders.hpp"
+        "threepp/loaders/MTLLoader.hpp"
         "threepp/loaders/ImageLoader.hpp"
+        "threepp/loaders/OBJLoader.hpp"
+        "threepp/loaders/STLLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
@@ -132,8 +136,6 @@ endforeach ()
 
 set(privateHeaders
 
-        "threepp/loaders/stb.hpp"
-
         "threepp/renderers/gl/GLAttributes.hpp"
         "threepp/renderers/gl/GLBackground.hpp"
         "threepp/renderers/gl/GLBindingStates.hpp"
@@ -189,8 +191,10 @@ set(sources
 
         "threepp/helpers/ArrowHelper.cpp"
 
-        "threepp/loaders/stb.cpp"
         "threepp/loaders/ImageLoader.cpp"
+        "threepp/loaders/MTLLoader.cpp"
+        "threepp/loaders/OBJLoader.cpp"
+        "threepp/loaders/STLLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
 
         "threepp/math/Box2.cpp"
@@ -251,10 +255,10 @@ set(sources
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 target_link_libraries(threepp
         PUBLIC
-        CONAN_PKG::glfw
-        CONAN_PKG::glad
+        glfw::glfw
+        glad::glad
         PRIVATE
-        CONAN_PKG::stb)
+        stb::stb)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"

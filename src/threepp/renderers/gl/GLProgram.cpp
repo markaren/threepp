@@ -58,8 +58,8 @@ namespace {
 
         std::string s;
 
-        auto start = std::atoi(match[1].str().c_str());
-        auto end = std::atoi(match[2].str().c_str());
+        auto start = std::stoi(match[1].str());
+        auto end = std::stoi(match[2].str());
 
         for (int i = start; i < end; i++) {
 
@@ -199,7 +199,7 @@ namespace {
             result.append(str, pos, match.position(0) - pos);
             pos = match.position(0) + match.length(0);
 
-            std::ssub_match sub = match[1];
+            const std::ssub_match& sub = match[1];
             std::string r = shaders::ShaderChunk::instance().get(sub.str(), "ShaderChunk");
             if (r.empty()) {
                 std::stringstream ss;
@@ -442,7 +442,7 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
                     parameters.useVertexTexture ? "#define BONE_TEXTURE" : "",
 
                     parameters.morphTargets ? "#define USE_MORPHTARGETS" : "",
-                    parameters.morphNormals && parameters.flatShading == false ? "#define USE_MORPHNORMALS" : "",
+                    parameters.morphNormals && !parameters.flatShading ? "#define USE_MORPHNORMALS" : "",
                     parameters.doubleSided ? "#define DOUBLE_SIDED" : "",
                     parameters.flipSided ? "#define FLIP_SIDED" : "",
 

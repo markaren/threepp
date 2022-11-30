@@ -14,6 +14,8 @@ namespace threepp {
     class SphereGeometry : public BufferGeometry {
 
     public:
+        const float radius;
+
         static std::shared_ptr<SphereGeometry> create(
                 float radius = 1,
                 int widthSegments = 8,

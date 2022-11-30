@@ -9,7 +9,15 @@
 
 using namespace threepp;
 
-SphereGeometry::SphereGeometry(float radius, int widthSegments, int heightSegments, float phiStart, float phiLength, float thetaStart, float thetaLength) {
+SphereGeometry::SphereGeometry(
+        float radius,
+        int widthSegments,
+        int heightSegments,
+        float phiStart,
+        float phiLength,
+        float thetaStart,
+        float thetaLength)
+    : radius(radius) {
 
     std::vector<int> indices;
     std::vector<float> vertices;

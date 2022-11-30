@@ -57,6 +57,10 @@ jobs:
         sudo pip3 install --upgrade setuptools pip
         sudo pip3 install conan
 
+    - name: Run conan
+      run: |
+        conan install . -s build_type=Release -if build -b missing
+
     - name: Configure and build
       run: |
         cmake . -B build -DCMAKE_BUILD_TYPE=Release
@@ -77,9 +81,29 @@ jobs:
         run: |
           pip3 install conan
 
+      - name: Run conan
+        run: |
+          conan install . -s build_type=Release -if build -b missing
+
       - name: Configure and build
         run: |
           cmake . -A x64 -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+
+  vcpkg-on-windows:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2019]
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Configure and build
+        run: |
+          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE="Release"
           cmake --build build --config Release
 
   conan-on-darwin:
@@ -96,6 +120,10 @@ jobs:
       - name: Install prerequisites
         run: |
           pip3 install conan
+
+      - name: Run conan
+        run: |
+          conan install . -s build_type=Release -if build -b missing
 
       - name: Configure and build
         run: |

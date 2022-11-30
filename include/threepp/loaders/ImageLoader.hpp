@@ -3,6 +3,8 @@
 #define THREEPP_IMAGELOADER_HPP
 
 #include <string>
+#include <filesystem>
+
 #include <threepp/textures/Image.hpp>
 
 namespace threepp {
@@ -11,7 +13,7 @@ namespace threepp {
 
     public:
 
-        Image load(const std::string &imagePath, int channels = 4);
+        Image load(const std::filesystem::path &imagePath, int channels = 4, bool flipY = true);
     };
 
 }// namespace threepp
