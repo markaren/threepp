@@ -6,12 +6,11 @@ using namespace threepp;
 int main() {
 
     Canvas canvas{Canvas::Parameters().antialiasing(8)};
+    GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.set(0, 100, 150);
-
-    GLRenderer renderer(canvas);
 
     OBJLoader loader;
     auto obj = loader.load("data/models/obj/female02/female02.obj");
