@@ -13,7 +13,6 @@
 #include "threepp/constants.hpp"
 #include "threepp/materials/Material.hpp"
 #include "threepp/math/Vector2.hpp"
-#include "threepp/utils/StringUtils.hpp"
 
 
 namespace threepp {
@@ -62,58 +61,7 @@ namespace threepp {
             wrap = this->options ? this->options->wrap : RepeatWrapping;
         }
 
-        MaterialsInfo convert(const MaterialsInfo &mi) {
-
-            if (!options) return mi;
-
-            MaterialsInfo converted = MaterialsInfo{};
-
-            for (auto &[key, mat] : mi) {
-
-                auto covMat = std::unordered_map<std::string, MatVariant>{};
-
-                converted[key] = covMat;
-
-                loop:
-                for (auto &[prop, value] : mat) {
-
-                    bool save = true;
-                    auto lprop = utils::toLower(prop);
-
-                    if (lprop == "kd" || lprop == "ka" || lprop == "ks") {
-
-                        if (options->normalizeRGB) {
-                            auto &v = const_cast<std::vector<float> &>(std::get<std::vector<float>>(value));
-
-                            v[0] /= 255;
-                            v[1] /= 255;
-                            v[2] /= 255;
-                        }
-
-                        if (options->ignoreZeroRGBs) {
-
-                            auto &v = std::get<std::vector<float>>(value);
-
-                            if (v[0] == 0 && v[1] == 0 && v[2] == 0) {
-                                save = false;
-                            }
-
-                        }
-                    } else {
-                        goto loop;
-                    }
-
-                    if (save) {
-
-                        covMat[lprop] = value;
-
-                    }
-
-                }
-            }
-
-            return converted;
-        }
+        MaterialsInfo convert(const MaterialsInfo &mi);
 
         MaterialCreator &preload() {
             for (auto &[mn, _] : materialsInfo) {

@@ -4,7 +4,7 @@
 #define THREEPP_GLOBJECTS_HPP
 
 #include "threepp/core/Object3D.hpp"
-#include <threepp/objects/InstancedMesh.hpp>
+#include "threepp/objects/InstancedMesh.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
@@ -50,7 +50,7 @@ namespace threepp::gl {
                 updateMap_[geometry->id] = frame;
             }
 
-            if (instanceof <InstancedMesh>(object.get())) {
+            if (std::dynamic_pointer_cast<InstancedMesh>(object)) {
 
                 if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
 

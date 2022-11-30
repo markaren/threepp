@@ -1,5 +1,5 @@
 
-#include "GLMaterials.hpp"
+#include "threepp/renderers/gl/GLMaterials.hpp"
 
 #include "threepp/materials/materials.hpp"
 #include "threepp/utils/InstanceOf.hpp"

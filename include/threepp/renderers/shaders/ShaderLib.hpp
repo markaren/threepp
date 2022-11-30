@@ -5,7 +5,6 @@
 
 #include "threepp/core/Shader.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
-
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
 

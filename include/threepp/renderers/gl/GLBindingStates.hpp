@@ -11,8 +11,6 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/materials.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 #include <optional>
 #include <threepp/core/InstancedBufferAttribute.hpp>
 #include <threepp/objects/InstancedMesh.hpp>

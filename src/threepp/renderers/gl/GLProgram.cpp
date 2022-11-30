@@ -1,9 +1,9 @@
 
-#include "GLProgram.hpp"
+#include "threepp/renderers/gl/GLProgram.hpp"
 
-#include "GLBindingStates.hpp"
-#include "GLPrograms.hpp"
-#include "GLUniforms.hpp"
+#include "threepp/renderers/gl/GLBindingStates.hpp"
+#include "threepp/renderers/gl/GLPrograms.hpp"
+#include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"

@@ -1,5 +1,5 @@
 
-#include "GLPrograms.hpp"
+#include "threepp/renderers/gl/GLPrograms.hpp"
 
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"

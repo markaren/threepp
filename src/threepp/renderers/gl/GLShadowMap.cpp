@@ -1,5 +1,5 @@
 
-#include "GLShadowMap.hpp"
+#include "threepp/renderers/gl/GLShadowMap.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"

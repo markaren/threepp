@@ -8,12 +8,9 @@
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 #include <array>
 #include <unordered_map>
 #include <vector>
-
 
 namespace threepp::gl {
 
