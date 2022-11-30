@@ -3,7 +3,7 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 
-#include <assimp/cimport.h>
+#include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
@@ -13,7 +13,7 @@ struct AssimpLoader::Impl {
 
     std::shared_ptr<Group> load(const std::filesystem::path &path) {
 
-        auto aiScene = aiImportFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
+        auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
         auto group = Group::create();
 
@@ -85,12 +85,13 @@ struct AssimpLoader::Impl {
             }
         }
 
-        delete aiScene;
-
         return group;
     }
 
     ~Impl() = default;
+
+private:
+    Assimp::Importer importer_;
 };
 
 AssimpLoader::AssimpLoader()
