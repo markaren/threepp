@@ -21,11 +21,13 @@ class ThreeppConan(ConanFile):
     )
 
     options = {
-        "with_bullet": [True, False]
+        "with_bullet": [True, False],
+        "with_assimp": [True, False]
     }
 
     default_options = (
         "with_bullet=False",
+        "with_assimp=False",
         "glad:gl_version=4.1"
     )
 
@@ -35,6 +37,8 @@ class ThreeppConan(ConanFile):
     def requirements(self):
         if self.options.with_bullet:
             self.requires("bullet3/3.24")
+        if self.options.with_assimp:
+            self.requires("assimp/5.2.2")
 
     def configure_cmake(self):
         cmake = CMake(self)

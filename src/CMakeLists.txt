@@ -252,6 +252,10 @@ set(sources
 
         )
 
+if (assimp_FOUND)
+  list(APPEND sources "threepp/loaders/AssimpLoader.cpp")
+endif()
+
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 target_link_libraries(threepp
         PUBLIC
@@ -264,6 +268,10 @@ target_include_directories(threepp
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"
         PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}")
+
+if (assimp_FOUND)
+  target_link_libraries(threepp PRIVATE assimp::assimp)
+endif()
 
 # ==============================================================================
 # Installation rules
