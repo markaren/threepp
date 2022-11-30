@@ -1,4 +1,4 @@
-include_directories(test ${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_executable(demo demo.cpp)
 target_link_libraries(demo PUBLIC threepp)
