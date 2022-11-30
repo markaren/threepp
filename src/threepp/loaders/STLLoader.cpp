@@ -8,7 +8,7 @@ using namespace threepp;
 
 std::shared_ptr<BufferGeometry> STLLoader::load(const std::string &path) const {
 
-    std::ifstream reader(path, std::ios::binary | std::ios::ate);
+    std::ifstream reader(path, std::ios::binary);
     reader.seekg(80, std::ios::beg);
 
     uint32_t faces;
@@ -22,13 +22,13 @@ std::shared_ptr<BufferGeometry> STLLoader::load(const std::string &path) const {
     std::vector<float> vertices(faces * 3 * 3);
     std::vector<float> normals(faces * 3 * 3);
 
+    float normalX;
+    float normalY;
+    float normalZ;
+
     for (int face = 0; face < faces; face++) {
         int start = dataOffset + face * faceLength;
         reader.seekg(start, std::ios::beg);
-
-        float normalX;
-        float normalY;
-        float normalZ;
 
         reader.read(reinterpret_cast<char *>(&normalX), sizeof(float));
         reader.read(reinterpret_cast<char *>(&normalY), sizeof(float));

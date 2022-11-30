@@ -1,12 +1,11 @@
 
-#include <threepp/loaders/OBJLoader.hpp>
 #include <threepp/threepp.hpp>
 
 using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas{Canvas::Parameters().antialiasing(8)};
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);

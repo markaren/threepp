@@ -18,16 +18,18 @@ however much remains to be done..
 * Most materials
 * RenderTarget
 * Raycasting against Mesh
+* Binary STL loader
+* OBJ/MTL Loader
 
 
 ### But, but why?
 
-This is mostly a personal exercise. Don't expect much support, although contributions are welcome. 
+Because fun. 
 
 
 ### How to build
 
-threepp can be used in conjunction with both `vcpkg` and `conan`.
+`threepp` can be used in conjunction with both `vcpkg` and `conan`.
 
 #### vcpkg (using manifest mode)
 
@@ -57,9 +59,9 @@ threepp/<version>@ais/testing-<branch> # (development builds -> branches)
 
 ### Implementation notes
 
-In general, you'll find that math classes are value types, while threepp expect smart pointers for other types. 
+In general, you'll find that math classes are value types, while `threepp` expect smart pointers for other types. 
 For convenience, geometries, materials etc. has a static `::create` function that returns a `std::shared_ptr`.
-There should never be a need to handle memory explicitly using threepp. Yay!
+There should never be a need to handle memory explicitly using `threepp`. Yay!
 
 ### Example
 

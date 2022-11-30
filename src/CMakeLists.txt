@@ -52,6 +52,7 @@ set(publicHeaders
         "threepp/helpers/PointLightHelper.hpp"
         "threepp/helpers/SpotLightHelper.hpp"
 
+        "threepp/loaders/loaders.hpp"
         "threepp/loaders/MTLLoader.hpp"
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
