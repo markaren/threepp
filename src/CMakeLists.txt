@@ -254,10 +254,10 @@ set(sources
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 target_link_libraries(threepp
-        PUBLIC
-        glfw::glfw
+        INTERFACE
         glad::glad
         PRIVATE
+        glfw::glfw
         stb::stb)
 target_include_directories(threepp
         PUBLIC
