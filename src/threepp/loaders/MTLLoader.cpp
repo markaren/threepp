@@ -88,7 +88,7 @@ MaterialCreator MTLLoader::load(const std::filesystem::path &path) {
 
     std::ifstream in(path);
 
-    std::unordered_map<std::string, MatVariant>* info;
+    std::unordered_map<std::string, MatVariant> *info;
     std::regex delimiterPattern{"\\s+"};
     MaterialsInfo materialsInfo;
 
@@ -131,6 +131,57 @@ MaterialCreator MTLLoader::load(const std::filesystem::path &path) {
     MaterialCreator materialCreator(resourcePath_ ? *resourcePath_ : path.parent_path(), materialOptions);
     materialCreator.setMaterials(materialsInfo);
     return materialCreator;
+}
+
+
+MaterialsInfo MaterialCreator::convert(const MaterialsInfo &mi) {
+
+    if (!options) return mi;
+
+    MaterialsInfo converted = MaterialsInfo{};
+
+    for (auto &[key, mat] : mi) {
+
+        auto covMat = std::unordered_map<std::string, MatVariant>{};
+
+        converted[key] = covMat;
+
+    loop:
+        for (auto &[prop, value] : mat) {
+
+            bool save = true;
+            auto lprop = utils::toLower(prop);
+
+            if (lprop == "kd" || lprop == "ka" || lprop == "ks") {
+
+                if (options->normalizeRGB) {
+                    auto &v = const_cast<std::vector<float> &>(std::get<std::vector<float>>(value));
+
+                    v[0] /= 255;
+                    v[1] /= 255;
+                    v[2] /= 255;
+                }
+
+                if (options->ignoreZeroRGBs) {
+
+                    auto &v = std::get<std::vector<float>>(value);
+
+                    if (v[0] == 0 && v[1] == 0 && v[2] == 0) {
+                        save = false;
+                    }
+                }
+            } else {
+                goto loop;
+            }
+
+            if (save) {
+
+                covMat[lprop] = value;
+            }
+        }
+    }
+
+    return converted;
 }
 
 std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path &path, std::optional<int> mapping) {
@@ -219,7 +270,6 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
 
                 params->opacity = n;
                 params->transparent = true;
-
             }
 
         } else if (lower == "tr") {
@@ -234,13 +284,9 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
 
                 params->opacity = 1 - n;
                 params->transparent = true;
-
             }
-
         }
 
         materials[materialName] = params;
-
     }
-
 }

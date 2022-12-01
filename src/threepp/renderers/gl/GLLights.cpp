@@ -1,5 +1,7 @@
 
-#include "GLLights.hpp"
+#include "threepp/renderers/gl/GLLights.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
 
 #include <algorithm>
 #include <unordered_map>
@@ -193,7 +195,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             auto l = dynamic_cast<DirectionalLight *>(light);
             auto &uniforms = state.directional.at(directionalLength);
 
-            auto& direction = std::get<Vector3>(uniforms.at("direction"));
+            auto &direction = std::get<Vector3>(uniforms.at("direction"));
 
             direction.setFromMatrixPosition(*light->matrixWorld);
 
@@ -209,8 +211,8 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             auto l = dynamic_cast<SpotLight *>(light);
             auto &uniforms = state.spot.at(spotLength);
 
-            auto& position = std::get<Vector3>(uniforms.at("position"));
-            auto& direction = std::get<Vector3>(uniforms.at("direction"));
+            auto &position = std::get<Vector3>(uniforms.at("position"));
+            auto &direction = std::get<Vector3>(uniforms.at("direction"));
 
             position.setFromMatrixPosition(*light->matrixWorld);
             position.applyMatrix4(viewMatrix);
@@ -228,7 +230,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto &uniforms = state.point.at(pointLength);
 
-            auto& position = std::get<Vector3>(uniforms.at("position"));
+            auto &position = std::get<Vector3>(uniforms.at("position"));
 
             position.setFromMatrixPosition(*light->matrixWorld);
             position.applyMatrix4(viewMatrix);

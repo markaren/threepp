@@ -1,34 +1,23 @@
-// https://github.com/mrdoob/three.js/blob/r129/src/renderers/shaders/ShaderLib.js
 
-#ifndef THREEPP_SHADERLIB_HPP
-#define THREEPP_SHADERLIB_HPP
-
-#include "threepp/core/Shader.hpp"
-#include "threepp/renderers/shaders/ShaderChunk.hpp"
-
-#include "threepp/renderers/shaders/UniformsLib.hpp"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
 
-namespace threepp::shaders {
+using namespace threepp::shaders;
 
-    class ShaderLib {
-
-    public:
-        Shader basic{
-                mergeUniforms({// clang-format off
-                            UniformsLib::instance().common,
-                            UniformsLib::instance().specularmap,
-                            UniformsLib::instance().envmap,
-                            UniformsLib::instance().aomap,
-                            UniformsLib::instance().lightmap,
-                            UniformsLib::instance().fog
+ShaderLib::ShaderLib()
+    : basic({mergeUniforms({// clang-format off
+                                    UniformsLib::instance().common,
+                                    UniformsLib::instance().specularmap,
+                                    UniformsLib::instance().envmap,
+                                    UniformsLib::instance().aomap,
+                                    UniformsLib::instance().lightmap,
+                                    UniformsLib::instance().fog
                         }),// clang-format on
 
-                ShaderChunk::instance().meshbasic_vert(),
-                ShaderChunk::instance().meshbasic_frag()};
-
-        Shader lambert{
-                mergeUniforms({// clang-format off
+             ShaderChunk::instance().meshbasic_vert(),
+             ShaderChunk::instance().meshbasic_frag()}),
+      lambert{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().specularmap,
                                       UniformsLib::instance().envmap,
@@ -42,11 +31,10 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().meshlambert_vert(),
-                ShaderChunk::instance().meshlambert_frag()};
-
-        Shader phong{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().meshlambert_vert(),
+              ShaderChunk::instance().meshlambert_frag()},
+      phong{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().specularmap,
                                       UniformsLib::instance().envmap,
@@ -65,11 +53,10 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().meshphong_vert(),
-                ShaderChunk::instance().meshphong_frag()};
-
-        Shader standard{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().meshphong_vert(),
+              ShaderChunk::instance().meshphong_frag()},
+      standard{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().envmap,
                                       UniformsLib::instance().aomap,
@@ -90,11 +77,10 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().meshphong_vert(),
-                ShaderChunk::instance().meshphysical_frag()};
-
-        Shader toon{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().meshphong_vert(),
+              ShaderChunk::instance().meshphysical_frag()},
+      toon{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().aomap,
                                       UniformsLib::instance().lightmap,
@@ -110,11 +96,10 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().meshtoon_vert(),
-                ShaderChunk::instance().meshtoon_frag()};
-
-        Shader matcap{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().meshtoon_vert(),
+              ShaderChunk::instance().meshtoon_frag()},
+      matcap{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().bumpmap,
                                       UniformsLib::instance().normalmap,
@@ -125,20 +110,18 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().meshmatcap_vert(),
-                ShaderChunk::instance().meshmatcap_frag()};
-
-        Shader points{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().meshmatcap_vert(),
+              ShaderChunk::instance().meshmatcap_frag()},
+      points{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().points,
                                       UniformsLib::instance().fog
                               }),// clang-format on
 
-                ShaderChunk::instance().points_vert(),
-                ShaderChunk::instance().points_frag()};
-
-        Shader dashed{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().points_vert(),
+              ShaderChunk::instance().points_frag()},
+      dashed{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().fog,
                                       UniformMap{
@@ -148,21 +131,19 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().linedashed_vert(),
-                ShaderChunk::instance().linedashed_frag()};
-
-        Shader depth{
-                mergeUniforms({
-                        // clang-format off
+              ShaderChunk::instance().linedashed_vert(),
+              ShaderChunk::instance().linedashed_frag()},
+      depth{
+              mergeUniforms({
+                      // clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().displacementmap,
                               }),// clang-format on
 
-                ShaderChunk::instance().depth_vert(),
-                ShaderChunk::instance().depth_frag()};
-
-        Shader normal{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().depth_vert(),
+              ShaderChunk::instance().depth_frag()},
+      normal{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().bumpmap,
                                       UniformsLib::instance().normalmap,
@@ -172,53 +153,48 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().normal_vert(),
-                ShaderChunk::instance().normal_frag()};
-
-        Shader sprite{
-                mergeUniforms({
-                        // clang-format off
+              ShaderChunk::instance().normal_vert(),
+              ShaderChunk::instance().normal_frag()},
+      sprite{
+              mergeUniforms({
+                      // clang-format off
                                       UniformsLib::instance().sprite,
                                       UniformsLib::instance().fog,
                               }),// clang-format on
 
-                ShaderChunk::instance().sprite_vert(),
-                ShaderChunk::instance().sprite_frag()};
-
-        Shader background{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().sprite_vert(),
+              ShaderChunk::instance().sprite_frag()},
+      background{
+              mergeUniforms({// clang-format off
                                       UniformMap{
                                               {"uvTransform", Uniform(Matrix3())},
                                               {"t2D", Uniform()}
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().background_vert(),
-                ShaderChunk::instance().background_frag()};
-
-        Shader cube{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().background_vert(),
+              ShaderChunk::instance().background_frag()},
+      cube{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().envmap,
                                       UniformMap{
                                               {"opacity", Uniform(1.f)}
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().cube_vert(),
-                ShaderChunk::instance().cube_frag()};
-
-        Shader equirect{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().cube_vert(),
+              ShaderChunk::instance().cube_frag()},
+      equirect{
+              mergeUniforms({// clang-format off
                                       UniformMap{
                                               {"tEquirect", Uniform()}
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().equirect_vert(),
-                ShaderChunk::instance().equirect_frag()};
-
-        Shader distanceRGBA{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().equirect_vert(),
+              ShaderChunk::instance().equirect_frag()},
+      distanceRGBA{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().common,
                                       UniformsLib::instance().displacementmap,
                                       UniformMap{
@@ -228,11 +204,10 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().distanceRGBA_vert(),
-                ShaderChunk::instance().distanceRGBA_frag()};
-
-        Shader shadow{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().distanceRGBA_vert(),
+              ShaderChunk::instance().distanceRGBA_frag()},
+      shadow{
+              mergeUniforms({// clang-format off
                                       UniformsLib::instance().lights,
                                       UniformsLib::instance().fog,
                                       UniformMap{
@@ -241,11 +216,10 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().shadow_vert(),
-                ShaderChunk::instance().shadow_frag()};
-
-        Shader physical{
-                mergeUniforms({// clang-format off
+              ShaderChunk::instance().shadow_vert(),
+              ShaderChunk::instance().shadow_frag()},
+      physical{
+              mergeUniforms({// clang-format off
                                       standard.uniforms,
                                       UniformMap{
                                               {"clearcoat", Uniform(0.f)},
@@ -266,63 +240,5 @@ namespace threepp::shaders {
                                       }
                               }),// clang-format on
 
-                ShaderChunk::instance().meshphysical_vert(),
-                ShaderChunk::instance().meshphysical_frag()};
-
-
-        [[nodiscard]] Shader get(const std::string &name) const {
-
-            if (name == "basic") {
-                return basic;
-            } else if (name == "lambert") {
-                return lambert;
-            } else if (name == "phong") {
-                return phong;
-            } else if (name == "standard") {
-                return standard;
-            } else if (name == "toon") {
-                return toon;
-            } else if (name == "matcap") {
-                return matcap;
-            } else if (name == "points") {
-                return points;
-            } else if (name == "dashed") {
-                return dashed;
-            } else if (name == "depth") {
-                return depth;
-            } else if (name == "normal") {
-                return normal;
-            } else if (name == "sprite") {
-                return sprite;
-            } else if (name == "background") {
-                return background;
-            } else if (name == "cube") {
-                return cube;
-            } else if (name == "equirect") {
-                return equirect;
-            } else if (name == "distanceRGBA") {
-                return distanceRGBA;
-            } else if (name == "shadow") {
-                return shadow;
-            } else if (name == "physical") {
-                return physical;
-            } else {
-                throw std::runtime_error("No shader with name: " + name);
-            }
-        }
-
-        ShaderLib(const ShaderLib &) = delete;
-        void operator=(const ShaderLib &) = delete;
-
-        static ShaderLib &instance() {
-            static ShaderLib instance;
-            return instance;
-        }
-
-    private:
-        ShaderLib() = default;
-    };
-
-}// namespace threepp::shaders
-
-#endif//THREEPP_SHADERLIB_HPP
+              ShaderChunk::instance().meshphysical_vert(),
+              ShaderChunk::instance().meshphysical_frag()} {}

@@ -55,7 +55,6 @@ namespace threepp::gl {
         std::shared_ptr<UniformMap> uniforms;
 
         unsigned int version{};
-
     };
 
     template<class T>

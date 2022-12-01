@@ -12,19 +12,17 @@ namespace threepp::gl {
 
     struct MemoryInfo {
 
-        int geometries {0};
-        int textures {0};
-
+        int geometries{0};
+        int textures{0};
     };
 
     struct RenderInfo {
 
-        int frame {0};
-        int calls {0};
-        int triangles {0};
-        int points {0};
-        int lines {0};
-
+        int frame{0};
+        int calls{0};
+        int triangles{0};
+        int points{0};
+        int lines{0};
     };
 
     struct GLInfo {
@@ -38,10 +36,9 @@ namespace threepp::gl {
 
         void update(int count, unsigned int mode, int instanceCount);
 
-        void reset ();
-
+        void reset();
     };
 
-}
+}// namespace threepp::gl
 
 #endif//THREEPP_GLINFO_HPP

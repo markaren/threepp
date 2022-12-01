@@ -317,7 +317,7 @@ void Object3D::traverseVisible(const std::function<void(Object3D &)> &callback) 
     }
 }
 
-void Object3D::traverseAncestors(const std::function<void(Object3D &)> &callback) const {
+void Object3D::traverseAncestors(const std::function<void(Object3D &)> &callback) {
 
     if (parent) {
 

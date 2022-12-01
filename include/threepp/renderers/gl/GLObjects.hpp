@@ -4,7 +4,7 @@
 #define THREEPP_GLOBJECTS_HPP
 
 #include "threepp/core/Object3D.hpp"
-#include <threepp/objects/InstancedMesh.hpp>
+#include "threepp/objects/InstancedMesh.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
@@ -34,41 +34,7 @@ namespace threepp::gl {
         GLObjects(GLGeometries &geometries, GLAttributes &attributes, GLInfo &info)
             : attributes_(attributes), geometries_(geometries), info_(info), onInstancedMeshDispose(*this) {}
 
-        std::shared_ptr<BufferGeometry> update(const std::shared_ptr<Object3D> &object) {
-
-            const int frame = info_.render.frame;
-
-            auto geometry = object->geometry();
-            geometries_.get(*geometry);
-
-            // Update once per frame
-
-            if (!updateMap_.count(geometry->id) || updateMap_[geometry->id] != frame) {
-
-                geometries_.update(*geometry);
-
-                updateMap_[geometry->id] = frame;
-            }
-
-            if (instanceof <InstancedMesh>(object.get())) {
-
-                if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
-
-                    object->addEventListener("dispose", &onInstancedMeshDispose);
-                }
-
-                auto o = dynamic_cast<InstancedMesh *>(object.get());
-
-                attributes_.update(o->instanceMatrix.get(), GL_ARRAY_BUFFER);
-
-                if (o->instanceColor != nullptr) {
-
-                    attributes_.update(o->instanceColor.get(), GL_ARRAY_BUFFER);
-                }
-            }
-
-            return geometry;
-        }
+        std::shared_ptr<BufferGeometry> update(const std::shared_ptr<Object3D> &object);
 
         void dispose() {
 

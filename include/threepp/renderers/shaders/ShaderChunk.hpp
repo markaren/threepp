@@ -540,7 +540,7 @@ namespace threepp::shaders {
             return get("sprite_vert", "ShaderLib");
         }
 
-        std::string &get(const std::string &key, const std::string& folder) {
+        std::string &get(const std::string &key, const std::string &folder) {
             if (!data_.count(key)) {
                 std::string line;
                 std::string text;

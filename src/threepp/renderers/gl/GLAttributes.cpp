@@ -1,5 +1,9 @@
 
-#include "GLAttributes.hpp"
+#include "threepp/renderers/gl/GLAttributes.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
+
+#include <glad/glad.h>
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -29,7 +33,7 @@ Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType)
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
     } else {
 
-        //TODO
+        throw std::runtime_error("TODO");
     }
 
     return {buffer, type, bytesPerElement, attribute->version + 1};
@@ -56,7 +60,7 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
         } else {
 
-            // TODO
+            throw std::runtime_error("TODO");
         }
 
     } else {
@@ -66,17 +70,17 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
             auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
             const auto &array = attr->array();
             std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
-            glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size()*bytesPerElement), sub.data());
+            glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
 
         } else if (instanceof <FloatBufferAttribute>(attribute)) {
 
             auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
             const auto &array = attr->array();
             std::vector<float> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
-            glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size()*bytesPerElement), sub.data());
+            glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
         } else {
 
-            //TODO
+            throw std::runtime_error("TODO");
         }
 
         updateRange.count = -1;

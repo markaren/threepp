@@ -1,5 +1,5 @@
 
-#include "GLShadowMap.hpp"
+#include "threepp/renderers/gl/GLShadowMap.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
@@ -44,6 +44,11 @@ namespace {
     std::shared_ptr<ShaderMaterial> shadowMaterialHorizontal = createShadowMaterialHorizontal();
 
 }// namespace
+
+GLShadowMap::GLShadowMap(GLObjects &_objects)
+    : _objects(_objects),
+      _maxTextureSize(GLCapabilities::instance().maxTextureSize) {}
+
 
 void GLShadowMap::render(GLRenderer &_renderer, const std::vector<Light *> &lights, Scene *scene, Camera *camera) {
 

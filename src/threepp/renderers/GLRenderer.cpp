@@ -6,6 +6,9 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/utils/InstanceOf.hpp"
+
+#include <glad/glad.h>
 
 using namespace threepp;
 
@@ -26,7 +29,8 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       shadowMap(objects),
       materials(properties),
       programCache(bindingStates, clipping),
-      onMaterialDispose(*this) {
+      onMaterialDispose(*this),
+      _currentDrawBuffers(GL_BACK) {
 
     info.programs = &programCache.programs;
 }
@@ -533,7 +537,7 @@ void GLRenderer::projectObject(const std::shared_ptr<Object3D> &object, const st
 
                 if (materials.size() > 1) {
 
-                    const auto& groups = geometry->groups;
+                    const auto &groups = geometry->groups;
 
                     for (const auto &group : groups) {
 

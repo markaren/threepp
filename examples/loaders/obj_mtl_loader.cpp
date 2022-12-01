@@ -12,18 +12,8 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.set(0, 100, 150);
 
-    TextureLoader tl;
-    auto tex = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
-
     OBJLoader loader;
-    auto obj = loader.load("data/models/obj/female02/female02.obj", false);
-    obj->traverseType<Mesh>([tex](Mesh &child) {
-        for (auto& m : child.materials()) {
-            if (std::dynamic_pointer_cast<MaterialWithMap>(m)) {
-                std::dynamic_pointer_cast<MaterialWithMap>(m)->map = tex;
-            }
-        }
-    });
+    auto obj = loader.load("data/models/obj/female02/female02.obj");
     scene->add(obj);
 
     auto light1 = PointLight::create(Color(0xffffff), 1.f);

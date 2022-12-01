@@ -250,7 +250,7 @@ namespace threepp {
         Vector4 _scissor;
         bool _scissorTest = false;
 
-        std::vector<GLenum> _currentDrawBuffers{GL_BACK};
+        std::vector<unsigned int> _currentDrawBuffers;
 
         // frustum
 

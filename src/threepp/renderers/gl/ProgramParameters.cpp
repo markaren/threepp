@@ -1,8 +1,9 @@
 
-#include "ProgramParameters.hpp"
+#include "threepp/renderers/gl/ProgramParameters.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
+#include "threepp/utils/InstanceOf.hpp"
 
 #include <sstream>
 

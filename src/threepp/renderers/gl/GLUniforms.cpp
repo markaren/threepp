@@ -1,7 +1,9 @@
 
-#include "GLUniforms.hpp"
+#include "threepp/renderers/gl/GLUniforms.hpp"
 
-#include "UniformUtils.hpp"
+#include "threepp/renderers/gl/UniformUtils.hpp"
+
+#include <glad/glad.h>
 
 #include <regex>
 
@@ -12,7 +14,9 @@ namespace {
 
     // helper type for the visitor
     template<class... Ts>
-    struct overloaded : Ts... { using Ts::operator()...; };
+    struct overloaded : Ts... {
+        using Ts::operator()...;
+    };
     // explicit deduction guide (not needed as of C++20)
     template<class... Ts>
     overloaded(Ts...) -> overloaded<Ts...>;
@@ -42,7 +46,6 @@ namespace {
         }
 
         void setValue(const UniformValue &value, GLTextures *textures) override {
-            //            std::cout << "name=" << activeInfo.name << ", type=" << activeInfo.type << std::endl;
             setValueFun(value, textures);
         }
 
@@ -239,8 +242,7 @@ namespace {
 
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
-                               [&](Matrix4 arg) { setValueM4Helper(arg.elements); }
-                       },
+                               [&](Matrix4 arg) { setValueM4Helper(arg.elements); }},
                        value);
         }
     };

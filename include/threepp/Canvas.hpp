@@ -73,7 +73,7 @@ namespace threepp {
         private:
             WindowSize size_;
             int antialiasing_;
-            std::string title_ = "untitled";
+            std::string title_ = "threepp";
 
             friend class Canvas::Impl;
         };

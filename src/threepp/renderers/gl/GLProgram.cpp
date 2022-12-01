@@ -1,9 +1,9 @@
 
-#include "GLProgram.hpp"
+#include "threepp/renderers/gl/GLProgram.hpp"
 
-#include "GLBindingStates.hpp"
-#include "GLPrograms.hpp"
-#include "GLUniforms.hpp"
+#include "threepp/renderers/gl/GLBindingStates.hpp"
+#include "threepp/renderers/gl/GLPrograms.hpp"
+#include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
@@ -12,6 +12,8 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
+
+#include <glad/glad.h>
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -199,7 +201,7 @@ namespace {
             result.append(str, pos, match.position(0) - pos);
             pos = match.position(0) + match.length(0);
 
-            const std::ssub_match& sub = match[1];
+            const std::ssub_match &sub = match[1];
             std::string r = shaders::ShaderChunk::instance().get(sub.str(), "ShaderChunk");
             if (r.empty()) {
                 std::stringstream ss;

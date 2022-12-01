@@ -8,12 +8,9 @@
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 #include <array>
 #include <unordered_map>
 #include <vector>
-
 
 namespace threepp::gl {
 
@@ -156,7 +153,7 @@ namespace threepp::gl {
 
             Hash hash{};
 
-            Color ambient{0,0,0};
+            Color ambient{0, 0, 0};
             std::vector<Vector3> probe{9};
             std::vector<LightUniforms> directional;
             std::vector<LightUniforms> directionalShadow;

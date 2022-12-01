@@ -4,7 +4,6 @@
 #include <bullet/btBulletDynamicsCommon.h>
 
 #include <threepp/geometries/geometries.hpp>
-#include <threepp/utils/InstanceOf.hpp>
 
 #include <unordered_map>
 
@@ -40,24 +39,24 @@ namespace {
 
     std::unique_ptr<Rbinfo> createFromMesh(const Mesh &m, float mass) {
         auto geometry = m.geometry();
-        if (instanceof <const BoxGeometry>(geometry)) {
+        if (std::dynamic_pointer_cast<const BoxGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<const BoxGeometry>(geometry);
 
             auto shape = std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
             return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
 
-        } else if (instanceof <const PlaneGeometry>(geometry)) {
+        } else if (std::dynamic_pointer_cast <const PlaneGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<const PlaneGeometry>(geometry);
 
             auto shape = std::make_unique<btBoxShape>(btVector3(g->width / 2, 0.01, g->height / 2));
             return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
-        } else if (instanceof <const SphereGeometry>(geometry)) {
+        } else if (std::dynamic_pointer_cast <const SphereGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<const SphereGeometry>(geometry);
 
             auto shape = std::make_unique<btSphereShape>(g->radius);
             return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
 
-        } else if (instanceof <const CylinderGeometry>(geometry)) {
+        } else if (std::dynamic_pointer_cast <const CylinderGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<const CylinderGeometry>(geometry);
 
             auto shape = std::make_unique<btCylinderShape>(btVector3(g->radiusTop, g->height/2, g->radiusTop));

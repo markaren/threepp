@@ -8,8 +8,6 @@
 
 #include "threepp/Canvas.hpp"
 
-#include <glad/glad.h>
-
 #include <iostream>
 #include <utility>
 #include <optional>
@@ -128,7 +126,7 @@ namespace threepp::gl {
         std::optional<float> currentPolygonOffsetFactor;
         std::optional<float> currentPolygonOffsetUnits;
 
-        const GLint maxTextures;
+        const int maxTextures;
 
         bool lineWidthAvailable = false;
         unsigned int version = 0;
@@ -178,15 +176,15 @@ namespace threepp::gl {
 
         // texture
 
-        void activeTexture(std::optional<GLenum> glSlot = std::nullopt);
+        void activeTexture(std::optional<unsigned int> glSlot = std::nullopt);
 
         void bindTexture(int glType, std::optional<int> glTexture);
 
         void unbindTexture();
 
-        void texImage2D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLuint format, GLuint type, const void *pixels);
+        void texImage2D(unsigned int target, int level, int internalFormat, int width, int height, unsigned int format, unsigned int type, const void *pixels);
 
-        void texImage3D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLint depth, GLuint format, GLuint type, const void *pixels);
+        void texImage3D(unsigned int target, int level, int internalFormat, int width, int height, int depth, unsigned int format, unsigned int type, const void *pixels);
 
         //
 
