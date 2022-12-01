@@ -13,7 +13,7 @@ namespace threepp::gl {
 
         explicit BufferRenderer(GLInfo &info) : info_(info) {}
 
-        void setMode(GLenum mode);
+        void setMode(unsigned int mode);
 
         virtual void render(int start, int count) = 0;
 

@@ -3,6 +3,8 @@
 
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 
+#include <glad/glad.h>
+
 using namespace threepp;
 using namespace threepp::gl;
 

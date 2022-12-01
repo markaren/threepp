@@ -20,25 +20,25 @@ namespace threepp::gl {
 
     struct GLTextures {
 
-        const GLint maxTextures = GLCapabilities::instance().maxTextures;
-        const GLint maxCubemapSize = GLCapabilities::instance().maxCubemapSize;
-        const GLint maxTextureSize = GLCapabilities::instance().maxTextureSize;
-        const GLint maxSamples = GLCapabilities::instance().maxSamples;
+        const int maxTextures = GLCapabilities::instance().maxTextures;
+        const int maxCubemapSize = GLCapabilities::instance().maxCubemapSize;
+        const int maxTextureSize = GLCapabilities::instance().maxTextureSize;
+        const int maxSamples = GLCapabilities::instance().maxSamples;
 
         GLTextures(
                 GLState &state,
                 GLProperties &properties,
                 GLInfo &info);
 
-        void generateMipmap(GLuint target, const Texture &texture, GLuint width, GLuint height);
+        void generateMipmap(unsigned int target, const Texture &texture, unsigned int width, unsigned int height);
 
-        void setTextureParameters(GLuint textureType, Texture &texture);
+        void setTextureParameters(unsigned int textureType, Texture &texture);
 
         void initTexture(TextureProperties &textureProperties, Texture &texture);
 
-        void uploadTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot);
+        void uploadTexture(TextureProperties &textureProperties, Texture &texture, unsigned int slot);
 
-        void uploadCubeTexture(TextureProperties &textureProperties, Texture &texture, GLuint slot);
+        void uploadCubeTexture(TextureProperties &textureProperties, Texture &texture, unsigned int slot);
 
         void deallocateTexture(Texture *texture);
 
@@ -48,16 +48,16 @@ namespace threepp::gl {
 
         int allocateTextureUnit();
 
-        void setTexture2D(Texture &texture, GLuint slot);
+        void setTexture2D(Texture &texture, unsigned int slot);
 
-        void setTexture2DArray(Texture &texture, GLuint slot);
+        void setTexture2DArray(Texture &texture, unsigned int slot);
 
-        void setTexture3D(Texture &texture, GLuint slot);
+        void setTexture3D(Texture &texture, unsigned int slot);
 
-        void setTextureCube(Texture &texture, GLuint slot);
+        void setTextureCube(Texture &texture, unsigned int slot);
 
         // Setup storage for target texture and bind it to correct framebuffer
-        void setupFrameBufferTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget, Texture &texture, GLuint attachment, GLuint textureTarget);
+        void setupFrameBufferTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget> &renderTarget, Texture &texture, unsigned int attachment, unsigned int textureTarget);
 
         void setupRenderBufferStorage(unsigned int renderbuffer, const std::shared_ptr<GLRenderTarget> &renderTarget);
 

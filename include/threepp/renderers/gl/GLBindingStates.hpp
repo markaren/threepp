@@ -8,11 +8,11 @@
 #include "GLProgram.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/InstancedBufferAttribute.hpp"
 #include "threepp/materials/materials.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 
 #include <optional>
-#include <threepp/core/InstancedBufferAttribute.hpp>
-#include <threepp/objects/InstancedMesh.hpp>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -24,7 +24,7 @@ namespace threepp::gl {
         std::vector<int> newAttributes;
         std::vector<int> enabledAttributes;
         std::vector<int> attributeDivisors;
-        std::optional<GLuint> object;
+        std::optional<unsigned int> object;
         std::unordered_map<std::string, BufferAttribute *> attributes;
         BufferAttribute *index = nullptr;
 
@@ -34,7 +34,7 @@ namespace threepp::gl {
                 std::vector<int> newAttributes,
                 std::vector<int> enabledAttributes,
                 std::vector<int> attributeDivisors,
-                const std::optional<GLuint> &object)
+                const std::optional<unsigned int> &object)
             : newAttributes(std::move(newAttributes)),
               enabledAttributes(std::move(enabledAttributes)),
               attributeDivisors(std::move(attributeDivisors)),
@@ -51,15 +51,15 @@ namespace threepp::gl {
 
         void setup(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry, BufferAttribute *index);
 
-        [[nodiscard]] GLuint createVertexArrayObject() const;
+        [[nodiscard]] unsigned int createVertexArrayObject() const;
 
-        void bindVertexArrayObject(GLuint vao) const;
+        void bindVertexArrayObject(unsigned int vao) const;
 
-        void deleteVertexArrayObject(GLuint vao);
+        void deleteVertexArrayObject(unsigned int vao);
 
         std::shared_ptr<GLBindingState> getBindingState(BufferGeometry *geometry, std::shared_ptr<GLProgram> &program, Material *material);
 
-        [[nodiscard]] std::shared_ptr<GLBindingState> createBindingState(std::optional<GLuint> vao) const;
+        [[nodiscard]] std::shared_ptr<GLBindingState> createBindingState(std::optional<unsigned int> vao) const;
 
         bool needsUpdate(BufferGeometry *geometry, BufferAttribute *index);
 
@@ -73,7 +73,7 @@ namespace threepp::gl {
 
         void disableUnusedAttributes();
 
-        void vertexAttribPointer(GLuint index, GLint size, GLenum type, bool normalized, GLsizei stride, int offset);
+        void vertexAttribPointer(unsigned int index, int size, unsigned int type, bool normalized, int stride, int offset);
 
         void setupVertexAttributes(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry);
 
@@ -87,7 +87,7 @@ namespace threepp::gl {
 
     private:
         GLAttributes &attributes_;
-        GLuint maxVertexAttributes_;
+        unsigned int maxVertexAttributes_;
 
         const std::shared_ptr<GLBindingState> defaultState_;
         std::shared_ptr<GLBindingState> currentState_;

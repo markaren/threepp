@@ -241,6 +241,7 @@ set(sources
         "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"
         "threepp/renderers/gl/GLLights.cpp"
+        "threepp/renderers/gl/GLObjects.cpp"
         "threepp/renderers/gl/GLProgram.cpp"
         "threepp/renderers/gl/GLPrograms.cpp"
         "threepp/renderers/gl/GLMaterials.cpp"
@@ -257,7 +258,7 @@ set(sources
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 target_link_libraries(threepp
-        PUBLIC
+        INTERFACE
         glad::glad
         PRIVATE
         glfw::glfw
