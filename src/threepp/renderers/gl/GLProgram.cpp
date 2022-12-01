@@ -13,6 +13,8 @@
 #include <iostream>
 #include <vector>
 
+#include <glad/glad.h>
+
 using namespace threepp;
 using namespace threepp::gl;
 

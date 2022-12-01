@@ -3,6 +3,8 @@
 
 #include "threepp/utils/InstanceOf.hpp"
 
+#include <glad/glad.h>
+
 using namespace threepp;
 using namespace threepp::gl;
 

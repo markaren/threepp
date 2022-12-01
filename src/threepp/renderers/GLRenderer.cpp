@@ -8,6 +8,8 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/utils/InstanceOf.hpp"
 
+#include <glad/glad.h>
+
 using namespace threepp;
 
 GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
@@ -27,7 +29,8 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       shadowMap(objects),
       materials(properties),
       programCache(bindingStates, clipping),
-      onMaterialDispose(*this) {
+      onMaterialDispose(*this),
+      _currentDrawBuffers(GL_BACK) {
 
     info.programs = &programCache.programs;
 }

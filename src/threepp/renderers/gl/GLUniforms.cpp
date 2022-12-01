@@ -3,6 +3,8 @@
 
 #include "threepp/renderers/gl/UniformUtils.hpp"
 
+#include <glad/glad.h>
+
 #include <regex>
 
 using namespace threepp;
