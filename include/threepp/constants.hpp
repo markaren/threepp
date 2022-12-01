@@ -200,6 +200,6 @@ namespace threepp {
     const int DynamicCopyUsage = 35050;
     const int StreamCopyUsage = 35042;
 
-}
+}// namespace threepp
 
 #endif//THREEPP_CONSTANTS_HPP

@@ -16,7 +16,7 @@ namespace threepp {
         int height;
 
         [[nodiscard]] float getAspect() const {
-            return (float) width / (float) height;
+            return static_cast<float>(width) / static_cast<float>(height);
         }
     };
 
@@ -60,7 +60,8 @@ namespace threepp {
 
             Parameters()
                 : size_{640, 480},
-                  antialiasing_{0} {}
+                  antialiasing_{0},
+                  title_{"threepp"} {}
 
             Parameters &title(std::string value);
 
@@ -73,7 +74,7 @@ namespace threepp {
         private:
             WindowSize size_;
             int antialiasing_;
-            std::string title_ = "threepp";
+            std::string title_;
 
             friend class Canvas::Impl;
         };
