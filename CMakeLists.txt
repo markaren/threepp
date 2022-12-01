@@ -4,6 +4,7 @@ project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
+option(THREEPP_BUILD_TESTS "Build test suite" ON)
 
 # ==============================================================================
 # Global internal configuration
@@ -43,7 +44,7 @@ target_link_libraries(glfw::glfw INTERFACE glfw)
 if (NOT TARGET stb::stb)
     find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
     add_library("stb::stb" INTERFACE IMPORTED)
-endif()
+endif ()
 
 target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 
@@ -54,19 +55,27 @@ if (THREEPP_BUILD_EXAMPLES)
     if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
         add_library(Bullet::Bullet INTERFACE IMPORTED)
         target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
-    endif()
+    endif ()
 
-endif()
+    add_subdirectory(examples)
 
-# ==============================================================================
-# Source code
-# ==============================================================================
+endif ()
 
 add_subdirectory(src)
 
-if (THREEPP_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
+if (THREEPP_BUILD_TESTS)
+
+    include(FetchContent)
+    FetchContent_Declare(
+            Catch2
+            GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+            GIT_TAG v2.13.8
+    )
+    FetchContent_MakeAvailable(Catch2)
+
+    enable_testing()
+    add_subdirectory(tests)
+endif ()
 
 
 # ==============================================================================

@@ -141,12 +141,16 @@ namespace threepp {
 
         Vector3 &setFromMatrix3Column(const Matrix3 &m, unsigned int index);
 
-        Vector3 clone() const;
+        [[nodiscard]] Vector3 clone() const;
 
         [[nodiscard]] bool equals(const Vector3 &v) const;
 
         bool operator==(const Vector3 &other) const {
             return equals(other);
+        }
+
+        bool operator!=(const Vector3 &other) const {
+            return !equals(other);
         }
 
         template<class ArrayLike>
