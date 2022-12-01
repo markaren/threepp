@@ -16,11 +16,11 @@ void gl::GLInfo::update(int count, unsigned int mode, int instanceCount) {
             break;
 
         case GL_LINES:
-            render.lines += instanceCount * ( count / 2 );
+            render.lines += instanceCount * (count / 2);
             break;
 
         case GL_LINE_STRIP:
-            render.lines += instanceCount * ( count - 1 );
+            render.lines += instanceCount * (count - 1);
             break;
 
         case GL_LINE_LOOP:
@@ -34,12 +34,11 @@ void gl::GLInfo::update(int count, unsigned int mode, int instanceCount) {
         default:
             std::cerr << "THREE.GLInfo: Unknown draw mode: " << mode << std::endl;
             break;
-
     }
 }
 void gl::GLInfo::reset() {
 
-    render.frame ++;
+    render.frame++;
     render.calls = 0;
     render.triangles = 0;
     render.points = 0;

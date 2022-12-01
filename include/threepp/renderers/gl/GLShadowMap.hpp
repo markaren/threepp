@@ -26,9 +26,7 @@ namespace threepp {
 
             int type = PCFShadowMap;
 
-            explicit GLShadowMap(GLObjects &_objects)
-                : _objects(_objects),
-                  _maxTextureSize(GLCapabilities::instance().maxTextureSize) {}
+            explicit GLShadowMap(GLObjects &_objects);
 
             void render(GLRenderer &_renderer, const std::vector<Light *> &lights, Scene *scene, Camera *camera);
 

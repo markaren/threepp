@@ -534,7 +534,7 @@ void GLRenderer::projectObject(const std::shared_ptr<Object3D> &object, const st
 
                 if (materials.size() > 1) {
 
-                    const auto& groups = geometry->groups;
+                    const auto &groups = geometry->groups;
 
                     for (const auto &group : groups) {
 

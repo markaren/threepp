@@ -2,8 +2,8 @@
 #ifndef THREEPP_PROGRAMPARAMETERS_HPP
 #define THREEPP_PROGRAMPARAMETERS_HPP
 
-#include "GLLights.hpp"
 #include "GLClipping.hpp"
+#include "GLLights.hpp"
 #include "threepp/core/Uniform.hpp"
 
 #include <optional>

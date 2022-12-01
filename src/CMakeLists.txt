@@ -134,7 +134,6 @@ set(publicHeaders
         "threepp/renderers/gl/GLCapabilities.hpp"
         "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLGeometries.hpp"
-        "threepp/renderers/gl/glHelper.hpp"
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLLights.hpp"
         "threepp/renderers/gl/GLMaterials.hpp"
@@ -148,22 +147,22 @@ set(publicHeaders
         "threepp/renderers/gl/GLState.hpp"
         "threepp/renderers/gl/GLTextures.hpp"
         "threepp/renderers/gl/GLUniforms.hpp"
-        "threepp/renderers/gl/GLUtils.hpp"
 
         "threepp/renderers/shaders/ShaderChunk.hpp"
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
-        "threepp/renderers/shaders/UniformsUtil.hpp"
 
         )
 
 set(publicHeadersFull)
 foreach (header IN LISTS publicHeaders)
-  list(APPEND publicHeadersFull "${publicHeaderDir}/${header}")
+    list(APPEND publicHeadersFull "${publicHeaderDir}/${header}")
 endforeach ()
 
 set(privateHeaders
 
+        "threepp/renderers/gl/glHelper.hpp"
+        "threepp/renderers/gl/GLUtils.hpp"
         "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/InstanceOf.hpp"
@@ -238,6 +237,7 @@ set(sources
         "threepp/renderers/gl/GLBackground.cpp"
         "threepp/renderers/gl/GLBindingStates.cpp"
         "threepp/renderers/gl/GLBufferRenderer.cpp"
+        "threepp/renderers/gl/GLCapabilities.cpp"
         "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"
         "threepp/renderers/gl/GLLights.cpp"
@@ -250,6 +250,8 @@ set(sources
         "threepp/renderers/gl/GLUniforms.cpp"
         "threepp/renderers/gl/GLRenderLists.cpp"
         "threepp/renderers/gl/ProgramParameters.cpp"
+
+        "threepp/renderers/shaders/ShaderLib.cpp"
 
         )
 

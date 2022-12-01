@@ -1,5 +1,5 @@
 
-#pragma warning( disable : 4312 )
+#pragma warning(disable : 4312)
 
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 
