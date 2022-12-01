@@ -262,9 +262,8 @@ endif()
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 target_link_libraries(threepp
-        INTERFACE
-        glad::glad
         PRIVATE
+        glad::glad
         glfw::glfw
         stb::stb)
 target_include_directories(threepp
