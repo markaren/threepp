@@ -1,5 +1,5 @@
 
-#include "GLUniforms.hpp"
+#include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include "UniformUtils.hpp"
 

@@ -9,7 +9,6 @@
 #include "threepp/objects/LineSegments.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 
 #include <memory>
 #include <unordered_map>

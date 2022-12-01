@@ -35,7 +35,6 @@ set(THREEPP_EXPORT_TARGET "${PROJECT_NAME}-targets")
 
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
-find_package(Bullet CONFIG)
 find_package(stb CONFIG QUIET)
 find_package(assimp CONFIG)
 
@@ -49,9 +48,15 @@ endif()
 
 target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 
-if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
-    add_library(Bullet::Bullet INTERFACE IMPORTED)
-    target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
+if (THREEPP_BUILD_EXAMPLES)
+
+    find_package(Bullet CONFIG)
+
+    if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
+        add_library(Bullet::Bullet INTERFACE IMPORTED)
+        target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
+    endif()
+
 endif()
 
 # ==============================================================================

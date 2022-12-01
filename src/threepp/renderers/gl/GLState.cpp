@@ -1,7 +1,7 @@
 
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include "glHelper.hpp"
+#include "threepp/renderers/gl/glHelper.hpp"
 
 #include <cstdint>
 

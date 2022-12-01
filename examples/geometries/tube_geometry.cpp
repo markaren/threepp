@@ -26,13 +26,11 @@ namespace {
 int main() {
 
     Canvas canvas;
+    GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 20;
-
-    GLRenderer renderer(canvas);
-    renderer.setSize(canvas.getSize());
 
     OrbitControls controls{camera, canvas};
 

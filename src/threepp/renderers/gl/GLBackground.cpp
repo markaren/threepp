@@ -1,7 +1,9 @@
 
-#include "GLBackground.hpp"
+#include "threepp/renderers/gl/GLBackground.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp::gl;
 

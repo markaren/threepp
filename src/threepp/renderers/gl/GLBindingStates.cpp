@@ -1,7 +1,9 @@
 
 #pragma warning(disable : 4312)
 
-#include "GLBindingStates.hpp"
+#include "threepp/renderers/gl/GLBindingStates.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;

@@ -27,7 +27,6 @@ int main() {
     renderer.checkShaderErrors = true;
     renderer.toneMapping = ACESFilmicToneMapping;
     renderer.setClearColor(Color::aliceblue);
-    renderer.setSize(canvas.getSize());
 
     const auto sphereGeometry = SphereGeometry::create(30);
     const auto sphereMaterial = MeshBasicMaterial::create();
@@ -43,6 +42,8 @@ int main() {
     texture->wrapT = RepeatWrapping;
 
     Water::Options opt;
+    opt.textureHeight = 512;
+    opt.textureWidth = 512;
     opt.alpha = 0.9f;
     opt.waterNormals = texture;
     opt.distortionScale = 3.7f;

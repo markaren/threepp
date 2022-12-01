@@ -1,5 +1,7 @@
 
-#include "GLGeometries.hpp"
+#include "threepp/renderers/gl/GLGeometries.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;

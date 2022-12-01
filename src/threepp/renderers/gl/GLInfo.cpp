@@ -1,9 +1,7 @@
 
-#include "GLInfo.hpp"
+#include "threepp/renderers/gl/GLInfo.hpp"
 
 #include <glad/glad.h>
-
-#include <iostream>
 
 using namespace threepp;
 

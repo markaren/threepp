@@ -6,6 +6,7 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp;
 

@@ -2,7 +2,7 @@
 #ifndef THREEPP_UNIFORMUTILS_HPP
 #define THREEPP_UNIFORMUTILS_HPP
 
-#include "GLTextures.hpp"
+#include "threepp/renderers/gl/GLTextures.hpp"
 
 #include <vector>
 

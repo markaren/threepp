@@ -1,5 +1,7 @@
 
-#include "GLLights.hpp"
+#include "threepp/renderers/gl/GLLights.hpp"
+
+#include "threepp/utils/InstanceOf.hpp"
 
 #include <algorithm>
 #include <unordered_map>

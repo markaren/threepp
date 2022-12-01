@@ -127,15 +127,6 @@ set(publicHeaders
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
-        )
-
-set(publicHeadersFull)
-foreach (header IN LISTS publicHeaders)
-  list(APPEND publicHeadersFull "${publicHeaderDir}/${header}")
-endforeach ()
-
-set(privateHeaders
-
         "threepp/renderers/gl/GLAttributes.hpp"
         "threepp/renderers/gl/GLBackground.hpp"
         "threepp/renderers/gl/GLBindingStates.hpp"
@@ -143,11 +134,11 @@ set(privateHeaders
         "threepp/renderers/gl/GLCapabilities.hpp"
         "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLGeometries.hpp"
+        "threepp/renderers/gl/glHelper.hpp"
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLLights.hpp"
         "threepp/renderers/gl/GLMaterials.hpp"
         "threepp/renderers/gl/GLObjects.hpp"
-        "threepp/renderers/gl/glHelper.hpp"
         "threepp/renderers/gl/GLProperties.hpp"
         "threepp/renderers/gl/GLProgram.hpp"
         "threepp/renderers/gl/GLPrograms.hpp"
@@ -158,12 +149,22 @@ set(privateHeaders
         "threepp/renderers/gl/GLTextures.hpp"
         "threepp/renderers/gl/GLUniforms.hpp"
         "threepp/renderers/gl/GLUtils.hpp"
-        "threepp/renderers/gl/ProgramParameters.hpp"
 
         "threepp/renderers/shaders/ShaderChunk.hpp"
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
         "threepp/renderers/shaders/UniformsUtil.hpp"
+
+        )
+
+set(publicHeadersFull)
+foreach (header IN LISTS publicHeaders)
+  list(APPEND publicHeadersFull "${publicHeaderDir}/${header}")
+endforeach ()
+
+set(privateHeaders
+
+        "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/InstanceOf.hpp"
         "threepp/utils/regex_util.hpp"
@@ -259,9 +260,9 @@ endif()
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 target_link_libraries(threepp
         PUBLIC
-        glfw::glfw
         glad::glad
         PRIVATE
+        glfw::glfw
         stb::stb)
 target_include_directories(threepp
         PUBLIC

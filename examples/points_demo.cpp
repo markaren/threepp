@@ -6,16 +6,13 @@ using namespace threepp;
 int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(8));
+    GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
     scene->background = 0x050505;
     scene->fog = Fog(0x050505, 2000, 3500);
     auto camera = PerspectiveCamera::create(27, canvas.getAspect(), 5, 3500);
     camera->position.z = 2750;
-
-    auto renderer = GLRenderer(canvas);
-    renderer.checkShaderErrors = true;
-    renderer.setSize(canvas.getSize());
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -27,8 +24,8 @@ int main() {
     std::vector<float> positions;
     std::vector<float> colors;
 
-    int n = 1000;
-    int n2 = n / 2;
+    float n = 1000;
+    float n2 = n / 2;
 
     for (int i = 0; i < numParticles; i += 3) {
         positions.emplace_back(math::randomInRange(0, 1) * n - n2);

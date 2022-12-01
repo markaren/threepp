@@ -73,14 +73,12 @@ using namespace threepp;
 int main() {
 
     Canvas canvas;
+    GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 5;
-
-    GLRenderer renderer(canvas);
-    renderer.setSize(canvas.getSize());
-
+    
     OrbitControls controls{camera, canvas};
 
     auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.75f));

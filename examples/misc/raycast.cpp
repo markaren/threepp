@@ -15,8 +15,7 @@ int main() {
 
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color(Color::aliceblue));
-    renderer.setSize(canvas.getSize());
+    renderer.setClearColor(Color::aliceblue);
 
     OrbitControls controls(camera, canvas);
 

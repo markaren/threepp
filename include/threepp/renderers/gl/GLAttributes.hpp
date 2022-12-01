@@ -6,7 +6,6 @@
 #include "GLCapabilities.hpp"
 
 #include "threepp/core/BufferAttribute.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 
 #include <glad/glad.h>
 

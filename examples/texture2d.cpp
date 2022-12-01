@@ -15,9 +15,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color(Color::aliceblue));
-    renderer.setSize(canvas.getSize());
+    renderer.setClearColor(Color::aliceblue);
 
     TextureLoader loader{};
 

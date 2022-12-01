@@ -12,9 +12,7 @@ int main() {
     camera->position.z = 5;
 
     GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color(Color::aliceblue));
-    renderer.setSize(canvas.getSize());
+    renderer.setClearColor(Color::aliceblue);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
