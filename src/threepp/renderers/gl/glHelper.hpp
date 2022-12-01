@@ -2,7 +2,7 @@
 #ifndef THREEPP_GLHELPER_HPP
 #define THREEPP_GLHELPER_HPP
 
-#include <glad/glad.h>
+#include "glad/glad.h"
 
 namespace {
 
@@ -12,6 +12,6 @@ namespace {
         return result;
     }
 
-}
+}// namespace
 
 #endif//THREEPP_GLHELPER_HPP

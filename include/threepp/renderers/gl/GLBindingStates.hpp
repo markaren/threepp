@@ -6,7 +6,6 @@
 #include "GLAttributes.hpp"
 #include "GLCapabilities.hpp"
 #include "GLProgram.hpp"
-#include "glHelper.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/materials.hpp"
@@ -60,7 +59,7 @@ namespace threepp::gl {
 
         std::shared_ptr<GLBindingState> getBindingState(BufferGeometry *geometry, std::shared_ptr<GLProgram> &program, Material *material);
 
-        std::shared_ptr<GLBindingState> createBindingState(std::optional<GLuint> vao) const;
+        [[nodiscard]] std::shared_ptr<GLBindingState> createBindingState(std::optional<GLuint> vao) const;
 
         bool needsUpdate(BufferGeometry *geometry, BufferAttribute *index);
 

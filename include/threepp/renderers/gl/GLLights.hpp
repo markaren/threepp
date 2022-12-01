@@ -153,7 +153,7 @@ namespace threepp::gl {
 
             Hash hash{};
 
-            Color ambient{0,0,0};
+            Color ambient{0, 0, 0};
             std::vector<Vector3> probe{9};
             std::vector<LightUniforms> directional;
             std::vector<LightUniforms> directionalShadow;

@@ -22,10 +22,10 @@ namespace {
     std::vector<float> &flatten(const ArrayLike &array, int nBlocks, int blockSize) {
 
         const auto n = nBlocks * blockSize;
-        arrayCacheF32.resize(n+1);
+        arrayCacheF32.resize(n + 1);
         auto &r = arrayCacheF32[n];
 
-        if (r.empty()) r.resize(n+1);
+        if (r.empty()) r.resize(n + 1);
 
         if (nBlocks != 0) {
 

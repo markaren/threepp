@@ -3,16 +3,17 @@
 
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 
+#include "threepp/renderers/gl/glHelper.hpp"
 #include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
 
 GLBindingStates::GLBindingStates(GLAttributes &attributes)
-        : maxVertexAttributes_(glGetParameter(GL_MAX_VERTEX_ATTRIBS)),
-          attributes_(attributes),
-          defaultState_(createBindingState(std::nullopt)),
-          currentState_(defaultState_) {
+    : maxVertexAttributes_(glGetParameter(GL_MAX_VERTEX_ATTRIBS)),
+      attributes_(attributes),
+      defaultState_(createBindingState(std::nullopt)),
+      currentState_(defaultState_) {
 }
 void GLBindingStates::setup(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry, BufferAttribute *index) {
 
@@ -73,9 +74,9 @@ std::shared_ptr<GLBindingState> GLBindingStates::getBindingState(BufferGeometry 
         wireframe = dynamic_cast<MaterialWithWireframe *>(material)->wireframe;
     }
 
-    auto& programMap = bindingStates[geometry->id];
+    auto &programMap = bindingStates[geometry->id];
 
-    auto& stateMap = programMap[program->id];
+    auto &stateMap = programMap[program->id];
 
     if (!stateMap.count(wireframe)) {
 
@@ -200,11 +201,11 @@ void GLBindingStates::vertexAttribPointer(GLuint index, GLint size, GLenum type,
 
     if (type == GL_INT || type == GL_UNSIGNED_INT) {
 
-        glVertexAttribIPointer(index, size, type, stride, (GLvoid*) offset);
+        glVertexAttribIPointer(index, size, type, stride, (GLvoid *) offset);
 
     } else {
 
-        glVertexAttribPointer(index, size, type, normalized, stride, (GLvoid*) offset);
+        glVertexAttribPointer(index, size, type, normalized, stride, (GLvoid *) offset);
     }
 }
 
@@ -233,7 +234,7 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
 
                 // TODO Attribute may not be available on context restore
 
-//                        if (!attribute) continue;
+                //                        if (!attribute) continue;
 
                 const auto buffer = attribute.buffer;
                 const auto type = attribute.type;
@@ -251,12 +252,11 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
 
                     } else {
 
-                        enableAttribute( programAttribute );
+                        enableAttribute(programAttribute);
                     }
 
-                    glBindBuffer( GL_ARRAY_BUFFER, buffer );
-                    vertexAttribPointer( programAttribute, size, type, normalized, 0, 0 );
-
+                    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+                    vertexAttribPointer(programAttribute, size, type, normalized, 0, 0);
                 }
             }
         }

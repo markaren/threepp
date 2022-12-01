@@ -31,7 +31,7 @@ Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType)
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
     } else {
 
-        //TODO
+        throw std::runtime_error("TODO");
     }
 
     return {buffer, type, bytesPerElement, attribute->version + 1};
@@ -58,7 +58,7 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
         } else {
 
-            // TODO
+            throw std::runtime_error("TODO");
         }
 
     } else {
@@ -78,7 +78,7 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
         } else {
 
-            //TODO
+            throw std::runtime_error("TODO");
         }
 
         updateRange.count = -1;

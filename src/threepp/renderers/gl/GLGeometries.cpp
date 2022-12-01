@@ -7,7 +7,7 @@ using namespace threepp;
 using namespace threepp::gl;
 
 GLGeometries::GLGeometries(GLAttributes &attributes, GLInfo &info, GLBindingStates &bindingStates)
-        : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(*this) {
+    : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(*this) {
 }
 
 void GLGeometries::get(BufferGeometry &geometry) {
@@ -41,36 +41,33 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry &geometry) {
     const auto geometryPosition = geometry.getAttribute<float>("position");
     unsigned int version = 0;
 
-    if ( geometryIndex != nullptr ) {
+    if (geometryIndex != nullptr) {
 
-        const auto& array = geometryIndex->array();
+        const auto &array = geometryIndex->array();
         version = geometryIndex->version;
 
-        for ( int i = 0, l = (int) array.size(); i < l; i += 3 ) {
+        for (int i = 0, l = (int) array.size(); i < l; i += 3) {
 
-            const auto a = array[ i + 0 ];
-            const auto b = array[ i + 1 ];
-            const auto c = array[ i + 2 ];
+            const auto a = array[i + 0];
+            const auto b = array[i + 1];
+            const auto c = array[i + 2];
 
-            indices.insert(indices.end(), { a, b, b, c, c, a });
-
+            indices.insert(indices.end(), {a, b, b, c, c, a});
         }
 
     } else {
 
-        const auto& array = geometryPosition->array();
+        const auto &array = geometryPosition->array();
         version = geometryPosition->version;
 
-        for ( int i = 0, l = ( (int) array.size() / 3 ) - 1; i < l; i += 3 ) {
+        for (int i = 0, l = ((int) array.size() / 3) - 1; i < l; i += 3) {
 
             const auto a = i + 0;
             const auto b = i + 1;
             const auto c = i + 2;
 
-            indices.insert(indices.end(), {a, b, b, c, c, a} );
-
+            indices.insert(indices.end(), {a, b, b, c, c, a});
         }
-
     }
 
     auto attribute = IntBufferAttribute::create(indices, 1);
@@ -78,9 +75,9 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry &geometry) {
 
     // Updating index buffer in VAO now. See WebGLBindingStates
 
-    if ( wireframeAttributes_.count(geometry.id) ) {
+    if (wireframeAttributes_.count(geometry.id)) {
         auto previousAttribute = wireframeAttributes_.at(geometry.id).get();
-        attributes_.remove( previousAttribute );
+        attributes_.remove(previousAttribute);
     }
 
     wireframeAttributes_[geometry.id] = std::move(attribute);
