@@ -97,6 +97,10 @@ namespace threepp {
             return equals(matrix);
         }
 
+        bool operator!=(const Matrix4 &matrix) const {
+            return !equals(matrix);
+        }
+
         template<class ArrayLike>
         Matrix4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
