@@ -6,7 +6,6 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 
 #include <glad/glad.h>
 
@@ -213,7 +212,7 @@ void GLRenderer::renderBufferDirect(
         //scene = &_emptyScene; // renderBufferDirect second parameter used to be fog (could be nullptr)
     }
 
-    bool isMesh = instanceof <Mesh>(object.get());
+    bool isMesh = object->as<Mesh>();
 
     const auto frontFaceCW = (isMesh && object->matrixWorld->determinant() < 0);
 
@@ -293,20 +292,20 @@ void GLRenderer::renderBufferDirect(
             renderer->setMode(GL_TRIANGLES);
         }
 
-    } else if (instanceof <Line>(object.get())) {
+    } else if (object->as<Line>()) {
 
         float lineWidth = 1;
         if (isWireframeMaterial) {
             lineWidth = wireframeMaterial->wireframeLinewidth;
         }
 
-        state.setLineWidth(lineWidth * getTargetPixelRatio());
+        state.setLineWidth(lineWidth * static_cast<float>(getTargetPixelRatio()));
 
-        if (instanceof <LineSegments>(object.get())) {
+        if (object->as<LineSegments>()) {
 
             renderer->setMode(GL_LINES);
 
-        } else if (instanceof <LineLoop>(object.get())) {
+        } else if (object->as<LineLoop>()) {
 
             renderer->setMode(GL_LINE_LOOP);
 
@@ -315,7 +314,7 @@ void GLRenderer::renderBufferDirect(
             renderer->setMode(GL_LINE_STRIP);
         }
 
-    } else if (instanceof <Points>(object.get())) {
+    } else if (object->as<Points>()) {
 
         renderer->setMode(GL_POINTS);
 
@@ -324,15 +323,13 @@ void GLRenderer::renderBufferDirect(
         renderer->setMode(GL_TRIANGLES);
     }
 
-    if (instanceof <InstancedMesh>(object.get())) {
+    if (object->as<InstancedMesh>()) {
 
-        auto instancedMesh = dynamic_cast<InstancedMesh *>(object.get());
+        renderer->renderInstances(drawStart, drawCount, object->as<InstancedMesh>()->count);
 
-        renderer->renderInstances(drawStart, drawCount, instancedMesh->count);
+    } else if (std::dynamic_pointer_cast<InstancedBufferGeometry>(geometry)) {
 
-    } else if (instanceof <InstancedBufferGeometry>(geometry.get())) {
-
-        auto g = dynamic_cast<InstancedBufferGeometry *>(geometry.get());
+        auto g = std::dynamic_pointer_cast<InstancedBufferGeometry>(geometry);
         const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
         renderer->renderInstances(drawStart, drawCount, instanceCount);
@@ -469,18 +466,18 @@ void GLRenderer::projectObject(const std::shared_ptr<Object3D> &object, const st
 
     if (visible) {
 
-        if (instanceof <Group>(object.get())) {
+        if (object->as<Group>()) {
 
             groupOrder = object->renderOrder;
 
-        } else if (instanceof <LOD>(object.get())) {
+        } else if (object->as<LOD>()) {
 
-            auto lod = dynamic_cast<LOD *>(object.get());
+            auto lod = object->as<LOD>();
             if (lod->autoUpdate) lod->update(camera.get());
 
-        } else if (instanceof <Light>(object.get())) {
+        } else if (object->as<Light>()) {
 
-            auto light = dynamic_cast<Light *>(object.get());
+            auto light = object->as<Light>();
 
             currentRenderState->pushLight(light);
 
@@ -522,7 +519,7 @@ void GLRenderer::projectObject(const std::shared_ptr<Object3D> &object, const st
             //
             //            currentRenderList.push( object, null, object.material, groupOrder, _vector3.z, null );
 
-        } else if (instanceof <Mesh>(object.get()) || instanceof <Line>(object.get()) || instanceof <Points>(object.get())) {
+        } else if (object->as<Mesh>() || object->as<Line>() || object->as<Points>()) {
 
             if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
 
@@ -672,7 +669,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
 
-    materialProperties.environment = instanceof <MeshStandardMaterial>(material.get()) ? scene->environment : nullptr;
+    materialProperties.environment = material->as<MeshStandardMaterial>() ? scene->environment : nullptr;
     materialProperties.fog = scene->fog;
     //    materialProperties.envMap = cubemaps.get( material.envMap || materialProperties.environment );
 
@@ -710,11 +707,11 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
         materialProperties.uniforms = parameters.uniforms;
     }
 
-    auto &uniforms = materialProperties.uniforms;
+    auto &uniforms = *materialProperties.uniforms;
 
-    if (! instanceof <ShaderMaterial>(material.get()) && ! instanceof <RawShaderMaterial>(material.get()) || material->clipping) {
+    if (!material->as<ShaderMaterial>() && !material->as<RawShaderMaterial>() || material->clipping) {
 
-        uniforms->operator[]("clippingPlanes") = clipping.uniform;
+        uniforms["clippingPlanes"] = clipping.uniform;
     }
 
     updateCommonMaterialProperties(material, parameters);
@@ -728,29 +725,29 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
         // wire up the material to this renderer's lighting state
 
-        uniforms->operator[]("ambientLightColor").setValue(lights.state.ambient);
-        uniforms->operator[]("lightProbe").setValue(lights.state.probe);
-        uniforms->operator[]("directionalLights").setValue(lights.state.directional);
-        uniforms->operator[]("directionalLightShadows").setValue(lights.state.directionalShadow);
-        uniforms->operator[]("spotLights").setValue(lights.state.spot);
-        uniforms->operator[]("spotLightShadows").setValue(lights.state.spotShadow);
-        uniforms->operator[]("rectAreaLights").setValue(lights.state.rectArea);
-        //        uniforms->operator[]("ltc_1").setValue(lights.state.rectAreaLTC1);
-        //        uniforms->operator[]("ltc_2").setValue(lights.state.rectAreaLTC2);
-        uniforms->operator[]("pointLights").setValue(lights.state.point);
-        uniforms->operator[]("pointLightShadows").setValue(lights.state.pointShadow);
-        uniforms->operator[]("hemisphereLights").setValue(lights.state.hemi);
+        uniforms.at("ambientLightColor").setValue(lights.state.ambient);
+        uniforms.at("lightProbe").setValue(lights.state.probe);
+        uniforms.at("directionalLights").setValue(lights.state.directional);
+        uniforms.at("directionalLightShadows").setValue(lights.state.directionalShadow);
+        uniforms.at("spotLights").setValue(lights.state.spot);
+        uniforms.at("spotLightShadows").setValue(lights.state.spotShadow);
+        uniforms.at("rectAreaLights").setValue(lights.state.rectArea);
+        //        uniforms.at("ltc_1").setValue(lights.state.rectAreaLTC1);
+        //        uniforms.at("ltc_2").setValue(lights.state.rectAreaLTC2);
+        uniforms.at("pointLights").setValue(lights.state.point);
+        uniforms.at("pointLightShadows").setValue(lights.state.pointShadow);
+        uniforms.at("hemisphereLights").setValue(lights.state.hemi);
 
-        uniforms->operator[]("directionalShadowMap").setValue(lights.state.directionalShadowMap);
-        uniforms->operator[]("directionalShadowMatrix").setValue(lights.state.directionalShadowMatrix);
-        uniforms->operator[]("spotShadowMap").setValue(lights.state.spotShadowMap);
-        uniforms->operator[]("spotShadowMatrix").setValue(lights.state.spotShadowMatrix);
-        uniforms->operator[]("pointShadowMap").setValue(lights.state.pointShadowMap);
-        uniforms->operator[]("pointShadowMatrix").setValue(lights.state.pointShadowMatrix);
+        uniforms.at("directionalShadowMap").setValue(lights.state.directionalShadowMap);
+        uniforms.at("directionalShadowMatrix").setValue(lights.state.directionalShadowMatrix);
+        uniforms.at("spotShadowMap").setValue(lights.state.spotShadowMap);
+        uniforms.at("spotShadowMatrix").setValue(lights.state.spotShadowMatrix);
+        uniforms.at("pointShadowMap").setValue(lights.state.pointShadowMap);
+        uniforms.at("pointShadowMatrix").setValue(lights.state.pointShadowMatrix);
     }
 
     auto progUniforms = program->getUniforms();
-    auto uniformsList = gl::GLUniforms::seqWithValue(progUniforms->seq, uniforms);
+    auto uniformsList = gl::GLUniforms::seqWithValue(progUniforms->seq, materialProperties.uniforms);
 
     materialProperties.currentProgram = program;
     materialProperties.uniformsList = uniformsList;
@@ -781,14 +778,14 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     //            if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
     //
 
-    bool isMeshBasicMaterial = instanceof <MeshBasicMaterial>(material.get());
-    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material.get());
-    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material.get());
-    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material.get());
-    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material.get());
-    bool isShadowMaterial = instanceof <ShadowMaterial>(material.get());
-    bool isShaderMaterial = instanceof <ShaderMaterial>(material.get());
-    bool isEnvMap = instanceof <MaterialWithEnvMap>(material.get()) && dynamic_cast<MaterialWithEnvMap *>(material.get())->envMap;
+    bool isMeshBasicMaterial = material->is<MeshBasicMaterial>();
+    bool isMeshLambertMaterial = material->is<MeshLambertMaterial>();
+    bool isMeshToonMaterial = material->is<MeshToonMaterial>();
+    bool isMeshPhongMaterial = material->is<MeshPhongMaterial>();
+    bool isMeshStandardMaterial = material->is<MeshStandardMaterial>();
+    bool isShadowMaterial = material->is<ShadowMaterial>();
+    bool isShaderMaterial = material->is<ShaderMaterial>();
+    bool isEnvMap = material->is<MaterialWithEnvMap>() && material->as<MaterialWithEnvMap>()->envMap;
 
     textures.resetTextureUnits();
 
@@ -820,7 +817,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     //
 
     bool needsProgramChange = false;
-    bool isInstancedMesh = instanceof <InstancedMesh>(object.get());
+    bool isInstancedMesh = object->as<InstancedMesh>();
 
     if (material->version == materialProperties.version) {
 
@@ -940,7 +937,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
             isMeshStandardMaterial ||
             isShaderMaterial) {
 
-            p_uniforms->setValue("isOrthographic", instanceof <OrthographicCamera>(camera.get()));
+            p_uniforms->setValue("isOrthographic", camera->is<OrthographicCamera>());
         }
 
         if (isMeshPhongMaterial ||
@@ -976,17 +973,17 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
             // use the current material's .needsUpdate flags to set
             // the GL state when required
 
-            markUniformsLightsNeedsUpdate(m_uniforms, refreshLights);
+            markUniformsLightsNeedsUpdate(*m_uniforms, refreshLights);
         }
 
         // refresh uniforms common to several materials
 
         if (fog && material->fog) {
 
-            materials.refreshFogUniforms(m_uniforms, *fog);
+            materials.refreshFogUniforms(*m_uniforms, *fog);
         }
 
-        materials.refreshMaterialUniforms(m_uniforms, material.get(), _pixelRatio, _size.height /*, _transmissionRenderTarget*/);
+        materials.refreshMaterialUniforms(*m_uniforms, material.get(), _pixelRatio, _size.height /*, _transmissionRenderTarget*/);
 
         gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }
@@ -1016,32 +1013,32 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     return program;
 }
 
-void GLRenderer::markUniformsLightsNeedsUpdate(std::shared_ptr<UniformMap> &uniforms, bool value) {
-    uniforms->operator[]("ambientLightColor").needsUpdate = value;
-    uniforms->operator[]("lightProbe").needsUpdate = value;
+void GLRenderer::markUniformsLightsNeedsUpdate(UniformMap &uniforms, bool value) {
+    uniforms.at("ambientLightColor").needsUpdate = value;
+    uniforms.at("lightProbe").needsUpdate = value;
 
-    uniforms->operator[]("directionalLights").needsUpdate = value;
-    uniforms->operator[]("directionalLightShadows").needsUpdate = value;
-    uniforms->operator[]("pointLights").needsUpdate = value;
-    uniforms->operator[]("pointLightShadows").needsUpdate = value;
-    uniforms->operator[]("spotLights").needsUpdate = value;
-    uniforms->operator[]("spotLightShadows").needsUpdate = value;
-    uniforms->operator[]("rectAreaLights").needsUpdate = value;
-    uniforms->operator[]("hemisphereLights").needsUpdate = value;
+    uniforms.at("directionalLights").needsUpdate = value;
+    uniforms.at("directionalLightShadows").needsUpdate = value;
+    uniforms.at("pointLights").needsUpdate = value;
+    uniforms.at("pointLightShadows").needsUpdate = value;
+    uniforms.at("spotLights").needsUpdate = value;
+    uniforms.at("spotLightShadows").needsUpdate = value;
+    uniforms.at("rectAreaLights").needsUpdate = value;
+    uniforms.at("hemisphereLights").needsUpdate = value;
 }
 
 bool GLRenderer::materialNeedsLights(const std::shared_ptr<Material> &material) {
 
-    bool isMeshLambertMaterial = instanceof <MeshLambertMaterial>(material.get());
-    bool isMeshToonMaterial = instanceof <MeshToonMaterial>(material.get());
-    bool isMeshPhongMaterial = instanceof <MeshPhongMaterial>(material.get());
-    bool isMeshStandardMaterial = instanceof <MeshStandardMaterial>(material.get());
-    bool isShadowMaterial = instanceof <ShadowMaterial>(material.get());
-    bool isShaderMaterial = instanceof <ShaderMaterial>(material.get());
+    bool isMeshLambertMaterial = material->as<MeshLambertMaterial>();
+    bool isMeshToonMaterial = material->as<MeshToonMaterial>();
+    bool isMeshPhongMaterial = material->as<MeshPhongMaterial>();
+    bool isMeshStandardMaterial = material->as<MeshStandardMaterial>();
+    bool isShadowMaterial = material->as<ShadowMaterial>();
+    bool isShaderMaterial = material->as<ShaderMaterial>();
     bool lights = false;
 
-    if (instanceof <MaterialWithLights>(material.get())) {
-        lights = dynamic_cast<MaterialWithLights *>(material.get())->lights;
+    if (material->as<MaterialWithLights>()) {
+        lights = material->as<MaterialWithLights>()->lights;
     }
 
     return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||

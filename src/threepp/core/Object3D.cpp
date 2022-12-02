@@ -5,7 +5,6 @@
 #include "threepp/core/Raycaster.hpp"
 
 #include "threepp/lights/Light.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp;
 
@@ -165,7 +164,7 @@ void Object3D::lookAt(float x, float y, float z) {
 
     _position.setFromMatrixPosition(*this->matrixWorld);
 
-    if (instanceof <Camera>(this) || instanceof <Light>(this)) {
+    if (this->as<Camera>() || this->as<Light>()) {
 
         _m1.lookAt(_position, _target, this->up);
 

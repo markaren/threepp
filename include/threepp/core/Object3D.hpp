@@ -187,6 +187,18 @@ namespace threepp {
             return nullptr;
         }
 
+        template<class T>
+        T* as() {
+
+            return dynamic_cast<T*>(this);
+        }
+
+        template<class T>
+        bool is() {
+
+            return dynamic_cast<T*>(this) != nullptr;
+        }
+
         virtual ~Object3D() = default;
 
     protected:

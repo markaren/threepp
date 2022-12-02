@@ -1,8 +1,6 @@
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 #include <glad/glad.h>
 
 using namespace threepp;
@@ -18,14 +16,14 @@ Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType)
 
     GLint type;
     GLsizei bytesPerElement;
-    if (instanceof <IntBufferAttribute>(attribute)) {
+    if (attribute->as<IntBufferAttribute>()) {
         type = GL_UNSIGNED_INT;
         bytesPerElement = sizeof(int);
         auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
         const auto &array = attr->array();
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
 
-    } else if (instanceof <FloatBufferAttribute>(attribute)) {
+    } else if (attribute->as<FloatBufferAttribute>()) {
         type = GL_FLOAT;
         bytesPerElement = sizeof(float);
         auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
@@ -47,13 +45,13 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
 
     if (updateRange.count == -1) {
 
-        if (instanceof <IntBufferAttribute>(attribute)) {
+        if (attribute->as<IntBufferAttribute>()) {
 
             auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
             const auto &array = attr->array();
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
 
-        } else if (instanceof <FloatBufferAttribute>(attribute)) {
+        } else if (attribute->as<FloatBufferAttribute>()) {
 
             auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
             const auto &array = attr->array();
@@ -65,14 +63,14 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
 
     } else {
 
-        if (instanceof <IntBufferAttribute>(attribute)) {
+        if (attribute->as<IntBufferAttribute>()) {
 
             auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
             const auto &array = attr->array();
             std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
 
-        } else if (instanceof <FloatBufferAttribute>(attribute)) {
+        } else if (attribute->as<FloatBufferAttribute>()) {
 
             auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
             const auto &array = attr->array();

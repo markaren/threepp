@@ -12,7 +12,6 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 #include "threepp/utils/StringUtils.hpp"
 #include "threepp/utils/regex_util.hpp"
 
@@ -461,11 +460,11 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             if (this->materials) {
                 material = this->materials->create(sourceMaterial->name);
 
-                if (isLine && material && ! instanceof <const LineBasicMaterial>(material)) {
+                if (isLine && material && ! material->is<LineBasicMaterial>()) {
 
                     // TODO
 
-                } else if (isPoints && material && ! instanceof <const PointsMaterial>(material)) {
+                } else if (isPoints && material && ! material->is<PointsMaterial>()) {
 
                     // TODO
                 }
@@ -489,7 +488,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             }
 
             material->vertexColors = hasVertexColors;
-            if (instanceof <const MaterialWithFlatShading>(material)) {
+            if (material->is<MaterialWithFlatShading>()) {
                 std::dynamic_pointer_cast<MaterialWithFlatShading>(material)->flatShading = !sourceMaterial->smooth;
             }
 

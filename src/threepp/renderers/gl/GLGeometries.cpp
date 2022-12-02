@@ -1,8 +1,6 @@
 
 #include "threepp/renderers/gl/GLGeometries.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 #include <glad/glad.h>
 
 using namespace threepp;
@@ -143,9 +141,9 @@ void GLGeometries::OnGeometryDispose::onEvent(Event &event) {
 
     scope_.bindingStates_.releaseStatesOfGeometry(geometry);
 
-    if (instanceof <InstancedBufferGeometry>(geometry)) {
-
-        dynamic_cast<InstancedBufferGeometry *>(geometry)->_maxInstanceCount = 0;
+    auto ig = dynamic_cast <InstancedBufferGeometry*>(geometry);
+    if (ig) {
+        ig->_maxInstanceCount = 0;
     }
 
     scope_.info_.memory.geometries--;

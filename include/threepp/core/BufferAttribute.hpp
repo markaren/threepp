@@ -50,6 +50,12 @@ namespace threepp {
             this->usage_ = value;
         }
 
+        template<class T>
+        T* as() {
+
+            return dynamic_cast<T*>(this);
+        }
+
         virtual ~BufferAttribute() = default;
 
     protected:

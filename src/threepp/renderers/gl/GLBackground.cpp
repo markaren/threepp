@@ -3,8 +3,6 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 using namespace threepp::gl;
 
 GLBackground::GLBackground(GLState &state, bool premultipliedAlpha) : state(state), premultipliedAlpha(premultipliedAlpha) {}
@@ -12,8 +10,8 @@ GLBackground::GLBackground(GLState &state, bool premultipliedAlpha) : state(stat
 void GLBackground::render(threepp::GLRenderer &renderer, threepp::Object3D *scene) {
 
     bool forceClear = false;
-    bool isScene = instanceof <Scene>(scene);
-    std::optional<Color> background = isScene ? dynamic_cast<Scene *>(scene)->background : std::nullopt;
+    bool isScene = scene->as<Scene>();
+    std::optional<Color> background = isScene ? scene->as<Scene>()->background : std::nullopt;
 
     if (!background) {
 

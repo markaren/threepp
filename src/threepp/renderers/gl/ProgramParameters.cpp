@@ -3,7 +3,6 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 
 #include <sstream>
 
@@ -77,7 +76,7 @@ ProgramParameters::ProgramParameters(
         defines = definesMaterial->defines;
     }
 
-    isRawShaderMaterial = instanceof <RawShaderMaterial>(material);
+    isRawShaderMaterial = material->as<RawShaderMaterial>();
 
     precision = "highp";
 
