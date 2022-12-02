@@ -98,7 +98,7 @@ jobs:
       - name: Test
         run: |
           cd build/tests
-          ctest --output-on-failure
+          ctest -C Release --output-on-failure
 
   vcpkg-on-windows:
 
@@ -115,6 +115,11 @@ jobs:
         run: |
           cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DCMAKE_BUILD_TYPE="Release"
           cmake --build build --config Release
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest -C Release --output-on-failure 
 
   conan-on-darwin:
 
