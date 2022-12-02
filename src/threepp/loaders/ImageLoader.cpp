@@ -1,7 +1,9 @@
 
 #include "threepp/loaders/ImageLoader.hpp"
 
+#ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
+#endif
 #include <stb_image.h>
 
 using namespace threepp;
