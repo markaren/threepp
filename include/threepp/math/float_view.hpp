@@ -3,8 +3,8 @@
 #define THREEPP_FLOAT_VIEW_HPP
 
 #include <functional>
-#include <utility>
 #include <optional>
+#include <utility>
 
 namespace threepp {
 
@@ -69,7 +69,6 @@ namespace threepp {
         }
 
         friend class Euler;
-
     };
 
 }// namespace threepp

@@ -8,8 +8,8 @@
 
 #include "threepp/controls/OrbitControls.hpp"
 
-#include "threepp/scenes/Scene.hpp"
 #include "threepp/geometries/geometries.hpp"
+#include "threepp/scenes/Scene.hpp"
 
 #include "threepp/materials/materials.hpp"
 
@@ -17,8 +17,8 @@
 
 #include "threepp/core/Object3D.hpp"
 
-#include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Group.hpp"
+#include "threepp/objects/Mesh.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
