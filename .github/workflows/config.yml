@@ -66,6 +66,11 @@ jobs:
         cmake . -B build -DCMAKE_BUILD_TYPE=Release
         cmake --build build
 
+    - name: Test
+      run: |
+        cd build/tests
+        ctest --output-on-failure
+
   conan-on-windows:
 
     runs-on: ${{ matrix.os }}
@@ -89,6 +94,11 @@ jobs:
         run: |
           cmake . -A x64 -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest --output-on-failure
 
   vcpkg-on-windows:
 
@@ -129,3 +139,8 @@ jobs:
         run: |
           cmake . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest --output-on-failure
