@@ -6,10 +6,13 @@
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 
 using namespace threepp;
+
+Euler::Euler(float x, float y, float z, Euler::RotationOrders order)
+    : x(x), y(y), z(z), order_(order) {}
 
 Euler &Euler::set(float x, float y, float z, const std::optional<RotationOrders> &order) {
 

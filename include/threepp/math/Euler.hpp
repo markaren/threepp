@@ -30,7 +30,7 @@ namespace threepp {
         float_view y;
         float_view z;
 
-        Euler() = default;
+        explicit Euler(float x = 0, float y = 0, float z = 0, RotationOrders order = default_order);
 
         [[nodiscard]] RotationOrders getOrder() const {
 

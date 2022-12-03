@@ -11,7 +11,9 @@ namespace threepp {
     class float_view {
 
     public:
-        float value{};
+        float value;
+
+        float_view(float value = 0) : value(value) {}
 
         float operator()() const {
 
@@ -24,10 +26,22 @@ namespace threepp {
             return *this;
         }
 
+        float operator*(float f) const {
+            return value * f;
+        }
+
+        float operator*(const float_view &f) const {
+            return value * f.value;
+        }
+
         float_view &operator*=(float f) {
             value *= f;
             if (f_) f_.value()();
             return *this;
+        }
+
+        float operator/(float f) const {
+            return value / f;
         }
 
         float_view &operator/=(float f) {
@@ -36,10 +50,26 @@ namespace threepp {
             return *this;
         }
 
+        float operator+(float f) const {
+            return value + f;
+        }
+
+        float operator+(const float_view &f) const {
+            return value + f.value;
+        }
+
         float_view &operator+=(float f) {
             value += f;
             if (f_) f_.value()();
             return *this;
+        }
+
+        float operator-(float f) const {
+            return value - f;
+        }
+
+        float operator-(const float_view &f) const {
+            return value - f.value;
         }
 
         float_view &operator-=(float f) {

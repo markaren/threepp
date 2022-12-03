@@ -3,6 +3,8 @@
 
 #include <random>
 
+using namespace threepp;
+
 // Linear mapping from range <a1, a2> to range <b1, b2>
 float mapLinear(float x, float a1, float a2, float b1, float b2) {
 
@@ -34,17 +36,17 @@ float damp(float x, float y, float lambda, float dt) {
     return lerp(x, y, 1 - std::exp(-lambda * dt));
 }
 
-float threepp::math::degToRad(const float degrees) {
+float math::degToRad(const float degrees) {
 
     return degrees * DEG2RAD;
 }
 
-float threepp::math::radToDeg(const float radians) {
+float math::radToDeg(const float radians) {
 
     return radians * RAD2DEG;
 }
 
-float threepp::math::randomInRange(float min, float max) {
+float math::randomInRange(float min, float max) {
 
     static std::random_device rd;
     static std::mt19937 e2(rd());
@@ -54,17 +56,22 @@ float threepp::math::randomInRange(float min, float max) {
     return static_cast<float>(dist(e2));
 }
 
-bool threepp::math::isPowerOfTwo(int value) {
+bool math::isPowerOfTwo(int value) {
 
     return (value & (value - 1)) == 0 && value != 0;
 }
 
-float threepp::math::floorPowerOfTwo(float value) {
+float math::floorPowerOfTwo(float value) {
 
     return std::pow(2.f, floor(std::log(value) / LN2));
 }
 
-float threepp::math::ceilPowerOfTwo(float value) {
+float math::ceilPowerOfTwo(float value) {
 
     return std::pow(2.f, std::ceil(std::log(value) / LN2));
+}
+
+bool math::compareFloats(float f1, float f2) {
+
+    return (std::fabs(f1 - f2) <= std::numeric_limits<float>::epsilon() * std::fmax(std::fabs(f1), std::fabs(f2)));
 }

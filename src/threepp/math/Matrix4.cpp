@@ -4,6 +4,7 @@
 #include "threepp/math/Euler.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/math/Matrix3.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -75,7 +76,7 @@ Matrix4 &Matrix4::copyPosition(const Matrix4 &m) {
     return *this;
 }
 
-Matrix4 &Matrix4::setFromMatrix3(const Matrix4 &m) {
+Matrix4 &Matrix4::setFromMatrix3(const Matrix3 &m) {
 
     const auto &me = m.elements;
 
@@ -454,12 +455,12 @@ Matrix4 &Matrix4::invert() {
                 n12 = te[4], n22 = te[5], n32 = te[6], n42 = te[7],
                 n13 = te[8], n23 = te[9], n33 = te[10], n43 = te[11],
                 n14 = te[12], n24 = te[13], n34 = te[14], n44 = te[15],
-                // clang.format off
-            t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44,
+
+                t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44,
                 t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44,
                 t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44,
                 t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
-    // clang.format on
+
 
     const float det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
 
@@ -467,7 +468,6 @@ Matrix4 &Matrix4::invert() {
 
     const float detInv = 1.0f / det;
 
-    // clang.format off
     te[0] = t11 * detInv;
     te[1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44) * detInv;
     te[2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44) * detInv;
@@ -487,7 +487,6 @@ Matrix4 &Matrix4::invert() {
     te[13] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34) * detInv;
     te[14] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 - n11 * n22 * n34) * detInv;
     te[15] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 + n11 * n22 * n33) * detInv;
-    // clang.format on
 
     return *this;
 }
