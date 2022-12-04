@@ -22,7 +22,7 @@ namespace threepp {
             this->cone->scale.set(coneWidth, coneWidth, coneLength);
 
             Vector3 _vector{};
-            _vector.setFromMatrixPosition(*this->light->target->matrixWorld);
+            _vector.setFromMatrixPosition(this->light->target->matrixWorld);
 
             this->cone->lookAt(_vector);
 

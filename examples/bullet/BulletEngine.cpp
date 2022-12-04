@@ -43,24 +43,24 @@ namespace {
             auto g = std::dynamic_pointer_cast<const BoxGeometry>(geometry);
 
             auto shape = std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
-            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+            return std::make_unique<Rbinfo>(std::move(shape), mass, m.matrixWorld);
 
         } else if (std::dynamic_pointer_cast <const PlaneGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<const PlaneGeometry>(geometry);
 
             auto shape = std::make_unique<btBoxShape>(btVector3(g->width / 2, 0.01, g->height / 2));
-            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+            return std::make_unique<Rbinfo>(std::move(shape), mass, m.matrixWorld);
         } else if (std::dynamic_pointer_cast <const SphereGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<const SphereGeometry>(geometry);
 
             auto shape = std::make_unique<btSphereShape>(g->radius);
-            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+            return std::make_unique<Rbinfo>(std::move(shape), mass, m.matrixWorld);
 
         } else if (std::dynamic_pointer_cast <const CylinderGeometry>(geometry)) {
             auto g = std::dynamic_pointer_cast<const CylinderGeometry>(geometry);
 
             auto shape = std::make_unique<btCylinderShape>(btVector3(g->radiusTop, g->height/2, g->radiusTop));
-            return std::make_unique<Rbinfo>(std::move(shape), mass, *m.matrixWorld);
+            return std::make_unique<Rbinfo>(std::move(shape), mass, m.matrixWorld);
         }
 
         return nullptr;
@@ -76,7 +76,7 @@ struct BulletEngine::Impl {
         world.setGravity(btVector3(0, gravity, 0));
     }
 
-    void register_mesh(std::shared_ptr<Mesh> m, float mass) {
+    void register_mesh(const std::shared_ptr<Mesh> &m, float mass) {
 
         auto geometry = m->geometry();
 

@@ -17,13 +17,13 @@ Object3D::Object3D() {
     });
 }
 
-void Object3D::applyMatrix4(const Matrix4 &matrix) {
+void Object3D::applyMatrix4(const Matrix4 &m) {
 
     if (this->matrixAutoUpdate) this->updateMatrix();
 
-    this->matrix->premultiply(matrix);
+    this->matrix.premultiply(m);
 
-    this->matrix->decompose(this->position, this->quaternion, this->scale);
+    this->matrix.decompose(this->position, this->quaternion, this->scale);
 }
 
 Object3D &Object3D::applyQuaternion(const Quaternion &q) {
@@ -134,14 +134,14 @@ Object3D &Object3D::translateZ(float distance) {
 
 void Object3D::localToWorld(Vector3 &vector) const {
 
-    vector.applyMatrix4(*this->matrixWorld);
+    vector.applyMatrix4(this->matrixWorld);
 }
 
 void Object3D::worldToLocal(Vector3 &vector) const {
 
     Matrix4 _m1{};
 
-    vector.applyMatrix4(_m1.copy(*this->matrixWorld).invert());
+    vector.applyMatrix4(_m1.copy(this->matrixWorld).invert());
 }
 
 void Object3D::lookAt(const Vector3 &vector) {
@@ -162,7 +162,7 @@ void Object3D::lookAt(float x, float y, float z) {
 
     this->updateWorldMatrix(true, false);
 
-    _position.setFromMatrixPosition(*this->matrixWorld);
+    _position.setFromMatrixPosition(this->matrixWorld);
 
     if (this->as<Camera>() || this->as<Light>()) {
 
@@ -177,7 +177,7 @@ void Object3D::lookAt(float x, float y, float z) {
 
     if (parent) {
 
-        _m1.extractRotation(*parent->matrixWorld);
+        _m1.extractRotation(parent->matrixWorld);
         _q1.setFromRotationMatrix(_m1);
         this->quaternion.premultiply(_q1.invert());
     }
@@ -262,7 +262,7 @@ void Object3D::getWorldPosition(Vector3 &target) {
 
     this->updateWorldMatrix(true, false);
 
-    target.setFromMatrixPosition(*this->matrixWorld);
+    target.setFromMatrixPosition(this->matrixWorld);
 }
 
 void Object3D::getWorldQuaternion(Quaternion &target) {
@@ -272,7 +272,7 @@ void Object3D::getWorldQuaternion(Quaternion &target) {
 
     this->updateWorldMatrix(true, false);
 
-    this->matrixWorld->decompose(_position, target, _scale);
+    this->matrixWorld.decompose(_position, target, _scale);
 }
 
 void Object3D::getWorldScale(Vector3 &target) {
@@ -282,14 +282,14 @@ void Object3D::getWorldScale(Vector3 &target) {
 
     this->updateWorldMatrix(true, false);
 
-    this->matrixWorld->decompose(_position, _quaternion, target);
+    this->matrixWorld.decompose(_position, _quaternion, target);
 }
 
 void Object3D::getWorldDirection(Vector3 &target) {
 
     this->updateWorldMatrix(true, false);
 
-    const auto &e = this->matrixWorld->elements;
+    const auto &e = this->matrixWorld.elements;
 
     target.set(e[8], e[9], e[10]).normalize();
 }
@@ -328,7 +328,7 @@ void Object3D::traverseAncestors(const std::function<void(Object3D &)> &callback
 
 void Object3D::updateMatrix() {
 
-    this->matrix->compose(this->position, this->quaternion, this->scale);
+    this->matrix.compose(this->position, this->quaternion, this->scale);
 
     this->matrixWorldNeedsUpdate = true;
 }
@@ -341,11 +341,11 @@ void Object3D::updateMatrixWorld(bool force) {
 
         if (!this->parent) {
 
-            this->matrixWorld->copy(*this->matrix);
+            this->matrixWorld.copy(this->matrix);
 
         } else {
 
-            this->matrixWorld->multiplyMatrices(*this->parent->matrixWorld, *this->matrix);
+            this->matrixWorld.multiplyMatrices(this->parent->matrixWorld, this->matrix);
         }
 
         this->matrixWorldNeedsUpdate = false;
@@ -372,11 +372,11 @@ void Object3D::updateWorldMatrix(bool updateParents, bool updateChildren) {
 
     if (!this->parent) {
 
-        this->matrixWorld->copy(*this->matrix);
+        this->matrixWorld.copy(this->matrix);
 
     } else {
 
-        this->matrixWorld->multiplyMatrices(*this->parent->matrixWorld, *this->matrix);
+        this->matrixWorld.multiplyMatrices(this->parent->matrixWorld, this->matrix);
     }
 
     // update children

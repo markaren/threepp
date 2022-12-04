@@ -56,8 +56,8 @@ namespace threepp {
         Matrix4 modelViewMatrix;
         Matrix3 normalMatrix;
 
-        std::shared_ptr<Matrix4> matrix = std::make_shared<Matrix4>();
-        std::shared_ptr<Matrix4> matrixWorld = std::make_shared<Matrix4>();
+        Matrix4 matrix;
+        Matrix4 matrixWorld;
 
         bool matrixAutoUpdate = true;
         bool matrixWorldNeedsUpdate = false;
