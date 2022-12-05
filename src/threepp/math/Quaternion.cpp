@@ -242,6 +242,85 @@ float Quaternion::angleTo(const Quaternion &q) const {
     return 2 * std::acos(std::abs(std::clamp(this->dot(q), -1.0f, 1.0f)));
 }
 
+Quaternion &Quaternion::rotateTowards(const Quaternion &q, float step) {
+
+    const float angle = this->angleTo(q);
+
+    if (angle == 0) return *this;
+
+    auto t = std::min(1.f, step / angle);
+
+    this->slerp(q, t);
+
+    return *this;
+}
+
+Quaternion &Quaternion::slerp(const Quaternion &qb, float t) {
+
+    if (t == 0) return *this;
+    if (t == 1) return this->copy(qb);
+
+    const float x = this->x.value_, y = this->y.value_, z = this->z.value_, w = this->w.value_;
+
+    // http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/slerp/
+
+    float cosHalfTheta = w * qb.w.value_ + x * qb.x.value_ + y * qb.y.value_ + z * qb.z.value_;
+
+    if (cosHalfTheta < 0) {
+
+        this->w.value_ = -qb.w.value_;
+        this->x.value_ = -qb.x.value_;
+        this->y.value_ = -qb.y.value_;
+        this->z.value_ = -qb.z.value_;
+
+        cosHalfTheta = -cosHalfTheta;
+
+    } else {
+
+        this->copy(qb);
+    }
+
+    if (cosHalfTheta >= 1.0) {
+
+        this->w.value_ = w;
+        this->x.value_ = x;
+        this->y.value_ = y;
+        this->z.value_ = z;
+
+        return *this;
+    }
+
+    const float sqrSinHalfTheta = 1.f - cosHalfTheta * cosHalfTheta;
+
+    if (sqrSinHalfTheta <= std::numeric_limits<float>::epsilon()) {
+
+        const float s = 1 - t;
+        this->w.value_ = s * w + t * this->w.value_;
+        this->x.value_ = s * x + t * this->x.value_;
+        this->y.value_ = s * y + t * this->y.value_;
+        this->z.value_ = s * z + t * this->z.value_;
+
+        this->normalize();
+        this->onChangeCallback_();
+
+        return *this;
+    }
+
+    const float sinHalfTheta = std::sqrt(sqrSinHalfTheta);
+    const float halfTheta = std::atan2(sinHalfTheta, cosHalfTheta);
+    const float ratioA = std::sin((1 - t) * halfTheta) / sinHalfTheta,
+                ratioB = std::sin(t * halfTheta) / sinHalfTheta;
+
+    this->w = (w * ratioA + this->w.value_ * ratioB);
+    this->x = (x * ratioA + this->x.value_ * ratioB);
+    this->y = (y * ratioA + this->y.value_ * ratioB);
+    this->z = (z * ratioA + this->z.value_ * ratioB);
+
+    this->onChangeCallback_();
+
+    return *this;
+}
+
 Quaternion &Quaternion::identity() {
 
     return this->set(0, 0, 0, 1);
@@ -331,6 +410,11 @@ Quaternion &Quaternion::multiplyQuaternions(const Quaternion &a, const Quaternio
     this->onChangeCallback_();
 
     return *this;
+}
+
+Quaternion Quaternion::clone() const {
+
+    return Quaternion(x.value_, y.value_, z.value_, w.value_);
 }
 
 bool Quaternion::equals(const Quaternion &v) const {

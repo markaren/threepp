@@ -43,6 +43,8 @@ namespace threepp {
 
         [[nodiscard]] float angleTo(const Quaternion &q) const;
 
+        Quaternion &rotateTowards(const Quaternion& q, float step);
+
         Quaternion &identity();
 
         Quaternion &invert();
@@ -62,6 +64,10 @@ namespace threepp {
         Quaternion &premultiply(const Quaternion &q);
 
         Quaternion &multiplyQuaternions(const Quaternion &a, const Quaternion &b);
+
+        Quaternion &slerp(const Quaternion& qb, float t);
+
+        [[nodiscard]] Quaternion clone() const;
 
         [[nodiscard]] bool equals(const Quaternion &v) const;
 

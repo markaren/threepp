@@ -8,6 +8,8 @@
 #include "threepp/math/Vector4.hpp"
 #include "threepp/math/Matrix4.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 using namespace threepp;
 
 namespace {
@@ -201,4 +203,74 @@ TEST_CASE("setFromRotationMatrix") {
     REQUIRE( std::abs( a.z() - expected.z ) <= eps);
     REQUIRE( std::abs( a.w() - expected.w ) <= eps);
 
+}
+
+TEST_CASE("rotateTowards") {
+    
+    auto a = Quaternion();
+    auto b = Quaternion().setFromEuler(  Euler( 0, math::PI, 0 ) );
+    auto c = Quaternion();
+    
+    float halfPI = math::PI * 0.5f;
+
+    a.rotateTowards( b, 0 );
+    REQUIRE( a.equals( a ) == true);
+
+    a.rotateTowards( b, math::PI * 2.f ); // test overshoot
+    REQUIRE( a.equals( b ) == true);
+
+    a.set( 0, 0, 0, 1 );
+    a.rotateTowards( b, halfPI );
+    REQUIRE( a.angleTo( c ) - halfPI <= eps);
+    
+}
+
+TEST_CASE("identity") {
+    
+    auto a = Quaternion();
+    
+    a.set( 1, 2, 3, -1 );
+    a.identity();
+
+    REQUIRE( a.x == 0);
+    REQUIRE( a.y == 0);
+    REQUIRE( a.z == 0);
+    REQUIRE( a.w == 1);
+    
+}
+
+TEST_CASE("slerp") {
+    
+    auto a =  Quaternion( 0, 0, 0, 1 );
+    auto b = Quaternion( - 0.5f, - 0.1f, - 0.2f, -1 );
+    
+    auto c = a.clone().slerp( b, 0 );
+    auto d = a.clone().slerp( b, 1 );
+
+    REQUIRE( a.equals( c ));
+    REQUIRE( b.equals( d ));
+
+    float D = std::sqrt(0.5f);
+
+    auto e = Quaternion( 1, 0, 0, 0 );
+    auto f = Quaternion( 0, 0, 1, 0 );
+    auto expected = Quaternion( D, 0, D, 0 );
+    auto result = e.clone().slerp( f, 0.5 );
+    REQUIRE( std::abs( result.x - expected.x ) <= eps);
+    REQUIRE( std::abs( result.y - expected.y ) <= eps);
+    REQUIRE( std::abs( result.z - expected.z ) <= eps);
+    REQUIRE( std::abs( result.w - expected.w ) <= eps);
+
+
+    auto g = Quaternion( 0, D, 0, D );
+    auto h = Quaternion( 0, - D, 0, D );
+    expected = Quaternion( 0, 0, 0, 1 );
+    result = g.clone().slerp( h, 0.5 );
+
+    REQUIRE( std::abs( result.x - expected.x ) <= eps);
+    REQUIRE( std::abs( result.y - expected.y ) <= eps);
+    REQUIRE( std::abs( result.z - expected.z ) <= eps);
+    REQUIRE( std::abs( result.w - expected.w ) <= eps);
+
+    
 }
