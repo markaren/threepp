@@ -45,7 +45,7 @@ namespace threepp {
             this->matrixWorldInverse.copy(this->matrixWorld).invert();
         }
 
-        void updateWorldMatrix(bool updateParents, bool updateChildren) override {
+        void updateWorldMatrix(std::optional<bool> updateParents, std::optional<bool> updateChildren) override {
 
             Object3D::updateWorldMatrix(updateParents, updateChildren);
 

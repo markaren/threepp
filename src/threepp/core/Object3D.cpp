@@ -258,14 +258,14 @@ Object3D *Object3D::getObjectByName(const std::string &name) {
     return nullptr;
 }
 
-void Object3D::getWorldPosition(Vector3 &target) {
+Vector3 &Object3D::getWorldPosition(Vector3 &target) {
 
     this->updateWorldMatrix(true, false);
 
-    target.setFromMatrixPosition(this->matrixWorld);
+    return target.setFromMatrixPosition(this->matrixWorld);
 }
 
-void Object3D::getWorldQuaternion(Quaternion &target) {
+Quaternion &Object3D::getWorldQuaternion(Quaternion &target) {
 
     Vector3 _position{};
     Vector3 _scale{};
@@ -273,9 +273,11 @@ void Object3D::getWorldQuaternion(Quaternion &target) {
     this->updateWorldMatrix(true, false);
 
     this->matrixWorld.decompose(_position, target, _scale);
+
+    return target;
 }
 
-void Object3D::getWorldScale(Vector3 &target) {
+Vector3 &Object3D::getWorldScale(Vector3 &target) {
 
     Vector3 _position{};
     Quaternion _quaternion{};
@@ -283,6 +285,8 @@ void Object3D::getWorldScale(Vector3 &target) {
     this->updateWorldMatrix(true, false);
 
     this->matrixWorld.decompose(_position, _quaternion, target);
+
+    return target;
 }
 
 void Object3D::getWorldDirection(Vector3 &target) {
@@ -361,9 +365,9 @@ void Object3D::updateMatrixWorld(bool force) {
     }
 }
 
-void Object3D::updateWorldMatrix(bool updateParents, bool updateChildren) {
+void Object3D::updateWorldMatrix(std::optional<bool> updateParents, std::optional<bool> updateChildren) {
 
-    if (updateParents && parent) {
+    if (updateParents && updateParents.value() && parent) {
 
         parent->updateWorldMatrix(true, false);
     }
@@ -381,7 +385,7 @@ void Object3D::updateWorldMatrix(bool updateParents, bool updateChildren) {
 
     // update children
 
-    if (updateChildren) {
+    if (updateChildren && updateChildren.value()) {
 
         for (auto &child : children) {
 
