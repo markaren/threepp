@@ -13,7 +13,7 @@ using namespace threepp;
 
 namespace {
 
-    constexpr float eps = 0.0001;
+    constexpr float eps = 0.0001f;
 
     bool matrixEquals4(const Matrix4 &a, const Matrix4 &b, float tolerance = eps) {
 

@@ -46,7 +46,6 @@ int main() {
       renderer.setSize(size);
     });
 
-    box->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
         scene->rotation.x += 1.f * dt;

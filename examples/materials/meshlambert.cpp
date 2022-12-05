@@ -21,7 +21,7 @@ int main() {
 
     {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
+        const auto boxMaterial = MeshLambertMaterial::create();
         boxMaterial->color.setHex(0xff0000);
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.setX(-1);
@@ -30,7 +30,7 @@ int main() {
 
     {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
+        const auto boxMaterial = MeshLambertMaterial::create();
         boxMaterial->color.setHex(0x00ff00);
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.setX(1);

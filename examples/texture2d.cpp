@@ -1,12 +1,14 @@
 
-#include "threepp/threepp.hpp"
 #include "threepp/objects/Reflector.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas(Canvas::Parameters().antialiasing(8));
+    GLRenderer renderer(canvas);
+    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
@@ -14,12 +16,9 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    GLRenderer renderer(canvas);
-    renderer.setClearColor(Color::aliceblue);
-
     TextureLoader loader{};
 
-    const auto sphereGeometry = SphereGeometry::create(0.5f);
+    const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
     const auto sphereMaterial = MeshBasicMaterial::create();
     sphereMaterial->map = loader.loadTexture("data/textures/checker.png");
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
@@ -55,11 +54,9 @@ int main() {
         renderer.setSize(size);
     });
 
-    box->rotation.setOrder(Euler::YZX);
-    sphere->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         box->rotation.y += 0.5f * dt;
-        sphere->rotation.y += 0.5f * dt;
+        sphere->rotation.x += 0.5f * dt;
 
         renderer.render(scene, camera);
     });

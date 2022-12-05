@@ -9,6 +9,9 @@ add_test(NAME Vector3_test COMMAND Vector3_test)
 add_executable(Matrix4_test Matrix4_test.cpp)
 add_test(NAME Matrix4_test COMMAND Matrix4_test)
 
+add_executable(Quaternion_test Quaternion_test.cpp)
+add_test(NAME Quaternion_test COMMAND Quaternion_test)
+
 add_executable(Object3D_test Object3D_test.cpp)
 add_test(NAME Object3D_test COMMAND Object3D_test)
 
