@@ -13,6 +13,7 @@ namespace threepp {
 
     public:
         void update() {
+            this->matrix.copy(this->light->matrixWorld);
 
             this->light->updateMatrixWorld();
 
@@ -57,7 +58,6 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
-            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             auto geometry = BufferGeometry::create();

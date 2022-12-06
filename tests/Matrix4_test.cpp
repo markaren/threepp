@@ -9,35 +9,9 @@
 
 #include "threepp/math/MathUtils.hpp"
 
+#include "equals_util.hpp"
+
 using namespace threepp;
-
-namespace {
-
-    constexpr float eps = 0.0001f;
-
-    bool matrixEquals4(const Matrix4 &a, const Matrix4 &b, float tolerance = eps) {
-
-        for (unsigned i = 0, il = a.elements.size(); i < il; i++) {
-
-            auto delta = a.elements[i] - b.elements[i];
-            if (delta > tolerance) {
-
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    bool eulerEquals( const Euler& a, const Euler& b, float tolerance = eps ) {
-
-        auto diff = std::abs( a.x - b.x ) + std::abs( a.y - b.y ) + std::abs( a.z - b.z );
-        return ( diff < tolerance );
-
-    }
-
-
-}// namespace
 
 TEST_CASE("determinant") {
 

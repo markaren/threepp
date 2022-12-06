@@ -41,6 +41,8 @@ namespace threepp {
 
             this->targetLine->lookAt(_v2);
             this->targetLine->scale.z = _v3.length();
+
+            this->matrix.copy(this->light->matrixWorld);
         }
 
         static std::shared_ptr<DirectionalLightHelper> create(const std::shared_ptr<DirectionalLight> &light, float size = 1, std::optional<unsigned int> color = std::nullopt) {
@@ -61,7 +63,6 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
-            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             auto geometry = BufferGeometry::create();

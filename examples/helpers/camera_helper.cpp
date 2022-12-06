@@ -48,6 +48,7 @@ int main() {
         renderer.render(scene, camera);
 
         helper->visible = true;
+        helper->update();
 
         renderer.setViewport({0, 0, size.width / 2, size.height});
         renderer.render(scene, camera2);

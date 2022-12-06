@@ -14,6 +14,8 @@ namespace threepp {
     public:
         void update() {
 
+            this->matrix.copy(this->light->matrixWorld);
+
             if (this->color) {
 
                 std::dynamic_pointer_cast<MaterialWithColor>(this->material())->color.setHex(*this->color);
@@ -46,7 +48,6 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
-            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             update();

@@ -62,6 +62,8 @@ int main() {
     canvas.animate([&](float dt) {
         group->rotation.y += 0.5f * dt;
 
+        helper->update();
+
         renderer.render(scene, camera);
     });
 }

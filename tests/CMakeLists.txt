@@ -15,6 +15,9 @@ add_test(NAME Quaternion_test COMMAND Quaternion_test)
 add_executable(Object3D_test Object3D_test.cpp)
 add_test(NAME Object3D_test COMMAND Object3D_test)
 
+add_executable(PerspectiveCamera_test PerspectiveCamera_test.cpp)
+add_test(NAME PerspectiveCamera_test COMMAND PerspectiveCamera_test)
+
 add_executable(StringUtils_test StringUtils_test.cpp)
 target_include_directories(StringUtils_test PRIVATE "${CMAKE_SOURCE_DIR}/src")
 add_test(NAME StringUtils_test COMMAND StringUtils_test)
