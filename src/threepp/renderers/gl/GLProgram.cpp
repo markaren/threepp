@@ -202,7 +202,7 @@ namespace {
             pos = match.position(0) + match.length(0);
 
             const std::ssub_match &sub = match[1];
-            std::string r = shaders::ShaderChunk::instance().get(sub.str(), "ShaderChunk");
+            std::string r = shaders::ShaderChunk::instance().get(sub.str());
             if (r.empty()) {
                 std::stringstream ss;
                 ss << "unable to resolve #include <" << sub.str() << ">";
