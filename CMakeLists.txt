@@ -25,12 +25,13 @@ find_package(glad CONFIG REQUIRED)
 find_package(stb CONFIG QUIET)
 find_package(assimp CONFIG)
 
-add_library(glfw::glfw INTERFACE IMPORTED)
-target_link_libraries(glfw::glfw INTERFACE glfw)
+if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+    add_library(glfw::glfw ALIAS glfw)
+endif()
 
-if (NOT TARGET stb::stb)
+if (NOT TARGET "stb::stb")
     find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
-    add_library("stb::stb" INTERFACE IMPORTED)
+    add_library(stb::stb INTERFACE IMPORTED)
 endif ()
 
 target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
