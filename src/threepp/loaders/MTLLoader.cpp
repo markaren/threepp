@@ -255,7 +255,7 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
 
         } else if (lower == "map_d") {
 
-            _setMapForType("alphamap", std::get<std::string>(value));
+            _setMapForType("alphaMap", std::get<std::string>(value));
             params->transparent = true;
 
         } else if (lower == "ns") {
