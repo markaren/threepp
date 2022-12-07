@@ -1,8 +1,0 @@
-@PACKAGE_INIT@
-include ("@PACKAGE_targetsFile@")
-
-include(CMakeFindDependencyMacro)
-
-list(APPEND CMAKE_MODULE_PATH "${PACKAGE_PREFIX_DIR}/@THREEPP_CMAKE_INSTALL_DIR@")
-
-list(REMOVE_AT CMAKE_MODULE_PATH -1)

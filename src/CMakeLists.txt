@@ -268,23 +268,10 @@ target_link_libraries(threepp
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}")
 
 if (assimp_FOUND)
   target_link_libraries(threepp PRIVATE assimp::assimp)
 endif()
-
-# ==============================================================================
-# Installation rules
-# ==============================================================================
-
-install(
-        TARGETS threepp
-        EXPORT "${THREEPP_EXPORT_TARGET}"
-        ${THREEPP_INSTALL_DESTINATIONS}
-)
-install(
-        DIRECTORY "${publicHeaderDir}/threepp"
-        DESTINATION "${THREEPP_HEADER_INSTALL_DIR}"
-)

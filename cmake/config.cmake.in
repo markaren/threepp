@@ -1,0 +1,12 @@
+@PACKAGE_INIT@
+
+include(${CMAKE_CURRENT_LIST_DIR}/threepp-targets.cmake)
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(glfw3 CONFIG)
+find_dependency(glad CONFIG)
+find_dependency(stb CONFIG)
+find_package(assimp CONFIG)
+
+check_required_components(threepp)
