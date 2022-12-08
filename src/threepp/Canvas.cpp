@@ -37,13 +37,16 @@ public:
         }
 
         {
-            GLFWimage images[1];
+
             ImageLoader imageLoader;
-            Image favicon = imageLoader.load("data/favicon.bmp", 4);
-            images[0] = {static_cast<int>(favicon.width),
-                         static_cast<int>(favicon.height),
-                         favicon.getData()};
-            glfwSetWindowIcon(window, 1, images);
+            auto favicon = imageLoader.load("favicon.bmp", 4);
+            if (favicon) {
+                GLFWimage images[1];
+                images[0] = {static_cast<int>(favicon->width),
+                             static_cast<int>(favicon->height),
+                             favicon->getData()};
+                glfwSetWindowIcon(window, 1, images);
+            }
         }
 
         glfwSetWindowUserPointer(window, this);
