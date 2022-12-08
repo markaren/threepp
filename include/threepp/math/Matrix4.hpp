@@ -11,6 +11,7 @@ namespace threepp {
     class Vector3;
     class Euler;
     class Quaternion;
+    class Matrix3;
 
     class Matrix4 {
 
@@ -33,7 +34,7 @@ namespace threepp {
 
         Matrix4 &copyPosition(const Matrix4 &m);
 
-        Matrix4 &setFromMatrix3(const Matrix4 &m);
+        Matrix4 &setFromMatrix3(const Matrix3 &m);
 
         Matrix4 &extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis);
 
@@ -94,7 +95,13 @@ namespace threepp {
         [[nodiscard]] bool equals(const Matrix4 &matrix) const;
 
         bool operator==(const Matrix4 &matrix) const {
+
             return equals(matrix);
+        }
+
+        bool operator!=(const Matrix4 &matrix) const {
+
+            return !equals(matrix);
         }
 
         template<class ArrayLike>

@@ -1,8 +1,6 @@
 
 #include "threepp/controls/OrbitControls.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 #include <cmath>
 #include <utility>
 
@@ -191,7 +189,7 @@ void OrbitControls::pan(float deltaX, float deltaY) {
 
     Vector3 offset{};
 
-    if (instanceof <PerspectiveCamera>(camera.get())) {
+    if (camera->as<PerspectiveCamera>()) {
 
         auto perspective = dynamic_cast<PerspectiveCamera *>(camera.get());
 
@@ -205,20 +203,20 @@ void OrbitControls::pan(float deltaX, float deltaY) {
 
         // we use only clientHeight here so aspect ratio does not distort speed
         const auto size = canvas.getSize();
-        panLeft(2 * deltaX * targetDistance / (float) size.height, *this->camera->matrix);
-        panUp(2 * deltaY * targetDistance / (float) size.height, *this->camera->matrix);
-    } else if (instanceof <OrthographicCamera>(camera.get())) {
+        panLeft(2 * deltaX * targetDistance / (float) size.height, this->camera->matrix);
+        panUp(2 * deltaY * targetDistance / (float) size.height, this->camera->matrix);
+    } else if (camera->as<OrthographicCamera>()) {
 
         const auto size = canvas.getSize();
-        auto ortho = dynamic_cast<OrthographicCamera *>(camera.get());
+        auto ortho = camera->as<OrthographicCamera>();
 
         // orthographic
         panLeft(
                 deltaX * (ortho->right - ortho->left) / this->camera->zoom / size.width,
-                *this->camera->matrix);
+                this->camera->matrix);
         panUp(
                 deltaY * (ortho->top - ortho->bottom) / this->camera->zoom / size.height,
-                *this->camera->matrix);
+                this->camera->matrix);
 
     } else {
 
@@ -230,11 +228,11 @@ void OrbitControls::pan(float deltaX, float deltaY) {
 
 void OrbitControls::dollyIn(float dollyScale) {
 
-    if (instanceof <PerspectiveCamera>(camera.get())) {
+    if (camera->as<PerspectiveCamera>()) {
 
         scale /= dollyScale;
 
-    } else if (instanceof <OrthographicCamera>(camera.get())) {
+    } else if (camera->as<OrthographicCamera>()) {
 
         this->camera->zoom = std::max(this->minZoom, std::min(this->maxZoom, this->camera->zoom * dollyScale));
         this->camera->updateProjectionMatrix();
@@ -247,9 +245,9 @@ void OrbitControls::dollyIn(float dollyScale) {
 }
 void OrbitControls::dollyOut(float dollyScale) {
 
-    if (instanceof <PerspectiveCamera>(camera.get())) {
+    if (camera->as<PerspectiveCamera>()) {
         scale *= dollyScale;
-    } else if (instanceof <OrthographicCamera>(camera.get())) {
+    } else if (camera->as<OrthographicCamera>()) {
         this->camera->zoom = std::max(this->minZoom, std::min(this->maxZoom, this->camera->zoom / dollyScale));
         this->camera->updateProjectionMatrix();
         zoomChanged = true;

@@ -108,13 +108,15 @@ namespace threepp {
 
             camera->updateProjectionMatrix();
 
-            this->matrix = camera->matrixWorld;
             this->matrixAutoUpdate = false;
 
             update();
         }
 
         void update() {
+
+            this->matrix.copy(camera->matrixWorld);
+
             float w = 1, h = 1;
 
             // we need just camera projection matrix inverse
@@ -161,6 +163,7 @@ namespace threepp {
             setPoint("cn4", _camera, 0, h, -1);
 
             geometry()->getAttribute<float>("position")->needsUpdate();
+
         }
 
     private:

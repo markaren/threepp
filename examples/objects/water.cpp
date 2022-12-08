@@ -66,13 +66,12 @@ int main() {
     });
 
     float t = 0;
-    sphere->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         sphere->position.y = std::sin(t) * 20 + 5;
         sphere->rotation.x = t * 0.05f;
         sphere->rotation.z = t * 0.051f;
 
-        water->material()->uniforms->operator[]("time").setValue(t);
+        (*water->material()->uniforms)["time"].setValue(t);
 
         renderer.render(scene, camera);
 

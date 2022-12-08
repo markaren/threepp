@@ -1,0 +1,22 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(glfw3 CONFIG)
+find_dependency(glad CONFIG)
+find_package(stb CONFIG QUIET)
+find_package(assimp CONFIG)
+
+if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+    add_library(glfw::glfw ALIAS glfw)
+endif()
+
+if (NOT TARGET "stb::stb")
+    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
+    add_library(stb::stb INTERFACE IMPORTED)
+endif ()
+
+target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
+
+include(${CMAKE_CURRENT_LIST_DIR}/threepp-targets.cmake)
+check_required_components(threepp)

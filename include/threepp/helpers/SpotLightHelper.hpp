@@ -13,6 +13,7 @@ namespace threepp {
 
     public:
         void update() {
+            this->matrix.copy(this->light->matrixWorld);
 
             this->light->updateMatrixWorld();
 
@@ -22,7 +23,7 @@ namespace threepp {
             this->cone->scale.set(coneWidth, coneWidth, coneLength);
 
             Vector3 _vector{};
-            _vector.setFromMatrixPosition(*this->light->target->matrixWorld);
+            _vector.setFromMatrixPosition(this->light->target->matrixWorld);
 
             this->cone->lookAt(_vector);
 
@@ -57,7 +58,6 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
-            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             auto geometry = BufferGeometry::create();

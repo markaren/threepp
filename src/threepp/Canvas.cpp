@@ -37,13 +37,16 @@ public:
         }
 
         {
-            GLFWimage images[1];
+
             ImageLoader imageLoader;
-            Image favicon = imageLoader.load("data/favicon.bmp", 4);
-            images[0] = {static_cast<int>(favicon.width),
-                         static_cast<int>(favicon.height),
-                         favicon.getData()};
-            glfwSetWindowIcon(window, 1, images);
+            auto favicon = imageLoader.load("favicon.bmp", 4);
+            if (favicon) {
+                GLFWimage images[1];
+                images[0] = {static_cast<int>(favicon->width),
+                             static_cast<int>(favicon->height),
+                             favicon->getData()};
+                glfwSetWindowIcon(window, 1, images);
+            }
         }
 
         glfwSetWindowUserPointer(window, this);
@@ -150,7 +153,7 @@ private:
     }
 
     static void error_callback(int error, const char *description) {
-        fprintf(stderr, "Error: %s\n", description);
+        std::cerr << "Error: " << description << std::endl;
     }
 
     static void scroll_callback(GLFWwindow *w, double xoffset, double yoffset) {
@@ -232,74 +235,74 @@ void Canvas::animate(const std::function<void(float)> &f) const {
     pimpl_->animate(f);
 }
 
-WindowSize threepp::Canvas::getSize() const {
+WindowSize Canvas::getSize() const {
 
     return pimpl_->getSize();
 }
 
-float threepp::Canvas::getAspect() const {
+float Canvas::getAspect() const {
 
     return getSize().getAspect();
 }
 
-void threepp::Canvas::setSize(WindowSize size) {
+void Canvas::setSize(WindowSize size) {
 
     pimpl_->setSize(size);
 }
-void threepp::Canvas::onWindowResize(std::function<void(WindowSize)> f) {
+void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
 }
 
-void threepp::Canvas::addKeyListener(const std::shared_ptr<KeyListener> &listener) {
+void Canvas::addKeyListener(const std::shared_ptr<KeyListener> &listener) {
 
     pimpl_->addKeyListener(listener);
 }
 
-bool threepp::Canvas::removeKeyListener(const std::string &listenerUuid) {
+bool Canvas::removeKeyListener(const std::string &listenerUuid) {
 
     return pimpl_->removeKeyListener(listenerUuid);
 }
 
-std::string threepp::Canvas::addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f) {
+std::string Canvas::addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f) {
 
     auto listener = std::make_shared<KeyAdapter>(mode, f);
     addKeyListener(listener);
     return listener->uuid;
 }
 
-void threepp::Canvas::addMouseListener(const std::shared_ptr<MouseListener> &listener) {
+void Canvas::addMouseListener(const std::shared_ptr<MouseListener> &listener) {
 
     pimpl_->addMouseListener(listener);
 }
 
-bool threepp::Canvas::removeMouseListener(const std::string &listenerUuid) {
+bool Canvas::removeMouseListener(const std::string &listenerUuid) {
 
     return pimpl_->removeMouseListener(listenerUuid);
 }
 
-threepp::Canvas::~Canvas() = default;
+Canvas::~Canvas() = default;
 
-Canvas::Parameters &threepp::Canvas::Parameters::title(std::string value) {
+Canvas::Parameters &Canvas::Parameters::title(std::string value) {
 
     this->title_ = std::move(value);
 
     return *this;
 }
 
-Canvas::Parameters &threepp::Canvas::Parameters::size(WindowSize size) {
+Canvas::Parameters &Canvas::Parameters::size(WindowSize size) {
 
     this->size_ = size;
 
     return *this;
 }
 
-Canvas::Parameters &threepp::Canvas::Parameters::size(int width, int height) {
+Canvas::Parameters &Canvas::Parameters::size(int width, int height) {
 
     return this->size({width, height});
 }
 
-Canvas::Parameters &threepp::Canvas::Parameters::antialiasing(int antialiasing) {
+Canvas::Parameters &Canvas::Parameters::antialiasing(int antialiasing) {
 
     this->antialiasing_ = antialiasing;
 

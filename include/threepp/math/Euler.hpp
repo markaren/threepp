@@ -29,8 +29,8 @@ namespace threepp {
         float_view x;
         float_view y;
         float_view z;
-        
-        Euler() = default;
+
+        explicit Euler(float x = 0, float y = 0, float z = 0, RotationOrders order = default_order);
 
         [[nodiscard]] RotationOrders getOrder() const {
 
@@ -56,9 +56,9 @@ namespace threepp {
         template<class ArrayLike>
         Euler &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
-            this->x.value = array[offset];
-            this->y.value = array[offset + 1];
-            this->z.value = array[offset + 2];
+            this->x.value_ = array[offset];
+            this->y.value_ = array[offset + 1];
+            this->z.value_ = array[offset + 2];
 
             this->onChangeCallback_();
 

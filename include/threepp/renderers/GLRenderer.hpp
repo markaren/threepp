@@ -188,7 +188,7 @@ namespace threepp {
                 const std::shared_ptr<Material> &material,
                 const std::shared_ptr<Object3D> &object);
 
-        void markUniformsLightsNeedsUpdate(std::shared_ptr<UniformMap> &uniforms, bool value);
+        void markUniformsLightsNeedsUpdate(UniformMap &uniforms, bool value);
 
         bool materialNeedsLights(const std::shared_ptr<Material> &material);
 

@@ -12,6 +12,12 @@
       "dependencies": [
         "bullet3"
       ]
+    },
+    "assimp": {
+      "description": "Enable assimp model importer",
+      "dependencies": [
+        "assimp"
+      ]
     }
   }
 }

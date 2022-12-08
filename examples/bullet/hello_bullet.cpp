@@ -62,7 +62,6 @@ int main() {
     engine.register_mesh(cylinder, 1);
     engine.register_mesh(plane, 0);
 
-    box->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         engine.step(dt);
 

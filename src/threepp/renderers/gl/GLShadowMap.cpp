@@ -17,8 +17,8 @@ namespace {
     std::shared_ptr<ShaderMaterial> createShadowMaterialVertical() {
 
         auto shadowMaterialVertical = ShaderMaterial::create();
-        shadowMaterialVertical->vertexShader = shaders::ShaderChunk::instance().get("vsm_vert", "ShaderLib");
-        shadowMaterialVertical->fragmentShader = shaders::ShaderChunk::instance().get("vsm_frag", "ShaderLib");
+        shadowMaterialVertical->vertexShader = shaders::ShaderChunk::instance().get("vsm_vert");
+        shadowMaterialVertical->fragmentShader = shaders::ShaderChunk::instance().get("vsm_frag");
 
         shadowMaterialVertical->defines["SAMPLE_RATE"] = std::to_string(2.f / 8.f);
         shadowMaterialVertical->defines["HALF_SAMPLE_RATE"], std::to_string(1.f / 8.f);

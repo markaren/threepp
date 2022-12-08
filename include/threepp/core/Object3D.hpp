@@ -36,6 +36,7 @@ namespace threepp {
 
     public:
         inline static Vector3 defaultUp{0, 1, 0};
+        inline static bool defaultMatrixAutoUpdate{true};
 
         const unsigned int id{_object3Did++};
 
@@ -56,10 +57,10 @@ namespace threepp {
         Matrix4 modelViewMatrix;
         Matrix3 normalMatrix;
 
-        std::shared_ptr<Matrix4> matrix = std::make_shared<Matrix4>();
-        std::shared_ptr<Matrix4> matrixWorld = std::make_shared<Matrix4>();
+        Matrix4 matrix;
+        Matrix4 matrixWorld;
 
-        bool matrixAutoUpdate = true;
+        bool matrixAutoUpdate = defaultMatrixAutoUpdate;
         bool matrixWorldNeedsUpdate = false;
 
         Layers layers;
@@ -124,11 +125,11 @@ namespace threepp {
 
         Object3D *getObjectByName(const std::string &name);
 
-        void getWorldPosition(Vector3 &target);
+        Vector3 &getWorldPosition(Vector3 &target);
 
-        void getWorldQuaternion(Quaternion &target);
+        Quaternion &getWorldQuaternion(Quaternion &target);
 
-        void getWorldScale(Vector3 &target);
+        Vector3 &getWorldScale(Vector3 &target);
 
         virtual void getWorldDirection(Vector3 &target);
 
@@ -142,8 +143,8 @@ namespace threepp {
 
         template<class T>
         void traverseType(const std::function<void(T &)> &callback) {
-            traverse([&](Object3D& o){
-                auto dyn = dynamic_cast<T*>(&o);
+            traverse([&](Object3D &o) {
+                auto dyn = dynamic_cast<T *>(&o);
                 if (dyn) {
                     callback(*dyn);
                 }
@@ -155,7 +156,7 @@ namespace threepp {
 
         virtual void updateMatrixWorld(bool force = false);
 
-        virtual void updateWorldMatrix(bool updateParents, bool updateChildren);
+        virtual void updateWorldMatrix(std::optional<bool> updateParents = std::nullopt, std::optional<bool> updateChildren = std::nullopt);
 
         static std::shared_ptr<Object3D> create() {
 
@@ -187,6 +188,18 @@ namespace threepp {
             return nullptr;
         }
 
+        template<class T>
+        T *as() {
+
+            return dynamic_cast<T *>(this);
+        }
+
+        template<class T>
+        bool is() {
+
+            return dynamic_cast<T *>(this) != nullptr;
+        }
+
         virtual ~Object3D() = default;
 
     protected:
@@ -194,9 +207,6 @@ namespace threepp {
 
     private:
         inline static unsigned int _object3Did{0};
-
-        friend class Box3;
-        friend class Frustum;
     };
 
 }// namespace threepp

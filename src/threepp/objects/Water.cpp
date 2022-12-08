@@ -177,9 +177,9 @@ struct Water::Impl {
         material->uniforms->operator[]("eye").setValue(eye);
 
         water_.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
-            mirrorWorldPosition.setFromMatrixPosition(*water_.matrixWorld);
-            cameraWorldPosition.setFromMatrixPosition(*camera->matrixWorld);
-            rotationMatrix.extractRotation(*water_.matrixWorld);
+            mirrorWorldPosition.setFromMatrixPosition(water_.matrixWorld);
+            cameraWorldPosition.setFromMatrixPosition(camera->matrixWorld);
+            rotationMatrix.extractRotation(water_.matrixWorld);
             normal.set(0, 0, 1);
             normal.applyMatrix4(rotationMatrix);
             view.subVectors(mirrorWorldPosition, cameraWorldPosition);// Avoid rendering when mirror is facing away
@@ -187,7 +187,7 @@ struct Water::Impl {
             if (view.dot(normal) > 0) return;
             view.reflect(normal).negate();
             view.add(mirrorWorldPosition);
-            rotationMatrix.extractRotation(*camera->matrixWorld);
+            rotationMatrix.extractRotation(camera->matrixWorld);
             lookAtPosition.set(0, 0, -1);
             lookAtPosition.applyMatrix4(rotationMatrix);
             lookAtPosition.add(cameraWorldPosition);
@@ -229,7 +229,7 @@ struct Water::Impl {
             projectionMatrix.elements[6] = clipPlane.y;
             projectionMatrix.elements[10] = clipPlane.z + 1.f - clipBias;
             projectionMatrix.elements[14] = clipPlane.w;
-            eye.setFromMatrixPosition(*camera->matrixWorld);// Render
+            eye.setFromMatrixPosition(camera->matrixWorld);// Render
 
             auto _renderer = static_cast<GLRenderer *>(renderer);
 

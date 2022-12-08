@@ -4,7 +4,6 @@
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 
 #include "threepp/renderers/gl/glHelper.hpp"
-#include "threepp/utils/InstanceOf.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -27,9 +26,11 @@ void GLBindingStates::setup(Object3D *object, Material *material, std::shared_pt
 
     bool updateBuffers = needsUpdate(geometry, index);
 
-    if (updateBuffers) saveCache(geometry, index);
+    if (updateBuffers) {
+        saveCache(geometry, index);
+    }
 
-    if (instanceof <InstancedMesh>(object)) {
+    if (object->as<InstancedMesh>()) {
 
         updateBuffers = true;
     }
@@ -70,8 +71,9 @@ std::shared_ptr<GLBindingState> GLBindingStates::getBindingState(BufferGeometry 
 
     bool wireframe = false;
 
-    if (instanceof <MaterialWithWireframe>(material)) {
-        wireframe = dynamic_cast<MaterialWithWireframe *>(material)->wireframe;
+    auto wm = material->as<MaterialWithWireframe>();
+    if (wm) {
+        wireframe = wm->wireframe;
     }
 
     auto &programMap = bindingStates[geometry->id];
@@ -83,7 +85,7 @@ std::shared_ptr<GLBindingState> GLBindingStates::getBindingState(BufferGeometry 
         stateMap[wireframe] = createBindingState(createVertexArrayObject());
     }
 
-    return stateMap[wireframe];
+    return stateMap.at(wireframe);
 }
 
 std::shared_ptr<GLBindingState> GLBindingStates::createBindingState(std::optional<GLuint> vao) const {

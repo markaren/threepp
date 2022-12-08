@@ -3,6 +3,8 @@
 #ifndef THREEPP_QUATERNION_HPP
 #define THREEPP_QUATERNION_HPP
 
+#include "threepp/math/float_view.hpp"
+
 #include <functional>
 #include <iostream>
 #include <string>
@@ -11,69 +13,21 @@ namespace threepp {
 
     class Vector3;
     class Matrix4;
-
     class Euler;
 
     class Quaternion {
 
     public:
-        Quaternion() = default;
 
-        Quaternion(float x, float y, float z, float w);
+        float_view x;
+        float_view y;
+        float_view z;
+        float_view w;
 
-        float &operator[](unsigned int index);
 
-        [[nodiscard]] float x() const {
+        explicit Quaternion(float x = 0, float y = 0, float z = 0, float w = 1);
 
-            return x_;
-        }
-
-        Quaternion &x(float value) {
-
-            this->x_ = value;
-            this->onChangeCallback_();
-
-            return *this;
-        }
-
-        [[nodiscard]] float y() const {
-
-            return y_;
-        }
-
-        Quaternion &y(float value) {
-
-            this->y_ = value;
-            this->onChangeCallback_();
-
-            return *this;
-        }
-
-        [[nodiscard]] float z() const {
-
-            return z_;
-        }
-
-        Quaternion &z(float value) {
-
-            this->z_ = value;
-            this->onChangeCallback_();
-
-            return *this;
-        }
-
-        [[nodiscard]] float w() const {
-
-            return w_;
-        }
-
-        Quaternion &w(float value) {
-
-            this->w_ = value;
-            this->onChangeCallback_();
-
-            return *this;
-        }
+        float operator[](unsigned int index) const;
 
         Quaternion &set(float x, float y, float z, float w);
 
@@ -88,6 +42,8 @@ namespace threepp {
         Quaternion &setFromUnitVectors(const Vector3 &vFrom, const Vector3 &vTo);
 
         [[nodiscard]] float angleTo(const Quaternion &q) const;
+
+        Quaternion &rotateTowards(const Quaternion& q, float step);
 
         Quaternion &identity();
 
@@ -109,10 +65,20 @@ namespace threepp {
 
         Quaternion &multiplyQuaternions(const Quaternion &a, const Quaternion &b);
 
+        Quaternion &slerp(const Quaternion& qb, float t);
+
+        [[nodiscard]] Quaternion clone() const;
+
         [[nodiscard]] bool equals(const Quaternion &v) const;
 
         bool operator==(const Quaternion &other) const {
+
             return equals(other);
+        }
+
+        bool operator!=(const Quaternion &other) const {
+
+            return !equals(other);
         }
 
         Quaternion &_onChange(std::function<void()> callback);
@@ -120,10 +86,10 @@ namespace threepp {
         template<class ArrayLike>
         Quaternion &fromArray(const ArrayLike &array, unsigned int offset = 0) {
 
-            this->x_ = array[offset];
-            this->y_ = array[offset + 1];
-            this->z_ = array[offset + 2];
-            this->w_ = array[offset + 3];
+            this->x.value_ = array[offset];
+            this->y.value_ = array[offset + 1];
+            this->z.value_ = array[offset + 2];
+            this->w.value_ = array[offset + 3];
 
             this->onChangeCallback_();
 
@@ -133,22 +99,18 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike &array, unsigned int offset = 0) const {
 
-            array[offset] = this->x_;
-            array[offset + 1] = this->y_;
-            array[offset + 2] = this->z_;
-            array[offset + 3] = this->w_;
+            array[offset] = this->x();
+            array[offset + 1] = this->y();
+            array[offset + 2] = this->z();
+            array[offset + 3] = this->w();
         }
 
         friend std::ostream &operator<<(std::ostream &os, const Quaternion &v) {
-            os << "Quaternion(x=" << v.x_ << ", y=" << v.y_ << ", z=" << v.z_ << ", w=" << v.w_ << ")";
+            os << "Quaternion(x=" << v.x << ", y=" << v.y << ", z=" << v.z << ", w=" << v.w << ")";
             return os;
         }
 
     private:
-        float x_{0.f};
-        float y_{0.f};
-        float z_{0.f};
-        float w_{1.f};
 
         std::function<void()> onChangeCallback_ = [] {};
     };

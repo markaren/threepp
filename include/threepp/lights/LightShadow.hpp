@@ -52,11 +52,11 @@ namespace threepp {
             auto &shadowMatrix = this->matrix;
 
             Vector3 _lightPositionWorld{};
-            _lightPositionWorld.setFromMatrixPosition(*light->matrixWorld);
+            _lightPositionWorld.setFromMatrixPosition(light->matrixWorld);
             shadowCamera->position.copy(_lightPositionWorld);
 
             Vector3 _lookTarget{};
-            _lookTarget.setFromMatrixPosition(*lightWithTarget->target->matrixWorld);
+            _lookTarget.setFromMatrixPosition(lightWithTarget->target->matrixWorld);
             shadowCamera->lookAt(_lookTarget);
             shadowCamera->updateMatrixWorld();
 

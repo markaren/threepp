@@ -235,7 +235,7 @@ Vector3 &Vector3::project(const Camera &camera) {
 
 Vector3 &Vector3::unproject(const Camera &camera) {
 
-    return this->applyMatrix4(camera.projectionMatrixInverse).applyMatrix4(*camera.matrixWorld);
+    return this->applyMatrix4(camera.projectionMatrixInverse).applyMatrix4(camera.matrixWorld);
 }
 
 Vector3 &Vector3::transformDirection(const Matrix4 &m) {

@@ -89,12 +89,22 @@ namespace threepp {
 
         [[nodiscard]] virtual std::string type() const = 0;
 
+        template<class T>
+        T *as() {
 
+            return dynamic_cast<T *>(this);
+        }
+
+        template<class T>
+        bool is() {
+
+            return dynamic_cast<T*>(this) != nullptr;
+        }
 
         virtual ~Material() = default;
 
     protected:
-        Material(): uniforms(std::make_shared<UniformMap>()) {}
+        Material() : uniforms(std::make_shared<UniformMap>()) {}
 
     private:
         inline static unsigned int materialId = 0;

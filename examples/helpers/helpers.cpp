@@ -6,6 +6,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas;
+    GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
@@ -13,10 +14,6 @@ int main() {
     camera->position.y = 1;
 
     OrbitControls controls{camera, canvas};
-
-    GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
-    renderer.setSize(canvas.getSize());
 
     const auto arrow = ArrowHelper::create({0, 1, 0}, {0, 0, 0}, 0.5f, 0xff0000);
     arrow->position.setX(0.5f);
@@ -36,7 +33,7 @@ int main() {
 
     Plane plane(Vector3(0.5, 1, 0.5), 1);
     const auto planeHelper = PlaneHelper::create(plane);
-    scene->add(planeHelper);
+    camera->add(planeHelper);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -44,8 +41,6 @@ int main() {
         renderer.setSize(size);
     });
 
-    arrow->rotation.setOrder(Euler::ZXY);
-    axes->rotation.setOrder(Euler::YZX);
     float t = 0;
     canvas.animate([&](float dt) {
         arrow->rotation.z += 0.5f * dt;

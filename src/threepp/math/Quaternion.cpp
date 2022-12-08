@@ -11,18 +11,18 @@
 using namespace threepp;
 
 Quaternion::Quaternion(float x, float y, float z, float w)
-    : x_(x), y_(y), z_(z), w_(w) {}
+    : x(x), y(y), z(z), w(w) {}
 
-float &Quaternion::operator[](unsigned int index) {
+float Quaternion::operator[](unsigned int index) const {
     switch (index) {
         case 0:
-            return x_;
+            return x();
         case 1:
-            return y_;
+            return y();
         case 2:
-            return z_;
+            return z();
         case 3:
-            return w_;
+            return w();
         default:
             throw std::runtime_error("index out of bound: " + std::to_string(index));
     }
@@ -30,10 +30,10 @@ float &Quaternion::operator[](unsigned int index) {
 
 Quaternion &Quaternion::set(float x, float y, float z, float w) {
 
-    this->x_ = x;
-    this->y_ = y;
-    this->z_ = z;
-    this->w_ = w;
+    this->x.value_ = x;
+    this->y.value_ = y;
+    this->z.value_ = z;
+    this->w.value_ = w;
 
     this->onChangeCallback_();
 
@@ -42,10 +42,10 @@ Quaternion &Quaternion::set(float x, float y, float z, float w) {
 
 Quaternion &Quaternion::copy(const Quaternion &quaternion) {
 
-    this->x_ = quaternion.x_;
-    this->y_ = quaternion.y_;
-    this->z_ = quaternion.z_;
-    this->w_ = quaternion.w_;
+    this->x.value_ = quaternion.x();
+    this->y.value_ = quaternion.y();
+    this->z.value_ = quaternion.z();
+    this->w.value_ = quaternion.w();
 
     this->onChangeCallback_();
 
@@ -72,45 +72,45 @@ Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
     switch (order) {
 
         case Euler::RotationOrders::XYZ:
-            this->x_ = s1 * c2 * c3 + c1 * s2 * s3;
-            this->y_ = c1 * s2 * c3 - s1 * c2 * s3;
-            this->z_ = c1 * c2 * s3 + s1 * s2 * c3;
-            this->w_ = c1 * c2 * c3 - s1 * s2 * s3;
+            this->x.value_ = s1 * c2 * c3 + c1 * s2 * s3;
+            this->y.value_ = c1 * s2 * c3 - s1 * c2 * s3;
+            this->z.value_ = c1 * c2 * s3 + s1 * s2 * c3;
+            this->w.value_ = c1 * c2 * c3 - s1 * s2 * s3;
             break;
 
         case Euler::RotationOrders::YXZ:
-            this->x_ = s1 * c2 * c3 + c1 * s2 * s3;
-            this->y_ = c1 * s2 * c3 - s1 * c2 * s3;
-            this->z_ = c1 * c2 * s3 - s1 * s2 * c3;
-            this->w_ = c1 * c2 * c3 + s1 * s2 * s3;
+            this->x.value_ = s1 * c2 * c3 + c1 * s2 * s3;
+            this->y.value_ = c1 * s2 * c3 - s1 * c2 * s3;
+            this->z.value_ = c1 * c2 * s3 - s1 * s2 * c3;
+            this->w.value_ = c1 * c2 * c3 + s1 * s2 * s3;
             break;
 
         case Euler::RotationOrders::ZXY:
-            this->x_ = s1 * c2 * c3 - c1 * s2 * s3;
-            this->y_ = c1 * s2 * c3 + s1 * c2 * s3;
-            this->z_ = c1 * c2 * s3 + s1 * s2 * c3;
-            this->w_ = c1 * c2 * c3 - s1 * s2 * s3;
+            this->x.value_ = s1 * c2 * c3 - c1 * s2 * s3;
+            this->y.value_ = c1 * s2 * c3 + s1 * c2 * s3;
+            this->z.value_ = c1 * c2 * s3 + s1 * s2 * c3;
+            this->w.value_ = c1 * c2 * c3 - s1 * s2 * s3;
             break;
 
         case Euler::RotationOrders::ZYX:
-            this->x_ = s1 * c2 * c3 - c1 * s2 * s3;
-            this->y_ = c1 * s2 * c3 + s1 * c2 * s3;
-            this->z_ = c1 * c2 * s3 - s1 * s2 * c3;
-            this->w_ = c1 * c2 * c3 + s1 * s2 * s3;
+            this->x.value_ = s1 * c2 * c3 - c1 * s2 * s3;
+            this->y.value_ = c1 * s2 * c3 + s1 * c2 * s3;
+            this->z.value_ = c1 * c2 * s3 - s1 * s2 * c3;
+            this->w.value_ = c1 * c2 * c3 + s1 * s2 * s3;
             break;
 
         case Euler::RotationOrders::YZX:
-            this->x_ = s1 * c2 * c3 + c1 * s2 * s3;
-            this->y_ = c1 * s2 * c3 + s1 * c2 * s3;
-            this->z_ = c1 * c2 * s3 - s1 * s2 * c3;
-            this->w_ = c1 * c2 * c3 - s1 * s2 * s3;
+            this->x.value_ = s1 * c2 * c3 + c1 * s2 * s3;
+            this->y.value_ = c1 * s2 * c3 + s1 * c2 * s3;
+            this->z.value_ = c1 * c2 * s3 - s1 * s2 * c3;
+            this->w.value_ = c1 * c2 * c3 - s1 * s2 * s3;
             break;
 
         case Euler::RotationOrders::XZY:
-            this->x_ = s1 * c2 * c3 - c1 * s2 * s3;
-            this->y_ = c1 * s2 * c3 - s1 * c2 * s3;
-            this->z_ = c1 * c2 * s3 + s1 * s2 * c3;
-            this->w_ = c1 * c2 * c3 + s1 * s2 * s3;
+            this->x.value_ = s1 * c2 * c3 - c1 * s2 * s3;
+            this->y.value_ = c1 * s2 * c3 - s1 * c2 * s3;
+            this->z.value_ = c1 * c2 * s3 + s1 * s2 * c3;
+            this->w.value_ = c1 * c2 * c3 + s1 * s2 * s3;
             break;
     }
 
@@ -129,10 +129,10 @@ Quaternion &Quaternion::setFromAxisAngle(const Vector3 &axis, float angle) {
 
     const float halfAngle = angle / 2.f, s = std::sin(halfAngle);
 
-    this->x_ = axis.x * s;
-    this->y_ = axis.y * s;
-    this->z_ = axis.z * s;
-    this->w_ = std::cos(halfAngle);
+    this->x.value_ = axis.x * s;
+    this->y.value_ = axis.y * s;
+    this->z.value_ = axis.z * s;
+    this->w.value_ = std::cos(halfAngle);
 
     this->onChangeCallback_();
 
@@ -157,37 +157,37 @@ Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
 
         const auto s = 0.5f / std::sqrt(trace + 1.0f);
 
-        this->w_ = 0.25f / s;
-        this->x_ = (m32 - m23) * s;
-        this->y_ = (m13 - m31) * s;
-        this->z_ = (m21 - m12) * s;
+        this->w.value_ = 0.25f / s;
+        this->x.value_ = (m32 - m23) * s;
+        this->y.value_ = (m13 - m31) * s;
+        this->z.value_ = (m21 - m12) * s;
 
     } else if (m11 > m22 && m11 > m33) {
 
         const auto s = 2.0f * std::sqrt(1.0f + m11 - m22 - m33);
 
-        this->w_ = (m32 - m23) / s;
-        this->x_ = 0.25f * s;
-        this->y_ = (m12 + m21) / s;
-        this->z_ = (m13 + m31) / s;
+        this->w.value_ = (m32 - m23) / s;
+        this->x.value_ = 0.25f * s;
+        this->y.value_ = (m12 + m21) / s;
+        this->z.value_ = (m13 + m31) / s;
 
     } else if (m22 > m33) {
 
         const auto s = 2.0f * std::sqrt(1.0f + m22 - m11 - m33);
 
-        this->w_ = (m13 - m31) / s;
-        this->x_ = (m12 + m21) / s;
-        this->y_ = 0.25f * s;
-        this->z_ = (m23 + m32) / s;
+        this->w.value_ = (m13 - m31) / s;
+        this->x.value_ = (m12 + m21) / s;
+        this->y.value_ = 0.25f * s;
+        this->z.value_ = (m23 + m32) / s;
 
     } else {
 
         const auto s = 2.f * std::sqrt(1.0f + m33 - m11 - m22);
 
-        this->w_ = (m21 - m12) / s;
-        this->x_ = (m13 + m31) / s;
-        this->y_ = (m23 + m32) / s;
-        this->z_ = 0.25f * s;
+        this->w.value_ = (m21 - m12) / s;
+        this->x.value_ = (m13 + m31) / s;
+        this->y.value_ = (m23 + m32) / s;
+        this->z.value_ = 0.25f * s;
     }
 
     this->onChangeCallback_();
@@ -210,27 +210,27 @@ Quaternion &Quaternion::setFromUnitVectors(const Vector3 &vFrom, const Vector3 &
 
         if (std::abs(vFrom.x) > std::abs(vFrom.z)) {
 
-            this->x_ = -vFrom.y;
-            this->y_ = vFrom.x;
-            this->z_ = 0;
-            this->w_ = r;
+            this->x.value_ = -vFrom.y;
+            this->y.value_ = vFrom.x;
+            this->z.value_ = 0;
+            this->w.value_ = r;
 
         } else {
 
-            this->x_ = 0;
-            this->y_ = -vFrom.z;
-            this->z_ = vFrom.y;
-            this->w_ = r;
+            this->x.value_ = 0;
+            this->y.value_ = -vFrom.z;
+            this->z.value_ = vFrom.y;
+            this->w.value_ = r;
         }
 
     } else {
 
         // crossVectors( vFrom, vTo ); // inlined to avoid cyclic dependency on Vector3
 
-        this->x_ = vFrom.y * vTo.z - vFrom.z * vTo.y;
-        this->y_ = vFrom.z * vTo.x - vFrom.x * vTo.z;
-        this->z_ = vFrom.x * vTo.y - vFrom.y * vTo.x;
-        this->w_ = r;
+        this->x.value_ = vFrom.y * vTo.z - vFrom.z * vTo.y;
+        this->y.value_ = vFrom.z * vTo.x - vFrom.x * vTo.z;
+        this->z.value_ = vFrom.x * vTo.y - vFrom.y * vTo.x;
+        this->w.value_ = r;
     }
 
     return this->normalize();
@@ -240,6 +240,85 @@ Quaternion &Quaternion::setFromUnitVectors(const Vector3 &vFrom, const Vector3 &
 float Quaternion::angleTo(const Quaternion &q) const {
 
     return 2 * std::acos(std::abs(std::clamp(this->dot(q), -1.0f, 1.0f)));
+}
+
+Quaternion &Quaternion::rotateTowards(const Quaternion &q, float step) {
+
+    const float angle = this->angleTo(q);
+
+    if (angle == 0) return *this;
+
+    auto t = std::min(1.f, step / angle);
+
+    this->slerp(q, t);
+
+    return *this;
+}
+
+Quaternion &Quaternion::slerp(const Quaternion &qb, float t) {
+
+    if (t == 0) return *this;
+    if (t == 1) return this->copy(qb);
+
+    const float x = this->x.value_, y = this->y.value_, z = this->z.value_, w = this->w.value_;
+
+    // http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/slerp/
+
+    float cosHalfTheta = w * qb.w.value_ + x * qb.x.value_ + y * qb.y.value_ + z * qb.z.value_;
+
+    if (cosHalfTheta < 0) {
+
+        this->w.value_ = -qb.w.value_;
+        this->x.value_ = -qb.x.value_;
+        this->y.value_ = -qb.y.value_;
+        this->z.value_ = -qb.z.value_;
+
+        cosHalfTheta = -cosHalfTheta;
+
+    } else {
+
+        this->copy(qb);
+    }
+
+    if (cosHalfTheta >= 1.0) {
+
+        this->w.value_ = w;
+        this->x.value_ = x;
+        this->y.value_ = y;
+        this->z.value_ = z;
+
+        return *this;
+    }
+
+    const float sqrSinHalfTheta = 1.f - cosHalfTheta * cosHalfTheta;
+
+    if (sqrSinHalfTheta <= std::numeric_limits<float>::epsilon()) {
+
+        const float s = 1 - t;
+        this->w.value_ = s * w + t * this->w.value_;
+        this->x.value_ = s * x + t * this->x.value_;
+        this->y.value_ = s * y + t * this->y.value_;
+        this->z.value_ = s * z + t * this->z.value_;
+
+        this->normalize();
+        this->onChangeCallback_();
+
+        return *this;
+    }
+
+    const float sinHalfTheta = std::sqrt(sqrSinHalfTheta);
+    const float halfTheta = std::atan2(sinHalfTheta, cosHalfTheta);
+    const float ratioA = std::sin((1 - t) * halfTheta) / sinHalfTheta,
+                ratioB = std::sin(t * halfTheta) / sinHalfTheta;
+
+    this->w = (w * ratioA + this->w.value_ * ratioB);
+    this->x = (x * ratioA + this->x.value_ * ratioB);
+    this->y = (y * ratioA + this->y.value_ * ratioB);
+    this->z = (z * ratioA + this->z.value_ * ratioB);
+
+    this->onChangeCallback_();
+
+    return *this;
 }
 
 Quaternion &Quaternion::identity() {
@@ -256,9 +335,9 @@ Quaternion &Quaternion::invert() {
 
 Quaternion &Quaternion::conjugate() {
 
-    this->x_ *= -1;
-    this->y_ *= -1;
-    this->z_ *= -1;
+    this->x.value_ *= -1;
+    this->y.value_ *= -1;
+    this->z.value_ *= -1;
 
     this->onChangeCallback_();
 
@@ -267,17 +346,17 @@ Quaternion &Quaternion::conjugate() {
 
 float Quaternion::dot(const Quaternion &v) const {
 
-    return this->x_ * v.x_ + this->y_ * v.y_ + this->z_ * v.z_ + this->w_ * v.w_;
+    return this->x * v.x + this->y * v.y + this->z * v.z + this->w * v.w;
 }
 
 float Quaternion::lengthSq() const {
 
-    return this->x_ * this->x_ + this->y_ * this->y_ + this->z_ * this->z_ + this->w_ * this->w_;
+    return this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w;
 }
 
 float Quaternion::length() const {
 
-    return std::sqrt(this->x_ * this->x_ + this->y_ * this->y_ + this->z_ * this->z_ + this->w_ * this->w_);
+    return std::sqrt(this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w);
 }
 
 Quaternion &Quaternion::normalize() {
@@ -286,19 +365,19 @@ Quaternion &Quaternion::normalize() {
 
     if (l == 0) {
 
-        this->x_ = 0;
-        this->y_ = 0;
-        this->z_ = 0;
-        this->w_ = 1;
+        this->x.value_ = 0;
+        this->y.value_ = 0;
+        this->z.value_ = 0;
+        this->w.value_ = 1;
 
     } else {
 
         l = 1.0f / l;
 
-        this->x_ = this->x_ * l;
-        this->y_ = this->y_ * l;
-        this->z_ = this->z_ * l;
-        this->w_ = this->w_ * l;
+        this->x.value_ = this->x * l;
+        this->y.value_ = this->y * l;
+        this->z.value_ = this->z * l;
+        this->w.value_ = this->w * l;
     }
 
     this->onChangeCallback_();
@@ -320,27 +399,36 @@ Quaternion &Quaternion::multiplyQuaternions(const Quaternion &a, const Quaternio
 
     // from http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/code/index.htm
 
-    const auto qax = a.x_, qay = a.y_, qaz = a.z_, qaw = a.w_;
-    const auto qbx = b.x_, qby = b.y_, qbz = b.z_, qbw = b.w_;
+    const auto qax = a.x(), qay = a.y(), qaz = a.z(), qaw = a.w();
+    const auto qbx = b.x(), qby = b.y(), qbz = b.z(), qbw = b.w();
 
-    this->x_ = qax * qbw + qaw * qbx + qay * qbz - qaz * qby;
-    this->y_ = qay * qbw + qaw * qby + qaz * qbx - qax * qbz;
-    this->z_ = qaz * qbw + qaw * qbz + qax * qby - qay * qbx;
-    this->w_ = qaw * qbw - qax * qbx - qay * qby - qaz * qbz;
+    this->x.value_ = qax * qbw + qaw * qbx + qay * qbz - qaz * qby;
+    this->y.value_ = qay * qbw + qaw * qby + qaz * qbx - qax * qbz;
+    this->z.value_ = qaz * qbw + qaw * qbz + qax * qby - qay * qbx;
+    this->w.value_ = qaw * qbw - qax * qbx - qay * qby - qaz * qbz;
 
     this->onChangeCallback_();
 
     return *this;
 }
 
+Quaternion Quaternion::clone() const {
+
+    return Quaternion(x.value_, y.value_, z.value_, w.value_);
+}
+
 bool Quaternion::equals(const Quaternion &v) const {
 
-    return ((v.x_ == this->x_) && (v.y_ == this->y_) && (v.z_ == this->z_) && (v.w_ == this->w_));
+    return ((v.x() == this->x()) && (v.y() == this->y()) && (v.z() == this->z()) && (v.w() == this->w()));
 }
 
 Quaternion &Quaternion::_onChange(std::function<void()> callback) {
 
     this->onChangeCallback_ = std::move(callback);
+    this->x.setCallback(this->onChangeCallback_);
+    this->y.setCallback(this->onChangeCallback_);
+    this->z.setCallback(this->onChangeCallback_);
+    this->w.setCallback(this->onChangeCallback_);
 
     return *this;
 }

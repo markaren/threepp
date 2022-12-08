@@ -60,7 +60,7 @@ bool Frustum::intersectsObject(Object3D &object) {
 
     if (!geometry->boundingSphere) geometry->computeBoundingSphere();
 
-    _sphere.copy(geometry->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
+    _sphere.copy(geometry->boundingSphere.value()).applyMatrix4(object.matrixWorld);
 
     return this->intersectsSphere(_sphere);
 }

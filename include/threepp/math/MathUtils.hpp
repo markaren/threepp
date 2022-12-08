@@ -48,6 +48,8 @@ namespace threepp::math {
         return (T(0) < val) - (val < T(0));
     }
 
+    bool compareFloats(float f1, float f2);
+
 }// namespace threepp::math
 
 #endif//THREEPP_MATHUTILS_HPP

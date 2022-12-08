@@ -4,8 +4,6 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
-#include "threepp/utils/InstanceOf.hpp"
-
 #include <algorithm>
 
 using namespace threepp;
@@ -72,15 +70,15 @@ std::vector<Intersection> Raycaster::intersectObjects(std::vector<std::shared_pt
 
 void Raycaster::setFromCamera(const Vector2 &coords, const std::shared_ptr<Camera> &camera) {
 
-    if (instanceof <PerspectiveCamera>(camera.get())) {
+    if (camera->as<PerspectiveCamera>()) {
 
-        this->ray.origin.setFromMatrixPosition(*camera->matrixWorld);
+        this->ray.origin.setFromMatrixPosition(camera->matrixWorld);
         this->ray.direction.set(coords.x, coords.y, 0.5f).unproject(*camera).sub(this->ray.origin).normalize();
 
-    } else if (instanceof <OrthographicCamera>(camera.get())) {
+    } else if (camera->as<OrthographicCamera>()) {
 
         this->ray.origin.set(coords.x, coords.y, (camera->near + camera->far) / (camera->near - camera->far)).unproject(*camera);// set origin in plane of camera
-        this->ray.direction.set(0, 0, -1).transformDirection(*camera->matrixWorld);
+        this->ray.direction.set(0, 0, -1).transformDirection(camera->matrixWorld);
 
     } else {
         std::cerr << "THREE.Raycaster: Unsupported camera type" << std::endl;

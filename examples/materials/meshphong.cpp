@@ -39,22 +39,12 @@ int main() {
 
     scene->add(group);
 
-    const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshLambertMaterial::create();
-    planeMaterial->color.setHex(Color::gray);
-    planeMaterial->side = DoubleSide;
-    auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.setY(-1);
-    plane->rotateX(math::degToRad(90));
-    scene->add(plane);
-
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
-    group->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         group->rotation.y += 0.5f * dt;
 

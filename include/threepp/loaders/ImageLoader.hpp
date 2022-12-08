@@ -4,6 +4,7 @@
 
 #include <string>
 #include <filesystem>
+#include <optional>
 
 #include <threepp/textures/Image.hpp>
 
@@ -13,7 +14,7 @@ namespace threepp {
 
     public:
 
-        Image load(const std::filesystem::path &imagePath, int channels = 4, bool flipY = true);
+        std::optional<Image> load(const std::filesystem::path &imagePath, int channels = 4, bool flipY = true);
     };
 
 }// namespace threepp

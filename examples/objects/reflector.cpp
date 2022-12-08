@@ -61,7 +61,6 @@ int main() {
         renderer.setSize(size);
     });
 
-    sphere->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         sphere->rotation.y += 0.5f * dt;
 

@@ -4,6 +4,7 @@ project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
+option(THREEPP_BUILD_TESTS "Build test suite" ON)
 
 # ==============================================================================
 # Global internal configuration
@@ -15,35 +16,25 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# Prepare for export and installation.
-set(THREEPP_HEADER_INSTALL_DIR "include")
-if (WIN32)
-    set(THREEPP_CMAKE_INSTALL_DIR "cmake")
-else ()
-    set(THREEPP_CMAKE_INSTALL_DIR "share/${PROJECT_NAME}/cmake")
-endif ()
-set(THREEPP_INSTALL_DESTINATIONS
-        ARCHIVE DESTINATION "lib"
-        LIBRARY DESTINATION "lib"
-        RUNTIME DESTINATION "bin"
-        INCLUDES DESTINATION "${THREEPP_HEADER_INSTALL_DIR}")
-set(THREEPP_EXPORT_TARGET "${PROJECT_NAME}-targets")
+# ==============================================================================
+# Dependencies
+# ==============================================================================
 
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(stb CONFIG QUIET)
+find_package(assimp CONFIG)
 
-add_library(glfw::glfw INTERFACE IMPORTED)
-target_link_libraries(glfw::glfw INTERFACE glfw)
-
-if (NOT TARGET stb::stb)
-    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
-    add_library("stb::stb" INTERFACE IMPORTED)
+if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+    add_library(glfw::glfw ALIAS glfw)
 endif()
+
+if (NOT TARGET "stb::stb")
+    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
+    add_library(stb::stb INTERFACE IMPORTED)
+endif ()
 
 target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 
@@ -53,60 +44,68 @@ if (THREEPP_BUILD_EXAMPLES)
 
     if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
         add_library(Bullet::Bullet INTERFACE IMPORTED)
+        if("${BULLET_INCLUDE_DIRS}" MATCHES ".*/bullet$")
+            target_include_directories(Bullet::Bullet INTERFACE "${BULLET_INCLUDE_DIRS}/..")
+        endif()
         target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
-    endif()
+    endif ()
 
-endif()
+    add_subdirectory(examples)
 
-# ==============================================================================
-# Source code
-# ==============================================================================
+endif ()
 
 add_subdirectory(src)
 
-if (THREEPP_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-endif()
+if (THREEPP_BUILD_TESTS)
+
+    include(FetchContent)
+    FetchContent_Declare(
+            Catch2
+            GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+            GIT_TAG v2.13.8
+    )
+    FetchContent_MakeAvailable(Catch2)
+
+    enable_testing()
+    add_subdirectory(tests)
+endif ()
 
 
 # ==============================================================================
 # Application resources
 # ==============================================================================
 
-# Shaders
-file(COPY "${CMAKE_SOURCE_DIR}/src/threepp/renderers/shaders/ShaderChunk" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
-file(COPY "${CMAKE_SOURCE_DIR}/src/threepp/renderers/shaders/ShaderLib" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
-
 # Data files
-file(COPY "${CMAKE_SOURCE_DIR}/data" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
+file(COPY "${CMAKE_SOURCE_DIR}/data/favicon.bmp" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
+file(COPY "${CMAKE_SOURCE_DIR}/data/models" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
+file(COPY "${CMAKE_SOURCE_DIR}/data/textures" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 
 # ==============================================================================
 # Exports and remaining installation
 # ==============================================================================
 
-install(
-        EXPORT "${THREEPP_EXPORT_TARGET}"
-        DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}"
-        NAMESPACE "${PROJECT_NAME}::"
-)
 
 include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
 
-# Generate and install package-config file.
-set(configFile "${CMAKE_BINARY_DIR}/${PROJECT_NAME}-config.cmake")
-set(targetsFile "${THREEPP_CMAKE_INSTALL_DIR}/${THREEPP_EXPORT_TARGET}.cmake")
-configure_package_config_file(
-        "${CMAKE_SOURCE_DIR}/cmake/project-config.cmake.in"
-        "${configFile}"
-        INSTALL_DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}"
-        PATH_VARS targetsFile
-)
-install(FILES "${configFile}" DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}")
 
-# Generate and install package-version file
-set(versionFile "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake")
+configure_package_config_file(cmake/config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake
+        INSTALL_DESTINATION ${CMAKE_INSTALL_DATADIR}/threepp
+        NO_SET_AND_CHECK_MACRO)
 write_basic_package_version_file(
-        "${versionFile}"
-        VERSION "${PROJECT_VERSION}"
-        COMPATIBILITY "SameMajorVersion")
-install(FILES "${versionFile}" DESTINATION "${THREEPP_CMAKE_INSTALL_DIR}")
+        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake
+        VERSION ${CMAKE_PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+install(
+        FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake
+        DESTINATION
+        ${CMAKE_INSTALL_DATADIR}/threepp)
+
+install(TARGETS threepp EXPORT threepp-targets)
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(EXPORT threepp-targets
+        NAMESPACE threepp::
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/threepp)
