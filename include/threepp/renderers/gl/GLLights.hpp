@@ -27,7 +27,7 @@ namespace threepp::gl {
 
     struct UniformsCache {
 
-        LightUniforms &get(const Light &light) {
+        std::shared_ptr<LightUniforms> get(const Light &light) {
 
             if (lights.count(light.id)) {
 
@@ -35,46 +35,46 @@ namespace threepp::gl {
             }
 
             auto type = light.type();
-            LightUniforms uniforms;
+            std::shared_ptr<LightUniforms> uniforms;
             if (type == "DirectionalLight") {
 
-                uniforms = {
+                uniforms = std::make_shared<LightUniforms>(LightUniforms {
                         {"direction", Vector3()},
-                        {"color", Color()}};
+                        {"color", Color()}});
 
             } else if (type == "SpotLight") {
 
-                uniforms = {
+                uniforms = std::make_shared<LightUniforms>(LightUniforms {
                         {"position", Vector3()},
                         {"direction", Vector3()},
                         {"color", Color()},
                         {"distance", 0.f},
                         {"coneCos", 0.f},
                         {"penumbraCos", 0.f},
-                        {"decay", 0.f}};
+                        {"decay", 0.f}});
 
             } else if (type == "PointLight") {
 
-                uniforms = {
+                uniforms = std::make_shared<LightUniforms>(LightUniforms {
                         {"position", Vector3()},
                         {"color", Color()},
                         {"distance", 0.f},
-                        {"decay", 0.f}};
+                        {"decay", 0.f}});
 
             } else if (type == "HemisphereLight") {
 
-                uniforms = {
+                uniforms = std::make_shared<LightUniforms>(LightUniforms {
                         {"direction", Vector3()},
                         {"skyColor", Color()},
-                        {"groundColor", Color()}};
+                        {"groundColor", Color()}});
 
             } else if (type == "RectAreaLight") {
 
-                uniforms = {
+                uniforms = std::make_shared<LightUniforms>(LightUniforms {
                         {"color", Color()},
                         {"position", Vector3()},
                         {"halfWidth", Vector3()},
-                        {"halfHeight", Vector3()}};
+                        {"halfHeight", Vector3()}});
             }
 
             lights[light.id] = uniforms;
@@ -83,7 +83,7 @@ namespace threepp::gl {
         }
 
     private:
-        std::unordered_map<unsigned int, LightUniforms> lights;
+        std::unordered_map<unsigned int, std::shared_ptr<LightUniforms>> lights;
     };
 
     struct ShadowUniformsCache {
@@ -155,20 +155,20 @@ namespace threepp::gl {
 
             Color ambient{0, 0, 0};
             std::vector<Vector3> probe{9};
-            std::vector<LightUniforms> directional;
+            std::vector<std::shared_ptr<LightUniforms>> directional;
             std::vector<LightUniforms> directionalShadow;
             std::vector<std::shared_ptr<Texture>> directionalShadowMap;
             std::vector<Matrix4> directionalShadowMatrix;
-            std::vector<LightUniforms> spot;
+            std::vector<std::shared_ptr<LightUniforms>> spot;
             std::vector<LightUniforms> spotShadow;
             std::vector<std::shared_ptr<Texture>> spotShadowMap;
             std::vector<Matrix4> spotShadowMatrix;
-            std::vector<LightUniforms> rectArea;
-            std::vector<LightUniforms> point;
+            std::vector<std::shared_ptr<LightUniforms>> rectArea;
+            std::vector<std::shared_ptr<LightUniforms>> point;
             std::vector<LightUniforms> pointShadow;
             std::vector<std::shared_ptr<Texture>> pointShadowMap;
             std::vector<Matrix4> pointShadowMatrix;
-            std::vector<LightUniforms> hemi;
+            std::vector<std::shared_ptr<LightUniforms>> hemi;
         };
 
         LightState state{};

@@ -15,7 +15,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = SpotLight::create(0xffffff);
-    light->distance = 3;
+    light->distance = 5;
     light->position.set(0, 2, 0);
     scene->add(light);
 
@@ -45,7 +45,7 @@ int main() {
     scene->add(group);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshLambertMaterial::create();
+    const auto planeMaterial = MeshPhongMaterial::create();
     planeMaterial->color.setHex(Color::gray);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);

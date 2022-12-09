@@ -260,13 +260,6 @@ if (assimp_FOUND)
 endif()
 
 
-
-#set(chunksHeader "threepp/renderers/shaders/ShaderChunk/chunks.hpp")
-#file(WRITE "${chunksHeader}"
-#        "#ifndef THREEPP_CHUNKS_HPP\n"
-#        "#define THREEPP_CHUNKS_HPP\n\n"
-#        )
-
 set(generatedSourcesDir "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${generatedSourcesDir}")
 
@@ -279,10 +272,10 @@ foreach(shaderFile ${files})
     get_filename_component(fileName ${shaderFile} NAME_WLE)
     set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk/${fileName}.hpp")
     file(READ ${shaderFile} text)
-    set(text
-            "namespace threepp::shaders::shaderchunk {\n\n"
-            "\tconst char* ${fileName}=R\"(${text})\";\n\n"
-            "}\n"
+    set(text "\
+namespace threepp::shaders::shaderchunk {\n\n\
+const char* ${fileName}=R\"(${text})\";\n\n\
+}\n"
         )
     file(WRITE "${header_file}"
             "#ifndef THREEPP_${fileName}_HPP\n"
@@ -304,10 +297,10 @@ foreach(shaderFile ${files})
     get_filename_component(fileName ${shaderFile} NAME_WLE)
     set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/ShaderLib/${fileName}.hpp")
     file(READ ${shaderFile} text)
-    set(text
-            "namespace threepp::shaders::shaderlib {\n\n"
-            "\tconst char* ${fileName}=R\"(${text})\";\n\n"
-            "}\n"
+    set(text "\
+namespace threepp::shaders::shaderlib {\n\n\
+const char* ${fileName}=R\"(${text})\";\n\n\
+}\n"
             )
     file(WRITE "${header_file}"
             "#ifndef THREEPP_${fileName}_HPP\n"
