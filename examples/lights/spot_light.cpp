@@ -45,7 +45,7 @@ int main() {
     scene->add(group);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshLambertMaterial::create();
+    const auto planeMaterial = MeshPhongMaterial::create();
     planeMaterial->color.setHex(Color::gray);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
@@ -62,8 +62,6 @@ int main() {
     group->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
       group->rotation.y += 0.5f * dt;
-
-      light->position.y += 0.1;
 
       helper->update();
 
