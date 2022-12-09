@@ -15,7 +15,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = SpotLight::create(0xffffff);
-    light->distance = 3;
+    light->distance = 5;
     light->position.set(0, 2, 0);
     scene->add(light);
 
@@ -62,6 +62,8 @@ int main() {
     group->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
       group->rotation.y += 0.5f * dt;
+
+      light->position.y += 0.1;
 
       helper->update();
 
