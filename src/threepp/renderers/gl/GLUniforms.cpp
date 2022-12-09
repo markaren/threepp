@@ -334,6 +334,12 @@ namespace {
                                     int index = std::stoi(u->id);
                                     u->setValue(arg[index], textures);
                                 }
+                            },
+                            [&](std::vector<std::shared_ptr<std::unordered_map<std::string, NestedUniformValue>>> arg) {
+                                for (auto &u : seq) {
+                                    int index = std::stoi(u->id);
+                                    u->setValue(*arg[index], textures);
+                                }
                             }},
                     value);
         }

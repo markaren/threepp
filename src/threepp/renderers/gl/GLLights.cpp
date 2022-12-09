@@ -21,7 +21,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
     int numPointShadows = 0;
     int numSpotShadows = 0;
 
-    std::stable_sort(lights.begin(), lights.end(), &shadowCastingLightsFirst);
+    std::stable_sort(lights.begin(), lights.end(), shadowCastingLightsFirst);
 
     for (auto &light : lights) {
 
@@ -45,9 +45,9 @@ void GLLights::setup(std::vector<Light *> &lights) {
 
         } else if (light->as<DirectionalLight>()) {
 
-            auto &uniforms = cache_.get(*light);
+            auto uniforms = cache_.get(*light);
 
-            std::get<Color>(uniforms["color"]).copy(light->color).multiplyScalar(light->intensity);
+            std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(light->intensity);
 
             if (light->castShadow) {
 
@@ -69,21 +69,27 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 numDirectionalShadows++;
             }
 
-            state.directional.resize(directionalLength + 1);
-            state.directional[directionalLength] = uniforms;
+            state.directional.emplace_back(uniforms);
 
             directionalLength++;
-        } else if (light->as<SpotLight>()) {
 
-            auto &uniforms = cache_.get(*light);
+        } else if (light->is<SpotLight>()) {
 
-            std::get<Color>(uniforms.at("color")).copy(light->color).multiplyScalar(light->intensity);
+            auto l = light->as<SpotLight>();
+            auto uniforms = cache_.get(*light);
+
+            std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(l->matrixWorld);
+
+            std::get<Color>(uniforms->at("color")).copy(color).multiplyScalar(l->intensity);
+            std::get<float>(uniforms->at("distance")) = l->distance;
+
+            std::get<float>(uniforms->at("coneCos")) = std::cos(l->angle);
+            std::get<float>(uniforms->at("penumbraCos")) = std::cos(l->angle * (1 - l->penumbra));
+            std::get<float>(uniforms->at("decay")) = l->decay;
 
             if (light->castShadow) {
 
-                auto l = dynamic_cast<SpotLight *>(light);
                 auto shadow = l->shadow;
-
                 auto &shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms.at("shadowBias") = shadow->bias;
@@ -99,8 +105,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 numSpotShadows++;
             }
 
-            state.spot.resize(spotLength + 1);
-            state.spot[spotLength] = uniforms;
+            state.spot.emplace_back(uniforms);
 
             spotLength++;
 
@@ -109,11 +114,11 @@ void GLLights::setup(std::vector<Light *> &lights) {
             auto l = dynamic_cast<PointLight *>(light);
             auto &shadow = l->shadow;
 
-            auto &uniforms = cache_.get(*light);
+            auto uniforms = cache_.get(*light);
 
-            std::get<Color>(uniforms["color"]).copy(light->color).multiplyScalar(light->intensity);
-            uniforms["distance"] = l->distance;
-            uniforms["decay"] = l->decay;
+            std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(l->intensity);
+            uniforms->at("distance") = l->distance;
+            uniforms->at("decay") = l->decay;
 
             if (light->castShadow) {
 
@@ -134,8 +139,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 numPointShadows++;
             }
 
-            state.point.resize(pointLength + 1);
-            state.point[pointLength] = uniforms;
+            state.point.emplace_back(uniforms);
 
             pointLength++;
         }
@@ -184,7 +188,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
     int pointLength = 0;
     int spotLength = 0;
 
-    const auto &viewMatrix = camera->matrixWorldInverse;
+    const auto viewMatrix = camera->matrixWorldInverse;
 
     for (auto light : lights) {
 
@@ -193,7 +197,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             auto l = light->as<DirectionalLight>();
             auto &uniforms = state.directional.at(directionalLength);
 
-            auto &direction = std::get<Vector3>(uniforms.at("direction"));
+            auto &direction = std::get<Vector3>(uniforms->at("direction"));
 
             direction.setFromMatrixPosition(light->matrixWorld);
 
@@ -209,13 +213,13 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             auto l = dynamic_cast<SpotLight *>(light);
             auto &uniforms = state.spot.at(spotLength);
 
-            auto &position = std::get<Vector3>(uniforms.at("position"));
-            auto &direction = std::get<Vector3>(uniforms.at("direction"));
+            auto &position = std::get<Vector3>(uniforms->at("position"));
+            auto &direction = std::get<Vector3>(uniforms->at("direction"));
 
-            position.setFromMatrixPosition(light->matrixWorld);
+            position.setFromMatrixPosition(l->matrixWorld);
             position.applyMatrix4(viewMatrix);
 
-            direction.setFromMatrixPosition(light->matrixWorld);
+            direction.setFromMatrixPosition(l->matrixWorld);
 
             Vector3 vector3;
             vector3.setFromMatrixPosition(l->target->matrixWorld);
@@ -228,7 +232,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto &uniforms = state.point.at(pointLength);
 
-            auto &position = std::get<Vector3>(uniforms.at("position"));
+            auto &position = std::get<Vector3>(uniforms->at("position"));
 
             position.setFromMatrixPosition(light->matrixWorld);
             position.applyMatrix4(viewMatrix);
