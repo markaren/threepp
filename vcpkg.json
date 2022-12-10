@@ -2,7 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
   "name": "threepp",
   "dependencies": [
-    "glad",
+    {
+      "name": "glad",
+      "features": ["gl-api-41"]
+    },
     "glfw3",
     "stb"
   ],
