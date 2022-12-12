@@ -4,23 +4,20 @@
 
 using namespace threepp;
 
-std::shared_ptr<Group> loadCrane() {
+std::shared_ptr<Object3D> loadCrane() {
 
     OBJLoader loader;
     auto part1 = loader.load("data/models/obj/Crane3R/4200/4200.obj");
     auto part2 = loader.load("data/models/obj/Crane3R/7000/7000.obj");
     part2->position.set(0, 0, 4.2);
+    part1->add(part2);
     auto part3 = loader.load("data/models/obj/Crane3R/5200/5200.obj");
-    part3->position.set(7, 0, 4.2);
+    part3->position.set(7, 0, 0);
+    part2->add(part3);
 
-    auto crane = Group::create();
-    crane->add(part1);
-    crane->add(part2);
-    crane->add(part3);
+    part1->rotateX(-math::PI/2);
 
-    crane->rotateX(-math::PI/2);
-
-    return crane;
+    return part1;
 }
 
 
@@ -31,7 +28,7 @@ int main() {
     renderer.setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create();
-    camera->position.set(10, 0, 10);
+    camera->position.set(3.5, 5, 10);
 
     OrbitControls controls(camera, canvas);
 
@@ -58,6 +55,5 @@ int main() {
     });
 
     t.join();
-
 
 }
