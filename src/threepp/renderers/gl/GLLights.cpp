@@ -54,15 +54,15 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 auto l = light->as<DirectionalLight>();
                 auto shadow = l->shadow;
 
-                auto &shadowUniforms = shadowCache_.get(*light);
+                auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms.at("shadowBias") = shadow->bias;
-                shadowUniforms.at("shadowNormalBias") = shadow->normalBias;
-                shadowUniforms.at("shadowRadius") = shadow->radius;
-                shadowUniforms.at("shadowMapSize") = shadow->mapSize;
+                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
+                shadowUniforms->at("shadowRadius") = shadow->radius;
+                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
 
-                state.directionalShadow.resize(directionalLength + 1);
-                state.directionalShadow[directionalLength] = shadowUniforms;
+//                state.directionalShadow.resize(directionalLength + 1);
+                state.directionalShadow.emplace_back(shadowUniforms);
                 state.directionalShadowMap[directionalLength] = shadow->map->texture;
                 state.directionalShadowMatrix[directionalLength] = shadow->matrix;
 
@@ -90,15 +90,15 @@ void GLLights::setup(std::vector<Light *> &lights) {
             if (light->castShadow) {
 
                 auto shadow = l->shadow;
-                auto &shadowUniforms = shadowCache_.get(*light);
+                auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms.at("shadowBias") = shadow->bias;
-                shadowUniforms.at("shadowNormalBias") = shadow->normalBias;
-                shadowUniforms.at("shadowRadius") = shadow->radius;
-                shadowUniforms.at("shadowMapSize") = shadow->mapSize;
+                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
+                shadowUniforms->at("shadowRadius") = shadow->radius;
+                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
 
-                state.spotShadow.resize(spotLength + 1);
-                state.spotShadow[spotLength] = shadowUniforms;
+//                state.spotShadow.resize(spotLength + 1);
+                state.spotShadow.emplace_back(shadowUniforms);
                 state.spotShadowMap[spotLength] = shadow->map->texture;
                 state.spotShadowMatrix[spotLength] = shadow->matrix;
 
@@ -122,17 +122,17 @@ void GLLights::setup(std::vector<Light *> &lights) {
 
             if (light->castShadow) {
 
-                auto &shadowUniforms = shadowCache_.get(*light);
+                auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms.at("shadowBias") = shadow->bias;
-                shadowUniforms.at("shadowNormalBias") = shadow->normalBias;
-                shadowUniforms.at("shadowRadius") = shadow->radius;
-                shadowUniforms.at("shadowMapSize") = shadow->mapSize;
-                shadowUniforms.at("shadowCameraNear") = shadow->camera->near;
-                shadowUniforms.at("shadowCameraFar") = shadow->camera->far;
+                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
+                shadowUniforms->at("shadowRadius") = shadow->radius;
+                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
+                shadowUniforms->at("shadowCameraNear") = shadow->camera->near;
+                shadowUniforms->at("shadowCameraFar") = shadow->camera->far;
 
-                state.pointShadow.resize(pointLength + 1);
-                state.pointShadow[pointLength] = shadowUniforms;
+//                state.pointShadow.resize(pointLength + 1);
+                state.pointShadow.emplace_back(shadowUniforms);
                 state.pointShadowMap[pointLength] = shadow->map->texture;
                 state.pointShadowMatrix[pointLength] = shadow->matrix;
 
