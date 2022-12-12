@@ -1,4 +1,3 @@
-include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_executable(demo demo.cpp)
 target_link_libraries(demo PUBLIC threepp)
@@ -17,6 +16,8 @@ add_subdirectory(lights)
 add_subdirectory(misc)
 add_subdirectory(helpers)
 add_subdirectory(loaders)
+
+add_subdirectory(projects)
 
 if (BULLET_FOUND)
     add_subdirectory(bullet)
