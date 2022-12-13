@@ -16,9 +16,13 @@
 
 namespace threepp {
 
+    template<class T>
+    class TypedBufferAttribute;
+
     class BufferAttribute {
 
     public:
+
         UpdateRange updateRange{0, -1};
 
         unsigned int version = 0;
@@ -51,21 +55,32 @@ namespace threepp {
         }
 
         template<class T>
-        T* as() {
+        TypedBufferAttribute<T>* typed() {
 
-            return dynamic_cast<T*>(this);
+            return dynamic_cast<TypedBufferAttribute<T>*>(this);
         }
 
         virtual ~BufferAttribute() = default;
 
     protected:
-        const int itemSize_;
-        const bool normalized_;
+        int itemSize_{};
+        bool normalized_{};
 
         int usage_{StaticDrawUsage};
 
+        BufferAttribute() = default;
+
         BufferAttribute(int itemSize, bool normalized)
             : itemSize_(itemSize), normalized_(normalized) {}
+
+        void copy(const BufferAttribute& source) {
+
+//            this->name = source.name;
+            this->itemSize_ = source.itemSize_;
+            this->normalized_ = source.normalized_;
+
+            this->usage_ = source.usage_;
+        }
 
         inline static Vector3 _vector{};
         inline static Vector2 _vector2{};
@@ -75,6 +90,7 @@ namespace threepp {
     class TypedBufferAttribute : public BufferAttribute {
 
     public:
+
         [[nodiscard]] int count() const override {
 
             return count_;
@@ -365,20 +381,35 @@ namespace threepp {
             target.set(minX, minY, minZ, maxX, maxY, maxZ);
         }
 
+        void copy(const TypedBufferAttribute<T> &source) {
+            BufferAttribute::copy(source);
+
+            this->count_ = source.count_;
+            this->array_ = array_;
+        }
+
+        [[nodiscard]] std::unique_ptr<TypedBufferAttribute<T>> clone() const {
+            auto clone = std::unique_ptr<TypedBufferAttribute<T>>(new TypedBufferAttribute<T>());
+            clone->copy(*this);
+
+            return clone;
+        }
+
         static std::unique_ptr<TypedBufferAttribute<T>> create(std::vector<T> array, int itemSize, bool normalized = false) {
 
             return std::unique_ptr<TypedBufferAttribute<T>>(new TypedBufferAttribute<T>(array, itemSize, normalized));
         }
 
     protected:
+        TypedBufferAttribute() = default;
+
         TypedBufferAttribute(std::vector<T> array, int itemSize, bool normalized)
             : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_((int) array_.size() / itemSize) {}
-
 
     private:
         std::vector<T> array_;
 
-        const int count_;
+       int count_;
     };
 
     typedef TypedBufferAttribute<int> IntBufferAttribute;

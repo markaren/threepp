@@ -275,6 +275,76 @@ void BufferGeometry::normalizeNormals() {
     }
 }
 
+void BufferGeometry::copy(const BufferGeometry &source) {
+    // reset
+
+    this->index_ = nullptr;
+    this->attributes_.clear();
+    this->groups.clear();
+    this->boundingBox = std::nullopt;
+    this->boundingSphere = std::nullopt;
+
+    // name
+
+//        this->name = source.name;
+
+    // index
+
+    auto &index = source.index_;
+
+    if (index) {
+
+        this->setIndex(index->clone());
+    }
+
+    // attributes
+
+    auto &attributes = source.attributes_;
+
+    for (const auto &[name, attribute] : attributes) {
+
+        if (attribute->typed<int>()) {
+            this->setAttribute(name, attribute->typed<int>()->clone());
+        } else if (attribute->typed<float>()) {
+            this->setAttribute(name, attribute->typed<float>()->clone());
+        } else {
+            throw std::runtime_error("TODO");
+        }
+
+    }
+
+
+    // groups
+
+    for (auto &group : source.groups) {
+
+        this->addGroup(group.start, group.count, group.materialIndex);
+    }
+
+    // bounding box
+
+    auto &boundingBox = source.boundingBox;
+
+    if (boundingBox) {
+
+        this->boundingBox = boundingBox;
+    }
+
+    // bounding sphere
+
+    auto &boundingSphere = source.boundingSphere;
+
+    if (boundingSphere) {
+
+        this->boundingSphere = boundingSphere;
+    }
+
+    // draw range
+
+    this->drawRange.start = source.drawRange.start;
+    this->drawRange.count = source.drawRange.count;
+}
+
 void BufferGeometry::dispose() {
 
     this->dispatchEvent("dispose", this);
