@@ -54,8 +54,8 @@ namespace threepp {
 
             if (levels.size() > 1) {
 
-                _v1.setFromMatrixPosition(camera->matrixWorld);
-                _v2.setFromMatrixPosition(this->matrixWorld);
+                _v1.setFromMatrixPosition(*camera->matrixWorld);
+                _v2.setFromMatrixPosition(*this->matrixWorld);
 
                 float distance = _v1.distanceTo(_v2) / camera->zoom;
 
@@ -63,7 +63,7 @@ namespace threepp {
 
                 int i, l;
 
-                for (i = 1, l = (int) levels.size(); i < l; i++) {
+                for (i = 1, l = levels.size(); i < l; i++) {
 
                     if (distance >= levels[i].distance) {
 

@@ -24,7 +24,7 @@ namespace {
         if (std::isnan(point.x)) return std::nullopt;
 
         _intersectionPointWorld.copy(point);
-        _intersectionPointWorld.applyMatrix4(object->matrixWorld);
+        _intersectionPointWorld.applyMatrix4(*object->matrixWorld);
 
         const auto distance = raycaster.ray.origin.distanceTo(_intersectionPointWorld);
 
@@ -102,7 +102,7 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
     if (!geometry_->boundingSphere) geometry_->computeBoundingSphere();
 
     _sphere.copy(*geometry_->boundingSphere);
-    _sphere.applyMatrix4(matrixWorld);
+    _sphere.applyMatrix4(*matrixWorld);
 
     if (!raycaster.ray.intersectsSphere(_sphere)) return;
 
@@ -111,7 +111,7 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
     Ray _ray{};
     Matrix4 _inverseMatrix{};
 
-    _inverseMatrix.copy(matrixWorld).invert();
+    _inverseMatrix.copy(*matrixWorld).invert();
     _ray.copy(raycaster.ray).applyMatrix4(_inverseMatrix);
 
     // Check boundingBox before continuing

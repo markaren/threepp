@@ -14,15 +14,13 @@ namespace threepp {
     public:
         void update() {
 
-            this->matrix.copy(this->light->matrixWorld);
-
             if (this->color) {
 
-                std::dynamic_pointer_cast<MaterialWithColor>(this->material())->color.setHex(*this->color);
+                this->material()->as<MaterialWithColor>()->color.copy(*this->color);
 
             } else {
 
-                std::dynamic_pointer_cast<MaterialWithColor>(this->material())->color.copy(this->light->color);
+                this->material()->as<MaterialWithColor>()->color.copy(this->light->color);
             }
         }
 
@@ -32,10 +30,10 @@ namespace threepp {
         }
 
     protected:
-        std::optional<unsigned int> color;
+        std::optional<Color> color;
         std::shared_ptr<PointLight> light;
 
-        PointLightHelper(std::shared_ptr<PointLight> light, float sphereSize, std::optional<unsigned int> color)
+        PointLightHelper(std::shared_ptr<PointLight> light, float sphereSize, std::optional<Color> color)
             : Mesh(nullptr, nullptr), light(std::move(light)), color(color) {
 
             geometry_ = SphereGeometry::create(sphereSize, 4, 2);
@@ -48,6 +46,7 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
+            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             update();

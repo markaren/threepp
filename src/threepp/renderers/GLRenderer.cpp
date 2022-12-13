@@ -214,7 +214,7 @@ void GLRenderer::renderBufferDirect(
 
     bool isMesh = object->as<Mesh>();
 
-    const auto frontFaceCW = (isMesh && object->matrixWorld.determinant() < 0);
+    const auto frontFaceCW = (isMesh && object->matrixWorld->determinant() < 0);
 
     auto program = setProgram(camera, scene, material, object);
 
@@ -525,7 +525,7 @@ void GLRenderer::projectObject(const std::shared_ptr<Object3D> &object, const st
 
                 if (sortObjects) {
 
-                    _vector3.setFromMatrixPosition(object->matrixWorld)
+                    _vector3.setFromMatrixPosition(*object->matrixWorld)
                             .applyMatrix4(_projScreenMatrix);
                 }
 
@@ -622,7 +622,7 @@ void GLRenderer::renderObject(
         object->onBeforeRender.value()((void *) this, scene, camera, geometry, material, group);
     }
 
-    object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, object->matrixWorld);
+    object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, *object->matrixWorld);
     object->normalMatrix.getNormalMatrix(object->modelViewMatrix);
 
     if (false /*object.isImmediateRenderObject*/) {
@@ -925,7 +925,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
             if (p_uniforms->map.count("cameraPosition")) {
 
                 auto &uCamPos = p_uniforms->map["cameraPosition"];
-                _vector3.setFromMatrixPosition(camera->matrixWorld);
+                _vector3.setFromMatrixPosition(*camera->matrixWorld);
                 uCamPos->setValue(_vector3);
             }
         }
@@ -1008,7 +1008,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
     p_uniforms->setValue("modelViewMatrix", object->modelViewMatrix);
     p_uniforms->setValue("normalMatrix", object->normalMatrix);
-    p_uniforms->setValue("modelMatrix", object->matrixWorld);
+    p_uniforms->setValue("modelMatrix", *object->matrixWorld);
 
     return program;
 }

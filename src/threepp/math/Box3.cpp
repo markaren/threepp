@@ -131,7 +131,7 @@ Box3 &Box3::expandByObject(Object3D &object) {
 
         Box3 _box{};
         _box.copy(geometry->boundingBox.value());
-        _box.applyMatrix4(object.matrixWorld);
+        _box.applyMatrix4(*object.matrixWorld);
 
         this->union_(_box);
     }

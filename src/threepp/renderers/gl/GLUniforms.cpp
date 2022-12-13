@@ -242,7 +242,8 @@ namespace {
 
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
-                               [&](Matrix4 arg) { setValueM4Helper(arg.elements); }},
+                               [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
+                               [&](Matrix4 *arg) { setValueM4Helper(arg->elements); }},
                        value);
         }
     };
@@ -329,7 +330,7 @@ namespace {
                                                v);
                                 }
                             },
-                            [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
+                            [&](std::vector<std::unordered_map<std::string, NestedUniformValue> *> arg) {
                                 for (auto &u : seq) {
                                     int index = std::stoi(u->id);
                                     u->setValue(*arg[index], textures);

@@ -108,6 +108,7 @@ namespace threepp {
 
             camera->updateProjectionMatrix();
 
+            this->matrix = camera->matrixWorld;
             this->matrixAutoUpdate = false;
 
             update();
@@ -115,62 +116,60 @@ namespace threepp {
 
         void update() {
 
-            this->matrix.copy(camera->matrixWorld);
-
             float w = 1, h = 1;
 
             // we need just camera projection matrix inverse
             // world matrix must be identity
 
-            Camera _camera;
             _camera.projectionMatrixInverse.copy(this->camera->projectionMatrixInverse);
 
             // center / target
 
-            setPoint("c", _camera, 0, 0, -1);
-            setPoint("t", _camera, 0, 0, 1);
+            setPoint("c", 0, 0, -1);
+            setPoint("t", 0, 0, 1);
 
             // near
 
-            setPoint("n1", _camera, -w, -h, -1);
-            setPoint("n2", _camera, w, -h, -1);
-            setPoint("n3", _camera, -w, h, -1);
-            setPoint("n4", _camera, w, h, -1);
+            setPoint("n1", -w, -h, -1);
+            setPoint("n2", w, -h, -1);
+            setPoint("n3", -w, h, -1);
+            setPoint("n4", w, h, -1);
 
             // far
 
-            setPoint("f1", _camera, -w, -h, 1);
-            setPoint("f2", _camera, w, -h, 1);
-            setPoint("f3", _camera, -w, h, 1);
-            setPoint("f4", _camera, w, h, 1);
+            setPoint("f1", -w, -h, 1);
+            setPoint("f2", w, -h, 1);
+            setPoint("f3", -w, h, 1);
+            setPoint("f4", w, h, 1);
 
             // up
 
-            setPoint("u1", _camera, w * 0.7f, h * 1.1f, -1);
-            setPoint("u2", _camera, -w * 0.7f, h * 1.1f, -1);
-            setPoint("u3", _camera, 0, h * 2, -1);
+            setPoint("u1", w * 0.7f, h * 1.1f, -1);
+            setPoint("u2", -w * 0.7f, h * 1.1f, -1);
+            setPoint("u3", 0, h * 2, -1);
 
             // cross
 
-            setPoint("cf1", _camera, -w, 0, 1);
-            setPoint("cf2", _camera, w, 0, 1);
-            setPoint("cf3", _camera, 0, -h, 1);
-            setPoint("cf4", _camera, 0, h, 1);
+            setPoint("cf1", -w, 0, 1);
+            setPoint("cf2", w, 0, 1);
+            setPoint("cf3", 0, -h, 1);
+            setPoint("cf4", 0, h, 1);
 
-            setPoint("cn1", _camera, -w, 0, -1);
-            setPoint("cn2", _camera, w, 0, -1);
-            setPoint("cn3", _camera, 0, -h, -1);
-            setPoint("cn4", _camera, 0, h, -1);
+            setPoint("cn1", -w, 0, -1);
+            setPoint("cn2", w, 0, -1);
+            setPoint("cn3", 0, -h, -1);
+            setPoint("cn4", 0, h, -1);
 
             geometry()->getAttribute<float>("position")->needsUpdate();
 
         }
 
     private:
+        Camera _camera;
         std::shared_ptr<Camera> camera;
         std::unordered_map<std::string, std::vector<float>> pointMap;
 
-        void setPoint(const std::string &point, const Camera &_camera, float x, float y, float z) {
+        void setPoint(const std::string &point, float x, float y, float z) {
 
             Vector3 _vector;
             _vector.set(x, y, z).unproject(_camera);

@@ -22,27 +22,26 @@ namespace threepp {
             Vector3 _v2{};
             Vector3 _v3{};
 
-            _v1.setFromMatrixPosition(this->light->matrixWorld);
-            _v2.setFromMatrixPosition(this->light->target->matrixWorld);
+            _v1.setFromMatrixPosition(*this->light->matrixWorld);
+            _v2.setFromMatrixPosition(*this->light->target->matrixWorld);
             _v3.subVectors(_v2, _v1);
 
             this->lightPlane->lookAt(_v2);
 
             if (this->color) {
 
-                std::dynamic_pointer_cast<MaterialWithColor>(this->lightPlane->material())->color.copy(*this->color);
-                std::dynamic_pointer_cast<MaterialWithColor>(this->targetLine->material())->color.copy(*this->color);
+                this->lightPlane->material()->as<MaterialWithColor>()->color.copy(*this->color);
+                this->targetLine->material()->as<MaterialWithColor>()->color.copy(*this->color);
 
             } else {
 
-                std::dynamic_pointer_cast<MaterialWithColor>(this->lightPlane->material())->color.copy(this->light->color);
-                std::dynamic_pointer_cast<MaterialWithColor>(this->targetLine->material())->color.copy(this->light->color);
+                this->lightPlane->material()->as<MaterialWithColor>()->color.copy(this->light->color);
+                this->targetLine->material()->as<MaterialWithColor>()->color.copy(this->light->color);
             }
 
             this->targetLine->lookAt(_v2);
             this->targetLine->scale.z = _v3.length();
 
-            this->matrix.copy(this->light->matrixWorld);
         }
 
         static std::shared_ptr<DirectionalLightHelper> create(const std::shared_ptr<DirectionalLight> &light, float size = 1, std::optional<unsigned int> color = std::nullopt) {
@@ -63,6 +62,7 @@ namespace threepp {
 
             this->light->updateMatrixWorld();
 
+            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             auto geometry = BufferGeometry::create();

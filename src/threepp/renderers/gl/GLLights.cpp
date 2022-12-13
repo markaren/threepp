@@ -78,7 +78,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
             auto l = light->as<SpotLight>();
             auto uniforms = cache_.get(*light);
 
-            std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(l->matrixWorld);
+            std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(*l->matrixWorld);
 
             std::get<Color>(uniforms->at("color")).copy(color).multiplyScalar(l->intensity);
             std::get<float>(uniforms->at("distance")) = l->distance;
@@ -199,10 +199,10 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto &direction = std::get<Vector3>(uniforms->at("direction"));
 
-            direction.setFromMatrixPosition(light->matrixWorld);
+            direction.setFromMatrixPosition(*light->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target->matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
@@ -216,13 +216,13 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             auto &position = std::get<Vector3>(uniforms->at("position"));
             auto &direction = std::get<Vector3>(uniforms->at("direction"));
 
-            position.setFromMatrixPosition(l->matrixWorld);
+            position.setFromMatrixPosition(*l->matrixWorld);
             position.applyMatrix4(viewMatrix);
 
-            direction.setFromMatrixPosition(l->matrixWorld);
+            direction.setFromMatrixPosition(*l->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target->matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
@@ -234,7 +234,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto &position = std::get<Vector3>(uniforms->at("position"));
 
-            position.setFromMatrixPosition(light->matrixWorld);
+            position.setFromMatrixPosition(*light->matrixWorld);
             position.applyMatrix4(viewMatrix);
 
             pointLength++;
