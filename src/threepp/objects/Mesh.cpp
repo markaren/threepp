@@ -233,3 +233,8 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
         }
     }
 }
+
+std::shared_ptr<Mesh> Mesh::clone(bool recursive) {
+    auto clone = std::shared_ptr<Mesh>(new Mesh(geometry_, materials_));
+    return clone;
+}

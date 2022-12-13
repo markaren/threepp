@@ -8,23 +8,38 @@
 
 namespace threepp {
 
-    class MeshLambertMaterial : public virtual Material,
-                                public MaterialWithColor,
-                                public MaterialWithMap,
-                                public MaterialWithLightMap,
-                                public MaterialWithAoMap,
-                                public MaterialWithEmissive,
-                                public MaterialWithSpecularMap,
-                                public MaterialWithAlphaMap,
-                                public MaterialWithEnvMap,
-                                public MaterialWithReflectivity,
-                                public MaterialWithWireframe,
-                                public MaterialWithCombine {
+    class MeshLambertMaterial
+        : public virtual Material,
+          public MaterialWithColor,
+          public MaterialWithMap,
+          public MaterialWithLightMap,
+          public MaterialWithAoMap,
+          public MaterialWithEmissive,
+          public MaterialWithSpecularMap,
+          public MaterialWithAlphaMap,
+          public MaterialWithEnvMap,
+          public MaterialWithReflectivity,
+          public MaterialWithWireframe,
+          public MaterialWithCombine {
 
     public:
+        MeshLambertMaterial(const MeshLambertMaterial &m)
+            : MaterialWithColor(m.color),
+              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth),
+              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
+              MaterialWithLightMap(m.lightMapIntensity),
+              MaterialWithEmissive(m.emissive, m.emissiveIntensity),
+              MaterialWithAoMap(m.aoMapIntensity),
+              MaterialWithCombine(m.combine) {}
+
         [[nodiscard]] std::string type() const override {
 
             return "MeshLambertMaterial";
+        }
+
+        [[nodiscard]] std::shared_ptr<MeshLambertMaterial> clone() const {
+
+            return std::make_shared<MeshLambertMaterial>(*this);
         }
 
         static std::shared_ptr<MeshLambertMaterial> create() {
@@ -40,7 +55,7 @@ namespace threepp {
               MaterialWithLightMap(1),
               MaterialWithEmissive(0x000000, 1),
               MaterialWithAoMap(1),
-              MaterialWithCombine(MultiplyOperation){}
+              MaterialWithCombine(MultiplyOperation) {}
     };
 
 }// namespace threepp

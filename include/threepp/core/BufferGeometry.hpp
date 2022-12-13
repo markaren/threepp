@@ -90,6 +90,7 @@ namespace threepp {
         void dispose();
 
         static std::shared_ptr<BufferGeometry> create() {
+
             return std::make_shared<BufferGeometry>();
         }
 

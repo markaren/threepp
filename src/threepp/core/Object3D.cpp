@@ -397,3 +397,47 @@ void Object3D::updateWorldMatrix(std::optional<bool> updateParents, std::optiona
         }
     }
 }
+
+void Object3D::copy(const Object3D& source, bool recursive) {
+
+    this->name = source.name;
+
+    this->up.copy( source.up );
+
+    this->position.copy( source.position );
+    this->rotation.order_ = source.rotation.order_;
+    this->quaternion.copy( source.quaternion );
+    this->scale.copy( source.scale );
+
+    this->matrix->copy( *source.matrix );
+    this->matrixWorld->copy( *source.matrixWorld );
+
+    this->matrixAutoUpdate = source.matrixAutoUpdate;
+    this->matrixWorldNeedsUpdate = source.matrixWorldNeedsUpdate;
+
+    this->layers.mask_ = source.layers.mask_;
+    this->visible = source.visible;
+
+    this->castShadow = source.castShadow;
+    this->receiveShadow = source.receiveShadow;
+
+    this->frustumCulled = source.frustumCulled;
+    this->renderOrder = source.renderOrder;
+
+    if (recursive) {
+
+        for (auto& child : children) {
+
+            this->add(child->clone());
+        }
+
+    }
+}
+
+std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
+
+    auto clone = std::shared_ptr<Object3D>(new Object3D());
+    clone->copy(*this);
+
+    return clone;
+}

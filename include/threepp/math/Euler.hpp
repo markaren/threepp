@@ -79,6 +79,7 @@ namespace threepp {
 
         std::function<void()> onChangeCallback_ = [] {};
 
+        friend class Object3D;
         friend class Quaternion;
     };
 

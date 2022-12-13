@@ -200,6 +200,10 @@ namespace threepp {
             return dynamic_cast<T *>(this) != nullptr;
         }
 
+        void copy(const Object3D& source, bool recursive = true);
+
+        std::shared_ptr<Object3D> clone(bool recursive = false);
+
         virtual ~Object3D() = default;
 
     protected:

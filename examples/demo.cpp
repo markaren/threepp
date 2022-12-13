@@ -22,6 +22,11 @@ int main() {
     auto box = Mesh::create(boxGeometry, boxMaterial);
     scene->add(box);
 
+    auto wiredBox = Mesh::create(boxGeometry, boxMaterial->clone());
+    wiredBox->material<MeshBasicMaterial>()->wireframe = true;
+    wiredBox->material<MeshBasicMaterial>()->color = Color::white;
+    box->add(wiredBox);
+
     const auto sphereGeometry = SphereGeometry::create(0.5f);
     const auto sphereMaterial = MeshBasicMaterial::create();
     sphereMaterial->color.setHex(0x00ff00);
