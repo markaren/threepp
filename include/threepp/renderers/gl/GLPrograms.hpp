@@ -49,12 +49,12 @@ namespace threepp {
                     Material *material,
                     const GLLights::LightState &lights,
                     int numShadows,
-                    const std::shared_ptr<Scene> &scene,
-                    const std::shared_ptr<Object3D> &object);
+                    Scene* scene,
+                    Object3D* object);
 
             static std::string getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters);
 
-            static std::shared_ptr<UniformMap> getUniforms(const std::shared_ptr<Material> &material);
+            static std::shared_ptr<UniformMap> getUniforms(Material* material);
 
             std::shared_ptr<GLProgram> acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey);
 

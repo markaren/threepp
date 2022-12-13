@@ -22,8 +22,8 @@ ProgramParameters::ProgramParameters(
         const GLRenderer &renderer,
         const GLLights::LightState &lights,
         int numShadows,
-        const std::shared_ptr<Object3D> &object,
-        const std::shared_ptr<Scene> &scene,
+        Object3D *object,
+        Scene *scene,
         Material *material,
         const std::unordered_map<std::string, std::string> &shaderIDs) {
 
@@ -80,7 +80,7 @@ ProgramParameters::ProgramParameters(
 
     precision = "highp";
 
-    auto instancedMesh = dynamic_cast<InstancedMesh *>(object.get());
+    auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
     instancing = instancedMesh != nullptr;
     instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor != nullptr;
 

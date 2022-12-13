@@ -7,7 +7,7 @@ using namespace threepp;
 using namespace threepp::gl;
 
 
-std::shared_ptr<BufferGeometry> GLObjects::update(const std::shared_ptr<Object3D> &object) {
+std::shared_ptr<BufferGeometry> GLObjects::update(Object3D* object) {
 
     const int frame = info_.render.frame;
 
@@ -23,14 +23,14 @@ std::shared_ptr<BufferGeometry> GLObjects::update(const std::shared_ptr<Object3D
         updateMap_[geometry->id] = frame;
     }
 
-    if (std::dynamic_pointer_cast<InstancedMesh>(object)) {
+    if (dynamic_cast<InstancedMesh*>(object)) {
 
         if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
 
             object->addEventListener("dispose", &onInstancedMeshDispose);
         }
 
-        auto o = dynamic_cast<InstancedMesh *>(object.get());
+        auto o = dynamic_cast<InstancedMesh *>(object);
 
         attributes_.update(o->instanceMatrix.get(), GL_ARRAY_BUFFER);
 

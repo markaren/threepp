@@ -146,7 +146,7 @@ struct Reflector::Impl {
             _renderer->state.depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
-            _renderer->render(scene, virtualCamera);
+            _renderer->render(scene, virtualCamera.get());
             _renderer->shadowMap.autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
 

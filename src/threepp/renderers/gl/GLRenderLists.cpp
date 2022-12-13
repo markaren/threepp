@@ -20,7 +20,7 @@ namespace {
 
                 return a->renderOrder < b->renderOrder;
 
-            } else if (a->program != nullptr && b->program != nullptr && a->program.get() != b->program.get()) {
+            } else if (a->program != nullptr && b->program != nullptr && a->program != b->program) {
 
                 return a->program->id < b->program->id;
 
@@ -76,9 +76,9 @@ void gl::GLRenderList::init() {
 }
 
 std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
-        const std::shared_ptr<Object3D> &object,
-        const std::shared_ptr<BufferGeometry> &geometry,
-        const std::shared_ptr<Material> &material,
+        Object3D* object,
+        BufferGeometry* geometry,
+        Material* material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     std::shared_ptr<gl::RenderItem> renderItem = nullptr;
@@ -90,7 +90,7 @@ std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
                                                                                       object,
                                                                                       geometry,
                                                                                       material,
-                                                                                      materialProperties.program,
+                                                                                      materialProperties.program.get(),
                                                                                       groupOrder,
                                                                                       object->renderOrder,
                                                                                       z,
@@ -105,7 +105,7 @@ std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
         renderItem->geometry = geometry;
         renderItem->material = material;
         if (materialProperties.program) {
-            renderItem->program = materialProperties.program;
+            renderItem->program = materialProperties.program.get();
         }
         renderItem->groupOrder = groupOrder;
         renderItem->renderOrder = object->renderOrder;
@@ -119,9 +119,9 @@ std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
 }
 
 void gl::GLRenderList::push(
-        const std::shared_ptr<Object3D> &object,
-        const std::shared_ptr<BufferGeometry> &geometry,
-        const std::shared_ptr<Material> &material,
+        Object3D* object,
+        BufferGeometry* geometry,
+        Material* material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
@@ -137,9 +137,9 @@ void gl::GLRenderList::push(
 }
 
 void GLRenderList::unshift(
-        const std::shared_ptr<Object3D> &object,
-        const std::shared_ptr<BufferGeometry> &geometry,
-        const std::shared_ptr<Material> &material,
+        Object3D* object,
+        BufferGeometry* geometry,
+        Material* material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
