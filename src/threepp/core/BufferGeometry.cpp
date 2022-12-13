@@ -154,6 +154,7 @@ BufferGeometry &BufferGeometry::rotateZ(float angle) {
 
     return *this;
 }
+
 BufferGeometry &BufferGeometry::translate(float x, float y, float z) {
 
     // translate geometry
@@ -165,6 +166,7 @@ BufferGeometry &BufferGeometry::translate(float x, float y, float z) {
 
     return *this;
 }
+
 BufferGeometry &BufferGeometry::scale(float x, float y, float z) {
 
     // scale geometry
@@ -176,6 +178,7 @@ BufferGeometry &BufferGeometry::scale(float x, float y, float z) {
 
     return *this;
 }
+
 BufferGeometry &BufferGeometry::center() {
 
     this->computeBoundingBox();
@@ -188,6 +191,7 @@ BufferGeometry &BufferGeometry::center() {
 
     return *this;
 }
+
 void BufferGeometry::computeBoundingBox() {
 
     if (!this->boundingBox) {
@@ -211,6 +215,7 @@ void BufferGeometry::computeBoundingBox() {
         std::cerr << "THREE.BufferGeometry.computeBoundingBox(): Computed min/max have NaN values. The 'position' attribute is likely to have NaN values." << std::endl;
     }
 }
+
 void BufferGeometry::computeBoundingSphere() {
 
     if (!this->boundingSphere) {
