@@ -33,10 +33,7 @@ namespace threepp::gl {
             uniform.needsUpdate = false;
         }
 
-        bool init(
-                const std::vector<Plane> &planes,
-                bool enableLocalClipping,
-                const std::shared_ptr<Camera> &camera) {
+        bool init(const std::vector<Plane> &planes, bool enableLocalClipping, Camera* camera) {
 
             bool enabled =
                     !planes.empty() ||
@@ -65,7 +62,7 @@ namespace threepp::gl {
             resetGlobalState();
         }
 
-        void setState(const std::shared_ptr<Material> &material, const std::shared_ptr<Camera> &camera, bool useCache) {
+        void setState(Material* material, Camera* camera, bool useCache) {
 
             auto &planes = material->clippingPlanes;
             auto clipIntersection = material->clipIntersection;
@@ -129,8 +126,7 @@ namespace threepp::gl {
         }
 
         std::vector<float> projectPlanes(
-                const std::vector<Plane> &planes,
-                const std::shared_ptr<Camera> &camera,
+                const std::vector<Plane> &planes, Camera* camera,
                 int dstOffset, bool skipTransform = false) {
 
             int nPlanes = (int) planes.size();

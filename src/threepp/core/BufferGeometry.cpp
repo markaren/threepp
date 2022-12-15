@@ -154,6 +154,7 @@ BufferGeometry &BufferGeometry::rotateZ(float angle) {
 
     return *this;
 }
+
 BufferGeometry &BufferGeometry::translate(float x, float y, float z) {
 
     // translate geometry
@@ -165,6 +166,7 @@ BufferGeometry &BufferGeometry::translate(float x, float y, float z) {
 
     return *this;
 }
+
 BufferGeometry &BufferGeometry::scale(float x, float y, float z) {
 
     // scale geometry
@@ -176,6 +178,7 @@ BufferGeometry &BufferGeometry::scale(float x, float y, float z) {
 
     return *this;
 }
+
 BufferGeometry &BufferGeometry::center() {
 
     this->computeBoundingBox();
@@ -188,6 +191,7 @@ BufferGeometry &BufferGeometry::center() {
 
     return *this;
 }
+
 void BufferGeometry::computeBoundingBox() {
 
     if (!this->boundingBox) {
@@ -211,6 +215,7 @@ void BufferGeometry::computeBoundingBox() {
         std::cerr << "THREE.BufferGeometry.computeBoundingBox(): Computed min/max have NaN values. The 'position' attribute is likely to have NaN values." << std::endl;
     }
 }
+
 void BufferGeometry::computeBoundingSphere() {
 
     if (!this->boundingSphere) {
@@ -268,6 +273,76 @@ void BufferGeometry::normalizeNormals() {
 
         normals->setXYZ(i, _vector.x, _vector.y, _vector.z);
     }
+}
+
+void BufferGeometry::copy(const BufferGeometry &source) {
+    // reset
+
+    this->index_ = nullptr;
+    this->attributes_.clear();
+    this->groups.clear();
+    this->boundingBox = std::nullopt;
+    this->boundingSphere = std::nullopt;
+
+    // name
+
+//        this->name = source.name;
+
+    // index
+
+    auto &index = source.index_;
+
+    if (index) {
+
+        this->setIndex(index->clone());
+    }
+
+    // attributes
+
+    auto &attributes = source.attributes_;
+
+    for (const auto &[name, attribute] : attributes) {
+
+        if (attribute->typed<int>()) {
+            this->setAttribute(name, attribute->typed<int>()->clone());
+        } else if (attribute->typed<float>()) {
+            this->setAttribute(name, attribute->typed<float>()->clone());
+        } else {
+            throw std::runtime_error("TODO");
+        }
+
+    }
+
+
+    // groups
+
+    for (auto &group : source.groups) {
+
+        this->addGroup(group.start, group.count, group.materialIndex);
+    }
+
+    // bounding box
+
+    auto &boundingBox = source.boundingBox;
+
+    if (boundingBox) {
+
+        this->boundingBox = boundingBox;
+    }
+
+    // bounding sphere
+
+    auto &boundingSphere = source.boundingSphere;
+
+    if (boundingSphere) {
+
+        this->boundingSphere = boundingSphere;
+    }
+
+    // draw range
+
+    this->drawRange.start = source.drawRange.start;
+    this->drawRange.count = source.drawRange.count;
 }
 
 void BufferGeometry::dispose() {

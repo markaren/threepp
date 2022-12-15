@@ -16,17 +16,17 @@ Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType)
 
     GLint type;
     GLsizei bytesPerElement;
-    if (attribute->as<IntBufferAttribute>()) {
+    if (attribute->typed<int>()) {
         type = GL_UNSIGNED_INT;
         bytesPerElement = sizeof(int);
-        auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
+        auto attr = attribute->typed<int>();
         const auto &array = attr->array();
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
 
-    } else if (attribute->as<FloatBufferAttribute>()) {
+    } else if (attribute->typed<float>()) {
         type = GL_FLOAT;
         bytesPerElement = sizeof(float);
-        auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
+        auto attr = attribute->typed<float>();
         const auto &array = attr->array();
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
     } else {
@@ -45,15 +45,15 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
 
     if (updateRange.count == -1) {
 
-        if (attribute->as<IntBufferAttribute>()) {
+        if (attribute->typed<int>()) {
 
-            auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
+            auto attr = attribute->typed<int>();
             const auto &array = attr->array();
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
 
-        } else if (attribute->as<FloatBufferAttribute>()) {
+        } else if (attribute->typed<float>()) {
 
-            auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
+            auto attr = attribute->typed<float>();
             const auto &array = attr->array();
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
         } else {
@@ -63,16 +63,16 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
 
     } else {
 
-        if (attribute->as<IntBufferAttribute>()) {
+        if (attribute->typed<int>()) {
 
-            auto attr = dynamic_cast<IntBufferAttribute *>(attribute);
+            auto attr = attribute->typed<int>();
             const auto &array = attr->array();
             std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
 
-        } else if (attribute->as<FloatBufferAttribute>()) {
+        } else if (attribute->typed<float>()) {
 
-            auto attr = dynamic_cast<FloatBufferAttribute *>(attribute);
+            auto attr = attribute->typed<float>();
             const auto &array = attr->array();
             std::vector<float> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());

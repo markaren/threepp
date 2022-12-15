@@ -23,26 +23,20 @@ int main() {
     scene->add(helper);
 
     auto group = Group::create();
-
-    {
-        const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color.setHex(0xff0000);
-        auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.setX(-1);
-        group->add(box);
-    }
-
-    {
-        const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color.setHex(0x00ff00);
-        auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.setX(1);
-        group->add(box);
-    }
-
     scene->add(group);
+
+    const auto boxGeometry = BoxGeometry::create();
+    const auto boxMaterial = MeshPhongMaterial::create();
+    boxMaterial->color.setHex(0xff0000);
+    auto box = Mesh::create(boxGeometry, boxMaterial);
+    box->position.setX(-1);
+    group->add(box);
+
+    auto box2 = Mesh::create(boxGeometry, boxMaterial->clone());
+    box2->material<MaterialWithColor>()->color.setHex(0x00ff00);
+    box2->position.setX(1);
+    group->add(box2);
+
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshLambertMaterial::create();
@@ -54,17 +48,14 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-      camera->aspect = size.getAspect();
-      camera->updateProjectionMatrix();
-      renderer.setSize(size);
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
     });
 
-    group->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
-      group->rotation.y += 0.5f * dt;
+        group->rotation.y += 0.5f * dt;
 
-      helper->update();
-
-      renderer.render(scene, camera);
+        renderer.render(scene, camera);
     });
 }

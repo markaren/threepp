@@ -47,6 +47,8 @@ namespace threepp {
 
             int _maxTextureSize;
 
+            std::shared_ptr<Mesh> fullScreenMesh;
+
             void VSMPass(GLRenderer &_renderer, LightShadow *shadow, Camera *camera);
 
         };

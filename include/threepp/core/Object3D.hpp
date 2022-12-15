@@ -27,10 +27,7 @@ namespace threepp {
     class Scene;
     class BufferGeometry;
 
-    typedef std::function<void(void *, const std::shared_ptr<Scene> &,
-                               const std::shared_ptr<Camera> &, const std::shared_ptr<BufferGeometry> &,
-                               const std::shared_ptr<Material> &, std::optional<GeometryGroup>)>
-            RenderCallback;
+    typedef std::function<void(void *, Scene* ,Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;
 
     class Object3D : public EventDispatcher {
 
@@ -57,8 +54,8 @@ namespace threepp {
         Matrix4 modelViewMatrix;
         Matrix3 normalMatrix;
 
-        Matrix4 matrix;
-        Matrix4 matrixWorld;
+        std::shared_ptr<Matrix4> matrix;
+        std::shared_ptr<Matrix4> matrixWorld;
 
         bool matrixAutoUpdate = defaultMatrixAutoUpdate;
         bool matrixWorldNeedsUpdate = false;
@@ -199,6 +196,10 @@ namespace threepp {
 
             return dynamic_cast<T *>(this) != nullptr;
         }
+
+        void copy(const Object3D& source, bool recursive = true);
+
+        std::shared_ptr<Object3D> clone(bool recursive = false);
 
         virtual ~Object3D() = default;
 

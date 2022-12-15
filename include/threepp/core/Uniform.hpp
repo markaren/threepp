@@ -20,7 +20,7 @@
 namespace threepp {
 
     typedef std::variant<int, float, Color, Vector2, Vector3> NestedUniformValue;
-    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, std::shared_ptr<Texture>, std::vector<float>, std::vector<Vector2>, std::vector<Vector3>, std::vector<Matrix3>, std::vector<Matrix4>, std::vector<std::shared_ptr<Texture>>, std::unordered_map<std::string, NestedUniformValue>, std::vector<std::unordered_map<std::string, NestedUniformValue>>, std::vector<std::shared_ptr<std::unordered_map<std::string, NestedUniformValue>>>> UniformValue;
+    typedef std::variant<bool, int, float, Color, Vector2, Vector3, Vector4, Matrix3, Matrix4, Matrix4*, std::shared_ptr<Texture>, std::vector<float>, std::vector<Vector2>, std::vector<Vector3>, std::vector<Matrix3>, std::vector<Matrix4>, std::vector<std::shared_ptr<Texture>>, std::unordered_map<std::string, NestedUniformValue>, std::vector<std::unordered_map<std::string, NestedUniformValue>*>> UniformValue;
 
     class Uniform {
 
@@ -46,6 +46,10 @@ namespace threepp {
 
         void setValue(UniformValue value) {
             this->value_ = std::move(value);
+        }
+
+        void setValue(std::reference_wrapper<UniformValue> value) {
+            this->value_ = value.get();
         }
 
     private:

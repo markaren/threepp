@@ -43,11 +43,19 @@ namespace {
     std::shared_ptr<ShaderMaterial> shadowMaterialVertical = createShadowMaterialVertical();
     std::shared_ptr<ShaderMaterial> shadowMaterialHorizontal = createShadowMaterialHorizontal();
 
+
 }// namespace
 
 GLShadowMap::GLShadowMap(GLObjects &_objects)
     : _objects(_objects),
-      _maxTextureSize(GLCapabilities::instance().maxTextureSize) {}
+      _maxTextureSize(GLCapabilities::instance().maxTextureSize) {
+
+
+    auto fullScreenTri = BufferGeometry::create();
+    fullScreenTri->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{-1, -1, 0.5, 3, -1, 0.5, -1, 3, 0.5}, 3));
+
+    fullScreenMesh = Mesh::create(fullScreenTri, shadowMaterialVertical);
+}
 
 
 void GLShadowMap::render(GLRenderer &_renderer, const std::vector<Light *> &lights, Scene *scene, Camera *camera) {
@@ -179,23 +187,23 @@ void GLShadowMap::render(GLRenderer &_renderer, const std::vector<Light *> &ligh
 
 void GLShadowMap::VSMPass(GLRenderer &_renderer, LightShadow *shadow, Camera *camera) {
 
-//    const auto &geometry = _objects.update( fullScreenMesh );
+//    const auto &geometry = _objects.update(fullScreenMesh);
 //
 //    // vertical pass
 //
 //    shadowMaterialVertical->uniforms->operator[]("shadow_pass").setValue(shadow->map->texture);
 //    shadowMaterialVertical->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
 //    shadowMaterialVertical->uniforms->operator[]("radius").value<float>() = shadow->radius;
-//    _renderer.setRenderTarget( shadow->mapPass );
+//    _renderer.setRenderTarget(shadow->mapPass);
 //    _renderer.clear();
-//    _renderer.renderBufferDirect( camera, nullptr, geometry, shadowMaterialVertical, fullScreenMesh, std::nullopt );
+//    _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialVertical, fullScreenMesh, std::nullopt);
 //
 //    // horizontal pass
 //
 //    shadowMaterialHorizontal->uniforms->operator[]("shadow_pass").setValue(shadow->mapPass->texture);
 //    shadowMaterialHorizontal->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
 //    shadowMaterialHorizontal->uniforms->operator[]("radius").value<float>() = shadow->radius;
-//    _renderer.setRenderTarget( shadow->map );
+//    _renderer.setRenderTarget(shadow->map);
 //    _renderer.clear();
-//    _renderer.renderBufferDirect( camera, nullptr, geometry, shadowMaterialHorizontal, fullScreenMesh, std::nullopt );
+//    _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialHorizontal, fullScreenMesh, std::nullopt);
 }
