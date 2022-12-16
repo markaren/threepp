@@ -12,7 +12,9 @@
 class imggui_helper {
 
 public:
-    explicit imggui_helper(threepp::Canvas& canvas) {
+    threepp::Canvas& canvas;
+
+    explicit imggui_helper(threepp::Canvas& canvas): canvas(canvas) {
         ImGui::CreateContext();
         ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) canvas.window_ptr(), true);
         ImGui_ImplOpenGL3_Init("#version 330 core");

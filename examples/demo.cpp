@@ -84,14 +84,18 @@ MyGui::MyGui(Canvas &canvas) : imggui_helper(canvas) {}
 
 void MyGui::onRender() {
 
-    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver, ImVec2(0,0));
-    ImGui::Begin("Plane settings");
+    ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+    ImGui::SetNextWindowSize({200, 100}, 0);
+    ImGui::Begin("Plane position settings");
     ImGui::SliderFloat("pos x", &planePosX, 0.0f, 1.0f);
     ImGui::SliderFloat("pos y", &planePosY, 0.0f, 1.0f);
     ImGui::SliderFloat("pos z", &planePosZ, 0.0f, 1.0f);
+    ImGui::End();
+
+    ImGui::SetNextWindowPos({200, 0}, 0, {0,0});
+    ImGui::SetNextWindowSize({200, 0}, 0);
+    ImGui::Begin("Plane rotation settings");
     ImGui::SliderFloat("rotation y", &planeRotY, 0.0f, 360.0f);
     ImGui::End();
 
 }
-
-
