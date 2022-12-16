@@ -26,6 +26,17 @@ Euler &Euler::set(float x, float y, float z, const std::optional<RotationOrders>
     return *this;
 }
 
+Euler &Euler::copy(const Euler &euler) {
+    this->x = euler.x;
+    this->y = euler.y;
+    this->z = euler.z;
+    this->order_ = euler.order_;
+
+    this->onChangeCallback_();
+
+    return *this;
+}
+
 Euler &Euler::setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrders> order, bool update) {
 
     // assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)

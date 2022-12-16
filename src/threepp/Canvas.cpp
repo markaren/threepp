@@ -308,7 +308,7 @@ Canvas::Parameters &Canvas::Parameters::antialiasing(int antialiasing) {
     return *this;
 }
 
-void *threepp::Canvas::window_ptr() {
+void *Canvas::window_ptr() const{
 
     return pimpl_->window;
 }

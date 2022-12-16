@@ -1,43 +1,46 @@
 
 #include "threepp/threepp.hpp"
 
+using namespace threepp;
+
 #ifdef HAS_IMGUI
 #include "imgui_helper.hpp"
 
 struct MyGui: public imggui_helper {
 
-    explicit MyGui(threepp::Canvas &canvas) : imggui_helper(canvas) {}
+    explicit MyGui(const Canvas &canvas) : imggui_helper(canvas) {}
 
     void onRender() override {
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
-        ImGui::SetNextWindowSize({200, 100}, 0);
-        ImGui::Begin("Plane position settings");
-        ImGui::SliderFloat("x", &planePosX, -5.0f, 5.0f);
-        ImGui::SliderFloat("y", &planePosY, -5.0f, 5.0f);
-        ImGui::SliderFloat("z", &planePosZ, -5.0f, 5.0f);
-        ImGui::End();
-
-        ImGui::SetNextWindowPos({200, 0}, 0, {0,0});
-        ImGui::SetNextWindowSize({200, 0}, 0);
-        ImGui::Begin("Plane rotation settings");
-        ImGui::SliderFloat("x", &planeRotX, 0.0f, 360.0f);
-        ImGui::SliderFloat("y", &planeRotY, 0.0f, 360.0f);
-        ImGui::SliderFloat("z", &planeRotZ, 0.0f, 360.0f);
+        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::Begin("Plane transform");
+        ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
+        ImGui::SliderFloat3("rotation", eulerBuf_.data(), -180.f, 180.f);
         ImGui::End();
 
     }
-    float planePosX{};
-    float planePosY{};
-    float planePosZ{};
-    float planeRotX{};
-    float planeRotY{};
-    float planeRotZ{};
+
+    const Vector3& position() {
+        pos_.fromArray(posBuf_);
+        return pos_;
+    }
+
+    const Euler& rotation() {
+        euler_.set(math::DEG2RAD * eulerBuf_[0], math::DEG2RAD * eulerBuf_[1], math::DEG2RAD * eulerBuf_[2]);
+        return euler_;
+    }
+
+private:
+
+    Vector3 pos_;
+    Euler euler_;
+
+    std::array<float, 3> posBuf_{};
+    std::array<float, 3> eulerBuf_{};
 
 };
 #endif
-
-using namespace threepp;
 
 int main() {
 
@@ -93,13 +96,14 @@ int main() {
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
 
-        plane->position.set(ui.planePosX, ui.planePosY, ui.planePosZ);
-        plane->rotation.set(math::DEG2RAD * ui.planeRotX, math::DEG2RAD * ui.planeRotY, math::DEG2RAD * ui.planeRotZ);
-
         renderer.render(scene, camera);
 
 #ifdef HAS_IMGUI
         ui.render();
+
+        plane->position.copy(ui.position());
+        plane->rotation.copy(ui.rotation());
+
 #endif
 
     });
