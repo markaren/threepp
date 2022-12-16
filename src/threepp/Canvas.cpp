@@ -14,6 +14,15 @@ using namespace threepp;
 class Canvas::Impl {
 
 public:
+    GLFWwindow *window;
+
+    WindowSize size_;
+    Vector2 lastMousePos{};
+
+    std::optional<std::function<void(WindowSize)>> resizeListener;
+    std::unordered_map<std::string, std::shared_ptr<KeyListener>> keyListeners;
+    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
+
     explicit Impl(const Canvas::Parameters &params) : size_(params.size_) {
         glfwSetErrorCallback(error_callback);
 
@@ -135,16 +144,6 @@ public:
         glfwDestroyWindow(window);
         glfwTerminate();
     }
-
-private:
-    GLFWwindow *window;
-
-    WindowSize size_;
-    Vector2 lastMousePos{};
-
-    std::optional<std::function<void(WindowSize)>> resizeListener;
-    std::unordered_map<std::string, std::shared_ptr<KeyListener>> keyListeners;
-    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
 
     static void window_size_callback(GLFWwindow *w, int width, int height) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
@@ -307,4 +306,9 @@ Canvas::Parameters &Canvas::Parameters::antialiasing(int antialiasing) {
     this->antialiasing_ = antialiasing;
 
     return *this;
+}
+
+void *threepp::Canvas::window_ptr() {
+
+    return pimpl_->window;
 }

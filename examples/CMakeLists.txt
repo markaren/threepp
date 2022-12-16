@@ -1,7 +1,7 @@
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_executable(demo demo.cpp)
-target_link_libraries(demo PUBLIC threepp)
+target_link_libraries(demo PUBLIC threepp imgui::imgui)
 
 add_executable(texture2d texture2d.cpp)
 target_link_libraries(texture2d PUBLIC threepp)

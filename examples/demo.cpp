@@ -1,7 +1,22 @@
 
 #include "threepp/threepp.hpp"
+#include "imgui_helper.hpp"
 
 using namespace threepp;
+
+
+struct MyGui: public imggui_helper {
+
+    explicit MyGui(Canvas &canvas);
+
+    void onRender() override;
+
+    float planePosX{};
+    float planePosY{};
+    float planePosZ{};
+    float planeRotY{};
+
+};
 
 int main() {
 
@@ -51,10 +66,32 @@ int main() {
       renderer.setSize(size);
     });
 
+    MyGui ui(canvas);
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
-        scene->rotation.x += 1.f * dt;
+
+        plane->position.set(ui.planePosX, ui.planePosY, ui.planePosZ);
+        plane->rotation.y = math::DEG2RAD * ui.planeRotY;
 
         renderer.render(scene, camera);
+        ui.render();
+
+
     });
 }
+
+MyGui::MyGui(Canvas &canvas) : imggui_helper(canvas) {}
+
+void MyGui::onRender() {
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_FirstUseEver, ImVec2(0,0));
+    ImGui::Begin("Plane settings");
+    ImGui::SliderFloat("pos x", &planePosX, 0.0f, 1.0f);
+    ImGui::SliderFloat("pos y", &planePosY, 0.0f, 1.0f);
+    ImGui::SliderFloat("pos z", &planePosZ, 0.0f, 1.0f);
+    ImGui::SliderFloat("rotation y", &planeRotY, 0.0f, 360.0f);
+    ImGui::End();
+
+}
+
+

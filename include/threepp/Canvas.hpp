@@ -49,6 +49,8 @@ namespace threepp {
 
         void animate(const std::function<void(float)> &f) const;
 
+        void* window_ptr();
+
         ~Canvas();
 
     private:

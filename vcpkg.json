@@ -21,6 +21,15 @@
       "dependencies": [
         "assimp"
       ]
+    },
+    "imgui": {
+      "description": "Enable user interfaces in examples",
+      "dependencies": [
+        {
+          "name": "imgui",
+          "features": ["glfw-binding", "opengl3-binding"]
+        }
+      ]
     }
   }
 }
