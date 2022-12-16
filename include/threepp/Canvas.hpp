@@ -51,6 +51,8 @@ namespace threepp {
 
         void invokeLater(const std::function<void()>& f);
 
+        [[nodiscard]] void* window_ptr() const;
+
         ~Canvas();
 
     private:

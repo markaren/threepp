@@ -40,6 +40,7 @@ target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 
 if (THREEPP_BUILD_EXAMPLES)
 
+    find_package(imgui CONFIG)
     find_package(Bullet CONFIG)
 
     if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)

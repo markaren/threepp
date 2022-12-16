@@ -15,6 +15,16 @@ using namespace threepp;
 class Canvas::Impl {
 
 public:
+    GLFWwindow *window;
+
+    WindowSize size_;
+    Vector2 lastMousePos{};
+
+    std::queue<std::function<void()>> tasks_;
+    std::optional<std::function<void(WindowSize)>> resizeListener;
+    std::unordered_map<std::string, std::shared_ptr<KeyListener>> keyListeners;
+    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
+
     explicit Impl(const Canvas::Parameters &params) : size_(params.size_) {
         glfwSetErrorCallback(error_callback);
 
@@ -153,18 +163,6 @@ public:
         glfwTerminate();
     }
 
-private:
-    GLFWwindow *window;
-
-    WindowSize size_;
-    Vector2 lastMousePos{};
-
-    std::optional<std::function<void(WindowSize)>> resizeListener;
-    std::unordered_map<std::string, std::shared_ptr<KeyListener>> keyListeners;
-    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
-
-    std::queue<std::function<void()>> tasks_;
-
     static void window_size_callback(GLFWwindow *w, int width, int height) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
         p->size_ = {width, height};
@@ -300,7 +298,7 @@ bool Canvas::removeMouseListener(const std::string &listenerUuid) {
     return pimpl_->removeMouseListener(listenerUuid);
 }
 
-void threepp::Canvas::invokeLater(const std::function<void()>& f) {
+void Canvas::invokeLater(const std::function<void()>& f) {
     pimpl_->invokeLater(f);
 }
 
@@ -330,4 +328,9 @@ Canvas::Parameters &Canvas::Parameters::antialiasing(int antialiasing) {
     this->antialiasing_ = antialiasing;
 
     return *this;
+}
+
+void *Canvas::window_ptr() const{
+
+    return pimpl_->window;
 }
