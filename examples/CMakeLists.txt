@@ -1,7 +1,21 @@
-include_directories(${CMAKE_SOURCE_DIR}/include)
+
+if (imgui_FOUND)
+    add_compile_definitions("HAS_IMGUI")
+    if(EXISTS "${CMAKE_BINARY_DIR}/_deps/imgui_glfw")
+        set(imgui_bindings "${CMAKE_BINARY_DIR}/_deps/imgui_glfw")
+        add_library(imgui_glfw "${imgui_bindings}/imgui_impl_glfw.cpp" "${imgui_bindings}/imgui_impl_opengl3.cpp")
+        target_link_libraries(imgui_glfw PUBLIC glad::glad glfw::glfw imgui::imgui)
+        target_include_directories(imgui_glfw PUBLIC "${imgui_bindings}")
+
+        set_property(TARGET imgui::imgui APPEND PROPERTY INTERFACE_LINK_LIBRARIES imgui_glfw)
+    endif()
+endif ()
 
 add_executable(demo demo.cpp)
 target_link_libraries(demo PUBLIC threepp)
+if (imgui_FOUND)
+    target_link_libraries(demo PUBLIC imgui::imgui)
+endif()
 
 add_executable(texture2d texture2d.cpp)
 target_link_libraries(texture2d PUBLIC threepp)

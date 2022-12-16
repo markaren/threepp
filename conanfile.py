@@ -1,6 +1,6 @@
 from os import path
 from conans import ConanFile, CMake, tools
-from conan.tools.cmake import CMakeDeps
+
 
 class ThreeppConan(ConanFile):
     name = "threepp"
@@ -22,12 +22,14 @@ class ThreeppConan(ConanFile):
 
     options = {
         "with_bullet": [True, False],
-        "with_assimp": [True, False]
+        "with_assimp": [True, False],
+        "with_imgui": [True, False],
     }
 
     default_options = (
         "with_bullet=False",
         "with_assimp=False",
+        "with_imgui=False",
         "glad:gl_version=4.1"
     )
 
@@ -39,6 +41,12 @@ class ThreeppConan(ConanFile):
             self.requires("bullet3/3.24")
         if self.options.with_assimp:
             self.requires("assimp/5.2.2")
+        if self.options.with_imgui:
+            self.requires("imgui/cci.20220621+1.88.docking")
+
+    def imports(self):
+        self.copy("imgui_impl_glfw*", dst="_deps/imgui_glfw", src="res/bindings")
+        self.copy("imgui_impl_opengl3*", dst="_deps/imgui_glfw", src="res/bindings")
 
     def configure_cmake(self):
         cmake = CMake(self)
