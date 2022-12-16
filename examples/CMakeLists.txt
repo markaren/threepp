@@ -12,7 +12,10 @@ if (imgui_FOUND)
 endif ()
 
 add_executable(demo demo.cpp)
-target_link_libraries(demo PUBLIC threepp imgui::imgui)
+target_link_libraries(demo PUBLIC threepp)
+if (imgui_FOUND)
+    target_link_libraries(demo PUBLIC imgui::imgui)
+endif()
 
 add_executable(texture2d texture2d.cpp)
 target_link_libraries(texture2d PUBLIC threepp)
