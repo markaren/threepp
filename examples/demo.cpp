@@ -8,6 +8,8 @@ using namespace threepp;
 
 struct MyGui: public imggui_helper {
 
+    bool colorChanged = false;
+
     explicit MyGui(const Canvas &canvas) : imggui_helper(canvas) {}
 
     void onRender() override {
@@ -17,6 +19,9 @@ struct MyGui: public imggui_helper {
         ImGui::Begin("Plane transform");
         ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
         ImGui::SliderFloat3("rotation", eulerBuf_.data(), -180.f, 180.f);
+        ImGui::ColorEdit4("Color", colorBuf_.data());
+        colorChanged = ImGui::IsItemEdited();
+
         ImGui::End();
 
     }
@@ -31,6 +36,10 @@ struct MyGui: public imggui_helper {
         return euler_;
     }
 
+    const std::array<float, 4>& color() {
+        return colorBuf_;
+    }
+
 private:
 
     Vector3 pos_;
@@ -38,6 +47,7 @@ private:
 
     std::array<float, 3> posBuf_{};
     std::array<float, 3> eulerBuf_{};
+    std::array<float, 4> colorBuf_{0,0,0,1};
 
 };
 #endif
@@ -103,6 +113,13 @@ int main() {
 
         plane->position.copy(ui.position());
         plane->rotation.copy(ui.rotation());
+
+        if (ui.colorChanged) {
+            auto& c = ui.color();
+            planeMaterial->color.fromArray(c);
+            planeMaterial->opacity = c[3];
+            planeMaterial->transparent = c[3] != 1;
+        }
 
 #endif
 
