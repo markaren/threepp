@@ -14,7 +14,9 @@ struct MyGui: public imggui_helper {
     float planePosX{};
     float planePosY{};
     float planePosZ{};
+    float planeRotX{};
     float planeRotY{};
+    float planeRotZ{};
 
 };
 
@@ -71,11 +73,10 @@ int main() {
         box->rotation.y +=  0.5f * dt;
 
         plane->position.set(ui.planePosX, ui.planePosY, ui.planePosZ);
-        plane->rotation.y = math::DEG2RAD * ui.planeRotY;
+        plane->rotation.set(math::DEG2RAD * ui.planeRotX, math::DEG2RAD * ui.planeRotY, math::DEG2RAD * ui.planeRotZ);
 
         renderer.render(scene, camera);
         ui.render();
-
 
     });
 }
@@ -87,15 +88,17 @@ void MyGui::onRender() {
     ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
     ImGui::SetNextWindowSize({200, 100}, 0);
     ImGui::Begin("Plane position settings");
-    ImGui::SliderFloat("pos x", &planePosX, 0.0f, 1.0f);
-    ImGui::SliderFloat("pos y", &planePosY, 0.0f, 1.0f);
-    ImGui::SliderFloat("pos z", &planePosZ, 0.0f, 1.0f);
+    ImGui::SliderFloat("x", &planePosX, -5.0f, 5.0f);
+    ImGui::SliderFloat("y", &planePosY, -5.0f, 5.0f);
+    ImGui::SliderFloat("z", &planePosZ, -5.0f, 5.0f);
     ImGui::End();
 
     ImGui::SetNextWindowPos({200, 0}, 0, {0,0});
     ImGui::SetNextWindowSize({200, 0}, 0);
     ImGui::Begin("Plane rotation settings");
-    ImGui::SliderFloat("rotation y", &planeRotY, 0.0f, 360.0f);
+    ImGui::SliderFloat("x", &planeRotX, 0.0f, 360.0f);
+    ImGui::SliderFloat("y", &planeRotY, 0.0f, 360.0f);
+    ImGui::SliderFloat("z", &planeRotZ, 0.0f, 360.0f);
     ImGui::End();
 
 }
