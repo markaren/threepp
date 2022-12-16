@@ -87,7 +87,9 @@ int main() {
       renderer.setSize(size);
     });
 
+#ifdef HAS_IMGUI
     MyGui ui(canvas);
+#endif
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
 

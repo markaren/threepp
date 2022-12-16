@@ -29,6 +29,7 @@ class ThreeppConan(ConanFile):
     default_options = (
         "with_bullet=False",
         "with_assimp=False",
+        "with_imgui=False",
         "glad:gl_version=4.1"
     )
 
