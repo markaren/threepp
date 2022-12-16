@@ -1,16 +1,32 @@
 
 #include "threepp/threepp.hpp"
+
+#ifdef HAS_IMGUI
 #include "imgui_helper.hpp"
-
-using namespace threepp;
-
 
 struct MyGui: public imggui_helper {
 
-    explicit MyGui(Canvas &canvas);
+    explicit MyGui(threepp::Canvas &canvas) : imggui_helper(canvas) {}
 
-    void onRender() override;
+    void onRender() override {
 
+        ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+        ImGui::SetNextWindowSize({200, 100}, 0);
+        ImGui::Begin("Plane position settings");
+        ImGui::SliderFloat("x", &planePosX, -5.0f, 5.0f);
+        ImGui::SliderFloat("y", &planePosY, -5.0f, 5.0f);
+        ImGui::SliderFloat("z", &planePosZ, -5.0f, 5.0f);
+        ImGui::End();
+
+        ImGui::SetNextWindowPos({200, 0}, 0, {0,0});
+        ImGui::SetNextWindowSize({200, 0}, 0);
+        ImGui::Begin("Plane rotation settings");
+        ImGui::SliderFloat("x", &planeRotX, 0.0f, 360.0f);
+        ImGui::SliderFloat("y", &planeRotY, 0.0f, 360.0f);
+        ImGui::SliderFloat("z", &planeRotZ, 0.0f, 360.0f);
+        ImGui::End();
+
+    }
     float planePosX{};
     float planePosY{};
     float planePosZ{};
@@ -19,6 +35,9 @@ struct MyGui: public imggui_helper {
     float planeRotZ{};
 
 };
+#endif
+
+using namespace threepp;
 
 int main() {
 
@@ -76,29 +95,10 @@ int main() {
         plane->rotation.set(math::DEG2RAD * ui.planeRotX, math::DEG2RAD * ui.planeRotY, math::DEG2RAD * ui.planeRotZ);
 
         renderer.render(scene, camera);
+
+#ifdef HAS_IMGUI
         ui.render();
+#endif
 
     });
-}
-
-MyGui::MyGui(Canvas &canvas) : imggui_helper(canvas) {}
-
-void MyGui::onRender() {
-
-    ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
-    ImGui::SetNextWindowSize({200, 100}, 0);
-    ImGui::Begin("Plane position settings");
-    ImGui::SliderFloat("x", &planePosX, -5.0f, 5.0f);
-    ImGui::SliderFloat("y", &planePosY, -5.0f, 5.0f);
-    ImGui::SliderFloat("z", &planePosZ, -5.0f, 5.0f);
-    ImGui::End();
-
-    ImGui::SetNextWindowPos({200, 0}, 0, {0,0});
-    ImGui::SetNextWindowSize({200, 0}, 0);
-    ImGui::Begin("Plane rotation settings");
-    ImGui::SliderFloat("x", &planeRotX, 0.0f, 360.0f);
-    ImGui::SliderFloat("y", &planeRotY, 0.0f, 360.0f);
-    ImGui::SliderFloat("z", &planeRotZ, 0.0f, 360.0f);
-    ImGui::End();
-
 }
