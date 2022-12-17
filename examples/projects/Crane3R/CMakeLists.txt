@@ -1,5 +1,5 @@
 
-add_executable(Crane3R main.cpp)
+add_executable(Crane3R main.cpp Crane3R.cpp)
 target_link_libraries(Crane3R PRIVATE threepp)
 if (imgui_FOUND)
     target_link_libraries(Crane3R PRIVATE imgui::imgui)

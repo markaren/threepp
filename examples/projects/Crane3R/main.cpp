@@ -1,6 +1,6 @@
 
-#include "threepp/threepp.hpp"
 #include "Crane3R.hpp"
+#include "threepp/threepp.hpp"
 
 #include <thread>
 
@@ -12,7 +12,7 @@ using namespace threepp;
 struct MyUI : public imggui_helper {
 
     bool mouseHover = false;
-    std::array<float, 3> angles{};
+    std::array<float, 3> angles{0, -40, 90};
 
     explicit MyUI(const threepp::Canvas &canvas) : imggui_helper(canvas) {}
 
@@ -23,8 +23,8 @@ struct MyUI : public imggui_helper {
         ImGui::Begin("Crane3R");
 
         ImGui::SliderFloat("j1", &angles[0], -90, 90);
-        ImGui::SliderFloat("j2", &angles[1], -90, 0);
-        ImGui::SliderFloat("j3", &angles[2], 0, 120);
+        ImGui::SliderFloat("j2", &angles[1], -80, 0);
+        ImGui::SliderFloat("j3", &angles[2], 40, 140);
 
         mouseHover = ImGui::IsWindowHovered();
         ImGui::End();
@@ -38,7 +38,7 @@ int main() {
     GLRenderer renderer{canvas};
     renderer.setClearColor(Color::aliceblue);
 
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect());
+    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
     camera->position.set(15, 8, 15);
 
     OrbitControls controls(camera, canvas);
@@ -71,18 +71,18 @@ int main() {
     canvas.animate([&] {
         renderer.render(scene, camera);
 
-#ifdef HAS_IMGUI
-
         if (crane) {
+
+#ifdef HAS_IMGUI
             ui.render();
+            controls.enabled = !ui.mouseHover;
 
             auto &angles = ui.angles;
             crane->setAngles(angles[0], angles[1], angles[2]);
-        }
-
-        controls.enabled = !ui.mouseHover;
-
 #endif
+
+            crane->update();
+        }
     });
 
     t.join();
