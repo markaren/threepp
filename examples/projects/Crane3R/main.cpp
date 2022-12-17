@@ -12,7 +12,7 @@ using namespace threepp;
 struct MyUI : public imggui_helper {
 
     bool mouseHover = false;
-    std::array<float, 3> angles;
+    std::array<float, 3> angles{};
 
     explicit MyUI(const threepp::Canvas &canvas) : imggui_helper(canvas) {}
 
