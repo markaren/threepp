@@ -1,0 +1,8 @@
+{
+    "jointAttachment": {"x": 7, "y": 0, "z": 0},
+    "houseAttachment": {"x": -2.8, "y": 0, "z": -0.78},
+    "rodAttachment": {"x":  2.695, "y": 0, "z": -0.85}, 
+    "jointType": "RY",
+	"mass": 1000,
+	"mesh": "7000.obj"
+}

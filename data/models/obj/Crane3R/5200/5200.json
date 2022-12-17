@@ -1,0 +1,37 @@
+{
+    "jointAttachment": {"x": 5.2, "y": 0, "z": 0},
+    "rodAttachment":  {"x": 0.98, "y": 0, "z": 0.2},
+    "jointType": "RY",
+	"mass": 1000,
+	"mesh": "5200.obj",
+    
+    "routingNodes": [
+        {
+            "radius": 0.18, 
+            "height": 0.025,
+            "route": {"x": 0, "y": 0, "z": 0.0},
+            "center": {"x": -0.19, "y": 0, "z": 0.292}
+        },
+        {
+            "radius": 0.18, 
+            "height": 0.025,
+            "route": {"x": 0, "y": 0, "z": 0.0},
+            "center": {"x": 0.997, "y": 0, "z": 1.183}
+        },
+        {
+            "radius": 0.18, 
+            "height": 0.025,
+            "route": {"x": 0.0, "y": 0, "z": 0},
+            "center": {"x": 4.8, "y": 0, "z": 0.4}
+        },
+        {
+            "radius": 0.18, 
+            "height": 0.025,
+            "route": {"x": 0.0, "y": 0, "z": 0.0},
+            "center": {"x": 5, "y": 0, "z": 0}
+        }
+       
+   
+    ]
+    
+}

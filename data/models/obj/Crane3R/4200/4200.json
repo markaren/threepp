@@ -1,0 +1,13 @@
+{
+    "jointAttachment": {"x": 0, "y": 0, "z": 4.2},
+    "houseAttachment": {"x": 0.68, "y": 0, "z": -1.32},
+    "jointType": "RZ",
+    "mass": 1000,
+	"mesh": "4200.obj",
+	
+    "winchAttachment": {
+        "radius": 0.3, 
+        "height": 0.35, 
+        "center": {"x": -0.6, "y": 0, "z": 4.680}
+    }
+}

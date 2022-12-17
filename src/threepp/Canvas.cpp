@@ -8,6 +8,7 @@
 
 #include <optional>
 #include <unordered_map>
+#include <queue>
 
 using namespace threepp;
 
@@ -19,6 +20,7 @@ public:
     WindowSize size_;
     Vector2 lastMousePos{};
 
+    std::queue<std::function<void()>> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
     std::unordered_map<std::string, std::shared_ptr<KeyListener>> keyListeners;
     std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
@@ -87,8 +89,14 @@ public:
         glfwSetWindowSize(window, size.width, size.height);
     }
 
-    void animate(const std::function<void()> &f) const {
+    void animate(const std::function<void()> &f) {
         while (!glfwWindowShouldClose(window)) {
+
+            while (!tasks_.empty()) {
+                auto task = tasks_.front();
+                task();
+                tasks_.pop();
+            }
 
             f();
 
@@ -97,9 +105,15 @@ public:
         }
     }
 
-    void animate(const std::function<void(float)> &f) const {
+    void animate(const std::function<void(float)> &f) {
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
+
+            while (!tasks_.empty()) {
+                auto task = tasks_.front();
+                task();
+                tasks_.pop();
+            }
 
             f(clock.getDelta());
 
@@ -138,6 +152,10 @@ public:
             return true;
         }
         return false;
+    }
+
+    void invokeLater(const std::function<void()>& f) {
+        tasks_.emplace(f);
     }
 
     ~Impl() {
@@ -224,12 +242,12 @@ public:
 
 Canvas::Canvas(const Canvas::Parameters &params) : pimpl_(new Impl(params)) {}
 
-void Canvas::animate(const std::function<void()> &f) const {
+void Canvas::animate(const std::function<void()> &f) {
 
     pimpl_->animate(f);
 }
 
-void Canvas::animate(const std::function<void(float)> &f) const {
+void Canvas::animate(const std::function<void(float)> &f) {
 
     pimpl_->animate(f);
 }
@@ -278,6 +296,10 @@ void Canvas::addMouseListener(const std::shared_ptr<MouseListener> &listener) {
 bool Canvas::removeMouseListener(const std::string &listenerUuid) {
 
     return pimpl_->removeMouseListener(listenerUuid);
+}
+
+void Canvas::invokeLater(const std::function<void()>& f) {
+    pimpl_->invokeLater(f);
 }
 
 Canvas::~Canvas() = default;
