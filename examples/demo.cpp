@@ -3,6 +3,55 @@
 
 using namespace threepp;
 
+#ifdef HAS_IMGUI
+#include "imgui_helper.hpp"
+
+struct MyGui: public imggui_helper {
+
+    bool colorChanged = false;
+
+    explicit MyGui(const Canvas &canvas) : imggui_helper(canvas) {}
+
+    void onRender() override {
+
+        ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::Begin("Plane transform");
+        ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
+        ImGui::SliderFloat3("rotation", eulerBuf_.data(), -180.f, 180.f);
+        ImGui::ColorEdit4("Color", colorBuf_.data());
+        colorChanged = ImGui::IsItemEdited();
+
+        ImGui::End();
+
+    }
+
+    const Vector3& position() {
+        pos_.fromArray(posBuf_);
+        return pos_;
+    }
+
+    const Euler& rotation() {
+        euler_.set(math::DEG2RAD * eulerBuf_[0], math::DEG2RAD * eulerBuf_[1], math::DEG2RAD * eulerBuf_[2]);
+        return euler_;
+    }
+
+    const std::array<float, 4>& color() {
+        return colorBuf_;
+    }
+
+private:
+
+    Vector3 pos_;
+    Euler euler_;
+
+    std::array<float, 3> posBuf_{};
+    std::array<float, 3> eulerBuf_{};
+    std::array<float, 4> colorBuf_{0,0,0,1};
+
+};
+#endif
+
 int main() {
 
     Canvas canvas;
@@ -21,6 +70,11 @@ int main() {
     boxMaterial->opacity = 0.1f;
     auto box = Mesh::create(boxGeometry, boxMaterial);
     scene->add(box);
+
+    auto wiredBox = Mesh::create(boxGeometry, boxMaterial->clone());
+    wiredBox->material<MeshBasicMaterial>()->wireframe = true;
+    wiredBox->material<MeshBasicMaterial>()->color = Color::white;
+    box->add(wiredBox);
 
     const auto sphereGeometry = SphereGeometry::create(0.5f);
     const auto sphereMaterial = MeshBasicMaterial::create();
@@ -46,10 +100,28 @@ int main() {
       renderer.setSize(size);
     });
 
+#ifdef HAS_IMGUI
+    MyGui ui(canvas);
+#endif
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
-        scene->rotation.x += 1.f * dt;
 
         renderer.render(scene, camera);
+
+#ifdef HAS_IMGUI
+        ui.render();
+
+        plane->position.copy(ui.position());
+        plane->rotation.copy(ui.rotation());
+
+        if (ui.colorChanged) {
+            auto& c = ui.color();
+            planeMaterial->color.fromArray(c);
+            planeMaterial->opacity = c[3];
+            planeMaterial->transparent = c[3] != 1;
+        }
+
+#endif
+
     });
 }

@@ -54,15 +54,15 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 auto l = light->as<DirectionalLight>();
                 auto shadow = l->shadow;
 
-                auto &shadowUniforms = shadowCache_.get(*light);
+                auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms.at("shadowBias") = shadow->bias;
-                shadowUniforms.at("shadowNormalBias") = shadow->normalBias;
-                shadowUniforms.at("shadowRadius") = shadow->radius;
-                shadowUniforms.at("shadowMapSize") = shadow->mapSize;
+                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
+                shadowUniforms->at("shadowRadius") = shadow->radius;
+                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
 
-                state.directionalShadow.resize(directionalLength + 1);
-                state.directionalShadow[directionalLength] = shadowUniforms;
+//                state.directionalShadow.resize(directionalLength + 1);
+                state.directionalShadow.emplace_back(shadowUniforms);
                 state.directionalShadowMap[directionalLength] = shadow->map->texture;
                 state.directionalShadowMatrix[directionalLength] = shadow->matrix;
 
@@ -78,7 +78,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
             auto l = light->as<SpotLight>();
             auto uniforms = cache_.get(*light);
 
-            std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(l->matrixWorld);
+            std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(*l->matrixWorld);
 
             std::get<Color>(uniforms->at("color")).copy(color).multiplyScalar(l->intensity);
             std::get<float>(uniforms->at("distance")) = l->distance;
@@ -90,15 +90,15 @@ void GLLights::setup(std::vector<Light *> &lights) {
             if (light->castShadow) {
 
                 auto shadow = l->shadow;
-                auto &shadowUniforms = shadowCache_.get(*light);
+                auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms.at("shadowBias") = shadow->bias;
-                shadowUniforms.at("shadowNormalBias") = shadow->normalBias;
-                shadowUniforms.at("shadowRadius") = shadow->radius;
-                shadowUniforms.at("shadowMapSize") = shadow->mapSize;
+                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
+                shadowUniforms->at("shadowRadius") = shadow->radius;
+                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
 
-                state.spotShadow.resize(spotLength + 1);
-                state.spotShadow[spotLength] = shadowUniforms;
+//                state.spotShadow.resize(spotLength + 1);
+                state.spotShadow.emplace_back(shadowUniforms);
                 state.spotShadowMap[spotLength] = shadow->map->texture;
                 state.spotShadowMatrix[spotLength] = shadow->matrix;
 
@@ -122,17 +122,17 @@ void GLLights::setup(std::vector<Light *> &lights) {
 
             if (light->castShadow) {
 
-                auto &shadowUniforms = shadowCache_.get(*light);
+                auto shadowUniforms = shadowCache_.get(*light);
 
-                shadowUniforms.at("shadowBias") = shadow->bias;
-                shadowUniforms.at("shadowNormalBias") = shadow->normalBias;
-                shadowUniforms.at("shadowRadius") = shadow->radius;
-                shadowUniforms.at("shadowMapSize") = shadow->mapSize;
-                shadowUniforms.at("shadowCameraNear") = shadow->camera->near;
-                shadowUniforms.at("shadowCameraFar") = shadow->camera->far;
+                shadowUniforms->at("shadowBias") = shadow->bias;
+                shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
+                shadowUniforms->at("shadowRadius") = shadow->radius;
+                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
+                shadowUniforms->at("shadowCameraNear") = shadow->camera->near;
+                shadowUniforms->at("shadowCameraFar") = shadow->camera->far;
 
-                state.pointShadow.resize(pointLength + 1);
-                state.pointShadow[pointLength] = shadowUniforms;
+//                state.pointShadow.resize(pointLength + 1);
+                state.pointShadow.emplace_back(shadowUniforms);
                 state.pointShadowMap[pointLength] = shadow->map->texture;
                 state.pointShadowMatrix[pointLength] = shadow->matrix;
 
@@ -199,10 +199,10 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto &direction = std::get<Vector3>(uniforms->at("direction"));
 
-            direction.setFromMatrixPosition(light->matrixWorld);
+            direction.setFromMatrixPosition(*light->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target->matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
@@ -216,13 +216,13 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             auto &position = std::get<Vector3>(uniforms->at("position"));
             auto &direction = std::get<Vector3>(uniforms->at("direction"));
 
-            position.setFromMatrixPosition(l->matrixWorld);
+            position.setFromMatrixPosition(*l->matrixWorld);
             position.applyMatrix4(viewMatrix);
 
-            direction.setFromMatrixPosition(l->matrixWorld);
+            direction.setFromMatrixPosition(*l->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target->matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
@@ -234,7 +234,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
             auto &position = std::get<Vector3>(uniforms->at("position"));
 
-            position.setFromMatrixPosition(light->matrixWorld);
+            position.setFromMatrixPosition(*light->matrixWorld);
             position.applyMatrix4(viewMatrix);
 
             pointLength++;

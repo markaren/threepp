@@ -20,6 +20,8 @@ however much remains to be done..
 * Raycasting against Mesh
 * Binary STL loader
 * OBJ/MTL Loader
+* Generic model loader based on Assimp
+* Easy integration with imgui
 
 
 ### But, but why?
@@ -107,8 +109,7 @@ int main() {
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
-
-    group->rotation.setOrder(Euler::YZX);
+    
     canvas.animate([&](float dt) {
         group->rotation.y += 0.5f * dt;
 
@@ -117,3 +118,10 @@ int main() {
 }
 
 ```
+
+### Screenshots
+
+![Crane](doc/screenshots/crane.png)
+![Obj+mtl](doc/screenshots/obj_mtl.png)
+![spotlight](doc/screenshots/spotlight.png)
+![directional](doc/screenshots/directional.png)

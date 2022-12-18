@@ -8,15 +8,15 @@
 
 namespace threepp {
 
-    class MeshDepthMaterial : public virtual Material,
-                              public MaterialWithMap,
-                              public MaterialWithAlphaMap,
-                              public MaterialWithDisplacementMap,
-                              public MaterialWithWireframe,
-                              public MaterialWithDepthPacking {
+    class MeshDepthMaterial
+        : public virtual Material,
+          public MaterialWithMap,
+          public MaterialWithAlphaMap,
+          public MaterialWithDisplacementMap,
+          public MaterialWithWireframe,
+          public MaterialWithDepthPacking {
 
     public:
-
         [[nodiscard]] std::string type() const override {
 
             return "MeshDepthMaterial";

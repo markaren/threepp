@@ -15,10 +15,10 @@ namespace threepp::gl {
     struct RenderItem {
 
         int id;
-        std::shared_ptr<Object3D> object;
-        std::shared_ptr<BufferGeometry> geometry;
-        std::shared_ptr<Material> material;
-        std::shared_ptr<GLProgram> program;
+        Object3D* object;
+        BufferGeometry* geometry;
+        Material* material;
+        GLProgram* program;
         int groupOrder;
         int renderOrder;
         float z;
@@ -39,21 +39,21 @@ namespace threepp::gl {
         void init();
 
         std::shared_ptr<RenderItem> getNextRenderItem(
-                const std::shared_ptr<Object3D> &object,
-                const std::shared_ptr<BufferGeometry> &geometry,
-                const std::shared_ptr<Material> &material,
+                Object3D* object,
+                BufferGeometry* geometry,
+                Material* material,
                 int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void push(
-                const std::shared_ptr<Object3D> &object,
-                const std::shared_ptr<BufferGeometry> &geometry,
-                const std::shared_ptr<Material> &material,
+                Object3D* object,
+                BufferGeometry* geometry,
+                Material* material,
                 int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void unshift(
-                const std::shared_ptr<Object3D> &object,
-                const std::shared_ptr<BufferGeometry> &geometry,
-                const std::shared_ptr<Material> &material,
+                Object3D* object,
+                BufferGeometry* geometry,
+                Material* material,
                 int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void sort();

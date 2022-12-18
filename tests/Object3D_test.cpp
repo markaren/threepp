@@ -173,25 +173,25 @@ TEST_CASE("updateMatrixWorld") {
 
     parent->updateMatrixWorld();
 
-    REQUIRE(parent->matrix.elements == std::array<float, 16>{
+    REQUIRE(parent->matrix->elements == std::array<float, 16>{
                                                1, 0, 0, 0,
                                                0, 1, 0, 0,
                                                0, 0, 1, 0,
                                                1, 2, 3, 1});
 
-    REQUIRE(parent->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(parent->matrixWorld->elements == std::array<float, 16>{
                                                     1, 0, 0, 0,
                                                     0, 1, 0, 0,
                                                     0, 0, 1, 0,
                                                     1, 2, 3, 1});
 
-    REQUIRE(child->matrix.elements == std::array<float, 16>{
+    REQUIRE(child->matrix->elements == std::array<float, 16>{
                                               1, 0, 0, 0,
                                               0, 1, 0, 0,
                                               0, 0, 1, 0,
                                               4, 5, 6, 1});
 
-    REQUIRE(child->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(child->matrixWorld->elements == std::array<float, 16>{
                                                    1, 0, 0, 0,
                                                    0, 1, 0, 0,
                                                    0, 0, 1, 0,
@@ -204,7 +204,7 @@ TEST_CASE("updateMatrixWorld") {
     parent->position.set(0, 0, 0);
     parent->updateMatrix();
 
-    REQUIRE(parent->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(parent->matrixWorld->elements == std::array<float, 16>{
                                                     1, 0, 0, 0,
                                                     0, 1, 0, 0,
                                                     0, 0, 1, 0,
@@ -221,19 +221,19 @@ TEST_CASE("updateMatrixWorld") {
     child->matrixAutoUpdate = false;
     parent->updateMatrixWorld();
 
-    REQUIRE(parent->matrix.elements == std::array<float, 16>{
+    REQUIRE(parent->matrix->elements == std::array<float, 16>{
                                                1, 0, 0, 0,
                                                0, 1, 0, 0,
                                                0, 0, 1, 0,
                                                0, 0, 0, 1});
 
-    REQUIRE(parent->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(parent->matrixWorld->elements == std::array<float, 16>{
                                                     1, 0, 0, 0,
                                                     0, 1, 0, 0,
                                                     0, 0, 1, 0,
                                                     0, 0, 0, 1});
 
-    REQUIRE(child->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(child->matrixWorld->elements == std::array<float, 16>{
                                                    1, 0, 0, 0,
                                                    0, 1, 0, 0,
                                                    0, 0, 1, 0,
@@ -247,7 +247,7 @@ TEST_CASE("updateMatrixWorld") {
     
     parent->updateMatrixWorld();
 
-    REQUIRE(child->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(child->matrixWorld->elements == std::array<float, 16>{
                                                    1, 0, 0, 0,
                                                    0, 1, 0, 0,
                                                    0, 0, 1, 0,
@@ -261,7 +261,7 @@ TEST_CASE("updateMatrixWorld") {
     parent->matrixAutoUpdate = true;
     parent->updateMatrixWorld();
 
-    REQUIRE(child->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(child->matrixWorld->elements == std::array<float, 16>{
                                                    1, 0, 0, 0,
                                                    0, 1, 0, 0,
                                                    0, 0, 1, 0,
@@ -281,7 +281,7 @@ TEST_CASE("updateMatrixWorld") {
 
     parent->updateMatrixWorld(true);
 
-    REQUIRE(parent->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(parent->matrixWorld->elements == std::array<float, 16>{
                                                     1, 0, 0, 0,
                                                     0, 1, 0, 0,
                                                     0, 0, 1, 0,
@@ -301,15 +301,15 @@ TEST_CASE("updateMatrixWorld") {
 
     child->updateMatrixWorld();
 
-    REQUIRE(parent->matrix.elements == std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1});
+    REQUIRE(parent->matrix->elements == std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1});
 
-    REQUIRE(parent->matrixWorld.elements == std::array<float, 16>{
+    REQUIRE(parent->matrixWorld->elements == std::array<float, 16>{
                                                     1, 0, 0, 0,
                                                     0, 1, 0, 0,
                                                     0, 0, 1, 0,
                                                     0, 0, 0, 1});
 
-    REQUIRE(child->matrixWorld.elements == std::array<float, 16>{1, 0, 0, 0,
+    REQUIRE(child->matrixWorld->elements == std::array<float, 16>{1, 0, 0, 0,
                                                                  0, 1, 0, 0,
                                                                  0, 0, 1, 0,
                                                                  4, 5, 6, 1});
@@ -335,89 +335,89 @@ TEST_CASE("updateWorldMatrix") {
 
     object->updateWorldMatrix();
 
-    REQUIRE( parent->matrix.elements == m.elements);
+    REQUIRE( parent->matrix->elements == m.elements);
 
-    REQUIRE( parent->matrixWorld.elements == m.elements);
+    REQUIRE( parent->matrixWorld->elements == m.elements);
 
-    REQUIRE( object->matrix.elements == m.setPosition( object->position ).elements);
+    REQUIRE( object->matrix->elements == m.setPosition( object->position ).elements);
 
-    REQUIRE( object->matrixWorld.elements == m.setPosition( object->position ).elements);
+    REQUIRE( object->matrixWorld->elements == m.setPosition( object->position ).elements);
 
-    REQUIRE( child->matrix.elements == m.identity().elements);
+    REQUIRE( child->matrix->elements == m.identity().elements);
 
-    REQUIRE( child->matrixWorld.elements == m.elements);
+    REQUIRE( child->matrixWorld->elements == m.elements);
 
     // Update the world matrices of an object and its parents
 
-    object->matrix.identity();
-    object->matrixWorld.identity();
+    object->matrix->identity();
+    object->matrixWorld->identity();
 
     object->updateWorldMatrix( true, false );
 
-    REQUIRE( parent->matrix.elements == m.setPosition( parent->position ).elements);
+    REQUIRE( parent->matrix->elements == m.setPosition( parent->position ).elements);
 
-    REQUIRE( parent->matrixWorld.elements == m.setPosition( parent->position ).elements);
+    REQUIRE( parent->matrixWorld->elements == m.setPosition( parent->position ).elements);
 
-    REQUIRE( object->matrix.elements == m.setPosition( object->position ).elements);
+    REQUIRE( object->matrix->elements == m.setPosition( object->position ).elements);
 
-    REQUIRE( object->matrixWorld.elements == m.setPosition( v.copy( parent->position ).add( object->position ) ).elements);
+    REQUIRE( object->matrixWorld->elements == m.setPosition( v.copy( parent->position ).add( object->position ) ).elements);
 
-    REQUIRE( child->matrix.elements == m.identity().elements);
+    REQUIRE( child->matrix->elements == m.identity().elements);
 
-    REQUIRE( child->matrixWorld.elements == m.identity().elements);
+    REQUIRE( child->matrixWorld->elements == m.identity().elements);
 
     // Update the world matrices of an object and its children
 
-    parent->matrix.identity();
-    parent->matrixWorld.identity();
-    object->matrix.identity();
-    object->matrixWorld.identity();
+    parent->matrix->identity();
+    parent->matrixWorld->identity();
+    object->matrix->identity();
+    object->matrixWorld->identity();
 
     object->updateWorldMatrix( false, true );
 
-    REQUIRE( parent->matrix.elements == m.elements);
+    REQUIRE( parent->matrix->elements == m.elements);
 
-    REQUIRE( parent->matrixWorld.elements == m.elements);
+    REQUIRE( parent->matrixWorld->elements == m.elements);
 
-    REQUIRE( object->matrix.elements == m.setPosition( object->position ).elements);
+    REQUIRE( object->matrix->elements == m.setPosition( object->position ).elements);
 
-    REQUIRE( object->matrixWorld.elements == m.setPosition( object->position ).elements);
+    REQUIRE( object->matrixWorld->elements == m.setPosition( object->position ).elements);
 
-    REQUIRE( child->matrix.elements == m.setPosition( child->position ).elements);
+    REQUIRE( child->matrix->elements == m.setPosition( child->position ).elements);
 
-    REQUIRE( child->matrixWorld.elements == m.setPosition( v.copy( object->position ).add( child->position ) ).elements);
+    REQUIRE( child->matrixWorld->elements == m.setPosition( v.copy( object->position ).add( child->position ) ).elements);
 
     // Update the world matrices of an object and its parents and children
 
-    object->matrix.identity();
-    object->matrixWorld.identity();
-    child->matrix.identity();
-    child->matrixWorld.identity();
+    object->matrix->identity();
+    object->matrixWorld->identity();
+    child->matrix->identity();
+    child->matrixWorld->identity();
 
     object->updateWorldMatrix( true, true );
 
-    REQUIRE( parent->matrix.elements == m.setPosition( parent->position ).elements);
+    REQUIRE( parent->matrix->elements == m.setPosition( parent->position ).elements);
 
-    REQUIRE( parent->matrixWorld.elements == m.setPosition( parent->position ).elements);
+    REQUIRE( parent->matrixWorld->elements == m.setPosition( parent->position ).elements);
 
-    REQUIRE( object->matrix.elements == m.setPosition( object->position ).elements);
+    REQUIRE( object->matrix->elements == m.setPosition( object->position ).elements);
 
-    REQUIRE( object->matrixWorld.elements == m.setPosition( v.copy( parent->position ).add( object->position ) ).elements);
+    REQUIRE( object->matrixWorld->elements == m.setPosition( v.copy( parent->position ).add( object->position ) ).elements);
 
-    REQUIRE( child->matrix.elements == m.setPosition( child->position ).elements);
+    REQUIRE( child->matrix->elements == m.setPosition( child->position ).elements);
 
-    REQUIRE( child->matrixWorld.elements == m.setPosition( v.copy( parent->position ).add( object->position ).add( child->position ) ).elements);
+    REQUIRE( child->matrixWorld->elements == m.setPosition( v.copy( parent->position ).add( object->position ).add( child->position ) ).elements);
 
     // object->matrixAutoUpdate = false test
 
-    object->matrix.identity();
-    object->matrixWorld.identity();
+    object->matrix->identity();
+    object->matrixWorld->identity();
 
     object->matrixAutoUpdate = false;
     object->updateWorldMatrix( true, false );
 
-    REQUIRE( object->matrix.elements == m.identity().elements);
+    REQUIRE( object->matrix->elements == m.identity().elements);
 
-    REQUIRE( object->matrixWorld.elements == m.setPosition( parent->position ).elements);
+    REQUIRE( object->matrixWorld->elements == m.setPosition( parent->position ).elements);
     
 }

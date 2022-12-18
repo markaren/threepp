@@ -13,7 +13,6 @@ namespace threepp {
 
     public:
         void update() {
-            this->matrix.copy(this->light->matrixWorld);
 
             this->light->updateMatrixWorld();
 
@@ -23,17 +22,17 @@ namespace threepp {
             this->cone->scale.set(coneWidth, coneWidth, coneLength);
 
             Vector3 _vector{};
-            _vector.setFromMatrixPosition(this->light->target->matrixWorld);
+            _vector.setFromMatrixPosition(*this->light->target->matrixWorld);
 
             this->cone->lookAt(_vector);
 
             if (this->color) {
 
-                std::dynamic_pointer_cast<MaterialWithColor>(this->cone->material())->color.setHex(*this->color);
+                this->material()->as<MaterialWithColor>()->color.copy(*this->color);
 
             } else {
 
-                std::dynamic_pointer_cast<MaterialWithColor>(this->cone->material())->color.copy(this->light->color);
+                this->cone->material()->as<MaterialWithColor>()->color.copy(this->light->color);
             }
         }
 
@@ -49,15 +48,16 @@ namespace threepp {
 
     protected:
         std::shared_ptr<SpotLight> light;
-        std::optional<unsigned int> color;
+        std::optional<Color> color;
 
         std::shared_ptr<LineSegments> cone;
 
-        SpotLightHelper(std::shared_ptr<SpotLight> light, std::optional<unsigned int> color)
+        SpotLightHelper(std::shared_ptr<SpotLight> light, std::optional<Color> color)
             : light(std::move(light)), color(color) {
 
             this->light->updateMatrixWorld();
 
+            this->matrix = this->light->matrixWorld;
             this->matrixAutoUpdate = false;
 
             auto geometry = BufferGeometry::create();

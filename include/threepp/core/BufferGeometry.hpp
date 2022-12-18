@@ -89,7 +89,10 @@ namespace threepp {
 
         void dispose();
 
+        void copy(const BufferGeometry &source);
+
         static std::shared_ptr<BufferGeometry> create() {
+
             return std::make_shared<BufferGeometry>();
         }
 

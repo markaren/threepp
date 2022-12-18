@@ -34,7 +34,7 @@ namespace threepp::gl {
         GLObjects(GLGeometries &geometries, GLAttributes &attributes, GLInfo &info)
             : attributes_(attributes), geometries_(geometries), info_(info), onInstancedMeshDispose(*this) {}
 
-        std::shared_ptr<BufferGeometry> update(const std::shared_ptr<Object3D> &object);
+        std::shared_ptr<BufferGeometry> update(Object3D* object);
 
         void dispose() {
 

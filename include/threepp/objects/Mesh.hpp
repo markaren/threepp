@@ -35,7 +35,19 @@ namespace threepp {
             return materials_[0];
         }
 
-        [[nodiscard]] std::vector<std::shared_ptr<Material>> materials() {
+        template<class T>
+        std::shared_ptr<T> material() {
+
+            return std::dynamic_pointer_cast<T>(material());
+        }
+
+        template<class T>
+        std::shared_ptr<const T> material() const {
+
+            return std::dynamic_pointer_cast<T>(material());
+        }
+
+        [[nodiscard]] std::vector<std::shared_ptr<Material>> materials() override {
 
             return materials_;
         }
@@ -46,6 +58,8 @@ namespace threepp {
         }
 
         void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
+
+        std::shared_ptr<Mesh> clone(bool recursive = false);
 
         static std::shared_ptr<Mesh> create(
                 std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),

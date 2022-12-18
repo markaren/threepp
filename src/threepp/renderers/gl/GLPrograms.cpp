@@ -46,8 +46,8 @@ ProgramParameters GLPrograms::getParameters(
         Material *material,
         const GLLights::LightState &lights,
         int numShadows,
-        const std::shared_ptr<Scene> &scene,
-        const std::shared_ptr<Object3D> &object) {
+        Scene* scene,
+        Object3D* object) {
 
     return {renderer, lights, numShadows, object, scene, material, shaderIDs};
 }
@@ -92,7 +92,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
     return utils::join(array);
 }
 
-std::shared_ptr<UniformMap> GLPrograms::getUniforms(const std::shared_ptr<Material> &material) {
+std::shared_ptr<UniformMap> GLPrograms::getUniforms(Material* material) {
 
     std::shared_ptr<UniformMap> uniforms;
 

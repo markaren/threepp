@@ -1,7 +1,10 @@
-include_directories(${CMAKE_SOURCE_DIR}/include)
 
 add_executable(demo demo.cpp)
 target_link_libraries(demo PUBLIC threepp)
+if (imgui_FOUND)
+    target_link_libraries(demo PUBLIC imgui::imgui)
+    target_compile_definitions(demo PRIVATE "HAS_IMGUI")
+endif()
 
 add_executable(texture2d texture2d.cpp)
 target_link_libraries(texture2d PUBLIC threepp)
@@ -17,6 +20,8 @@ add_subdirectory(lights)
 add_subdirectory(misc)
 add_subdirectory(helpers)
 add_subdirectory(loaders)
+
+add_subdirectory(projects)
 
 if (BULLET_FOUND)
     add_subdirectory(bullet)

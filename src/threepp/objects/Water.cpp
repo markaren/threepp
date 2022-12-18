@@ -166,7 +166,7 @@ struct Water::Impl {
         material->fog = options.fog.value_or(false);
 
         material->uniforms->operator[]("mirrorSampler").setValue(renderTarget->texture);
-        material->uniforms->operator[]("textureMatrix").setValue(textureMatrix);
+        material->uniforms->operator[]("textureMatrix").setValue(&textureMatrix);
         material->uniforms->operator[]("alpha").setValue(alpha);
         material->uniforms->operator[]("time").setValue(time);
         material->uniforms->operator[]("normalSampler").setValue(options.waterNormals);
@@ -177,9 +177,9 @@ struct Water::Impl {
         material->uniforms->operator[]("eye").setValue(eye);
 
         water_.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
-            mirrorWorldPosition.setFromMatrixPosition(water_.matrixWorld);
-            cameraWorldPosition.setFromMatrixPosition(camera->matrixWorld);
-            rotationMatrix.extractRotation(water_.matrixWorld);
+            mirrorWorldPosition.setFromMatrixPosition(*water_.matrixWorld);
+            cameraWorldPosition.setFromMatrixPosition(*camera->matrixWorld);
+            rotationMatrix.extractRotation(*water_.matrixWorld);
             normal.set(0, 0, 1);
             normal.applyMatrix4(rotationMatrix);
             view.subVectors(mirrorWorldPosition, cameraWorldPosition);// Avoid rendering when mirror is facing away
@@ -187,7 +187,7 @@ struct Water::Impl {
             if (view.dot(normal) > 0) return;
             view.reflect(normal).negate();
             view.add(mirrorWorldPosition);
-            rotationMatrix.extractRotation(camera->matrixWorld);
+            rotationMatrix.extractRotation(*camera->matrixWorld);
             lookAtPosition.set(0, 0, -1);
             lookAtPosition.applyMatrix4(rotationMatrix);
             lookAtPosition.add(cameraWorldPosition);
@@ -212,8 +212,6 @@ struct Water::Impl {
             textureMatrix.multiply(mirrorCamera->matrixWorldInverse);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
                                                                      // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
 
-            material->uniforms->operator[]("textureMatrix").setValue(textureMatrix);
-
             mirrorPlane.setFromNormalAndCoplanarPoint(normal, mirrorWorldPosition);
             mirrorPlane.applyMatrix4(mirrorCamera->matrixWorldInverse);
             clipPlane.set(mirrorPlane.normal.x, mirrorPlane.normal.y, mirrorPlane.normal.z, mirrorPlane.constant);
@@ -229,7 +227,7 @@ struct Water::Impl {
             projectionMatrix.elements[6] = clipPlane.y;
             projectionMatrix.elements[10] = clipPlane.z + 1.f - clipBias;
             projectionMatrix.elements[14] = clipPlane.w;
-            eye.setFromMatrixPosition(camera->matrixWorld);// Render
+            eye.setFromMatrixPosition(*camera->matrixWorld);// Render
 
             auto _renderer = static_cast<GLRenderer *>(renderer);
 
@@ -243,7 +241,7 @@ struct Water::Impl {
             _renderer->state.depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
-            _renderer->render(scene, mirrorCamera);
+            _renderer->render(scene, mirrorCamera.get());
             water_.visible = true;
             _renderer->shadowMap.autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport

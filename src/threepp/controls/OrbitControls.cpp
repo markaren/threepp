@@ -203,8 +203,8 @@ void OrbitControls::pan(float deltaX, float deltaY) {
 
         // we use only clientHeight here so aspect ratio does not distort speed
         const auto size = canvas.getSize();
-        panLeft(2 * deltaX * targetDistance / (float) size.height, this->camera->matrix);
-        panUp(2 * deltaY * targetDistance / (float) size.height, this->camera->matrix);
+        panLeft(2 * deltaX * targetDistance / (float) size.height, *this->camera->matrix);
+        panUp(2 * deltaY * targetDistance / (float) size.height, *this->camera->matrix);
     } else if (camera->as<OrthographicCamera>()) {
 
         const auto size = canvas.getSize();
@@ -213,10 +213,10 @@ void OrbitControls::pan(float deltaX, float deltaY) {
         // orthographic
         panLeft(
                 deltaX * (ortho->right - ortho->left) / this->camera->zoom / size.width,
-                this->camera->matrix);
+                *this->camera->matrix);
         panUp(
                 deltaY * (ortho->top - ortho->bottom) / this->camera->zoom / size.height,
-                this->camera->matrix);
+                *this->camera->matrix);
 
     } else {
 

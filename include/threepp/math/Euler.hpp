@@ -45,6 +45,8 @@ namespace threepp {
 
         Euler &set(float x, float y, float z, const std::optional<RotationOrders> &order = std::nullopt);
 
+        Euler &copy(const Euler & e);
+
         Euler &setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrders> order = std::nullopt, bool update = true);
 
         Euler &setFromQuaternion(const Quaternion &q, std::optional<RotationOrders> order = std::nullopt, bool update = true);
@@ -79,6 +81,7 @@ namespace threepp {
 
         std::function<void()> onChangeCallback_ = [] {};
 
+        friend class Object3D;
         friend class Quaternion;
     };
 

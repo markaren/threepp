@@ -57,7 +57,7 @@ void PointLightShadow::updateMatrices(PointLight *light, int viewportIndex) {
     }
 
     Vector3 _lightPositionWorld{};
-    _lightPositionWorld.setFromMatrixPosition(light->matrixWorld);
+    _lightPositionWorld.setFromMatrixPosition(*light->matrixWorld);
     camera->position.copy(_lightPositionWorld);
 
     Vector3 _lookTarget{};

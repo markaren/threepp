@@ -40,6 +40,7 @@ target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 
 if (THREEPP_BUILD_EXAMPLES)
 
+    find_package(imgui CONFIG)
     find_package(Bullet CONFIG)
 
     if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
@@ -48,6 +49,18 @@ if (THREEPP_BUILD_EXAMPLES)
             target_include_directories(Bullet::Bullet INTERFACE "${BULLET_INCLUDE_DIRS}/..")
         endif()
         target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
+    endif ()
+
+    if (imgui_FOUND)
+
+        if(EXISTS "${CMAKE_BINARY_DIR}/_deps/imgui_glfw")
+            set(imgui_bindings "${CMAKE_BINARY_DIR}/_deps/imgui_glfw")
+            add_library(imgui_glfw "${imgui_bindings}/imgui_impl_glfw.cpp" "${imgui_bindings}/imgui_impl_opengl3.cpp")
+            target_link_libraries(imgui_glfw PUBLIC glad::glad glfw::glfw imgui::imgui)
+            target_include_directories(imgui_glfw PUBLIC "${imgui_bindings}")
+
+            set_property(TARGET imgui::imgui APPEND PROPERTY INTERFACE_LINK_LIBRARIES imgui_glfw)
+        endif()
     endif ()
 
     add_subdirectory(examples)

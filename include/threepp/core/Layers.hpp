@@ -48,6 +48,8 @@ namespace threepp {
 
     private:
         unsigned int mask_;
+
+        friend class Object3D;
     };
 
 }// namespace threepp

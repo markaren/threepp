@@ -11,13 +11,13 @@ namespace threepp {
     class GridHelper : public LineSegments {
 
     public:
-        static std::shared_ptr<GridHelper> create(int size = 10, int divisions = 10, unsigned int color1 = 0x444444, unsigned int color2 = 0x888888) {
+        static std::shared_ptr<GridHelper> create(int size = 10, int divisions = 10, Color color1 = 0x444444, Color color2 = 0x888888) {
 
             return std::shared_ptr<GridHelper>(new GridHelper(size, divisions, color1, color2));
         }
 
     protected:
-        GridHelper(int size, int divisions, unsigned int color1, unsigned int color2)
+        GridHelper(int size, int divisions, Color color1, Color color2)
             : LineSegments(nullptr, nullptr) {
 
             Color c1{color1};
