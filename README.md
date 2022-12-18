@@ -21,6 +21,7 @@ however much remains to be done..
 * Binary STL loader
 * OBJ/MTL Loader
 * Generic model loader based on Assimp
+* Easy integration with imgui
 
 
 ### But, but why?
@@ -117,3 +118,10 @@ int main() {
 }
 
 ```
+
+### Screenshots
+
+![Crane](doc/screenshots/crane.png)
+![Obj+mtl](doc/screenshots/obj_mtl.png)
+![spotlight](doc/screenshots/spotlight.png)
+![directional](doc/screenshots/directional.png)
