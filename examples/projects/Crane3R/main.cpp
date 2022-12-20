@@ -4,16 +4,17 @@
 
 #include <thread>
 
-#include "Kine.hpp"
-#include "ik/DLSSolver.hpp"
-
 using namespace threepp;
-using namespace kine;
 
 #ifdef HAS_IMGUI
 #include "../../imgui_helper.hpp"
 
+#include "Kine.hpp"
+#include "ik/DLSSolver.hpp"
 
+using namespace kine;
+
+template<size_t nKineDof>
 struct MyUI : public imggui_helper {
 
     bool mouseHover = false;
@@ -21,10 +22,10 @@ struct MyUI : public imggui_helper {
     bool posMode = false;
 
     Vector3 pos;
-    std::vector<KineLimit> limits;
-    std::array<float, 3> angles;
+    std::array<KineLimit, nKineDof> limits;
+    std::array<float, nKineDof> angles;
 
-    explicit MyUI(const Canvas &canvas, Kine &kine)
+    explicit MyUI(const Canvas &canvas, Kine<nKineDof> &kine)
         : imggui_helper(canvas),
           limits(kine.limits()),
           angles(kine.meanAngles()) {
@@ -98,22 +99,20 @@ int main() {
         renderer.setSize(size);
     });
 
-    std::vector<std::unique_ptr<KineComponent>> components;
-
-    Kine kine;
-    DLSSolver<3> ikSolver;
-
-    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Y, KineLimit{-90.f, 90.f}));
-    kine.addComponent(std::make_unique<KineLink>(Vector3::Y.clone().multiplyScalar(4.2)));
-    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::X.clone(), KineLimit{-80.f, 0.f}));
-    kine.addComponent(std::make_unique<KineLink>(Vector3::Z.clone().multiplyScalar(7)));
-    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::X.clone(), KineLimit{40.f, 140.f}));
-    kine.addComponent(std::make_unique<KineLink>(Vector3::Z.clone().multiplyScalar(5.2)));
-
-
 
 #ifdef HAS_IMGUI
-    MyUI ui(canvas, kine);
+
+    DLSSolver<3> ikSolver;
+    Kine<3> kine = KineBuilder()
+                           .addRevoluteJoint(Vector3::Y, KineLimit{-90.f, 90.f})
+                           .addLink(Vector3::Y.clone().multiplyScalar(4.2))
+                           .addRevoluteJoint(Vector3::X.clone(), KineLimit{-80.f, 0.f})
+                           .addLink(Vector3::Z.clone().multiplyScalar(7))
+                           .addRevoluteJoint(Vector3::X.clone(), KineLimit{40.f, 140.f})
+                           .addLink(Vector3::Z.clone().multiplyScalar(5.2))
+                           .build<3>();
+
+    MyUI<3> ui(canvas, kine);
 
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;

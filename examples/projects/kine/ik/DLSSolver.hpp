@@ -13,14 +13,14 @@ namespace kine {
         explicit DLSSolver(float lambda = 0.5f)
             : lambdaSq_(lambda*lambda) {}
 
-        std::array<float, numDof> solveIK(const Kine& kine, const threepp::Vector3& target, std::optional<std::array<float, numDof>> values) override {
+        std::array<float, numDof> solveIK(const Kine<numDof>& kine, const threepp::Vector3& target, std::optional<std::array<float, numDof>> values) override {
 
             auto vals = values ? *values : std::array<float, numDof>{};
 
             threepp::Vector3 tmp;
             for (int i = 0; i < 100; ++i) {
 
-                auto j = kine.computeJacobian<numDof>(vals);
+                auto j = kine.computeJacobian(vals);
                 auto m = kine.calculateEndEffectorTransformation(vals);
                 auto& actual = tmp.setFromMatrixPosition(m);
 
