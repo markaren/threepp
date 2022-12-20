@@ -13,18 +13,6 @@ using namespace kine;
 #ifdef HAS_IMGUI
 #include "../../imgui_helper.hpp"
 
-namespace {
-
-    std::array<float, 3> getMeanAngles(const Kine& kine) {
-        auto lim = kine.limits();
-        std::array<float, 3> res{};
-        for (unsigned i = 0; i < 3; ++i) {
-            res[i] = kine.limits()[i].mean();
-        }
-        return res;
-    }
-
-}
 
 struct MyUI : public imggui_helper {
 
@@ -34,10 +22,14 @@ struct MyUI : public imggui_helper {
 
     Vector3 pos;
     std::vector<KineLimit> limits;
-    std::array<float, 3> angles{0, -40, 90};
+    std::array<float, 3> angles;
 
-    explicit MyUI(const Canvas &canvas, Kine& kine) : imggui_helper(canvas), limits(kine.limits()){
-        pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(kine.meanAngles()));
+    explicit MyUI(const Canvas &canvas, Kine &kine)
+        : imggui_helper(canvas),
+          limits(kine.limits()),
+          angles(kine.meanAngles()) {
+
+        pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(angles));
     }
 
     void onRender() override {
@@ -108,7 +100,9 @@ int main() {
 
     std::vector<std::unique_ptr<KineComponent>> components;
 
-    kine::Kine kine;
+    Kine kine;
+    DLSSolver<3> ikSolver;
+
     kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Y, KineLimit{-90.f, 90.f}));
     kine.addComponent(std::make_unique<KineLink>(Vector3::Y.clone().multiplyScalar(4.2)));
     kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::X.clone(), KineLimit{-80.f, 0.f}));
@@ -116,7 +110,7 @@ int main() {
     kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::X.clone(), KineLimit{40.f, 140.f}));
     kine.addComponent(std::make_unique<KineLink>(Vector3::Z.clone().multiplyScalar(5.2)));
 
-    DLSSolver<3> ikSolver;
+
 
 #ifdef HAS_IMGUI
     MyUI ui(canvas, kine);
