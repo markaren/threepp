@@ -104,11 +104,11 @@ int main() {
 
     DLSSolver<3> ikSolver;
     Kine<3> kine = KineBuilder()
-                           .addRevoluteJoint(Vector3::Y, KineLimit{-90.f, 90.f})
+                           .addRevoluteJoint(Vector3::Y, {-90.f, 90.f})
                            .addLink(Vector3::Y.clone().multiplyScalar(4.2))
-                           .addRevoluteJoint(Vector3::X.clone(), KineLimit{-80.f, 0.f})
+                           .addRevoluteJoint(Vector3::X.clone(), {-80.f, 0.f})
                            .addLink(Vector3::Z.clone().multiplyScalar(7))
-                           .addRevoluteJoint(Vector3::X.clone(), KineLimit{40.f, 140.f})
+                           .addRevoluteJoint(Vector3::X.clone(), {40.f, 140.f})
                            .addLink(Vector3::Z.clone().multiplyScalar(5.2))
                            .build<3>();
 
