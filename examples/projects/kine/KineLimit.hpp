@@ -22,6 +22,15 @@ namespace kine {
             return max_;
         }
 
+        [[nodiscard]] float mean() const {
+
+            float lower = min_.value_or(-std::numeric_limits<float>::max());
+            float upper = max_.value_or(std::numeric_limits<float>::max());
+
+            return (lower + upper) / 2.f;
+
+        }
+
         bool clamp(float &value) const {
             if (min_ && *min_ > value) {
                 value = *min_;

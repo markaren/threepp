@@ -84,8 +84,10 @@ Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj) {
 std::shared_ptr<Crane3R> Crane3R::create() {
 
     threepp::OBJLoader loader;
+
+    auto parent = Group::create();
+
     auto part1 = loader.load("data/models/obj/Crane3R/4200/4200.obj");
-    part1->rotateX(-threepp::math::PI / 2);
     auto part2 = loader.load("data/models/obj/Crane3R/7000/7000.obj");
     part2->position.set(0, 0, 4.2);
     auto part3 = loader.load("data/models/obj/Crane3R/5200/5200.obj");
@@ -104,7 +106,11 @@ std::shared_ptr<Crane3R> Crane3R::create() {
     part2->add(make_rod_attachment(1, 2.05f, {2.695, 0, -0.85}));
     part3->add(make_rod_attachment(2, 2.05f, {0.98, 0, 0.2}));
 
-    return std::shared_ptr<Crane3R>(new Crane3R(part1));
+    parent->add(part1);
+    parent->rotateY(-math::PI/2);
+    parent->rotateX(-math::PI/2);
+
+    return std::shared_ptr<Crane3R>(new Crane3R(parent));
 }
 
 

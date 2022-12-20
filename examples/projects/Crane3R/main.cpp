@@ -13,17 +13,32 @@ using namespace kine;
 #ifdef HAS_IMGUI
 #include "../../imgui_helper.hpp"
 
+namespace {
+
+    std::array<float, 3> getMeanAngles(const Kine& kine) {
+        auto lim = kine.limits();
+        std::array<float, 3> res{};
+        for (unsigned i = 0; i < 3; ++i) {
+            res[i] = kine.limits()[i].mean();
+        }
+        return res;
+    }
+
+}
+
 struct MyUI : public imggui_helper {
 
     bool mouseHover = false;
     bool jointMode = false;
     bool posMode = false;
 
-    Vector3 pos{0, 0, 0};
+    Vector3 pos;
     std::vector<KineLimit> limits;
     std::array<float, 3> angles{0, -40, 90};
 
-    explicit MyUI(const Canvas &canvas, Kine& kine) : imggui_helper(canvas), limits(kine.limits()) {}
+    explicit MyUI(const Canvas &canvas, Kine& kine) : imggui_helper(canvas), limits(kine.limits()){
+        pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(kine.meanAngles()));
+    }
 
     void onRender() override {
 
@@ -40,11 +55,11 @@ struct MyUI : public imggui_helper {
         jointMode = jointMode || ImGui::IsItemEdited();
 
         ImGui::Text("Target pos");
-        ImGui::SliderFloat("px", &pos.x, 0, 10);
+        ImGui::SliderFloat("px", &pos.x, -10, 10);
         posMode = ImGui::IsItemEdited();
         ImGui::SliderFloat("py", &pos.y, 0, 10);
         posMode = posMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("pz", &pos.z, -10, 10);
+        ImGui::SliderFloat("pz", &pos.z, 0, 10);
         posMode = posMode || ImGui::IsItemEdited();
 
         mouseHover = ImGui::IsWindowHovered();
@@ -60,7 +75,7 @@ int main() {
     renderer.setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
-    camera->position.set(15, 8, 15);
+    camera->position.set(-15, 8, 15);
 
     OrbitControls controls(camera, canvas);
 
@@ -96,10 +111,10 @@ int main() {
     kine::Kine kine;
     kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Y, KineLimit{-90.f, 90.f}));
     kine.addComponent(std::make_unique<KineLink>(Vector3::Y.clone().multiplyScalar(4.2)));
-    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Z.clone().negate(), KineLimit{-80.f, 0.f}));
-    kine.addComponent(std::make_unique<KineLink>(Vector3::X.clone().multiplyScalar(7)));
-    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Z.clone().negate(), KineLimit{40.f, 140.f}));
-    kine.addComponent(std::make_unique<KineLink>(Vector3::X.clone().multiplyScalar(5.2)));
+    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::X.clone(), KineLimit{-80.f, 0.f}));
+    kine.addComponent(std::make_unique<KineLink>(Vector3::Z.clone().multiplyScalar(7)));
+    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::X.clone(), KineLimit{40.f, 140.f}));
+    kine.addComponent(std::make_unique<KineLink>(Vector3::Z.clone().multiplyScalar(5.2)));
 
     DLSSolver<3> ikSolver;
 

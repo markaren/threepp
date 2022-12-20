@@ -86,6 +86,15 @@ namespace kine {
             return limits;
         }
 
+        [[nodiscard]] std::array<float, 3> meanAngles() const {
+            auto lim = limits();
+            std::array<float, 3> res{};
+            for (unsigned i = 0; i < 3; ++i) {
+                res[i] = lim[i].mean();
+            }
+            return res;
+        }
+
         [[nodiscard]] const std::vector<std::unique_ptr<KineComponent>> &components() const {
             return components_;
         }
