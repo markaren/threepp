@@ -20,7 +20,7 @@ namespace threepp::math {
     }
 
     template<class T>
-    void clamp(T& value, T min, T max) {
+    void clampInPlace(T& value, T min, T max) {
 
         value = std::max(min, std::min(max, value));
     }
@@ -43,7 +43,7 @@ namespace threepp::math {
 
     float floorPowerOfTwo(float value);
 
-    template <typename T>
+    template<typename T>
     inline int sgn(T val) {
         return (T(0) < val) - (val < T(0));
     }

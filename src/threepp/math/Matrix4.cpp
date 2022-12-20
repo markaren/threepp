@@ -2,9 +2,9 @@
 #include "threepp/math/Matrix4.hpp"
 
 #include "threepp/math/Euler.hpp"
+#include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
-#include "threepp/math/Matrix3.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -529,6 +529,11 @@ Matrix4 &Matrix4::makeTranslation(float x, float y, float z) {
     );
 
     return *this;
+}
+
+Matrix4 &Matrix4::makeTranslation(const Vector3 &v) {
+
+    return makeTranslation(v.x, v.y, v.z);
 }
 
 Matrix4 &Matrix4::makeRotationX(float theta) {

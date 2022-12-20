@@ -4,7 +4,11 @@
 
 #include <thread>
 
+#include "Kine.hpp"
+#include "ik/DLSSolver.hpp"
+
 using namespace threepp;
+using namespace kine;
 
 #ifdef HAS_IMGUI
 #include "../../imgui_helper.hpp"
@@ -14,10 +18,12 @@ struct MyUI : public imggui_helper {
     bool mouseHover = false;
     bool jointMode = false;
     bool posMode = false;
-    std::array<float, 3> angles{0, -40, 90};
-    Vector3 pos{0, 0, 0};
 
-    explicit MyUI(const threepp::Canvas &canvas) : imggui_helper(canvas) {}
+    Vector3 pos{0, 0, 0};
+    std::vector<KineLimit> limits;
+    std::array<float, 3> angles{0, -40, 90};
+
+    explicit MyUI(const Canvas &canvas, Kine& kine) : imggui_helper(canvas), limits(kine.limits()) {}
 
     void onRender() override {
 
@@ -26,13 +32,12 @@ struct MyUI : public imggui_helper {
         ImGui::Begin("Crane3R");
 
         ImGui::Text("Target angles");
-        ImGui::SliderFloat("j1", &angles[0], -90, 90);
+        ImGui::SliderFloat("j1", &angles[0], *limits[0].min(), *limits[0].max());
         jointMode = ImGui::IsItemEdited();
-        ImGui::SliderFloat("j2", &angles[1], -80, 0);
+        ImGui::SliderFloat("j2", &angles[1], *limits[1].min(), *limits[1].max());
         jointMode = jointMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("j3", &angles[2], 40, 140);
+        ImGui::SliderFloat("j3", &angles[2], *limits[2].min(), *limits[2].max());
         jointMode = jointMode || ImGui::IsItemEdited();
-
 
         ImGui::Text("Target pos");
         ImGui::SliderFloat("px", &pos.x, 0, 10);
@@ -65,6 +70,7 @@ int main() {
     scene->add(grid);
 
     auto endEffectorHelper = AxesHelper::create(1);
+    endEffectorHelper->visible = false;
     scene->add(endEffectorHelper);
 
     auto light = AmbientLight::create(Color::white);
@@ -75,6 +81,7 @@ int main() {
         crane = Crane3R::create();
         canvas.invokeLater([&, crane] {
             scene->add(crane);
+            endEffectorHelper->visible = true;
         });
     });
 
@@ -84,10 +91,23 @@ int main() {
         renderer.setSize(size);
     });
 
+    std::vector<std::unique_ptr<KineComponent>> components;
+
+    kine::Kine kine;
+    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Y, KineLimit{-90.f, 90.f}));
+    kine.addComponent(std::make_unique<KineLink>(Vector3::Y.clone().multiplyScalar(4.2)));
+    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Z.clone().negate(), KineLimit{-80.f, 0.f}));
+    kine.addComponent(std::make_unique<KineLink>(Vector3::X.clone().multiplyScalar(7)));
+    kine.addComponent(std::make_unique<RevoluteJoint>(Vector3::Z.clone().negate(), KineLimit{40.f, 140.f}));
+    kine.addComponent(std::make_unique<KineLink>(Vector3::X.clone().multiplyScalar(5.2)));
+
+    DLSSolver<3> ikSolver;
+
 #ifdef HAS_IMGUI
-    MyUI ui(canvas);
+    MyUI ui(canvas, kine);
 
     auto targetHelper = AxesHelper::create(2);
+    targetHelper->visible = false;
     scene->add(targetHelper);
 
 #endif
@@ -96,8 +116,8 @@ int main() {
 
         if (crane) {
 
-            auto endEffectorPosition = Crane3R::calculateEndEffectorPosition(crane->getAngles());
-            endEffectorHelper->position.copy(endEffectorPosition);
+            auto endEffectorPosition = kine.calculateEndEffectorTransformation(crane->getAngles());
+            endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
 #ifdef HAS_IMGUI
             ui.render();
@@ -106,12 +126,12 @@ int main() {
             targetHelper->position.copy(ui.pos);
 
             if (ui.jointMode) {
-                auto &angles = ui.angles;
-                ui.pos = Crane3R::calculateEndEffectorPosition(angles);
+                ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(ui.angles));
+                targetHelper->visible = false;
             }
             if (ui.posMode) {
-                auto& pos = ui.pos;
-                ui.angles = crane->computeAngles(pos);
+                ui.angles = ikSolver.solveIK(kine, ui.pos, crane->getAngles());
+                targetHelper->visible = true;
             }
 
             crane->setTargetAngles(ui.angles);

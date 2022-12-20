@@ -7,8 +7,6 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 
-#include "linalg.h"
-
 using namespace threepp;
 
 namespace {
@@ -60,36 +58,6 @@ namespace {
 
         return group;
     }
-
-    linalg::mat<float, 3, 3> jacobian(const std::array<float, 3> values) {
-        constexpr float h = 0.0001f;//some low value
-
-        linalg::mat<float, 3, 3> jacobian{};
-
-        for (int i = 0; i < 3; ++i) {
-            auto vals = values; //copy
-            vals[i] += h;
-            auto d1 = Crane3R::calculateEndEffectorPosition(vals);
-            auto d2 = Crane3R::calculateEndEffectorPosition(values);
-
-            jacobian.x[i] = (d1.x - d2.x) / h;
-            jacobian.y[i] = (d1.y - d2.y) / h;
-            jacobian.z[i] = (d1.z - d2.z) / h;
-        }
-        return jacobian;
-    }
-
-    linalg::mat<float, 3, 3> DLS(const linalg::mat<float, 3, 3> &j, float lambda) {
-
-        linalg::mat<float, 3, 3> I = linalg::identity;
-
-        auto jt = linalg::transpose(j);
-        auto jjt = linalg::mul(j, jt);
-        auto plus = linalg::cmul(I, lambda*lambda);
-
-        return linalg::mul(jt, linalg::inverse(jjt + plus));
-    }
-
 
 }// namespace
 
@@ -176,48 +144,4 @@ std::array<float, 3> Crane3R::getAngles(bool degrees) const {
     }
 
     return angles;
-}
-
-Vector3 Crane3R::calculateEndEffectorPosition(const std::array<float, 3> &values, bool degrees) {
-
-    float j1 = degrees ? math::DEG2RAD * values[0] : values[0];
-    float j2 = degrees ? math::DEG2RAD * values[1] : values[1];
-    float j3 = degrees ? math::DEG2RAD * values[2] : values[1];
-
-    auto t1 = Matrix4().makeRotationY(j1);
-    auto t2 = Matrix4().makeTranslation(0, 4.2, 0).multiply(Matrix4().makeRotationZ(-j2));
-    auto t3 = Matrix4().makeTranslation(7, 0, 0).multiply(Matrix4().makeRotationZ(-j3));
-    auto t4 = Matrix4().makeTranslation(5.2, 0, 0);
-
-    auto T = Matrix4().copy(t1).multiply(t2).multiply(t3).multiply(t4);
-    return {T.elements[12], T.elements[13], T.elements[14]};
-}
-
-std::array<float, 3> Crane3R::computeAngles(const Vector3 &target) const {
-
-    auto vals = getAngles();
-
-    for (int i = 0; i < 100; ++i) {
-
-        auto j = jacobian(vals);
-        auto actual = calculateEndEffectorPosition(vals);
-
-        auto delta = linalg::vec<float, 3>{target.x - actual.x, target.y - actual.y, target.z - actual.z};
-        linalg::mat<float, 3, 3> inv = DLS(j, 0.5f);
-
-        linalg::vec<float, 3> theta_dot = linalg::mul(inv, delta);
-
-        for (int k = 0; k < 3; ++k) {
-
-            vals[k] += theta_dot[k];
-            if (vals[k] < limMin[k]) {
-                vals[k] = limMin[k];
-            } else if (vals[k] > limMax[k]) {
-                vals[k] = limMax[k];
-            }
-        }
-    }
-
-
-    return vals;
 }
