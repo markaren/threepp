@@ -11,9 +11,9 @@ class Crane3R : public threepp::Group {
 
 public:
 
-    [[nodiscard]] std::array<float, 3> getAngles(bool degrees = true) const;
+    [[nodiscard]] std::array<float, 3> getValues(bool degrees = true) const;
 
-    void setTargetAngles(const std::array<float, 3>& values, bool degrees = true);
+    void setTargetValues(const std::array<float, 3>& values, bool degrees = true);
 
     void update();
 
@@ -21,7 +21,7 @@ public:
 
 
 private:
-    std::array<float, 3> targetangles{};
+    std::array<float, 3> targetValues{};
     std::array<threepp::Object3D *, 3> parts_{};
     std::array<std::pair<threepp::Object3D*, threepp::Object3D*>, 2> cylinders_{};
 

@@ -114,23 +114,23 @@ std::shared_ptr<Crane3R> Crane3R::create() {
 }
 
 
-void Crane3R::setTargetAngles(const std::array<float, 3> &values, bool degrees) {
+void Crane3R::setTargetValues(const std::array<float, 3> &values, bool degrees) {
 
     if (degrees) {
-        targetangles = {values[0] * math::DEG2RAD, values[1] * math::DEG2RAD, values[2] * math::DEG2RAD};
+        targetValues = {values[0] * math::DEG2RAD, values[1] * math::DEG2RAD, values[2] * math::DEG2RAD};
     } else {
-        targetangles = values;
+        targetValues = values;
     }
 }
 
 void Crane3R::update() {
 
-    parts_[0]->rotation.z = targetangles[0];
-    parts_[1]->rotation.y = targetangles[1];
-    parts_[2]->rotation.y = targetangles[2];
+    parts_[0]->rotation.z = targetValues[0];
+    parts_[1]->rotation.y = targetValues[1];
+    parts_[2]->rotation.y = targetValues[2];
 
     Vector3 tmp;
-    for (auto &cylinder : cylinders_) {
+    for (const auto &cylinder : cylinders_) {
 
         auto house = cylinder.first;
         auto rod = cylinder.second;
@@ -140,7 +140,7 @@ void Crane3R::update() {
     }
 }
 
-std::array<float, 3> Crane3R::getAngles(bool degrees) const {
+std::array<float, 3> Crane3R::getValues(bool degrees) const {
 
     std::array<float, 3> angles{parts_[0]->rotation.z(), parts_[1]->rotation.y(), parts_[2]->rotation.y()};
     if (degrees) {
