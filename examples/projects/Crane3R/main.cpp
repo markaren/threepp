@@ -124,12 +124,12 @@ int main() {
 
         if (crane) {
 
-            auto endEffectorPosition = kine.calculateEndEffectorTransformation(crane->getAngles());
-            endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
-
 #ifdef HAS_IMGUI
             ui.render();
             controls.enabled = !ui.mouseHover;
+
+            auto endEffectorPosition = kine.calculateEndEffectorTransformation(crane->getAngles());
+            endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
             targetHelper->position.copy(ui.pos);
 
