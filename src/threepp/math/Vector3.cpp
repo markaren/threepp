@@ -261,7 +261,7 @@ Vector3 &Vector3::divide(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::divideScalar(const float &v) {
+Vector3 &Vector3::divideScalar(float v) {
     this->x /= v;
     this->y /= v;
     this->z /= v;

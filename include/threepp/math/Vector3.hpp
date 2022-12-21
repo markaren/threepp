@@ -77,7 +77,7 @@ namespace threepp {
 
         Vector3 &divide(const Vector3 &v);
 
-        Vector3 &divideScalar(const float &v);
+        Vector3 &divideScalar(float v);
 
         Vector3 &min(const Vector3 &v);
 
@@ -151,6 +151,86 @@ namespace threepp {
 
         bool operator!=(const Vector3 &other) const {
             return !equals(other);
+        }
+
+        Vector3 operator+(const Vector3 &other) const {
+
+            return clone().add(other);
+        }
+
+        Vector3 &operator+=(const Vector3 &other) {
+
+            return add(other);
+        }
+
+        Vector3 operator+(float s) const {
+
+            return clone().addScalar(s);
+        }
+
+        Vector3 &operator+=(float s) {
+
+            return addScalar(s);
+        }
+
+        Vector3 operator-(const Vector3 &other) const {
+
+            return clone().sub(other);
+        }
+
+        Vector3 &operator-=(const Vector3 &other) {
+
+            return sub(other);
+        }
+
+        Vector3 operator-(float s) const {
+
+            return clone().subScalar(s);
+        }
+
+        Vector3 &operator-=(float s) {
+
+            return subScalar(s);
+        }
+
+        Vector3 operator*(const Vector3 &other) const {
+
+            return clone().multiply(other);
+        }
+
+        Vector3 &operator*=(const Vector3 &other) {
+
+            return multiply(other);
+        }
+
+        Vector3 operator*(float s) const {
+
+            return clone().multiplyScalar(s);
+        }
+
+        Vector3 &operator*=(float s) {
+
+            return multiplyScalar(s);
+        }
+
+        Vector3 operator/(const Vector3 &other) const {
+
+            return clone().divide(other);
+        }
+
+        Vector3 &operator/=(const Vector3 &other) {
+
+            return divide(other);
+        }
+
+        Vector3 operator/(float s) const {
+
+            return clone().divideScalar(s);
+        }
+
+        Vector3 &operator/=(float s) {
+
+            return divideScalar(s);
         }
 
         template<class ArrayLike>

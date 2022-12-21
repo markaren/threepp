@@ -72,6 +72,8 @@ namespace threepp {
 
         Matrix4 &makeTranslation(float x, float y, float z);
 
+        Matrix4 &makeTranslation(const Vector3& v);
+
         Matrix4 &makeRotationX(float theta);
 
         Matrix4 &makeRotationY(float theta);

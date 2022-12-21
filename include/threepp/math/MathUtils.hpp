@@ -20,7 +20,7 @@ namespace threepp::math {
     }
 
     template<class T>
-    void clamp(T& value, T min, T max) {
+    void clampInPlace(T& value, T min, T max) {
 
         value = std::max(min, std::min(max, value));
     }
@@ -30,6 +30,8 @@ namespace threepp::math {
     float inverseLerp(float x, float y, float value);
 
     float lerp(float x, float y, float t);
+
+    float damp(float x, float y, float lambda, float dt);
 
     float degToRad(float degrees);
 
@@ -43,7 +45,7 @@ namespace threepp::math {
 
     float floorPowerOfTwo(float value);
 
-    template <typename T>
+    template<typename T>
     inline int sgn(T val) {
         return (T(0) < val) - (val < T(0));
     }
