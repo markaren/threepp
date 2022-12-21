@@ -91,6 +91,22 @@ namespace kine {
             return res;
         }
 
+        std::array<float, numDOF> normalizeValues(const std::array<float, numDOF>& values) const {
+            std::array<float, numDOF> res{};
+            for (unsigned i = 0; i < numDOF; ++i) {
+                res[i] = joints_[i]->limit.normalize(values[i]);
+            }
+            return res;
+        }
+
+        std::array<float, numDOF> denormalizeValues(const std::array<float, numDOF>& values) const {
+            std::array<float, numDOF> res{};
+            for (unsigned i = 0; i < numDOF; ++i) {
+                res[i] = joints_[i]->limit.denormalize(values[i]);
+            }
+            return res;
+        }
+
     private:
         std::array<KineJoint *, numDOF> joints_;
         std::vector<std::shared_ptr<KineComponent>> components_;

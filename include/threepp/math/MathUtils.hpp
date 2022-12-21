@@ -31,6 +31,8 @@ namespace threepp::math {
 
     float lerp(float x, float y, float t);
 
+    float damp(float x, float y, float lambda, float dt);
+
     float degToRad(float degrees);
 
     float radToDeg(float radians);

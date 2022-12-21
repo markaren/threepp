@@ -15,7 +15,7 @@ namespace kine {
     template <size_t numDof>
     class IKSolver {
 
-        virtual std::array<float, numDof> solveIK(const Kine<numDof>& kine, const threepp::Vector3& target, std::optional<std::array<float, numDof>> values) = 0;
+        virtual std::array<float, numDof> solveIK(const Kine<numDof>& kine, const threepp::Vector3& target, const std::array<float, numDof>& startValues) = 0;
 
         void setEPS(float eps) {
             eps_ = eps;

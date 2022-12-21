@@ -13,9 +13,9 @@ namespace kine {
         explicit DLSSolver(float lambda = 0.5f)
             : lambdaSq_(lambda*lambda) {}
 
-        std::array<float, numDof> solveIK(const Kine<numDof>& kine, const threepp::Vector3& target, std::optional<std::array<float, numDof>> values) override {
+        std::array<float, numDof> solveIK(const Kine<numDof>& kine, const threepp::Vector3& target, const std::array<float, numDof>& startValues) override {
 
-            auto vals = values ? *values : std::array<float, numDof>{};
+            auto vals = startValues;
 
             threepp::Vector3 tmp;
             for (int i = 0; i < 100; ++i) {
@@ -34,7 +34,7 @@ namespace kine {
                 for (int k = 0; k < numDof; ++k) {
 
                     vals[k] += theta_dot[k];
-                    kine.joints()[k]->limit.clamp(vals[k]);
+                    kine.joints()[k]->limit.clampWithinLimit(vals[k]);
                 }
             }
 

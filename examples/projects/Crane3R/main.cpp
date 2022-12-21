@@ -11,6 +11,7 @@ using namespace threepp;
 
 #include "Kine.hpp"
 #include "ik/DLSSolver.hpp"
+#include "ik/CCDSolver.hpp"
 
 using namespace kine;
 
@@ -102,7 +103,7 @@ int main() {
 
 #ifdef HAS_IMGUI
 
-    DLSSolver<3> ikSolver;
+    auto ikSolver = std::make_unique<CCDSolver<3>>();
     Kine<3> kine = KineBuilder()
                            .addRevoluteJoint(Vector3::Y, {-90.f, 90.f})
                            .addLink(Vector3::Y * 4.2)
@@ -138,7 +139,7 @@ int main() {
                 targetHelper->visible = false;
             }
             if (ui.posMode) {
-                ui.angles = ikSolver.solveIK(kine, ui.pos, crane->getValues());
+                ui.angles = ikSolver->solveIK(kine, ui.pos, crane->getValues());
                 targetHelper->visible = true;
             }
 

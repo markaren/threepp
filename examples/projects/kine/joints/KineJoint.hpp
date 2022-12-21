@@ -27,7 +27,7 @@ namespace kine {
 
         void setJointValue(float value) {
             value_ = value;
-            limit.clamp(value_);
+            limit.clampWithinLimit(value_);
         }
 
         [[nodiscard]] threepp::Matrix4 getTransformation() const override {
