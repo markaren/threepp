@@ -106,7 +106,7 @@ namespace kine {
             return *this;
         }
 
-        KineBuilder &addPrismticjoint(const threepp::Vector3 &axis, const KineLimit &limit) {
+        KineBuilder &addPrismaticJoint(const threepp::Vector3 &axis, const KineLimit &limit) {
             components_.emplace_back(std::make_unique<PrismaticJoint>(axis, limit));
             ++nDOF;
 
