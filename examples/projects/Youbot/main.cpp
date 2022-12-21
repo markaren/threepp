@@ -28,7 +28,7 @@ int main() {
     std::shared_ptr<Group> youbot;
     std::thread t([&] {
         AssimpLoader loader;
-        youbot = loader.load(R"(C:\Users\Lars Ivar Hatledal\Downloads\youbot.dae)");
+        youbot = loader.load("data/models/collada/youbot.dae");
         youbot->scale.multiplyScalar(10);
 
         canvas.invokeLater([&, youbot] {
