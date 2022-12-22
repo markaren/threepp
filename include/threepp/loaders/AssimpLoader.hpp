@@ -11,7 +11,7 @@ namespace threepp {
     class AssimpLoader {
 
     public:
-        AssimpLoader();
+        explicit AssimpLoader(bool basicMaterial = false);
 
         std::shared_ptr<Group> load(const std::filesystem::path& path);
 

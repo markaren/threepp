@@ -1,6 +1,6 @@
 
-#include <threepp/threepp.hpp>
 #include <threepp/loaders/AssimpLoader.hpp>
+#include <threepp/threepp.hpp>
 
 using namespace threepp;
 
@@ -14,9 +14,8 @@ int main() {
 
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
-    renderer.outputEncoding = sRGBEncoding;
 
-    AssimpLoader loader;
+    AssimpLoader loader(true);
     auto objModel = loader.load("data/models/gltf/zedm.glb");
     objModel->scale.multiplyScalar(0.1);
     scene->add(objModel);
@@ -31,7 +30,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         objModel->rotation.y += 1 * dt;
 
         renderer.render(scene, camera);

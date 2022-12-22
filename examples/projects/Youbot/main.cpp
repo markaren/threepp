@@ -22,8 +22,12 @@ int main() {
     auto grid = GridHelper::create(20, 10, Color::yellowgreen);
     scene->add(grid);
 
-    auto light = AmbientLight::create(Color::white);
+    auto light = DirectionalLight::create(0xffffff, 0.1f);
+    scene->position.set(1,1,1);
     scene->add(light);
+
+    auto light2 = AmbientLight::create(0xffffff, 0.1f);
+    scene->add(light2);
 
     std::shared_ptr<Group> youbot;
     std::thread t([&] {

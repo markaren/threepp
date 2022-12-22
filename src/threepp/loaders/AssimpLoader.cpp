@@ -1,8 +1,8 @@
 
 #include "threepp/loaders/AssimpLoader.hpp"
-#include "threepp/objects/Mesh.hpp"
-#include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/materials/MeshPhongMaterial.hpp"
+#include "threepp/objects/Mesh.hpp"
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -12,7 +12,9 @@ using namespace threepp;
 
 struct AssimpLoader::Impl {
 
-    void parseNodes(const std::filesystem::path &path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
+    explicit Impl(bool basicMaterial) : basicMaterial_(basicMaterial) {}
+
+    void parseNodes(const std::filesystem::path &path, const aiScene *aiScene, aiNode *aiNode, Object3D &parent) {
 
         auto group = Group::create();
         group->name = aiNode->mName.C_Str();
@@ -57,10 +59,14 @@ struct AssimpLoader::Impl {
                         }
                     }
                 }
-
             }
 
-            auto material = MeshBasicMaterial::create();
+            std::shared_ptr<Material> material;
+            if (basicMaterial_) {
+                material = MeshBasicMaterial::create();
+            } else {
+                material = MeshPhongMaterial::create();
+            }
 
             geometry->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
             if (!normals.empty()) {
@@ -79,31 +85,52 @@ struct AssimpLoader::Impl {
                 aiString p;
                 auto mi = aiMesh->mMaterialIndex;
                 auto mat = aiScene->mMaterials[mi];
+
                 if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                     if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                         auto texPath = path.parent_path() / p.C_Str();
-                        auto tex = TextureLoader().loadTexture(texPath);
-                        tex->encoding = sRGBEncoding;
-                        material->map = tex;
-                    }
-                } else {
-                    C_STRUCT aiColor4D diffuse;
-                    if(AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_DIFFUSE, &diffuse)) {
-                        material->color.setRGB(diffuse.r, diffuse.g, diffuse.b);
+                        auto tex = texLoader_.loadTexture(texPath);
+                        //                        tex->encoding = sRGBEncoding;
+                        std::dynamic_pointer_cast<MaterialWithMap>(material)->map = tex;
                     }
                 }
-                if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
-                    if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
-                        auto texPath = path.parent_path() / p.C_Str();
-                        auto tex = TextureLoader().loadTexture(texPath);
-                        tex->encoding = sRGBEncoding;
-                        material->specularMap = tex;
+                C_STRUCT aiColor4D diffuse;
+                if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_DIFFUSE, &diffuse)) {
+                    std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(diffuse.r, diffuse.g, diffuse.b);
+                }
+
+                if (!basicMaterial_) {
+                    if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
+                        if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
+                            auto texPath = path.parent_path() / p.C_Str();
+                            auto tex = texLoader_.loadTexture(texPath);
+                            //                        tex->encoding = sRGBEncoding;
+                            std::dynamic_pointer_cast<MaterialWithEmissive>(material)->emissiveMap = tex;
+                        }
                     }
-                } else {
-//                    C_STRUCT aiColor4D specular;
-//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
-//                        material->specular.setRGB(specular.r, specular.g, specular.b);
-//                    }
+                    C_STRUCT aiColor4D emissive;
+                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_EMISSIVE, &emissive)) {
+                        std::dynamic_pointer_cast<MaterialWithEmissive>(material)->emissive.setRGB(emissive.r, emissive.g, emissive.b);
+                    }
+
+
+                    if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
+                        if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
+                            auto texPath = path.parent_path() / p.C_Str();
+                            auto tex = texLoader_.loadTexture(texPath);
+                            //                        tex->encoding = sRGBEncoding;
+                            std::dynamic_pointer_cast<MaterialWithSpecularMap>(material)->specularMap = tex;
+                        }
+                    }
+                    C_STRUCT aiColor4D specular;
+                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
+                        std::dynamic_pointer_cast<MaterialWithSpecular>(material)->specular.setRGB(specular.r, specular.g, specular.b);
+                    }
+                }
+
+                C_STRUCT aiColor4D ambient;
+                if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
+                    std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
                 }
 
             }
@@ -119,8 +146,7 @@ struct AssimpLoader::Impl {
                 t.a1, t.a2, t.a3, t.a4,
                 t.b1, t.b2, t.b3, t.b4,
                 t.c1, t.c2, t.c3, t.c4,
-                t.d1, t.d2, t.d3, t.d4
-        );
+                t.d1, t.d2, t.d3, t.d4);
         group->position.setFromMatrixPosition(m);
         group->rotation.setFromRotationMatrix(m);
         group->updateMatrix();
@@ -129,7 +155,6 @@ struct AssimpLoader::Impl {
         for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
             parseNodes(path, aiScene, aiNode->mChildren[i], *group);
         }
-
     }
 
     std::shared_ptr<Group> load(const std::filesystem::path &path) {
@@ -149,11 +174,13 @@ struct AssimpLoader::Impl {
     ~Impl() = default;
 
 private:
+    bool basicMaterial_;
+    TextureLoader texLoader_;
     Assimp::Importer importer_;
 };
 
-AssimpLoader::AssimpLoader()
-    : pimpl_(std::make_unique<Impl>()) {}
+AssimpLoader::AssimpLoader(bool basicMaterial)
+    : pimpl_(std::make_unique<Impl>(basicMaterial)) {}
 
 std::shared_ptr<Group> AssimpLoader::load(const std::filesystem::path &path) {
     return pimpl_->load(path);
