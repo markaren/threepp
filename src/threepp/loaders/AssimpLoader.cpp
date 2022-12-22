@@ -133,6 +133,10 @@ struct AssimpLoader::Impl {
                     std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
                 }
 
+                if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
+                    std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
+                }
+
             }
 
             auto mesh = Mesh::create(geometry, material);
