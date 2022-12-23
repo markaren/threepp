@@ -23,10 +23,10 @@ struct MyUI : public imggui_helper {
     bool posMode = false;
 
     Vector3 pos;
-    std::array<KineLimit, nKineDof> limits;
-    std::array<float, nKineDof> angles;
+    std::vector<KineLimit> limits;
+    std::vector<float> angles;
 
-    explicit MyUI(const Canvas &canvas, Kine<nKineDof> &kine)
+    explicit MyUI(const Canvas &canvas, Kine &kine)
         : imggui_helper(canvas),
           limits(kine.limits()),
           angles(kine.meanAngles()) {
@@ -103,15 +103,15 @@ int main() {
 
 #ifdef HAS_IMGUI
 
-    auto ikSolver = std::make_unique<CCDSolver<3>>();
-    Kine<3> kine = KineBuilder()
+    auto ikSolver = std::make_unique<DLSSolver>();
+    Kine kine = KineBuilder()
                            .addRevoluteJoint(Vector3::Y, {-90.f, 90.f})
                            .addLink(Vector3::Y * 4.2)
                            .addRevoluteJoint(Vector3::X, {-80.f, 0.f})
                            .addLink(Vector3::Z * 7)
                            .addRevoluteJoint(Vector3::X, {40.f, 140.f})
                            .addLink(Vector3::Z * 5.2)
-                           .build<3>();
+                           .build();
 
     MyUI<3> ui(canvas, kine);
 

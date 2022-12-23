@@ -1,5 +1,4 @@
 
-
 add_library(kine INTERFACE
         "Kine.hpp"
         "KineComponent.hpp"
@@ -13,4 +12,4 @@ add_library(kine INTERFACE
         "ik/CCDSolver.hpp"
         )
 target_include_directories(kine INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(kine INTERFACE threepp)
+target_link_libraries(kine INTERFACE threepp Eigen3::Eigen)

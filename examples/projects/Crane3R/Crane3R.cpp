@@ -114,12 +114,12 @@ std::shared_ptr<Crane3R> Crane3R::create() {
 }
 
 
-void Crane3R::setTargetValues(const std::array<float, 3> &values, bool degrees) {
+void Crane3R::setTargetValues(const std::vector<float> &values, bool degrees) {
 
     if (degrees) {
         targetValues = {values[0] * math::DEG2RAD, values[1] * math::DEG2RAD, values[2] * math::DEG2RAD};
     } else {
-        targetValues = values;
+        std::copy_n(values.begin(), 3, targetValues.begin());
     }
 }
 
@@ -140,9 +140,9 @@ void Crane3R::update() {
     }
 }
 
-std::array<float, 3> Crane3R::getValues(bool degrees) const {
+std::vector<float> Crane3R::getValues(bool degrees) const {
 
-    std::array<float, 3> angles{parts_[0]->rotation.z(), parts_[1]->rotation.y(), parts_[2]->rotation.y()};
+    std::vector<float> angles{parts_[0]->rotation.z(), parts_[1]->rotation.y(), parts_[2]->rotation.y()};
     if (degrees) {
         for (auto &a : angles) {
             a *= math::RAD2DEG;

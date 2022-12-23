@@ -1,7 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "youbot.hpp"
+#include "Youbot.hpp"
 
 #include <thread>
 

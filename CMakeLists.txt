@@ -4,6 +4,7 @@ project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
+option(THREEPP_BUILD_EXAMPLES_WITH_KINE "Build examples with kine" OFF)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
 
 # ==============================================================================
@@ -42,6 +43,10 @@ if (THREEPP_BUILD_EXAMPLES)
 
     find_package(imgui CONFIG)
     find_package(Bullet CONFIG)
+
+    if (THREEPP_BUILD_EXAMPLES_WITH_KINE)
+        find_package(Eigen3 CONFIG REQUIRED)
+    endif()
 
     if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
         add_library(Bullet::Bullet INTERFACE IMPORTED)

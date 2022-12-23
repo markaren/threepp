@@ -11,9 +11,9 @@ class Crane3R : public threepp::Group {
 
 public:
 
-    [[nodiscard]] std::array<float, 3> getValues(bool degrees = true) const;
+    [[nodiscard]] std::vector<float> getValues(bool degrees = true) const;
 
-    void setTargetValues(const std::array<float, 3>& values, bool degrees = true);
+    void setTargetValues(const std::vector<float>& values, bool degrees = true);
 
     void update();
 
