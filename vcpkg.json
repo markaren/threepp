@@ -30,6 +30,12 @@
           "features": ["glfw-binding", "opengl3-binding"]
         }
       ]
+    },
+    "kine": {
+      "description": "Build kine library",
+      "dependencies": [
+        "eigen3"
+      ]
     }
   }
 }

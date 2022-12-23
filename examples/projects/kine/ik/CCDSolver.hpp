@@ -7,15 +7,14 @@
 
 namespace kine {
 
-    template<size_t numDof>
-    class CCDSolver : public IKSolver<numDof> {
+    class CCDSolver : public IKSolver {
 
     public:
         explicit CCDSolver(int maxTries = 10, float stepSize = 0.005f)
             : maxTries(maxTries),
               stepSize(stepSize) {}
 
-        std::array<float, numDof> solveIK(const Kine<numDof> &kine, const threepp::Vector3 &target, const std::array<float, numDof>& startValues) {
+        std::vector<float> solveIK(const Kine &kine, const threepp::Vector3 &target, const std::vector<float>& startValues) override {
 
             threepp::Vector3 endPos;
             endPos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(startValues));
@@ -23,10 +22,10 @@ namespace kine {
             if (endPos.distanceTo(target) < 0.001f) return startValues;
 
             int tries = 0;
-            std::array<float, numDof> newValues = kine.normalizeValues(startValues);
+            std::vector<float> newValues = kine.normalizeValues(startValues);
             while(true) {
 
-                for (unsigned i = 0; i < numDof; ++i) {
+                for (unsigned i = 0; i < kine.numDof(); ++i) {
                     float closest = std::numeric_limits<float>::max();
                     float k = 0;
                     float val = 0;

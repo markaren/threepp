@@ -6,14 +6,13 @@
 
 namespace kine {
 
-    template <size_t numDof>
-    class DLSSolver: public IKSolver<numDof> {
+    class DLSSolver: public IKSolver {
 
     public:
         explicit DLSSolver(float lambda = 0.5f)
             : lambdaSq_(lambda*lambda) {}
 
-        std::array<float, numDof> solveIK(const Kine<numDof>& kine, const threepp::Vector3& target, const std::array<float, numDof>& startValues) override {
+        std::vector<float> solveIK(const Kine& kine, const threepp::Vector3& target, const std::vector<float>& startValues) override {
 
             auto vals = startValues;
 
@@ -26,12 +25,12 @@ namespace kine {
 
                 if (actual.distanceTo(target) < this->eps_) break;
 
-                auto delta = linalg::vec<float, 3>{target.x - actual.x, target.y - actual.y, target.z - actual.z};
-                linalg::mat<float, 3, numDof> inv = DLS(j);
+                Eigen::Vector3<float> delta{target.x - actual.x, target.y - actual.y, target.z - actual.z};
 
-                linalg::vec<float, numDof> theta_dot = linalg::mul(inv, delta);
+                auto inv = DLS(j);
+                auto theta_dot = inv * delta;
 
-                for (int k = 0; k < numDof; ++k) {
+                for (int k = 0; k < kine.numDof(); ++k) {
 
                     vals[k] += theta_dot[k];
                     kine.joints()[k]->limit.clampWithinLimit(vals[k]);
@@ -45,15 +44,16 @@ namespace kine {
     private:
         float lambdaSq_;
 
-        linalg::mat<float, 3, numDof> DLS(const linalg::mat<float, 3, 3> &j) {
+        Eigen::MatrixX<float> DLS(const Eigen::MatrixX<float> &j) {
 
-            linalg::mat<float, 3, numDof> I = linalg::identity;
+            Eigen::MatrixX<float> I(j.rows(), j.cols());
+            I.setIdentity();
 
-            auto jt = linalg::transpose(j);
-            auto jjt = linalg::mul(j, jt);
-            auto plus = linalg::cmul(I, lambdaSq_);
+            auto jt = j.transpose();
+            auto jjt = j * jt;
+            auto plus = I * lambdaSq_;
 
-            return linalg::mul(jt, linalg::inverse(jjt + plus));
+            return jt * (jjt + plus).inverse();
         }
 
     };

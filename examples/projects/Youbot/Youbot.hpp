@@ -77,6 +77,10 @@ struct Youbot {
         front_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
     }
 
+    void setJointValues(const std::array<float, 5>& vals) {
+        arm_joint1->rotation.z = math::DEG2RAD * vals[0];
+    }
+
     void update(float dt) {
 
         if (wasd_.up) {
@@ -111,12 +115,24 @@ private:
     Object3D *back_left_wheel;
     Object3D *back_right_wheel;
 
+    Object3D *arm_joint1;
+    Object3D *arm_joint2;
+    Object3D *arm_joint3;
+    Object3D *arm_joint4;
+    Object3D *arm_joint5;
+
     explicit Youbot(std::shared_ptr<Group> model) : base(std::move(model)) {
 
         back_left_wheel = base->getObjectByName("back-left_wheel");
         back_right_wheel = base->getObjectByName("back-right_wheel");
         front_left_wheel = base->getObjectByName("front-left_wheel_join");
         front_right_wheel = base->getObjectByName("front-right_wheel");
+
+        arm_joint1 = base->getObjectByName("arm_joint1");
+        arm_joint2 = base->getObjectByName("arm_joint2");
+        arm_joint3 = base->getObjectByName("arm_joint3");
+        arm_joint4 = base->getObjectByName("arm_joint4");
+        arm_joint5 = base->getObjectByName("arm_joint5");
     }
 };
 

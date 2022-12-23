@@ -11,22 +11,20 @@
 #include "joints/PrismaticJoint.hpp"
 #include "joints/RevoluteJoint.hpp"
 
-#include "../linalg.h"
+#include "Eigen/Dense"
 
 namespace kine {
 
-    template <size_t numDOF>
     class Kine {
 
     public:
         Kine(std::vector<std::shared_ptr<KineComponent>> components)
             : components_(std::move(components)) {
 
-            for (unsigned i = 0, j = 0; i < components_.size(); ++i) {
-                auto c = components_[i];
+            for (const auto& c : components_) {
                 auto joint = dynamic_cast<KineJoint *>(c.get());
                 if (joint) {
-                    joints_[j++] = joint;
+                    joints_.emplace_back(joint);
                 }
             }
 
@@ -34,10 +32,10 @@ namespace kine {
 
         [[nodiscard]] size_t numDof() const {
 
-            return numDOF;
+            return joints_.size();
         }
 
-        [[nodiscard]] threepp::Matrix4 calculateEndEffectorTransformation(const std::array<float, numDOF> &values) const {
+        [[nodiscard]] threepp::Matrix4 calculateEndEffectorTransformation(const std::vector<float> &values) const {
 
             threepp::Matrix4 result;
             for (unsigned i = 0, j = 0; i < components_.size(); ++i) {
@@ -51,11 +49,11 @@ namespace kine {
             return result;
         }
 
-        linalg::mat<float, 3, numDOF> computeJacobian(const std::array<float, numDOF> &values) const {
+        [[nodiscard]] Eigen::MatrixX<float> computeJacobian(const std::vector<float> &values) const {
 
             constexpr float h = 0.0001f;// some low value
 
-            linalg::mat<float, 3, numDOF> jacobian{};
+            Eigen::MatrixX<float> jacobian(3, numDof());
             auto d1 = calculateEndEffectorTransformation(values);
 
             for (int i = 0; i < 3; ++i) {
@@ -63,52 +61,52 @@ namespace kine {
                 vals[i] += h;
                 auto d2 = calculateEndEffectorTransformation(vals);
 
-                jacobian.x[i] = (d2[12] - d1[12]) / h;
-                jacobian.y[i] = (d2[13] - d1[13]) / h;
-                jacobian.z[i] = (d2[14] - d1[14]) / h;
+                jacobian(0, i) = (d2[12] - d1[12]) / h;
+                jacobian(1, i) = (d2[13] - d1[13]) / h;
+                jacobian(2, i) = (d2[14] - d1[14]) / h;
             }
             return jacobian;
         }
 
-        [[nodiscard]] const std::array<KineJoint *, numDOF> &joints() const {
+        [[nodiscard]] const std::vector<KineJoint *> &joints() const {
             return joints_;
         }
 
-        [[nodiscard]] std::array<KineLimit, numDOF> limits() const {
-            std::array<KineLimit, numDOF> limits;
-            for (unsigned i = 0; i < numDOF; i++) {
-                limits[i] = joints_[i]->limit;
+        [[nodiscard]] std::vector<KineLimit> limits() const {
+            std::vector<KineLimit> limits;
+            for (unsigned i = 0; i < numDof(); i++) {
+                limits.emplace_back(joints_[i]->limit);
             }
             return limits;
         }
 
-        [[nodiscard]] std::array<float, numDOF> meanAngles() const {
+        [[nodiscard]] std::vector<float> meanAngles() const {
             auto lim = limits();
-            std::array<float, numDOF> res{};
-            for (unsigned i = 0; i < numDOF; ++i) {
+            std::vector<float> res(numDof());
+            for (unsigned i = 0; i < numDof(); ++i) {
                 res[i] = lim[i].mean();
             }
             return res;
         }
 
-        std::array<float, numDOF> normalizeValues(const std::array<float, numDOF>& values) const {
-            std::array<float, numDOF> res{};
-            for (unsigned i = 0; i < numDOF; ++i) {
+        std::vector<float> normalizeValues(const std::vector<float>& values) const {
+            std::vector<float> res(numDof());
+            for (unsigned i = 0; i < numDof(); ++i) {
                 res[i] = joints_[i]->limit.normalize(values[i]);
             }
             return res;
         }
 
-        std::array<float, numDOF> denormalizeValues(const std::array<float, numDOF>& values) const {
-            std::array<float, numDOF> res{};
-            for (unsigned i = 0; i < numDOF; ++i) {
+        std::vector<float> denormalizeValues(const std::vector<float>& values) const {
+            std::vector<float> res(numDof());
+            for (unsigned i = 0; i < numDof(); ++i) {
                 res[i] = joints_[i]->limit.denormalize(values[i]);
             }
             return res;
         }
 
     private:
-        std::array<KineJoint *, numDOF> joints_;
+        std::vector<KineJoint *> joints_;
         std::vector<std::shared_ptr<KineComponent>> components_;
     };
 
@@ -135,12 +133,9 @@ namespace kine {
             return *this;
         }
 
-        template<size_t nDOF>
-        Kine<nDOF> build() {
+        Kine build() {
 
-            if (nDOF != this->nDOF) throw std::runtime_error("");
-
-            return Kine<nDOF>(components_);
+            return components_;
         }
 
     private:
