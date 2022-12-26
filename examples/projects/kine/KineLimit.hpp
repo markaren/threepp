@@ -43,6 +43,7 @@ namespace kine {
         }
 
         bool clampWithinLimit(float &value) const {
+            if (_isnanf(value)) value = mean();
             if (min_ && *min_ > value) {
                 value = *min_;
                 return true;

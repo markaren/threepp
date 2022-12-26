@@ -49,11 +49,11 @@ namespace kine {
             return result;
         }
 
-        [[nodiscard]] Eigen::MatrixX<float> computeJacobian(const std::vector<float> &values) const {
+        [[nodiscard]] Eigen::MatrixX<double> computeJacobian(const std::vector<float> &values) const {
 
-            constexpr float h = 0.0001f;// some low value
+            constexpr double h = 0.0001;// some low value
 
-            Eigen::MatrixX<float> jacobian(3, numDof());
+            Eigen::MatrixX<double> jacobian(3, numDof());
             auto d1 = calculateEndEffectorTransformation(values);
 
             for (int i = 0; i < 3; ++i) {
@@ -89,7 +89,7 @@ namespace kine {
             return res;
         }
 
-        std::vector<float> normalizeValues(const std::vector<float>& values) const {
+        [[nodiscard]] std::vector<float> normalizeValues(const std::vector<float>& values) const {
             std::vector<float> res(numDof());
             for (unsigned i = 0; i < numDof(); ++i) {
                 res[i] = joints_[i]->limit.normalize(values[i]);
@@ -97,7 +97,7 @@ namespace kine {
             return res;
         }
 
-        std::vector<float> denormalizeValues(const std::vector<float>& values) const {
+        [[nodiscard]] std::vector<float> denormalizeValues(const std::vector<float>& values) const {
             std::vector<float> res(numDof());
             for (unsigned i = 0; i < numDof(); ++i) {
                 res[i] = joints_[i]->limit.denormalize(values[i]);

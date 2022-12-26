@@ -77,8 +77,22 @@ struct Youbot {
         front_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
     }
 
-    void setJointValues(const std::array<float, 5>& vals) {
+    void setJointValues(const std::vector<float>& vals) {
         arm_joint1->rotation.z = math::DEG2RAD * vals[0];
+        arm_joint2->rotation.z = math::DEG2RAD * (vals[1]-90);
+        arm_joint3->rotation.z = math::DEG2RAD * (vals[2]-90);
+        arm_joint4->rotation.z = math::DEG2RAD * vals[3];
+        arm_joint5->rotation.z = math::DEG2RAD * vals[4];
+    }
+
+    std::vector<float> getJointValues() {
+        return {
+                arm_joint1->rotation.z() * math::RAD2DEG,
+                arm_joint2->rotation.z() * math::RAD2DEG+90,
+                arm_joint3->rotation.z() * math::RAD2DEG+90,
+                arm_joint4->rotation.z() * math::RAD2DEG,
+                arm_joint5->rotation.z() * math::RAD2DEG,
+        };
     }
 
     void update(float dt) {
@@ -128,11 +142,11 @@ private:
         front_left_wheel = base->getObjectByName("front-left_wheel_join");
         front_right_wheel = base->getObjectByName("front-right_wheel");
 
-        arm_joint1 = base->getObjectByName("arm_joint1");
-        arm_joint2 = base->getObjectByName("arm_joint2");
-        arm_joint3 = base->getObjectByName("arm_joint3");
-        arm_joint4 = base->getObjectByName("arm_joint4");
-        arm_joint5 = base->getObjectByName("arm_joint5");
+        arm_joint1 = base->getObjectByName("arm_joint_1");
+        arm_joint2 = base->getObjectByName("arm_joint_2");
+        arm_joint3 = base->getObjectByName("arm_joint_3");
+        arm_joint4 = base->getObjectByName("arm_joint_4");
+        arm_joint5 = base->getObjectByName("arm_joint_5");
     }
 };
 
