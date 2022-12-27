@@ -37,6 +37,8 @@ namespace threepp::math {
 
     float radToDeg(float radians);
 
+    int randomInRange(int min, int max);
+
     float randomInRange(float min, float max);
 
     bool isPowerOfTwo(int value);
