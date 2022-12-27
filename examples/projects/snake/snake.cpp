@@ -10,16 +10,14 @@ enum class Direction {
     DOWN
 };
 
-class Snake;
-
-
 struct GameState {
 
     int gridSize;
     bool running;
     float moveInterval;
     Direction direction;
-    Vector2 foodpos;
+    Direction nextDirection;
+    Vector2 foodPos;
 
     explicit GameState(Scene &scene, int gridSize) : gridSize(gridSize) {
 
@@ -34,16 +32,17 @@ struct GameState {
     }
 
     void spawnFood() {
-        foodpos.set(math::randomInRange(0, gridSize - 1), math::randomInRange(0, gridSize - 1));
-        food->position.set(foodpos.x, foodpos.y, 0);
+        foodPos.set(math::randomInRange(0, gridSize - 1), math::randomInRange(0, gridSize - 1));
+        food->position.set(foodPos.x, foodPos.y, 0);
 
-        moveInterval -= 0.05f;
+        moveInterval -= (moveInterval * 0.05f);
     }
 
     void reset() {
         running = true;
         moveInterval = 0.5f;
-        direction = Direction::RIGHT;
+        nextDirection = Direction::RIGHT;
+        direction = nextDirection;
         spawnFood();
     }
 
@@ -54,10 +53,8 @@ private:
 class Snake : public Object3D {
 
 public:
-    bool canChangeDirection = true;
-
-    Snake(int startRow, int startCol)
-        : startRow(startRow), startCol(startCol) {
+    Snake(GameState &state, int startRow, int startCol)
+        : state(state), startRow(startRow), startCol(startCol) {
 
         boxGeometry->translate(0.5, 0.5, 0);
         snakeHead = Mesh::create(boxGeometry, boxMaterial);
@@ -81,7 +78,7 @@ public:
         movements.clear();
     }
 
-    void move(GameState &state) {
+    void move() {
 
         movements.insert(movements.begin(), Vector2{snakeHead->position.x, snakeHead->position.y});
 
@@ -89,43 +86,33 @@ public:
             movements.pop_back();
         }
 
-        switch (state.direction) {
+        Vector2 nextPos(snakeHead->position.x, snakeHead->position.y);
+        switch (state.nextDirection) {
             case Direction::LEFT:
-                if (snakeHead->position.x - 1 < 0) {
-                    state.running = false;
-                } else {
-                    snakeHead->position.x -= 1;
-                }
+                nextPos.x -= 1;
                 break;
             case Direction::RIGHT:
-                if (snakeHead->position.x + 2 > state.gridSize) {
-                    state.running = false;
-                } else {
-                    snakeHead->position.x += 1;
-                }
+                nextPos.x += 1;
                 break;
             case Direction::UP:
-                if (snakeHead->position.y - 1 < 0) {
-                    state.running = false;
-                } else {
-                    snakeHead->position.y -= 1;
-                }
+                nextPos.y -= 1;
                 break;
             case Direction::DOWN:
-                if (snakeHead->position.y + 2 > state.gridSize) {
-                    state.running = false;
-                } else {
-                    snakeHead->position.y += 1;
-                }
+                nextPos.y += 1;
                 break;
         }
+
+        state.running = !checkBorderCollision(nextPos) && !checkSelfCollision(nextPos);
 
         if (!state.running) {
             boxMaterial->color = Color::red;
             return;
         }
 
-        if (state.foodpos.distanceTo(Vector2(snakeHead->position.x, snakeHead->position.y)) < 0.1) {
+        state.direction = state.nextDirection;
+        snakeHead->position.set(nextPos.x, nextPos.y, 0);
+
+        if (state.foodPos.distanceTo(nextPos) < 0.1) {
             grow();
 
             state.spawnFood();
@@ -136,13 +123,13 @@ public:
             auto p = movements[i - 1];
             body.at(i)->position.set(p.x, p.y, 0);
         }
-
     }
 
 
 private:
     int startRow;
     int startCol;
+    GameState &state;
 
     std::vector<Vector2> movements;
     std::vector<std::shared_ptr<Object3D>> body;
@@ -157,6 +144,24 @@ private:
         body.emplace_back(part);
         add(part);
     }
+
+    [[nodiscard]] bool checkBorderCollision(Vector2 pos) const {
+        if (pos.x < 0 || pos.x >= state.gridSize) return true;
+        if (pos.y < 0 || pos.y >= state.gridSize) return true;
+
+        return false;
+    }
+
+    [[nodiscard]] bool checkSelfCollision(Vector2 pos) const {
+        Vector3 tmp;
+        for (auto &o : body) {
+            if (o->position.distanceTo(tmp.set(pos.x, pos.y, 0)) < 0.1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 };
 
 
@@ -167,29 +172,29 @@ public:
         : snake(snake), state(state) {}
 
     void onKeyPressed(KeyEvent evt) override {
-        if (snake.canChangeDirection) {
+
+        if (state.running) {
+
             if (evt.key == 265 && state.direction != Direction::DOWN) {
-                state.direction = Direction::UP;
-                snake.canChangeDirection = false;
+                state.nextDirection = Direction::UP;
             }
             if (evt.key == 264 && state.direction != Direction::UP) {
-                state.direction = Direction::DOWN;
-                snake.canChangeDirection = false;
+                state.nextDirection = Direction::DOWN;
             }
             if (evt.key == 263 && state.direction != Direction::RIGHT) {
-                state.direction = Direction::LEFT;
-                snake.canChangeDirection = false;
+                state.nextDirection = Direction::LEFT;
             }
             if (evt.key == 262 && state.direction != Direction::LEFT) {
-                state.direction = Direction::RIGHT;
-                snake.canChangeDirection = false;
+                state.nextDirection = Direction::RIGHT;
             }
-        }
 
-        if (!state.running && evt.key == 82 /*r*/) {
+        } else if (evt.key == 82 /*r*/) {
+
             snake.reset();
             state.reset();
+
         }
+
     }
 
 private:
@@ -218,9 +223,8 @@ int main() {
 
     createAndAddGrid(gridSize, *scene);
 
-
     GameState state(*scene, gridSize);
-    auto snake = std::make_shared<Snake>(gridSize / 2, gridSize / 2);
+    auto snake = std::make_shared<Snake>(state, gridSize / 2, gridSize / 2);
     scene->add(snake);
 
     canvas.addKeyListener(std::make_shared<MyKeyListener>(*snake, state));
@@ -237,8 +241,7 @@ int main() {
 
             if (t > state.moveInterval) {
 
-                snake->move(state);
-                snake->canChangeDirection = state.running;
+                snake->move();
 
                 t = 0;
             }
