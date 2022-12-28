@@ -20,6 +20,8 @@ namespace threepp {
 
         Vector2() = default;
 
+        Vector2(int x, int y);
+
         Vector2(float x, float y);
 
         Vector2 &set(float x, float y);
