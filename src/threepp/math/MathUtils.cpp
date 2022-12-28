@@ -46,6 +46,16 @@ float math::radToDeg(const float radians) {
     return radians * RAD2DEG;
 }
 
+int math::randomInRange(int min, int max) {
+
+    static std::random_device rd;
+    static std::mt19937 e2(rd());
+
+    std::uniform_int_distribution<> dist(min, max);
+
+    return dist(e2);
+}
+
 float math::randomInRange(float min, float max) {
 
     static std::random_device rd;

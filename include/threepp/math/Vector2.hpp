@@ -20,6 +20,8 @@ namespace threepp {
 
         Vector2() = default;
 
+        Vector2(int x, int y);
+
         Vector2(float x, float y);
 
         Vector2 &set(float x, float y);
@@ -104,12 +106,28 @@ namespace threepp {
 
         Vector2 &lerpVectors(const Vector2 &v1, const Vector2 &v2, float alpha);
 
-        Vector2 clone() const;
+        [[nodiscard]] Vector2 clone() const;
 
         [[nodiscard]] bool equals(const Vector2 &v) const;
 
         bool operator==(const Vector2 &other) const {
             return equals(other);
+        }
+
+        Vector2 operator +(const Vector2& other) const {
+            return clone().add(other);
+        }
+
+        Vector2& operator +=(const Vector2& other) {
+            return add(other);
+        }
+
+        Vector2 operator -(const Vector2& other) const {
+            return clone().sub(other);
+        }
+
+        Vector2& operator -=(const Vector2& other) {
+            return sub(other);
         }
 
         template<class ArrayLike>
