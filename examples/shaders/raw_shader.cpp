@@ -56,16 +56,15 @@ int main() {
     std::vector<float> positions;
     std::vector<float> colors;
 
-
     for (int i = 0; i < triangles; i++) {
-        positions.emplace_back(math::randomInRange(0, 1) - .5f);
-        positions.emplace_back(math::randomInRange(0, 1) - .5f);
-        positions.emplace_back(math::randomInRange(0, 1) - .5f);
+        positions.emplace_back(math::randomInRange(0.f, 1.f) - .5f);
+        positions.emplace_back(math::randomInRange(0.f, 1.f) - .5f);
+        positions.emplace_back(math::randomInRange(0.f, 1.f) - .5f);
 
-        colors.emplace_back(math::randomInRange(0, 1));
-        colors.emplace_back(math::randomInRange(0, 1));
-        colors.emplace_back(math::randomInRange(0, 1));
-        colors.emplace_back(math::randomInRange(0, 1));
+        colors.emplace_back(math::randomInRange(0.f, 1.f));
+        colors.emplace_back(math::randomInRange(0.f, 1.f));
+        colors.emplace_back(math::randomInRange(0.f, 1.f));
+        colors.emplace_back(math::randomInRange(0.f, 1.f));
     }
 
     geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));

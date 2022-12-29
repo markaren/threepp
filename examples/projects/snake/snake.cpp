@@ -46,7 +46,6 @@ int main() {
     GLRenderer renderer(canvas);
 
     auto scene = std::make_shared<SnakeScene>(game);
-
     canvas.addKeyListener(std::make_shared<MyKeyListener>(*scene, game));
 
     canvas.onWindowResize([&](WindowSize size) {

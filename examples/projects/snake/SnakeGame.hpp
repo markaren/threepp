@@ -54,7 +54,7 @@ public:
 
     void reset() {
         positions_.clear();
-        positions_.emplace_back(Vector2(xStart_, yStart_));
+        positions_.emplace_back(xStart_, yStart_);
     }
 
     [[nodiscard]] const std::vector<Vector2> &positions() const {
@@ -163,13 +163,16 @@ private:
 
     void spawnFood() {
         do {
-            foodPos_.set(math::randomInRange(0, gridSize_ - 1), math::randomInRange(0, gridSize_ - 1));
+            auto x = static_cast<float>(math::randomInRange(0, gridSize_ - 1));
+            auto y = static_cast<float>(math::randomInRange(0, gridSize_ - 1));
+            foodPos_.set(x, y);
         } while (snake_.checkSelfCollision(foodPos_));
     }
 
-    [[nodiscard]] bool checkBorderCollision(Vector2 pos) const {
-        if (pos.x < 0 || pos.x >= gridSize_) return true;
-        if (pos.y < 0 || pos.y >= gridSize_) return true;
+    [[nodiscard]] bool checkBorderCollision(const Vector2& pos) const {
+        auto size = static_cast<float>(gridSize_);
+        if (pos.x < 0 || pos.x >= size) return true;
+        if (pos.y < 0 || pos.y >= size) return true;
 
         return false;
     }

@@ -11,8 +11,6 @@
 #include "joints/PrismaticJoint.hpp"
 #include "joints/RevoluteJoint.hpp"
 
-#include "Eigen/Dense"
-
 namespace kine {
 
     class Kine {
@@ -47,25 +45,6 @@ namespace kine {
                 }
             }
             return result;
-        }
-
-        [[nodiscard]] Eigen::MatrixX<double> computeJacobian(const std::vector<float> &values) const {
-
-            constexpr double h = 0.0001;// some low value
-
-            Eigen::MatrixX<double> jacobian(3, numDof());
-            auto d1 = calculateEndEffectorTransformation(values);
-
-            for (int i = 0; i < 3; ++i) {
-                auto vals = values;// copy
-                vals[i] += h;
-                auto d2 = calculateEndEffectorTransformation(vals);
-
-                jacobian(0, i) = (d2[12] - d1[12]) / h;
-                jacobian(1, i) = (d2[13] - d1[13]) / h;
-                jacobian(2, i) = (d2[14] - d1[14]) / h;
-            }
-            return jacobian;
         }
 
         [[nodiscard]] const std::vector<KineJoint *> &joints() const {

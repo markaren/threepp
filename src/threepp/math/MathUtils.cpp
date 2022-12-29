@@ -36,12 +36,12 @@ float math::damp(float x, float y, float lambda, float dt) {
     return lerp(x, y, 1 - std::exp(-lambda * dt));
 }
 
-float math::degToRad(const float degrees) {
+float math::degToRad(float degrees) {
 
     return degrees * DEG2RAD;
 }
 
-float math::radToDeg(const float radians) {
+float math::radToDeg(float radians) {
 
     return radians * RAD2DEG;
 }

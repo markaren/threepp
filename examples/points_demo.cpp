@@ -28,9 +28,9 @@ int main() {
     float n2 = n / 2;
 
     for (int i = 0; i < numParticles; i += 3) {
-        positions.emplace_back(math::randomInRange(0, 1) * n - n2);
-        positions.emplace_back(math::randomInRange(0, 1) * n - n2);
-        positions.emplace_back(math::randomInRange(0, 1) * n - n2);
+        positions.emplace_back(math::randomInRange(0.f, 1.f) * n - n2);
+        positions.emplace_back(math::randomInRange(0.f, 1.f) * n - n2);
+        positions.emplace_back(math::randomInRange(0.f, 1.f) * n - n2);
 
         colors.emplace_back((positions[i] / n) + 0.5f);
         colors.emplace_back((positions[i + 1] / n) + 0.5f);
