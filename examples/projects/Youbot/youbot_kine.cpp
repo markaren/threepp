@@ -3,7 +3,6 @@
 
 #include "Kine.hpp"
 #include "Youbot.hpp"
-#include "ik/DLSSolver.hpp"
 #include "ik/CCDSolver.hpp"
 
 #include <thread>

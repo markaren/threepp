@@ -10,7 +10,6 @@ using namespace threepp;
 #include "../../imgui_helper.hpp"
 
 #include "Kine.hpp"
-#include "ik/DLSSolver.hpp"
 #include "ik/CCDSolver.hpp"
 
 using namespace kine;
@@ -106,7 +105,7 @@ int main() {
 
 #ifdef HAS_IMGUI
 
-    auto ikSolver = std::make_unique<DLSSolver>();
+    auto ikSolver = std::make_unique<CCDSolver>();
     Kine kine = KineBuilder()
                            .addRevoluteJoint(Vector3::Y, {-90.f, 90.f})
                            .addLink(Vector3::Y * 4.2)
