@@ -31,7 +31,7 @@
         }
       ]
     },
-    "kine": {
+    "eigen": {
       "description": "Build kine library with DLSSolver",
       "dependencies": [
         "eigen3"
