@@ -8,12 +8,11 @@ set(kine_sources
         "joints/RevoluteJoint.hpp"
         "joints/PrismaticJoint.hpp"
         "ik/IKSolver.hpp"
-        "ik/DLSSolver.hpp"
         "ik/CCDSolver.hpp"
         )
 if (Eigen_FOUND)
     list(APPEND kine_sources
-            "ik/IKSolver.hpp"
+            "ik/DLSSolver.hpp"
             )
 endif()
 

@@ -4,7 +4,6 @@ project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
-option(THREEPP_BUILD_EXAMPLES_WITH_KINE "Build examples with kine" OFF)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
 
 # ==============================================================================
