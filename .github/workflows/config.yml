@@ -4,151 +4,151 @@ name: Build
 on: [push, workflow_dispatch]
 
 jobs:
-#  conan-on-linux:
-#
-#    runs-on: ${{ matrix.os }}
-#    env:
-#      CC: gcc-${{ matrix.compiler_version }}
-#      CXX: g++-${{ matrix.compiler_version }}
-#    strategy:
-#      fail-fast: false
-#      matrix:
-#        os: [ubuntu-20.04]
-#        compiler_version: [9]
-#
-#    steps:
-#    - uses: actions/checkout@v3
-#
-#    - name: Install prerequisites
-#      run: |
-#        sudo apt install -y \
-#        libgl-dev \
-#        libfontenc-dev \
-#        libxaw7-dev \
-#        libxkbfile-dev \
-#        libxmu-dev \
-#        libxmuu-dev \
-#        libxpm-dev \
-#        libxres-dev \
-#        libxss-dev \
-#        libxt-dev \
-#        libxtst-dev \
-#        libxv-dev \
-#        libxvmc-dev \
-#        libxxf86vm-dev \
-#        libxcb-render-util0-dev \
-#        libxcb-xkb-dev \
-#        libxcb-icccm4-dev \
-#        libxcb-image0-dev \
-#        libxcb-keysyms1-dev \
-#        libxcb-randr0-dev \
-#        libxcb-shape0-dev \
-#        libxcb-sync-dev \
-#        libxcb-xfixes0-dev \
-#        libxcb-xinerama0-dev \
-#        libxcb-dri3-dev \
-#        libx11-xcb-dev \
-#        libxcomposite-dev \
-#        libxcursor-dev \
-#        libxdamage-dev \
-#        libxinerama-dev \
-#        libxrandr-dev \
-#        libxcb-util-dev
-#        sudo pip3 install --upgrade setuptools pip
-#        sudo pip3 install conan
-#
-#    - name: Run conan
-#      run: |
-#        conan install . -s build_type=Release -if build -b missing
-#
-#    - name: Configure and build
-#      run: |
-#        cmake . -B build -DCMAKE_BUILD_TYPE=Release
-#        cmake --build build
-#
-#    - name: Test
-#      run: |
-#        cd build/tests
-#        ctest --output-on-failure
-#
-#  conan-on-windows:
-#
-#    runs-on: ${{ matrix.os }}
-#    strategy:
-#      fail-fast: false
-#      matrix:
-#        os: [windows-2019]
-#
-#    steps:
-#      - uses: actions/checkout@v3
-#
-#      - name: Install prerequisites
-#        run: |
-#          pip3 install conan
-#
-#      - name: Run conan
-#        run: |
-#          conan install . -s build_type=Release -if build -b missing
-#
-#      - name: Configure and build
-#        run: |
-#          cmake . -A x64 -B build -DCMAKE_BUILD_TYPE=Release
-#          cmake --build build --config Release
-#
-#      - name: Test
-#        run: |
-#          cd build/tests
-#          ctest -C Release --output-on-failure
-#
-#  vcpkg-on-windows:
-#
-#    runs-on: ${{ matrix.os }}
-#    strategy:
-#      fail-fast: false
-#      matrix:
-#        os: [windows-2019]
-#
-#    steps:
-#      - uses: actions/checkout@v3
-#
-#      - name: Configure and build
-#        run: |
-#          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;bullet;assimp;kine" -DCMAKE_BUILD_TYPE="Release"
-#          cmake --build build --config Release
-#
-#      - name: Test
-#        run: |
-#          cd build/tests
-#          ctest -C Release --output-on-failure
-#
-#  conan-on-darwin:
-#
-#    runs-on: ${{ matrix.os }}
-#    strategy:
-#      fail-fast: false
-#      matrix:
-#        os: [macos-11]
-#
-#    steps:
-#      - uses: actions/checkout@v3
-#
-#      - name: Install prerequisites
-#        run: |
-#          pip3 install conan
-#
-#      - name: Run conan
-#        run: |
-#          conan install . -s build_type=Release -if build -b missing
-#
-#      - name: Configure and build
-#        run: |
-#          cmake . -B build -DCMAKE_BUILD_TYPE=Release
-#          cmake --build build
-#
-#      - name: Test
-#        run: |
-#          cd build/tests
-#          ctest --output-on-failure
+  conan-on-linux:
+
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-20.04]
+        compiler_version: [9]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install prerequisites
+      run: |
+        sudo apt install -y \
+        libgl-dev \
+        libfontenc-dev \
+        libxaw7-dev \
+        libxkbfile-dev \
+        libxmu-dev \
+        libxmuu-dev \
+        libxpm-dev \
+        libxres-dev \
+        libxss-dev \
+        libxt-dev \
+        libxtst-dev \
+        libxv-dev \
+        libxvmc-dev \
+        libxxf86vm-dev \
+        libxcb-render-util0-dev \
+        libxcb-xkb-dev \
+        libxcb-icccm4-dev \
+        libxcb-image0-dev \
+        libxcb-keysyms1-dev \
+        libxcb-randr0-dev \
+        libxcb-shape0-dev \
+        libxcb-sync-dev \
+        libxcb-xfixes0-dev \
+        libxcb-xinerama0-dev \
+        libxcb-dri3-dev \
+        libx11-xcb-dev \
+        libxcomposite-dev \
+        libxcursor-dev \
+        libxdamage-dev \
+        libxinerama-dev \
+        libxrandr-dev \
+        libxcb-util-dev
+        sudo pip3 install --upgrade setuptools pip
+        sudo pip3 install conan
+
+    - name: Run conan
+      run: |
+        conan install . -s build_type=Release -if build -b missing
+
+    - name: Configure and build
+      run: |
+        cmake . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build
+
+    - name: Test
+      run: |
+        cd build/tests
+        ctest --output-on-failure
+
+  conan-on-windows:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2019]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install prerequisites
+        run: |
+          pip3 install conan
+
+      - name: Run conan
+        run: |
+          conan install . -s build_type=Release -if build -b missing
+
+      - name: Configure and build
+        run: |
+          cmake . -A x64 -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest -C Release --output-on-failure
+
+  vcpkg-on-windows:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2019]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure and build
+        run: |
+          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;bullet;assimp;kine" -DCMAKE_BUILD_TYPE="Release"
+          cmake --build build --config Release
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest -C Release --output-on-failure
+
+  conan-on-darwin:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-11]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install prerequisites
+        run: |
+          pip3 install conan
+
+      - name: Run conan
+        run: |
+          conan install . -s build_type=Release -if build -b missing
+
+      - name: Configure and build
+        run: |
+          cmake . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest --output-on-failure
 
   vcpkg-on-darwin:
 
@@ -163,7 +163,7 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE="/usr/local/share/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;bullet;assimp;eigen" -DCMAKE_BUILD_TYPE="Release"
+          cmake . -B build -DCMAKE_TOOLCHAIN_FILE="/usr/local/share/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui" -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
 
       - name: Test
