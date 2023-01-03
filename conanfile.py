@@ -24,14 +24,14 @@ class ThreeppConan(ConanFile):
         "with_bullet": [True, False],
         "with_assimp": [True, False],
         "with_imgui": [True, False],
-        "with_kine": [True, False]
+        "with_eigen": [True, False]
     }
 
     default_options = (
         "with_bullet=False",
         "with_assimp=False",
         "with_imgui=False",
-        "with_kine=False",
+        "with_eigen=False",
         "glad:gl_version=4.1"
     )
 
@@ -45,7 +45,7 @@ class ThreeppConan(ConanFile):
             self.requires("assimp/5.2.2")
         if self.options.with_imgui:
             self.requires("imgui/cci.20220621+1.88.docking")
-        if self.options.with_kine:
+        if self.options.with_eigen:
             self.requires("eigen/3.4.0")
 
     def imports(self):
