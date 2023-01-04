@@ -10,7 +10,7 @@ struct MyGui: public imggui_helper {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas &canvas) : imggui_helper(canvas) {}
+    explicit MyGui(const Canvas &canvas) : imggui_helper(canvas.window_ptr()) {}
 
     void onRender() override {
 

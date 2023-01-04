@@ -37,7 +37,9 @@ Because fun.
 
 Call CMake with `-DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcpkg.cmake`
 
-Add features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;feature2`
+Add optional features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;feature2`
+
+See [vcpkg.json](vcpkg.json) for available features.
 
 #### conan
 

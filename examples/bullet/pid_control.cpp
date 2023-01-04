@@ -3,44 +3,59 @@
 
 #include "BulletEngine.hpp"
 
-#include "PID.hpp"
 #include "../imgui_helper.hpp"
+#include "PID.hpp"
 
 using namespace threepp;
 
-class MyGroup : public Group {
+std::shared_ptr<Object3D> createTarget() {
+    auto geom = BoxGeometry::create(0.1, 1, 0.1);
+    geom->translate(0, geom->height / 2 + 1, 0);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color::green;
+    material->transparent = true;
+    material->opacity = 0.9f;
+    auto target = Mesh::create(geom, material);
 
-public:
-    std::shared_ptr<Mesh> box;
-    std::shared_ptr<Mesh> cylinder;
+    return target;
+}
 
-    MyGroup() {
-        auto cylinderGeometry = CylinderGeometry::create(0.5, 0.5, 0.1);
-        cylinderGeometry->rotateX(math::DEG2RAD * 90);
+std::shared_ptr<Group> createObject() {
+    auto group = Group::create();
 
-        auto boxGeometry = BoxGeometry::create(0.1, 1, 0.1);
-        boxGeometry->translate(0, boxGeometry->height / 2, 0);
+    auto cylinderGeometry = CylinderGeometry::create(0.5, 0.5, 0.1);
+    cylinderGeometry->rotateX(math::DEG2RAD * 90);
 
-        auto material = MeshBasicMaterial::create();
-        material->color = 0x000000;
+    auto boxGeometry = BoxGeometry::create(0.1, 1, 0.1);
+    boxGeometry->translate(0, boxGeometry->height / 2, 0);
 
-        cylinder = Mesh::create(cylinderGeometry, material);
-        box = Mesh::create(boxGeometry, material);
+    auto material = MeshBasicMaterial::create();
+    material->color = 0x000000;
 
-        add(cylinder);
-        add(box);
-    }
+    auto cylinder = Mesh::create(cylinderGeometry, material);
+    auto box = Mesh::create(boxGeometry, material);
+
+    group->add(cylinder);
+    group->add(box);
+
+    return group;
+}
+
+struct ControllableOptions {
+    float targetAngle;
+    float maxMotorVelocity;
+
+    PID& pid;
+
+    explicit ControllableOptions(PID &pid, float targetAngle = 0, float maxMotorVelocity = 5) : targetAngle(targetAngle), maxMotorVelocity(maxMotorVelocity), pid(pid) {}
 };
 
 
 struct MyUI : public imggui_helper {
 
-    bool mouseHover = false;
 
-    PID& pid;
-    float targetAngle{};
-
-    explicit MyUI(const Canvas &canvas, PID& pid) : imggui_helper(canvas),pid(pid) {}
+    explicit MyUI(const Canvas &canvas, ControllableOptions &opt)
+        : imggui_helper(canvas.window_ptr()), opt(opt) {}
 
     void onRender() override {
 
@@ -48,40 +63,48 @@ struct MyUI : public imggui_helper {
         ImGui::SetNextWindowSize({}, 0);
         ImGui::Begin("PID control");
 
-        ImGui::Text("Target angle");
-        ImGui::SliderFloat("theta", &targetAngle, -179, 179);
+        ImGui::Text("Motor settings");
+        ImGui::SliderFloat("theta", &opt.targetAngle, -179, 179);
+        ImGui::SliderFloat("maxSpeed", &opt.maxMotorVelocity, 0.1, 20);
 
         ImGui::Text("PID params");
-        ImGui::SliderFloat("kp", &pid.kp, 0.1, 10);
-        ImGui::SliderFloat("ti", &pid.ti, 0, 1);
-        ImGui::SliderFloat("td", &pid.td, 0, 1);
+        ImGui::SliderFloat("kp", &opt.pid.kp, 0.1, 10);
+        ImGui::SliderFloat("ti", &opt.pid.ti, 0, 1);
+        ImGui::SliderFloat("td", &opt.pid.td, 0, 1);
 
+        ImGui::PlotLines("Error", errors.data(), static_cast<int>(errors.size()));
 
-        mouseHover = ImGui::IsWindowHovered();
         ImGui::End();
-    }
-};
 
+        errors.emplace_back(opt.pid.error());
+        if (errors.size() > 100) {
+            errors.erase(errors.begin(), errors.begin()+1);
+        }
+    }
+
+private:
+    ControllableOptions &opt;
+    std::vector<float> errors;
+};
 
 
 int main() {
 
     Canvas canvas;
-
-    auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
-    camera->position.set(0, 0, -5);
-
-    OrbitControls controls{camera, canvas};
-
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
-    auto group = std::make_shared<MyGroup>();
-    scene->add(group);
+    auto scene = Scene::create();
+    auto camera = OrthographicCamera::create(-4, 4, -3, 3);
+    camera->position.set(0, 0, 5);
+
+    auto controllable = createObject();
+    scene->add(controllable);
+
+    auto target = createTarget();
+    scene->add(target);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -89,7 +112,7 @@ int main() {
 
     BulletEngine engine;
 
-    auto body = engine.registerGroup(group, 10);
+    auto body = engine.registerGroup(controllable, 10);
     btHingeConstraint c(*body, btVector3(), btVector3(0, 0, 1));
     c.enableAngularMotor(true, 0, 1.f);
     engine.addConstraint(&c);
@@ -97,18 +120,18 @@ int main() {
     PID pid(1, 0.001, 0.1);
     pid.setWindupGuard(0.1f);
 
-    MyUI ui(canvas, pid);
+    ControllableOptions opt(pid);
 
-    const float maxMotorVelocity = 5;
+    MyUI ui(canvas, opt);
+
     canvas.animate([&](float dt) {
-
-        controls.enabled = !ui.mouseHover;
 
         engine.step(dt);
 
-        float out = pid.regulate(ui.targetAngle * math::DEG2RAD, c.getHingeAngle(), dt);
-        c.setMotorTargetVelocity(out * maxMotorVelocity);
+        float out = pid.regulate(opt.targetAngle * math::DEG2RAD, c.getHingeAngle(), dt);
+        c.setMotorTargetVelocity(out * opt.maxMotorVelocity);
 
+        target->rotation.z = opt.targetAngle * math::DEG2RAD;
 
         renderer.render(scene, camera);
         ui.render();

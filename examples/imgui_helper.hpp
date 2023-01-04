@@ -3,8 +3,6 @@
 #ifndef THREEPP_IMGUI_HELPER_HPP
 #define THREEPP_IMGUI_HELPER_HPP
 
-#include "threepp/Canvas.hpp"
-
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -12,11 +10,10 @@
 class imggui_helper {
 
 public:
-    const threepp::Canvas& canvas;
 
-    explicit imggui_helper(const threepp::Canvas& canvas): canvas(canvas) {
+    explicit imggui_helper(void* window) {
         ImGui::CreateContext();
-        ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) canvas.window_ptr(), true);
+        ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) window, true);
         ImGui_ImplOpenGL3_Init("#version 410");
     }
 

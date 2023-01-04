@@ -25,7 +25,7 @@ struct MyUI : public imggui_helper {
     std::vector<float> values;
 
     explicit MyUI(const Canvas &canvas, Kine &kine)
-        : imggui_helper(canvas),
+        : imggui_helper(canvas.window_ptr()),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
