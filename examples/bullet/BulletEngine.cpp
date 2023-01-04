@@ -85,7 +85,7 @@ btRigidBody *BulletEngine::registerGroup(const std::shared_ptr<threepp::Group> &
 
 void BulletEngine::step(float dt) {
 
-    world.stepSimulation(dt, 1, 1.0f/100);
+    world.stepSimulation(dt);
 
     for (auto &[m, info] : bodies) {
         auto t = info->body->getWorldTransform();

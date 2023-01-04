@@ -42,6 +42,7 @@ struct Rbinfo {
         state->setWorldTransform(convert(origin));
 
         body = std::make_unique<btRigidBody>(mass, state.get(), this->shape.get(), inertia);
+        body->setActivationState(DISABLE_DEACTIVATION);
     }
 };
 
