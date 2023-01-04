@@ -57,10 +57,10 @@ int main() {
 
     BulletEngine engine;
 
-    engine.register_mesh(box, 1);
-    engine.register_mesh(sphere, 2);
-    engine.register_mesh(cylinder, 1);
-    engine.register_mesh(plane, 0);
+    engine.registerMesh(box, 1);
+    engine.registerMesh(sphere, 2);
+    engine.registerMesh(cylinder, 1);
+    engine.registerMesh(plane, 0);
 
     canvas.animate([&](float dt) {
         engine.step(dt);
