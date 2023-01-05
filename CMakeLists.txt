@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.18)
 file(STRINGS "${CMAKE_SOURCE_DIR}/version.txt" projectVersion)
 project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
@@ -24,19 +24,18 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
-find_package(stb CONFIG QUIET)
-find_package(assimp CONFIG)
+find_package(assimp CONFIG QUIET)
 
 if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
     add_library(glfw::glfw ALIAS glfw)
 endif()
 
 if (NOT TARGET "stb::stb")
-    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h")
+    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h" REQUIRED)
     add_library(stb::stb INTERFACE IMPORTED)
+    target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 endif ()
 
-target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 
 if (THREEPP_BUILD_EXAMPLES)
 
