@@ -317,7 +317,6 @@ const char* ${fileName}=R\"(${text})\";\n\n\
 
 endforeach()
 
-
 configure_file(
         "threepp/renderers/shaders/ShaderChunk.cpp.in"
         "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
@@ -326,6 +325,8 @@ configure_file(
 
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
+add_library(threepp::threepp ALIAS threepp)
+target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad

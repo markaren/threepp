@@ -11,7 +11,9 @@ option(THREEPP_BUILD_TESTS "Build test suite" ON)
 # ==============================================================================
 
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
@@ -96,14 +98,10 @@ file(COPY "${CMAKE_SOURCE_DIR}/data/favicon.bmp" DESTINATION ${CMAKE_CURRENT_BIN
 file(COPY "${CMAKE_SOURCE_DIR}/data/models" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 file(COPY "${CMAKE_SOURCE_DIR}/data/textures" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 
+
 # ==============================================================================
 # Exports and remaining installation
 # ==============================================================================
-
-
-include(CMakePackageConfigHelpers)
-include(GNUInstallDirs)
-
 
 configure_package_config_file(cmake/config.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake
