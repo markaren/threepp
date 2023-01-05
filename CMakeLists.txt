@@ -28,6 +28,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(assimp CONFIG QUIET)
+find_package(stb CONFIG QUIET)
 
 if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
     add_library(glfw::glfw ALIAS glfw)
