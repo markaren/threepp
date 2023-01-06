@@ -115,14 +115,14 @@ jobs:
         uses: lukka/run-vcpkg@v10
         id: runvcpkg
         with:
-          vcpkgDirectory: ${env:VCPKG_INSTALLATION_ROOT}
+          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
           vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
           vcpkgJsonGlob: '**/vcpkg.json'
           appendedCacheKey: vcpkginstall
 
       - name: Configure and build
         run: |
-          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
+          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
           cmake --build build --config Release
 
       - name: Test
@@ -174,14 +174,14 @@ jobs:
         uses: lukka/run-vcpkg@v10
         id: runvcpkg
         with:
-          vcpkgDirectory: '/usr/local/share/vcpkg'
+          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
           vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
           vcpkgJsonGlob: '**/vcpkg.json'
           appendedCacheKey: vcpkginstall
 
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE="/usr/local/share/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
+          cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
 
       - name: Test
