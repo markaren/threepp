@@ -111,6 +111,17 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: Restore artifacts, or run vcpkg, build (and cache artifacts as post step)
+        uses: lukka/run-vcpkg@v10
+        id: runvcpkg
+        with:
+          vcpkgDirectory: '$env:VCPKG_INSTALLATION_ROOT'
+          vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+          # Run vcpkg with the command specified by the `runVcpkgFormatString` input.
+          runVcpkgInstall: true
+          vcpkgJsonGlob: '**/vcpkg.json'
+          appendedCacheKey: vcpkginstall
+
       - name: Configure and build
         run: |
           cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
@@ -160,6 +171,17 @@ jobs:
 
     steps:
       - uses: actions/checkout@v3
+
+      - name: Restore artifacts, or run vcpkg, build (and cache artifacts as post step)
+        uses: lukka/run-vcpkg@v10
+        id: runvcpkg
+        with:
+          vcpkgDirectory: '/usr/local/share/vcpkg'
+          vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+          # Run vcpkg with the command specified by the `runVcpkgFormatString` input.
+          runVcpkgInstall: true
+          vcpkgJsonGlob: '**/vcpkg.json'
+          appendedCacheKey: vcpkginstall
 
       - name: Configure and build
         run: |
