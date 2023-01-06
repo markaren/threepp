@@ -4,13 +4,13 @@
 using namespace threepp;
 
 #ifdef HAS_IMGUI
-#include "imgui_helper.hpp"
+#include "threepp/extras/imgui/imgui_context.hpp"
 
-struct MyGui: public imggui_helper {
+struct MyGui: public imgui_context {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas &canvas) : imggui_helper(canvas.window_ptr()) {}
+    explicit MyGui(const Canvas &canvas) : imgui_context(canvas.window_ptr()) {}
 
     void onRender() override {
 

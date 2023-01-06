@@ -3,8 +3,8 @@
 
 #include "BulletEngine.hpp"
 
-#include "../imgui_helper.hpp"
 #include "PID.hpp"
+#include "threepp/extras/imgui/imgui_context.hpp"
 
 using namespace threepp;
 
@@ -45,17 +45,17 @@ struct ControllableOptions {
     float targetAngle;
     float maxMotorVelocity;
 
-    PID& pid;
+    PID &pid;
 
     explicit ControllableOptions(PID &pid, float targetAngle = 0, float maxMotorVelocity = 5) : targetAngle(targetAngle), maxMotorVelocity(maxMotorVelocity), pid(pid) {}
 };
 
 
-struct MyUI : public imggui_helper {
+struct MyUI : imgui_context {
 
 
     explicit MyUI(const Canvas &canvas, ControllableOptions &opt)
-        : imggui_helper(canvas.window_ptr()), opt(opt) {}
+        : imgui_context(canvas.window_ptr()), opt(opt) {}
 
     void onRender() override {
 
@@ -78,7 +78,7 @@ struct MyUI : public imggui_helper {
 
         errors.emplace_back(opt.pid.error());
         if (errors.size() > 100) {
-            errors.erase(errors.begin(), errors.begin()+1);
+            errors.erase(errors.begin(), errors.begin() + 1);
         }
     }
 
@@ -125,7 +125,6 @@ int main() {
     MyUI ui(canvas, opt);
 
     canvas.animate([&](float dt) {
-
         engine.step(dt);
 
         float out = pid.regulate(opt.targetAngle * math::DEG2RAD, c.getHingeAngle(), dt);

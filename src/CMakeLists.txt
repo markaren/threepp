@@ -28,6 +28,7 @@ set(publicHeaders
 
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/curve/CatmullRomCurve3.hpp"
+        "threepp/extras/imgui/imgui_context.hpp"
 
         "threepp/input/KeyListener.hpp"
         "threepp/input/MouseListener.hpp"
