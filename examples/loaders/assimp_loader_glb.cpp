@@ -15,8 +15,8 @@ int main() {
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
-    AssimpLoader loader(true);
-    auto objModel = loader.load("data/models/gltf/zedm.glb");
+    AssimpLoader loader;
+    auto objModel = loader.load("data/models/gltf/zedm.glb", true);
     objModel->scale.multiplyScalar(0.1);
     scene->add(objModel);
 
