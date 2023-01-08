@@ -54,6 +54,7 @@ set(publicHeaders
         "threepp/helpers/SpotLightHelper.hpp"
 
         "threepp/loaders/loaders.hpp"
+        "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/MTLLoader.hpp"
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
@@ -256,11 +257,6 @@ set(sources
 
         )
 
-if (assimp_FOUND)
-  list(APPEND sources "threepp/loaders/AssimpLoader.cpp")
-endif()
-
-
 set(generatedSourcesDir "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${generatedSourcesDir}")
 
@@ -340,7 +336,3 @@ target_include_directories(threepp
         PRIVATE
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}")
-
-if (assimp_FOUND)
-  target_link_libraries(threepp PRIVATE assimp::assimp)
-endif()

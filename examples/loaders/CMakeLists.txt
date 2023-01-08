@@ -10,8 +10,8 @@ target_link_libraries(obj_mtl_loader PUBLIC threepp)
 
 if (assimp_FOUND)
     add_executable(assimp_loader_obj assimp_loader_obj.cpp)
-    target_link_libraries(assimp_loader_obj threepp)
+    target_link_libraries(assimp_loader_obj threepp assimp::assimp)
 
     add_executable(assimp_loader_glb assimp_loader_glb.cpp)
-    target_link_libraries(assimp_loader_glb threepp)
+    target_link_libraries(assimp_loader_glb threepp assimp::assimp)
 endif()
