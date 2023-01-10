@@ -50,8 +50,11 @@ public:
         windup_guard = windupGuard;
     }
 
-private:
+    [[nodiscard]] float error() const {
+        return prev_error;
+    }
 
+private:
 
     float integral;
     float prev_error{};

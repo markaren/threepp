@@ -28,6 +28,7 @@ set(publicHeaders
 
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/curve/CatmullRomCurve3.hpp"
+        "threepp/extras/imgui/imgui_context.hpp"
 
         "threepp/input/KeyListener.hpp"
         "threepp/input/MouseListener.hpp"
@@ -53,6 +54,7 @@ set(publicHeaders
         "threepp/helpers/SpotLightHelper.hpp"
 
         "threepp/loaders/loaders.hpp"
+        "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/MTLLoader.hpp"
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
@@ -255,11 +257,6 @@ set(sources
 
         )
 
-if (assimp_FOUND)
-  list(APPEND sources "threepp/loaders/AssimpLoader.cpp")
-endif()
-
-
 set(generatedSourcesDir "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${generatedSourcesDir}")
 
@@ -317,7 +314,6 @@ const char* ${fileName}=R\"(${text})\";\n\n\
 
 endforeach()
 
-
 configure_file(
         "threepp/renderers/shaders/ShaderChunk.cpp.in"
         "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
@@ -326,6 +322,8 @@ configure_file(
 
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
+add_library(threepp::threepp ALIAS threepp)
+target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
@@ -333,12 +331,8 @@ target_link_libraries(threepp
         stb::stb)
 target_include_directories(threepp
         PUBLIC
-        "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}")
-
-if (assimp_FOUND)
-  target_link_libraries(threepp PRIVATE assimp::assimp)
-endif()

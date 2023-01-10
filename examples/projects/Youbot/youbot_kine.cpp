@@ -7,12 +7,12 @@
 
 #include <thread>
 
-#include "../../imgui_helper.hpp"
+#include "threepp/extras/imgui/imgui_context.hpp"
 
 using namespace threepp;
 using namespace kine;
 
-struct MyUI : public imggui_helper {
+struct MyUI : imgui_context {
 
     bool mouseHover = false;
     bool jointMode = true;
@@ -23,7 +23,7 @@ struct MyUI : public imggui_helper {
     std::vector<float> values;
 
     explicit MyUI(const Canvas &canvas, Kine &kine)
-        : imggui_helper(canvas),
+        : imgui_context(canvas.window_ptr()),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -112,15 +112,15 @@ int main() {
     auto ikSolver = CCDSolver();
     auto kine = KineBuilder()
                         .addLink(Vector3(1.67, 1.3, 0))
-                        .addRevoluteJoint(Vector3::Y*-1, {-180.f, 180.f})
+                        .addRevoluteJoint(Vector3::Y * -1, {-180.f, 180.f})
                         .addLink(Vector3(0.33, 1.15, 0))
-                        .addRevoluteJoint(Vector3::Z*-1, {-90.f, 90.f})
+                        .addRevoluteJoint(Vector3::Z * -1, {-90.f, 90.f})
                         .addLink(Vector3(0, 1.6, 0))
-                        .addRevoluteJoint(Vector3::Z*-1, {-90.f, 90.f})
+                        .addRevoluteJoint(Vector3::Z * -1, {-90.f, 90.f})
                         .addLink(Vector3(0, 1.3, 0))
-                        .addRevoluteJoint(Vector3::Z*-1, {-90.f, 90.f})
+                        .addRevoluteJoint(Vector3::Z * -1, {-90.f, 90.f})
                         .addLink(Vector3(0, 0.85, 0))
-                        .addRevoluteJoint(Vector3::Y*-1, {-180.f, 180.f})
+                        .addRevoluteJoint(Vector3::Y * -1, {-180.f, 180.f})
                         .addLink(Vector3(0, 1.2, 0))
                         .build();
 

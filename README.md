@@ -37,7 +37,9 @@ Because fun.
 
 Call CMake with `-DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcpkg.cmake`
 
-Add features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;feature2`
+Add optional features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;feature2`
+
+See [vcpkg.json](vcpkg.json) for available features.
 
 #### conan
 
@@ -62,7 +64,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas;
-    GLRenderer renderer(canvas);
+    GLRenderer renderer{canvas};
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
@@ -78,18 +80,18 @@ int main() {
     {
         const auto boxGeometry = BoxGeometry::create();
         const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color.setHex(0xff0000);
+        boxMaterial->color = 0xff0000;
         auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.setX(-1);
+        box->position.x = -1;
         group->add(box);
     }
 
     {
         const auto boxGeometry = BoxGeometry::create();
         const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color.setHex(0x00ff00);
+        boxMaterial->color = 0x00ff00;
         auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.setX(1);
+        box->position.x = 1;
         group->add(box);
     }
 
@@ -97,10 +99,10 @@ int main() {
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshLambertMaterial::create();
-    planeMaterial->color.setHex(Color::gray);
+    planeMaterial->color = Color::gray;
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.setY(-1);
+    plane->position.y = -1;
     plane->rotateX(math::degToRad(90));
     scene->add(plane);
 
