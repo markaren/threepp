@@ -46,16 +46,12 @@ if (THREEPP_BUILD_EXAMPLES)
     find_package(imgui CONFIG)
     find_package(Bullet CONFIG)
 
-    if (THREEPP_BUILD_EXAMPLES_WITH_KINE)
-        find_package(Eigen3 CONFIG REQUIRED)
-    endif()
-
     if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
         add_library(Bullet::Bullet INTERFACE IMPORTED)
         if("${BULLET_INCLUDE_DIRS}" MATCHES ".*/bullet$")
             target_include_directories(Bullet::Bullet INTERFACE "${BULLET_INCLUDE_DIRS}/..")
         endif()
-        target_link_libraries(Bullet::Bullet INTERFACE LinearMath Bullet3Common BulletCollision BulletDynamics)
+        target_link_libraries(Bullet::Bullet INTERFACE ${BULLET_LIBRARIES})
     endif ()
 
     if (imgui_FOUND)
