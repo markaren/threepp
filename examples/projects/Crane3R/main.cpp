@@ -131,7 +131,7 @@ int main() {
             ui.render();
             controls.enabled = !ui.mouseHover;
 
-            auto endEffectorPosition = kine.calculateEndEffectorTransformation(crane->getValues());
+            auto endEffectorPosition = kine.calculateEndEffectorTransformation(inDegrees(crane->getValues()));
             endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
             targetHelper->position.copy(ui.pos);
@@ -141,11 +141,11 @@ int main() {
                 targetHelper->visible = false;
             }
             if (ui.posMode) {
-                ui.values = ikSolver->solveIK(kine, ui.pos, crane->getValues());
+                ui.values = ikSolver->solveIK(kine, ui.pos, inDegrees(crane->getValues()));
                 targetHelper->visible = true;
             }
 
-            crane->setTargetValues(ui.values);
+            crane->setTargetValues(asAngles(ui.values, Angle::Repr::DEG));
 #endif
 
             crane->update(dt);

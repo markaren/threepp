@@ -1,5 +1,6 @@
 
 set(kine_sources
+        "Angle.hpp"
         "Kine.hpp"
         "KineComponent.hpp"
         "KineLink.hpp"

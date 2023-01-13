@@ -41,13 +41,13 @@ public:
     void update() override {
         switch (axis_) {
             case X:
-                obj_->rotateOnAxis(threepp::Vector3::X, gain_ * maxSpeed_);
+                obj_->rotation.x += gain_ * maxSpeed_;
                 break;
             case Y:
-                obj_->rotateOnAxis(threepp::Vector3::Y, gain_ * maxSpeed_);
+                obj_->rotation.y += gain_ * maxSpeed_;
                 break;
             case Z:
-                obj_->rotateOnAxis(threepp::Vector3::Z, gain_ * maxSpeed_);
+                obj_->rotation.z += gain_ * maxSpeed_;
                 break;
         }
     }
@@ -60,6 +60,8 @@ public:
                 return obj_->rotation.y();
             case Z:
                 return obj_->rotation.z();
+            default:
+                throw std::runtime_error("");
         }
     }
 
