@@ -122,7 +122,7 @@ int main() {
     scene->add(targetHelper);
 
 #endif
-    canvas.animate([&] {
+    canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
         if (crane) {
@@ -148,7 +148,7 @@ int main() {
             crane->setTargetValues(ui.values);
 #endif
 
-            crane->update();
+            crane->update(dt);
         }
     });
 

@@ -68,9 +68,9 @@ struct MyUI : imgui_context {
         ImGui::SliderFloat("maxSpeed", &opt.maxMotorVelocity, 0.1, 20);
 
         ImGui::Text("PID params");
-        ImGui::SliderFloat("kp", &opt.pid.kp, 0.1, 10);
-        ImGui::SliderFloat("ti", &opt.pid.ti, 0, 1);
-        ImGui::SliderFloat("td", &opt.pid.td, 0, 1);
+        ImGui::SliderFloat("kp", &opt.pid.params().kp, 0.1, 10);
+        ImGui::SliderFloat("ti", &opt.pid.params().ti, 0, 1);
+        ImGui::SliderFloat("td", &opt.pid.params().td, 0, 1);
 
         ImGui::PlotLines("Error", errors.data(), static_cast<int>(errors.size()));
 

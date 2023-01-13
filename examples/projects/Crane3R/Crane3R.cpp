@@ -59,6 +59,18 @@ namespace {
         return group;
     }
 
+    void updateCylinders(std::array<std::pair<threepp::Object3D*, threepp::Object3D*>, 2> cylinders) {
+        Vector3 tmp;
+        for (const auto &cylinder : cylinders) {
+
+            auto house = cylinder.first;
+            auto rod = cylinder.second;
+
+            house->lookAt(rod->getWorldPosition(tmp));
+            rod->lookAt(house->getWorldPosition(tmp));
+        }
+    }
+
 }// namespace
 
 Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj) {
@@ -75,10 +87,13 @@ Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj) {
             obj->getObjectByName("house2"),
             obj->getObjectByName("rod2")};
 
+    actuators_[0] = std::make_unique<Object3DActuator>(parts_[0], Object3DActuator::Axis::Z, 1*math::DEG2RAD);
+    actuators_[1] = std::make_unique<Object3DActuator>(parts_[1], Object3DActuator::Axis::Y, 1*math::DEG2RAD);
+    actuators_[2] = std::make_unique<Object3DActuator>(parts_[2], Object3DActuator::Axis::Y, 1*math::DEG2RAD);
 
     add(obj);
 
-    update();
+    updateCylinders(cylinders_);
 }
 
 std::shared_ptr<Crane3R> Crane3R::create() {
@@ -114,30 +129,39 @@ std::shared_ptr<Crane3R> Crane3R::create() {
 }
 
 
-void Crane3R::setTargetValues(const std::vector<float> &values, bool degrees) {
-
-    if (degrees) {
-        targetValues = {values[0] * math::DEG2RAD, values[1] * math::DEG2RAD, values[2] * math::DEG2RAD};
-    } else {
-        std::copy_n(values.begin(), 3, targetValues.begin());
+void Crane3R::setGains(const std::vector<float> &values) {
+    mode_ = DIRECT;
+    for (unsigned i = 0; i < actuators_.size(); ++i) {
+        actuators_[i]->setGain(values[i]);
     }
 }
 
-void Crane3R::update() {
+void Crane3R::setTargetValues(const std::vector<float>& values) {
+    mode_ = POSITION;
+    std::copy_n(values.begin(), 3, targetValues.begin());
+}
 
-    parts_[0]->rotation.z = targetValues[0];
-    parts_[1]->rotation.y = targetValues[1];
-    parts_[2]->rotation.y = targetValues[2];
+void Crane3R::update(float dt) {
 
-    Vector3 tmp;
-    for (const auto &cylinder : cylinders_) {
-
-        auto house = cylinder.first;
-        auto rod = cylinder.second;
-
-        house->lookAt(rod->getWorldPosition(tmp));
-        rod->lookAt(house->getWorldPosition(tmp));
+    if (mode_ == POSITION) {
+        for (unsigned i = 0; i < pids_.size(); i++) {
+            auto& pid = pids_[i];
+            auto& act = actuators_[i];
+            auto v = pids_[i].regulate(targetValues[i]* math::DEG2RAD, act->getProcessOutput(), dt);
+            actuators_[i]->setGain(v);
+        }
+    } else {
+        for (unsigned i = 0; i < 3; ++i) {
+            targetValues[i] = actuators_[i]->getProcessOutput();
+        }
     }
+
+    for (auto& actuator : actuators_) {
+        actuator->update();
+    }
+
+    updateCylinders(cylinders_);
+
 }
 
 std::vector<float> Crane3R::getValues(bool degrees) const {

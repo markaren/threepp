@@ -4,26 +4,41 @@
 
 #include "threepp/objects/Group.hpp"
 
+#include "Actuator.hpp"
+
 #include <array>
 #include <utility>
+
 
 class Crane3R : public threepp::Group {
 
 public:
+    enum ControlMode {
+        DIRECT,
+        POSITION
+    };
 
     [[nodiscard]] std::vector<float> getValues(bool degrees = true) const;
 
-    void setTargetValues(const std::vector<float>& values, bool degrees = true);
+    void setGains(const std::vector<float> &values);
 
-    void update();
+    void setTargetValues(const std::vector<float> &values);
+
+    void update(float dt);
 
     static std::shared_ptr<Crane3R> create();
 
 
 private:
+    ControlMode mode_{DIRECT};
+
+    std::array<PID, 3> pids_{};
     std::array<float, 3> targetValues{};
+    std::array<std::unique_ptr<Actuator>, 3> actuators_{};
+
     std::array<threepp::Object3D *, 3> parts_{};
-    std::array<std::pair<threepp::Object3D*, threepp::Object3D*>, 2> cylinders_{};
+    std::array<std::pair<threepp::Object3D *, threepp::Object3D *>, 2> cylinders_{};
+
 
     explicit Crane3R(const std::shared_ptr<threepp::Group> &obj);
 };
