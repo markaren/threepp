@@ -58,7 +58,7 @@ namespace {
         return group;
     }
 
-    void updateCylinders(std::array<std::pair<threepp::Object3D*, threepp::Object3D*>, 2> cylinders) {
+    void updateCylinders(std::array<std::pair<threepp::Object3D *, threepp::Object3D *>, 2> cylinders) {
         Vector3 tmp;
         for (const auto &cylinder : cylinders) {
 
@@ -72,7 +72,7 @@ namespace {
 
 }// namespace
 
-Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj): controller_(*this) {
+Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj) {
 
     parts_[0] = obj->getObjectByName("part1");
     parts_[1] = obj->getObjectByName("part2");
@@ -88,6 +88,8 @@ Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj): controller_(*this)
 
 
     add(obj);
+
+    controller_ = std::make_unique<Controller>(*this);
 
     updateCylinders(cylinders_);
 }
@@ -118,12 +120,11 @@ std::shared_ptr<Crane3R> Crane3R::create() {
     part3->add(make_rod_attachment(2, 2.05f, {0.98, 0, 0.2}));
 
     parent->add(part1);
-    parent->rotateY(-math::PI/2);
-    parent->rotateX(-math::PI/2);
+    parent->rotateY(-math::PI / 2);
+    parent->rotateX(-math::PI / 2);
 
     return std::shared_ptr<Crane3R>(new Crane3R(parent));
 }
-
 
 
 std::vector<Angle> Crane3R::getValues() const {
@@ -139,8 +140,8 @@ std::vector<Angle> Crane3R::getValues() const {
 
 void Crane3R::setTargetValues(const std::vector<Angle> &values) {
 
-    if (controller_.enabled) {
-        controller_.setTargetValues(values);
+    if (controllerEnabled) {
+        controller_->setTargetValues(values);
     } else {
         parts_[0]->rotation.z = values[0].inRadians();
         parts_[1]->rotation.y = values[1].inRadians();
@@ -153,14 +154,15 @@ void Crane3R::update(float dt) {
 
     updateCylinders(cylinders_);
 
-    controller_.update(dt);
-
+    if (controllerEnabled) {
+        controller_->update(dt);
+    }
 }
 
-Crane3R::Controller::Controller(const Crane3R& c) {
-    actuators_[0] = std::make_unique<Object3DActuator>(c.parts_[0], Object3DActuator::Axis::Z, 1*math::DEG2RAD);
-    actuators_[1] = std::make_unique<Object3DActuator>(c.parts_[1], Object3DActuator::Axis::Y, 1*math::DEG2RAD);
-    actuators_[2] = std::make_unique<Object3DActuator>(c.parts_[2], Object3DActuator::Axis::Y, 1*math::DEG2RAD);
+Crane3R::Controller::Controller(const Crane3R &c) {
+    actuators_[0] = std::make_unique<Object3DActuator>(c.parts_[0], Object3DActuator::Axis::Z, 1 * math::DEG2RAD, std::make_pair<float, float>(-90.f, 90.f));
+    actuators_[1] = std::make_unique<Object3DActuator>(c.parts_[1], Object3DActuator::Axis::Y, 1 * math::DEG2RAD, std::make_pair<float, float>(-80.f, 0.f));
+    actuators_[2] = std::make_unique<Object3DActuator>(c.parts_[2], Object3DActuator::Axis::Y, 1 * math::DEG2RAD, std::make_pair<float, float>(-140.f, 40.f));
 }
 
 void Crane3R::Controller::setGains(const std::vector<float> &values) {
@@ -170,7 +172,7 @@ void Crane3R::Controller::setGains(const std::vector<float> &values) {
     }
 }
 
-void Crane3R::Controller::setTargetValues(const std::vector<Angle>& values) {
+void Crane3R::Controller::setTargetValues(const std::vector<Angle> &values) {
     mode_ = POSITION;
     for (unsigned i = 0; i < 3; ++i) {
         targetValues[i] = values[i].inRadians();
@@ -179,23 +181,20 @@ void Crane3R::Controller::setTargetValues(const std::vector<Angle>& values) {
 
 void Crane3R::Controller::update(float dt) {
 
-    if (enabled) {
-        if (mode_ == POSITION) {
-            for (unsigned i = 0; i < 3; ++i) {
-                auto& pid = pids_[i];
-                auto& act = actuators_[i];
-                auto v = pids_[i].regulate(targetValues[i], actuators_[i]->getProcessOutput(), dt);
-                actuators_[i]->setGain(v);
-            }
-        } else {
-            for (unsigned i = 0; i < 3; ++i) {
-                targetValues[i] = actuators_[i]->getProcessOutput();
-            }
+    if (mode_ == POSITION) {
+        for (unsigned i = 0; i < 3; ++i) {
+            auto &pid = pids_[i];
+            auto &act = actuators_[i];
+            auto v = pids_[i].regulate(targetValues[i], actuators_[i]->getProcessOutput(), dt);
+            actuators_[i]->setGain(v);
         }
-
-        for (auto& actuator : actuators_) {
-            actuator->update();
+    } else {
+        for (unsigned i = 0; i < 3; ++i) {
+            targetValues[i] = actuators_[i]->getProcessOutput();
         }
     }
 
+    for (auto &actuator : actuators_) {
+        actuator->update();
+    }
 }

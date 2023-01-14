@@ -28,11 +28,12 @@ public:
         Z
     };
 
-    Object3DActuator(threepp::Object3D *obj, Axis axis, float maxSpeed)
+    Object3DActuator(threepp::Object3D *obj, Axis axis, float maxSpeed, std::pair<float, float> limit)
         : obj_(obj),
           axis_(axis),
           gain_(0),
-          maxSpeed_(maxSpeed) {}
+          maxSpeed_(maxSpeed),
+          limit_(limit) {}
 
     void setGain(float gain) override {
         gain_ = gain;
@@ -42,12 +43,21 @@ public:
         switch (axis_) {
             case X:
                 obj_->rotation.x += gain_ * maxSpeed_;
+                if (limit_) {
+                    obj_->rotation.x.clamp(limit_->first, limit_->second);
+                }
                 break;
             case Y:
                 obj_->rotation.y += gain_ * maxSpeed_;
+                if (limit_) {
+                    obj_->rotation.y.clamp(limit_->first, limit_->second);
+                }
                 break;
             case Z:
                 obj_->rotation.z += gain_ * maxSpeed_;
+                if (limit_) {
+                    obj_->rotation.z.clamp(limit_->first, limit_->second);
+                }
                 break;
         }
     }
@@ -68,6 +78,7 @@ public:
 private:
     float gain_;
     float maxSpeed_;
+    std::optional<std::pair<float, float>> limit_;
 
     Axis axis_;
     threepp::Object3D *obj_;

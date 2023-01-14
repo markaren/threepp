@@ -15,6 +15,8 @@ class Crane3R : public threepp::Group {
 
 public:
 
+    bool controllerEnabled = false;
+
     [[nodiscard]] std::vector<Angle> getValues() const;
 
     void setTargetValues(const std::vector<Angle>& values);
@@ -31,8 +33,6 @@ private:
             DIRECT,
             POSITION
         };
-
-        bool enabled = false;
 
         explicit Controller(const Crane3R& c);
 
@@ -52,7 +52,7 @@ private:
         std::array<std::unique_ptr<Actuator>, 3> actuators_{};
     };
 
-    Controller controller_;
+    std::unique_ptr<Controller> controller_;
     std::array<threepp::Object3D *, 3> parts_{};
     std::array<std::pair<threepp::Object3D *, threepp::Object3D *>, 2> cylinders_{};
 

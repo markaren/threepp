@@ -110,6 +110,11 @@ namespace threepp {
             return value_ != other.value_;
         }
 
+        float_view& clamp(float min, float max) {
+            value_ = std::max(min, std::min(max, value_));
+            return *this;
+        }
+
         void setCallback(std::function<void()> f) {
 
             f_ = std::move(f);

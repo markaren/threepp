@@ -19,6 +19,7 @@ struct MyUI : imgui_context {
     bool mouseHover = false;
     bool jointMode = true;
     bool posMode = false;
+    bool enableController = false;
 
     Vector3 pos;
     std::vector<KineLimit> limits;
@@ -57,6 +58,8 @@ struct MyUI : imgui_context {
         posMode = posMode || ImGui::IsItemEdited();
 
         jointMode = !posMode;
+
+        ImGui::Checkbox("controller", &enableController);
 
         mouseHover = ImGui::IsWindowHovered();
         ImGui::End();
@@ -145,6 +148,7 @@ int main() {
                 targetHelper->visible = true;
             }
 
+            crane->controllerEnabled = ui.enableController;
             crane->setTargetValues(asAngles(ui.values, Angle::Repr::DEG));
 #endif
 
