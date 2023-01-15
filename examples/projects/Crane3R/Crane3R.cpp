@@ -4,7 +4,6 @@
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/loaders/OBJLoader.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
-#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 using namespace threepp;
@@ -59,6 +58,18 @@ namespace {
         return group;
     }
 
+    void updateCylinders(std::array<std::pair<threepp::Object3D *, threepp::Object3D *>, 2> cylinders) {
+        Vector3 tmp;
+        for (const auto &cylinder : cylinders) {
+
+            auto house = cylinder.first;
+            auto rod = cylinder.second;
+
+            house->lookAt(rod->getWorldPosition(tmp));
+            rod->lookAt(house->getWorldPosition(tmp));
+        }
+    }
+
 }// namespace
 
 Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj) {
@@ -78,7 +89,9 @@ Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj) {
 
     add(obj);
 
-    update();
+    controller_ = std::make_unique<Controller>(*this);
+
+    updateCylinders(cylinders_);
 }
 
 std::shared_ptr<Crane3R> Crane3R::create() {
@@ -107,47 +120,81 @@ std::shared_ptr<Crane3R> Crane3R::create() {
     part3->add(make_rod_attachment(2, 2.05f, {0.98, 0, 0.2}));
 
     parent->add(part1);
-    parent->rotateY(-math::PI/2);
-    parent->rotateX(-math::PI/2);
+    parent->rotateY(-math::PI / 2);
+    parent->rotateX(-math::PI / 2);
 
     return std::shared_ptr<Crane3R>(new Crane3R(parent));
 }
 
 
-void Crane3R::setTargetValues(const std::vector<float> &values, bool degrees) {
+std::vector<Angle> Crane3R::getValues() const {
 
-    if (degrees) {
-        targetValues = {values[0] * math::DEG2RAD, values[1] * math::DEG2RAD, values[2] * math::DEG2RAD};
+    std::vector<Angle> angles{
+            Angle::radians(parts_[0]->rotation.z()),
+            Angle::radians(parts_[1]->rotation.y()),
+            Angle::radians(parts_[2]->rotation.y()),
+    };
+
+    return angles;
+}
+
+void Crane3R::setTargetValues(const std::vector<Angle> &values) {
+
+    if (controllerEnabled) {
+        controller_->setTargetValues(values);
     } else {
-        std::copy_n(values.begin(), 3, targetValues.begin());
+        parts_[0]->rotation.z = values[0].inRadians();
+        parts_[1]->rotation.y = values[1].inRadians();
+        parts_[2]->rotation.y = values[2].inRadians();
+    }
+
+}
+
+void Crane3R::update(float dt) {
+
+    updateCylinders(cylinders_);
+
+    if (controllerEnabled) {
+        controller_->update(dt);
     }
 }
 
-void Crane3R::update() {
+Crane3R::Controller::Controller(const Crane3R &c) {
+    actuators_[0] = std::make_unique<Object3DActuator>(c.parts_[0], Object3DActuator::Axis::Z, 1 * math::DEG2RAD, std::make_pair<float, float>(-90.f, 90.f));
+    actuators_[1] = std::make_unique<Object3DActuator>(c.parts_[1], Object3DActuator::Axis::Y, 1 * math::DEG2RAD, std::make_pair<float, float>(-80.f, 0.f));
+    actuators_[2] = std::make_unique<Object3DActuator>(c.parts_[2], Object3DActuator::Axis::Y, 1 * math::DEG2RAD, std::make_pair<float, float>(-140.f, 40.f));
+}
 
-    parts_[0]->rotation.z = targetValues[0];
-    parts_[1]->rotation.y = targetValues[1];
-    parts_[2]->rotation.y = targetValues[2];
-
-    Vector3 tmp;
-    for (const auto &cylinder : cylinders_) {
-
-        auto house = cylinder.first;
-        auto rod = cylinder.second;
-
-        house->lookAt(rod->getWorldPosition(tmp));
-        rod->lookAt(house->getWorldPosition(tmp));
+void Crane3R::Controller::setGains(const std::vector<float> &values) {
+    mode_ = DIRECT;
+    for (unsigned i = 0; i < actuators_.size(); ++i) {
+        actuators_[i]->setGain(values[i]);
     }
 }
 
-std::vector<float> Crane3R::getValues(bool degrees) const {
+void Crane3R::Controller::setTargetValues(const std::vector<Angle> &values) {
+    mode_ = POSITION;
+    for (unsigned i = 0; i < 3; ++i) {
+        targetValues[i] = values[i].inRadians();
+    }
+}
 
-    std::vector<float> angles{parts_[0]->rotation.z(), parts_[1]->rotation.y(), parts_[2]->rotation.y()};
-    if (degrees) {
-        for (auto &a : angles) {
-            a *= math::RAD2DEG;
+void Crane3R::Controller::update(float dt) {
+
+    if (mode_ == POSITION) {
+        for (unsigned i = 0; i < 3; ++i) {
+            auto &pid = pids_[i];
+            auto &act = actuators_[i];
+            auto v = pids_[i].regulate(targetValues[i], actuators_[i]->getProcessOutput(), dt);
+            actuators_[i]->setGain(v);
+        }
+    } else {
+        for (unsigned i = 0; i < 3; ++i) {
+            targetValues[i] = actuators_[i]->getProcessOutput();
         }
     }
 
-    return angles;
+    for (auto &actuator : actuators_) {
+        actuator->update();
+    }
 }

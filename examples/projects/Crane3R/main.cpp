@@ -19,6 +19,7 @@ struct MyUI : imgui_context {
     bool mouseHover = false;
     bool jointMode = true;
     bool posMode = false;
+    bool enableController = false;
 
     Vector3 pos;
     std::vector<KineLimit> limits;
@@ -57,6 +58,8 @@ struct MyUI : imgui_context {
         posMode = posMode || ImGui::IsItemEdited();
 
         jointMode = !posMode;
+
+        ImGui::Checkbox("controller", &enableController);
 
         mouseHover = ImGui::IsWindowHovered();
         ImGui::End();
@@ -122,7 +125,7 @@ int main() {
     scene->add(targetHelper);
 
 #endif
-    canvas.animate([&] {
+    canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
         if (crane) {
@@ -131,7 +134,7 @@ int main() {
             ui.render();
             controls.enabled = !ui.mouseHover;
 
-            auto endEffectorPosition = kine.calculateEndEffectorTransformation(crane->getValues());
+            auto endEffectorPosition = kine.calculateEndEffectorTransformation(inDegrees(crane->getValues()));
             endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
             targetHelper->position.copy(ui.pos);
@@ -141,14 +144,15 @@ int main() {
                 targetHelper->visible = false;
             }
             if (ui.posMode) {
-                ui.values = ikSolver->solveIK(kine, ui.pos, crane->getValues());
+                ui.values = ikSolver->solveIK(kine, ui.pos, inDegrees(crane->getValues()));
                 targetHelper->visible = true;
             }
 
-            crane->setTargetValues(ui.values);
+            crane->controllerEnabled = ui.enableController;
+            crane->setTargetValues(asAngles(ui.values, Angle::Repr::DEG));
 #endif
 
-            crane->update();
+            crane->update(dt);
         }
     });
 
