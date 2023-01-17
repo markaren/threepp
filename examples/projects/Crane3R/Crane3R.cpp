@@ -185,8 +185,8 @@ void Crane3R::Controller::update(float dt) {
         for (unsigned i = 0; i < 3; ++i) {
             auto &pid = pids_[i];
             auto &act = actuators_[i];
-            auto v = pids_[i].regulate(targetValues[i], actuators_[i]->getProcessOutput(), dt);
-            actuators_[i]->setGain(v);
+            auto v = pid.regulate(targetValues[i], act->getProcessOutput(), dt);
+            act->setGain(v);
         }
     } else {
         for (unsigned i = 0; i < 3; ++i) {
