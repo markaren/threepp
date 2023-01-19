@@ -20,21 +20,21 @@ int main() {
         renderer.setSize(size);
     });
 
-    int numParticles = 500000;
-    std::vector<float> positions;
-    std::vector<float> colors;
+    const int numParticles = 500000;
+    std::vector<float> positions(numParticles * 3);
+    std::vector<float> colors(numParticles * 3);
 
-    float n = 1000;
-    float n2 = n / 2;
+    const float n = 1000;
+    const float n2 = n / 2;
 
     for (int i = 0; i < numParticles; i += 3) {
-        positions.emplace_back(math::randomInRange(0.f, 1.f) * n - n2);
-        positions.emplace_back(math::randomInRange(0.f, 1.f) * n - n2);
-        positions.emplace_back(math::randomInRange(0.f, 1.f) * n - n2);
+        positions[i] = (math::randomInRange(0.f, 1.f) * n - n2);
+        positions[i + 1] = (math::randomInRange(0.f, 1.f) * n - n2);
+        positions[i + 2] = (math::randomInRange(0.f, 1.f) * n - n2);
 
-        colors.emplace_back((positions[i] / n) + 0.5f);
-        colors.emplace_back((positions[i + 1] / n) + 0.5f);
-        colors.emplace_back((positions[i + 2] / n) + 0.5f);
+        colors[i] = ((positions[i] / n) + 0.5f);
+        colors[i + 1] = ((positions[i + 1] / n) + 0.5f);
+        colors[i + 2] = ((positions[i + 2] / n) + 0.5f);
     }
 
     auto geometry = BufferGeometry::create();
@@ -51,7 +51,6 @@ int main() {
     scene->add(points);
 
     float time = 0;
-    points->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         time += dt;
         points->rotation.x = time * 0.25f;
