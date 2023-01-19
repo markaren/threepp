@@ -1,12 +1,20 @@
 
+#include "threepp/extras/imgui/imgui_context.hpp"
 #include "threepp/threepp.hpp"
 
 #include "BulletEngine.hpp"
-
 #include "PID.hpp"
-#include "threepp/extras/imgui/imgui_context.hpp"
+
+#ifdef HAS_matplotlib
+#include "matplotlibcpp.h"
+
+#include <mutex>
+#include <thread>
+#endif
+
 
 using namespace threepp;
+namespace plt = matplotlibcpp;
 
 std::shared_ptr<Object3D> createTarget() {
     auto geom = BoxGeometry::create(0.1, 1, 0.1);
@@ -52,7 +60,6 @@ struct ControllableOptions {
 
 
 struct MyUI : imgui_context {
-
 
     explicit MyUI(const Canvas &canvas, ControllableOptions &opt)
         : imgui_context(canvas.window_ptr()), opt(opt) {}
@@ -124,6 +131,27 @@ int main() {
 
     MyUI ui(canvas, opt);
 
+
+#ifdef HAS_matplotlib
+    int i = 0;
+    float t = 0;
+
+    const int plotLen = 1000;
+    std::vector<float> errors;
+    std::vector<float> time;
+
+    plt::ion();
+
+    auto fig = plt::figure();
+    plt::Plot plot("PID error");// automatic coloring: tab:blue
+
+    plt::ylim(-4, 4);
+
+    plt::legend();
+    plt::show();
+
+#endif
+
     canvas.animate([&](float dt) {
         engine.step(dt);
 
@@ -134,5 +162,29 @@ int main() {
 
         renderer.render(scene, camera);
         ui.render();
+
+#ifdef HAS_matplotlib
+        if (plt::fignum_exists(fig)) {
+
+            t += dt;
+
+            errors.emplace_back(pid.error());
+            time.emplace_back(t);
+
+            if (errors.size() == plotLen) {
+                errors.erase(errors.begin(), errors.begin() + 1);
+                time.erase(time.begin(), time.begin() + 1);
+            }
+
+            if (i % 10 == 0) {
+                plot.update(time, errors);
+                plt::xlim(time.front(), time.back());
+            }
+
+            ++i;
+        }
+
+#endif
     });
+
 }
