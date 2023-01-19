@@ -61,9 +61,9 @@ float math::randomInRange(float min, float max) {
     static std::random_device rd;
     static std::mt19937 e2(rd());
 
-    std::uniform_real_distribution<> dist(min, max);
+    std::uniform_real_distribution<float> dist(min, max);
 
-    return static_cast<float>(dist(e2));
+    return dist(e2);
 }
 
 bool math::isPowerOfTwo(int value) {
