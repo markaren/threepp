@@ -1,10 +1,8 @@
 
 #include "threepp/threepp.hpp"
-
 #include "threepp/extras/imgui/imgui_context.hpp"
 
 using namespace threepp;
-
 
 int main() {
 
@@ -41,9 +39,9 @@ int main() {
     canvas.animate([&]{
 
         renderer.render(scene, camera);
-        ui.render();
 
 #ifdef HAS_IMGUI
+        ui.render();
         mesh->position.fromArray(posBuf);
 #endif
 
