@@ -1,12 +1,19 @@
 
+#include "threepp/extras/imgui/imgui_context.hpp"
 #include "threepp/threepp.hpp"
 
 #include "BulletEngine.hpp"
-
 #include "PID.hpp"
-#include "threepp/extras/imgui/imgui_context.hpp"
+
+#ifdef HAS_MATPLOTLIB
+#include "matplotlibcpp.h"
+
+namespace plt = matplotlibcpp;
+#endif
+
 
 using namespace threepp;
+
 
 std::shared_ptr<Object3D> createTarget() {
     auto geom = BoxGeometry::create(0.1, 1, 0.1);
@@ -52,7 +59,6 @@ struct ControllableOptions {
 
 
 struct MyUI : imgui_context {
-
 
     explicit MyUI(const Canvas &canvas, ControllableOptions &opt)
         : imgui_context(canvas.window_ptr()), opt(opt) {}
@@ -124,6 +130,32 @@ int main() {
 
     MyUI ui(canvas, opt);
 
+
+#ifdef HAS_MATPLOTLIB
+
+    plt::ion();
+
+    auto fig = plt::figure();
+    plt::Plot plot("PID error");// automatic coloring: tab:blue
+
+    plt::ylim(-4, 4);
+    plt::ylabel("Error [rad]");
+    plt::xlabel("Time[s]");
+
+    plt::legend();
+
+    float t = 0;
+    size_t i = 0;
+
+    float timer = 0;
+    float updateInterval = 0.1f;
+
+    const float plotLen = 10.f;
+    std::vector<float> errors;
+    std::vector<float> time;
+
+#endif
+
     canvas.animate([&](float dt) {
         engine.step(dt);
 
@@ -134,5 +166,36 @@ int main() {
 
         renderer.render(scene, camera);
         ui.render();
+
+#ifdef HAS_MATPLOTLIB
+        if (plt::fignum_exists(fig)) {
+
+            t += dt;
+
+            if (i % 2 == 0) {
+
+                errors.emplace_back(pid.error());
+                time.emplace_back(t);
+
+                while (time.back() - time.front() > plotLen) {
+                    errors.erase(errors.begin(), errors.begin() + 1);
+                    time.erase(time.begin(), time.begin() + 1);
+                }
+
+            }
+
+            if ((timer += dt) > updateInterval) {
+                plot.update(time, errors);
+                plt::xlim(time.front(), time.back());
+                plt::pause(0.001);
+                timer = 0;
+            }
+
+        }
+
+        ++i;
+
+#endif
     });
+
 }
