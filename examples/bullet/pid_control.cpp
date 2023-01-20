@@ -5,7 +5,7 @@
 #include "BulletEngine.hpp"
 #include "PID.hpp"
 
-#ifdef HAS_matplotlib
+#ifdef HAS_MATPLOTLIB
 #include "matplotlibcpp.h"
 
 namespace plt = matplotlibcpp;
@@ -131,7 +131,7 @@ int main() {
     MyUI ui(canvas, opt);
 
 
-#ifdef HAS_matplotlib
+#ifdef HAS_MATPLOTLIB
 
     plt::ion();
 
@@ -167,7 +167,7 @@ int main() {
         renderer.render(scene, camera);
         ui.render();
 
-#ifdef HAS_matplotlib
+#ifdef HAS_MATPLOTLIB
         if (plt::fignum_exists(fig)) {
 
             t += dt;
