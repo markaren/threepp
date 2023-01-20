@@ -22,4 +22,4 @@ if (imgui_FOUND)
 endif ()
 
 add_executable(test main.cpp)
-target_link_libraries(test PRIVATE stb::stb threepp::threepp imgui::imgui)
+target_link_libraries(test PRIVATE threepp::threepp imgui::imgui)
