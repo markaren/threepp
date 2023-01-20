@@ -8,13 +8,12 @@
 #ifdef HAS_matplotlib
 #include "matplotlibcpp.h"
 
-#include <mutex>
-#include <thread>
+namespace plt = matplotlibcpp;
 #endif
 
 
 using namespace threepp;
-namespace plt = matplotlibcpp;
+
 
 std::shared_ptr<Object3D> createTarget() {
     auto geom = BoxGeometry::create(0.1, 1, 0.1);
