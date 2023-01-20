@@ -42,13 +42,15 @@ protected:
 
 };
 
-class imgui_functional_context: imgui_context {
+class imgui_functional_context: public imgui_context {
 
 public:
     explicit imgui_functional_context(void* window, std::function<void()> f)
         : imgui_context(window),
           f_(std::move(f)) {}
 
+
+protected:
     void onRender() override {
         f_();
     }
