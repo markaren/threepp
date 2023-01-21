@@ -41,11 +41,11 @@ if (NOT TARGET "stb::stb")
 endif ()
 
 
+add_subdirectory(src)
+
 if (THREEPP_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif ()
-
-add_subdirectory(src)
 
 if (THREEPP_BUILD_TESTS)
 
