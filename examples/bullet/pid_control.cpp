@@ -1,8 +1,8 @@
 
+#include "threepp/extras/bullet/BulletWrapper.hpp"
 #include "threepp/extras/imgui/imgui_context.hpp"
 #include "threepp/threepp.hpp"
 
-#include "BulletEngine.hpp"
 #include "PID.hpp"
 
 #ifdef HAS_MATPLOTLIB
@@ -116,10 +116,11 @@ int main() {
     });
 
 
-    BulletEngine engine;
+    BulletWrapper engine;
 
-    auto body = engine.registerGroup(controllable, 10);
-    btHingeConstraint c(*body, btVector3(), btVector3(0, 0, 1));
+    auto rb = RbWrapper::create(controllable->children[0]->geometry(), 10);
+    engine.addRigidbody(rb, controllable);
+    btHingeConstraint c(*rb->body, btVector3(), btVector3(0, 0, 1));
     c.enableAngularMotor(true, 0, 1.f);
     engine.addConstraint(&c);
 
@@ -127,9 +128,7 @@ int main() {
     pid.setWindupGuard(0.1f);
 
     ControllableOptions opt(pid);
-
     MyUI ui(canvas, opt);
-
 
 #ifdef HAS_MATPLOTLIB
 
@@ -181,7 +180,6 @@ int main() {
                     errors.erase(errors.begin(), errors.begin() + 1);
                     time.erase(time.begin(), time.begin() + 1);
                 }
-
             }
 
             if ((timer += dt) > updateInterval) {
@@ -190,12 +188,10 @@ int main() {
                 plt::pause(0.001);
                 timer = 0;
             }
-
         }
 
         ++i;
 
 #endif
     });
-
 }

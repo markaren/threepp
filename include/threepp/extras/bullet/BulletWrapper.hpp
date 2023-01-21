@@ -28,6 +28,11 @@ namespace threepp {
     }
 
     std::unique_ptr<btCollisionShape> fromGeometry(const std::shared_ptr<BufferGeometry> &geometry) {
+
+        if (!geometry) {
+            return std::make_unique<btEmptyShape>();
+        }
+
         if (std::dynamic_pointer_cast<const BoxGeometry>(geometry)) {
 
             auto g = std::dynamic_pointer_cast<const BoxGeometry>(geometry);
@@ -47,9 +52,9 @@ namespace threepp {
 
             auto g = std::dynamic_pointer_cast<const CylinderGeometry>(geometry);
             return std::make_unique<btCylinderShape>(btVector3(g->radiusTop, g->height / 2, g->radiusTop));
+        } else {
+            return std::make_unique<btEmptyShape>();
         }
-
-        return std::make_unique<btEmptyShape>();
     }
 
 
@@ -58,33 +63,44 @@ namespace threepp {
         std::unique_ptr<btMotionState> state;
         std::unique_ptr<btRigidBody> body;
 
-        RbWrapper(std::unique_ptr<btCollisionShape> shape, float mass, const threepp::Matrix4 &origin = Matrix4())
-            : shape(std::move(shape)),
+        static std::shared_ptr<RbWrapper> create(const std::shared_ptr<BufferGeometry> &shape, float mass = 0) {
+            return std::shared_ptr<RbWrapper>(new RbWrapper(shape, mass));
+        }
+
+    private:
+        RbWrapper(const std::shared_ptr<BufferGeometry> &shape, float mass)
+            : shape(fromGeometry(shape)),
               state(std::make_unique<btDefaultMotionState>()) {
 
             btVector3 inertia;
             this->shape->calculateLocalInertia(mass, inertia);
 
-            state->setWorldTransform(convert(origin));
-
             body = std::make_unique<btRigidBody>(mass, state.get(), this->shape.get(), inertia);
             body->setActivationState(DISABLE_DEACTIVATION);
         }
-
     };
 
 
     class BulletWrapper {
 
     public:
-        explicit BulletWrapper(float gravity = -9.81f)
+        explicit BulletWrapper(const Vector3 &gravity = {0, -9.81f, 0})
             : dispatcher{&collisionConfiguration},
               world{&dispatcher, &broadphase, &solver, &collisionConfiguration} {
-            //            world.setGravity(btVector3(0, gravity, 0));
+            world.setGravity(convert(gravity));
         }
 
         void step(float dt, int maxSubSteps = 1, btScalar fixedTimeStep = btScalar(1.) / btScalar(60.)) {
             world.stepSimulation(dt, maxSubSteps, fixedTimeStep);
+
+            for (auto &[m, info] : bodies) {
+                auto &t = info->body->getWorldTransform();
+                auto &p = t.getOrigin();
+                auto r = t.getRotation();
+
+                m->quaternion.set(r.x(), r.y(), r.z(), r.w());
+                m->position.set(p.x(), p.y(), p.z());
+            }
         }
 
         BulletWrapper &setGravity(const Vector3 &g) {
@@ -92,30 +108,24 @@ namespace threepp {
             return *this;
         }
 
-        BulletWrapper &addRigidbody(btRigidBody *rb) {
-            world.addRigidBody(rb);
+        BulletWrapper &addRigidbody(const std::shared_ptr<RbWrapper> &rb, const std::shared_ptr<Object3D> &obj) {
+
+            obj->updateMatrixWorld();
+            auto t = convert(*obj->matrixWorld);
+            rb->state->setWorldTransform(t);
+            rb->body->setWorldTransform(t);
+
+            world.addRigidBody(rb->body.get());
+            bodies[obj] = rb;
             return *this;
         }
 
-        BulletWrapper &addRigidbody(btRigidBody *rb, int group, int mask) {
-            world.addRigidBody(rb, group, mask);
-            return *this;
+        void addConstraint(btTypedConstraint *c, bool disableCollisionsBetweenLinkedBodies = false) {
+            world.addConstraint(c, disableCollisionsBetweenLinkedBodies);
         }
-
-        BulletWrapper &addRigidbody(const RbWrapper &rb) {
-            return addRigidbody(rb.body.get());
-        }
-
-        BulletWrapper &addRigidbody(const RbWrapper &rb, int group, int mask) {
-            return addRigidbody(rb.body.get(), group, mask);
-        }
-
-        //        btRigidBody *registerMesh(const std::shared_ptr<threepp::Mesh> &m, float mass);
-        //        btRigidBody *registerGroup(const std::shared_ptr<threepp::Group> &m, float mass);
-
 
     private:
-        //        std::unordered_map<std::shared_ptr<threepp::Object3D>, std::unique_ptr<Rbinfo>> bodies{};
+        std::unordered_map<std::shared_ptr<threepp::Object3D>, std::shared_ptr<RbWrapper>> bodies{};
 
         btDbvtBroadphase broadphase{};
 
