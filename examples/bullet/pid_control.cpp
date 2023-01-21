@@ -1,8 +1,8 @@
 
+#include "threepp/extras/bullet/BulletWrapper.hpp"
 #include "threepp/extras/imgui/imgui_context.hpp"
 #include "threepp/threepp.hpp"
 
-#include "BulletEngine.hpp"
 #include "PID.hpp"
 
 #ifdef HAS_MATPLOTLIB
@@ -27,8 +27,7 @@ std::shared_ptr<Object3D> createTarget() {
     return target;
 }
 
-std::shared_ptr<Group> createObject() {
-    auto group = Group::create();
+std::shared_ptr<Object3D> createObject() {
 
     auto cylinderGeometry = CylinderGeometry::create(0.5, 0.5, 0.1);
     cylinderGeometry->rotateX(math::DEG2RAD * 90);
@@ -42,10 +41,9 @@ std::shared_ptr<Group> createObject() {
     auto cylinder = Mesh::create(cylinderGeometry, material);
     auto box = Mesh::create(boxGeometry, material);
 
-    group->add(cylinder);
-    group->add(box);
+    cylinder->add(box);
 
-    return group;
+    return cylinder;
 }
 
 struct ControllableOptions {
@@ -116,10 +114,11 @@ int main() {
     });
 
 
-    BulletEngine engine;
+    BulletWrapper engine;
 
-    auto body = engine.registerGroup(controllable, 10);
-    btHingeConstraint c(*body, btVector3(), btVector3(0, 0, 1));
+    auto rb = RbWrapper::create(nullptr, 10);
+    engine.addRigidbody(rb, controllable);
+    btHingeConstraint c(*rb->body, btVector3(0, 0, 0), btVector3(0, 0, 1));
     c.enableAngularMotor(true, 0, 1.f);
     engine.addConstraint(&c);
 
@@ -127,16 +126,14 @@ int main() {
     pid.setWindupGuard(0.1f);
 
     ControllableOptions opt(pid);
-
     MyUI ui(canvas, opt);
-
 
 #ifdef HAS_MATPLOTLIB
 
     plt::ion();
 
     auto fig = plt::figure();
-    plt::Plot plot("PID error");// automatic coloring: tab:blue
+    plt::Plot plot("PID error");
 
     plt::ylim(-4, 4);
     plt::ylabel("Error [rad]");
@@ -181,7 +178,6 @@ int main() {
                     errors.erase(errors.begin(), errors.begin() + 1);
                     time.erase(time.begin(), time.begin() + 1);
                 }
-
             }
 
             if ((timer += dt) > updateInterval) {
@@ -190,12 +186,10 @@ int main() {
                 plt::pause(0.001);
                 timer = 0;
             }
-
         }
 
         ++i;
 
 #endif
     });
-
 }

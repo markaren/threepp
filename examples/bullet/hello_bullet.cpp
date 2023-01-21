@@ -1,7 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "BulletEngine.hpp"
+#include "threepp/extras/bullet/BulletWrapper.hpp"
 
 using namespace threepp;
 
@@ -55,15 +55,15 @@ int main() {
         renderer.setSize(size);
     });
 
-    BulletEngine engine;
+    BulletWrapper bullet(Vector3::Y * -9.81f);
 
-    engine.registerMesh(box, 1);
-    engine.registerMesh(sphere, 2);
-    engine.registerMesh(cylinder, 1);
-    engine.registerMesh(plane, 0);
+    bullet.addRigidbody(RbWrapper::create(boxGeometry, 1), box);
+    bullet.addRigidbody(RbWrapper::create(sphereGeometry, 2), sphere);
+    bullet.addRigidbody(RbWrapper::create(cylinderGeometry, 5), cylinder);
+    bullet.addRigidbody(RbWrapper::create(planeGeometry), plane);
 
     canvas.animate([&](float dt) {
-        engine.step(dt);
+        bullet.step(dt);
 
         renderer.render(scene, camera);
     });

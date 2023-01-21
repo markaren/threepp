@@ -26,6 +26,7 @@ set(publicHeaders
         "threepp/cameras/OrthographicCamera.hpp"
         "threepp/cameras/CameraView.hpp"
 
+        "threepp/extras/bullet/BulletWrapper.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/curve/CatmullRomCurve3.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
