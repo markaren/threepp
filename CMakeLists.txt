@@ -40,6 +40,14 @@ if (NOT TARGET "stb::stb")
     target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
 endif ()
 
+include(FetchContent)
+FetchContent_Declare(
+        glText
+        GIT_REPOSITORY git@github.com:vallentin/glText.git
+        GIT_TAG 8200fa70e32acec0a3cd777d404f41ee0c203ca4
+)
+FetchContent_Populate(glText)
+
 
 add_subdirectory(src)
 
@@ -49,7 +57,6 @@ endif ()
 
 if (THREEPP_BUILD_TESTS)
 
-    include(FetchContent)
     FetchContent_Declare(
             Catch2
             GIT_REPOSITORY https://github.com/catchorg/Catch2.git

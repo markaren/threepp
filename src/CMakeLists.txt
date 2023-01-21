@@ -127,6 +127,7 @@ set(publicHeaders
         "threepp/lights/SpotLight.hpp"
         "threepp/lights/SpotLightShadow.hpp"
 
+        "threepp/renderers/TextHandle.hpp"
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
@@ -335,5 +336,6 @@ target_include_directories(threepp
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
+        "${gltext_SOURCE_DIR}"
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}")

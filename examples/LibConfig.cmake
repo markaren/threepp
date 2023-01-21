@@ -41,15 +41,3 @@ if (NOT TARGET "matplotlib::matplotlib")
     endif()
 
 endif()
-
-
-include(FetchContent)
-FetchContent_Declare(
-        glText
-        GIT_REPOSITORY git@github.com:vallentin/glText.git
-        GIT_TAG 8200fa70e32acec0a3cd777d404f41ee0c203ca4
-)
-FetchContent_Populate(glText)
-add_library(gltext INTERFACE)
-add_library(gltext::gltext ALIAS gltext)
-target_include_directories(gltext INTERFACE "${gltext_SOURCE_DIR}")

@@ -27,7 +27,7 @@ namespace threepp {
 
         explicit Canvas(const Parameters &params = Parameters());
 
-        [[nodiscard]] WindowSize getSize() const;
+        [[nodiscard]] const WindowSize& getSize() const;
 
         [[nodiscard]] float getAspect() const;
 

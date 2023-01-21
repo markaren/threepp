@@ -1,9 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
-#define GLT_IMPLEMENTATION
 #include <glad/glad.h>
-#include <gltext.h>
 
 using namespace threepp;
 
@@ -104,38 +102,22 @@ int main() {
       renderer.setSize(size);
     });
 
-    // Initialize glText
-    gltInit();
+    renderer.enableTextRendering();
+    auto& handle = renderer.textHandle();
+    handle.setPosition(canvas.getSize().width-130, 0);
+    handle.color = Color::red;
 
 #ifdef HAS_IMGUI
     MyGui ui(canvas);
 #endif
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
+        handle.setText("Delta=" + std::to_string(dt));
 
         renderer.render(scene, camera);
 
-
-        // Creating text
-        GLTtext *text = gltCreateText();
-        gltSetText(text, "Hello World!");
-
-        // Begin text drawing (this for instance calls glUseProgram)
-        gltBeginDraw();
-
-        // Draw any amount of text between begin and end
-        gltColor(1.0f, 1.0f, 1.0f, 1.0f);
-        gltDrawText2D(text, 0, 0, 1);
-
-        // Finish drawing text
-        gltEndDraw();
-
-        // Deleting text
-        gltDeleteText(text);
-
-
 #ifdef HAS_IMGUI
-//        ui.render();
+        ui.render();
 
         plane->position.copy(ui.position());
         plane->rotation.copy(ui.rotation());
@@ -150,8 +132,5 @@ int main() {
 #endif
 
     });
-
-    // Destroy glText
-    gltTerminate();
 
 }

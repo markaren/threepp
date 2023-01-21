@@ -162,7 +162,7 @@ void GLRenderList::sort() {
 
     if (opaque.size() > 1) std::stable_sort(opaque.begin(), opaque.end(), painterSortStable);
     if (transmissive.size() > 1) std::stable_sort(transmissive.begin(), transmissive.end(), reversePainterSortStable);
-    if (transparent.size() > 1) std::stable_sort(transparent.begin(), transparent.end(), reversePainterSortStable);
+    if (transparent.size() > 1) std::stable_sort(transparent.begin(), transparent.end(), painterSortStable); // TODO check this
 }
 
 void GLRenderList::finish() {
