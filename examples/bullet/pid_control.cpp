@@ -27,8 +27,7 @@ std::shared_ptr<Object3D> createTarget() {
     return target;
 }
 
-std::shared_ptr<Group> createObject() {
-    auto group = Group::create();
+std::shared_ptr<Object3D> createObject() {
 
     auto cylinderGeometry = CylinderGeometry::create(0.5, 0.5, 0.1);
     cylinderGeometry->rotateX(math::DEG2RAD * 90);
@@ -42,10 +41,9 @@ std::shared_ptr<Group> createObject() {
     auto cylinder = Mesh::create(cylinderGeometry, material);
     auto box = Mesh::create(boxGeometry, material);
 
-    group->add(cylinder);
-    group->add(box);
+    cylinder->add(box);
 
-    return group;
+    return cylinder;
 }
 
 struct ControllableOptions {
@@ -118,9 +116,9 @@ int main() {
 
     BulletWrapper engine;
 
-    auto rb = RbWrapper::create(controllable->children[0]->geometry(), 10);
+    auto rb = RbWrapper::create(nullptr, 10);
     engine.addRigidbody(rb, controllable);
-    btHingeConstraint c(*rb->body, btVector3(), btVector3(0, 0, 1));
+    btHingeConstraint c(*rb->body, btVector3(0, 0, 0), btVector3(0, 0, 1));
     c.enableAngularMotor(true, 0, 1.f);
     engine.addConstraint(&c);
 
@@ -135,7 +133,7 @@ int main() {
     plt::ion();
 
     auto fig = plt::figure();
-    plt::Plot plot("PID error");// automatic coloring: tab:blue
+    plt::Plot plot("PID error");
 
     plt::ylim(-4, 4);
     plt::ylabel("Error [rad]");

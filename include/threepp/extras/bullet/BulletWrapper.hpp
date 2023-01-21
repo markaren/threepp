@@ -72,8 +72,12 @@ namespace threepp {
             : shape(fromGeometry(shape)),
               state(std::make_unique<btDefaultMotionState>()) {
 
-            btVector3 inertia;
-            this->shape->calculateLocalInertia(mass, inertia);
+            btVector3 inertia{1, 1, 1};
+            if (shape) {
+                this->shape->calculateLocalInertia(mass, inertia);
+            } else {
+                inertia *= mass;
+            }
 
             body = std::make_unique<btRigidBody>(mass, state.get(), this->shape.get(), inertia);
             body->setActivationState(DISABLE_DEACTIVATION);
