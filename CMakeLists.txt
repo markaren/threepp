@@ -43,7 +43,7 @@ endif ()
 include(FetchContent)
 FetchContent_Declare(
         glText
-        GIT_REPOSITORY git@github.com:vallentin/glText.git
+        GIT_REPOSITORY https://github.com/vallentin/glText.git
         GIT_TAG 8200fa70e32acec0a3cd777d404f41ee0c203ca4
 )
 FetchContent_Populate(glText)
