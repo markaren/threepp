@@ -1,8 +1,6 @@
 
 #include "threepp/threepp.hpp"
 
-#include <glad/glad.h>
-
 using namespace threepp;
 
 #ifdef HAS_IMGUI
