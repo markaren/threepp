@@ -81,7 +81,7 @@ public:
         //        glEnable(GL_POINT_SMOOTH);
     }
 
-    [[nodiscard]] WindowSize getSize() const {
+    [[nodiscard]] const WindowSize& getSize() const {
         return size_;
     }
 
@@ -252,7 +252,7 @@ void Canvas::animate(const std::function<void(float)> &f) {
     pimpl_->animate(f);
 }
 
-WindowSize Canvas::getSize() const {
+const WindowSize& Canvas::getSize() const {
 
     return pimpl_->getSize();
 }

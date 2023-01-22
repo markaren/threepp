@@ -13,28 +13,17 @@ namespace {
 
         bool operator()(const std::shared_ptr<RenderItem> &a, const std::shared_ptr<RenderItem> &b) {
             if (a->groupOrder != b->groupOrder) {
-
-                return a->groupOrder < b->groupOrder;
-
+                return b->groupOrder > a->groupOrder;
             } else if (a->renderOrder != b->renderOrder) {
-
-                return a->renderOrder < b->renderOrder;
-
-            } else if (a->program != nullptr && b->program != nullptr && a->program != b->program) {
-
-                return a->program->id < b->program->id;
-
+                return b->renderOrder > a->renderOrder;
+            } else if (a->program != nullptr && b->program != nullptr && (a->program->id != b->program->id)) {
+                return b->program->id > a->program->id;
             } else if (a->material->id != b->material->id) {
-
-                return a->material->id < b->material->id;
-
+                return b->material->id > a->material->id;
             } else if (a->z != b->z) {
-
-                return a->z < b->z;
-
+                return b->z > a->z;
             } else {
-
-                return a->id < b->id;
+                return b->id > a->id;
             }
         }
     } painterSortStable;
@@ -43,20 +32,17 @@ namespace {
         bool operator()(const std::shared_ptr<RenderItem> &a, const std::shared_ptr<RenderItem> &b) {
 
             if (a->groupOrder != b->groupOrder) {
-
-                return a->groupOrder > b->groupOrder;
-
+                return b->groupOrder > a->groupOrder;
             } else if (a->renderOrder != b->renderOrder) {
-
-                return a->renderOrder > b->renderOrder;
-
+                return b->renderOrder > a->renderOrder;
+            } else if (a->program != nullptr && b->program != nullptr && (a->program->id != b->program->id)) {
+                return b->program->id > a->program->id;
+            } else if (a->material->id != b->material->id) {
+                return b->material->id > a->material->id;
             } else if (a->z != b->z) {
-
-                return a->z > b->z;
-
+                return b->z > a->z;
             } else {
-
-                return a->id > b->id;
+                return b->id > a->id;
             }
         }
     } reversePainterSortStable;
@@ -76,9 +62,9 @@ void gl::GLRenderList::init() {
 }
 
 std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
-        Object3D* object,
-        BufferGeometry* geometry,
-        Material* material,
+        Object3D *object,
+        BufferGeometry *geometry,
+        Material *material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     std::shared_ptr<gl::RenderItem> renderItem = nullptr;
@@ -119,9 +105,9 @@ std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
 }
 
 void gl::GLRenderList::push(
-        Object3D* object,
-        BufferGeometry* geometry,
-        Material* material,
+        Object3D *object,
+        BufferGeometry *geometry,
+        Material *material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
@@ -137,9 +123,9 @@ void gl::GLRenderList::push(
 }
 
 void GLRenderList::unshift(
-        Object3D* object,
-        BufferGeometry* geometry,
-        Material* material,
+        Object3D *object,
+        BufferGeometry *geometry,
+        Material *material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);

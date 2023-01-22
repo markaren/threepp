@@ -100,11 +100,17 @@ int main() {
       renderer.setSize(size);
     });
 
+    renderer.enableTextRendering();
+    auto& handle = renderer.textHandle();
+    handle.setPosition(canvas.getSize().width-130, 0);
+    handle.color = Color::red;
+
 #ifdef HAS_IMGUI
     MyGui ui(canvas);
 #endif
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
+        handle.setText("Delta=" + std::to_string(dt));
 
         renderer.render(scene, camera);
 
@@ -124,4 +130,5 @@ int main() {
 #endif
 
     });
+
 }

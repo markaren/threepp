@@ -8,8 +8,8 @@
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
-#include <threepp/math/Color.hpp>
-#include <threepp/math/Frustum.hpp>
+#include "threepp/math/Color.hpp"
+#include "threepp/math/Frustum.hpp"
 
 #include "threepp/Canvas.hpp"
 #include "threepp/constants.hpp"
@@ -33,6 +33,8 @@
 #include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLUniforms.hpp"
+
+#include "TextHandle.hpp"
 
 #include <memory>
 #include <vector>
@@ -213,6 +215,12 @@ namespace threepp {
 
         void setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
 
+        void enableTextRendering();
+
+        TextHandle& textHandle(const std::string& str = "");
+
+        ~GLRenderer();
+
     private:
         struct OnMaterialDispose : EventListener {
 
@@ -224,9 +232,12 @@ namespace threepp {
             GLRenderer &scope_;
         };
 
-        OnMaterialDispose onMaterialDispose;
-
         Canvas &canvas_;
+
+        bool textEnabled_ = false;
+        std::vector<std::shared_ptr<TextHandle>> textHandles_;
+
+        OnMaterialDispose onMaterialDispose;
 
         std::shared_ptr<gl::GLRenderList> currentRenderList;
         std::shared_ptr<gl::GLRenderState> currentRenderState;
@@ -288,6 +299,8 @@ namespace threepp {
 
         std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
         std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
+
+        void renderText();
 
         friend struct gl::ProgramParameters;
         friend struct gl::GLShadowMap;
