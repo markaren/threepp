@@ -8,7 +8,7 @@
 #include "threepp/objects/LineSegments.hpp"
 
 #define GLT_IMPLEMENTATION
-//#define GLT_MANUAL_VIEWPORT
+#define GLT_MANUAL_VIEWPORT
 #include <glad/glad.h>
 #include <gltext.h>
 
@@ -96,7 +96,7 @@ void GLRenderer::setViewport(const Vector4 &v) {
     state.viewport(_currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
 
     if (textEnabled_) {
-//        gltViewport(static_cast<int>(v.z), static_cast<int>(v.w));
+        gltViewport(static_cast<int>(v.z), static_cast<int>(v.w));
     }
 }
 
@@ -107,7 +107,7 @@ void GLRenderer::setViewport(int x, int y, int width, int height) {
     state.viewport(_currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
 
     if (textEnabled_) {
-//        gltViewport(width, height);
+        gltViewport(width, height);
     }
 }
 
@@ -468,22 +468,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
         currentRenderList = nullptr;
     }
 
-    if (textEnabled_ && !textHandles_.empty()) {
-
-        gltBeginDraw();
-        auto it = textHandles_.begin();
-        while (it != textHandles_.end()) {
-
-            if ((*it)->invalidate_) {
-                it = textHandles_.erase(it);
-            } else {
-
-                (*it)->render();
-                ++it;
-            }
-        }
-        gltEndDraw();
-    }
+    renderText();
 }
 
 void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
@@ -1145,13 +1130,34 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
 void GLRenderer::enableTextRendering() {
     if (!textEnabled_) {
         textEnabled_ = gltInit();
-//        gltViewport(static_cast<int>(_viewport.z), static_cast<int>(_viewport.w));
+        gltViewport(static_cast<int>(_viewport.z), static_cast<int>(_viewport.w));
     }
 }
 
 TextHandle &GLRenderer::textHandle(const std::string &str) {
     textHandles_.emplace_back(std::make_unique<TextHandle>(str));
     return *textHandles_.back();
+}
+
+void GLRenderer::renderText() {
+
+    if (textEnabled_ && !textHandles_.empty()) {
+
+        gltBeginDraw();
+        auto it = textHandles_.begin();
+        while (it != textHandles_.end()) {
+
+            if ((*it)->invalidate_) {
+                it = textHandles_.erase(it);
+            } else {
+
+                (*it)->render();
+                ++it;
+            }
+        }
+        gltEndDraw();
+    }
+
 }
 
 GLRenderer::~GLRenderer() {
@@ -1190,7 +1196,7 @@ void TextHandle::setText(const std::string &str) {
 
 void threepp::TextHandle::render() {
     gltColor(color.r, color.g, color.b, alpha);
-    gltDrawText2D(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale);
+    gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, horizontalAlignment, verticalAlignment);
 }
 
 TextHandle::~TextHandle() = default;

@@ -12,12 +12,19 @@ namespace threepp {
     class TextHandle {
 
     public:
+
+        enum Alignment: int {
+            LEFT = 0, CENTER = 1, RIGHT = 2
+        };
+
         int x = 0;
         int y = 0;
         float scale = 1;
 
         Color color;
         float alpha = 1;
+        Alignment horizontalAlignment{0};
+        Alignment verticalAlignment{0};
 
         explicit TextHandle(const std::string& str);
 
@@ -30,6 +37,10 @@ namespace threepp {
 
         void invalidate() {
             invalidate_ = true;
+        }
+
+        [[nodiscard]] bool isValid() const {
+            return !invalidate_;
         }
 
         ~TextHandle();
