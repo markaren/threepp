@@ -16,7 +16,6 @@ class ThreeppConan(ConanFile):
     requires = (
         "glfw/3.3.8",
         "glad/0.1.36",
-        "stb/cci.20210910"
     )
 
     options = {
