@@ -34,11 +34,9 @@ if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
     add_library(glfw::glfw ALIAS glfw)
 endif()
 
-if (NOT TARGET "stb::stb")
-    find_path(STB_INCLUDE_DIRS "stb_c_lexer.h" REQUIRED)
-    add_library(stb::stb INTERFACE IMPORTED)
-    target_include_directories(stb::stb INTERFACE ${STB_INCLUDE_DIRS})
-endif ()
+if (NOT stb_INCLUDE_DIR)
+    find_path(stb_INCLUDE_DIR "stb_c_lexer.h" REQUIRED)
+endif()
 
 include(FetchContent)
 FetchContent_Declare(
@@ -47,6 +45,7 @@ FetchContent_Declare(
         GIT_TAG 8200fa70e32acec0a3cd777d404f41ee0c203ca4
 )
 FetchContent_Populate(glText)
+set(gltext_INCLUDE_DIR "${gltext_SOURCE_DIR}")
 
 
 add_subdirectory(src)

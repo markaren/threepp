@@ -329,13 +329,13 @@ target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
-        glfw::glfw
-        stb::stb)
+        glfw::glfw)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
-        "${gltext_SOURCE_DIR}"
+        "${stb_INCLUDE_DIR}"
+        "${gltext_INCLUDE_DIR}"
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}")
