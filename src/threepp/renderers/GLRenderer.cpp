@@ -413,11 +413,9 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     // render scene
 
     auto &opaqueObjects = currentRenderList->opaque;
-    auto &transmissiveObjects = currentRenderList->transmissive;
     auto &transparentObjects = currentRenderList->transparent;
     //
     if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene, camera);
-    if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene, camera);
     if (!transparentObjects.empty()) renderObjects(transparentObjects, scene, camera);
 
     //
@@ -573,14 +571,6 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
     }
 }
 
-void GLRenderer::renderTransmissiveObjects(
-        std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects,
-        std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects,
-        Scene *scene,
-        Camera *camera) {
-    //TODO
-}
-
 void GLRenderer::renderObjects(
         std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
         Scene *scene,
@@ -595,30 +585,7 @@ void GLRenderer::renderObjects(
         auto material = overrideMaterial == nullptr ? renderItem->material : overrideMaterial.get();
         auto group = renderItem->group;
 
-        if (false /*camera.isArrayCamera*/) {
-
-            //            const cameras = camera.cameras;
-            //
-            //            for ( let j = 0, jl = cameras.length; j < jl; j ++ ) {
-            //
-            //                const camera2 = cameras[ j ];
-            //
-            //                if ( object.layers.test( camera2.layers ) ) {
-            //
-            //                    state.viewport( _currentViewport.copy( camera2.viewport ) );
-            //
-            //                    currentRenderState.setupLightsView( camera2 );
-            //
-            //                    renderObject( object, scene, camera2, geometry, material, group );
-            //
-            //                }
-            //
-            //            }
-
-        } else {
-
-            renderObject(object, scene, camera, geometry, material, group);
-        }
+        renderObject(object, scene, camera, geometry, material, group);
     }
 }
 
@@ -675,8 +642,8 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     auto lightsStateVersion = lights.state.version;
 
-    auto parameters = programCache.getParameters(*this, material, lights.state, static_cast<int>(shadowsArray.size()), scene, object);
-    auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
+    auto parameters = gl::GLPrograms::getParameters(*this, material, lights.state, static_cast<int>(shadowsArray.size()), scene, object);
+    auto programCacheKey = gl::GLPrograms::getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;
 
@@ -708,7 +675,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     } else {
 
-        parameters.uniforms = programCache.getUniforms(material);
+        parameters.uniforms = gl::GLPrograms::getUniforms(material);
 
         // material.onBuild( parameters, this );
 
@@ -996,7 +963,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
             materials.refreshFogUniforms(*m_uniforms, *fog);
         }
 
-        materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height /*, _transmissionRenderTarget*/);
+        materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height);
 
         gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }
@@ -1157,7 +1124,6 @@ void GLRenderer::renderText() {
         }
         gltEndDraw();
     }
-
 }
 
 GLRenderer::~GLRenderer() {
