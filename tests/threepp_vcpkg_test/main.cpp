@@ -24,26 +24,24 @@ int main() {
 
     scene->add(mesh);
 
-#ifdef HAS_IMGUI
+
     std::array<float, 3> posBuf{};
-    imgui_functional_context ui(canvas.window_ptr(), [&]{
-        ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+    imgui_functional_context ui(canvas.window_ptr(), [&] {
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("Demo");
         ImGui::SliderFloat3("position", posBuf.data(), -1.f, 1.f);
         controls.enabled = !ImGui::IsWindowHovered();
         ImGui::End();
     });
-#endif
 
-    canvas.animate([&]{
+
+    canvas.animate([&] {
 
         renderer.render(scene, camera);
 
-#ifdef HAS_IMGUI
         ui.render();
         mesh->position.fromArray(posBuf);
-#endif
 
     });
 
