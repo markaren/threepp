@@ -22,13 +22,7 @@ namespace threepp {
     public:
         std::string vertexShader;
         std::string fragmentShader;
-        std::shared_ptr<UniformMap> uniforms;
-
-       std::unordered_map<std::string, UniformValue> defaultAttributeValues {
-               {"color", Color(1,1,1)},
-               {"uv", Vector2(0,0)},
-               {"uv2", Vector2(0,0)}
-        };
+        std::shared_ptr<UniformMap> uniforms = std::make_shared<UniformMap>();
 
         std::optional<std::string> index0AttributeName;
         bool uniformsNeedUpdate = false;
@@ -55,10 +49,11 @@ namespace threepp {
             this->fog = false;
             this->lights = false;
             this->clipping = false;
-        }
 
-    private:
-        std::unordered_map<std::string, Uniform> uniforms_;
+            defaultAttributeValues["color"] = Color(1, 1, 1);
+            defaultAttributeValues["uv"] = Vector2(0, 0);
+            defaultAttributeValues["uv2"] = Vector2(0, 0);
+        }
     };
 
 }// namespace threepp

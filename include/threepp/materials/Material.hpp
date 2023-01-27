@@ -73,6 +73,8 @@ namespace threepp {
 
         bool toneMapped = true;
 
+        std::unordered_map<std::string, UniformValue> defaultAttributeValues;
+
         unsigned int version = 0;
 
         void dispose() {

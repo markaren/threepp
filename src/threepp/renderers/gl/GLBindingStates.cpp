@@ -219,7 +219,7 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
 
     const auto &programAttributes = program->getAttributes();
 
-    //            const auto &materialDefaultAttributeValues = material.defaultAttributeValues;
+    auto &materialDefaultAttributeValues = material->defaultAttributeValues;
 
     for (const auto &[name, programAttribute] : programAttributes) {
 
@@ -259,6 +259,15 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
 
                     glBindBuffer(GL_ARRAY_BUFFER, buffer);
                     vertexAttribPointer(programAttribute, size, type, normalized, 0, 0);
+                }
+
+            } else if (!materialDefaultAttributeValues.empty()) {
+
+                if (materialDefaultAttributeValues.count("name")) {
+
+                    UniformValue &value = materialDefaultAttributeValues.at("name");
+
+                    // TODO
                 }
             }
         }
