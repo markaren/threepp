@@ -23,10 +23,10 @@ namespace {
         shadowMaterialVertical->defines["SAMPLE_RATE"] = std::to_string(2.f / 8.f);
         shadowMaterialVertical->defines["HALF_SAMPLE_RATE"] = std::to_string(1.f / 8.f);
 
-        shadowMaterialVertical->uniforms = {
+        shadowMaterialVertical->uniforms = std::make_shared<UniformMap>(UniformMap{
                 {"shadow_pass", Uniform()},
                 {"resolution", Uniform(Vector2())},
-                {"radius", Uniform(4.f)}};
+                {"radius", Uniform(4.f)}});
 
         return shadowMaterialVertical;
     }

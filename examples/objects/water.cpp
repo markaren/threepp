@@ -71,7 +71,7 @@ int main() {
         sphere->rotation.x = t * 0.05f;
         sphere->rotation.z = t * 0.051f;
 
-        (water->material()->uniforms)["time"].setValue(t);
+        water->material<ShaderMaterial>()->uniforms->at("time").setValue(t);
 
         renderer.render(scene, camera);
 

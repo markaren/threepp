@@ -22,6 +22,7 @@ namespace threepp {
     public:
         std::string vertexShader;
         std::string fragmentShader;
+        std::shared_ptr<UniformMap> uniforms;
 
        std::unordered_map<std::string, UniformValue> defaultAttributeValues {
                {"color", Color(1,1,1)},

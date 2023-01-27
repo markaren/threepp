@@ -672,7 +672,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     } else {
 
-        parameters.uniforms = &gl::GLPrograms::getUniforms(material);
+        parameters.uniforms = gl::GLPrograms::getUniforms(material);
 
         // material.onBuild( parameters, this );
 

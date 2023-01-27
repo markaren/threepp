@@ -73,8 +73,6 @@ namespace threepp {
 
         bool toneMapped = true;
 
-        UniformMap uniforms;
-
         unsigned int version = 0;
 
         void dispose() {

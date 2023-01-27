@@ -124,7 +124,7 @@ namespace threepp {
 
             std::optional<std::string> index0AttributeName;
 
-            UniformMap* uniforms = nullptr;
+            std::shared_ptr<UniformMap> uniforms = nullptr;
 
             ProgramParameters(
                     const GLRenderer &renderer,
