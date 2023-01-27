@@ -14,46 +14,46 @@ namespace threepp::gl {
 
     struct RenderItem {
 
-        int id;
+        std::optional<unsigned int> id;
         Object3D* object;
         BufferGeometry* geometry;
         Material* material;
         GLProgram* program;
-        int groupOrder;
-        int renderOrder;
+        unsigned int groupOrder;
+        unsigned int renderOrder;
         float z;
         std::optional<GeometryGroup> group;
     };
 
     struct GLRenderList {
 
-        std::vector<std::shared_ptr<RenderItem>> opaque;
-        std::vector<std::shared_ptr<RenderItem>> transparent;
+        std::vector<RenderItem*> opaque;
+        std::vector<RenderItem*> transparent;
 
-        std::vector<std::shared_ptr<RenderItem>> renderItems;
-        int renderItemsIndex = 0;
+        std::vector<std::unique_ptr<RenderItem>> renderItems;
+        size_t renderItemsIndex = 0;
 
         explicit GLRenderList(GLProperties &properties);
 
         void init();
 
-        std::shared_ptr<RenderItem> getNextRenderItem(
+        RenderItem* getNextRenderItem(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                int groupOrder, float z, std::optional<GeometryGroup> group);
+                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void push(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                int groupOrder, float z, std::optional<GeometryGroup> group);
+                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void unshift(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                int groupOrder, float z, std::optional<GeometryGroup> group);
+                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void sort();
 
@@ -67,7 +67,7 @@ namespace threepp::gl {
 
         explicit GLRenderLists(GLProperties &properties) : properties(properties) {}
 
-        std::shared_ptr<GLRenderList> get(Scene *scene, int renderCallDepth) {
+        std::shared_ptr<GLRenderList> get(Scene *scene, size_t renderCallDepth) {
 
             if (!lists.count(scene->uuid)) {
 

@@ -372,7 +372,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     _localClippingEnabled = this->localClippingEnabled;
     _clippingEnabled = clipping.init(this->clippingPlanes, _localClippingEnabled, camera);
 
-    currentRenderList = renderLists.get(scene, (int) renderListStack.size());
+    currentRenderList = renderLists.get(scene, renderListStack.size());
     currentRenderList->init();
 
     renderListStack.emplace_back(currentRenderList);
@@ -466,7 +466,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     renderText();
 }
 
-void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder, bool sortObjects) {
+void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int groupOrder, bool sortObjects) {
 
     if (!object->visible) return;
 
@@ -569,7 +569,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
 }
 
 void GLRenderer::renderObjects(
-        std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
+        const std::vector<gl::RenderItem*> &renderList,
         Scene *scene,
         Camera *camera) {
 

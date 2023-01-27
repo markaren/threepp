@@ -262,10 +262,10 @@ namespace threepp {
         void projectObject(
                 Object3D* object,
                 Camera* camera,
-                int groupOrder, bool sortObjects);
+                unsigned int groupOrder, bool sortObjects);
 
         void renderObjects(
-                std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
+                const std::vector<gl::RenderItem*> &renderList,
                 Scene* scene, Camera* camera);
 
         void renderObject(
