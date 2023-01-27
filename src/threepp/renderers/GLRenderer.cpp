@@ -445,7 +445,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     if (!renderStateStack.empty()) {
 
-        currentRenderState = renderStateStack[renderStateStack.size() - 1];
+        currentRenderState = renderStateStack.back();
 
     } else {
 
@@ -456,7 +456,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     if (!renderListStack.empty()) {
 
-        currentRenderList = renderListStack[renderListStack.size() - 1];
+        currentRenderList = renderListStack.back();
 
     } else {
 
