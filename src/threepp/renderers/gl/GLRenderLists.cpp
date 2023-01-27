@@ -57,7 +57,6 @@ void gl::GLRenderList::init() {
 
     renderItems.clear();
     opaque.clear();
-    transmissive.clear();
     transparent.clear();
 }
 
@@ -130,11 +129,7 @@ void GLRenderList::unshift(
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
-    if (false /*material->transmission > 0.0*/) {
-
-        transmissive.insert(transmissive.begin(), renderItem);
-
-    } else if (material->transparent) {
+    if (material->transparent) {
 
         transparent.insert(transparent.begin(), renderItem);
 
@@ -147,7 +142,6 @@ void GLRenderList::unshift(
 void GLRenderList::sort() {
 
     if (opaque.size() > 1) std::stable_sort(opaque.begin(), opaque.end(), painterSortStable);
-    if (transmissive.size() > 1) std::stable_sort(transmissive.begin(), transmissive.end(), reversePainterSortStable);
     if (transparent.size() > 1) std::stable_sort(transparent.begin(), transparent.end(), reversePainterSortStable);
 }
 

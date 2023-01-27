@@ -402,7 +402,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
 
     if (blending == NoBlending) {
 
-        if (currentBlendingEnabled == true) {
+        if (currentBlendingEnabled) {
 
             disable(GL_BLEND);
             currentBlendingEnabled = false;
@@ -411,7 +411,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
         return;
     }
 
-    if (currentBlendingEnabled == false) {
+    if (!currentBlendingEnabled) {
 
         enable(GL_BLEND);
         currentBlendingEnabled = true;

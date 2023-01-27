@@ -8,29 +8,28 @@ using namespace threepp;
 int main() {
 
     Canvas canvas;
+    GLRenderer renderer(canvas);
+    renderer.checkShaderErrors = true;
+    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 5;
 
-    GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color::aliceblue);
-
     OrbitControls controls(camera, canvas);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->color.setRGB(1, 0, 0);
+    boxMaterial->color = Color::green;
     auto box = Mesh::create(boxGeometry, boxMaterial);
     scene->add(box);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->color.setHex(Color::yellow);
+    planeMaterial->color = Color::yellow;
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.setZ(-2);
+    plane->position.z = -2;
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -50,12 +49,12 @@ int main() {
     }));
 
     Raycaster raycaster;
-
     canvas.animate([&](float dt) {
         raycaster.setFromCamera(mouse, camera);
         auto intersects = raycaster.intersectObjects(scene->children);
 
-        for (auto &intersect : intersects) {
+        if (!intersects.empty()) {
+            auto &intersect = intersects.front();
 
             auto object = intersect.object;
 

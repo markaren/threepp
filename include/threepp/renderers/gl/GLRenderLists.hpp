@@ -28,7 +28,6 @@ namespace threepp::gl {
     struct GLRenderList {
 
         std::vector<std::shared_ptr<RenderItem>> opaque;
-        std::vector<std::shared_ptr<RenderItem>> transmissive;
         std::vector<std::shared_ptr<RenderItem>> transparent;
 
         std::vector<std::shared_ptr<RenderItem>> renderItems;

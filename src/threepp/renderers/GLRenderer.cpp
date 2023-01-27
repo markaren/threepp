@@ -7,10 +7,7 @@
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
 
-#define GLT_IMPLEMENTATION
-#define GLT_MANUAL_VIEWPORT
 #include <glad/glad.h>
-#include <gltext.h>
 
 using namespace threepp;
 
@@ -96,7 +93,7 @@ void GLRenderer::setViewport(const Vector4 &v) {
     state.viewport(_currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
 
     if (textEnabled_) {
-        gltViewport(static_cast<int>(v.z), static_cast<int>(v.w));
+        TextHandle::setViewport(static_cast<int>(v.z), static_cast<int>(v.w));
     }
 }
 
@@ -107,7 +104,7 @@ void GLRenderer::setViewport(int x, int y, int width, int height) {
     state.viewport(_currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
 
     if (textEnabled_) {
-        gltViewport(width, height);
+        TextHandle::setViewport(width, height);
     }
 }
 
@@ -413,11 +410,9 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     // render scene
 
     auto &opaqueObjects = currentRenderList->opaque;
-    auto &transmissiveObjects = currentRenderList->transmissive;
     auto &transparentObjects = currentRenderList->transparent;
     //
     if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene, camera);
-    if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene, camera);
     if (!transparentObjects.empty()) renderObjects(transparentObjects, scene, camera);
 
     //
@@ -443,14 +438,14 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     // finish
 
-    _currentMaterialId = -1;
+    _currentMaterialId = std::nullopt;
     _currentCamera = nullptr;
 
     renderStateStack.pop_back();
 
     if (!renderStateStack.empty()) {
 
-        currentRenderState = renderStateStack[renderStateStack.size() - 1];
+        currentRenderState = renderStateStack.back();
 
     } else {
 
@@ -461,7 +456,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     if (!renderListStack.empty()) {
 
-        currentRenderList = renderListStack[renderListStack.size() - 1];
+        currentRenderList = renderListStack.back();
 
     } else {
 
@@ -573,14 +568,6 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
     }
 }
 
-void GLRenderer::renderTransmissiveObjects(
-        std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects,
-        std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects,
-        Scene *scene,
-        Camera *camera) {
-    //TODO
-}
-
 void GLRenderer::renderObjects(
         std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
         Scene *scene,
@@ -595,30 +582,7 @@ void GLRenderer::renderObjects(
         auto material = overrideMaterial == nullptr ? renderItem->material : overrideMaterial.get();
         auto group = renderItem->group;
 
-        if (false /*camera.isArrayCamera*/) {
-
-            //            const cameras = camera.cameras;
-            //
-            //            for ( let j = 0, jl = cameras.length; j < jl; j ++ ) {
-            //
-            //                const camera2 = cameras[ j ];
-            //
-            //                if ( object.layers.test( camera2.layers ) ) {
-            //
-            //                    state.viewport( _currentViewport.copy( camera2.viewport ) );
-            //
-            //                    currentRenderState.setupLightsView( camera2 );
-            //
-            //                    renderObject( object, scene, camera2, geometry, material, group );
-            //
-            //                }
-            //
-            //            }
-
-        } else {
-
-            renderObject(object, scene, camera, geometry, material, group);
-        }
+        renderObject(object, scene, camera, geometry, material, group);
     }
 }
 
@@ -675,8 +639,8 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     auto lightsStateVersion = lights.state.version;
 
-    auto parameters = programCache.getParameters(*this, material, lights.state, static_cast<int>(shadowsArray.size()), scene, object);
-    auto programCacheKey = programCache.getProgramCacheKey(*this, parameters);
+    auto parameters = gl::GLPrograms::getParameters(*this, material, lights.state, static_cast<int>(shadowsArray.size()), scene, object);
+    auto programCacheKey = gl::GLPrograms::getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;
 
@@ -708,7 +672,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     } else {
 
-        parameters.uniforms = programCache.getUniforms(material);
+        parameters.uniforms = gl::GLPrograms::getUniforms(material);
 
         // material.onBuild( parameters, this );
 
@@ -996,7 +960,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
             materials.refreshFogUniforms(*m_uniforms, *fog);
         }
 
-        materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height /*, _transmissionRenderTarget*/);
+        materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height);
 
         gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
     }
@@ -1129,8 +1093,8 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
 
 void GLRenderer::enableTextRendering() {
     if (!textEnabled_) {
-        textEnabled_ = gltInit();
-        gltViewport(static_cast<int>(_viewport.z), static_cast<int>(_viewport.w));
+        textEnabled_ = TextHandle::init();
+        TextHandle::setViewport(static_cast<int>(_viewport.z), static_cast<int>(_viewport.w));
     }
 }
 
@@ -1143,7 +1107,7 @@ void GLRenderer::renderText() {
 
     if (textEnabled_ && !textHandles_.empty()) {
 
-        gltBeginDraw();
+        TextHandle::beginDraw();
         auto it = textHandles_.begin();
         while (it != textHandles_.end()) {
 
@@ -1155,14 +1119,13 @@ void GLRenderer::renderText() {
                 ++it;
             }
         }
-        gltEndDraw();
+        TextHandle::endDraw();
     }
-
 }
 
 GLRenderer::~GLRenderer() {
     if (textEnabled_) {
-        gltTerminate();
+        TextHandle::terminate();
     }
 }
 
@@ -1175,28 +1138,3 @@ void GLRenderer::OnMaterialDispose::onEvent(Event &event) {
 
     scope_.deallocateMaterial(*material);
 }
-
-struct TextHandle::Impl {
-
-    GLTtext *text = gltCreateText();
-
-    ~Impl() {
-        gltDeleteText(text);
-    }
-};
-
-TextHandle::TextHandle(const std::string &str)
-    : pimpl_(std::make_unique<Impl>()) {
-    setText(str);
-}
-
-void TextHandle::setText(const std::string &str) {
-    gltSetText(pimpl_->text, str.c_str());
-}
-
-void threepp::TextHandle::render() {
-    gltColor(color.r, color.g, color.b, alpha);
-    gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, horizontalAlignment, verticalAlignment);
-}
-
-TextHandle::~TextHandle() = default;

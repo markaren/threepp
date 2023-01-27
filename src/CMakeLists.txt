@@ -234,6 +234,7 @@ set(sources
 
         "threepp/utils/uuid.cpp"
 
+        "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
