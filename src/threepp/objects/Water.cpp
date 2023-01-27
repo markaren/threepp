@@ -165,16 +165,16 @@ struct Water::Impl {
         material->side = options.side.value_or(FrontSide);
         material->fog = options.fog.value_or(false);
 
-        material->uniforms->operator[]("mirrorSampler").setValue(renderTarget->texture);
-        material->uniforms->operator[]("textureMatrix").setValue(&textureMatrix);
-        material->uniforms->operator[]("alpha").setValue(alpha);
-        material->uniforms->operator[]("time").setValue(time);
-        material->uniforms->operator[]("normalSampler").setValue(options.waterNormals);
-        material->uniforms->operator[]("sunColor").setValue(sunColor);
-        material->uniforms->operator[]("waterColor").setValue(waterColor);
-        material->uniforms->operator[]("sunDirection").setValue(sunDirection);
-        material->uniforms->operator[]("distortionScale").setValue(distortionScale);
-        material->uniforms->operator[]("eye").setValue(eye);
+        (*material->uniforms)["mirrorSampler"].setValue(renderTarget->texture);
+        (*material->uniforms)["textureMatrix"].setValue(&textureMatrix);
+        (*material->uniforms)["alpha"].setValue(alpha);
+        (*material->uniforms)["time"].setValue(time);
+        (*material->uniforms)["normalSampler"].setValue(options.waterNormals);
+        (*material->uniforms)["sunColor"].setValue(sunColor);
+        (*material->uniforms)["waterColor"].setValue(waterColor);
+        (*material->uniforms)["sunDirection"].setValue(sunDirection);
+        (*material->uniforms)["distortionScale"].setValue(distortionScale);
+        (*material->uniforms)["eye"].setValue(eye);
 
         water_.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
             mirrorWorldPosition.setFromMatrixPosition(*water_.matrixWorld);

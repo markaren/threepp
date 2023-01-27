@@ -94,21 +94,20 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
 
 std::shared_ptr<UniformMap> GLPrograms::getUniforms(Material* material) {
 
-    std::shared_ptr<UniformMap> uniforms;
-
     if (shaderIDs.count(material->type())) {
 
         auto shaderID = shaderIDs.at(material->type());
 
-        auto shader = shaders::ShaderLib::instance().get(shaderID);
-        uniforms = std::make_shared<UniformMap>(shader.uniforms);
+        auto& shader = shaders::ShaderLib::instance().get(shaderID);
+        return std::make_shared<UniformMap>(shader.uniforms);
 
-    } else {
-
-        uniforms = material->uniforms;
     }
-
-    return uniforms;
+    auto shaderMaterial = material->as<ShaderMaterial>();
+    if (shaderMaterial) {
+        return shaderMaterial->uniforms;
+    } else {
+        return nullptr;
+    }
 }
 
 std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey) {

@@ -27,8 +27,8 @@ int main() {
     auto geometry = BoxGeometry::create(1000, 1000, 1000);
 
     auto material = RawShaderMaterial::create();
-    material->uniforms->operator[]("iTime") = Uniform();
-    material->uniforms->operator[]("iResolution") = Uniform(Vector2(size.width, size.height));
+    (*material->uniforms)["iTime"] = Uniform();
+    (*material->uniforms)["iResolution"] = Uniform(Vector2(size.width, size.height));
     material->vertexShader = vertexSource();
     material->fragmentShader = fragmentSource();
     material->side = DoubleSide;
@@ -38,15 +38,14 @@ int main() {
 
     canvas.onWindowResize([&](WindowSize size) {
         renderer.setSize(size);
-        material->uniforms->operator[]("iResolution").value<Vector2>().set(size.width, size.height);
+        material->uniforms->at("iResolution").value<Vector2>().set(size.width, size.height);
     });
 
     float value = 0.f;
-    mesh->rotation.setOrder(Euler::RotationOrders::YZX);
     canvas.animate([&](float dt) {
         value += 1 * dt;
         mesh->rotation.y = value;
-        material->uniforms->operator[]("iTime").setValue(value);
+        material->uniforms->at("iTime").setValue(value);
 
         renderer.render(scene, camera);
     });

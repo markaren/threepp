@@ -724,7 +724,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
     }
 
     auto progUniforms = program->getUniforms();
-    auto uniformsList = gl::GLUniforms::seqWithValue(progUniforms->seq, materialProperties.uniforms);
+    auto uniformsList = gl::GLUniforms::seqWithValue(progUniforms->seq, *materialProperties.uniforms);
 
     materialProperties.currentProgram = program;
     materialProperties.uniformsList = uniformsList;
@@ -962,7 +962,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
         materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height);
 
-        gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
+        gl::GLUniforms::upload(materialProperties.uniformsList, *m_uniforms, &textures);
     }
 
     if (isShaderMaterial) {
@@ -970,7 +970,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
         auto m = dynamic_cast<ShaderMaterial *>(material);
         if (m->uniformsNeedUpdate) {
 
-            gl::GLUniforms::upload(materialProperties.uniformsList, m_uniforms, &textures);
+            gl::GLUniforms::upload(materialProperties.uniformsList, *m_uniforms, &textures);
             m->uniformsNeedUpdate = false;
         }
     }

@@ -21,7 +21,7 @@ namespace {
         shadowMaterialVertical->fragmentShader = shaders::ShaderChunk::instance().get("vsm_frag");
 
         shadowMaterialVertical->defines["SAMPLE_RATE"] = std::to_string(2.f / 8.f);
-        shadowMaterialVertical->defines["HALF_SAMPLE_RATE"], std::to_string(1.f / 8.f);
+        shadowMaterialVertical->defines["HALF_SAMPLE_RATE"] = std::to_string(1.f / 8.f);
 
         shadowMaterialVertical->uniforms = std::make_shared<UniformMap>(UniformMap{
                 {"shadow_pass", Uniform()},
