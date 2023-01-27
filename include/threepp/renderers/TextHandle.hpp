@@ -4,6 +4,7 @@
 
 #include "threepp/math/Color.hpp"
 
+
 #include <string>
 #include <memory>
 
@@ -52,6 +53,15 @@ namespace threepp {
         bool invalidate_ = false;
 
         void render();
+
+        static void setViewport(int width, int height);
+
+        static bool init();
+
+        static void beginDraw();
+        static void endDraw();
+
+        static void terminate();
 
         friend class GLRenderer;
     };
