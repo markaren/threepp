@@ -72,13 +72,13 @@ struct Reflector::Impl {
         }
 
         auto material = ShaderMaterial::create();
-        material->uniforms = std::make_shared<UniformMap>(shader.uniforms);
+        material->uniforms = shader.uniforms;
         material->fragmentShader = shader.fragmentShader;
         material->vertexShader = shader.vertexShader;
 
-        material->uniforms->operator[]("tDiffuse").setValue(renderTarget->texture);
-        material->uniforms->operator[]("color").setValue(color);
-        material->uniforms->operator[]("textureMatrix").setValue(&textureMatrix);
+        material->uniforms["tDiffuse"].setValue(renderTarget->texture);
+        material->uniforms["color"].setValue(color);
+        material->uniforms["textureMatrix"].setValue(&textureMatrix);
 
         reflector.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
             reflectorWorldPosition.setFromMatrixPosition(*reflector_.matrixWorld);

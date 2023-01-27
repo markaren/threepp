@@ -31,7 +31,7 @@ namespace threepp::shaders {
         Shader shadow;
         Shader physical;
 
-        [[nodiscard]] Shader get(const std::string &name) const {
+        [[nodiscard]] Shader& get(const std::string &name) {
 
             if (name == "basic") {
                 return basic;

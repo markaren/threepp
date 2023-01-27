@@ -71,7 +71,7 @@ int main() {
     geometry->setAttribute("color", FloatBufferAttribute::create(colors, 4));
 
     auto material = RawShaderMaterial::create();
-    material->uniforms->operator[]("time") = Uniform();
+    material->uniforms["time"] = Uniform();
     material->vertexShader = vertexSource();
     material->fragmentShader = fragmentSource();
     material->side = DoubleSide;
@@ -87,11 +87,10 @@ int main() {
     });
 
     float value = 0.f;
-    mesh->rotation.setOrder(Euler::YZX);
     canvas.animate([&](float dt) {
         value += 0.005f ;
         mesh->rotation.y = value;
-        material->uniforms->operator[]("time").setValue(value * 10);
+        material->uniforms.at("time").setValue(value * 10);
 
         renderer.render(scene, camera);
     });
