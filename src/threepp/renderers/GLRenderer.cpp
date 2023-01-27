@@ -569,7 +569,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, int groupOrder,
 }
 
 void GLRenderer::renderObjects(
-        std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
+        const std::vector<gl::RenderItem*> &renderList,
         Scene *scene,
         Camera *camera) {
 

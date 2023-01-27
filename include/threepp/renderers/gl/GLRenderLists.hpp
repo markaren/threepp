@@ -27,17 +27,17 @@ namespace threepp::gl {
 
     struct GLRenderList {
 
-        std::vector<std::shared_ptr<RenderItem>> opaque;
-        std::vector<std::shared_ptr<RenderItem>> transparent;
+        std::vector<RenderItem*> opaque;
+        std::vector<RenderItem*> transparent;
 
-        std::vector<std::shared_ptr<RenderItem>> renderItems;
-        int renderItemsIndex = 0;
+        std::vector<std::unique_ptr<RenderItem>> renderItems;
+        size_t renderItemsIndex = 0;
 
         explicit GLRenderList(GLProperties &properties);
 
         void init();
 
-        std::shared_ptr<RenderItem> getNextRenderItem(
+        RenderItem* getNextRenderItem(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,

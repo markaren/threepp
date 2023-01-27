@@ -11,7 +11,7 @@ namespace {
 
     struct {
 
-        bool operator()(const std::shared_ptr<RenderItem> &a, const std::shared_ptr<RenderItem> &b) {
+        bool operator()(const RenderItem* a, const RenderItem* b) {
             if (a->groupOrder != b->groupOrder) {
                 return b->groupOrder > a->groupOrder;
             } else if (a->renderOrder != b->renderOrder) {
@@ -29,7 +29,7 @@ namespace {
     } painterSortStable;
 
     struct {
-        bool operator()(const std::shared_ptr<RenderItem> &a, const std::shared_ptr<RenderItem> &b) {
+        bool operator()(const RenderItem *a, const RenderItem *b) {
 
             if (a->groupOrder != b->groupOrder) {
                 return b->groupOrder > a->groupOrder;
@@ -60,30 +60,31 @@ void gl::GLRenderList::init() {
     transparent.clear();
 }
 
-std::shared_ptr<gl::RenderItem> gl::GLRenderList::getNextRenderItem(
+gl::RenderItem* gl::GLRenderList::getNextRenderItem(
         Object3D *object,
         BufferGeometry *geometry,
         Material *material,
         int groupOrder, float z, std::optional<GeometryGroup> group) {
 
-    std::shared_ptr<gl::RenderItem> renderItem = nullptr;
+    gl::RenderItem* renderItem = nullptr;
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
     if (renderItemsIndex >= renderItems.size()) {
-
-        renderItem = renderItems.emplace_back(std::make_shared<RenderItem>(RenderItem{(int) object->id,
-                                                                                      object,
-                                                                                      geometry,
-                                                                                      material,
-                                                                                      materialProperties.program.get(),
-                                                                                      groupOrder,
-                                                                                      object->renderOrder,
-                                                                                      z,
-                                                                                      group}));
+        auto r = std::make_unique<RenderItem>(RenderItem{(int) object->id,
+                                                object,
+                                                geometry,
+                                                material,
+                                                materialProperties.program.get(),
+                                                groupOrder,
+                                                object->renderOrder,
+                                                z,
+                                                group});
+        renderItems.emplace_back(std::move(r));
+        renderItem = renderItems.back().get();
 
     } else {
 
-        renderItem = renderItems.at(renderItemsIndex);
+        renderItem = renderItems.at(renderItemsIndex).get();
 
         renderItem->id = (int) object->id;
         renderItem->object = object;
@@ -149,9 +150,9 @@ void GLRenderList::finish() {
 
     // Clear references from inactive renderItems in the list
 
-    for (int i = renderItemsIndex, il = (int) renderItems.size(); i < il; i++) {
+    for (auto i = renderItemsIndex, il = renderItems.size(); i < il; i++) {
 
-        auto renderItem = renderItems.at(i);
+        auto& renderItem = renderItems.at(i);
 
         if (renderItem->id == -1) break;
 
