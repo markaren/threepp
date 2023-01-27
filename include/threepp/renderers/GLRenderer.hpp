@@ -139,64 +139,11 @@ namespace threepp {
 
         void dispose();
 
-        void deallocateMaterial(Material &material);
-
-        void releaseMaterialProgramReferences(Material &material);
-
-        void renderBufferDirect(
-                Camera* camera,
-                Scene* scene,
-                BufferGeometry* geometry,
-                Material* material,
-                Object3D* object,
-                std::optional<GeometryGroup> group);
-
         void render(Scene* scene, Camera* camera);
 
         void render(const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera> &camera) {
             render(scene.get(), camera.get());
         }
-
-        void projectObject(
-                Object3D* object,
-                Camera* camera,
-                int groupOrder, bool sortObjects);
-
-        void renderTransmissiveObjects(
-                std::vector<std::shared_ptr<gl::RenderItem>> &opaqueObjects,
-                std::vector<std::shared_ptr<gl::RenderItem>> &transmissiveObjects,
-                Scene* scene, Camera* camera);
-
-        void renderObjects(
-                std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
-                Scene* scene, Camera* camera);
-
-        void renderObject(
-                Object3D* object,
-                Scene* scene,
-                Camera* camera,
-                BufferGeometry* geometry,
-                Material *material,
-                std::optional<GeometryGroup> group);
-
-        std::shared_ptr<gl::GLProgram> getProgram(
-                Material* material,
-                Scene* scene,
-                Object3D* object);
-
-        void updateCommonMaterialProperties(
-                Material* material,
-                gl::ProgramParameters &parameters);
-
-        std::shared_ptr<gl::GLProgram> setProgram(
-                Camera* camera,
-                Scene* scene,
-                Material* material,
-                Object3D* object);
-
-        void markUniformsLightsNeedsUpdate(UniformMap &uniforms, bool value);
-
-        bool materialNeedsLights(Material* material);
 
         [[nodiscard]] int getActiveCubeFace() const {
 
@@ -299,6 +246,54 @@ namespace threepp {
 
         std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
         std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
+
+        void deallocateMaterial(Material &material);
+
+        void releaseMaterialProgramReferences(Material &material);
+
+        void renderBufferDirect(
+                Camera* camera,
+                Scene* scene,
+                BufferGeometry* geometry,
+                Material* material,
+                Object3D* object,
+                std::optional<GeometryGroup> group);
+
+        void projectObject(
+                Object3D* object,
+                Camera* camera,
+                int groupOrder, bool sortObjects);
+
+        void renderObjects(
+                std::vector<std::shared_ptr<gl::RenderItem>> &renderList,
+                Scene* scene, Camera* camera);
+
+        void renderObject(
+                Object3D* object,
+                Scene* scene,
+                Camera* camera,
+                BufferGeometry* geometry,
+                Material *material,
+                std::optional<GeometryGroup> group);
+
+        std::shared_ptr<gl::GLProgram> getProgram(
+                Material* material,
+                Scene* scene,
+                Object3D* object);
+
+        void updateCommonMaterialProperties(
+                Material* material,
+                gl::ProgramParameters &parameters);
+
+        std::shared_ptr<gl::GLProgram> setProgram(
+                Camera* camera,
+                Scene* scene,
+                Material* material,
+                Object3D* object);
+
+        void markUniformsLightsNeedsUpdate(UniformMap &uniforms, bool value);
+
+        bool materialNeedsLights(Material* material);
 
         void renderText();
 
