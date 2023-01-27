@@ -438,7 +438,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     // finish
 
-    _currentMaterialId = -1;
+    _currentMaterialId = std::nullopt;
     _currentCamera = nullptr;
 
     renderStateStack.pop_back();

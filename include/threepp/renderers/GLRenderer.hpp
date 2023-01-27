@@ -195,7 +195,7 @@ namespace threepp {
         int _currentActiveCubeFace = 0;
         int _currentActiveMipmapLevel = 0;
         std::shared_ptr<GLRenderTarget> _currentRenderTarget = nullptr;
-        unsigned int _currentMaterialId = -1;
+        std::optional<unsigned int> _currentMaterialId;
 
         Camera* _currentCamera = nullptr;
         Vector4 _currentViewport;
