@@ -64,13 +64,13 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
         Object3D *object,
         BufferGeometry *geometry,
         Material *material,
-        int groupOrder, float z, std::optional<GeometryGroup> group) {
+        unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     gl::RenderItem* renderItem = nullptr;
     auto &materialProperties = properties.materialProperties.get(material->uuid);
 
     if (renderItemsIndex >= renderItems.size()) {
-        auto r = std::make_unique<RenderItem>(RenderItem{(int) object->id,
+        auto r = std::make_unique<RenderItem>(RenderItem{object->id,
                                                 object,
                                                 geometry,
                                                 material,
@@ -86,7 +86,7 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
 
         renderItem = renderItems.at(renderItemsIndex).get();
 
-        renderItem->id = (int) object->id;
+        renderItem->id = object->id;
         renderItem->object = object;
         renderItem->geometry = geometry;
         renderItem->material = material;
@@ -108,7 +108,7 @@ void gl::GLRenderList::push(
         Object3D *object,
         BufferGeometry *geometry,
         Material *material,
-        int groupOrder, float z, std::optional<GeometryGroup> group) {
+        unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
@@ -126,7 +126,7 @@ void GLRenderList::unshift(
         Object3D *object,
         BufferGeometry *geometry,
         Material *material,
-        int groupOrder, float z, std::optional<GeometryGroup> group) {
+        unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
@@ -154,9 +154,9 @@ void GLRenderList::finish() {
 
         auto& renderItem = renderItems.at(i);
 
-        if (renderItem->id == -1) break;
+        if (!renderItem->id) break;
 
-        renderItem->id = -1;
+        renderItem->id = std::nullopt;
         renderItem->object = nullptr;
         renderItem->geometry = nullptr;
         renderItem->material = nullptr;

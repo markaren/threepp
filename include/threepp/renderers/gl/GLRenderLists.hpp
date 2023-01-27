@@ -14,13 +14,13 @@ namespace threepp::gl {
 
     struct RenderItem {
 
-        int id;
+        std::optional<unsigned int> id;
         Object3D* object;
         BufferGeometry* geometry;
         Material* material;
         GLProgram* program;
-        int groupOrder;
-        int renderOrder;
+        unsigned int groupOrder;
+        unsigned int renderOrder;
         float z;
         std::optional<GeometryGroup> group;
     };
@@ -41,19 +41,19 @@ namespace threepp::gl {
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                int groupOrder, float z, std::optional<GeometryGroup> group);
+                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void push(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                int groupOrder, float z, std::optional<GeometryGroup> group);
+                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void unshift(
                 Object3D* object,
                 BufferGeometry* geometry,
                 Material* material,
-                int groupOrder, float z, std::optional<GeometryGroup> group);
+                unsigned int groupOrder, float z, std::optional<GeometryGroup> group);
 
         void sort();
 
@@ -67,7 +67,7 @@ namespace threepp::gl {
 
         explicit GLRenderLists(GLProperties &properties) : properties(properties) {}
 
-        std::shared_ptr<GLRenderList> get(Scene *scene, int renderCallDepth) {
+        std::shared_ptr<GLRenderList> get(Scene *scene, size_t renderCallDepth) {
 
             if (!lists.count(scene->uuid)) {
 

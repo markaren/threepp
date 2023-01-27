@@ -67,7 +67,7 @@ namespace threepp {
         bool receiveShadow = false;
 
         bool frustumCulled = true;
-        int renderOrder = 0;
+        unsigned int renderOrder = 0;
 
         std::optional<RenderCallback> onBeforeRender;
         std::optional<RenderCallback> onAfterRender;
