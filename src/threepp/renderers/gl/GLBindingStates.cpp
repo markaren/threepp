@@ -3,7 +3,7 @@
 
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 
-#include "threepp/renderers/gl/glHelper.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;

@@ -165,7 +165,6 @@ endforeach ()
 
 set(privateHeaders
 
-        "threepp/renderers/gl/glHelper.hpp"
         "threepp/renderers/gl/GLUtils.hpp"
         "threepp/renderers/gl/UniformUtils.hpp"
 

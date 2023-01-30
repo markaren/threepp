@@ -9,7 +9,13 @@
 
 namespace threepp::gl {
 
-    inline GLuint convert(int p) {
+    inline GLint glGetParameter(GLenum id) {
+        GLint result;
+        glGetIntegerv(id, &result);
+        return result;
+    }
+
+    constexpr inline GLuint convert(int p) {
 
         if (p == UnsignedByteType) return GL_UNSIGNED_BYTE;
         if (p == UnsignedShort4444Type) return GL_UNSIGNED_SHORT_4_4_4_4;
