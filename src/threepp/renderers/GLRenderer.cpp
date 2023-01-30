@@ -1120,6 +1120,7 @@ void GLRenderer::renderText() {
             }
         }
         TextHandle::endDraw();
+        bindingStates.reset();
     }
 }
 

@@ -10,7 +10,12 @@ struct MyGui: public imgui_context {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas &canvas) : imgui_context(canvas.window_ptr()) {}
+    explicit MyGui(const Canvas &canvas, const MeshBasicMaterial& m) : imgui_context(canvas.window_ptr()) {
+        colorBuf_[0] = m.color.r;
+        colorBuf_[1] = m.color.g;
+        colorBuf_[2] = m.color.b;
+        colorBuf_[3] = m.opacity;
+    }
 
     void onRender() override {
 
@@ -63,6 +68,8 @@ int main() {
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
+//    OrbitControls controls{camera, canvas};
+
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
     boxMaterial->color.setRGB(1,0,0);
@@ -106,11 +113,11 @@ int main() {
     handle.color = Color::red;
 
 #ifdef HAS_IMGUI
-    MyGui ui(canvas);
+    MyGui ui(canvas, *planeMaterial);
 #endif
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
-        handle.setText("Delta=" + std::to_string(dt));
+        handle.text = "Delta=" + std::to_string(dt);
 
         renderer.render(scene, camera);
 
