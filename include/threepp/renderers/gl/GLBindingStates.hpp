@@ -73,7 +73,7 @@ namespace threepp::gl {
 
         void disableUnusedAttributes();
 
-        void vertexAttribPointer(unsigned int index, int size, unsigned int type, bool normalized, int stride, int offset);
+        void vertexAttribPointer(unsigned int index, int size, unsigned int type, bool normalized, int stride, size_t offset);
 
         void setupVertexAttributes(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry);
 

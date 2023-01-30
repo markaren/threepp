@@ -75,7 +75,7 @@ void gl::ColorBuffer::setLocked(bool lock) {
 
 void gl::ColorBuffer::setClear(float r, float g, float b, float a, bool premultipliedAlpha) {
 
-    if (premultipliedAlpha == true) {
+    if (premultipliedAlpha) {
 
         r *= a;
         g *= a;

@@ -361,7 +361,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     //
     //    if ( scene.isScene === true ) scene.onBeforeRender( _this, scene, camera, _currentRenderTarget );
 
-    currentRenderState = renderStates.get(scene, (int) renderStateStack.size());
+    currentRenderState = renderStates.get(scene, renderStateStack.size());
     currentRenderState->init();
 
     renderStateStack.emplace_back(currentRenderState);
@@ -639,7 +639,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     auto lightsStateVersion = lights.state.version;
 
-    auto parameters = gl::GLPrograms::getParameters(*this, material, lights.state, static_cast<int>(shadowsArray.size()), scene, object);
+    auto parameters = gl::GLPrograms::getParameters(*this, material, lights.state, shadowsArray.size(), scene, object);
     auto programCacheKey = gl::GLPrograms::getProgramCacheKey(*this, parameters);
 
     auto &programs = materialProperties.programs;

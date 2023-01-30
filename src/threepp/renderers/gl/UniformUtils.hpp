@@ -45,7 +45,7 @@ namespace {
 
         if (a.size() != b.size()) return false;
 
-        for (int i = 0, l = (int) a.size(); i < l; i++) {
+        for (unsigned i = 0, l = a.size(); i < l; ++i) {
 
             if (a[i] != b[i]) return false;
         }
@@ -56,7 +56,7 @@ namespace {
     template<class ArrayLike1, class ArrayLike2>
     void copyArray(ArrayLike1 &a, const ArrayLike2 &b) {
 
-        for (int i = 0, l = (int) b.size(); i < l; i++) {
+        for (unsigned i = 0, l = b.size(); i < l; ++i) {
 
             a[i] = b[i];
         }

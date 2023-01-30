@@ -7,7 +7,7 @@ using namespace threepp;
 
 void gl::GLInfo::update(int count, unsigned int mode, int instanceCount) {
 
-    render.calls++;
+    ++render.calls;
 
     switch (mode) {
 
@@ -38,7 +38,7 @@ void gl::GLInfo::update(int count, unsigned int mode, int instanceCount) {
 }
 void gl::GLInfo::reset() {
 
-    render.frame++;
+    ++render.frame;
     render.calls = 0;
     render.triangles = 0;
     render.points = 0;

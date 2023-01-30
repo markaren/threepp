@@ -61,17 +61,16 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 shadowUniforms->at("shadowMapSize") = shadow->mapSize;
 
-//                state.directionalShadow.resize(directionalLength + 1);
                 state.directionalShadow.emplace_back(shadowUniforms);
                 state.directionalShadowMap[directionalLength] = shadow->map->texture;
                 state.directionalShadowMatrix[directionalLength] = shadow->matrix;
 
-                numDirectionalShadows++;
+                ++numDirectionalShadows;
             }
 
             state.directional.emplace_back(uniforms);
 
-            directionalLength++;
+            ++directionalLength;
 
         } else if (light->is<SpotLight>()) {
 
@@ -97,17 +96,16 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 shadowUniforms->at("shadowMapSize") = shadow->mapSize;
 
-//                state.spotShadow.resize(spotLength + 1);
                 state.spotShadow.emplace_back(shadowUniforms);
                 state.spotShadowMap[spotLength] = shadow->map->texture;
                 state.spotShadowMatrix[spotLength] = shadow->matrix;
 
-                numSpotShadows++;
+                ++numSpotShadows;
             }
 
             state.spot.emplace_back(uniforms);
 
-            spotLength++;
+            ++spotLength;
 
         } else if (light->as<PointLight>()) {
 
@@ -131,17 +129,16 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 shadowUniforms->at("shadowCameraNear") = shadow->camera->near;
                 shadowUniforms->at("shadowCameraFar") = shadow->camera->far;
 
-//                state.pointShadow.resize(pointLength + 1);
                 state.pointShadow.emplace_back(shadowUniforms);
                 state.pointShadowMap[pointLength] = shadow->map->texture;
                 state.pointShadowMatrix[pointLength] = shadow->matrix;
 
-                numPointShadows++;
+                ++numPointShadows;
             }
 
             state.point.emplace_back(uniforms);
 
-            pointLength++;
+            ++pointLength;
         }
     }
 
@@ -178,7 +175,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
         hash.numPointShadows = numPointShadows;
         hash.numSpotShadows = numSpotShadows;
 
-        state.version = nextVersion++;
+        ++state.version = nextVersion;
     }
 }
 
@@ -206,7 +203,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
-            directionalLength++;
+            ++directionalLength;
 
         } else if (light->as<SpotLight>()) {
 
@@ -226,7 +223,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
-            spotLength++;
+            ++spotLength;
 
         } else if (light->as<PointLight>()) {
 
@@ -237,7 +234,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             position.setFromMatrixPosition(*light->matrixWorld);
             position.applyMatrix4(viewMatrix);
 
-            pointLength++;
+            ++pointLength;
         }
     }
 }

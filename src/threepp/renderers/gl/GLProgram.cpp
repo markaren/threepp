@@ -63,7 +63,7 @@ namespace {
         auto start = std::stoi(match[1].str());
         auto end = std::stoi(match[2].str());
 
-        for (int i = start; i < end; i++) {
+        for (int i = start; i < end; ++i) {
 
             s += std::regex_replace(match[3].str(), std::regex("\\[\\s*i\\s*\\]"), "[ " + std::to_string(i) + " ]");
             s = std::regex_replace(s, std::regex("UNROLLED_LOOP_INDEX"), std::to_string(i));
@@ -144,7 +144,7 @@ namespace {
         GLint size;
         GLenum type;
         GLchar nameBuffer[256];
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < n; ++i) {
 
             glGetActiveAttrib(program, i, 256, &length, &size, &type, nameBuffer);
 
@@ -209,7 +209,7 @@ namespace {
                 throw std::logic_error(ss.str());
             }
             result.append(r);
-            rex_it++;
+            ++rex_it;
         }
 
         if (pos == 0) return str;
@@ -499,11 +499,9 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
 
             };
 
-            v.erase(
-                    std::remove_if(
-                            v.begin(),
-                            v.end(),
-                            [](const std::string &s) { return s.empty(); }),
+            v.erase(std::remove_if(v.begin(), v.end(), [](const std::string &s) {
+                        return s.empty();
+                    }),
                     v.end());
 
             prefixVertex = utils::join(v);
