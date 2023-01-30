@@ -68,8 +68,6 @@ int main() {
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
-//    OrbitControls controls{camera, canvas};
-
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
     boxMaterial->color.setRGB(1,0,0);
@@ -117,7 +115,7 @@ int main() {
 #endif
     canvas.animate([&](float dt) {
         box->rotation.y +=  0.5f * dt;
-        handle.text = "Delta=" + std::to_string(dt);
+        handle.setText("Delta=" + std::to_string(dt));
 
         renderer.render(scene, camera);
 
