@@ -53,12 +53,15 @@ int main() {
 
 std::string vertexSource() {
 
-    return "uniform mat4 modelViewMatrix; // optional\n"
-           "        uniform mat4 projectionMatrix; // optional\n"
-           "        attribute vec3 position;\n"
-           "        void main()\t{\n"
-           "            gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );\n"
-           "        }";
+    return "#version 330 core\n\n"
+           "#define attribute in\n"
+           "#define varying out\n"
+           "uniform mat4 modelViewMatrix; // optional\n"
+           "uniform mat4 projectionMatrix; // optional\n"
+           "attribute vec3 position;\n\n"
+           "void main() {\n"
+           "  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );\n"
+           "}";
 }
 
 std::string fragmentSource() {
@@ -69,6 +72,10 @@ std::string fragmentSource() {
            "     * Contact: tdmaav@gmail.com\n"
            "     */\n"
            "    \n"
+           "#   version 330 core\n\n"
+           "#   define varying in\n"
+           "    out highp vec4 pc_fragColor;\n"
+           "    #define gl_FragColor pc_fragColor\n"
            "    uniform float iTime;\n"
            "    uniform vec2 iResolution;\n"
            "    \n"

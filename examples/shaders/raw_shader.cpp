@@ -7,29 +7,36 @@ namespace {
 
     std::string vertexSource() {
 
-        return "uniform mat4 modelViewMatrix; // optional\n"
-               "\t\t\tuniform mat4 projectionMatrix; // optional\n"
-               "\t\t\tattribute vec3 position;\n"
-               "\t\t\tattribute vec4 color;\n"
-               "\t\t\tvarying vec3 vPosition;\n"
-               "\t\t\tvarying vec4 vColor;\n"
-               "\t\t\tvoid main()\t{\n"
-               "\t\t\t\tvPosition = position;\n"
-               "\t\t\t\tvColor = color;\n"
-               "\t\t\t\tgl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );\n"
-               "\t\t\t}";
+        return "#version 330 core\n\n"
+               "#define attribute in\n"
+               "#define varying out\n"
+               "uniform mat4 modelViewMatrix; // optional\n"
+               "uniform mat4 projectionMatrix; // optional\n"
+               "attribute vec3 position;\n"
+               "attribute vec4 color;\n"
+               "varying vec3 vPosition;\n"
+               "varying vec4 vColor;\n\n"
+               "void main()\t{\n"
+               "\tvPosition = position;\n"
+               "\tvColor = color;\n"
+               "\tgl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );\n"
+               "}";
     }
 
     std::string fragmentSource() {
 
-        return "uniform float time;\n"
-               "\t\t\tvarying vec3 vPosition;\n"
-               "\t\t\tvarying vec4 vColor;\n"
-               "\t\t\tvoid main()\t{\n"
-               "\t\t\t\tvec4 color = vec4( vColor );\n"
-               "\t\t\t\tcolor.r += sin( vPosition.x * 10.0 + time ) * 0.5;\n"
-               "\t\t\t\tgl_FragColor = color;\n"
-               "\t\t\t}";
+        return "#version 330 core\n\n"
+               "#define varying in\n"
+               "out highp vec4 pc_fragColor;\n"
+               "#define gl_FragColor pc_fragColor\n"
+               "uniform float time;\n"
+               "varying vec3 vPosition;\n"
+               "varying vec4 vColor;\n\n"
+               "void main()\t{\n"
+               "\tvec4 color = vec4( vColor );\n"
+               "\tcolor.r += sin( vPosition.x * 10.0 + time ) * 0.5;\n"
+               "\tgl_FragColor = color;\n"
+               "}";
     }
 
 }// namespace
