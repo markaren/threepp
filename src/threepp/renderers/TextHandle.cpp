@@ -8,31 +8,18 @@
 
 using namespace threepp;
 
-struct TextHandle::Impl {
-
-    GLTtext *text = gltCreateText();
-
-    ~Impl() {
-        gltDeleteText(text);
-    }
-};
-
-TextHandle::TextHandle(const std::string &str)
-    : pimpl_(std::make_unique<Impl>()) {
-    setText(str);
-}
+TextHandle::TextHandle(const std::string &str): text(str) {}
 
 bool threepp::TextHandle::init() {
     return gltInit();
 }
 
-void TextHandle::setText(const std::string &str) {
-    gltSetText(pimpl_->text, str.c_str());
-}
-
 void threepp::TextHandle::render() {
+    GLTtext *txt = gltCreateText();
+    gltSetText(txt, text.c_str());
     gltColor(color.r, color.g, color.b, alpha);
-    gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, horizontalAlignment, verticalAlignment);
+    gltDrawText2DAligned(txt, static_cast<float>(x), static_cast<float>(y), scale, horizontalAlignment, verticalAlignment);
+    gltDeleteText(txt);
 }
 
 void threepp::TextHandle::setViewport(int width, int height) {

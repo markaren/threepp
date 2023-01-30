@@ -855,7 +855,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     auto p_uniforms = program->getUniforms();
     auto &m_uniforms = materialProperties.uniforms;
 
-    if (state.useProgram(program->program)) {
+    if (state.useProgram(program->program, textEnabled_)) {
 
         refreshProgram = true;
         refreshMaterial = true;

@@ -21,6 +21,7 @@ namespace threepp {
         int x = 0;
         int y = 0;
         float scale = 1;
+        std::string text;
 
         Color color;
         float alpha = 1;
@@ -28,8 +29,6 @@ namespace threepp {
         Alignment verticalAlignment{0};
 
         explicit TextHandle(const std::string& str);
-
-        void setText(const std::string& str);
 
         void setPosition(int xPos, int yPos) {
             x = xPos;
@@ -47,8 +46,7 @@ namespace threepp {
         ~TextHandle();
 
     private:
-        struct Impl;
-        std::unique_ptr<Impl> pimpl_;
+
 
         bool invalidate_ = false;
 
