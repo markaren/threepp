@@ -149,7 +149,7 @@ namespace threepp::gl {
 
         bool bindFramebuffer(int target, unsigned int framebuffer);
 
-        bool useProgram(unsigned int program);
+        bool useProgram(unsigned int program, bool force);
 
         void setBlending(
                 int blending,

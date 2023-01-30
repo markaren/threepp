@@ -14,6 +14,7 @@ GLBindingStates::GLBindingStates(GLAttributes &attributes)
       defaultState_(createBindingState(std::nullopt)),
       currentState_(defaultState_) {
 }
+
 void GLBindingStates::setup(Object3D *object, Material *material, std::shared_ptr<GLProgram> &program, BufferGeometry *geometry, BufferAttribute *index) {
 
     auto state = getBindingState(geometry, program, material);
@@ -352,5 +353,5 @@ void GLBindingStates::reset() {
     if (currentState_ == defaultState_) return;
 
     currentState_ = defaultState_;
-    bindVertexArrayObject(*currentState_->object);
+    bindVertexArrayObject(currentState_->object.value_or(0));
 }

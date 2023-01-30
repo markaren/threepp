@@ -52,4 +52,3 @@ void threepp::TextHandle::endDraw() {
 }
 
 TextHandle::~TextHandle() = default;
-
