@@ -14,7 +14,7 @@ however much remains to be done..
 * 2D Textures
 * Transparency
 * OrbitControls
-* AmbientLight, DirectionalLight, PointLight  
+* AmbientLight, DirectionalLight, PointLight, SpotLight 
 * Most materials
 * RenderTarget
 * Raycasting against Mesh
@@ -22,7 +22,9 @@ however much remains to be done..
 * OBJ/MTL Loader
 * Generic model loader based on Assimp
 * Easy integration with imgui
+* Easy to use text rendering
 
+Builds on Windows, Linux, MacOS, MinGW.
 
 ### But, but why?
 
@@ -40,6 +42,13 @@ Call CMake with `-DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcp
 Add optional features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;feature2`
 
 See [vcpkg.json](vcpkg.json) for available features.
+
+###### Building under MinGW
+
+Under MinGW you'll need to specify the vcpkg triplet.
+```shell
+-DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic
+```
 
 #### conan
 
