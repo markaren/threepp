@@ -175,7 +175,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
         hash.numPointShadows = numPointShadows;
         hash.numSpotShadows = numSpotShadows;
 
-        ++state.version = nextVersion;
+        state.version = nextVersion++;
     }
 }
 
