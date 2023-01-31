@@ -18,7 +18,7 @@ void GLGeometries::get(BufferGeometry &geometry) {
 
     geometries_[geometry.id] = true;
 
-    info_.memory.geometries++;
+    ++info_.memory.geometries;
 }
 
 void GLGeometries::update(BufferGeometry &geometry) {
@@ -46,7 +46,7 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry &geometry) {
         const auto &array = geometryIndex->array();
         version = geometryIndex->version;
 
-        for (int i = 0, l = (int) array.size(); i < l; i += 3) {
+        for (unsigned i = 0, l = array.size(); i < l; i += 3) {
 
             const auto a = array[i + 0];
             const auto b = array[i + 1];
@@ -146,5 +146,5 @@ void GLGeometries::OnGeometryDispose::onEvent(Event &event) {
         ig->_maxInstanceCount = 0;
     }
 
-    scope_.info_.memory.geometries--;
+    --scope_.info_.memory.geometries;
 }

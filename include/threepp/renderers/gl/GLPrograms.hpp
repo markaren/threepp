@@ -48,7 +48,7 @@ namespace threepp {
                     const GLRenderer &renderer,
                     Material *material,
                     const GLLights::LightState &lights,
-                    int numShadows,
+                    size_t numShadows,
                     Scene* scene,
                     Object3D* object);
 

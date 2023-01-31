@@ -3,7 +3,7 @@
 
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 
-#include "threepp/renderers/gl/glHelper.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -120,7 +120,7 @@ bool GLBindingStates::needsUpdate(BufferGeometry *geometry, BufferAttribute *ind
 
         //  if (cachedAttribute.data != geometryAttribute.data) return true;
 
-        attributesNum++;
+        ++attributesNum;
     }
 
     if (currentState_->attributesNum != attributesNum) return true;
@@ -140,7 +140,7 @@ void GLBindingStates::saveCache(BufferGeometry *geometry, BufferAttribute *index
 
         cache[key] = attribute.get();
 
-        attributesNum++;
+        ++attributesNum;
     }
 
     currentState_->attributes = cache;
@@ -190,7 +190,7 @@ void GLBindingStates::disableUnusedAttributes() {
     const auto &newAttributes = currentState_->newAttributes;
     auto &enabledAttributes = currentState_->enabledAttributes;
 
-    for (int i = 0, il = (int) enabledAttributes.size(); i < il; i++) {
+    for (unsigned i = 0, il = enabledAttributes.size(); i < il; ++i) {
 
         if (enabledAttributes[i] != newAttributes[i]) {
 
@@ -200,7 +200,7 @@ void GLBindingStates::disableUnusedAttributes() {
     }
 }
 
-void GLBindingStates::vertexAttribPointer(GLuint index, GLint size, GLenum type, bool normalized, GLsizei stride, int offset) {
+void GLBindingStates::vertexAttribPointer(GLuint index, GLint size, GLenum type, bool normalized, GLsizei stride, size_t offset) {
 
     if (type == GL_INT || type == GL_UNSIGNED_INT) {
 

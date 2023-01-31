@@ -1,7 +1,7 @@
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 
-#include "threepp/renderers/gl/glHelper.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
 using namespace threepp::gl;
 

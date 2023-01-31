@@ -389,7 +389,7 @@ namespace {
                 container = dynamic_cast<Container *>(container->map.at(id).get());
             }
 
-            rex_it++;
+            ++rex_it;
         }
     }
 
@@ -399,10 +399,10 @@ namespace {
 
 GLUniforms::GLUniforms(unsigned int program) {
 
-    int n;
+    int n{};
     glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &n);
 
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; ++i) {
 
         ActiveUniformInfo info(program, i);
         GLint addr = glGetUniformLocation(program, info.name.c_str());

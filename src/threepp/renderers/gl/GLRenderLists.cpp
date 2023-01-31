@@ -99,7 +99,7 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
         renderItem->group = group;
     }
 
-    renderItemsIndex++;
+    ++renderItemsIndex;
 
     return renderItem;
 }
@@ -150,7 +150,7 @@ void GLRenderList::finish() {
 
     // Clear references from inactive renderItems in the list
 
-    for (auto i = renderItemsIndex, il = renderItems.size(); i < il; i++) {
+    for (auto i = renderItemsIndex, il = renderItems.size(); i < il; ++i) {
 
         auto& renderItem = renderItems.at(i);
 

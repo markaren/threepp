@@ -62,7 +62,7 @@ namespace threepp::gl {
 
         GLRenderStates() = default;
 
-        std::shared_ptr<GLRenderState> get(Scene *scene, int renderCallDepth = 1) {
+        std::shared_ptr<GLRenderState> get(Scene *scene, size_t renderCallDepth = 1) {
 
             if (renderCallDepth >= renderStates_[scene->uuid].size()) {
 

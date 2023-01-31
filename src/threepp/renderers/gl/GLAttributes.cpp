@@ -114,7 +114,7 @@ void GLAttributes::update(BufferAttribute *attribute, GLenum bufferType) {
 
         if (data.version < attribute->version) {
             updateBuffer(data.buffer, attribute, bufferType, data.bytesPerElement);
-            data.version++;
+            ++data.version;
         }
     }
 }

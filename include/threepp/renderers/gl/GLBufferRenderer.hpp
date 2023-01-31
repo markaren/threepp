@@ -49,8 +49,8 @@ namespace threepp::gl {
 
 
     private:
-        int type_;
-        int bytesPerElement_;
+        int type_{};
+        size_t bytesPerElement_{};
     };
 
 }// namespace threepp::gl

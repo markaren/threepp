@@ -128,10 +128,10 @@ void gl::GLTextures::uploadTexture(TextureProperties &textureProperties, Texture
 
     if (!mipmaps.empty()) {
 
-        for (size_t i = 0, il = mipmaps.size(); i < il; i++) {
+        for (int i = 0; i < mipmaps.size(); ++i) {
 
             const auto &mipmap = mipmaps[i];
-            state.texImage2D(GL_TEXTURE_2D, (GLint) i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());
+            state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());
         }
 
         texture.generateMipmaps = false;
@@ -165,7 +165,7 @@ void gl::GLTextures::initTexture(TextureProperties &textureProperties, Texture &
         glGenTextures(1, &glTexture);
         textureProperties.glTexture = glTexture;
 
-        info.memory.textures++;
+        ++info.memory.textures;
     }
 }
 
@@ -193,7 +193,7 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget *renderTarget) {
 
         glDeleteTextures(1, &textureProperties.glTexture.value());
 
-        info.memory.textures--;
+        --info.memory.textures;
     }
 
     if (renderTarget->depthTexture) {
@@ -489,7 +489,7 @@ void gl::GLTextures::TextureEventListener::onEvent(Event &event) {
 
     scope_.deallocateTexture(texture);
 
-    scope_.info.memory.textures--;
+    --scope_.info.memory.textures;
 }
 
 void gl::GLTextures::RenderTargetEventListener::onEvent(Event &event) {

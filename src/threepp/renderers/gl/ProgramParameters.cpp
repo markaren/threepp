@@ -21,7 +21,7 @@ namespace {
 ProgramParameters::ProgramParameters(
         const GLRenderer &renderer,
         const GLLights::LightState &lights,
-        int numShadows,
+        size_t numShadows,
         Object3D *object,
         Scene *scene,
         Material *material,
