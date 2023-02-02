@@ -14,6 +14,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    camera->layers.enableAll();
     camera->position.z = 5;
 
     OrbitControls controls(camera, canvas);
@@ -32,6 +33,15 @@ int main() {
     plane->position.z = -2;
     scene->add(plane);
 
+    float sphereRadius = 0.1f;
+    const auto sphereGeometry = SphereGeometry::create(sphereRadius);
+    const auto sphereMaterial = MeshBasicMaterial::create();
+    sphereMaterial->color = Color::black;
+    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
+    sphere->visible = false;
+    sphere->layers.set(1);
+    scene->add(sphere);
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
@@ -49,20 +59,23 @@ int main() {
     }));
 
     Raycaster raycaster;
+
     canvas.animate([&](float dt) {
+
         raycaster.setFromCamera(mouse, camera);
+
+        sphere->visible = false;
         auto intersects = raycaster.intersectObjects(scene->children);
 
         if (!intersects.empty()) {
             auto &intersect = intersects.front();
 
-            auto object = intersect.object;
-
-            auto mesh = dynamic_cast<Mesh *>(object);
-            if (mesh) {
-                auto colorMaterial = std::dynamic_pointer_cast<MaterialWithColor>(mesh->material());
-                if (colorMaterial) colorMaterial->color.randomize();
+            sphere->position.copy(intersect.point);
+            if (intersect.face) {
+                sphere->position += (intersect.face.value().normal * sphereRadius);
             }
+            sphere->visible = true;
+
         }
 
         renderer.render(scene, camera);
