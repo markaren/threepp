@@ -10,12 +10,12 @@ namespace threepp {
     public:
         Layers() : mask_(1 | 0) {}
 
-        void set(int channel) {
+        void set(unsigned int channel) {
 
             this->mask_ = 1 << channel | 0;
         }
 
-        void enable(int channel) {
+        void enable(unsigned int channel) {
 
             this->mask_ |= 1 << channel | 0;
         }
@@ -25,12 +25,12 @@ namespace threepp {
             this->mask_ = 0xffffffff | 0;
         }
 
-        void toggle(int channel) {
+        void toggle(unsigned int channel) {
 
             this->mask_ ^= 1 << channel | 0;
         }
 
-        void disable(int channel) {
+        void disable(unsigned int channel) {
 
             this->mask_ &= ~(1 << channel | 0);
         }
@@ -43,6 +43,11 @@ namespace threepp {
         bool test(Layers &layers) const {
 
             return (this->mask_ & layers.mask_) != 0;
+        }
+
+        [[nodiscard]] bool isEnabled(unsigned int channel) const {
+
+            return (mask_ & (1 << channel | 0)) != 0;
         }
 
 
