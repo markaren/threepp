@@ -283,6 +283,12 @@ namespace {
 
 std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool tryLoadMtl) {
 
+    if (!exists(path)) return nullptr;
+
+    if (cache_.count(path.string())) {
+        return cache_[path.string()];
+    }
+
     std::ifstream in(path);
 
     if (tryLoadMtl) {
