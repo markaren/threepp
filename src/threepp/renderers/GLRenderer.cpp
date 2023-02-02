@@ -516,14 +516,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
             //
             //            }
             //
-            //        } else if ( object.isImmediateRenderObject ) {
-            //
-            //            if ( sortObjects ) {
-            //
-            //                _vector3.setFromMatrixPosition( object.matrixWorld )
-            //                        .applyMatrix4( _projScreenMatrix );
-            //
-            //            }
+            //        }
             //
             //            currentRenderList.push( object, null, object.material, groupOrder, _vector3.z, null );
 
@@ -602,20 +595,7 @@ void GLRenderer::renderObject(
     object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, *object->matrixWorld);
     object->normalMatrix.getNormalMatrix(object->modelViewMatrix);
 
-    if (false /*object.isImmediateRenderObject*/) {
-
-        //        const program = setProgram( camera, scene, material, object );
-        //
-        //        state.setMaterial( material );
-        //
-        //        bindingStates.reset();
-        //
-        //        renderObjectImmediate( object, program );
-
-    } else {
-
-        renderBufferDirect(camera, scene, geometry, material, object, group);
-    }
+    renderBufferDirect(camera, scene, geometry, material, object, group);
 
     if (object->onAfterRender) {
 
