@@ -48,7 +48,7 @@ namespace threepp::gl {
 
         OnInstancedMeshDispose onInstancedMeshDispose;
 
-        std::unordered_map<unsigned int, int> updateMap_;
+        std::unordered_map<BufferGeometry*, int> updateMap_;
     };
 
 }// namespace threepp::gl

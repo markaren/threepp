@@ -15,6 +15,10 @@ namespace threepp {
     public:
         void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
 
+        BufferGeometry *Sprite::geometry() override {
+            return _geometry.get();
+        }
+
         static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial> &material = SpriteMaterial::create()) {
 
             return std::shared_ptr<Sprite>(new Sprite(material));

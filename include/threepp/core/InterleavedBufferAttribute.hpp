@@ -12,13 +12,18 @@
 
 namespace threepp {
 
-    class InterleavedBufferAttribute: public BufferAttribute {
+    class InterleavedBufferAttribute: public TypedBufferAttribute<float> {
 
     public:
         unsigned int offset;
         std::shared_ptr<InterleavedBuffer> data;
 
-        InterleavedBufferAttribute(std::shared_ptr<InterleavedBuffer> buffer, int itemSize, unsigned int offset, bool normalized);
+        InterleavedBufferAttribute(std::shared_ptr<InterleavedBuffer> data, int itemSize, unsigned int offset, bool normalized)
+            :  data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
+
+        [[nodiscard]] const std::vector<float>& array() const override {
+            return data->array;
+        }
 
         [[nodiscard]] int count() const override {
             return data->count;

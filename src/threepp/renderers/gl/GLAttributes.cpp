@@ -1,5 +1,6 @@
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
+#include "threepp/core/InterleavedBufferAttribute.hpp"
 
 #include <glad/glad.h>
 
@@ -86,6 +87,10 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
 }
 
 Buffer GLAttributes::get(BufferAttribute *attribute) {
+
+//    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
+//        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
+//    }
 
     return buffers_.at(attribute);
 }

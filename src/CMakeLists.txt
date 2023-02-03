@@ -188,7 +188,6 @@ set(sources
 
         "threepp/core/BufferGeometry.cpp"
         "threepp/core/InterleavedBuffer.cpp"
-        "threepp/core/InterleavedBufferAttribute.cpp"
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 

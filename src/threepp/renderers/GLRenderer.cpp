@@ -254,7 +254,7 @@ void GLRenderer::renderBufferDirect(
 
     if (isWireframeMaterial && wireframeMaterial->wireframe) {
 
-        index = geometries.getWireframeAttribute(*geometry);
+        index = geometries.getWireframeAttribute(geometry);
         rangeFactor = 2;
     }
 

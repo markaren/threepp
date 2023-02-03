@@ -71,7 +71,6 @@ Sprite::Sprite(const std::shared_ptr<SpriteMaterial> &material)
     _geometry->setAttribute("uv", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
 }
 
-
 void Sprite::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {
     if (!raycaster.camera) {
 

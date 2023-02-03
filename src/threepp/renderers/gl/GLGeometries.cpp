@@ -10,20 +10,20 @@ GLGeometries::GLGeometries(GLAttributes &attributes, GLInfo &info, GLBindingStat
     : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(*this) {
 }
 
-void GLGeometries::get(BufferGeometry &geometry) {
+void GLGeometries::get(Object3D* object, BufferGeometry* geometry) {
 
-    if (geometries_[geometry.id]) return;
+    if (geometries_.count(geometry) && geometries_.at(geometry)) return;
 
-    geometry.addEventListener("dispose", &onGeometryDispose_);
+    geometry->addEventListener("dispose", &onGeometryDispose_);
 
-    geometries_[geometry.id] = true;
+    geometries_[geometry] = true;
 
     ++info_.memory.geometries;
 }
 
-void GLGeometries::update(BufferGeometry &geometry) {
+void GLGeometries::update(BufferGeometry *geometry) {
 
-    auto &geometryAttributes = geometry.getAttributes();
+    auto &geometryAttributes = geometry->getAttributes();
 
     // Updating index buffer in VAO now. See WebGLBindingStates.
 
@@ -33,12 +33,12 @@ void GLGeometries::update(BufferGeometry &geometry) {
     }
 }
 
-void GLGeometries::updateWireframeAttribute(BufferGeometry &geometry) {
+void GLGeometries::updateWireframeAttribute(BufferGeometry *geometry) {
 
     std::vector<int> indices;
 
-    const auto geometryIndex = geometry.getIndex();
-    const auto geometryPosition = geometry.getAttribute<float>("position");
+    const auto geometryIndex = geometry->getIndex();
+    const auto geometryPosition = geometry->getAttribute<float>("position");
     unsigned int version = 0;
 
     if (geometryIndex != nullptr) {
@@ -60,7 +60,7 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry &geometry) {
         const auto &array = geometryPosition->array();
         version = geometryPosition->version;
 
-        for (int i = 0, l = ((int) array.size() / 3) - 1; i < l; i += 3) {
+        for (int i = 0, l = static_cast<int>(array.size() / 3) - 1; i < l; i += 3) {
 
             const auto a = i + 0;
             const auto b = i + 1;
@@ -75,23 +75,23 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry &geometry) {
 
     // Updating index buffer in VAO now. See WebGLBindingStates
 
-    if (wireframeAttributes_.count(geometry.id)) {
-        auto previousAttribute = wireframeAttributes_.at(geometry.id).get();
+    if (wireframeAttributes_.count(geometry)) {
+        auto previousAttribute = wireframeAttributes_.at(geometry).get();
         attributes_.remove(previousAttribute);
     }
 
-    wireframeAttributes_[geometry.id] = std::move(attribute);
+    wireframeAttributes_[geometry] = std::move(attribute);
 }
 
-IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry &geometry) {
+IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry *geometry) {
 
-    if (wireframeAttributes_.count(geometry.id)) {
+    if (wireframeAttributes_.count(geometry)) {
 
-        const auto &currentAttribute = wireframeAttributes_.at(geometry.id);
+        const auto &currentAttribute = wireframeAttributes_.at(geometry);
 
-        if (geometry.hasIndex()) {
+        if (geometry->hasIndex()) {
 
-            auto geometryIndex = geometry.getIndex();
+            auto geometryIndex = geometry->getIndex();
 
             // if the attribute is obsolete, create a new one
 
@@ -106,7 +106,7 @@ IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry &geometry
         updateWireframeAttribute(geometry);
     }
 
-    return wireframeAttributes_.at(geometry.id).get();
+    return wireframeAttributes_.at(geometry).get();
 }
 
 
@@ -128,15 +128,15 @@ void GLGeometries::OnGeometryDispose::onEvent(Event &event) {
 
     geometry->removeEventListener("dispose", this);
 
-    scope_.geometries_.erase(geometry->id);
+    scope_.geometries_.erase(geometry);
 
 
-    if (scope_.wireframeAttributes_.count(geometry->id)) {
+    if (scope_.wireframeAttributes_.count(geometry)) {
 
-        const auto &attribute = scope_.wireframeAttributes_.at(geometry->id);
+        const auto &attribute = scope_.wireframeAttributes_.at(geometry);
 
         scope_.attributes_.remove(attribute.get());
-        scope_.wireframeAttributes_.erase(geometry->id);
+        scope_.wireframeAttributes_.erase(geometry);
     }
 
     scope_.bindingStates_.releaseStatesOfGeometry(geometry);

@@ -165,9 +165,9 @@ namespace threepp {
             return nullptr;
         }
 
-        [[nodiscard]] virtual const BufferGeometry* geometry() const {
+        [[nodiscard]] const BufferGeometry* geometry() const {
 
-            return nullptr;
+            return geometry();
         }
 
         virtual Material* material() {

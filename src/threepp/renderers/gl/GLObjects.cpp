@@ -12,15 +12,15 @@ BufferGeometry* GLObjects::update(Object3D* object) {
     const int frame = info_.render.frame;
 
     auto geometry = object->geometry();
-    geometries_.get(*geometry);
+    geometries_.get(object, geometry);
 
     // Update once per frame
 
-    if (!updateMap_.count(geometry->id) || updateMap_[geometry->id] != frame) {
+    if (!updateMap_.count(geometry) || updateMap_[geometry] != frame) {
 
-        geometries_.update(*geometry);
+        geometries_.update(geometry);
 
-        updateMap_[geometry->id] = frame;
+        updateMap_[geometry] = frame;
     }
 
     auto instancedMesh = dynamic_cast<InstancedMesh *>(object);

@@ -5,4 +5,7 @@ target_link_libraries(reflector PUBLIC threepp)
 add_executable(water water.cpp)
 target_link_libraries(water PUBLIC threepp)
 
+add_executable(sprite sprite.cpp)
+target_link_libraries(sprite PUBLIC threepp)
+
 
