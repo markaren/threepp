@@ -2,6 +2,7 @@
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Raycaster.hpp"
+#include "threepp/core/InterleavedBufferAttribute.hpp"
 
 using namespace threepp;
 
@@ -52,6 +53,21 @@ namespace {
         vertexPosition.applyMatrix4(_viewWorldMatrix);
     }
 }// namespace
+
+
+Sprite::Sprite(const std::shared_ptr<SpriteMaterial> &material) : material(material), _geometry(new BufferGeometry()) {
+
+    std::vector<float> float32Array{
+            -0.5f, -0.5f, 0.f, 0.f, 0.f,
+            0.5f, -0.5f, 0.f, 1.f, 0.f,
+            0.5f, 0.5f, 0.f, 1.f, 1.f,
+            -0.5f, 0.5f, 0.f, 0.f, 1.f};
+
+    auto interleavedBuffer = std::make_shared<InterleavedBuffer>(float32Array, 5);
+    _geometry->setIndex({0, 1, 2,	0, 2, 3});
+    _geometry->setAttribute("position", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
+    _geometry->setAttribute("uv", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
+}
 
 
 void Sprite::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {

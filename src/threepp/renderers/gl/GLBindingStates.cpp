@@ -3,6 +3,7 @@
 
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 
+#include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 using namespace threepp;
@@ -235,17 +236,35 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
 
                 auto attribute = attributes_.get(geometryAttribute.get());
 
-                // TODO Attribute may not be available on context restore
-
-                //                        if (!attribute) continue;
-
                 const auto buffer = attribute.buffer;
                 const auto type = attribute.type;
                 const auto bytesPerElement = attribute.bytesPerElement;
 
-                if (false /*geometryAttribute.isInterleavedBufferAttribute*/) {
+                if (dynamic_cast<InterleavedBufferAttribute*>(geometryAttribute.get())) {
 
-                    // TODO
+                    auto attr = dynamic_cast<InterleavedBufferAttribute*>(geometryAttribute.get());
+                    auto data = attr->data;
+                    const auto stride = data->stride;
+                    const auto offset = attr->offset;
+
+                    if ( false /*data && data.isInstancedInterleavedBuffer*/ ) {
+
+//                        enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
+//
+//                        if ( geometry._maxInstanceCount === undefined ) {
+//
+//                            geometry._maxInstanceCount = data.meshPerAttribute * data.count;
+//
+//                        }
+
+                    } else {
+
+                        enableAttribute( programAttribute );
+
+                    }
+
+                    glBindBuffer( GL_ARRAY_BUFFER, buffer );
+                    vertexAttribPointer( programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement );
 
                 } else {
 

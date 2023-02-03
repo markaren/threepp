@@ -16,6 +16,8 @@ set(publicHeaders
         "threepp/core/misc.hpp"
         "threepp/core/InstancedBufferAttribute.hpp"
         "threepp/core/InstancedBufferGeometry.hpp"
+        "threepp/core/InterleavedBuffer.hpp"
+        "threepp/core/InterleavedBufferAttribute.hpp"
         "threepp/core/Object3D.hpp"
         "threepp/core/Raycaster.hpp"
         "threepp/core/Shader.hpp"
@@ -185,6 +187,8 @@ set(sources
         "threepp/controls/OrbitControls.cpp"
 
         "threepp/core/BufferGeometry.cpp"
+        "threepp/core/InterleavedBuffer.cpp"
+        "threepp/core/InterleavedBufferAttribute.cpp"
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 

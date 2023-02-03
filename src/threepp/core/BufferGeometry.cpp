@@ -243,7 +243,7 @@ void BufferGeometry::computeBoundingSphere() {
 
         float maxRadiusSq = 0;
 
-        for (auto i = 0, il = position->count(); i < il; i++) {
+        for (unsigned i = 0, il = position->count(); i < il; i++) {
 
             Vector3 _vector{};
             position->setFromBufferAttribute(_vector, i);

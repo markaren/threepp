@@ -6,6 +6,7 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/InterleavedBuffer.hpp"
 
 namespace threepp {
 
@@ -26,14 +27,7 @@ namespace threepp {
         std::shared_ptr<BufferGeometry> _geometry;
         std::shared_ptr<SpriteMaterial> material;
 
-        explicit Sprite(const std::shared_ptr<SpriteMaterial> &material) : material(material), _geometry(new BufferGeometry()) {
-
-            std::array<float, 20> float32Array{
-                    -0.5f, -0.5f, 0.f, 0.f, 0.f,
-                    0.5f, -0.5f, 0.f, 1.f, 0.f,
-                    0.5f, 0.5f, 0.f, 1.f, 1.f,
-                    -0.5f, 0.5f, 0.f, 0.f, 1.f};
-        }
+        explicit Sprite(const std::shared_ptr<SpriteMaterial> &material);
 
         friend class GLRenderer;
     };
