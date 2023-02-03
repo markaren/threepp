@@ -2,12 +2,14 @@
 #include "threepp/math/Frustum.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
-#include "threepp/core/Object3D.hpp"
-
-#include "threepp/math/Matrix4.hpp"
-#include "threepp/math/Sphere.hpp"
+#include "threepp/objects/Sprite.hpp"
 
 using namespace threepp;
+
+namespace {
+    Sphere _sphere{};
+    Vector3 _vector{};
+}
 
 Frustum::Frustum(Plane p0, Plane p1, Plane p2, Plane p3, Plane p4, Plane p5)
     : planes_{p0, p1, p2, p3, p4, p5} {}
@@ -54,13 +56,20 @@ Frustum &Frustum::setFromProjectionMatrix(const Matrix4 &m) {
 
 bool Frustum::intersectsObject(Object3D &object) {
 
-    Sphere _sphere{};
 
     auto geometry = object.geometry();
 
     if (!geometry->boundingSphere) geometry->computeBoundingSphere();
 
     _sphere.copy(geometry->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
+
+    return this->intersectsSphere(_sphere);
+}
+
+bool Frustum::intersectsSprite(const Sprite &sprite) {
+    _sphere.center.set(0, 0, 0);
+    _sphere.radius = 0.7071067811865476;
+    _sphere.applyMatrix4(*sprite.matrixWorld);
 
     return this->intersectsSphere(_sphere);
 }
@@ -84,8 +93,6 @@ bool Frustum::intersectsSphere(const Sphere &sphere) {
 }
 
 bool Frustum::intersectsBox(const Box3 &box) {
-
-    Vector3 _vector{};
 
     for (int i = 0; i < 6; i++) {
 

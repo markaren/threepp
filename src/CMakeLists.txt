@@ -74,6 +74,7 @@ set(publicHeaders
         "threepp/materials/RawShaderMaterial.hpp"
         "threepp/materials/ShaderMaterial.hpp"
         "threepp/materials/ShadowMaterial.hpp"
+        "threepp/materials/SpriteMaterial.hpp"
         "threepp/materials/interfaces.hpp"
 
         "threepp/math/Box2.hpp"
@@ -105,6 +106,7 @@ set(publicHeaders
         "threepp/objects/LineSegments.hpp"
         "threepp/objects/LOD.hpp"
         "threepp/objects/Mesh.hpp"
+        "threepp/objects/Sprite.hpp"
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
         "threepp/objects/Water.hpp"
@@ -226,6 +228,7 @@ set(sources
         "threepp/lights/SpotLightShadow.cpp"
 
         "threepp/objects/Mesh.cpp"
+        "threepp/objects/Sprite.cpp"
         "threepp/objects/Reflector.cpp"
         "threepp/objects/Water.cpp"
 

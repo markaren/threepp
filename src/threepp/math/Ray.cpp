@@ -380,7 +380,7 @@ bool Ray::intersectsBox(const Box3 &box) const {
     return std::isnan(_vector.x);
 }
 
-void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c, bool backfaceCulling, Vector3 &target) const {
+std::optional<Vector3> Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c, bool backfaceCulling, Vector3 &target) const {
 
     // Compute the offset origin, edges, and normal.
 
@@ -407,7 +407,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
         if (backfaceCulling) {
 
             target.set(NAN, NAN, NAN);
-            return;
+            return std::nullopt;
         }
         sign = 1.f;
 
@@ -419,7 +419,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
     } else {
 
         target.set(NAN, NAN, NAN);
-        return;
+        return std::nullopt;
     }
 
     Vector3 _diff{};
@@ -430,7 +430,7 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
     if (DdQxE2 < 0) {
 
         target.set(NAN, NAN, NAN);
-        return;
+        return std::nullopt;
     }
 
     const float DdE1xQ = sign * this->direction.dot(_edge1.cross(_diff));
@@ -439,14 +439,14 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
     if (DdE1xQ < 0) {
 
         target.set(NAN, NAN, NAN);
-        return;
+        return std::nullopt;
     }
 
     // b1+b2 > 1, no intersection
     if (DdQxE2 + DdE1xQ > DdN) {
 
         target.set(NAN, NAN, NAN);
-        return;
+        return std::nullopt;
     }
 
     // Line intersects triangle, check if ray does.
@@ -456,11 +456,11 @@ void Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c
     if (QdN < 0) {
 
         target.set(NAN, NAN, NAN);
-        return;
+        return std::nullopt;
     }
 
     // Ray intersects triangle.
-    this->at(QdN / DdN, target);
+    return this->at(QdN / DdN, target);
 }
 
 Ray &Ray::applyMatrix4(const Matrix4 &matrix4) {
