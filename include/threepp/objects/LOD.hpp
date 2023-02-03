@@ -12,10 +12,10 @@ namespace threepp {
     struct Level {
 
         float distance;
-        std::shared_ptr<Object3D> object;
+        Object3D* object;
 
-        Level(float distance, std::shared_ptr<Object3D> object)
-            : distance(distance), object(std::move(object)) {}
+        Level(float distance, Object3D* object)
+            : distance(distance), object(object) {}
     };
 
     class LOD : public Object3D {
@@ -37,7 +37,7 @@ namespace threepp {
                 }
             }
 
-            levels.insert(levels.begin() + l, {distance, object});
+            levels.insert(levels.begin() + l, {distance, object.get()});
 
             this->add(object);
 
@@ -45,7 +45,7 @@ namespace threepp {
         }
 
 
-        [[nodiscard]] int getCurrentLevel() const {
+        [[nodiscard]] size_t getCurrentLevel() const {
 
             return _currentLevel;
         }
@@ -61,7 +61,7 @@ namespace threepp {
 
                 levels[0].object->visible = true;
 
-                int i, l;
+                size_t i, l;
 
                 for (i = 1, l = levels.size(); i < l; i++) {
 
@@ -94,7 +94,7 @@ namespace threepp {
         LOD() = default;
 
     private:
-        int _currentLevel = 0;
+        size_t _currentLevel = 0;
         std::vector<Level> levels;
 
         inline static Vector3 _v1;
