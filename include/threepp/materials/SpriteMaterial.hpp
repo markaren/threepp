@@ -3,6 +3,8 @@
 #ifndef THREEPP_SPRITEMATERIAL_HPP
 #define THREEPP_SPRITEMATERIAL_HPP
 
+#include <memory>
+
 #include "threepp/materials/materials.hpp"
 
 namespace threepp {

@@ -55,7 +55,9 @@ namespace {
 }// namespace
 
 
-Sprite::Sprite(const std::shared_ptr<SpriteMaterial> &material) : material(material), _geometry(new BufferGeometry()) {
+Sprite::Sprite(const std::shared_ptr<SpriteMaterial> &material)
+    : material(material),
+      _geometry(new BufferGeometry()) {
 
     std::vector<float> float32Array{
             -0.5f, -0.5f, 0.f, 0.f, 0.f,

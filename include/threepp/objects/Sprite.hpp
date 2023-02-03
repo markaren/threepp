@@ -15,7 +15,7 @@ namespace threepp {
     public:
         void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
 
-        static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial> &material = std::make_shared<SpriteMaterial>()) {
+        static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial> &material = SpriteMaterial::create()) {
 
             return std::shared_ptr<Sprite>(new Sprite(material));
         }
