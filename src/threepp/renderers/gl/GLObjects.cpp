@@ -23,22 +23,21 @@ BufferGeometry* GLObjects::update(Object3D* object) {
         updateMap_[geometry->id] = frame;
     }
 
-    if (dynamic_cast<InstancedMesh*>(object)) {
+    auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
+    if (instancedMesh) {
 
         if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
 
             object->addEventListener("dispose", &onInstancedMeshDispose);
         }
 
-        auto o = dynamic_cast<InstancedMesh *>(object);
+        attributes_.update(instancedMesh->instanceMatrix.get(), GL_ARRAY_BUFFER);
 
-        attributes_.update(o->instanceMatrix.get(), GL_ARRAY_BUFFER);
+        if (instancedMesh->instanceColor != nullptr) {
 
-        if (o->instanceColor != nullptr) {
-
-            attributes_.update(o->instanceColor.get(), GL_ARRAY_BUFFER);
+            attributes_.update(instancedMesh->instanceColor.get(), GL_ARRAY_BUFFER);
         }
     }
 
-    return geometry.get();
+    return geometry;
 }

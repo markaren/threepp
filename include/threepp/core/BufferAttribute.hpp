@@ -407,8 +407,8 @@ namespace threepp {
             : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_(array_.size() / itemSize) {}
 
     private:
-        int count_{};
         std::vector<T> array_;
+        int count_{};
 
     };
 

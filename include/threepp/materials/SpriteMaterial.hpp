@@ -20,6 +20,11 @@ namespace threepp {
             return "SpriteMaterial";
         }
 
+        static std::shared_ptr<SpriteMaterial> create() {
+
+            return std::shared_ptr<SpriteMaterial>(new SpriteMaterial());
+        }
+
     private:
         SpriteMaterial()
             : MaterialWithColor(0xffffff),
