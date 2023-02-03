@@ -534,17 +534,17 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
 
                     for (const auto &group : groups) {
 
-                        auto &groupMaterial = materials.at(group.materialIndex);
+                        Material* groupMaterial = materials.at(group.materialIndex);
 
                         if (groupMaterial && groupMaterial->visible) {
 
-                            currentRenderList->push(object, geometry, groupMaterial.get(), groupOrder, _vector3.z, group);
+                            currentRenderList->push(object, geometry, groupMaterial, groupOrder, _vector3.z, group);
                         }
                     }
 
                 } else if (materials.front()->visible) {
 
-                    currentRenderList->push(object, geometry, materials.front().get(), groupOrder, _vector3.z, std::nullopt);
+                    currentRenderList->push(object, geometry, materials.front(), groupOrder, _vector3.z, std::nullopt);
                 }
             }
         }

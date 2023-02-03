@@ -15,41 +15,42 @@ namespace threepp {
     class Mesh : public Object3D {
 
     public:
-        std::shared_ptr<BufferGeometry> geometry() override {
+        BufferGeometry* geometry() override {
 
-            return geometry_;
+            return geometry_.get();
         }
 
-        [[nodiscard]] std::shared_ptr<const BufferGeometry> geometry() const override {
+        [[nodiscard]] const BufferGeometry* geometry() const override {
 
-            return geometry_;
+            return geometry_.get();
         }
 
-        std::shared_ptr<Material> material() override {
+        Material* material() override {
 
-            return materials_[0];
+            return materials_.front().get();
         }
 
-        [[nodiscard]] std::shared_ptr<const Material> material() const override {
+        [[nodiscard]] const Material* material() const override {
 
-            return materials_[0];
-        }
-
-        template<class T>
-        std::shared_ptr<T> material() {
-
-            return std::dynamic_pointer_cast<T>(material());
+            return materials_.front().get();
         }
 
         template<class T>
-        std::shared_ptr<const T> material() const {
+        T* material() {
 
-            return std::dynamic_pointer_cast<T>(material());
+            return dynamic_cast<T*>(material());
         }
 
-        [[nodiscard]] std::vector<std::shared_ptr<Material>> materials() override {
+        template<class T>
+        const T* material() const {
 
-            return materials_;
+            return dynamic_cast<T*>(material());
+        }
+
+        [[nodiscard]] std::vector<Material*> materials() override {
+            std::vector<Material*> res(materials_.size());
+            std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) {return m.get();});
+            return res;
         }
 
         [[nodiscard]] size_t numMaterials() const {

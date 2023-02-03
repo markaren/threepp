@@ -12,18 +12,18 @@ namespace threepp {
     class Points : public Object3D {
 
     public:
-        std::shared_ptr<BufferGeometry> geometry() override {
+        BufferGeometry* geometry() override {
 
-            return geometry_;
+            return geometry_.get();
         }
 
-        std::shared_ptr<Material> material() override {
+        Material* material() override {
 
-            return material_;
+            return material_.get();
         }
 
-        std::vector<std::shared_ptr<Material>> materials() override {
-            return {material_};
+        std::vector<Material*> materials() override {
+            return {material_.get()};
         }
 
         static std::shared_ptr<Points> create(
