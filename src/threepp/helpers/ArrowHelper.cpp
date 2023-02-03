@@ -88,6 +88,6 @@ void ArrowHelper::setLength(float length, std::optional<float> headLength_, std:
 
 void ArrowHelper::setColor(int color) {
 
-    std::dynamic_pointer_cast<MaterialWithColor>(this->line->material())->color.setHex(color);
-    std::dynamic_pointer_cast<MaterialWithColor>(this->cone->material())->color.setHex(color);
+    this->line->material()->as<MaterialWithColor>()->color.setHex(color);
+    this->cone->material()->as<MaterialWithColor>()->color.setHex(color);
 }

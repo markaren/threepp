@@ -7,7 +7,7 @@ using namespace threepp;
 using namespace threepp::gl;
 
 
-std::shared_ptr<BufferGeometry> GLObjects::update(Object3D* object) {
+BufferGeometry* GLObjects::update(Object3D* object) {
 
     const int frame = info_.render.frame;
 

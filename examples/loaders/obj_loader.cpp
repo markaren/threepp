@@ -19,8 +19,9 @@ int main() {
     auto obj = loader.load("data/models/obj/female02/female02.obj", false);
     obj->traverseType<Mesh>([tex](Mesh &child) {
         for (auto& m : child.materials()) {
-            if (std::dynamic_pointer_cast<MaterialWithMap>(m)) {
-                std::dynamic_pointer_cast<MaterialWithMap>(m)->map = tex;
+            auto materialWithMap = m->as<MaterialWithMap>();
+            if (materialWithMap) {
+                materialWithMap->map = tex;
             }
         }
     });
