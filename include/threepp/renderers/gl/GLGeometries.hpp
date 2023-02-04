@@ -27,13 +27,13 @@ namespace threepp::gl {
 
         GLGeometries(GLAttributes &attributes, GLInfo &info, GLBindingStates &bindingStates);
 
-        void get(BufferGeometry &geometry);
+        void get(Object3D* object, BufferGeometry* geometry);
 
-        void update(BufferGeometry &geometry);
+        void update(BufferGeometry *geometry);
 
-        void updateWireframeAttribute(BufferGeometry &geometry);
+        void updateWireframeAttribute(BufferGeometry *geometry);
 
-        IntBufferAttribute *getWireframeAttribute(BufferGeometry &geometry);
+        IntBufferAttribute *getWireframeAttribute(BufferGeometry *geometry);
 
     private:
         GLInfo& info_;
@@ -42,8 +42,8 @@ namespace threepp::gl {
 
         OnGeometryDispose onGeometryDispose_;
 
-        std::unordered_map<unsigned int, bool> geometries_;
-        std::unordered_map<unsigned int, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;
+        std::unordered_map<BufferGeometry*, bool> geometries_;
+        std::unordered_map<BufferGeometry*, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;
 
     };
 

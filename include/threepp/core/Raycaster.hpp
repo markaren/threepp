@@ -35,6 +35,7 @@ namespace threepp {
         float far;
 
         Ray ray;
+        Camera* camera;
         Layers layers{};
 
         explicit Raycaster(const Vector3 &origin = Vector3(), const Vector3 &direction = Vector3(), float near = 0, float far = std::numeric_limits<float>::infinity())

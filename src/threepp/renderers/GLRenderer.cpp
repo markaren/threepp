@@ -6,6 +6,7 @@
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/Sprite.hpp"
 
 #include <glad/glad.h>
 
@@ -221,7 +222,6 @@ void GLRenderer::renderBufferDirect(
     }
 
     bool isMesh = object->as<Mesh>();
-
     const auto frontFaceCW = (isMesh && object->matrixWorld->determinant() < 0);
 
     auto program = setProgram(camera, scene, material, object);
@@ -253,7 +253,7 @@ void GLRenderer::renderBufferDirect(
 
     if (isWireframeMaterial && wireframeMaterial->wireframe) {
 
-        index = geometries.getWireframeAttribute(*geometry);
+        index = geometries.getWireframeAttribute(geometry);
         rangeFactor = 2;
     }
 
@@ -326,7 +326,7 @@ void GLRenderer::renderBufferDirect(
 
         renderer->setMode(GL_POINTS);
 
-    } else if (false /*object.isSprite*/) {
+    } else if (object->is<Sprite>()) {
 
         renderer->setMode(GL_TRIANGLES);
     }
@@ -494,31 +494,25 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
                 currentRenderState->pushShadow(light);
             }
 
-            //        } else if ( object.isSprite ) {
-            //
-            //            if ( ! object.frustumCulled || _frustum.intersectsSprite( object ) ) {
-            //
-            //                if ( sortObjects ) {
-            //
-            //                    _vector3.setFromMatrixPosition( object.matrixWorld )
-            //                            .applyMatrix4( _projScreenMatrix );
-            //
-            //                }
-            //
-            //                const geometry = objects.update( object );
-            //                const material = object.material;
-            //
-            //                if ( material.visible ) {
-            //
-            //                    currentRenderList.push( object, geometry, material, groupOrder, _vector3.z, null );
-            //
-            //                }
-            //
-            //            }
-            //
-            //        }
-            //
-            //            currentRenderList.push( object, null, object.material, groupOrder, _vector3.z, null );
+        } else if (object->is<Sprite>()) {
+
+            auto sprite = object->as<Sprite>();
+            if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
+
+                if (sortObjects) {
+
+                    _vector3.setFromMatrixPosition(*sprite->matrixWorld)
+                            .applyMatrix4(_projScreenMatrix);
+                }
+
+                auto geometry = objects.update(object);
+                auto material = sprite->material;
+
+                if (material->visible) {
+
+                    currentRenderList->push(object, geometry, material.get(), groupOrder, _vector3.z, std::nullopt);
+                }
+            }
 
         } else if (object->as<Mesh>() || object->as<Line>() || object->as<Points>()) {
 
@@ -539,7 +533,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
 
                     for (const auto &group : groups) {
 
-                        Material* groupMaterial = materials.at(group.materialIndex);
+                        Material *groupMaterial = materials.at(group.materialIndex);
 
                         if (groupMaterial && groupMaterial->visible) {
 
@@ -562,7 +556,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
 }
 
 void GLRenderer::renderObjects(
-        const std::vector<gl::RenderItem*> &renderList,
+        const std::vector<gl::RenderItem *> &renderList,
         Scene *scene,
         Camera *camera) {
 
@@ -955,10 +949,9 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
         }
     }
 
-    if (false /*material.isSpriteMaterial*/) {
+    if (material->is<SpriteMaterial>() && object->is<Sprite>()) {
 
-        // TODO
-        //                        p_uniforms->setValue("center", object->center);
+        p_uniforms->setValue("center", object->as<Sprite>()->center);
     }
 
     // common matrices

@@ -12,6 +12,7 @@ namespace threepp {
     class Box3;
     class Sphere;
     class Object3D;
+    class Sprite;
 
     class Frustum {
 
@@ -25,6 +26,8 @@ namespace threepp {
         Frustum &setFromProjectionMatrix(const Matrix4 &m);
 
         bool intersectsObject(Object3D &object);
+
+        bool intersectsSprite(const Sprite& sprite );
 
         bool intersectsSphere(const Sphere &sphere);
 

@@ -48,9 +48,21 @@ namespace threepp {
 
         Vector2 &subScalar(float s);
 
-        Vector2 &subVectors(const Vector2 &a, const Vector2 &b);
+        template<class VectorA, class VectorB>
+        Vector2 &subVectors(const VectorA &a, const VectorB &b) {
+            this->x = a.x - b.x;
+            this->y = a.y - b.y;
 
-        Vector2 &multiply(const Vector2 &v);
+            return *this;
+        }
+
+        template<class Vector>
+        Vector2 &multiply(const Vector &v) {
+            this->x *= v.x;
+            this->y *= v.y;
+
+            return *this;
+        }
 
         Vector2 &multiplyScalar(float scalar);
 

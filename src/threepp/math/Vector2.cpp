@@ -112,22 +112,6 @@ Vector2 &Vector2::subScalar(float s) {
     return *this;
 }
 
-Vector2 &Vector2::subVectors(const Vector2 &a, const Vector2 &b) {
-
-    this->x = a.x - b.x;
-    this->y = a.y - b.y;
-
-    return *this;
-}
-
-Vector2 &Vector2::multiply(const Vector2 &v) {
-
-    this->x *= v.x;
-    this->y *= v.y;
-
-    return *this;
-}
-
 Vector2 &Vector2::multiplyScalar(float scalar) {
 
     this->x *= scalar;

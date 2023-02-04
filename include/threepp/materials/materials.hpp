@@ -17,5 +17,6 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/materials/ShadowMaterial.hpp"
+#include "threepp/materials/SpriteMaterial.hpp"
 
 #endif//THREEPP_MATERIALS_HPP

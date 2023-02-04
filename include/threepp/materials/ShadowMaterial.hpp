@@ -26,7 +26,7 @@ namespace threepp {
         ShadowMaterial() : MaterialWithColor(0x000000) {
 
             this->transparent = true;
-        };
+        }
     };
 
 }// namespace threepp

@@ -17,6 +17,11 @@ namespace threepp {
         explicit MaterialWithColor(Color color) : color(color) {}
     };
 
+    struct MaterialWithRotation : virtual Material {
+
+        float rotation{};
+    };
+
     struct MaterialWithClipping : virtual Material {
 
         bool clipping;

@@ -19,6 +19,7 @@
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Sprite.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 

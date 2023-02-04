@@ -54,7 +54,7 @@ namespace threepp {
 
         [[nodiscard]] bool intersectsBox(const Box3 &box) const;
 
-        void intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c, bool backfaceCulling, Vector3 &target) const;
+        std::optional<Vector3> intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c, bool backfaceCulling, Vector3 &target) const;
 
         Ray &applyMatrix4(const Matrix4 &matrix4);
 

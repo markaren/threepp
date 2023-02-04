@@ -46,7 +46,7 @@ namespace threepp {
 
         void needsUpdate() {
 
-            version++;
+            ++version;
         }
 
         void setUsage(int value) {
@@ -96,7 +96,7 @@ namespace threepp {
             return count_;
         }
 
-        const std::vector<T> &array() const {
+        virtual const std::vector<T> &array() const {
 
             return array_;
         }
@@ -403,13 +403,15 @@ namespace threepp {
     protected:
         TypedBufferAttribute() = default;
 
-        TypedBufferAttribute(std::vector<T> array, int itemSize, bool normalized)
-            : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_((int) array_.size() / itemSize) {}
+        TypedBufferAttribute(const std::vector<T>& array, int count): array_(array), count_(count) {}
+
+        TypedBufferAttribute(const std::vector<T>& array, int itemSize, bool normalized)
+            : BufferAttribute(itemSize, normalized), array_(array), count_(array_.size() / itemSize) {}
 
     private:
         std::vector<T> array_;
+        int count_{};
 
-       int count_;
     };
 
     typedef TypedBufferAttribute<int> IntBufferAttribute;
