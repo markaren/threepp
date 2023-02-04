@@ -12,7 +12,6 @@ int main() {
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 5;
-    camera->position.y = 2;
 
     OrbitControls controls{camera, canvas};
 
@@ -25,7 +24,6 @@ int main() {
     for (int x = -5; x < 5; x++) {
         auto sprite = Sprite::create(material);
         sprite->position.x = static_cast<float>(x);
-        sprite->position.z -= 1;
         sprite->scale *= 0.5f;
         scene->add(sprite);
     }
