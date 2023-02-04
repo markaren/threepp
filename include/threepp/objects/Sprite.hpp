@@ -13,9 +13,15 @@ namespace threepp {
     class Sprite : public Object3D {
 
     public:
+
+        Vector2 center{0.5f, 0.5f};
+
+        std::shared_ptr<BufferGeometry> _geometry;
+        std::shared_ptr<SpriteMaterial> material;
+
         void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
 
-        BufferGeometry *Sprite::geometry() override {
+        BufferGeometry *geometry() override {
             return _geometry.get();
         }
 
@@ -25,11 +31,6 @@ namespace threepp {
         }
 
     private:
-
-        Vector2 center{0.5f, 0.5f};
-
-        std::shared_ptr<BufferGeometry> _geometry;
-        std::shared_ptr<SpriteMaterial> material;
 
         explicit Sprite(const std::shared_ptr<SpriteMaterial> &material);
 

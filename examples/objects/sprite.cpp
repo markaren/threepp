@@ -19,7 +19,7 @@ int main() {
     TextureLoader loader;
 
     auto material = SpriteMaterial::create();
-    material->map = loader.loadTexture("favicon.bmp");
+    material->map = loader.loadTexture("data/textures/uv_grid_opengl.jpg");
 
     auto sprite = Sprite::create(material);
     scene->add(sprite);
@@ -32,6 +32,7 @@ int main() {
 
     canvas.animate([&](float dt) {
 
+        material->rotation += 1 * dt;
 
         renderer.render(scene, camera);
     });
