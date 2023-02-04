@@ -244,7 +244,7 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
 
                     auto attr = dynamic_cast<InterleavedBufferAttribute*>(geometryAttribute.get());
                     auto data = attr->data;
-                    const auto stride = data->stride;
+                    const auto stride = data->stride();
                     const auto offset = attr->offset;
 
                     if ( false /*data && data.isInstancedInterleavedBuffer*/ ) {

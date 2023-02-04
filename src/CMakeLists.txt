@@ -187,7 +187,6 @@ set(sources
         "threepp/controls/OrbitControls.cpp"
 
         "threepp/core/BufferGeometry.cpp"
-        "threepp/core/InterleavedBuffer.cpp"
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 

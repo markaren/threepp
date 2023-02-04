@@ -20,6 +20,7 @@ namespace {
         auto metalnessMaterial = dynamic_cast<MaterialWithMetalness *>(material);
         auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap *>(material);
         auto emissiveMaterial = dynamic_cast<MaterialWithEmissive *>(material);
+        auto spriteMaterial = dynamic_cast<SpriteMaterial *>(material);
         // TODO clearcoat
 
         auto aoMaterial = dynamic_cast<MaterialWithAoMap *>(material);
@@ -260,20 +261,66 @@ namespace {
         uniforms.at("scale").value<float>() = height * 0.5f;
     }
 
+    void refreshUniformsSprites(UniformMap &uniforms, SpriteMaterial* material) {
+        uniforms.at("diffuse").value<Color>().copy( material->color );
+        uniforms.at("opacity").value<float>() = material->opacity;
+        uniforms.at("rotation").value<float>() = material->rotation;
+
+        if ( material->map ) {
+
+            uniforms.at("map").setValue(material->map);
+
+        }
+
+        if ( material->alphaMap ) {
+
+            uniforms.at("alphaMap").setValue(material->alphaMap);
+
+        }
+
+        // uv repeat and offset setting priorities
+        // 1. color map
+        // 2. alpha map
+
+        std::shared_ptr<Texture> uvScaleMap = nullptr;
+
+        if ( material->map ) {
+
+            uvScaleMap = material->map;
+
+        } else if ( material->alphaMap ) {
+
+            uvScaleMap = material->alphaMap;
+
+        }
+
+        if ( uvScaleMap ) {
+
+            if ( uvScaleMap->matrixAutoUpdate ) {
+
+                uvScaleMap->updateMatrix();
+
+            }
+
+            uniforms.at("uvTransform").value<Matrix3>().copy( uvScaleMap->matrix );
+
+        }
+    }
+
 }// namespace
 
 void GLMaterials::refreshFogUniforms(UniformMap &uniforms, FogVariant &fog) {
 
     if (fog.index() == 0) {
 
-        Fog &f = std::get<Fog>(fog);
+        auto &f = std::get<Fog>(fog);
         uniforms.at("fogColor").value<Color>().copy(f.color);
 
         uniforms.at("fogNear").value<float>() = f.near;
         uniforms.at("fogFar").value<float>() = f.far;
     } else {
 
-        FogExp2 &f = std::get<FogExp2>(fog);
+        auto &f = std::get<FogExp2>(fog);
         uniforms.at("fogColor").value<Color>().copy(f.color);
 
         uniforms.at("fogDensity").value<float>() = f.density;
@@ -282,37 +329,42 @@ void GLMaterials::refreshFogUniforms(UniformMap &uniforms, FogVariant &fog) {
 
 void GLMaterials::refreshMaterialUniforms(UniformMap &uniforms, Material *material, int pixelRatio, int height) {
 
-    if (material->as<MeshBasicMaterial>()) {
+    if (material->is<MeshBasicMaterial>()) {
 
         refreshUniformsCommon(uniforms, material, properties);
-    } else if (material->as<MeshLambertMaterial>()) {
+    } else if (material->is<MeshLambertMaterial>()) {
 
-        auto m = dynamic_cast<MeshLambertMaterial *>(material);
+        auto m = material->as<MeshLambertMaterial>();
         refreshUniformsCommon(uniforms, m, properties);
         refreshUniformsLambert(uniforms, m);
 
-    } else if (material->as<MeshToonMaterial>()) {
+    } else if (material->is<MeshToonMaterial>()) {
 
-        auto m = dynamic_cast<MeshToonMaterial *>(material);
+        auto m = material->as<MeshToonMaterial>();
         refreshUniformsCommon(uniforms, m, properties);
         refreshUniformsToon(uniforms, m);
 
-    } else if (material->as<MeshPhongMaterial>()) {
+    } else if (material->is<MeshPhongMaterial>()) {
 
-        auto m = dynamic_cast<MeshPhongMaterial *>(material);
+        auto m = material->as<MeshPhongMaterial>();
         refreshUniformsCommon(uniforms, m, properties);
         refreshUniformsPhong(uniforms, m);
 
-    } else if (material->as<LineBasicMaterial>()) {
+    } else if (material->is<LineBasicMaterial>()) {
 
-        refreshUniformsLine(uniforms, dynamic_cast<LineBasicMaterial *>(material));
+        refreshUniformsLine(uniforms, material->as<LineBasicMaterial>());
 
     } else if (material->as<PointsMaterial>()) {
 
-        refreshUniformsPoints(uniforms, dynamic_cast<PointsMaterial *>(material), pixelRatio, (float) height);
+        refreshUniformsPoints(uniforms, material->as<PointsMaterial>(), pixelRatio, static_cast<float>(height));
+
+    } else if (material->as<SpriteMaterial>()) {
+
+        auto m = material->as<SpriteMaterial>();
+        refreshUniformsSprites( uniforms, material->as<SpriteMaterial>() );
 
     } else if (material->as<ShaderMaterial>()) {
 
-        dynamic_cast<ShaderMaterial *>(material)->uniformsNeedUpdate = false;
+        material->as<ShaderMaterial>()->uniformsNeedUpdate = false;
     }
 }

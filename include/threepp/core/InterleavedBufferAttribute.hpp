@@ -22,31 +22,12 @@ namespace threepp {
             :  data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
 
         [[nodiscard]] const std::vector<float>& array() const override {
-            return data->array;
+            return data->array();
         }
 
         [[nodiscard]] int count() const override {
-            return data->count;
+            return data->count();
         }
-
-//        void applyMatrix4( const Matrix4& m ) {
-//
-//            for ( unsigned i = 0, l = data_.count(); i < l; i ++ ) {
-//
-//                _vector.x = this.getX( i );
-//                _vector.y = this.getY( i );
-//                _vector.z = this.getZ( i );
-//
-//                _vector.applyMatrix4( m );
-//
-//                this.setXYZ( i, _vector.x, _vector.y, _vector.z );
-//
-//            }
-//
-//            return this;
-//
-//        }
-
 
     };
 

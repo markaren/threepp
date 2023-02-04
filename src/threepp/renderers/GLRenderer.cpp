@@ -222,7 +222,6 @@ void GLRenderer::renderBufferDirect(
     }
 
     bool isMesh = object->as<Mesh>();
-
     const auto frontFaceCW = (isMesh && object->matrixWorld->determinant() < 0);
 
     auto program = setProgram(camera, scene, material, object);
@@ -497,7 +496,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
 
         } else if (object->is<Sprite>()) {
 
-            Sprite *sprite = object->as<Sprite>();
+            auto sprite = object->as<Sprite>();
             if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
 
                 if (sortObjects) {

@@ -88,14 +88,18 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
 
 Buffer GLAttributes::get(BufferAttribute *attribute) {
 
-//    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
-//        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
-//    }
+    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
+        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
+    }
 
     return buffers_.at(attribute);
 }
 
 void GLAttributes::remove(BufferAttribute *attribute) {
+
+    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
+        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
+    }
 
     if (buffers_.count(attribute)) {
 
@@ -109,12 +113,16 @@ void GLAttributes::remove(BufferAttribute *attribute) {
 
 void GLAttributes::update(BufferAttribute *attribute, GLenum bufferType) {
 
+    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
+        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
+    }
+
     if (!buffers_.count(attribute)) {
 
         buffers_[attribute] = createBuffer(attribute, bufferType);
 
     } else {
-
+        
         auto &data = buffers_.at(attribute);
 
         if (data.version < attribute->version) {

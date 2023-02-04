@@ -403,8 +403,10 @@ namespace threepp {
     protected:
         TypedBufferAttribute() = default;
 
-        TypedBufferAttribute(std::vector<T> array, int itemSize, bool normalized)
-            : BufferAttribute(itemSize, normalized), array_(std::move(array)), count_(array_.size() / itemSize) {}
+        TypedBufferAttribute(const std::vector<T>& array, int count): array_(array), count_(count) {}
+
+        TypedBufferAttribute(const std::vector<T>& array, int itemSize, bool normalized)
+            : BufferAttribute(itemSize, normalized), array_(array), count_(array_.size() / itemSize) {}
 
     private:
         std::vector<T> array_;

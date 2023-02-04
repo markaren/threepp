@@ -11,33 +11,21 @@
 
 namespace threepp {
 
-    class InterleavedBuffer {
+    class InterleavedBuffer: public TypedBufferAttribute<float> {
 
     public:
-        unsigned int version = 0;
 
-        std::vector<float> array;
+        InterleavedBuffer(const std::vector<float> &array, int stride)
+            : TypedBufferAttribute<float>(array, static_cast<int>(array.size() / stride)),
+              stride_(stride) {}
 
-        int stride;
-        int count;
-
-        int usage_{StaticDrawUsage};
-        UpdateRange updateRange_{0, -1};
-
-        const std::string uuid = utils::generateUUID();
-
-        InterleavedBuffer(const std::vector<float>& array, int stride);
-
-        InterleavedBuffer& setUsage(int usage) {
-            this->usage_ = usage;
-
-            return *this;
+        [[nodiscard]] int stride() const {
+            return stride_;
         }
 
-        void needsUpdate() {
-            ++version;
-        }
+    private:
 
+        int stride_;
     };
 
 }
