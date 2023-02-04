@@ -398,7 +398,15 @@ bool gl::GLState::useProgram(unsigned int program, bool force) {
     return false;
 }
 
-void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, std::optional<int> blendSrc, std::optional<int> blendDst, std::optional<int> blendEquationAlpha, std::optional<int> blendSrcAlpha, std::optional<int> blendDstAlpha, std::optional<bool> premultipliedAlpha) {
+void gl::GLState::setBlending(
+        int blending,
+        std::optional<int> blendEquation,
+        std::optional<int> blendSrc,
+        std::optional<int> blendDst,
+        std::optional<int> blendEquationAlpha,
+        std::optional<int> blendSrcAlpha,
+        std::optional<int> blendDstAlpha,
+        std::optional<bool> premultipliedAlpha) {
 
     if (blending == NoBlending) {
 
@@ -429,7 +437,7 @@ void gl::GLState::setBlending(int blending, std::optional<int> blendEquation, st
                 currentBlendEquationAlpha = AddEquation;
             }
 
-            if (premultipliedAlpha == true) {
+            if (premultipliedAlpha && premultipliedAlpha.value()) {
 
                 switch (blending) {
 

@@ -73,7 +73,7 @@ endif ()
 # ==============================================================================
 
 # Data files
-file(COPY "${CMAKE_SOURCE_DIR}/data/favicon.bmp" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
+file(COPY "${CMAKE_SOURCE_DIR}/data/favicon.png" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
 file(COPY "${CMAKE_SOURCE_DIR}/data/models" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 file(COPY "${CMAKE_SOURCE_DIR}/data/textures" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 

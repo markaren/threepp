@@ -50,7 +50,7 @@ public:
         {
 
             ImageLoader imageLoader;
-            auto favicon = imageLoader.load("favicon.bmp", 4);
+            auto favicon = imageLoader.load("favicon.png", 4);
             if (favicon) {
                 GLFWimage images[1];
                 images[0] = {static_cast<int>(favicon->width),

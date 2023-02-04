@@ -533,7 +533,7 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
 
                     for (const auto &group : groups) {
 
-                        Material* groupMaterial = materials.at(group.materialIndex);
+                        Material *groupMaterial = materials.at(group.materialIndex);
 
                         if (groupMaterial && groupMaterial->visible) {
 

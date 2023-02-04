@@ -19,10 +19,16 @@ int main() {
     TextureLoader loader;
 
     auto material = SpriteMaterial::create();
-    material->map = loader.loadTexture("data/textures/uv_grid_opengl.jpg");
+    material->map = loader.loadTexture("favicon.png");
+    material->map->offset.set(0.5, 0.5);
 
-    auto sprite = Sprite::create(material);
-    scene->add(sprite);
+    for (int x = -5; x < 5; x++) {
+        auto sprite = Sprite::create(material);
+        sprite->position.x = static_cast<float>(x);
+        sprite->position.z -= 1;
+        sprite->scale *= 0.5f;
+        scene->add(sprite);
+    }
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
