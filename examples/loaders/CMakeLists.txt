@@ -14,4 +14,7 @@ if (assimp_FOUND)
 
     add_executable(assimp_loader_glb assimp_loader_glb.cpp)
     target_link_libraries(assimp_loader_glb threepp assimp::assimp)
+
+    add_executable(assimp_loader_glb_lps assimp_loader_glb_lps.cpp)
+    target_link_libraries(assimp_loader_glb_lps threepp assimp::assimp)
 endif()
