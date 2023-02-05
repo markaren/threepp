@@ -5,18 +5,24 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas{Canvas::Parameters().antialiasing(8)};
     GLRenderer renderer(canvas);
     renderer.autoClear = false;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 10);
+    auto camera = PerspectiveCamera::create(60, 0.5f * canvas.getAspect(), 1, 10);
 
-    auto sphereGeometry = SphereGeometry::create();
+    auto sphereGeometry = SphereGeometry::create(1, 10, 10);
     auto sphereMaterial = MeshBasicMaterial::create();
     auto sphereMesh = Mesh::create(sphereGeometry, sphereMaterial);
-    sphereMesh->position.z = -10;
+    sphereMesh->position.z = -8;
     scene->add(sphereMesh);
+
+    auto sphereMaterialWireframe = MeshBasicMaterial::create();
+    sphereMaterialWireframe->wireframe = true;
+    sphereMaterialWireframe->color = Color::black;
+    auto sphereMeshWireframe = Mesh::create(sphereGeometry, sphereMaterialWireframe);
+    sphereMesh->add(sphereMeshWireframe);
 
     auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 1000);
     camera2->position.z = 5;
@@ -37,6 +43,7 @@ int main() {
         renderer.setSize(size);
     });
 
+    float t = 0;
     canvas.animate([&](float dt) {
         auto size = canvas.getSize();
 
@@ -52,10 +59,7 @@ int main() {
         renderer.setViewport({0, 0, size.width / 2, size.height});
         renderer.render(scene, camera2);
 
-        camera->position.z -= dt;
+        camera->position.z = 5 * std::sin(2 * math::PI * 0.1f * (t+=dt));
 
-        if (camera->position.z < -4) {
-            camera->position.z = 0;
-        }
     });
 }
