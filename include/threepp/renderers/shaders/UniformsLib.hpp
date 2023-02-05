@@ -51,7 +51,7 @@ namespace threepp::shaders {
                 {"bumpScale", Uniform(1.f)}};
 
         UniformMap normalmap{
-                {"normalmap", Uniform()},
+                {"normalMap", Uniform()},
                 {"normalScale", Uniform(Vector2(1, 1))}};
 
         UniformMap displacementmap{
