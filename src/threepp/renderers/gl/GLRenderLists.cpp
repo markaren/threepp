@@ -11,7 +11,7 @@ namespace {
 
     struct {
 
-        bool operator()(const RenderItem* a, const RenderItem* b) {
+        bool operator()(const RenderItem* b, const RenderItem* a) {
             if (a->groupOrder != b->groupOrder) {
                 return b->groupOrder > a->groupOrder;
             } else if (a->renderOrder != b->renderOrder) {
@@ -29,16 +29,12 @@ namespace {
     } painterSortStable;
 
     struct {
-        bool operator()(const RenderItem *a, const RenderItem *b) {
+        bool operator()(const RenderItem *b, const RenderItem *a) {
 
             if (a->groupOrder != b->groupOrder) {
                 return b->groupOrder > a->groupOrder;
             } else if (a->renderOrder != b->renderOrder) {
-                return b->renderOrder > a->renderOrder;
-            } else if (a->program != nullptr && b->program != nullptr && (a->program->id != b->program->id)) {
-                return b->program->id > a->program->id;
-            } else if (a->material->id != b->material->id) {
-                return b->material->id > a->material->id;
+                return a->renderOrder < b->renderOrder;
             } else if (a->z != b->z) {
                 return b->z > a->z;
             } else {
