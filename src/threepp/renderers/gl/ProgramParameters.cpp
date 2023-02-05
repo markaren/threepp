@@ -146,19 +146,21 @@ ProgramParameters::ProgramParameters(
         flatShading = flatshadeMaterial->flatShading;
     }
 
+    sizeAttenuation = material->is<MaterialWithSize>();
+
     skinning = false;// TODO
     maxBones = 0;    // TODO
     useVertexTexture = GLCapabilities::instance().floatVertexTextures;
 
-    numDirLights = static_cast<int>(lights.directional.size());
-    numPointLights = static_cast<int>(lights.point.size());
-    numSpotLights = static_cast<int>(lights.spot.size());
-    numRectAreaLights = static_cast<int>(lights.rectArea.size());
-    numHemiLights = static_cast<int>(lights.hemi.size());
+    numDirLights = lights.directional.size();
+    numPointLights = lights.point.size();
+    numSpotLights = lights.spot.size();
+    numRectAreaLights = lights.rectArea.size();
+    numHemiLights = lights.hemi.size();
 
-    numDirLightShadows = static_cast<int>(lights.directionalShadowMap.size());
-    numPointLightShadows = static_cast<int>(lights.pointShadowMap.size());
-    numSpotLightShadows = static_cast<int>(lights.spotShadowMap.size());
+    numDirLightShadows = lights.directionalShadowMap.size();
+    numPointLightShadows = lights.pointShadowMap.size();
+    numSpotLightShadows = lights.spotShadowMap.size();
 
     numClippingPlanes = renderer.clipping.numPlanes;
     numClipIntersection = renderer.clipping.numIntersection;

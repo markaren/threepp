@@ -87,21 +87,21 @@ namespace threepp {
             bool logarithmicDepthBuffer{};
 
             bool skinning;
-            int maxBones;
+            size_t maxBones;
             bool useVertexTexture{};
 
             bool morphTargets{};
             bool morphNormals{};
 
-            int numDirLights;
-            int numPointLights;
-            int numSpotLights;
-            int numRectAreaLights;
-            int numHemiLights;
+            size_t numDirLights;
+            size_t numPointLights;
+            size_t numSpotLights;
+            size_t numRectAreaLights;
+            size_t numHemiLights;
 
-            int numDirLightShadows;
-            int numPointLightShadows;
-            int numSpotLightShadows;
+            size_t numDirLightShadows;
+            size_t numPointLightShadows;
+            size_t numSpotLightShadows;
 
             int numClippingPlanes;
             int numClipIntersection{};
