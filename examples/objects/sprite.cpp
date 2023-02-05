@@ -11,7 +11,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
-    camera->position.z = 5;
+    camera->position.z = 8;
 
     OrbitControls controls{camera, canvas};
 
@@ -21,11 +21,13 @@ int main() {
     material->map = loader.loadTexture("favicon.png");
     material->map->offset.set(0.5, 0.5);
 
-    for (int x = -5; x < 5; x++) {
-        auto sprite = Sprite::create(material);
-        sprite->position.x = static_cast<float>(x);
-        sprite->scale *= 0.5f;
-        scene->add(sprite);
+    for (int x = -4; x <= 4; x++) {
+        for (int y = -4; y <= 4; y++) {
+            auto sprite = Sprite::create(material);
+            sprite->position.x = static_cast<float>(x);
+            sprite->position.y = static_cast<float>(y);
+            scene->add(sprite);
+        }
     }
 
     canvas.onWindowResize([&](WindowSize size) {
