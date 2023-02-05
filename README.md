@@ -12,6 +12,7 @@ however much remains to be done..
 
 * Box, Sphere, Plane, Cylindrical and Tube geometries  
 * 2D Textures
+* Sprites
 * Transparency
 * OrbitControls
 * AmbientLight, DirectionalLight, PointLight, SpotLight 
@@ -20,9 +21,9 @@ however much remains to be done..
 * Raycasting against Mesh
 * Binary STL loader
 * OBJ/MTL Loader
-* Generic model loader based on Assimp
-* Easy integration with imgui
-* Easy to use text rendering
+* Generic model loader based on [Assimp](https://github.com/assimp/assimp)
+* Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
+* Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
 Builds on Windows, Linux, MacOS, MinGW.
 
@@ -89,7 +90,7 @@ int main() {
     {
         const auto boxGeometry = BoxGeometry::create();
         const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color = 0xff0000;
+        boxMaterial->color = Color::red;
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = -1;
         group->add(box);
@@ -98,7 +99,7 @@ int main() {
     {
         const auto boxGeometry = BoxGeometry::create();
         const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color = 0x00ff00;
+        boxMaterial->color = Color::green;
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = 1;
         group->add(box);
