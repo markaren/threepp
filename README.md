@@ -135,5 +135,4 @@ int main() {
 
 ![Crane](doc/screenshots/crane.png)
 ![Obj+mtl](doc/screenshots/obj_mtl.png)
-![spotlight](doc/screenshots/spotlight.png)
-![directional](doc/screenshots/directional.png)
+![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
