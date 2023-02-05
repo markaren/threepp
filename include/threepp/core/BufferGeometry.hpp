@@ -41,6 +41,8 @@ namespace threepp {
 
         IntBufferAttribute *getIndex();
 
+        const IntBufferAttribute *getIndex() const;
+
         BufferGeometry &setIndex(std::vector<int> index);
 
         BufferGeometry &setIndex(std::unique_ptr<IntBufferAttribute> index);
@@ -53,11 +55,19 @@ namespace threepp {
             return dynamic_cast<TypedBufferAttribute<T> *>(attributes_.at(name).get());
         }
 
+        template<class T>
+        const TypedBufferAttribute<T> *getAttribute(const std::string &name) const {
+
+            if (!hasAttribute(name)) return nullptr;
+
+            return dynamic_cast<TypedBufferAttribute<T> *>(attributes_.at(name).get());
+        }
+
         [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &getAttributes() const;
 
         void setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute);
 
-        bool hasAttribute(const std::string &name);
+        bool hasAttribute(const std::string &name) const;
 
         void addGroup(int start, int count, int materialIndex = 0);
 
