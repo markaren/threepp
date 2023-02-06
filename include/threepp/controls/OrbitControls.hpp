@@ -169,7 +169,7 @@ namespace threepp {
 
             explicit MyMouseMoveListener(OrbitControls &scope) : scope(scope) {}
 
-            void onMouseMove(Vector2 pos) override {
+            void onMouseMove(const Vector2& pos) override {
                 if (scope.enabled) {
 
                     switch (scope.state) {
@@ -204,7 +204,7 @@ namespace threepp {
             explicit MyMouseListener(OrbitControls &scope)
                 : scope(scope), mouseMoveListener(new MyMouseMoveListener(scope)) {}
 
-            void onMouseDown(int button, Vector2 pos) override {
+            void onMouseDown(int button, const Vector2& pos) override {
                 if (scope.enabled) {
                     switch (button) {
                         case 0: // LEFT
@@ -238,7 +238,7 @@ namespace threepp {
 
             }
 
-            void onMouseWheel(Vector2 delta) override {
+            void onMouseWheel(const Vector2& delta) override {
                 if (scope.enabled && scope.enableZoom && !(scope.state != State::NONE && scope.state != State::ROTATE)) {
                     scope.handleMouseWheel(delta);
                 }
@@ -254,7 +254,7 @@ namespace threepp {
             explicit MyMouseUpListener(OrbitControls &scope, std::shared_ptr<MouseListener> mouseMoveListener)
                 : scope(scope), mouseMoveListener(std::move(mouseMoveListener)) {}
 
-            void onMouseUp(int button, Vector2 pos) override {
+            void onMouseUp(int button, const Vector2& pos) override {
                 if (scope.enabled) {
 
                     scope.canvas.removeMouseListener(mouseMoveListener->uuid);

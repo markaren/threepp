@@ -19,11 +19,8 @@ namespace {
         decalMaterial->normalScale = Vector2(1, 1);
         decalMaterial->shininess = 30;
         decalMaterial->transparent = true;
-        decalMaterial->depthTest = true;
-        decalMaterial->depthWrite = true;
         decalMaterial->polygonOffset = true;
         decalMaterial->polygonOffsetFactor = -4;
-        decalMaterial->wireframe = false;
 
         return decalMaterial;
     }
@@ -31,30 +28,38 @@ namespace {
     class MyMouseListener : public MouseListener {
 
     public:
-
+        Vector2 mouse{-1, -1};
 
         explicit MyMouseListener(Canvas &canvas) : canvas(canvas) {}
 
-        std::optional<Vector2> mouseClick() {
+        bool mouseClick() {
             if (mouseDown) {
                 mouseDown = false;
-                return mouse;
+                return true;
             } else {
-                return std::nullopt;
+                return false;
             }
         }
 
-        void onMouseDown(int button, Vector2 pos) override {
-            auto& size = canvas.getSize();
-            mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-            mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        void onMouseDown(int button, const Vector2 &pos) override {
             mouseDown = true;
+            updateMousePos(pos);
+        }
+
+        void onMouseMove(const Vector2 &pos) override {
+            updateMousePos(pos);
         }
 
     private:
         Canvas &canvas;
         bool mouseDown = false;
-        Vector2 mouse{-1, -1};
+
+
+        void updateMousePos(Vector2 pos) {
+            auto &size = canvas.getSize();
+            mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
+            mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        }
     };
 
 }// namespace
@@ -84,16 +89,21 @@ int main() {
 
     scene->add(model);
 
-    auto light = AmbientLight::create(0x443333, 1);
+    auto light = AmbientLight::create(0x443333, 1.f);
     scene->add(light);
 
-    auto light2 = DirectionalLight::create(0xffddcc, 1);
+    auto light2 = DirectionalLight::create(0xffddcc, 1.f);
     light2->position.set(1, 0.75, 0.5);
     scene->add(light2);
 
-    auto light3 = DirectionalLight::create(0xccccff, 1);
+    auto light3 = DirectionalLight::create(0xccccff, 1.f);
     light3->position.set(-1, 0.75, -0.5);
     scene->add(light3);
+
+    auto lineGeometry = BufferGeometry::create();
+    lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
+    auto line = Line::create(lineGeometry, LineBasicMaterial::create());
+    scene->add(line);
 
     auto mouseListener = std::make_shared<MyMouseListener>(canvas);
     canvas.addMouseListener(mouseListener);
@@ -111,40 +121,34 @@ int main() {
     auto decalMat = decalMaterial();
 
     Raycaster raycaster;
-    std::vector<std::shared_ptr<Mesh>> decals;
     canvas.animate([&](float dt) {
+        raycaster.setFromCamera(mouseListener->mouse, camera);
+        auto intersects = raycaster.intersectObject(mesh, false);
 
-        auto mouse = mouseListener->mouseClick();
-        if (mouse) {
+        if (!intersects.empty()) {
 
-            raycaster.setFromCamera(*mouse, camera);
-            auto intersects = raycaster.intersectObject(mesh, false);
+            auto &i = intersects.front();
+            Vector3 n = i.face->normal;
 
-            if (!intersects.empty()) {
+            mouseHelper.setPosition(i.point);
+            n.transformDirection(*mesh->matrixWorld);
+            n.multiplyScalar(10);
+            n.add(i.point);
+            mouseHelper.lookAt(position.setFromMatrixPosition(mouseHelper), n, Vector3::Z);
+            orientation.setFromRotationMatrix(mouseHelper);
 
-                auto& i = intersects.front();
-                Vector3 n = i.face->normal;
+            line->position.copy(position);
+            line->lookAt(n);
 
-                mouseHelper.setPosition(i.point);
-                n.transformDirection( *mesh->matrixWorld );
-                n.multiplyScalar( 10 );
-                n.add( i.point );
-                mouseHelper.lookAt(position.setFromMatrixPosition(mouseHelper), n, Vector3::Z);
-                orientation.setFromRotationMatrix(mouseHelper);
+            if (mouseListener->mouseClick()) {
 
                 Vector3 scale = Vector3::ONES * math::randomInRange(0.2f, 1.f);
 
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), decalMat);
-                decals.emplace_back(m);
                 scene->add(m);
-
-                if (decals.size() > 10) {
-                    scene->remove(decals.front());
-                    decals.erase(decals.begin());
-                }
             }
-
         }
+
 
         renderer.render(scene, camera);
     });

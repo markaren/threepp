@@ -204,7 +204,7 @@ public:
 
     static void cursor_callback(GLFWwindow *w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
-        p->lastMousePos.set((float) xpos, (float) ypos);
+        p->lastMousePos.set(static_cast<float>(xpos), static_cast<float>(ypos));
         auto listeners = p->mouseListeners;
         for (auto &[_, l] : listeners) {
             l->onMouseMove(p->lastMousePos);

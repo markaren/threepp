@@ -11,19 +11,19 @@ namespace {
 
         explicit MyListener(float &t) : t(t) {}
 
-        void onMouseDown(int button, Vector2 pos) override {
+        void onMouseDown(int button, const Vector2& pos) override {
             std::cout << "onMouseDown, button= " << button << ", pos=" << pos << " at t=" << t << std::endl;
         }
 
-        void onMouseUp(int button, Vector2 pos) override {
+        void onMouseUp(int button, const Vector2& pos) override {
             std::cout << "onMouseUp, button= " << button << ", pos=" << pos << " at t=" << t << std::endl;
         }
 
-        void onMouseMove(Vector2 pos) override {
+        void onMouseMove(const Vector2& pos) override {
             std::cout << "onMouseMove, " << "pos=" << pos << " at t=" << t << std::endl;
         }
 
-        void onMouseWheel(Vector2 delta) override {
+        void onMouseWheel(const Vector2& delta) override {
             std::cout << "onMouseWheel, " << "delta=" << delta << " at t=" << t << std::endl;
         }
     };
