@@ -41,6 +41,7 @@ set(publicHeaders
         "threepp/geometries/CircleGeometry.hpp"
         "threepp/geometries/ConeGeometry.hpp"
         "threepp/geometries/CylinderGeometry.hpp"
+        "threepp/geometries/DecalGeometry.hpp"
         "threepp/geometries/PlaneGeometry.hpp"
         "threepp/geometries/SphereGeometry.hpp"
         "threepp/geometries/TubeGeometry.hpp"
@@ -192,6 +193,7 @@ set(sources
 
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CylinderGeometry.cpp"
+        "threepp/geometries/DecalGeometry.cpp"
         "threepp/geometries/PlaneGeometry.cpp"
         "threepp/geometries/SphereGeometry.cpp"
 

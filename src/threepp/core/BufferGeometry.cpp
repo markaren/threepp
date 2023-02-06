@@ -17,6 +17,13 @@ IntBufferAttribute *BufferGeometry::getIndex() {
     return this->index_.get();
 }
 
+const IntBufferAttribute *BufferGeometry::getIndex() const {
+
+    if (!index_) return nullptr;
+
+    return this->index_.get();
+}
+
 BufferGeometry &BufferGeometry::setIndex(std::vector<int> index) {
 
     this->index_ = IntBufferAttribute::create(std::move(index), 1);
@@ -40,7 +47,7 @@ void BufferGeometry::setAttribute(const std::string &name, std::unique_ptr<Buffe
     attributes_[name] = std::move(attribute);
 }
 
-bool BufferGeometry::hasAttribute(const std::string &name) {
+bool BufferGeometry::hasAttribute(const std::string &name) const {
 
     return attributes_.count(name);
 }

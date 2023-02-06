@@ -24,10 +24,10 @@ namespace threepp {
 
         const std::string uuid = utils::generateUUID();
 
-        virtual void onMouseDown(int button, Vector2 pos) {}
-        virtual void onMouseUp(int button, Vector2 pos) {}
-        virtual void onMouseMove(Vector2 pos) {}
-        virtual void onMouseWheel(Vector2 delta) {}
+        virtual void onMouseDown(int button, const Vector2& pos) {}
+        virtual void onMouseUp(int button, const Vector2& pos) {}
+        virtual void onMouseMove(const Vector2& pos) {}
+        virtual void onMouseWheel(const Vector2& delta) {}
 
         virtual ~MouseListener() = default;
 
@@ -35,10 +35,10 @@ namespace threepp {
 
     struct MouseMoveListener: MouseListener {
 
-        explicit MouseMoveListener(std::function<void(Vector2)> f)
+        explicit MouseMoveListener(std::function<void(const Vector2&)> f)
             : f_(std::move(f)) {}
 
-        void onMouseMove(Vector2 pos) override {
+        void onMouseMove(const Vector2& pos) override {
             f_(pos);
         }
 

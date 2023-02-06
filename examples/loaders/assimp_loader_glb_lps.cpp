@@ -1,8 +1,68 @@
 
+#include <threepp/core/Raycaster.hpp>
+#include <threepp/geometries/DecalGeometry.hpp>
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/threepp.hpp>
 
 using namespace threepp;
+
+namespace {
+
+    TextureLoader tl;
+
+    std::shared_ptr<MeshPhongMaterial> decalMaterial() {
+
+        auto decalMaterial = MeshPhongMaterial::create();
+        decalMaterial->specular = 0x444444;
+        decalMaterial->map = tl.loadTexture("data/textures/decal/decal-diffuse.png");
+        decalMaterial->specularMap = tl.loadTexture("data/textures/decal/decal-normal.jpg");
+        decalMaterial->normalScale = Vector2(1, 1);
+        decalMaterial->shininess = 30;
+        decalMaterial->transparent = true;
+        decalMaterial->polygonOffset = true;
+        decalMaterial->polygonOffsetFactor = -4;
+
+        return decalMaterial;
+    }
+
+    class MyMouseListener : public MouseListener {
+
+    public:
+        Vector2 mouse{-1, -1};
+
+        explicit MyMouseListener(Canvas &canvas) : canvas(canvas) {}
+
+        bool mouseClick() {
+            if (mouseDown) {
+                mouseDown = false;
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        void onMouseDown(int button, const Vector2 &pos) override {
+            mouseDown = true;
+            updateMousePos(pos);
+        }
+
+        void onMouseMove(const Vector2 &pos) override {
+            updateMousePos(pos);
+        }
+
+    private:
+        Canvas &canvas;
+        bool mouseDown = false;
+
+
+        void updateMousePos(Vector2 pos) {
+            auto &size = canvas.getSize();
+            mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
+            mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        }
+    };
+
+}// namespace
 
 int main() {
 
@@ -29,16 +89,24 @@ int main() {
 
     scene->add(model);
 
-    auto light = AmbientLight::create(0x443333, 1);
+    auto light = AmbientLight::create(0x443333, 1.f);
     scene->add(light);
 
-    auto light2 = DirectionalLight::create(0xffddcc, 1);
+    auto light2 = DirectionalLight::create(0xffddcc, 1.f);
     light2->position.set(1, 0.75, 0.5);
     scene->add(light2);
 
-    auto light3 = DirectionalLight::create(0xccccff, 1);
-    light3->position.set(- 1, 0.75, - 0.5);
+    auto light3 = DirectionalLight::create(0xccccff, 1.f);
+    light3->position.set(-1, 0.75, -0.5);
     scene->add(light3);
+
+    auto lineGeometry = BufferGeometry::create();
+    lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
+    auto line = Line::create(lineGeometry, LineBasicMaterial::create());
+    scene->add(line);
+
+    auto mouseListener = std::make_shared<MyMouseListener>(canvas);
+    canvas.addMouseListener(mouseListener);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -46,7 +114,42 @@ int main() {
         renderer.setSize(size);
     });
 
+    Matrix4 mouseHelper;
+    Vector3 position;
+    Euler orientation;
+
+    auto decalMat = decalMaterial();
+
+    Raycaster raycaster;
     canvas.animate([&](float dt) {
+        raycaster.setFromCamera(mouseListener->mouse, camera);
+        auto intersects = raycaster.intersectObject(mesh, false);
+
+        if (!intersects.empty()) {
+
+            auto &i = intersects.front();
+            Vector3 n = i.face->normal;
+
+            mouseHelper.setPosition(i.point);
+            n.transformDirection(*mesh->matrixWorld);
+            n.multiplyScalar(10);
+            n.add(i.point);
+            mouseHelper.lookAt(position.setFromMatrixPosition(mouseHelper), n, Vector3::Z);
+            orientation.setFromRotationMatrix(mouseHelper);
+
+            line->position.copy(position);
+            line->lookAt(n);
+
+            if (mouseListener->mouseClick()) {
+
+                Vector3 scale = Vector3::ONES * math::randomInRange(0.2f, 1.f);
+
+                auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), decalMat);
+                scene->add(m);
+            }
+        }
+
+
         renderer.render(scene, camera);
     });
 }

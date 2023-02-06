@@ -23,6 +23,11 @@ namespace threepp {
             return geometry_.get();
         }
 
+        [[nodiscard]] const BufferGeometry* geometry() const {
+
+            return geometry_.get();
+        }
+
         Material* material() override {
 
             return materials_.front().get();
