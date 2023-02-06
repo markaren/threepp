@@ -95,11 +95,6 @@ int main() {
     light3->position.set(-1, 0.75, -0.5);
     scene->add(light3);
 
-    Raycaster raycaster;
-
-    Vector3 position;
-    Euler orientation;
-
     auto mouseListener = std::make_shared<MyMouseListener>(canvas);
     canvas.addMouseListener(mouseListener);
 
@@ -109,12 +104,14 @@ int main() {
         renderer.setSize(size);
     });
 
-    auto mouseHelper = Mesh::create(BoxGeometry::create(), MeshBasicMaterial::create());
-    mouseHelper->visible = false;
-    scene->add(mouseHelper);
+    Matrix4 mouseHelper;
+    Vector3 position;
+    Euler orientation;
 
-    std::vector<std::shared_ptr<Mesh>> decals;
     auto decalMat = decalMaterial();
+
+    Raycaster raycaster;
+    std::vector<std::shared_ptr<Mesh>> decals;
     canvas.animate([&](float dt) {
 
         auto mouse = mouseListener->mouseClick();
@@ -128,18 +125,16 @@ int main() {
                 auto& i = intersects.front();
                 Vector3 n = i.face->normal;
 
-                mouseHelper->position.copy(i.point);
+                mouseHelper.setPosition(i.point);
                 n.transformDirection( *mesh->matrixWorld );
                 n.multiplyScalar( 10 );
                 n.add( i.point );
-                mouseHelper->lookAt(n);
+                mouseHelper.lookAt(position.setFromMatrixPosition(mouseHelper), n, Vector3::Z);
+                orientation.setFromRotationMatrix(mouseHelper);
 
-                Vector3 scale = Vector3::ONES * math::randomInRange(0.1f, 1.f);
+                Vector3 scale = Vector3::ONES * math::randomInRange(0.2f, 1.f);
 
-
-                decalMat->color.randomize();
-
-                auto m = Mesh::create(DecalGeometry::create(*mesh, i.point, mouseHelper->rotation, scale), decalMat);
+                auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), decalMat);
                 decals.emplace_back(m);
                 scene->add(m);
 
@@ -150,7 +145,6 @@ int main() {
             }
 
         }
-
 
         renderer.render(scene, camera);
     });

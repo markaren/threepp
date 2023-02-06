@@ -267,15 +267,12 @@ DecalGeometry::DecalGeometry(
 
         // third, generate final vertices, normals and uvs
 
-        for (unsigned i = 0; i < decalVertices.size(); i++) {
-
-            auto &decalVertex = decalVertices[i];
+        for (auto &decalVertex : decalVertices) {
 
             // create texture coordinates (we are still in projector space)
 
-            uvs.insert(uvs.end(),
-                       {0.5f + (decalVertex.position.x / size.x),
-                        0.5f + (decalVertex.position.y / size.y)});
+            uvs.emplace_back(0.5f + (decalVertex.position.x / size.x));
+            uvs.emplace_back(0.5f + (decalVertex.position.y / size.y));
 
             // transform the vertex back to world space
 
