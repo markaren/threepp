@@ -8,10 +8,11 @@ using namespace threepp;
 
 namespace {
 
-    TextureLoader tl;
+
 
     auto decalMaterial() {
 
+        TextureLoader tl;
         auto decalMaterial = MeshBasicMaterial::create();
 //        decalMaterial->specular = 0x444444;
         decalMaterial->map = tl.loadTexture("data/textures/decal/decal-diffuse.png");
@@ -19,8 +20,8 @@ namespace {
 //        decalMaterial->normalScale = Vector2(1, 1);
 //        decalMaterial->shininess = 30;
         decalMaterial->transparent = true;
-//        decalMaterial->polygonOffset = true;
-//        decalMaterial->polygonOffsetFactor = -4;
+        decalMaterial->polygonOffset = true;
+        decalMaterial->polygonOffsetFactor = -4;
 
         return decalMaterial;
     }
@@ -53,7 +54,6 @@ namespace {
     private:
         Canvas &canvas;
         bool mouseDown = false;
-
 
         void updateMousePos(Vector2 pos) {
             auto &size = canvas.getSize();
@@ -144,10 +144,11 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES * math::randomInRange(0.2f, 1.f);
+                Vector3 scale = Vector3::ONES * math::randomInRange(0.4f, 1.f);
 
                 auto mat = decalMat->clone();
                 mat->color.randomize();
+                orientation.z = math::PI * math::randomInRange(0.f, 1.f);
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
                 scene->add(m);
             }
