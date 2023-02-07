@@ -81,10 +81,10 @@ int main() {
     auto model = loader.load(folder / "LeePerrySmith.glb");
     auto mesh = model->children[0]->children[0]->as<Mesh>();
     auto mat = MeshPhongMaterial::create();
-    mat->as<MaterialWithMap>()->map = texLoader.loadTexture(folder / "Map-COL.jpg", false);
-    mat->as<MaterialWithSpecularMap>()->specularMap = texLoader.loadTexture(folder / "Map-SPEC.jpg", false);
-    mat->as<MaterialWithNormalMap>()->normalMap = texLoader.loadTexture(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
-    mat->as<MaterialWithSpecular>()->shininess = 25;
+    mat->map = texLoader.loadTexture(folder / "Map-COL.jpg", false);
+    mat->specularMap = texLoader.loadTexture(folder / "Map-SPEC.jpg", false);
+    mat->normalMap = texLoader.loadTexture(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
+    mat->shininess = 25;
     mesh->materials_.front() = mat;
 
     scene->add(model);
