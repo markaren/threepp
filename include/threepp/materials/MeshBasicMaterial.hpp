@@ -27,14 +27,14 @@ namespace threepp {
           public MaterialWithCombine {
 
     public:
-        MeshBasicMaterial(const MeshBasicMaterial &m)
-            : MaterialWithColor(m.color),
-              MaterialWithAoMap(m.aoMapIntensity),
-              MaterialWithLightMap(m.lightMapIntensity),
-              MaterialWithCombine(m.combine),
-              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
-              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth) {
-        }
+//        MeshBasicMaterial(const MeshBasicMaterial &m)
+//            : MaterialWithColor(m.color),
+//              MaterialWithAoMap(m.aoMapIntensity),
+//              MaterialWithLightMap(m.lightMapIntensity),
+//              MaterialWithCombine(m.combine),
+//              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
+//              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth) {
+//        }
 
         [[nodiscard]] std::string type() const override {
 
@@ -43,7 +43,32 @@ namespace threepp {
 
         [[nodiscard]] std::shared_ptr<MeshBasicMaterial> clone() const {
 
-            return std::make_shared<MeshBasicMaterial>(*this);
+            auto m =  std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
+            copyInto(m.get());
+            
+            m->color.copy( color );
+            
+            m->map = map;
+
+            m->lightMap = lightMap;
+            m->lightMapIntensity = lightMapIntensity;
+
+            m->aoMap = aoMap;
+            m->aoMapIntensity = aoMapIntensity;
+
+            m->specularMap = specularMap;
+
+            m->alphaMap = alphaMap;
+
+            m->envMap = envMap;
+            m->combine = combine;
+            m->reflectivity = reflectivity;
+            m->refractionRatio = refractionRatio;
+
+            m->wireframe = wireframe;
+            m->wireframeLinewidth = wireframeLinewidth;
+
+            return m;
         }
 
         static std::shared_ptr<MeshBasicMaterial> create() {

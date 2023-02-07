@@ -23,14 +23,14 @@ namespace threepp {
           public MaterialWithCombine {
 
     public:
-        MeshLambertMaterial(const MeshLambertMaterial &m)
-            : MaterialWithColor(m.color),
-              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth),
-              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
-              MaterialWithLightMap(m.lightMapIntensity),
-              MaterialWithEmissive(m.emissive, m.emissiveIntensity),
-              MaterialWithAoMap(m.aoMapIntensity),
-              MaterialWithCombine(m.combine) {}
+//        MeshLambertMaterial(const MeshLambertMaterial &m)
+//            : MaterialWithColor(m.color),
+//              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth),
+//              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
+//              MaterialWithLightMap(m.lightMapIntensity),
+//              MaterialWithEmissive(m.emissive, m.emissiveIntensity),
+//              MaterialWithAoMap(m.aoMapIntensity),
+//              MaterialWithCombine(m.combine) {}
 
         [[nodiscard]] std::string type() const override {
 

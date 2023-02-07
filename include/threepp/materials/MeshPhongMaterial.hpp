@@ -28,19 +28,19 @@ namespace threepp {
           public MaterialWithFlatShading {
 
     public:
-        MeshPhongMaterial(const MeshPhongMaterial &m)
-            : MaterialWithColor(m.color),
-              MaterialWithCombine(m.combine),
-              MaterialWithFlatShading(m.flatShading),
-              MaterialWithSpecular(m.specular, m.shininess),
-              MaterialWithLightMap(m.lightMapIntensity),
-              MaterialWithAoMap(m.aoMapIntensity),
-              MaterialWithEmissive(m.emissive, m.emissiveIntensity),
-              MaterialWithBumpMap(m.bumpScale),
-              MaterialWithNormalMap(m.normalMapType, m.normalScale),
-              MaterialWithDisplacementMap(m.displacementScale, m.displacementBias),
-              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
-              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth) {}
+//        MeshPhongMaterial(const MeshPhongMaterial &m)
+//            : MaterialWithColor(m.color),
+//              MaterialWithCombine(m.combine),
+//              MaterialWithFlatShading(m.flatShading),
+//              MaterialWithSpecular(m.specular, m.shininess),
+//              MaterialWithLightMap(m.lightMapIntensity),
+//              MaterialWithAoMap(m.aoMapIntensity),
+//              MaterialWithEmissive(m.emissive, m.emissiveIntensity),
+//              MaterialWithBumpMap(m.bumpScale),
+//              MaterialWithNormalMap(m.normalMapType, m.normalScale),
+//              MaterialWithDisplacementMap(m.displacementScale, m.displacementBias),
+//              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
+//              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth) {}
 
         [[nodiscard]] std::string type() const override {
 
@@ -49,7 +49,53 @@ namespace threepp {
 
         [[nodiscard]] std::shared_ptr<MeshPhongMaterial> clone() const {
 
-            return std::make_shared<MeshPhongMaterial>(*this);
+            auto m = std::shared_ptr<MeshPhongMaterial>(new MeshPhongMaterial());
+
+            copyInto(m.get());
+
+            m->color.copy( color );
+            m->specular.copy( specular );
+            m->shininess = shininess;
+
+            m->map = map;
+
+            m->lightMap = lightMap;
+            m->lightMapIntensity = lightMapIntensity;
+
+            m->aoMap = aoMap;
+            m->aoMapIntensity = aoMapIntensity;
+
+            m->emissive.copy( emissive );
+            m->emissiveMap = emissiveMap;
+            m->emissiveIntensity = emissiveIntensity;
+
+            m->bumpMap = bumpMap;
+            m->bumpScale = bumpScale;
+
+            m->normalMap = normalMap;
+            m->normalMapType = normalMapType;
+            m->normalScale.copy( normalScale );
+
+            m->displacementMap = displacementMap;
+            m->displacementScale = displacementScale;
+            m->displacementBias = displacementBias;
+
+            m->specularMap = specularMap;
+
+            m->alphaMap = alphaMap;
+
+            m->envMap = envMap;
+            m->combine = combine;
+            m->reflectivity = reflectivity;
+            m->refractionRatio = refractionRatio;
+
+            m->wireframe = wireframe;
+            m->wireframeLinewidth = wireframeLinewidth;
+
+            m->flatShading = flatShading;
+
+            return m;
+
         }
 
         static std::shared_ptr<MeshPhongMaterial> create() {
