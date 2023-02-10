@@ -1088,7 +1088,7 @@ void GLRenderer::renderText() {
                 it = textHandles_.erase(it);
             } else {
 
-                (*it)->render();
+                (*it)->render(state.currentBlendingEnabled);
                 ++it;
             }
         }

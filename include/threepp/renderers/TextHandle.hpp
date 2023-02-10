@@ -52,7 +52,7 @@ namespace threepp {
 
         bool invalidate_ = false;
 
-        void render();
+        void render(bool blendingEnabled);
 
         static void setViewport(int width, int height);
 
