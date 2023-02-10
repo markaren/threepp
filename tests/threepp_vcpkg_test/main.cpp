@@ -17,12 +17,31 @@ int main() {
 
     auto scene = Scene::create();
 
-    auto geometry = BoxGeometry::create();
-    auto material = MeshBasicMaterial::create();
-    material->color = Color::green;
-    auto mesh = Mesh::create(geometry, material);
+    auto group = Group::create();
+    scene->add(group);
 
-    scene->add(mesh);
+    {
+        auto geometry = BoxGeometry::create();
+        auto material = MeshBasicMaterial::create();
+        material->color = Color::green;
+        auto mesh = Mesh::create(geometry, material);
+        mesh->position.x = -1;
+        group->add(mesh);
+    }
+
+    {
+        auto geometry = BoxGeometry::create();
+        auto material = MeshBasicMaterial::create();
+        material->color = Color::blue;
+        auto mesh = Mesh::create(geometry, material);
+        mesh->position.x = 1;
+        group->add(mesh);
+    }
+
+    renderer.enableTextRendering();
+    auto& textHandle = renderer.textHandle("Hello World");
+    textHandle.setPosition(0, canvas.getSize().height-30);
+    textHandle.scale = 2;
 
 
     std::array<float, 3> posBuf{};
@@ -35,13 +54,19 @@ int main() {
         ImGui::End();
     });
 
+    canvas.onWindowResize([&](WindowSize size){
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+        textHandle.setPosition(0, size.height-30);
+    });
 
     canvas.animate([&] {
 
         renderer.render(scene, camera);
 
         ui.render();
-        mesh->position.fromArray(posBuf);
+        group->position.fromArray(posBuf);
 
     });
 
