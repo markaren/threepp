@@ -41,7 +41,15 @@ namespace threepp {
 
         Color &multiply(const Color &color);
 
+        Color& operator *=(const Color& color) {
+            return multiply(color);
+        }
+
         Color &multiplyScalar(float s);
+
+        Color& operator *=(float s) {
+            return multiplyScalar(s);
+        }
 
         Color &lerp(const Color &color, float alpha);
 

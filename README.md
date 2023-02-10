@@ -131,6 +131,10 @@ int main() {
 
 ```
 
+## Consuming threepp using a custom vcpkg-registry
+
+See [here](tests/threepp_vcpkg_test) for an example of how threepp can be consuming in a separate project using vcpkg.
+
 ### Screenshots
 
 ![Crane](doc/screenshots/crane.png)
