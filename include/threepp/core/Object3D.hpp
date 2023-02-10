@@ -72,6 +72,8 @@ namespace threepp {
         std::optional<RenderCallback> onBeforeRender;
         std::optional<RenderCallback> onAfterRender;
 
+        Object3D();
+
         void applyMatrix4(const Matrix4 &matrix);
 
         Object3D &applyQuaternion(const Quaternion &q);
@@ -197,9 +199,6 @@ namespace threepp {
         std::shared_ptr<Object3D> clone(bool recursive = false);
 
         virtual ~Object3D() = default;
-
-    protected:
-        Object3D();
 
     private:
         inline static unsigned int _object3Did{0};
