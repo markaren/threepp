@@ -31,8 +31,10 @@ void TextHandle::setText(const std::string &str) {
 }
 
 void threepp::TextHandle::render() {
+    glEnable(GL_BLEND);
     gltColor(color.r, color.g, color.b, alpha);
     gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, horizontalAlignment, verticalAlignment);
+    glDisable(GL_BLEND);
 }
 
 void threepp::TextHandle::setViewport(int width, int height) {
