@@ -1,0 +1,4 @@
+
+add_test_executable(Vector3_test)
+add_test_executable(Matrix4_test)
+add_test_executable(Quaternion_test)

@@ -1,7 +1,7 @@
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
-#include "equals_util.hpp"
+#include "../equals_util.hpp"
 
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>

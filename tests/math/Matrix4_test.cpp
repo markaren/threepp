@@ -9,7 +9,7 @@
 
 #include "threepp/math/MathUtils.hpp"
 
-#include "equals_util.hpp"
+#include "../equals_util.hpp"
 
 using namespace threepp;
 

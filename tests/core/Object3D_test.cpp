@@ -7,10 +7,9 @@
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
-
 #include "threepp/math/MathUtils.hpp"
 
-#include "equals_util.hpp"
+#include "../equals_util.hpp"
 
 using namespace threepp;
 
