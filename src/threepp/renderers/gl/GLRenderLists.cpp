@@ -51,7 +51,6 @@ void gl::GLRenderList::init() {
 
     renderItemsIndex = 0;
 
-    renderItems.clear();
     opaque.clear();
     transparent.clear();
 }
