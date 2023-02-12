@@ -30,15 +30,9 @@ void TextHandle::setText(const std::string &str) {
     gltSetText(pimpl_->text, str.c_str());
 }
 
-void threepp::TextHandle::render(bool blendingEnabled) {
-    if (!blendingEnabled) {
-        glEnable(GL_BLEND);
-    }
+void threepp::TextHandle::render() {
     gltColor(color.r, color.g, color.b, alpha);
     gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, horizontalAlignment, verticalAlignment);
-    if (!blendingEnabled) {
-        glDisable(GL_BLEND);
-    }
 }
 
 void threepp::TextHandle::setViewport(int width, int height) {
@@ -49,12 +43,18 @@ void threepp::TextHandle::terminate() {
     gltTerminate();
 }
 
-void threepp::TextHandle::beginDraw() {
+void threepp::TextHandle::beginDraw(bool blendingEnabled) {
+    if (!blendingEnabled) {
+        glEnable(GL_BLEND);
+    }
     gltBeginDraw();
 }
 
-void threepp::TextHandle::endDraw() {
+void threepp::TextHandle::endDraw(bool blendingEnabled) {
     gltEndDraw();
+    if (!blendingEnabled) {
+        glDisable(GL_BLEND);
+    }
 }
 
 TextHandle::~TextHandle() = default;

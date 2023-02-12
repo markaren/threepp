@@ -52,14 +52,14 @@ namespace threepp {
 
         bool invalidate_ = false;
 
-        void render(bool blendingEnabled);
+        void render();
 
         static void setViewport(int width, int height);
 
         static bool init();
 
-        static void beginDraw();
-        static void endDraw();
+        static void beginDraw(bool blendingEnabled);
+        static void endDraw(bool blendingEnabled);
 
         static void terminate();
 

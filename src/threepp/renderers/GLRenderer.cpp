@@ -1080,19 +1080,18 @@ void GLRenderer::renderText() {
 
     if (textEnabled_ && !textHandles_.empty()) {
 
-        TextHandle::beginDraw();
+        TextHandle::beginDraw(state.currentBlendingEnabled);
         auto it = textHandles_.begin();
         while (it != textHandles_.end()) {
 
             if ((*it)->invalidate_) {
                 it = textHandles_.erase(it);
             } else {
-
-                (*it)->render(state.currentBlendingEnabled);
+                (*it)->render();
                 ++it;
             }
         }
-        TextHandle::endDraw();
+        TextHandle::endDraw(state.currentBlendingEnabled);
         bindingStates.reset();
     }
 }
