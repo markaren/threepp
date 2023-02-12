@@ -24,23 +24,17 @@ int main() {
     auto grid = GridHelper::create(20, 10, Color::yellowgreen);
     scene->add(grid);
 
-    auto light = DirectionalLight::create(0xffffff, 0.1f);
-    scene->position.set(1, 1, 1);
-    scene->add(light);
+    auto light1 = DirectionalLight::create(0xffffff, 1.f);
+    light1->position.set(1, 1, 1);
+    scene->add(light1);
 
-    auto light2 = AmbientLight::create(0xffffff, 0.1f);
+    auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    std::unique_ptr<Youbot> youbot;
-    std::thread t([&] {
-        AssimpLoader loader;
-        youbot = Youbot::create("data/models/collada/youbot.dae");
-        youbot->setup(canvas);
-
-        canvas.invokeLater([&] {
-            scene->add(youbot->base);
-        });
-    });
+    AssimpLoader loader;
+    auto youbot = Youbot::create("data/models/collada/youbot.dae");
+    canvas.addKeyListener(youbot.get());
+    scene->add(youbot->base);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -51,10 +45,6 @@ int main() {
     canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
-        if (youbot) {
-            youbot->update(dt);
-        }
+        youbot->update(dt);
     });
-
-    t.join();
 }

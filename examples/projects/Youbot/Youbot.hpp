@@ -14,35 +14,32 @@ struct wasd {
     bool down = false;
 };
 
-struct Youbot {
+struct Youbot: KeyListener {
 
     std::shared_ptr<Group> base;
 
-    void setup(Canvas &canvas) {
+    void onKeyPressed(KeyEvent evt) override {
+        if (evt.key == 87) {
+            wasd_.up = true;
+        } else if (evt.key == 83) {
+            wasd_.down = true;
+        } else if (evt.key == 68) {
+            wasd_.right = true;
+        } else if (evt.key == 65) {
+            wasd_.left = true;
+        }
+    }
 
-        canvas.addKeyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
-            if (evt.key == 87) {
-                wasd_.up = true;
-            } else if (evt.key == 83) {
-                wasd_.down = true;
-            } else if (evt.key == 68) {
-                wasd_.right = true;
-            } else if (evt.key == 65) {
-                wasd_.left = true;
-            }
-        });
-
-        canvas.addKeyAdapter(KeyAdapter::Mode::KEY_RELEASED, [&](KeyEvent evt) {
-            if (evt.key == 87) {
-                wasd_.up = false;
-            } else if (evt.key == 83) {
-                wasd_.down = false;
-            } else if (evt.key == 68) {
-                wasd_.right = false;
-            } else if (evt.key == 65) {
-                wasd_.left = false;
-            }
-        });
+    void onKeyReleased(KeyEvent evt) override {
+        if (evt.key == 87) {
+            wasd_.up = false;
+        } else if (evt.key == 83) {
+            wasd_.down = false;
+        } else if (evt.key == 68) {
+            wasd_.right = false;
+        } else if (evt.key == 65) {
+            wasd_.left = false;
+        }
     }
 
     void driveForwards(float dt) {

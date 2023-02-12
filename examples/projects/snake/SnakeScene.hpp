@@ -9,7 +9,7 @@
 using namespace threepp;
 
 
-class SnakeScene : public Scene {
+class SnakeScene : public Scene, public KeyListener {
 
 public:
     explicit SnakeScene(SnakeGame &game) : game_(game) {
@@ -38,13 +38,37 @@ public:
         add(camera_);
     }
 
+    void onKeyPressed(KeyEvent evt) override {
+
+        if (game_.isRunning()) {
+
+            if (evt.key == 265 && game_.direction != Direction::DOWN) {
+                game_.nextDirection = Direction::UP;
+            }
+            if (evt.key == 264 && game_.direction != Direction::UP) {
+                game_.nextDirection = Direction::DOWN;
+            }
+            if (evt.key == 263 && game_.direction != Direction::RIGHT) {
+                game_.nextDirection = Direction::LEFT;
+            }
+            if (evt.key == 262 && game_.direction != Direction::LEFT) {
+                game_.nextDirection = Direction::RIGHT;
+            }
+        }
+        if (evt.key == 82 /*r*/) {
+
+            game_.reset();
+            reset();
+        }
+    }
+
     void update() {
         auto foodPos = game_.foodPos();
         food_->position.set(foodPos.x, foodPos.y, 0);
 
         auto &positions = game_.snake().positions();
         for (unsigned i = 0; i < positions.size(); ++i) {
-            auto& pos = positions.at(i);
+            auto &pos = positions.at(i);
             if (positions.size() != snake_.size()) {
                 snake_.emplace_back(Mesh::create(boxGeometry_, snakeMaterial_));
                 add(snake_.back());
@@ -55,7 +79,6 @@ public:
         if (!game_.isRunning()) {
             snakeMaterial_->color = Color::red;
         }
-
     }
 
     void reset() {
@@ -75,7 +98,6 @@ public:
     }
 
 private:
-
     SnakeGame &game_;
     std::shared_ptr<Mesh> food_;
     std::shared_ptr<OrthographicCamera> camera_;

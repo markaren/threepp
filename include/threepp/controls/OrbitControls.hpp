@@ -105,8 +105,8 @@ namespace threepp {
         Canvas &canvas;
         std::shared_ptr<Camera> camera;
 
-        std::shared_ptr<KeyListener> keyListener;
-        std::shared_ptr<MouseListener> mouseListener;
+        std::unique_ptr<KeyListener> keyListener;
+        std::unique_ptr<MouseListener> mouseListener;
 
         // current position in spherical coordinates
         Spherical spherical{};
@@ -199,10 +199,30 @@ namespace threepp {
             OrbitControls &scope;
         };
 
+
+        struct MyMouseUpListener: MouseListener {
+
+            explicit MyMouseUpListener(OrbitControls &scope, MyMouseMoveListener* mouseMoveListener)
+                : scope(scope), mouseMoveListener(mouseMoveListener) {}
+
+            void onMouseUp(int button, const Vector2& pos) override {
+                if (scope.enabled) {
+
+                    scope.canvas.removeMouseListener(mouseMoveListener);
+                    scope.canvas.removeMouseListener(this);
+                    scope.state = State::NONE;
+                }
+            }
+
+        private:
+            OrbitControls &scope;
+            MouseListener* mouseMoveListener;
+        };
+
         struct MyMouseListener : MouseListener {
 
             explicit MyMouseListener(OrbitControls &scope)
-                : scope(scope), mouseMoveListener(new MyMouseMoveListener(scope)) {}
+                : scope(scope), mouseMoveListener(scope), mouseUpListener(scope, &mouseMoveListener) {}
 
             void onMouseDown(int button, const Vector2& pos) override {
                 if (scope.enabled) {
@@ -231,8 +251,8 @@ namespace threepp {
 
                 if (scope.state != State::NONE) {
 
-                    scope.canvas.addMouseListener(mouseMoveListener);
-                    scope.canvas.addMouseListener(std::make_shared<MyMouseUpListener>(scope, mouseMoveListener));
+                    scope.canvas.addMouseListener(&mouseMoveListener);
+                    scope.canvas.addMouseListener(&mouseUpListener);
 
                 }
 
@@ -246,27 +266,10 @@ namespace threepp {
 
         private:
             OrbitControls &scope;
-            std::shared_ptr<MyMouseMoveListener> mouseMoveListener;
+            MyMouseMoveListener mouseMoveListener;
+            MyMouseUpListener mouseUpListener;
         };
 
-        struct MyMouseUpListener: MouseListener {
-
-            explicit MyMouseUpListener(OrbitControls &scope, std::shared_ptr<MouseListener> mouseMoveListener)
-                : scope(scope), mouseMoveListener(std::move(mouseMoveListener)) {}
-
-            void onMouseUp(int button, const Vector2& pos) override {
-                if (scope.enabled) {
-
-                    scope.canvas.removeMouseListener(mouseMoveListener->uuid);
-                    scope.canvas.removeMouseListener(this->uuid);
-                    scope.state = State::NONE;
-                }
-            }
-
-        private:
-            OrbitControls &scope;
-            std::shared_ptr<MouseListener> mouseMoveListener;
-        };
     };
 
 }// namespace threepp

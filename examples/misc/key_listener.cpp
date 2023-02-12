@@ -31,20 +31,20 @@ int main() {
     Canvas canvas;
 
     float t = 0;
-    auto l = std::make_shared<MyListener>(t);
-    canvas.addKeyListener(l);
+    MyListener l{t};
+    canvas.addKeyListener(&l);
 
     bool finish = false;
     canvas.animate([&](float dt) {
         t += dt;
 
         if (t > 2 && t < 4) {
-            if (canvas.removeKeyListener(l->uuid)) {
+            if (canvas.removeKeyListener(&l)) {
                 std::cout << "removed listener" << std::endl;
             }
         } else if (!finish && t > 5) {
             std::cout << "re-added listener" << std::endl;
-            canvas.addKeyListener(l);
+            canvas.addKeyListener(&l);
             finish = true;
         }
 
