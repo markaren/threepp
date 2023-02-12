@@ -93,7 +93,6 @@ int main() {
 
     std::unique_ptr<Youbot> youbot;
     std::thread t([&] {
-        AssimpLoader loader;
         youbot = Youbot::create("data/models/collada/youbot.dae");
         youbot->setup(canvas);
 

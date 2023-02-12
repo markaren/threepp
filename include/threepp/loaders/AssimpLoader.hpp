@@ -117,48 +117,70 @@ namespace threepp {
                             //                        tex->encoding = sRGBEncoding;
                             std::dynamic_pointer_cast<MaterialWithMap>(material)->map = tex;
                         }
-                    }
-                    C_STRUCT aiColor4D diffuse;
-                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_DIFFUSE, &diffuse)) {
-                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(diffuse.r, diffuse.g, diffuse.b);
+                    } else {
+                        C_STRUCT aiColor4D diffuse;
+                        if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_DIFFUSE, &diffuse)) {
+                            std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(diffuse.r, diffuse.g, diffuse.b);
+                        }
                     }
 
                     if (!basicMaterial) {
+
+                        auto m = material->as<MeshPhongMaterial>();
+
                         if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                             if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
                                 auto texPath = path.parent_path() / p.C_Str();
                                 auto tex = texLoader_.loadTexture(texPath);
                                 //                        tex->encoding = sRGBEncoding;
-                                std::dynamic_pointer_cast<MaterialWithEmissive>(material)->emissiveMap = tex;
+                                m->emissiveMap = tex;
+                            }
+                        } else {
+                            C_STRUCT aiColor4D emissive;
+                            if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_EMISSIVE, &emissive)) {
+                                m->emissive.setRGB(emissive.r, emissive.g, emissive.b);
                             }
                         }
-                        C_STRUCT aiColor4D emissive;
-                        if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_EMISSIVE, &emissive)) {
-                            std::dynamic_pointer_cast<MaterialWithEmissive>(material)->emissive.setRGB(emissive.r, emissive.g, emissive.b);
-                        }
-
 
                         if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
                             if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
                                 auto texPath = path.parent_path() / p.C_Str();
                                 auto tex = texLoader_.loadTexture(texPath);
                                 //                        tex->encoding = sRGBEncoding;
-                                std::dynamic_pointer_cast<MaterialWithSpecularMap>(material)->specularMap = tex;
+                                m->specularMap = tex;
+                            }
+                        } else {
+                            C_STRUCT aiColor4D specular;
+                            if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
+                                m->specular.setRGB(specular.r, specular.g, specular.b);
                             }
                         }
-                        C_STRUCT aiColor4D specular;
-                        if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
-                            std::dynamic_pointer_cast<MaterialWithSpecular>(material)->specular.setRGB(specular.r, specular.g, specular.b);
+
+                        float shininess;
+                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_SHININESS, &shininess) ) {
+                            m->shininess = shininess;
                         }
+
+                        float emmisiveIntensity;
+                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity) ) {
+                            m->emissiveIntensity = emmisiveIntensity;
+                        }
+
                     }
 
-                    C_STRUCT aiColor4D ambient;
-                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
-                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
-                    }
+//                    C_STRUCT aiColor4D ambient;
+//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
+//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
+//                    }
+//
+//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
+//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
+//                    }
 
-                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
-                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
+                    float opacity;
+                    if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity) ) {
+                        material->transparent = true;
+                        material->opacity = opacity;
                     }
 
                 }
