@@ -28,19 +28,6 @@ namespace threepp {
           public MaterialWithFlatShading {
 
     public:
-//        MeshPhongMaterial(const MeshPhongMaterial &m)
-//            : MaterialWithColor(m.color),
-//              MaterialWithCombine(m.combine),
-//              MaterialWithFlatShading(m.flatShading),
-//              MaterialWithSpecular(m.specular, m.shininess),
-//              MaterialWithLightMap(m.lightMapIntensity),
-//              MaterialWithAoMap(m.aoMapIntensity),
-//              MaterialWithEmissive(m.emissive, m.emissiveIntensity),
-//              MaterialWithBumpMap(m.bumpScale),
-//              MaterialWithNormalMap(m.normalMapType, m.normalScale),
-//              MaterialWithDisplacementMap(m.displacementScale, m.displacementBias),
-//              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
-//              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth) {}
 
         [[nodiscard]] std::string type() const override {
 

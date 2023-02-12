@@ -77,6 +77,8 @@ namespace threepp {
 
         unsigned int version = 0;
 
+        Material(const Material&) = delete;
+
         void dispose() {
 
             dispatchEvent("dispose", this);
@@ -98,7 +100,7 @@ namespace threepp {
         template<class T>
         bool is() {
 
-            return dynamic_cast<T*>(this) != nullptr;
+            return dynamic_cast<T *>(this) != nullptr;
         }
 
         virtual ~Material() = default;
@@ -106,7 +108,10 @@ namespace threepp {
     protected:
         Material() = default;
 
-        void copyInto(Material* m) const {
+        void copyInto(Material *m) const {
+
+            m->name = name;
+
             m->fog = fog;
 
             m->blending = blending;
@@ -136,20 +141,18 @@ namespace threepp {
             m->stencilZPass = stencilZPass;
             m->stencilWrite = stencilWrite;
 
-            const auto srcPlanes = clippingPlanes;
+            const auto &srcPlanes = clippingPlanes;
             std::vector<Plane> dstPlanes;
 
-            if ( !srcPlanes.empty() ) {
+            if (!srcPlanes.empty()) {
 
                 auto n = srcPlanes.size();
                 dstPlanes.resize(n);
 
-                for ( unsigned i = 0; i != n; ++ i ) {
+                for (unsigned i = 0; i != n; ++i) {
 
-                    dstPlanes[ i ] = srcPlanes[ i ];
-
+                    dstPlanes[i] = srcPlanes[i];
                 }
-
             }
 
             m->clippingPlanes = dstPlanes;

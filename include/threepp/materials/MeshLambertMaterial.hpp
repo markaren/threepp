@@ -23,15 +23,6 @@ namespace threepp {
           public MaterialWithCombine {
 
     public:
-//        MeshLambertMaterial(const MeshLambertMaterial &m)
-//            : MaterialWithColor(m.color),
-//              MaterialWithWireframe(m.wireframe, m.wireframeLinewidth),
-//              MaterialWithReflectivity(m.reflectivity, m.refractionRatio),
-//              MaterialWithLightMap(m.lightMapIntensity),
-//              MaterialWithEmissive(m.emissive, m.emissiveIntensity),
-//              MaterialWithAoMap(m.aoMapIntensity),
-//              MaterialWithCombine(m.combine) {}
-
         [[nodiscard]] std::string type() const override {
 
             return "MeshLambertMaterial";
@@ -39,7 +30,36 @@ namespace threepp {
 
         [[nodiscard]] std::shared_ptr<MeshLambertMaterial> clone() const {
 
-            return std::make_shared<MeshLambertMaterial>(*this);
+            auto m = std::shared_ptr<MeshLambertMaterial>(new MeshLambertMaterial());
+            copyInto(m.get());
+
+            m->color.copy(color);
+
+            m->map = map;
+
+            m->lightMap = lightMap;
+            m->lightMapIntensity = lightMapIntensity;
+
+            m->aoMap = aoMap;
+            m->aoMapIntensity = aoMapIntensity;
+
+            m->emissive.copy(emissive);
+            m->emissiveMap = emissiveMap;
+            m->emissiveIntensity = emissiveIntensity;
+
+            m->specularMap = specularMap;
+
+            m->alphaMap = alphaMap;
+
+            m->envMap = envMap;
+            m->combine = combine;
+            m->reflectivity = reflectivity;
+            m->refractionRatio = refractionRatio;
+
+            m->wireframe = wireframe;
+            m->wireframeLinewidth = wireframeLinewidth;
+
+            return m;
         }
 
         static std::shared_ptr<MeshLambertMaterial> create() {
