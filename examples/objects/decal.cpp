@@ -8,17 +8,15 @@ using namespace threepp;
 
 namespace {
 
-
-
     auto decalMaterial() {
 
         TextureLoader tl;
         auto decalMaterial = MeshBasicMaterial::create();
-//        decalMaterial->specular = 0x444444;
+        //        decalMaterial->specular = 0x444444;
         decalMaterial->map = tl.loadTexture("data/textures/decal/decal-diffuse.png");
-//        decalMaterial->specularMap = tl.loadTexture("data/textures/decal/decal-normal.jpg");
-//        decalMaterial->normalScale = Vector2(1, 1);
-//        decalMaterial->shininess = 30;
+        //        decalMaterial->specularMap = tl.loadTexture("data/textures/decal/decal-normal.jpg");
+        //        decalMaterial->normalScale = Vector2(1, 1);
+        //        decalMaterial->shininess = 30;
         decalMaterial->transparent = true;
         decalMaterial->polygonOffset = true;
         decalMaterial->polygonOffsetFactor = -4;

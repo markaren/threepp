@@ -8,4 +8,7 @@ target_link_libraries(water PUBLIC threepp)
 add_executable(sprite sprite.cpp)
 target_link_libraries(sprite PUBLIC threepp)
 
-
+if (assimp_FOUND)
+    add_executable(decal decal.cpp)
+    target_link_libraries(decal PUBLIC threepp assimp::assimp)
+endif()
