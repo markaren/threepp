@@ -35,8 +35,8 @@ int main() {
     Canvas canvas;
 
     float t = 0;
-    auto l = std::make_shared<MyListener>(t);
-    canvas.addMouseListener(l);
+    MyListener l{t};
+    canvas.addMouseListener(&l);
 
     canvas.animate([&](float dt) {
         t += dt;

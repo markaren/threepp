@@ -49,14 +49,15 @@ int main() {
     });
 
     Vector2 mouse{-1, -1};
-    canvas.addMouseListener(std::make_shared<MouseMoveListener>([&](Vector2 pos) {
+    MouseMoveListener l([&](Vector2 pos) {
         // calculate mouse position in normalized device coordinates
         // (-1 to +1) for both components
 
         auto size = canvas.getSize();
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
-    }));
+    });
+    canvas.addMouseListener(&l);
 
     Raycaster raycaster;
 

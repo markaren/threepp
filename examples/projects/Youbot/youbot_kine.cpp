@@ -81,26 +81,19 @@ int main() {
     auto grid = GridHelper::create(20, 10, Color::yellowgreen);
     scene->add(grid);
 
-    auto light = DirectionalLight::create(0xffffff, 0.1f);
-    scene->position.set(1, 1, 1);
-    scene->add(light);
+    auto light1 = DirectionalLight::create(0xffffff, 1.f);
+    light1->position.set(1, 1, 1);
+    scene->add(light1);
 
+    auto light2 = AmbientLight::create(0xffffff, 1.f);
+    scene->add(light2);
 
     auto endEffectorHelper = AxesHelper::create(1);
-    endEffectorHelper->visible = false;
     scene->add(endEffectorHelper);
 
-
-    std::unique_ptr<Youbot> youbot;
-    std::thread t([&] {
-        youbot = Youbot::create("data/models/collada/youbot.dae");
-        youbot->setup(canvas);
-
-        canvas.invokeLater([&] {
-            scene->add(youbot->base);
-            endEffectorHelper->visible = true;
-        });
-    });
+    auto youbot = Youbot::create("data/models/collada/youbot.dae");
+    canvas.addKeyListener(youbot.get());
+    scene->add(youbot->base);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -132,29 +125,24 @@ int main() {
     canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
-        if (youbot) {
+        ui.render();
+        controls.enabled = !ui.mouseHover;
 
-            ui.render();
-            controls.enabled = !ui.mouseHover;
+        auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
+        endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
-            auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
-            endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
+        targetHelper->position.copy(ui.pos);
 
-            targetHelper->position.copy(ui.pos);
-
-            if (ui.jointMode) {
-                ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(youbot->getJointValues()));
-                targetHelper->visible = false;
-            }
-            if (ui.posMode) {
-                ui.values = ikSolver.solveIK(kine, ui.pos, youbot->getJointValues());
-                targetHelper->visible = true;
-            }
-
-            youbot->setJointValues(ui.values);
-            youbot->update(dt);
+        if (ui.jointMode) {
+            ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(youbot->getJointValues()));
+            targetHelper->visible = false;
         }
-    });
+        if (ui.posMode) {
+            ui.values = ikSolver.solveIK(kine, ui.pos, youbot->getJointValues());
+            targetHelper->visible = true;
+        }
 
-    t.join();
+        youbot->setJointValues(ui.values);
+        youbot->update(dt);
+    });
 }

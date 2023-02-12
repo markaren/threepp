@@ -35,15 +35,13 @@ namespace threepp {
 
         void onWindowResize(std::function<void(WindowSize)> f);
 
-        void addKeyListener(const std::shared_ptr<KeyListener> &listener);
+        void addKeyListener(KeyListener *listener);
 
-        bool removeKeyListener(const std::string &listenerUuid);
+        bool removeKeyListener(const KeyListener *listener);
 
-        std::string addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f);
+        void addMouseListener(MouseListener* listener);
 
-        void addMouseListener(const std::shared_ptr<MouseListener> &listener);
-
-        bool removeMouseListener(const std::string &listenerUuid);
+        bool removeMouseListener(const MouseListener* listener);
 
         void animate(const std::function<void()> &f);
 

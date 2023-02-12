@@ -26,8 +26,8 @@ OrbitControls::OrbitControls(std::shared_ptr<Camera> camera, Canvas &canvas)
       keyListener(new MyKeyListener(*this)),
       mouseListener(new MyMouseListener(*this)) {
 
-    canvas.addMouseListener(mouseListener);
-    canvas.addKeyListener(keyListener);
+    canvas.addMouseListener(mouseListener.get());
+    canvas.addKeyListener(keyListener.get());
 
     update();
 }
@@ -365,6 +365,6 @@ void OrbitControls::handleMouseWheel(const Vector2 &delta) {
 
 OrbitControls::~OrbitControls() {
 
-    canvas.removeMouseListener(mouseListener->uuid);
-    canvas.removeKeyListener(keyListener->uuid);
+    canvas.removeMouseListener(mouseListener.get());
+    canvas.removeKeyListener(keyListener.get());
 }

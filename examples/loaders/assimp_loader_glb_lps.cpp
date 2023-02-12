@@ -105,8 +105,8 @@ int main() {
     auto line = Line::create(lineGeometry, LineBasicMaterial::create());
     scene->add(line);
 
-    auto mouseListener = std::make_shared<MyMouseListener>(canvas);
-    canvas.addMouseListener(mouseListener);
+    MyMouseListener mouseListener(canvas);
+    canvas.addMouseListener(&mouseListener);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -122,10 +122,10 @@ int main() {
 
     Raycaster raycaster;
     canvas.animate([&](float dt) {
-        raycaster.setFromCamera(mouseListener->mouse, camera);
+        raycaster.setFromCamera(mouseListener.mouse, camera);
         auto intersects = raycaster.intersectObject(mesh, false);
 
-        bool click = mouseListener->mouseClick();
+        bool click = mouseListener.mouseClick();
 
         if (!intersects.empty()) {
 

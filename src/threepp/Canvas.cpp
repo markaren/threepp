@@ -7,8 +7,8 @@
 #include <glad/glad.h>
 
 #include <optional>
-#include <unordered_map>
 #include <queue>
+#include <unordered_map>
 
 using namespace threepp;
 
@@ -22,8 +22,8 @@ public:
 
     std::queue<std::function<void()>> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
-    std::unordered_map<std::string, std::shared_ptr<KeyListener>> keyListeners;
-    std::unordered_map<std::string, std::shared_ptr<MouseListener>> mouseListeners;
+    std::vector<KeyListener *> keyListeners;
+    std::vector<MouseListener *> mouseListeners;
 
     explicit Impl(const Canvas::Parameters &params) : size_(params.size_) {
         glfwSetErrorCallback(error_callback);
@@ -81,7 +81,7 @@ public:
         //        glEnable(GL_POINT_SMOOTH);
     }
 
-    [[nodiscard]] const WindowSize& getSize() const {
+    [[nodiscard]] const WindowSize &getSize() const {
         return size_;
     }
 
@@ -126,35 +126,39 @@ public:
         this->resizeListener = std::move(f);
     }
 
-    void addKeyListener(const std::shared_ptr<KeyListener> &listener) {
-        if (!keyListeners.count(listener->uuid)) {
-            keyListeners[listener->uuid] = listener;
+    void addKeyListener(KeyListener *listener) {
+        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
+        if (find == keyListeners.end()) {
+            keyListeners.emplace_back(listener);
         }
     }
 
-    bool removeKeyListener(const std::string &listenerUuid) {
-        if (keyListeners.count(listenerUuid)) {
-            keyListeners.erase(listenerUuid);
+    bool removeKeyListener(const KeyListener *listener) {
+        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
+        if (find != keyListeners.end()) {
+            keyListeners.erase(find);
             return true;
         }
         return false;
     }
 
-    void addMouseListener(const std::shared_ptr<MouseListener> &listener) {
-        if (!mouseListeners.count(listener->uuid)) {
-            mouseListeners[listener->uuid] = listener;
+    void addMouseListener(MouseListener *listener) {
+        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
+        if (find == mouseListeners.end()) {
+            mouseListeners.emplace_back(listener);
         }
     }
 
-    bool removeMouseListener(const std::string &listenerUuid) {
-        if (mouseListeners.count(listenerUuid)) {
-            mouseListeners.erase(listenerUuid);
+    bool removeMouseListener(const MouseListener *listener) {
+        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
+        if (find != mouseListeners.end()) {
+            mouseListeners.erase(find);
             return true;
         }
         return false;
     }
 
-    void invokeLater(const std::function<void()>& f) {
+    void invokeLater(const std::function<void()> &f) {
         tasks_.emplace(f);
     }
 
@@ -178,7 +182,7 @@ public:
         auto listeners = p->mouseListeners;
         if (listeners.empty()) return;
         Vector2 delta{(float) xoffset, (float) yoffset};
-        for (auto &[_, l] : listeners) {
+        for (auto l : listeners) {
             l->onMouseWheel(delta);
         }
     }
@@ -187,7 +191,7 @@ public:
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
 
         auto listeners = p->mouseListeners;
-        for (auto &[_, l] : listeners) {
+        for (auto l : listeners) {
 
             switch (action) {
                 case GLFW_PRESS:
@@ -206,7 +210,7 @@ public:
         auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
         p->lastMousePos.set(static_cast<float>(xpos), static_cast<float>(ypos));
         auto listeners = p->mouseListeners;
-        for (auto &[_, l] : listeners) {
+        for (auto l : listeners) {
             l->onMouseMove(p->lastMousePos);
         }
     }
@@ -222,7 +226,7 @@ public:
 
         KeyEvent evt{key, scancode, mods};
         auto listeners = p->keyListeners;
-        for (auto &[_, l] : listeners) {
+        for (auto l : listeners) {
             switch (action) {
                 case GLFW_PRESS:
                     l->onKeyPressed(evt);
@@ -252,7 +256,7 @@ void Canvas::animate(const std::function<void(float)> &f) {
     pimpl_->animate(f);
 }
 
-const WindowSize& Canvas::getSize() const {
+const WindowSize &Canvas::getSize() const {
 
     return pimpl_->getSize();
 }
@@ -271,34 +275,27 @@ void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
     pimpl_->onWindowResize(std::move(f));
 }
 
-void Canvas::addKeyListener(const std::shared_ptr<KeyListener> &listener) {
+void Canvas::addKeyListener(KeyListener *listener) {
 
     pimpl_->addKeyListener(listener);
 }
 
-bool Canvas::removeKeyListener(const std::string &listenerUuid) {
+bool Canvas::removeKeyListener(const KeyListener *listener) {
 
-    return pimpl_->removeKeyListener(listenerUuid);
+    return pimpl_->removeKeyListener(listener);
 }
 
-std::string Canvas::addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f) {
-
-    auto listener = std::make_shared<KeyAdapter>(mode, f);
-    addKeyListener(listener);
-    return listener->uuid;
-}
-
-void Canvas::addMouseListener(const std::shared_ptr<MouseListener> &listener) {
+void Canvas::addMouseListener(MouseListener *listener) {
 
     pimpl_->addMouseListener(listener);
 }
 
-bool Canvas::removeMouseListener(const std::string &listenerUuid) {
+bool Canvas::removeMouseListener(const MouseListener *listener) {
 
-    return pimpl_->removeMouseListener(listenerUuid);
+    return pimpl_->removeMouseListener(listener);
 }
 
-void Canvas::invokeLater(const std::function<void()>& f) {
+void Canvas::invokeLater(const std::function<void()> &f) {
     pimpl_->invokeLater(f);
 }
 
@@ -330,7 +327,7 @@ Canvas::Parameters &Canvas::Parameters::antialiasing(int antialiasing) {
     return *this;
 }
 
-void *Canvas::window_ptr() const{
+void *Canvas::window_ptr() const {
 
     return pimpl_->window;
 }
