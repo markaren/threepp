@@ -125,27 +125,24 @@ int main() {
     canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
-        if (youbot) {
+        ui.render();
+        controls.enabled = !ui.mouseHover;
 
-            ui.render();
-            controls.enabled = !ui.mouseHover;
+        auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
+        endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
-            auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
-            endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
+        targetHelper->position.copy(ui.pos);
 
-            targetHelper->position.copy(ui.pos);
-
-            if (ui.jointMode) {
-                ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(youbot->getJointValues()));
-                targetHelper->visible = false;
-            }
-            if (ui.posMode) {
-                ui.values = ikSolver.solveIK(kine, ui.pos, youbot->getJointValues());
-                targetHelper->visible = true;
-            }
-
-            youbot->setJointValues(ui.values);
-            youbot->update(dt);
+        if (ui.jointMode) {
+            ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(youbot->getJointValues()));
+            targetHelper->visible = false;
         }
+        if (ui.posMode) {
+            ui.values = ikSolver.solveIK(kine, ui.pos, youbot->getJointValues());
+            targetHelper->visible = true;
+        }
+
+        youbot->setJointValues(ui.values);
+        youbot->update(dt);
     });
 }

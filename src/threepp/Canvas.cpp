@@ -285,13 +285,6 @@ bool Canvas::removeKeyListener(const KeyListener *listener) {
     return pimpl_->removeKeyListener(listener);
 }
 
-//std::string Canvas::addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f) {
-//
-//    auto listener = std::make_shared<KeyAdapter>(mode, f);
-//    addKeyListener(listener);
-//    return listener->uuid;
-//}
-
 void Canvas::addMouseListener(MouseListener *listener) {
 
     pimpl_->addMouseListener(listener);

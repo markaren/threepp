@@ -39,8 +39,6 @@ namespace threepp {
 
         bool removeKeyListener(const KeyListener *listener);
 
-//        std::string addKeyAdapter(const KeyAdapter::Mode &mode, const std::function<void(KeyEvent)> &f);
-
         void addMouseListener(MouseListener* listener);
 
         bool removeMouseListener(const MouseListener* listener);
