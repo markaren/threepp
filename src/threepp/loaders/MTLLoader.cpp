@@ -53,7 +53,9 @@ namespace {
     TexParams getTextureParams(const std::string &value, MeshPhongMaterial &params) {
         TexParams texParams{Vector2(1, 1), Vector2(0, 0)};
 
-        auto items = utils::regexSplit(value, std::regex("\\s+"));
+        static std::regex r("\\s+");
+
+        auto items = utils::regexSplit(value, r);
         auto pos = std::find(items.begin(), items.end(), "-bm");
 
         if (pos != items.end()) {
@@ -89,7 +91,6 @@ MaterialCreator MTLLoader::load(const std::filesystem::path &path) {
     std::ifstream in(path);
 
     std::unordered_map<std::string, MatVariant> *info;
-    std::regex delimiterPattern{"\\s+"};
     MaterialsInfo materialsInfo;
 
     std::string line;

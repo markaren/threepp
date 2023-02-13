@@ -299,6 +299,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
     }
 
     ParserState state;
+    static std::regex r1("\\s+");
 
     std::string line;
     while (std::getline(in, line)) {
@@ -314,7 +315,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
         if (lineFirstChar == 'v') {
 
-            auto data = utils::regexSplit(line, std::regex("\\s+"));
+            auto data = utils::regexSplit(line, r1);
 
             if (data[0] == "v") {
                 state.vertices.insert(state.vertices.end(), {std::stof(data[1]),
@@ -338,7 +339,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
             std::string lineData{line.begin() + 1, line.end()};
             utils::trimInplace(lineData);
-            auto vertexData = utils::regexSplit(lineData, std::regex("\\s+"));
+            auto vertexData = utils::regexSplit(lineData, r1);
             std::vector<std::vector<std::string>> faceVertices;
 
             for (const auto &vertex : vertexData) {
@@ -394,20 +395,21 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             }
 
         } else {
-
-            std::vector<std::string> result = findAll(line, std::regex("^[og]\\s*(.+)?"));
+            static std::regex r("^[og]\\s*(.+)?");
+            std::vector<std::string> result = findAll(line, r);
             if (!result.empty()) {
                 std::string name = utils::trim(result.front().substr(1));
                 state.startObject(name);
                 continue;
             }
-
-            result = findAll(line, std::regex("^usemtl "));
+            static std::regex usemtlRegex("^usemtl ");
+            result = findAll(line, usemtlRegex);
             if (!result.empty()) {
                 state.object->startMaterial(utils::trim(line.substr(7)), state.materialLibraries);
                 continue;
             }
-            result = findAll(line, std::regex("^mtllib "));
+            static std::regex mtllibRegex("^mtllib ");
+            result = findAll(line, mtllibRegex);
             if (!result.empty()) {
                 state.materialLibraries.emplace_back(utils::trim(line.substr(7)));
                 continue;
