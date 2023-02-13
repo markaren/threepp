@@ -7,7 +7,8 @@
       "features": ["gl-api-41"]
     },
     "glfw3",
-    "stb"
+    "stb",
+    "re2"
   ],
   "features": {
     "bullet": {
