@@ -7,13 +7,14 @@
 #include <utility>
 #include <vector>
 
+#include <re2/re2.h>
+
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/utils/StringUtils.hpp"
-#include "threepp/utils/regex_util.hpp"
 
 using namespace threepp;
 
@@ -99,7 +100,6 @@ namespace {
                 lastMultiMaterial->groupEnd = static_cast<int>(geometry.vertices.size()) / 3;
                 lastMultiMaterial->groupCount = lastMultiMaterial->groupEnd - lastMultiMaterial->groupStart;
                 lastMultiMaterial->inherited = false;
-
             }
 
             if (end && !materials.empty()) {
@@ -394,10 +394,10 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             }
 
         } else {
-            static std::regex r("^[og]\\s*(.+)?");
-            std::vector<std::string> result = findAll(line, r);
-            if (!result.empty()) {
-                std::string name = utils::trim(result.front().substr(1));
+            static RE2 r2("^[og]\\s*(.+)?");
+            re2::StringPiece piece(line);
+            std::string name;
+            if (RE2::FullMatch(piece, r2, &name)) {
                 state.startObject(name);
                 continue;
             }
@@ -463,11 +463,11 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             if (this->materials) {
                 material = this->materials->create(sourceMaterial->name);
 
-                if (isLine && material && ! material->is<LineBasicMaterial>()) {
+                if (isLine && material && !material->is<LineBasicMaterial>()) {
 
                     // TODO
 
-                } else if (isPoints && material && ! material->is<PointsMaterial>()) {
+                } else if (isPoints && material && !material->is<PointsMaterial>()) {
 
                     // TODO
                 }
@@ -487,7 +487,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
                 }
 
                 material->name = sourceMaterial->name;
-
             }
 
             material->vertexColors = hasVertexColors;
@@ -496,7 +495,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             }
 
             createdMaterials.emplace_back(material);
-
         }
 
         std::shared_ptr<Object3D> mesh;
@@ -505,9 +503,8 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
             for (int mi = 0; mi < materials.size(); ++mi) {
 
-                auto& sourceMaterial = materials.at(mi);
+                auto &sourceMaterial = materials.at(mi);
                 bufferGeometry->addGroup(sourceMaterial->groupStart, sourceMaterial->groupCount, mi);
-
             }
 
             if (isLine) {
