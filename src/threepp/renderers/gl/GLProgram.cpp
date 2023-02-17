@@ -164,14 +164,24 @@ namespace {
     std::string replaceLightNums(const std::string &str, const ProgramParameters &parameters) {
 
         std::string result = str;
-        result = std::regex_replace(result, std::regex("NUM_DIR_LIGHTS"), std::to_string(parameters.numDirLights));
-        result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHTS"), std::to_string(parameters.numSpotLights));
-        result = std::regex_replace(result, std::regex("NUM_RECT_AREA_LIGHTS"), std::to_string(parameters.numRectAreaLights));
-        result = std::regex_replace(result, std::regex("NUM_POINT_LIGHTS"), std::to_string(parameters.numPointLights));
-        result = std::regex_replace(result, std::regex("NUM_HEMI_LIGHTS"), std::to_string(parameters.numHemiLights));
-        result = std::regex_replace(result, std::regex("NUM_DIR_LIGHT_SHADOWS"), std::to_string(parameters.numDirLightShadows));
-        result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHT_SHADOWS"), std::to_string(parameters.numSpotLightShadows));
-        result = std::regex_replace(result, std::regex("NUM_POINT_LIGHT_SHADOWS"), std::to_string(parameters.numPointLightShadows));
+
+        static RE2 NUM_DIR_LIGHTS("NUM_DIR_LIGHTS");
+        static RE2 NUM_SPOT_LIGHTS("NUM_SPOT_LIGHTS");
+        static RE2 NUM_RECT_AREA_LIGHTS("NUM_RECT_AREA_LIGHTS");
+        static RE2 NUM_POINT_LIGHTS("NUM_POINT_LIGHTS");
+        static RE2 NUM_HEMI_LIGHTS("NUM_HEMI_LIGHTS");
+        static RE2 NUM_DIR_LIGHT_SHADOWS("NUM_DIR_LIGHT_SHADOWS");
+        static RE2 NUM_SPOT_LIGHT_SHADOWS("NUM_SPOT_LIGHT_SHADOWS");
+        static RE2 NUM_POINT_LIGHT_SHADOWS("NUM_POINT_LIGHT_SHADOWS");
+
+        RE2::GlobalReplace(&result, NUM_DIR_LIGHTS, re2::StringPiece(std::to_string(parameters.numDirLights)));
+        RE2::GlobalReplace(&result, NUM_SPOT_LIGHTS, re2::StringPiece(std::to_string(parameters.numSpotLights)));
+        RE2::GlobalReplace(&result, NUM_RECT_AREA_LIGHTS, re2::StringPiece(std::to_string(parameters.numRectAreaLights)));
+        RE2::GlobalReplace(&result, NUM_POINT_LIGHTS, re2::StringPiece(std::to_string(parameters.numPointLights)));
+        RE2::GlobalReplace(&result, NUM_HEMI_LIGHTS, re2::StringPiece(std::to_string(parameters.numHemiLights)));
+        RE2::GlobalReplace(&result, NUM_DIR_LIGHT_SHADOWS, re2::StringPiece(std::to_string(parameters.numDirLightShadows)));
+        RE2::GlobalReplace(&result, NUM_SPOT_LIGHT_SHADOWS, re2::StringPiece(std::to_string(parameters.numSpotLightShadows)));
+        RE2::GlobalReplace(&result, NUM_POINT_LIGHT_SHADOWS, re2::StringPiece(std::to_string(parameters.numPointLightShadows)));
 
         return result;
     }
@@ -179,8 +189,12 @@ namespace {
     std::string replaceClippingPlaneNums(const std::string &str, const ProgramParameters &parameters) {
 
         std::string result = str;
-        result = std::regex_replace(result, std::regex("NUM_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes));
-        result = std::regex_replace(result, std::regex("UNION_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes - parameters.numClipIntersection));
+        
+        static RE2 NUM_CLIPPING_PLANES("NUM_CLIPPING_PLANES");
+        static RE2 UNION_CLIPPING_PLANES("UNION_CLIPPING_PLANES");
+
+        RE2::GlobalReplace(&result, NUM_CLIPPING_PLANES, re2::StringPiece(std::to_string(parameters.numClippingPlanes)));
+        RE2::GlobalReplace(&result, UNION_CLIPPING_PLANES, re2::StringPiece(std::to_string(parameters.numClippingPlanes - parameters.numClipIntersection)));
 
         return result;
     }
