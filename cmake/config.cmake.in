@@ -4,6 +4,7 @@ include(CMakeFindDependencyMacro)
 
 find_dependency(glfw3 CONFIG)
 find_dependency(glad CONFIG)
+find_dependency(re2 CONFIG)
 
 if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
     add_library(glfw::glfw ALIAS glfw)
