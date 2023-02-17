@@ -3,11 +3,9 @@
 #define THREEPP_STRINGUTILS_HPP
 
 #include <algorithm>
-#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <re2/re2.h>
 
 namespace threepp::utils {
 
@@ -22,12 +20,6 @@ namespace threepp::utils {
         }
 
         return tokens;
-    }
-
-    inline std::vector<std::string> regexSplit(const std::string &s, const std::regex &sep_regex) {
-        std::sregex_token_iterator iter(s.begin(), s.end(), sep_regex, -1);
-        std::sregex_token_iterator end;
-        return {iter, end};
     }
 
     inline std::string join(const std::vector<std::string> &v, char c = '\n') {
@@ -54,17 +46,6 @@ namespace threepp::utils {
         }
 
         return join(lines, '\n');
-    }
-
-    inline std::string replaceAll(const std::string &text, const std::string &replaceFrom, const std::string &replaceTo) {
-        std::string result = text;
-        size_t start_pos = 0;
-        while (((start_pos = text.find(replaceFrom, start_pos)) != std::string::npos)) {
-            result.replace(start_pos, replaceFrom.length(), replaceTo);
-            start_pos += replaceTo.length();
-        }
-
-        return result;
     }
 
     // trim from start (in place)
