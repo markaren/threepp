@@ -59,15 +59,17 @@ namespace {
 
     std::string loopReplacer(const std::smatch &match) {
 
-        std::string s;
-
         auto start = std::stoi(match[1].str());
         auto end = std::stoi(match[2].str());
 
+        static std::regex r1(R"(\[\s*i\s*\])");
+        static std::regex r2("UNROLLED_LOOP_INDEX");
+
+        std::string s;
         for (int i = start; i < end; ++i) {
 
-            s += std::regex_replace(match[3].str(), std::regex("\\[\\s*i\\s*\\]"), "[ " + std::to_string(i) + " ]");
-            s = std::regex_replace(s, std::regex("UNROLLED_LOOP_INDEX"), std::to_string(i));
+            s += std::regex_replace(match[3].str(), r1, "[ " + std::to_string(i) + " ]");
+            s = std::regex_replace(s, r2, std::to_string(i));
         }
 
         return s;
@@ -220,7 +222,7 @@ namespace {
 
     std::string unrollLoops(const std::string &glsl) {
 
-        static const std::regex rex("#pragma unroll_loop_start\\s+for\\s*\\(\\s*int\\s+i\\s*=\\s*(\\d+)\\s*;\\s*i\\s*<\\s*(\\d+)\\s*;\\s*i\\s*\\+\\+\\s*\\)\\s*\\{([\\s\\S]+?)\\}\\s+#pragma unroll_loop_end");
+        static const std::regex rex(R"(#pragma unroll_loop_start\s+for\s*\(\s*int\s+i\s*=\s*(\d+)\s*;\s*i\s*<\s*(\d+)\s*;\s*i\s*\+\+\s*\)\s*\{([\s\S]+?)\}\s+#pragma unroll_loop_end)");
 
         return regex_replace(glsl, rex, loopReplacer);
     }
