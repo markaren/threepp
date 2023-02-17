@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <glad/glad.h>
+#include <re2/re2.h>
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -188,35 +189,17 @@ namespace {
 
     std::string resolveIncludes(const std::string &str) {
 
-        static const std::regex rex("#include +<([\\w\\d.]+)>");
+        std::string res = str;
+        static RE2 r("#include +<([\\w\\d.]+)>");
+        re2::StringPiece piece(str);
 
-        std::string result;
-
-        std::sregex_iterator rex_it(str.begin(), str.end(), rex);
-        std::sregex_iterator rex_end;
-        size_t pos = 0;
-
-        while (rex_it != rex_end) {
-            std::smatch match = *rex_it;
-            result.append(str, pos, match.position(0) - pos);
-            pos = match.position(0) + match.length(0);
-
-            const std::ssub_match &sub = match[1];
-            std::string r = shaders::ShaderChunk::instance().get(sub.str());
-            if (r.empty()) {
-                std::stringstream ss;
-                ss << "unable to resolve #include <" << sub.str() << ">";
-                throw std::logic_error(ss.str());
-            }
-            result.append(r);
-            ++rex_it;
+        std::string include;
+        while (RE2::FindAndConsume(&piece, r, &include)) {
+            re2::StringPiece rewrite(shaders::ShaderChunk::instance().get(include));
+            RE2::Replace(&res, r, rewrite);
         }
 
-        if (pos == 0) return str;
-        else {
-            result.append(str, pos, str.length());
-            return result;
-        }
+        return res;
     }
 
     // Unroll loops
