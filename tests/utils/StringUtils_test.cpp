@@ -8,7 +8,7 @@ using namespace threepp;
 
 TEST_CASE("join") {
 
-    std::string join = utils::join({"1", "2", "3", "4"}, ' ');
+    std::string join = utils::join(std::vector<std::string>{"1", "2", "3", "4"}, ' ');
     REQUIRE(join == "1 2 3 4");
 
 }
