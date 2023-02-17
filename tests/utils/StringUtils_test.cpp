@@ -4,12 +4,28 @@
 
 #include "threepp/utils/StringUtils.hpp"
 
+#include <vector>
+#include <list>
+#include <array>
+
 using namespace threepp;
 
 TEST_CASE("join") {
 
-    std::string join = utils::join(std::vector<std::string>{"1", "2", "3", "4"}, ' ');
-    REQUIRE(join == "1 2 3 4");
+    {
+        std::string join = utils::join(std::vector<std::string>{"1", "2", "3", "4"}, ' ');
+        REQUIRE(join == "1 2 3 4");
+    }
+
+    {
+        std::string join = utils::join(std::list<std::string>{"1", "2", "3", "4"}, ' ');
+        REQUIRE(join == "1 2 3 4");
+    }
+
+    {
+        std::string join = utils::join(std::array<std::string, 4>{"1", "2", "3", "4"}, ' ');
+        REQUIRE(join == "1 2 3 4");
+    }
 
 }
 
