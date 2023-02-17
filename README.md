@@ -49,6 +49,7 @@ See [vcpkg.json](vcpkg.json) for available features.
 Under MinGW you'll need to specify the vcpkg triplet.
 ```shell
 -DVCPKG_TARGET_TRIPLET=x64-mingw-dynamic
+-DVCPKG_HOST_TRIPLET=x64-mingw-dynamic    # needed only if MSVC is not present at all 
 ```
 
 #### conan
@@ -133,7 +134,8 @@ int main() {
 
 ## Consuming threepp using a custom vcpkg-registry
 
-See [here](tests/threepp_vcpkg_test) for an example of how threepp can be consuming in a separate project using vcpkg.
+See [here](tests/threepp_vcpkg_test) for an example of how `threepp` may be consumed 
+as a library a separate project using vcpkg.
 
 ### Screenshots
 

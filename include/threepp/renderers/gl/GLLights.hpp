@@ -14,15 +14,6 @@
 
 namespace threepp::gl {
 
-    namespace {
-
-        bool shadowCastingLightsFirst(const Light *lightA, const Light *lightB) {
-
-            return (lightB->castShadow ? 1 : 0) > (lightA->castShadow ? 1 : 0);
-        }
-
-    }// namespace
-
     typedef std::unordered_map<std::string, NestedUniformValue> LightUniforms;
 
     struct UniformsCache {

@@ -42,7 +42,7 @@ int main() {
     cylinder->rotateZ(math::DEG2RAD*45);
     scene->add(cylinder);
 
-    const auto planeGeometry = PlaneGeometry::create(10, 10);
+    const auto planeGeometry = PlaneGeometry::create(20, 20);
     planeGeometry->rotateX(math::DEG2RAD*-90);
     const auto planeMaterial = MeshBasicMaterial::create();
     planeMaterial->color = Color::red;
@@ -61,6 +61,22 @@ int main() {
     bullet.addRigidbody(RbWrapper::create(sphereGeometry, 2), sphere);
     bullet.addRigidbody(RbWrapper::create(cylinderGeometry, 5), cylinder);
     bullet.addRigidbody(RbWrapper::create(planeGeometry), plane);
+
+    KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt){
+       if (evt.key == 32) { // space
+           auto geom = SphereGeometry::create(0.1);
+           auto mat = MeshBasicMaterial::create();
+           auto mesh = Mesh::create(geom, mat);
+           mesh->position.copy(camera->position);
+           auto rb = RbWrapper::create(geom, 10);
+           Vector3 dir;
+           camera->getWorldDirection(dir);
+           rb->body->setLinearVelocity(convert(dir * 10));
+           bullet.addRigidbody(rb, mesh);
+           scene->add(mesh);
+       }
+    });
+    canvas.addKeyListener(&keyListener);
 
     canvas.animate([&](float dt) {
         bullet.step(dt);

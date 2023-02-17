@@ -41,7 +41,7 @@ namespace threepp {
         } else if (std::dynamic_pointer_cast<const PlaneGeometry>(geometry)) {
 
             auto g = std::dynamic_pointer_cast<const PlaneGeometry>(geometry);
-            return std::make_unique<btBoxShape>(btVector3(g->width / 2, 0.01f, g->height / 2));
+            return std::make_unique<btBoxShape>(btVector3(g->width / 2, 0.1f, g->height / 2));
 
         } else if (std::dynamic_pointer_cast<const SphereGeometry>(geometry)) {
 
