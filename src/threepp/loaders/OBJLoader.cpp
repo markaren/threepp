@@ -395,9 +395,9 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
         } else {
             static std::regex r("^[og]\\s*(.+)?");
-            std::vector<std::string> result = findAll(line, r);
-            if (!result.empty()) {
-                std::string name = utils::trim(result.front().substr(1));
+            std::smatch match;
+            if (std::regex_match(line, match, r)) {
+                std::string name = utils::trim(match[1]);
                 state.startObject(name);
                 continue;
             }

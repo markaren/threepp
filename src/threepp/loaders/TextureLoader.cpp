@@ -7,7 +7,9 @@ using namespace threepp;
 
 std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
 
-    bool isJPEG = std::regex_match(path.string(), std::regex(".*jpe?g", std::regex::icase));
+    static std::regex reg(".*jpe?g", std::regex::icase);
+
+    bool isJPEG = std::regex_match(path.string(), reg);
 
     auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
 

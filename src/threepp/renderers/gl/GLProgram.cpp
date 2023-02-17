@@ -12,6 +12,7 @@
 #include <cmath>
 #include <iostream>
 #include <vector>
+#include <list>
 
 #include <glad/glad.h>
 
@@ -58,18 +59,20 @@ namespace {
 
     std::string loopReplacer(const std::smatch &match) {
 
-        std::string s;
+        static std::regex reg1(R"(\[\s*i\s*\])");
+        static std::regex reg2("UNROLLED_LOOP_INDEX");
 
         auto start = std::stoi(match[1].str());
         auto end = std::stoi(match[2].str());
 
+        std::stringstream ss;
         for (int i = start; i < end; ++i) {
 
-            s += std::regex_replace(match[3].str(), std::regex("\\[\\s*i\\s*\\]"), "[ " + std::to_string(i) + " ]");
-            s = std::regex_replace(s, std::regex("UNROLLED_LOOP_INDEX"), std::to_string(i));
+            ss << std::regex_replace(match[3].str(), reg1, "[ " + std::to_string(i) + " ]");
+            ss.str() = std::regex_replace(ss.str(), reg2, std::to_string(i));
         }
 
-        return s;
+        return ss.str();
     }
 
     std::string getTexelDecodingFunction(const std::string &functionName, int encoding) {
@@ -120,14 +123,15 @@ namespace {
 
     std::string generateDefines(const std::unordered_map<std::string, std::string> &defines) {
 
-        std::vector<std::string> chunks;
+        std::list<std::string> chunks;
 
         for (const auto &[name, value] : defines) {
 
             if (value == "false") continue;
 
-            std::string chunk("#define " + name + " " + value);
-            chunks.emplace_back(chunk);
+            std::stringstream chunk;
+            chunk << "#define " << name << " " << value;
+            chunks.emplace_back(chunk.str());
         }
 
         return utils::join(chunks);
@@ -160,28 +164,23 @@ namespace {
         return str.empty();
     }
 
-    std::string replaceLightNums(const std::string &str, const ProgramParameters &parameters) {
+    void replaceLightNums(std::string &str, const ProgramParameters &parameters) {
 
-        std::string result = str;
-        result = std::regex_replace(result, std::regex("NUM_DIR_LIGHTS"), std::to_string(parameters.numDirLights));
-        result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHTS"), std::to_string(parameters.numSpotLights));
-        result = std::regex_replace(result, std::regex("NUM_RECT_AREA_LIGHTS"), std::to_string(parameters.numRectAreaLights));
-        result = std::regex_replace(result, std::regex("NUM_POINT_LIGHTS"), std::to_string(parameters.numPointLights));
-        result = std::regex_replace(result, std::regex("NUM_HEMI_LIGHTS"), std::to_string(parameters.numHemiLights));
-        result = std::regex_replace(result, std::regex("NUM_DIR_LIGHT_SHADOWS"), std::to_string(parameters.numDirLightShadows));
-        result = std::regex_replace(result, std::regex("NUM_SPOT_LIGHT_SHADOWS"), std::to_string(parameters.numSpotLightShadows));
-        result = std::regex_replace(result, std::regex("NUM_POINT_LIGHT_SHADOWS"), std::to_string(parameters.numPointLightShadows));
-
-        return result;
+        std::string& result = str;
+        utils::replaceAll(result, "NUM_DIR_LIGHTS", std::to_string(parameters.numDirLights));
+        utils::replaceAll(result, "NUM_SPOT_LIGHTS", std::to_string(parameters.numSpotLights));
+        utils::replaceAll(result, "NUM_RECT_AREA_LIGHTS", std::to_string(parameters.numRectAreaLights));
+        utils::replaceAll(result, "NUM_POINT_LIGHTS", std::to_string(parameters.numPointLights));
+        utils::replaceAll(result, "NUM_HEMI_LIGHTS", std::to_string(parameters.numHemiLights));
+        utils::replaceAll(result, "NUM_DIR_LIGHT_SHADOWS", std::to_string(parameters.numDirLightShadows));
+        utils::replaceAll(result, "NUM_SPOT_LIGHT_SHADOWS", std::to_string(parameters.numSpotLightShadows));
+        utils::replaceAll(result, "NUM_POINT_LIGHT_SHADOWS", std::to_string(parameters.numPointLightShadows));
     }
 
-    std::string replaceClippingPlaneNums(const std::string &str, const ProgramParameters &parameters) {
+    void replaceClippingPlaneNums(std::string &str, const ProgramParameters &parameters) {
 
-        std::string result = str;
-        result = std::regex_replace(result, std::regex("NUM_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes));
-        result = std::regex_replace(result, std::regex("UNION_CLIPPING_PLANES"), std::to_string(parameters.numClippingPlanes - parameters.numClipIntersection));
-
-        return result;
+        utils::replaceAll(str, "NUM_CLIPPING_PLANES", std::to_string(parameters.numClippingPlanes));
+        utils::replaceAll(str, "UNION_CLIPPING_PLANES", std::to_string(parameters.numClippingPlanes - parameters.numClipIntersection));
     }
 
     // Resolve Includes
@@ -202,7 +201,7 @@ namespace {
             pos = match.position(0) + match.length(0);
 
             const std::ssub_match &sub = match[1];
-            std::string r = shaders::ShaderChunk::instance().get(sub.str());
+            const std::string& r = shaders::ShaderChunk::instance().get(sub.str());
             if (r.empty()) {
                 std::stringstream ss;
                 ss << "unable to resolve #include <" << sub.str() << ">";
@@ -223,12 +222,12 @@ namespace {
 
     std::string unrollLoops(const std::string &glsl) {
 
-        static const std::regex rex("#pragma unroll_loop_start\\s+for\\s*\\(\\s*int\\s+i\\s*=\\s*(\\d+)\\s*;\\s*i\\s*<\\s*(\\d+)\\s*;\\s*i\\s*\\+\\+\\s*\\)\\s*\\{([\\s\\S]+?)\\}\\s+#pragma unroll_loop_end");
+        static const std::regex rex(R"(#pragma unroll_loop_start\s+for\s*\(\s*int\s+i\s*=\s*(\d+)\s*;\s*i\s*<\s*(\d+)\s*;\s*i\s*\+\+\s*\)\s*\{([\s\S]+?)\}\s+#pragma unroll_loop_end)");
 
         return regex_replace(glsl, rex, loopReplacer);
     }
 
-    std::string generatePrecision() {
+    inline std::string generatePrecision() {
 
         return "precision highp float;\nprecision highp int;\n#define HIGH_PRECISION";
     }
@@ -607,12 +606,12 @@ GLProgram::GLProgram(const GLRenderer &renderer, std::string cacheKey, const Pro
     }
 
     vertexShader = resolveIncludes(vertexShader);
-    vertexShader = replaceLightNums(vertexShader, parameters);
-    vertexShader = replaceClippingPlaneNums(vertexShader, parameters);
+    replaceLightNums(vertexShader, parameters);
+    replaceClippingPlaneNums(vertexShader, parameters);
 
     fragmentShader = resolveIncludes(fragmentShader);
-    fragmentShader = replaceLightNums(fragmentShader, parameters);
-    fragmentShader = replaceClippingPlaneNums(fragmentShader, parameters);
+    replaceLightNums(fragmentShader, parameters);
+    replaceClippingPlaneNums(fragmentShader, parameters);
 
     vertexShader = unrollLoops(vertexShader);
     fragmentShader = unrollLoops(fragmentShader);
