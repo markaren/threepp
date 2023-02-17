@@ -179,6 +179,10 @@ jobs:
           vcpkgJsonGlob: '**/vcpkg.json'
           appendedCacheKey: vcpkginstall
 
+      - name: Install prerequisites
+        run: |
+          brew install pkg-config
+
       - name: Configure and build
         run: |
           cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
