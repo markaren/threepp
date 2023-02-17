@@ -405,7 +405,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
                 state.object->startMaterial(utils::trim(line.substr(7)), state.materialLibraries);
                 continue;
             }
-
             if (line.find("mtllib ") != std::string::npos) {
                 state.materialLibraries.emplace_back(utils::trim(line.substr(7)));
                 continue;
