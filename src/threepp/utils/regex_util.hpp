@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <regex>
 #include <string>
+#include <re2/re2.h>
 
 namespace {
 

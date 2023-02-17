@@ -53,9 +53,7 @@ namespace {
     TexParams getTextureParams(const std::string &value, MeshPhongMaterial &params) {
         TexParams texParams{Vector2(1, 1), Vector2(0, 0)};
 
-        static std::regex r("\\s+");
-
-        auto items = utils::regexSplit(value, r);
+        auto items = utils::split(value, ' ');
         auto pos = std::find(items.begin(), items.end(), "-bm");
 
         if (pos != items.end()) {

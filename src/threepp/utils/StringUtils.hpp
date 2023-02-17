@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <re2/re2.h>
 
 namespace threepp::utils {
 

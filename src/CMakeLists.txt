@@ -336,7 +336,8 @@ target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
-        glfw::glfw)
+        glfw::glfw
+        re2::re2)
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"

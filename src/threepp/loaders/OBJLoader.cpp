@@ -299,7 +299,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
     }
 
     ParserState state;
-    static std::regex r1("\\s+");
 
     std::string line;
     while (std::getline(in, line)) {
@@ -315,7 +314,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
         if (lineFirstChar == 'v') {
 
-            auto data = utils::regexSplit(line, r1);
+            auto data = utils::split(line, ' ');
 
             if (data[0] == "v") {
                 state.vertices.insert(state.vertices.end(), {std::stof(data[1]),
@@ -339,7 +338,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
             std::string lineData{line.begin() + 1, line.end()};
             utils::trimInplace(lineData);
-            auto vertexData = utils::regexSplit(lineData, r1);
+            auto vertexData = utils::split(lineData, ' ');
             std::vector<std::vector<std::string>> faceVertices;
 
             for (const auto &vertex : vertexData) {
@@ -402,15 +401,12 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
                 state.startObject(name);
                 continue;
             }
-            static std::regex usemtlRegex("^usemtl ");
-            result = findAll(line, usemtlRegex);
-            if (!result.empty()) {
+            if (line.find("usemtl ") != std::string::npos) {
                 state.object->startMaterial(utils::trim(line.substr(7)), state.materialLibraries);
                 continue;
             }
-            static std::regex mtllibRegex("^mtllib ");
-            result = findAll(line, mtllibRegex);
-            if (!result.empty()) {
+
+            if (line.find("mtllib ") != std::string::npos) {
                 state.materialLibraries.emplace_back(utils::trim(line.substr(7)));
                 continue;
             }
