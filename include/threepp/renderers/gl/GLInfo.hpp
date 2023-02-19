@@ -32,8 +32,6 @@ namespace threepp::gl {
 
         bool autoReset = true;
 
-        std::vector<std::shared_ptr<GLProgram>> *programs;
-
         void update(int count, unsigned int mode, int instanceCount);
 
         void reset();

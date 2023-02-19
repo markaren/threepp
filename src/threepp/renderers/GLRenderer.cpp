@@ -30,10 +30,7 @@ GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
       materials(properties),
       programCache(bindingStates, clipping),
       onMaterialDispose(*this),
-      _currentDrawBuffers(GL_BACK) {
-
-    info.programs = &programCache.programs;
-}
+      _currentDrawBuffers(GL_BACK) {}
 
 int GLRenderer::getTargetPixelRatio() const {
     return _pixelRatio;
