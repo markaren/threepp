@@ -53,7 +53,7 @@ namespace {
             uniforms.at("specularMap").setValue(specularMaterial->specularMap);
         }
 
-        auto envMap = properties.materialProperties.get(material->uuid).envMap;
+        auto envMap = properties.materialProperties.get(material->uuid())->envMap;
         if (envMap) {
 
             uniforms.at("envMap").setValue(envMap);
@@ -65,7 +65,7 @@ namespace {
                 uniforms.at("refractionRatio").value<float>() = reflectiveMaterial->refractionRatio;
             }
 
-            const auto &maxMipMapLevel = properties.textureProperties.get(envMap->uuid).maxMipLevel;
+            const auto &maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
             if (maxMipMapLevel) {
                 uniforms.at("maxMipLevel").value<int>() = *maxMipMapLevel;
             }

@@ -60,9 +60,9 @@ namespace threepp::gl {
     template<class T>
     struct GLTypeProperties {
 
-        T &get(const std::string &key) {
+        T *get(const std::string &key) {
 
-            return properties_[key];
+            return &properties_[key];
         }
 
         void remove(const std::string &key) {

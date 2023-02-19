@@ -188,16 +188,16 @@ void GLRenderer::dispose() {
     bindingStates.dispose();
 }
 
-void GLRenderer::deallocateMaterial(Material &material) {
+void GLRenderer::deallocateMaterial(Material *material) {
 
     releaseMaterialProgramReferences(material);
 
-    properties.materialProperties.remove(material.uuid);
+    properties.materialProperties.remove(material->uuid());
 }
 
-void GLRenderer::releaseMaterialProgramReferences(Material &material) {
+void GLRenderer::releaseMaterialProgramReferences(Material *material) {
 
-    auto &programs = properties.materialProperties.get(material.uuid).programs;
+    auto& programs = properties.materialProperties.get(material->uuid())->programs;
 
     if (!programs.empty()) {
 
@@ -606,7 +606,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
     //
     //    if (!isScene) scene = &_emptyScene;// scene could be a Mesh, Line, Points, ...
 
-    auto &materialProperties = properties.materialProperties.get(material->uuid);
+    auto materialProperties = properties.materialProperties.get(material->uuid());
 
     auto &lights = currentRenderState->getLights();
     auto &shadowsArray = currentRenderState->getShadowsArray();
@@ -616,12 +616,12 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
     auto parameters = gl::GLPrograms::getParameters(*this, material, lights.state, shadowsArray.size(), scene, object);
     auto programCacheKey = gl::GLPrograms::getProgramCacheKey(*this, parameters);
 
-    auto &programs = materialProperties.programs;
+    auto &programs = materialProperties->programs;
 
     // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
 
-    materialProperties.environment = material->as<MeshStandardMaterial>() ? scene->environment : nullptr;
-    materialProperties.fog = scene->fog;
+    materialProperties->environment = material->as<MeshStandardMaterial>() ? scene->environment : nullptr;
+    materialProperties->fog = scene->fog;
     //    materialProperties.envMap = cubemaps.get( material.envMap || materialProperties.environment );
 
     if (programs.empty()) {
@@ -637,7 +637,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
         program = programs.at(programCacheKey);
 
-        if (materialProperties.currentProgram == program && materialProperties.lightsStateVersion == lightsStateVersion) {
+        if (materialProperties->currentProgram == program && materialProperties->lightsStateVersion == lightsStateVersion) {
 
             updateCommonMaterialProperties(material, parameters);
 
@@ -655,10 +655,10 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
         program = programCache.acquireProgram(*this, parameters, programCacheKey);
         programs[programCacheKey] = program;
 
-        materialProperties.uniforms = parameters.uniforms;
+        materialProperties->uniforms = parameters.uniforms;
     }
 
-    auto &uniforms = *materialProperties.uniforms;
+    auto &uniforms = *materialProperties->uniforms;
 
     if (!material->as<ShaderMaterial>() && !material->as<RawShaderMaterial>() || material->clipping) {
 
@@ -669,10 +669,10 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     // store the light setup it was created for
 
-    materialProperties.needsLights = materialNeedsLights(material);
-    materialProperties.lightsStateVersion = lightsStateVersion;
+    materialProperties->needsLights = materialNeedsLights(material);
+    materialProperties->lightsStateVersion = lightsStateVersion;
 
-    if (materialProperties.needsLights) {
+    if (materialProperties->needsLights) {
 
         // wire up the material to this renderer's lighting state
 
@@ -698,23 +698,23 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
     }
 
     auto progUniforms = program->getUniforms();
-    auto uniformsList = gl::GLUniforms::seqWithValue(progUniforms->seq, *materialProperties.uniforms);
+    auto uniformsList = gl::GLUniforms::seqWithValue(progUniforms->seq, *materialProperties->uniforms);
 
-    materialProperties.currentProgram = program;
-    materialProperties.uniformsList = uniformsList;
+    materialProperties->currentProgram = program;
+    materialProperties->uniformsList = uniformsList;
 
-    return materialProperties.currentProgram;
+    return materialProperties->currentProgram;
 }
 
 void GLRenderer::updateCommonMaterialProperties(Material *material, gl::ProgramParameters &parameters) {
 
-    auto &materialProperties = properties.materialProperties.get(material->uuid);
+    auto materialProperties = properties.materialProperties.get(material->uuid());
 
-    materialProperties.outputEncoding = parameters.outputEncoding;
-    materialProperties.instancing = parameters.instancing;
-    materialProperties.numClippingPlanes = parameters.numClippingPlanes;
-    materialProperties.numIntersection = parameters.numClipIntersection;
-    materialProperties.vertexAlphas = parameters.vertexAlphas;
+    materialProperties->outputEncoding = parameters.outputEncoding;
+    materialProperties->instancing = parameters.instancing;
+    materialProperties->numClippingPlanes = parameters.numClippingPlanes;
+    materialProperties->numIntersection = parameters.numClipIntersection;
+    materialProperties->vertexAlphas = parameters.vertexAlphas;
 }
 
 
@@ -749,7 +749,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
                         object->geometry()->hasAttribute("color") &&
                         object->geometry()->getAttribute<float>("color")->itemSize() == 4;
 
-    auto &materialProperties = properties.materialProperties.get(material->uuid);
+    auto materialProperties = properties.materialProperties.get(material->uuid());
     auto &lights = currentRenderState->getLights();
 
     if (_clippingEnabled) {
@@ -770,21 +770,21 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     bool needsProgramChange = false;
     bool isInstancedMesh = object->as<InstancedMesh>();
 
-    if (material->version == materialProperties.version) {
+    if (material->version == materialProperties->version) {
 
-        if (materialProperties.needsLights && (materialProperties.lightsStateVersion != lights.state.version)) {
-
-            needsProgramChange = true;
-
-        } else if (materialProperties.outputEncoding != encoding) {
+        if (materialProperties->needsLights && (materialProperties->lightsStateVersion != lights.state.version)) {
 
             needsProgramChange = true;
 
-        } else if (isInstancedMesh && !materialProperties.instancing) {
+        } else if (materialProperties->outputEncoding != encoding) {
 
             needsProgramChange = true;
 
-        } else if (!isInstancedMesh && materialProperties.instancing) {
+        } else if (isInstancedMesh && !materialProperties->instancing) {
+
+            needsProgramChange = true;
+
+        } else if (!isInstancedMesh && materialProperties->instancing) {
 
             needsProgramChange = true;
 
@@ -792,17 +792,17 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
             needsProgramChange = true;
 
-        } else if (fog && material->fog && materialProperties.fog && !(fog.value() == materialProperties.fog.value())) {
+        } else if (fog && material->fog && materialProperties->fog && !(fog.value() == materialProperties->fog.value())) {
 
             needsProgramChange = true;
 
-        } else if (materialProperties.numClippingPlanes &&
-                   (materialProperties.numClippingPlanes.value() != clipping.numPlanes ||
-                    materialProperties.numIntersection != clipping.numIntersection)) {
+        } else if (materialProperties->numClippingPlanes &&
+                   (materialProperties->numClippingPlanes.value() != clipping.numPlanes ||
+                    materialProperties->numIntersection != clipping.numIntersection)) {
 
             needsProgramChange = true;
 
-        } else if (materialProperties.vertexAlphas != vertexAlphas) {
+        } else if (materialProperties->vertexAlphas != vertexAlphas) {
 
             needsProgramChange = true;
         }
@@ -810,12 +810,12 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     } else {
 
         needsProgramChange = true;
-        materialProperties.version = material->version;
+        materialProperties->version = material->version;
     }
 
     //
 
-    auto program = materialProperties.currentProgram;
+    auto program = materialProperties->currentProgram;
 
     if (needsProgramChange) {
 
@@ -827,7 +827,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     bool refreshLights = false;
 
     auto p_uniforms = program->getUniforms();
-    auto &m_uniforms = materialProperties.uniforms;
+    auto &m_uniforms = materialProperties->uniforms;
 
     if (state.useProgram(program->program, textEnabled_)) {
 
@@ -903,9 +903,9 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
         }
     }
 
-    if (refreshMaterial || materialProperties.receiveShadow != object->receiveShadow) {
+    if (refreshMaterial || materialProperties->receiveShadow != object->receiveShadow) {
 
-        materialProperties.receiveShadow = object->receiveShadow;
+        materialProperties->receiveShadow = object->receiveShadow;
         p_uniforms->setValue("receiveShadow", object->receiveShadow);
     }
 
@@ -913,7 +913,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
         p_uniforms->setValue("toneMappingExposure", toneMappingExposure);
 
-        if (materialProperties.needsLights) {
+        if (materialProperties->needsLights) {
 
             // the current material requires lighting info
 
@@ -936,7 +936,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
         materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height);
 
-        gl::GLUniforms::upload(materialProperties.uniformsList, *m_uniforms, &textures);
+        gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
     }
 
     if (isShaderMaterial) {
@@ -944,7 +944,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
         auto m = dynamic_cast<ShaderMaterial *>(material);
         if (m->uniformsNeedUpdate) {
 
-            gl::GLUniforms::upload(materialProperties.uniformsList, *m_uniforms, &textures);
+            gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
             m->uniformsNeedUpdate = false;
         }
     }
@@ -1002,7 +1002,7 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
     _currentActiveCubeFace = activeCubeFace;
     _currentActiveMipmapLevel = activeMipmapLevel;
 
-    if (renderTarget && !properties.renderTargetProperties.get(renderTarget->uuid).glFramebuffer) {
+    if (renderTarget && !properties.renderTargetProperties.get(renderTarget->uuid)->glFramebuffer) {
 
         textures.setupRenderTarget(renderTarget);
     }
@@ -1013,7 +1013,7 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
 
         const auto &texture = renderTarget->texture;
 
-        framebuffer = *properties.renderTargetProperties.get(renderTarget->uuid).glFramebuffer;
+        framebuffer = *properties.renderTargetProperties.get(renderTarget->uuid)->glFramebuffer;
 
         _currentViewport.copy(renderTarget->viewport);
         _currentScissor.copy(renderTarget->scissor);
@@ -1034,7 +1034,7 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
 
         if (renderTarget) {
 
-            if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers[0] != GL_COLOR_ATTACHMENT0) {
+            if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers.front() != GL_COLOR_ATTACHMENT0) {
 
                 _currentDrawBuffers[0] = GL_COLOR_ATTACHMENT0;
                 _currentDrawBuffers.resize(1);
@@ -1044,7 +1044,7 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
 
         } else {
 
-            if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers[0] != GL_BACK) {
+            if (_currentDrawBuffers.size() != 1 || _currentDrawBuffers.front() != GL_BACK) {
 
                 _currentDrawBuffers.clear();
                 _currentDrawBuffers.emplace_back(GL_BACK);
@@ -1055,7 +1055,7 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
 
         if (needsUpdate) {
 
-            glDrawBuffers((int) _currentDrawBuffers.size(), _currentDrawBuffers.data());
+            glDrawBuffers(static_cast<int>(_currentDrawBuffers.size()), _currentDrawBuffers.data());
         }
     }
 
@@ -1109,5 +1109,5 @@ void GLRenderer::OnMaterialDispose::onEvent(Event &event) {
 
     material->removeEventListener("dispose", this);
 
-    scope_.deallocateMaterial(*material);
+    scope_.deallocateMaterial(material);
 }

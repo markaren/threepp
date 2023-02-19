@@ -34,11 +34,11 @@ namespace threepp::gl {
 
         void setTextureParameters(unsigned int textureType, Texture &texture);
 
-        void initTexture(TextureProperties &textureProperties, Texture &texture);
+        void initTexture(TextureProperties *textureProperties, Texture &texture);
 
-        void uploadTexture(TextureProperties &textureProperties, Texture &texture, unsigned int slot);
+        void uploadTexture(TextureProperties *textureProperties, Texture &texture, unsigned int slot);
 
-        void uploadCubeTexture(TextureProperties &textureProperties, Texture &texture, unsigned int slot);
+        void uploadCubeTexture(TextureProperties *textureProperties, Texture &texture, unsigned int slot);
 
         void deallocateTexture(Texture *texture);
 

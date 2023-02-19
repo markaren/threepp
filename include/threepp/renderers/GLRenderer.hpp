@@ -247,9 +247,9 @@ namespace threepp {
         std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
         std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
-        void deallocateMaterial(Material &material);
+        void deallocateMaterial(Material *material);
 
-        void releaseMaterialProgramReferences(Material &material);
+        void releaseMaterialProgramReferences(Material *material);
 
         void renderBufferDirect(
                 Camera* camera,

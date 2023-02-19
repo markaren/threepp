@@ -120,7 +120,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer
         if (preexistingProgram->cacheKey == cacheKey) {
 
             program = preexistingProgram;
-            ++program->usedTimes;
+            ++(program->usedTimes);
 
             break;
         }
@@ -128,7 +128,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer
 
     if (!program) {
 
-        program = programs.emplace_back(GLProgram::create(renderer, cacheKey, parameters, bindingStates));
+        program = programs.emplace_back(std::make_shared<GLProgram>(&renderer, cacheKey, &parameters, &bindingStates));
     }
 
     return program;
@@ -136,7 +136,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer
 
 void GLPrograms::releaseProgram(const std::shared_ptr<GLProgram> &program) {
 
-    if (--program->usedTimes == 0) {
+    if (--(program->usedTimes) == 0) {
 
         auto it = find(programs.begin(), programs.end(), program);
         auto i = it - programs.begin();

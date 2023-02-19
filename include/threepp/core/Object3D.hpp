@@ -35,7 +35,7 @@ namespace threepp {
         inline static Vector3 defaultUp{0, 1, 0};
         inline static bool defaultMatrixAutoUpdate{true};
 
-        const unsigned int id{_object3Did++};
+        unsigned int id{_object3Did++};
 
         const std::string uuid{utils::generateUUID()};
 

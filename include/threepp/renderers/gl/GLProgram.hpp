@@ -25,20 +25,20 @@ namespace threepp {
             int usedTimes = 1;
             unsigned int program = -1;
 
+            GLProgram(const GLRenderer *renderer, std::string cacheKey, const ProgramParameters *parameters, GLBindingStates *bindingStates);
+
             std::shared_ptr<GLUniforms> getUniforms();
 
             std::unordered_map<std::string, int> getAttributes();
 
             void destroy();
 
-            static std::shared_ptr<GLProgram> create(const GLRenderer &renderer, std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates);
-
         private:
-            GLBindingStates &bindingStates;
+            GLBindingStates *bindingStates;
             std::shared_ptr<GLUniforms> cachedUniforms;
             std::unordered_map<std::string, int> cachedAttributes;
 
-            GLProgram(const GLRenderer &renderer, std::string cacheKey, const ProgramParameters &parameters, GLBindingStates &bindingStates);
+            GLProgram() = default;
 
             inline static int programIdCount{0};
         };

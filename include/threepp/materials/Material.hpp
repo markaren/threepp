@@ -17,8 +17,6 @@ namespace threepp {
     public:
         const unsigned int id = materialId++;
 
-        const std::string uuid = utils::generateUUID();
-
         std::string name;
 
         bool fog = true;
@@ -78,6 +76,11 @@ namespace threepp {
         unsigned int version = 0;
 
         Material(const Material&) = delete;
+
+        std::string uuid() const {
+
+            return uuid_;
+        }
 
         void dispose() {
 
@@ -179,7 +182,9 @@ namespace threepp {
         }
 
     private:
+        std::string uuid_ = utils::generateUUID();
         inline static unsigned int materialId = 0;
+
     };
 
 }// namespace threepp

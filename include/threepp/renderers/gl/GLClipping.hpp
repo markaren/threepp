@@ -68,7 +68,7 @@ namespace threepp::gl {
             auto clipIntersection = material->clipIntersection;
             auto clipShadows = material->clipShadows;
 
-            auto &materialProperties = properties.materialProperties.get(material->uuid);
+            auto materialProperties = properties.materialProperties.get(material->uuid());
 
             if (!localClippingEnabled || planes.empty() || renderingShadows && !clipShadows) {
 
@@ -90,7 +90,7 @@ namespace threepp::gl {
                 const auto nGlobal = renderingShadows ? 0 : numGlobalPlanes,
                            lGlobal = nGlobal * 4;
 
-                auto &dstArray = materialProperties.clippingState;
+                auto &dstArray = materialProperties->clippingState;
 
                 uniform.setValue(dstArray);// ensure unique state
 
@@ -101,7 +101,7 @@ namespace threepp::gl {
                     dstArray[i] = globalState.value()[i];
                 }
 
-                materialProperties.clippingState = dstArray;
+                materialProperties->clippingState = dstArray;
                 this->numIntersection = clipIntersection ? this->numPlanes : 0;
                 this->numPlanes += nGlobal;
             }
