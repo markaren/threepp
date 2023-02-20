@@ -661,7 +661,7 @@ GLProgram::GLProgram(const GLRenderer *renderer, std::string cacheKey, const Pro
 
     if (parameters->index0AttributeName) {
 
-        glBindAttribLocation(program, 0, "position");
+        glBindAttribLocation(program, 0, parameters->index0AttributeName.value().c_str());
     }
 
     glLinkProgram(program);
