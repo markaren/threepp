@@ -753,7 +753,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
         if (_localClippingEnabled || camera != _currentCamera) {
 
-            bool useCache = camera == _currentCamera && material->id == _currentMaterialId;
+            bool useCache = camera == _currentCamera && material->id == _currentMaterialId.value_or(-1);
 
             // we might want to call this function with some ClippingGroup
             // object instead of the material, once it becomes feasible
@@ -833,7 +833,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
         refreshLights = true;
     }
 
-    if (material->id != _currentMaterialId) {
+    if (material->id != _currentMaterialId.value_or(-1)) {
 
         _currentMaterialId = material->id;
 
