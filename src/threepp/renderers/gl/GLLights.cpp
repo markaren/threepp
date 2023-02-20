@@ -14,6 +14,13 @@ namespace {
         return (lightB->castShadow ? 1 : 0) > (lightA->castShadow ? 1 : 0);
     }
 
+    template <class T>
+    void ensureCapacity(T& container, size_t capacity) {
+        while (container.size() < capacity) {
+            container.emplace_back();
+        }
+    }
+
 }// namespace
 
 
@@ -78,7 +85,8 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 ++numDirectionalShadows;
             }
 
-            state.directional.emplace_back(uniforms);
+            ensureCapacity(state.directional, directionalLength+1);
+            state.directional[directionalLength] = uniforms;
 
             ++directionalLength;
 
@@ -113,7 +121,8 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 ++numSpotShadows;
             }
 
-            state.spot.emplace_back(uniforms);
+            ensureCapacity(state.spot, spotLength+1);
+            state.spot[spotLength] = uniforms;
 
             ++spotLength;
 
@@ -146,7 +155,8 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 ++numPointShadows;
             }
 
-            state.point.emplace_back(uniforms);
+            ensureCapacity(state.point, pointLength+1);
+            state.point[pointLength] = uniforms;
 
             ++pointLength;
         }
