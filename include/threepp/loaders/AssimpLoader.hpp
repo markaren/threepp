@@ -192,14 +192,12 @@ namespace threepp {
 
             auto t = aiNode->mTransformation;
             Matrix4 m;
-            m.set(
-                    t.a1, t.a2, t.a3, t.a4,
+            m.set(t.a1, t.a2, t.a3, t.a4,
                     t.b1, t.b2, t.b3, t.b4,
                     t.c1, t.c2, t.c3, t.c4,
                     t.d1, t.d2, t.d3, t.d4);
-            group->position.setFromMatrixPosition(m);
-            group->rotation.setFromRotationMatrix(m);
-            group->updateMatrix();
+            group->applyMatrix4(m);
+
             parent.add(group);
 
             for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
