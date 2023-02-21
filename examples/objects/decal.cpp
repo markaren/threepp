@@ -17,7 +17,7 @@ namespace {
         decalMaterial->normalMap = tl.loadTexture("data/textures/decal/decal-normal.jpg");
         decalMaterial->normalScale = Vector2(1, 1);
         decalMaterial->shininess = 30;
-        decalMaterial->depthTest = false;
+        decalMaterial->depthTest = true;
         decalMaterial->depthWrite = false;
         decalMaterial->transparent = true;
         decalMaterial->polygonOffset = true;
