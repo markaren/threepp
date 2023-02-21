@@ -172,6 +172,7 @@ namespace {
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector3 arg) { setValueV3fHelper(arg); },
+                               [&](Vector3* arg) { setValueV3fHelper(*arg); },
                                [&](Color arg) { setValueV3fHelper(arg); },
                        },
                        value);

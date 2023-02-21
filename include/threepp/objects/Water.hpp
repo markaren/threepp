@@ -22,10 +22,10 @@ namespace threepp {
             std::optional<float> time;
             std::shared_ptr<Texture> waterNormals;
             std::optional<Vector3> sunDirection;
-            std::optional<unsigned int> sunColor;
-            std::optional<unsigned int> waterColor;
+            std::optional<Color> sunColor;
+            std::optional<Color> waterColor;
             std::optional<Vector3> eye;
-            std::optional<float> distortionScale ;
+            std::optional<float> distortionScale;
             std::optional<int> side;
             std::optional<bool> fog;
         };

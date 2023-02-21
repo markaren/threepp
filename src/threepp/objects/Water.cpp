@@ -139,8 +139,8 @@ struct Water::Impl {
 
         Vector3 sunDirection = options.sunDirection.value_or(Vector3{0.70707f, 0.70707f, 0.f});
 
-        Color sunColor{options.sunColor ? *options.sunColor : 0xffffff};
-        Color waterColor{options.waterColor ? *options.waterColor : 0x7f7f7f};
+        Color sunColor{options.sunColor.value_or(0xffffff)};
+        Color waterColor{options.waterColor.value_or(0x7f7f7f)};
 
         Shader shader = mirrorShader();
 
@@ -174,7 +174,7 @@ struct Water::Impl {
         (*material->uniforms)["waterColor"].setValue(waterColor);
         (*material->uniforms)["sunDirection"].setValue(sunDirection);
         (*material->uniforms)["distortionScale"].setValue(distortionScale);
-        (*material->uniforms)["eye"].setValue(eye);
+        (*material->uniforms)["eye"].setValue(&eye);
 
         water_.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
             mirrorWorldPosition.setFromMatrixPosition(*water_.matrixWorld);

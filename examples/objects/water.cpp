@@ -6,21 +6,21 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas(Canvas::Parameters().antialiasing(4));
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(55, canvas.getAspect(), 1, 2000);
-    camera->position.set(30, 30, 100);
+    camera->position.set(-50, 50, -100);
 
     OrbitControls controls{camera, canvas};
     controls.maxPolarAngle = math::PI * 0.495f;
     controls.target.set(0, 10, 0);
     controls.minDistance = 40;
-    controls.maxDistance = 200;
+    controls.maxDistance = 400;
     controls.update();
 
     auto light = DirectionalLight::create(0xffffff);
-    light->position.set(-1,-1,-1);
+    light->position.set(1, 1, 1);
     scene->add(light);
 
     GLRenderer renderer(canvas);
@@ -32,7 +32,6 @@ int main() {
     const auto sphereMaterial = MeshBasicMaterial::create();
     sphereMaterial->color.setHex(0x0000ff);
     sphereMaterial->wireframe = true;
-    sphereMaterial->wireframeLinewidth = 10;
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     scene->add(sphere);
 
@@ -44,11 +43,11 @@ int main() {
     Water::Options opt;
     opt.textureHeight = 512;
     opt.textureWidth = 512;
-    opt.alpha = 0.9f;
+    opt.alpha = 0.8f;
     opt.waterNormals = texture;
     opt.distortionScale = 3.7f;
-    opt.sunDirection = Vector3{};
-    opt.sunColor = 0xffffff;
+    opt.sunDirection = light->position.clone().normalize();
+    opt.sunColor = light->color;
     opt.waterColor = 0x001e0f;
     opt.fog = scene->fog.has_value();
 
@@ -56,7 +55,6 @@ int main() {
 
     auto water = Water::create(waterGeometry, opt);
     water->rotateX(math::degToRad(-90));
-    water->position.setY(-1);
     scene->add(water);
 
     canvas.onWindowResize([&](WindowSize size) {
