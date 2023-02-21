@@ -10,14 +10,13 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
-    camera->position.set(0, 1, 10);
+    camera->position.set(0, 0.1, 1);
 
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
     AssimpLoader loader;
     auto objModel = loader.load("data/models/gltf/zedm.glb", true);
-    objModel->scale.multiplyScalar(0.1);
     scene->add(objModel);
 
     auto light = AmbientLight::create(Color(0xfffff));
