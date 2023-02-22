@@ -48,10 +48,7 @@ namespace threepp {
 
             bool alpha;
             bool depth;
-            bool stencil;
-            bool antialias;
             bool premultipliedAlpha;
-            bool preserveDrawingBuffer;
         };
 
         // clearing
@@ -89,7 +86,7 @@ namespace threepp {
         gl::GLState state;
         gl::GLShadowMap shadowMap;
 
-        explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters());
+        explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters{});
 
         [[nodiscard]] int getTargetPixelRatio() const;
 
