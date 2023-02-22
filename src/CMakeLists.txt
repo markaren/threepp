@@ -110,6 +110,7 @@ set(publicHeaders
         "threepp/objects/LineSegments.hpp"
         "threepp/objects/LOD.hpp"
         "threepp/objects/Mesh.hpp"
+        "threepp/objects/Sky.hpp"
         "threepp/objects/Sprite.hpp"
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
@@ -234,6 +235,7 @@ set(sources
         "threepp/lights/SpotLightShadow.cpp"
 
         "threepp/objects/Mesh.cpp"
+        "threepp/objects/Sky.cpp"
         "threepp/objects/Sprite.cpp"
         "threepp/objects/Reflector.cpp"
         "threepp/objects/Water.cpp"

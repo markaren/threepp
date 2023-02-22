@@ -1,5 +1,6 @@
 
 #include "threepp/objects/Water.hpp"
+#include "threepp/objects/Sky.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -10,7 +11,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(55, canvas.getAspect(), 1, 2000);
-    camera->position.set(-50, 50, -100);
+    camera->position.set(-300, 120, -150);
 
     OrbitControls controls{camera, canvas};
     controls.maxPolarAngle = math::PI * 0.495f;
@@ -20,13 +21,12 @@ int main() {
     controls.update();
 
     auto light = DirectionalLight::create(0xffffff);
-    light->position.set(1, 1, 1);
+    light->position.set(100, 10, 100);
     scene->add(light);
 
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
     renderer.toneMapping = ACESFilmicToneMapping;
-    renderer.setClearColor(Color::aliceblue);
 
     const auto sphereGeometry = SphereGeometry::create(30);
     const auto sphereMaterial = MeshBasicMaterial::create();
@@ -57,10 +57,21 @@ int main() {
     water->rotateX(math::degToRad(-90));
     scene->add(water);
 
+    auto sky = Sky::create();
+    sky->scale.setScalar(10000);
+    sky->material<ShaderMaterial>()->uniforms->at("turbidity").value<float>() = 10;
+    sky->material<ShaderMaterial>()->uniforms->at("rayleigh").value<float>() = 1;
+    sky->material<ShaderMaterial>()->uniforms->at("mieCoefficient").value<float>() = 0.005;
+    sky->material<ShaderMaterial>()->uniforms->at("mieDirectionalG").value<float>() = 0.8;
+    sky->material<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
+    scene->add(sky);
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        std::cout << camera->position << std::endl;
     });
 
     float t = 0;
@@ -70,6 +81,7 @@ int main() {
         sphere->rotation.z = t * 0.051f;
 
         water->material<ShaderMaterial>()->uniforms->at("time").setValue(t);
+
 
         renderer.render(scene, camera);
 
