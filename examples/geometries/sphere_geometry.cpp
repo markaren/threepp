@@ -21,6 +21,12 @@ int main() {
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+    });
+
     canvas.animate([&]() {
         renderer.render(scene, camera);
     });
