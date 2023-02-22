@@ -15,10 +15,7 @@ namespace threepp {
 
     public:
         std::shared_ptr<Curve3> path;
-        int tubularSegments;
         float radius;
-        int radialSegments;
-        bool closed;
 
         static std::shared_ptr<TubeGeometry> create(const std::shared_ptr<Curve3> &path, int tubularSegments = 64, float radius = 1, int radialSegments = 8, bool closed = false) {
 
@@ -29,7 +26,7 @@ namespace threepp {
         Curve3::FrenetFrames frames;
 
         TubeGeometry(std::shared_ptr<Curve3> path, int tubularSegments, float radius, int radialSegments, bool closed)
-            : path(std::move(path)), tubularSegments(tubularSegments), radius(radius), radialSegments(radialSegments), closed(closed) {
+            : path(std::move(path)), radius(radius) {
 
             this->frames = this->path->computeFrenetFrames(tubularSegments, closed);
 
