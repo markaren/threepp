@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/cameras/Camera.hpp"
 
 namespace threepp {
 
