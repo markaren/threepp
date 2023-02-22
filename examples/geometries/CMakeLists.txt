@@ -2,6 +2,9 @@
 add_executable(box_geometry box_geometry.cpp)
 target_link_libraries(box_geometry PUBLIC threepp)
 
+add_executable(cylinder_geometry cylinder_geometry.cpp)
+target_link_libraries(cylinder_geometry PUBLIC threepp)
+
 add_executable(ring_geometry ring_geometry.cpp)
 target_link_libraries(ring_geometry PUBLIC threepp)
 
