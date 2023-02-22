@@ -2,11 +2,10 @@
 #include "threepp/objects/Water.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/core/Shader.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
-#include "threepp/scenes/Scene.hpp"
-
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
 

@@ -5,7 +5,6 @@
 
 #include <utility>
 
-#include "threepp/core/Shader.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 namespace threepp {
