@@ -9,6 +9,7 @@ namespace threepp::math {
 
     const float LN2 = std::log(2.f);
     const float PI = 2.f * std::acos(0.f);
+    const float TWO_PI = 2.f * PI;
 
     const float DEG2RAD = PI / 180.f;
     const float RAD2DEG = 180.f / PI;
