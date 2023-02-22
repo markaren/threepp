@@ -1,8 +1,6 @@
 
 #include "threepp/geometries/SphereGeometry.hpp"
 
-#include "threepp/math/Vector3.hpp"
-
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -24,8 +22,8 @@ SphereGeometry::SphereGeometry(
     std::vector<float> normals;
     std::vector<float> uvs;
 
-    widthSegments = std::max(3, (int) std::floor(widthSegments));
-    heightSegments = std::max(2, (int) std::floor(heightSegments));
+    widthSegments = std::max(3, widthSegments);
+    heightSegments = std::max(2, heightSegments);
 
     const auto thetaEnd = std::min(thetaStart + thetaLength, math::PI);
 
@@ -41,24 +39,24 @@ SphereGeometry::SphereGeometry(
 
         std::vector<int> verticesRow;
 
-        const float v = (float) iy / heightSegments;
+        const float v = static_cast<float>(iy) / static_cast<float>(heightSegments);
 
         // special case for the poles
 
-        int uOffset = 0;
+        float uOffset = 0;
 
         if (iy == 0 && thetaStart == 0) {
 
-            uOffset = (int) (0.5f / widthSegments);
+            uOffset = 0.5f / static_cast<float>(widthSegments);
 
         } else if (iy == heightSegments && thetaEnd == math::PI) {
 
-            uOffset = (int) (-0.5f / widthSegments);
+            uOffset = -0.5f / static_cast<float>(widthSegments);
         }
 
         for (int ix = 0; ix <= widthSegments; ix++) {
 
-            const float u = (float) ix / widthSegments;
+            const float u = static_cast<float>(ix) / static_cast<float>(widthSegments);
 
             // vertex
 
