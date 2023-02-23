@@ -18,6 +18,8 @@ however much remains to be done..
 * AmbientLight, DirectionalLight, PointLight, SpotLight 
 * Most materials
 * RenderTarget
+* InstancedMesh
+* Water and Sky shader
 * Raycasting against Mesh
 * Binary STL loader
 * OBJ/MTL Loader
@@ -52,7 +54,7 @@ Under MinGW you'll need to specify the vcpkg triplet.
 -DVCPKG_HOST_TRIPLET=x64-mingw-dynamic    # needed only if MSVC is not present at all 
 ```
 
-#### conan
+#### conan 1.x
 
 Run something akin to:
 `conan install . -s build_type=Debug -if cmake-build-debug -b missing` _before_ calling CMake.
