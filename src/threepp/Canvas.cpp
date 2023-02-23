@@ -17,6 +17,8 @@ class Canvas::Impl {
 public:
     GLFWwindow *window;
 
+    int fps_ = -1;
+
     WindowSize size_;
     Vector2 lastMousePos{};
 
@@ -70,7 +72,7 @@ public:
 
         glfwMakeContextCurrent(window);
         gladLoadGL();
-        glfwSwapInterval(1);
+        glfwSwapInterval(params.vsync_ ? 1 : 0);
 
         if (params.antialiasing_ > 0) {
             glEnable(GL_MULTISAMPLE);
@@ -89,8 +91,23 @@ public:
         glfwSetWindowSize(window, size.width, size.height);
     }
 
+    // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
+    void measureFPS(double &lastTime, int &nbFrames) {
+        double currentTime = glfwGetTime();
+        nbFrames++;
+        if (currentTime - lastTime >= 1.0) {
+            fps_ = nbFrames;
+            nbFrames = 0;
+            lastTime += 1.0;
+        }
+    }
+
     void animate(const std::function<void()> &f) {
+        double lastTime = glfwGetTime();
+        int nbFrames = 0;
         while (!glfwWindowShouldClose(window)) {
+
+            measureFPS(lastTime, nbFrames);
 
             while (!tasks_.empty()) {
                 auto task = tasks_.front();
@@ -106,8 +123,13 @@ public:
     }
 
     void animate(const std::function<void(float)> &f) {
+
+        double lastTime = glfwGetTime();
+        int nbFrames = 0;
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
+
+            measureFPS(lastTime, nbFrames);
 
             while (!tasks_.empty()) {
                 auto task = tasks_.front();
@@ -246,6 +268,10 @@ public:
 
 Canvas::Canvas(const Canvas::Parameters &params) : pimpl_(new Impl(params)) {}
 
+int threepp::Canvas::getFPS() const {
+    return pimpl_->fps_;
+}
+
 void Canvas::animate(const std::function<void()> &f) {
 
     pimpl_->animate(f);
@@ -323,6 +349,13 @@ Canvas::Parameters &Canvas::Parameters::size(int width, int height) {
 Canvas::Parameters &Canvas::Parameters::antialiasing(int antialiasing) {
 
     this->antialiasing_ = antialiasing;
+
+    return *this;
+}
+
+Canvas::Parameters &Canvas::Parameters::vsync(bool flag) {
+
+    this->vsync_ = flag;
 
     return *this;
 }

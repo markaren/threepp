@@ -27,9 +27,11 @@ namespace threepp {
 
         explicit Canvas(const Parameters &params = Parameters());
 
-        [[nodiscard]] const WindowSize& getSize() const;
+        [[nodiscard]] const WindowSize &getSize() const;
 
         [[nodiscard]] float getAspect() const;
+
+        [[nodiscard]] int getFPS() const;
 
         void setSize(WindowSize size);
 
@@ -39,17 +41,17 @@ namespace threepp {
 
         bool removeKeyListener(const KeyListener *listener);
 
-        void addMouseListener(MouseListener* listener);
+        void addMouseListener(MouseListener *listener);
 
-        bool removeMouseListener(const MouseListener* listener);
+        bool removeMouseListener(const MouseListener *listener);
 
         void animate(const std::function<void()> &f);
 
         void animate(const std::function<void(float)> &f);
 
-        void invokeLater(const std::function<void()>& f);
+        void invokeLater(const std::function<void()> &f);
 
-        [[nodiscard]] void* window_ptr() const;
+        [[nodiscard]] void *window_ptr() const;
 
         ~Canvas();
 
@@ -63,7 +65,8 @@ namespace threepp {
             Parameters()
                 : size_{640, 480},
                   antialiasing_{0},
-                  title_{"threepp"} {}
+                  title_{"threepp"},
+                  vsync_(true) {}
 
             Parameters &title(std::string value);
 
@@ -73,10 +76,13 @@ namespace threepp {
 
             Parameters &antialiasing(int antialiasing);
 
+            Parameters &vsync(bool flag);
+
         private:
             WindowSize size_;
             int antialiasing_;
             std::string title_;
+            bool vsync_;
 
             friend class Canvas::Impl;
         };

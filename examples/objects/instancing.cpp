@@ -6,7 +6,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas(Canvas::Parameters().antialiasing(4).vsync(false));
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
@@ -58,9 +58,12 @@ int main() {
     });
     canvas.addMouseListener(&l);
 
+    renderer.enableTextRendering();
+    auto& handle = renderer.textHandle();
+
     Raycaster raycaster;
     std::unordered_map<int, bool> map;
-    canvas.animate([&]() {
+    canvas.animate([&](float dt) {
 
         raycaster.setFromCamera(mouse, camera);
         auto intersects = raycaster.intersectObject(mesh.get());
@@ -73,6 +76,8 @@ int main() {
                 map[*instanceId] = true;
             }
         }
+
+        handle.setText("FPS: " + std::to_string(canvas.getFPS()));
 
         renderer.render(scene, camera);
     });
