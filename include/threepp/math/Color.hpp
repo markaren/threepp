@@ -60,7 +60,7 @@ namespace threepp {
         [[nodiscard]] bool equals(const Color &c) const;
 
         template<class ArrayLike>
-        Color &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Color &fromArray(const ArrayLike &array, size_t offset = 0) {
 
             this->r = array[offset];
             this->g = array[offset + 1];
@@ -70,7 +70,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, unsigned int offset = 0) {
+        void toArray(ArrayLike &array, size_t offset = 0) const {
 
             array[offset] = this->r;
             array[offset + 1] = this->g;

@@ -59,7 +59,7 @@ GLuint GLBindingStates::createVertexArrayObject() const {
     return vao;
 }
 
-void GLBindingStates::bindVertexArrayObject(const GLuint vao) const {
+void GLBindingStates::bindVertexArrayObject(GLuint vao) const {
 
     glBindVertexArray(vao);
 }
@@ -119,7 +119,7 @@ bool GLBindingStates::needsUpdate(BufferGeometry *geometry, BufferAttribute *ind
 
         if (cachedAttribute != geometryAttribute.get()) return true;
 
-        //  if (cachedAttribute.data != geometryAttribute.data) return true;
+//          if (cachedAttribute.data != geometryAttribute.data) return true;
 
         ++attributesNum;
     }
@@ -240,31 +240,30 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
                 const auto type = attribute.type;
                 const auto bytesPerElement = attribute.bytesPerElement;
 
-                if (dynamic_cast<InterleavedBufferAttribute*>(geometryAttribute.get())) {
+                if (dynamic_cast<InterleavedBufferAttribute *>(geometryAttribute.get())) {
 
-                    auto attr = dynamic_cast<InterleavedBufferAttribute*>(geometryAttribute.get());
+                    auto attr = dynamic_cast<InterleavedBufferAttribute *>(geometryAttribute.get());
                     auto data = attr->data;
                     const auto stride = data->stride();
                     const auto offset = attr->offset;
 
-                    if ( false /*data && data.isInstancedInterleavedBuffer*/ ) {
+                    if (false /*data && data.isInstancedInterleavedBuffer*/) {
 
-//                        enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
-//
-//                        if ( geometry._maxInstanceCount === undefined ) {
-//
-//                            geometry._maxInstanceCount = data.meshPerAttribute * data.count;
-//
-//                        }
+                        //                        enableAttributeAndDivisor( programAttribute, data.meshPerAttribute );
+                        //
+                        //                        if ( geometry._maxInstanceCount === undefined ) {
+                        //
+                        //                            geometry._maxInstanceCount = data.meshPerAttribute * data.count;
+                        //
+                        //                        }
 
                     } else {
 
-                        enableAttribute( programAttribute );
-
+                        enableAttribute(programAttribute);
                     }
 
-                    glBindBuffer( GL_ARRAY_BUFFER, buffer );
-                    vertexAttribPointer( programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement );
+                    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+                    vertexAttribPointer(programAttribute, size, type, normalized, stride * bytesPerElement, offset * bytesPerElement);
 
                 } else {
 
@@ -281,28 +280,84 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
                     vertexAttribPointer(programAttribute, size, type, normalized, 0, 0);
                 }
 
+            } else if (name == "instanceMatrix") {
+
+                auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceMatrix.get());
+
+                auto buffer = attribute.buffer;
+                auto type = attribute.type;
+
+                enableAttributeAndDivisor(programAttribute + 0, 1);
+                enableAttributeAndDivisor(programAttribute + 1, 1);
+                enableAttributeAndDivisor(programAttribute + 2, 1);
+                enableAttributeAndDivisor(programAttribute + 3, 1);
+
+                glBindBuffer(GL_ARRAY_BUFFER, buffer);
+
+                glVertexAttribPointer(programAttribute + 0, 4, type, false, 64, (void *) 0);
+                glVertexAttribPointer(programAttribute + 1, 4, type, false, 64, (void *) 16);
+                glVertexAttribPointer(programAttribute + 2, 4, type, false, 64, (void *) 32);
+                glVertexAttribPointer(programAttribute + 3, 4, type, false, 64, (void *) 48);
+
+            } else if (name == "instanceColor") {
+
+                auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceColor.get());
+
+                auto buffer = attribute.buffer;
+                auto type = attribute.type;
+
+                enableAttributeAndDivisor( programAttribute, 1 );
+
+                glBindBuffer( GL_ARRAY_BUFFER, buffer );
+
+                glVertexAttribPointer( programAttribute, 3, type, false, 12, 0 );
+
             } else if (!materialDefaultAttributeValues.empty()) {
 
-                if (materialDefaultAttributeValues.count("name")) {
+                    if (materialDefaultAttributeValues.count("name")) {
 
-                    UniformValue &value = materialDefaultAttributeValues.at("name");
+                        UniformValue &value = materialDefaultAttributeValues.at("name");
 
-                    // TODO
+                        // TODO
+                    }
                 }
             }
         }
+
+        disableUnusedAttributes();
     }
 
-    disableUnusedAttributes();
-}
+    void GLBindingStates::dispose() {
 
-void GLBindingStates::dispose() {
+        reset();
 
-    reset();
+        for (const auto &geometryId : bindingStates) {
 
-    for (const auto &geometryId : bindingStates) {
+            auto &programMap = bindingStates.at(geometryId.first);
 
-        auto &programMap = bindingStates.at(geometryId.first);
+            for (const auto &programId : programMap) {
+
+                auto &stateMap = programMap.at(programId.first);
+
+                for (const auto &wireframe : stateMap) {
+
+                    deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
+
+                    stateMap.erase(wireframe.first);
+                }
+
+                programMap.erase(programId.first);
+            }
+
+            bindingStates.erase(geometryId.first);
+        }
+    }
+
+    void GLBindingStates::releaseStatesOfGeometry(BufferGeometry * geometry) {
+
+        if (!bindingStates.count(geometry->id)) return;
+
+        auto &programMap = bindingStates[geometry->id];
 
         for (const auto &programId : programMap) {
 
@@ -318,59 +373,35 @@ void GLBindingStates::dispose() {
             programMap.erase(programId.first);
         }
 
-        bindingStates.erase(geometryId.first);
+        bindingStates.erase(geometry->id);
     }
-}
 
-void GLBindingStates::releaseStatesOfGeometry(BufferGeometry *geometry) {
+    void GLBindingStates::releaseStatesOfProgram(GLProgram & program) {
 
-    if (!bindingStates.count(geometry->id)) return;
+        for (const auto &geometryId : bindingStates) {
 
-    auto &programMap = bindingStates[geometry->id];
+            auto &programMap = bindingStates[geometryId.first];
 
-    for (const auto &programId : programMap) {
+            if (!programMap.count(program.id)) continue;
 
-        auto &stateMap = programMap.at(programId.first);
+            auto &stateMap = programMap.at(program.id);
 
-        for (const auto &wireframe : stateMap) {
+            for (const auto &wireframe : stateMap) {
 
-            deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
+                auto &value = stateMap.at(wireframe.first);
+                deleteVertexArrayObject(*value->object);
 
-            stateMap.erase(wireframe.first);
+                stateMap.erase(wireframe.first);
+            }
+
+            programMap.erase(program.id);
         }
-
-        programMap.erase(programId.first);
     }
 
-    bindingStates.erase(geometry->id);
-}
+    void GLBindingStates::reset() {
 
-void GLBindingStates::releaseStatesOfProgram(GLProgram &program) {
+        if (currentState_ == defaultState_) return;
 
-    for (const auto &geometryId : bindingStates) {
-
-        auto &programMap = bindingStates[geometryId.first];
-
-        if (!programMap.count(program.id)) continue;
-
-        auto &stateMap = programMap.at(program.id);
-
-        for (const auto &wireframe : stateMap) {
-
-            auto &value = stateMap.at(wireframe.first);
-            deleteVertexArrayObject(*value->object);
-
-            stateMap.erase(wireframe.first);
-        }
-
-        programMap.erase(program.id);
+        currentState_ = defaultState_;
+        bindVertexArrayObject(currentState_->object.value_or(0));
     }
-}
-
-void GLBindingStates::reset() {
-
-    if (currentState_ == defaultState_) return;
-
-    currentState_ = defaultState_;
-    bindVertexArrayObject(currentState_->object.value_or(0));
-}

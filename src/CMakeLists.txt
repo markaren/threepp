@@ -234,6 +234,7 @@ set(sources
         "threepp/lights/SpotLight.cpp"
         "threepp/lights/SpotLightShadow.cpp"
 
+        "threepp/objects/InstancedMesh.cpp"
         "threepp/objects/Mesh.cpp"
         "threepp/objects/Sky.cpp"
         "threepp/objects/Sprite.cpp"

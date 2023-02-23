@@ -28,6 +28,12 @@ namespace threepp {
             return geometry_.get();
         }
 
+        void setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+
+            geometry_ = geometry;
+        }
+
+
         Material* material() override {
 
             return materials_.front().get();
@@ -54,6 +60,11 @@ namespace threepp {
             std::vector<Material*> res(materials_.size());
             std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) {return m.get();});
             return res;
+        }
+
+        void setMaterial(const std::vector<std::shared_ptr<Material>>& materials) {
+
+            materials_ = materials;
         }
 
         [[nodiscard]] size_t numMaterials() const {

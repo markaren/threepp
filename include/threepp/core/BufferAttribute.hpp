@@ -96,7 +96,7 @@ namespace threepp {
             return count_;
         }
 
-        virtual const std::vector<T> &array() const {
+        virtual std::vector<T> &array() {
 
             return array_;
         }

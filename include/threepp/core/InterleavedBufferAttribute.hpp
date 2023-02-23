@@ -21,7 +21,7 @@ namespace threepp {
         InterleavedBufferAttribute(std::shared_ptr<InterleavedBuffer> data, int itemSize, unsigned int offset, bool normalized)
             :  data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
 
-        [[nodiscard]] const std::vector<float>& array() const override {
+        [[nodiscard]] std::vector<float>& array() override {
             return data->array();
         }
 
