@@ -55,7 +55,7 @@ jobs:
         libxrandr-dev \
         libxcb-util-dev
         sudo pip3 install --upgrade setuptools pip
-        sudo pip3 install conan
+        sudo pip3 install conan==1.59.0
 
     - name: Run conan
       run: |
@@ -84,7 +84,7 @@ jobs:
 
       - name: Install prerequisites
         run: |
-          pip3 install conan
+          pip3 install conan==1.59.0
 
       - name: Run conan
         run: |
@@ -143,7 +143,7 @@ jobs:
 
       - name: Install prerequisites
         run: |
-          pip3 install conan
+          pip3 install conan==1.59.0
 
       - name: Run conan
         run: |
