@@ -6,14 +6,15 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
+    renderer.setClearColor(Color::aliceblue);
 
     int amount = 10;
     int count = std::pow(amount, 3);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10000);
     camera->position.set(amount, amount, amount);
 
     OrbitControls controls{camera, canvas};
@@ -23,11 +24,11 @@ int main() {
     scene->add(light);
 
     auto material = MeshPhongMaterial::create();
-    auto geometry = BoxGeometry::create(0.5f, 0.5f, 0.5f);
+    auto geometry = SphereGeometry::create(0.5f, 16, 12);
     auto mesh = InstancedMesh::create(geometry, material, count);
 
     Matrix4 matrix;
-    Color color{Color::whitesmoke};
+    Color color;
     size_t index = 0;
     float offset = static_cast<float>(amount - 1) / 2;
     for (int x = 0; x < amount; x++) {
@@ -49,20 +50,20 @@ int main() {
         renderer.setSize(size);
     });
 
-    Vector2 mouse{-10, -10};
-    MouseMoveListener l([&](auto pos){
+    Vector2 mouse{-Infinity<float>, -Infinity<float>};
+    MouseMoveListener l([&](auto& pos){
         auto size = canvas.getSize();
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
     });
     canvas.addMouseListener(&l);
 
-    Raycaster racaster;
+    Raycaster raycaster;
     std::unordered_map<int, bool> map;
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
 
-        racaster.setFromCamera(mouse, camera);
-        auto intersects = racaster.intersectObject(mesh.get());
+        raycaster.setFromCamera(mouse, camera);
+        auto intersects = raycaster.intersectObject(mesh.get());
 
         if (!intersects.empty()) {
             auto instanceId = intersects.front().instanceId;

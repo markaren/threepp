@@ -24,7 +24,6 @@ void InstancedMesh::getMatrixAt(size_t index, Matrix4 &matrix) const {
     matrix.fromArray(this->instanceMatrix->array(), index * 16);
 }
 
-
 void InstancedMesh::setColorAt(size_t index, const Color &color) {
 
     if (!this->instanceColor) {
@@ -47,7 +46,7 @@ void InstancedMesh::dispose() {
 
 void InstancedMesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {
 
-    const auto matrixWorld = this->matrixWorld;
+    const auto& matrixWorld = this->matrixWorld;
     const auto raycastTimes = this->count;
 
     _mesh->setGeometry(geometry_);
@@ -71,7 +70,7 @@ void InstancedMesh::raycast(Raycaster &raycaster, std::vector<Intersection> &int
 
         // process the result of raycast
 
-        for (auto intersect : _instanceIntersects) {
+        for (auto& intersect : _instanceIntersects) {
 
             intersect.instanceId = instanceId;
             intersect.object = this;
