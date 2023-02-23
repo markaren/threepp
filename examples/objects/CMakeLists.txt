@@ -1,4 +1,7 @@
 
+add_executable(instancing instancing.cpp)
+target_link_libraries(instancing PUBLIC threepp)
+
 add_executable(lod lod.cpp)
 target_link_libraries(lod PUBLIC threepp)
 

@@ -107,7 +107,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        Matrix4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Matrix4 &fromArray(const ArrayLike &array, size_t offset = 0) {
 
             for (auto i = 0; i < 16; i++) {
 
@@ -118,7 +118,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, unsigned int offset = 0) const {
+        void toArray(ArrayLike &array, size_t offset = 0) const {
 
             auto &te = this->elements;
 

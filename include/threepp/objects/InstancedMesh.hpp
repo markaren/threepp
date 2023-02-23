@@ -17,6 +17,16 @@ namespace threepp {
 
         int count;
 
+        void setMatrixAt( size_t index, const Matrix4& matrix ) const {
+
+            matrix.toArray( this->instanceMatrix->array(), index * 16 );
+        }
+
+        void dispose() {
+
+            dispatchEvent("dispose", this);
+        }
+
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
