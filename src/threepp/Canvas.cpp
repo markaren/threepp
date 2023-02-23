@@ -92,13 +92,21 @@ public:
     }
 
     // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
-    void measureFPS(double &lastTime, int &nbFrames) {
+    inline void measureFPS(double &lastTime, int &nbFrames) {
         double currentTime = glfwGetTime();
         nbFrames++;
         if (currentTime - lastTime >= 1.0) {
             fps_ = nbFrames;
             nbFrames = 0;
             lastTime += 1.0;
+        }
+    }
+
+    inline void handleTasks() {
+        while (!tasks_.empty()) {
+            auto task = tasks_.front();
+            task();
+            tasks_.pop();
         }
     }
 
@@ -109,11 +117,7 @@ public:
 
             measureFPS(lastTime, nbFrames);
 
-            while (!tasks_.empty()) {
-                auto task = tasks_.front();
-                task();
-                tasks_.pop();
-            }
+            handleTasks();
 
             f();
 
@@ -131,11 +135,7 @@ public:
 
             measureFPS(lastTime, nbFrames);
 
-            while (!tasks_.empty()) {
-                auto task = tasks_.front();
-                task();
-                tasks_.pop();
-            }
+            handleTasks();
 
             f(clock.getDelta());
 
