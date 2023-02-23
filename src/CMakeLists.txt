@@ -46,6 +46,7 @@ set(publicHeaders
         "threepp/geometries/RingGeometry.hpp"
         "threepp/geometries/SphereGeometry.hpp"
         "threepp/geometries/TubeGeometry.hpp"
+        "threepp/geometries/WireframeGeometry.hpp"
 
         "threepp/helpers/helpers.hpp"
         "threepp/helpers/AxesHelper.hpp"
@@ -199,6 +200,7 @@ set(sources
         "threepp/geometries/PlaneGeometry.cpp"
         "threepp/geometries/RingGeometry.cpp"
         "threepp/geometries/SphereGeometry.cpp"
+        "threepp/geometries/WireframeGeometry.cpp"
 
         "threepp/helpers/ArrowHelper.cpp"
 
@@ -234,6 +236,7 @@ set(sources
         "threepp/lights/SpotLight.cpp"
         "threepp/lights/SpotLightShadow.cpp"
 
+        "threepp/objects/Line.cpp"
         "threepp/objects/InstancedMesh.cpp"
         "threepp/objects/Mesh.cpp"
         "threepp/objects/Sky.cpp"

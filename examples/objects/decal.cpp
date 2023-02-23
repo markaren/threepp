@@ -102,7 +102,7 @@ int main() {
 
     auto lineGeometry = BufferGeometry::create();
     lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
-    auto line = Line::create(lineGeometry, LineBasicMaterial::create());
+    auto line = Line::create(lineGeometry);
     scene->add(line);
 
     MyMouseListener mouseListener(canvas);

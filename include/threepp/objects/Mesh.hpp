@@ -33,27 +33,9 @@ namespace threepp {
             geometry_ = geometry;
         }
 
-
         Material* material() override {
 
             return materials_.front().get();
-        }
-
-        [[nodiscard]] const Material* material() const override {
-
-            return materials_.front().get();
-        }
-
-        template<class T>
-        T* material() {
-
-            return dynamic_cast<T*>(material());
-        }
-
-        template<class T>
-        const T* material() const {
-
-            return dynamic_cast<T*>(material());
         }
 
         [[nodiscard]] std::vector<Material*> materials() override {
@@ -77,8 +59,8 @@ namespace threepp {
         std::shared_ptr<Mesh> clone(bool recursive = false);
 
         static std::shared_ptr<Mesh> create(
-                std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
-                std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
+                std::shared_ptr<BufferGeometry> geometry = nullptr,
+                std::shared_ptr<Material> material = nullptr) {
 
             return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
         }
@@ -95,7 +77,8 @@ namespace threepp {
     protected:
 
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-            : geometry_(std::move(geometry)), materials_{std::move(material)} {
+            : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
+              materials_{material ? std::move(material) : MeshBasicMaterial::create()} {
         }
 
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)

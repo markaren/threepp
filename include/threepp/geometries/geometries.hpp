@@ -10,5 +10,6 @@
 #include "threepp/geometries/RingGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/geometries/TubeGeometry.hpp"
+#include "threepp/geometries/WireframeGeometry.hpp"
 
 #endif//THREEPP_GEOMETRIES_HPP

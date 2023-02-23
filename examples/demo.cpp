@@ -76,9 +76,9 @@ int main() {
     auto box = Mesh::create(boxGeometry, boxMaterial);
     scene->add(box);
 
-    auto wiredBox = Mesh::create(boxGeometry, boxMaterial->clone());
-    wiredBox->material<MeshBasicMaterial>()->wireframe = true;
-    wiredBox->material<MeshBasicMaterial>()->color = Color::white;
+    auto wiredBox = LineSegments::create(WireframeGeometry::create(*boxGeometry));
+    wiredBox->material()->as<LineBasicMaterial>()->depthTest = false;
+    wiredBox->material()->as<LineBasicMaterial>()->color = Color::gray;
     box->add(wiredBox);
 
     const auto sphereGeometry = SphereGeometry::create(0.5f);

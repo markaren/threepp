@@ -36,14 +36,14 @@ namespace threepp {
             }
         }
 
-        static std::shared_ptr<LineSegments> create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
+        static std::shared_ptr<LineSegments> create(const std::shared_ptr<BufferGeometry>& geometry = nullptr, const std::shared_ptr<Material>& material = nullptr) {
 
-            return std::shared_ptr<LineSegments>(new LineSegments(std::move(geometry), std::move((material))));
+            return std::shared_ptr<LineSegments>(new LineSegments(geometry, (material)));
         }
 
     protected:
-        LineSegments(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-            : Line(std::move(geometry), std::move(material)) {}
+        LineSegments(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
+            : Line(geometry, material) {}
     };
 
 }// namespace threepp
