@@ -129,6 +129,7 @@ set(publicHeaders
         "threepp/lights/AmbientLight.hpp"
         "threepp/lights/DirectionalLight.hpp"
         "threepp/lights/DirectionalLightShadow.hpp"
+        "threepp/lights/HemisphereLight.hpp"
         "threepp/lights/LightShadow.hpp"
         "threepp/lights/PointLight.hpp"
         "threepp/lights/PointLightShadow.hpp"

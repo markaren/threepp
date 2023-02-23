@@ -24,15 +24,13 @@ namespace threepp {
             return "DirectionalLight";
         }
 
-        template<class T>
-        static std::shared_ptr<DirectionalLight> create(T color, std::optional<float> intensity = std::nullopt) {
+        static std::shared_ptr<DirectionalLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt) {
 
             return std::shared_ptr<DirectionalLight>(new DirectionalLight(color, intensity));
         }
 
     protected:
-        template<class T>
-        DirectionalLight(T color, std::optional<float> intensity)
+        DirectionalLight(const Color& color, std::optional<float> intensity)
             : Light(color, intensity), LightWithShadow<DirectionalLightShadow>(DirectionalLightShadow::create()) {
 
             this->position.copy(Object3D::defaultUp);

@@ -26,8 +26,8 @@ namespace threepp {
         virtual void dispose(){};
 
     protected:
-        template<class T>
-        Light(T color, std::optional<float> intensity)
+
+        Light(const Color& color, std::optional<float> intensity)
             : color(color), intensity(intensity.value_or(1)) {}
 
     };

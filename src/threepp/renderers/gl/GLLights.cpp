@@ -33,6 +33,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
     int directionalLength = 0;
     int pointLength = 0;
     int spotLength = 0;
+    int hemiLength = 0;
 
     int numDirectionalShadows = 0;
     int numPointShadows = 0;
@@ -159,6 +160,20 @@ void GLLights::setup(std::vector<Light *> &lights) {
             state.point[pointLength] = uniforms;
 
             ++pointLength;
+
+        } else if (light->as<HemisphereLight>()) {
+
+            auto l = dynamic_cast<HemisphereLight *>(light);
+            auto uniforms = cache_.get( *light );
+
+            std::get<Color>(uniforms->at("skyColor")).copy( l->color ).multiplyScalar( intensity );
+            std::get<Color>(uniforms->at("groundColor")).copy( l->groundColor ).multiplyScalar( intensity );
+
+            ensureCapacity(state.hemi, hemiLength+1);
+            state.hemi[ hemiLength ] = uniforms;
+
+            ++hemiLength;
+
         }
     }
 
@@ -169,6 +184,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
     if (hash.directionalLength != directionalLength ||
         hash.pointLength != pointLength ||
         hash.spotLength != spotLength ||
+        hash.hemiLength != hemiLength ||
         hash.numDirectionalShadows != numDirectionalShadows ||
         hash.numPointShadows != numPointShadows ||
         hash.numSpotShadows != numSpotShadows) {
@@ -176,6 +192,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
         state.directional.resize(directionalLength);
         state.spot.resize(spotLength);
         state.point.resize(pointLength);
+        state.hemi.resize(hemiLength);
 
         state.directionalShadow.resize(numDirectionalShadows);
         state.directionalShadowMap.resize(numDirectionalShadows);
@@ -190,6 +207,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
         hash.directionalLength = directionalLength;
         hash.pointLength = pointLength;
         hash.spotLength = spotLength;
+        hash.hemiLength = hemiLength;
 
         hash.numDirectionalShadows = numDirectionalShadows;
         hash.numPointShadows = numPointShadows;
@@ -204,6 +222,7 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
     int directionalLength = 0;
     int pointLength = 0;
     int spotLength = 0;
+    int hemiLength = 0;
 
     const auto viewMatrix = camera->matrixWorldInverse;
 
@@ -255,6 +274,19 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
             position.applyMatrix4(viewMatrix);
 
             ++pointLength;
+
+        } else if ( light->as<HemisphereLight>()) {
+
+            auto &uniforms = state.hemi.at(hemiLength);
+
+            auto &direction = std::get<Vector3>(uniforms->at("direction"));
+
+            direction.setFromMatrixPosition(*light->matrixWorld);
+            direction.transformDirection(viewMatrix);
+            direction.normalize();
+
+            ++hemiLength;
+
         }
     }
 }

@@ -1,4 +1,7 @@
 
+add_executable(hemi_light hemi_light.cpp)
+target_link_libraries(hemi_light PUBLIC threepp)
+
 add_executable(point_light point_light.cpp)
 target_link_libraries(point_light PUBLIC threepp)
 

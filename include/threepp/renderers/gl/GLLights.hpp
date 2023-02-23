@@ -134,6 +134,7 @@ namespace threepp::gl {
                 int directionalLength = -1;
                 int pointLength = -1;
                 int spotLength = -1;
+                int hemiLength = -1;
 
                 int numDirectionalShadows = -1;
                 int numPointShadows = -1;

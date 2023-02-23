@@ -26,15 +26,13 @@ namespace threepp {
             return "PointLight";
         }
 
-        template<class T>
-        static std::shared_ptr<PointLight> create(T color, std::optional<float> intensity = std::nullopt, float distance = 0, float decay = 1) {
+        static std::shared_ptr<PointLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt, float distance = 0, float decay = 1) {
 
             return std::shared_ptr<PointLight>(new PointLight(color, intensity, distance, decay));
         }
 
     protected:
-        template<class T>
-        PointLight(T color, std::optional<float> intensity, float distance, float decay)
+        PointLight(const Color& color, std::optional<float> intensity, float distance, float decay)
             : Light(color, intensity), LightWithShadow(PointLightShadow::create()), distance(distance), decay(decay) {}
     };
 

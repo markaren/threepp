@@ -19,8 +19,8 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = DirectionalLight::create(0xffffff);
-    light->position.set(1,1,1);
+    auto light = HemisphereLight::create(0xffffff, 0x888888);
+    light->position.set(0,1,0);
     scene->add(light);
 
     auto material = MeshPhongMaterial::create();

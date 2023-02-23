@@ -32,15 +32,13 @@ namespace threepp {
             return "SpotLight";
         }
 
-        template<class T>
-        static std::shared_ptr<SpotLight> create(T color, std::optional<float> intensity = std::nullopt, float distance = 0, float angle = math::PI / 3, float penumbra = 0, float decay = 1) {
+        static std::shared_ptr<SpotLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt, float distance = 0, float angle = math::PI / 3, float penumbra = 0, float decay = 1) {
 
             return std::shared_ptr<SpotLight>(new SpotLight(color, intensity, distance, angle, penumbra, decay));
         }
 
     protected:
-        template<class T>
-        SpotLight(T color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay)
+        SpotLight(const Color& color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay)
             : Light(color, intensity), LightWithShadow<SpotLightShadow>(SpotLightShadow::create()), distance(distance), angle(angle), penumbra(penumbra), decay(decay) {
 
             this->position.copy(Object3D::defaultUp);

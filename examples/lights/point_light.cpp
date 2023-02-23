@@ -14,7 +14,7 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = PointLight::create(0xffffff);
+    auto light = PointLight::create();
     light->distance = 10;
     light->position.set(0, 1, 0);
     scene->add(light);
