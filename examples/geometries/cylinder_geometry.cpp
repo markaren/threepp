@@ -18,13 +18,18 @@ int main() {
 
     const auto material = MeshBasicMaterial::create();
     material->color.setHex(0xff0000);
-    material->wireframe = true;
 
     {
         const auto geometry = CylinderGeometry::create(0.5f, 0.5f);
         auto mesh = Mesh::create(geometry, material);
         mesh->position.x = -1;
         group->add(mesh);
+
+        auto line = LineSegments::create(WireframeGeometry::create(*geometry));
+        line->material()->as<LineBasicMaterial>()->depthTest = false;
+        line->material()->as<LineBasicMaterial>()->opacity = 0.5;
+        line->material()->as<LineBasicMaterial>()->transparent = true;
+        mesh->add(line);
     }
 
     {
@@ -32,6 +37,12 @@ int main() {
         auto mesh = Mesh::create(geometry, material);
         mesh->position.x = 1;
         group->add(mesh);
+
+        auto line = LineSegments::create(WireframeGeometry::create(*geometry));
+        line->material()->as<LineBasicMaterial>()->depthTest = false;
+        line->material()->as<LineBasicMaterial>()->opacity = 0.5;
+        line->material()->as<LineBasicMaterial>()->transparent = true;
+        mesh->add(line);
     }
 
     scene->add(group);

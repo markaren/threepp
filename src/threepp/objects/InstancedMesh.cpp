@@ -10,7 +10,7 @@ namespace {
 
     std::vector<Intersection> _instanceIntersects;
 
-    auto _mesh = Mesh::create(BufferGeometry::create(), MeshBasicMaterial::create());
+    auto _mesh = Mesh::create();
 
 }// namespace
 

@@ -33,7 +33,7 @@ int main() {
     group->add(box);
 
     auto box2 = Mesh::create(boxGeometry, boxMaterial->clone());
-    box2->material<MaterialWithColor>()->color.setHex(0x00ff00);
+    box2->material()->as<MaterialWithColor>()->color.setHex(0x00ff00);
     box2->position.setX(1);
     group->add(box2);
 

@@ -175,7 +175,7 @@ Sky::Sky() : Mesh(BoxGeometry::create(1, 1, 1), ShaderMaterial::create()) {
                     #include <encodings_fragment>
                 })";
 
-    auto m = material<ShaderMaterial>();
+    auto m = materials_.front()->as<ShaderMaterial>();
     m->name = "SkyShader";
     m->fragmentShader = fragmentShader;
     m->vertexShader = vertexShader;

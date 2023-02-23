@@ -59,11 +59,11 @@ int main() {
 
     auto sky = Sky::create();
     sky->scale.setScalar(10000);
-    sky->material<ShaderMaterial>()->uniforms->at("turbidity").value<float>() = 10;
-    sky->material<ShaderMaterial>()->uniforms->at("rayleigh").value<float>() = 1;
-    sky->material<ShaderMaterial>()->uniforms->at("mieCoefficient").value<float>() = 0.005;
-    sky->material<ShaderMaterial>()->uniforms->at("mieDirectionalG").value<float>() = 0.8;
-    sky->material<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
+    sky->material()->as<ShaderMaterial>()->uniforms->at("turbidity").value<float>() = 10;
+    sky->material()->as<ShaderMaterial>()->uniforms->at("rayleigh").value<float>() = 1;
+    sky->material()->as<ShaderMaterial>()->uniforms->at("mieCoefficient").value<float>() = 0.005;
+    sky->material()->as<ShaderMaterial>()->uniforms->at("mieDirectionalG").value<float>() = 0.8;
+    sky->material()->as<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
     scene->add(sky);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -78,7 +78,7 @@ int main() {
         sphere->rotation.x = t * 0.05f;
         sphere->rotation.z = t * 0.051f;
 
-        water->material<ShaderMaterial>()->uniforms->at("time").setValue(t);
+        water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
 
         renderer.render(scene, camera);
 

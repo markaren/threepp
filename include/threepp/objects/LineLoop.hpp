@@ -11,14 +11,14 @@ namespace threepp {
 
     public:
 
-        static std::shared_ptr<LineLoop> create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
+        static std::shared_ptr<LineLoop> create(const std::shared_ptr<BufferGeometry>& geometry = nullptr, const std::shared_ptr<Material>& material = nullptr) {
 
-            return std::shared_ptr<LineLoop>(new LineLoop(std::move(geometry), std::move((material))));
+            return std::shared_ptr<LineLoop>(new LineLoop(geometry, (material)));
         }
 
     protected:
-        LineLoop(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-            : Line(std::move(geometry), std::move(material)) {}
+        LineLoop(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
+            : Line(geometry, material) {}
     };
 
 }// namespace threepp
