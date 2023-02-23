@@ -74,11 +74,13 @@ void Raycaster::setFromCamera(const Vector2 &coords, const std::shared_ptr<Camer
 
         this->ray.origin.setFromMatrixPosition(*camera->matrixWorld);
         this->ray.direction.set(coords.x, coords.y, 0.5f).unproject(*camera).sub(this->ray.origin).normalize();
+        this->camera = camera.get();
 
     } else if (camera->as<OrthographicCamera>()) {
 
         this->ray.origin.set(coords.x, coords.y, (camera->near + camera->far) / (camera->near - camera->far)).unproject(*camera);// set origin in plane of camera
         this->ray.direction.set(0, 0, -1).transformDirection(*camera->matrixWorld);
+        this->camera = camera.get();
 
     } else {
         std::cerr << "THREE.Raycaster: Unsupported camera type" << std::endl;

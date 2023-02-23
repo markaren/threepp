@@ -25,6 +25,7 @@ namespace threepp {
         std::optional<Vector2> uv;
         std::optional<Vector2> uv2;
         std::optional<Face3> face;
+        std::optional<int> instanceId;
     };
 
     class Raycaster {

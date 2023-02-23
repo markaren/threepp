@@ -299,6 +299,19 @@ void GLBindingStates::setupVertexAttributes(Object3D *object, Material *material
                 glVertexAttribPointer(programAttribute + 2, 4, type, false, 64, (void *) 32);
                 glVertexAttribPointer(programAttribute + 3, 4, type, false, 64, (void *) 48);
 
+            } else if (name == "instanceColor") {
+
+                auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceColor.get());
+
+                auto buffer = attribute.buffer;
+                auto type = attribute.type;
+
+                enableAttributeAndDivisor( programAttribute, 1 );
+
+                glBindBuffer( GL_ARRAY_BUFFER, buffer );
+
+                glVertexAttribPointer( programAttribute, 3, type, false, 12, 0 );
+
             } else if (!materialDefaultAttributeValues.empty()) {
 
                     if (materialDefaultAttributeValues.count("name")) {

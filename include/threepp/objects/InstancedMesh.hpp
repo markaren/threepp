@@ -4,28 +4,31 @@
 #define THREEPP_INSTANCEDMESH_HPP
 
 #include "Mesh.hpp"
+#include "threepp/core/Raycaster.hpp"
 
 #include <optional>
 
 namespace threepp {
 
+
     class InstancedMesh : public Mesh {
 
     public:
+        int count;
         std::unique_ptr<FloatBufferAttribute> instanceMatrix;
         std::unique_ptr<FloatBufferAttribute> instanceColor = nullptr;
 
-        int count;
+        void getColorAt(size_t index, Color &color) const;
 
-        void setMatrixAt( size_t index, const Matrix4& matrix ) const {
+        void getMatrixAt(size_t index, Matrix4 &matrix) const;
 
-            matrix.toArray( this->instanceMatrix->array(), index * 16 );
-        }
+        void setColorAt(size_t index, const Color &color);
 
-        void dispose() {
+        void setMatrixAt(size_t index, const Matrix4 &matrix) const;
 
-            dispatchEvent("dispose", this);
-        }
+        void dispose();
+
+        void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
 
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
