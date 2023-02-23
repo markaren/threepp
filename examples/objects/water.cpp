@@ -70,8 +70,6 @@ int main() {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        std::cout << camera->position << std::endl;
     });
 
     float t = 0;
@@ -81,7 +79,6 @@ int main() {
         sphere->rotation.z = t * 0.051f;
 
         water->material<ShaderMaterial>()->uniforms->at("time").setValue(t);
-
 
         renderer.render(scene, camera);
 
