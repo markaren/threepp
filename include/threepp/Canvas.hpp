@@ -25,9 +25,9 @@ namespace threepp {
     public:
         struct Parameters;
 
-        explicit Canvas(const Parameters &params = Parameters());
+        explicit Canvas(const Parameters& params = Parameters());
 
-        [[nodiscard]] const WindowSize &getSize() const;
+        [[nodiscard]] const WindowSize& getSize() const;
 
         [[nodiscard]] float getAspect() const;
 
@@ -37,21 +37,21 @@ namespace threepp {
 
         void onWindowResize(std::function<void(WindowSize)> f);
 
-        void addKeyListener(KeyListener *listener);
+        void addKeyListener(KeyListener* listener);
 
-        bool removeKeyListener(const KeyListener *listener);
+        bool removeKeyListener(const KeyListener* listener);
 
-        void addMouseListener(MouseListener *listener);
+        void addMouseListener(MouseListener* listener);
 
-        bool removeMouseListener(const MouseListener *listener);
+        bool removeMouseListener(const MouseListener* listener);
 
-        void animate(const std::function<void()> &f);
+        void animate(const std::function<void()>& f);
 
-        void animate(const std::function<void(float)> &f);
+        void animate(const std::function<void(float)>& f);
 
-        void invokeLater(const std::function<void()> &f);
+        void invokeLater(const std::function<void()>& f);
 
-        [[nodiscard]] void *window_ptr() const;
+        [[nodiscard]] void* window_ptr() const;
 
         ~Canvas();
 
@@ -68,15 +68,15 @@ namespace threepp {
                   title_{"threepp"},
                   vsync_(true) {}
 
-            Parameters &title(std::string value);
+            Parameters& title(std::string value);
 
-            Parameters &size(WindowSize size);
+            Parameters& size(WindowSize size);
 
-            Parameters &size(int width, int height);
+            Parameters& size(int width, int height);
 
-            Parameters &antialiasing(int antialiasing);
+            Parameters& antialiasing(int antialiasing);
 
-            Parameters &vsync(bool flag);
+            Parameters& vsync(bool flag);
 
         private:
             WindowSize size_;

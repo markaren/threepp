@@ -11,13 +11,13 @@
 
 namespace threepp {
 
-    class TubeGeometry : public BufferGeometry {
+    class TubeGeometry: public BufferGeometry {
 
     public:
         std::shared_ptr<Curve3> path;
         float radius;
 
-        static std::shared_ptr<TubeGeometry> create(const std::shared_ptr<Curve3> &path, int tubularSegments = 64, float radius = 1, int radialSegments = 8, bool closed = false) {
+        static std::shared_ptr<TubeGeometry> create(const std::shared_ptr<Curve3>& path, int tubularSegments = 64, float radius = 1, int radialSegments = 8, bool closed = false) {
 
             return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, tubularSegments, radius, radialSegments, closed));
         }
@@ -53,8 +53,8 @@ namespace threepp {
 
                 // retrieve corresponding normal and binormal
 
-                const Vector3 &N = frames.normals[i];
-                const Vector3 &B = frames.binormals[i];
+                const Vector3& N = frames.normals[i];
+                const Vector3& B = frames.binormals[i];
 
                 // generate normals and vertices for the current segment
 
@@ -146,7 +146,6 @@ namespace threepp {
             this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
             this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
             this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
-
         }
     };
 

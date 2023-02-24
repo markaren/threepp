@@ -6,7 +6,7 @@
 
 using namespace threepp;
 
-Sky::Sky() : Mesh(BoxGeometry::create(1, 1, 1), ShaderMaterial::create()) {
+Sky::Sky(): Mesh(BoxGeometry::create(1, 1, 1), ShaderMaterial::create()) {
 
     UniformMap uniforms{
             {"turbidity", Uniform(2.f)},

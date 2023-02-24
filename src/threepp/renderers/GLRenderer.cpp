@@ -12,7 +12,7 @@
 
 using namespace threepp;
 
-GLRenderer::GLRenderer(Canvas &canvas, const GLRenderer::Parameters &parameters)
+GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
     : canvas_(canvas), _size(canvas.getSize()),
       _viewport(0, 0, _size.width, _size.height),
       _scissor(0, 0, _size.width, _size.height),
@@ -57,7 +57,7 @@ void GLRenderer::setSize(WindowSize size) {
     this->setViewport(0, 0, size.width, size.height);
 }
 
-void GLRenderer::getDrawingBufferSize(Vector2 &target) const {
+void GLRenderer::getDrawingBufferSize(Vector2& target) const {
 
     target.set((float) (_size.width * _pixelRatio), (float) (_size.height * _pixelRatio)).floor();
 }
@@ -74,17 +74,17 @@ void GLRenderer::setDrawingBufferSize(int width, int height, int pixelRatio) {
     this->setViewport(0, 0, width, height);
 }
 
-void GLRenderer::getCurrentViewport(Vector4 &target) const {
+void GLRenderer::getCurrentViewport(Vector4& target) const {
 
     target.copy(_currentViewport);
 }
 
-void GLRenderer::getViewport(Vector4 &target) const {
+void GLRenderer::getViewport(Vector4& target) const {
 
     target.copy(_viewport);
 }
 
-void GLRenderer::setViewport(const Vector4 &v) {
+void GLRenderer::setViewport(const Vector4& v) {
 
     _viewport.copy(v);
 
@@ -106,12 +106,12 @@ void GLRenderer::setViewport(int x, int y, int width, int height) {
     }
 }
 
-void GLRenderer::getScissor(Vector4 &target) {
+void GLRenderer::getScissor(Vector4& target) {
 
     target.copy(_scissor);
 }
 
-void GLRenderer::setScissor(const Vector4 &v) {
+void GLRenderer::setScissor(const Vector4& v) {
 
     _scissor.copy(v);
 
@@ -138,12 +138,12 @@ void GLRenderer::setScissorTest(bool boolean) {
     state.setScissorTest(_scissorTest);
 }
 
-void GLRenderer::getClearColor(Color &target) const {
+void GLRenderer::getClearColor(Color& target) const {
 
     target.copy(background.getClearColor());
 }
 
-void GLRenderer::setClearColor(const Color &color, float alpha) {
+void GLRenderer::setClearColor(const Color& color, float alpha) {
 
     background.setClearColor(color, alpha);
 }
@@ -185,20 +185,20 @@ void GLRenderer::dispose() {
     bindingStates.dispose();
 }
 
-void GLRenderer::deallocateMaterial(Material *material) {
+void GLRenderer::deallocateMaterial(Material* material) {
 
     releaseMaterialProgramReferences(material);
 
     properties.materialProperties.remove(material->uuid());
 }
 
-void GLRenderer::releaseMaterialProgramReferences(Material *material) {
+void GLRenderer::releaseMaterialProgramReferences(Material* material) {
 
     auto& programs = properties.materialProperties.get(material->uuid())->programs;
 
     if (!programs.empty()) {
 
-        for (auto &[key, program] : programs) {
+        for (auto& [key, program] : programs) {
 
             programCache.releaseProgram(program);
         }
@@ -206,11 +206,11 @@ void GLRenderer::releaseMaterialProgramReferences(Material *material) {
 }
 
 void GLRenderer::renderBufferDirect(
-        Camera *camera,
-        Scene *scene,
-        BufferGeometry *geometry,
-        Material *material,
-        Object3D *object,
+        Camera* camera,
+        Scene* scene,
+        BufferGeometry* geometry,
+        Material* material,
+        Object3D* object,
         std::optional<GeometryGroup> group) {
 
     if (scene == nullptr) {
@@ -228,7 +228,7 @@ void GLRenderer::renderBufferDirect(
     //
 
     auto index = geometry->getIndex();
-    const auto &position = geometry->getAttribute<float>("position");
+    const auto& position = geometry->getAttribute<float>("position");
 
     //
 
@@ -245,7 +245,7 @@ void GLRenderer::renderBufferDirect(
 
     int rangeFactor = 1;
 
-    auto wireframeMaterial = dynamic_cast<MaterialWithWireframe *>(material);
+    auto wireframeMaterial = dynamic_cast<MaterialWithWireframe*>(material);
     bool isWireframeMaterial = wireframeMaterial != nullptr;
 
     if (isWireframeMaterial && wireframeMaterial->wireframe) {
@@ -256,11 +256,11 @@ void GLRenderer::renderBufferDirect(
 
     bindingStates.setup(object, material, program, geometry, index);
 
-    gl::BufferRenderer *renderer = bufferRenderer.get();
+    gl::BufferRenderer* renderer = bufferRenderer.get();
 
     if (index != nullptr) {
 
-        const auto &attribute = attributes.get(index);
+        const auto& attribute = attributes.get(index);
 
         renderer = indexedBufferRenderer.get();
         indexedBufferRenderer->setIndex(attribute);
@@ -332,9 +332,9 @@ void GLRenderer::renderBufferDirect(
 
         renderer->renderInstances(drawStart, drawCount, object->as<InstancedMesh>()->count);
 
-    } else if (dynamic_cast<InstancedBufferGeometry *>(geometry)) {
+    } else if (dynamic_cast<InstancedBufferGeometry*>(geometry)) {
 
-        auto g = dynamic_cast<InstancedBufferGeometry *>(geometry);
+        auto g = dynamic_cast<InstancedBufferGeometry*>(geometry);
         const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
         renderer->renderInstances(drawStart, drawCount, instanceCount);
@@ -345,7 +345,7 @@ void GLRenderer::renderBufferDirect(
     }
 }
 
-void GLRenderer::render(Scene *scene, Camera *camera) {
+void GLRenderer::render(Scene* scene, Camera* camera) {
 
     // update scene graph
 
@@ -387,7 +387,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     if (_clippingEnabled) clipping.beginShadows();
 
-    auto &shadowsArray = currentRenderState->getShadowsArray();
+    auto& shadowsArray = currentRenderState->getShadowsArray();
 
     shadowMap.render(*this, shadowsArray, scene, camera);
 
@@ -406,8 +406,8 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
 
     // render scene
 
-    auto &opaqueObjects = currentRenderList->opaque;
-    auto &transparentObjects = currentRenderList->transparent;
+    auto& opaqueObjects = currentRenderList->opaque;
+    auto& transparentObjects = currentRenderList->transparent;
     //
     if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene, camera);
     if (!transparentObjects.empty()) renderObjects(transparentObjects, scene, camera);
@@ -463,7 +463,7 @@ void GLRenderer::render(Scene *scene, Camera *camera) {
     renderText();
 }
 
-void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int groupOrder, bool sortObjects) {
+void GLRenderer::projectObject(Object3D* object, Camera* camera, unsigned int groupOrder, bool sortObjects) {
 
     if (!object->visible) return;
 
@@ -526,11 +526,11 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
 
                 if (materials.size() > 1) {
 
-                    const auto &groups = geometry->groups;
+                    const auto& groups = geometry->groups;
 
-                    for (const auto &group : groups) {
+                    for (const auto& group : groups) {
 
-                        Material *groupMaterial = materials.at(group.materialIndex);
+                        Material* groupMaterial = materials.at(group.materialIndex);
 
                         if (groupMaterial && groupMaterial->visible) {
 
@@ -546,20 +546,20 @@ void GLRenderer::projectObject(Object3D *object, Camera *camera, unsigned int gr
         }
     }
 
-    for (const auto &child : object->children) {
+    for (const auto& child : object->children) {
 
         projectObject(child.get(), camera, groupOrder, sortObjects);
     }
 }
 
 void GLRenderer::renderObjects(
-        const std::vector<gl::RenderItem *> &renderList,
-        Scene *scene,
-        Camera *camera) {
+        const std::vector<gl::RenderItem*>& renderList,
+        Scene* scene,
+        Camera* camera) {
 
     auto overrideMaterial = scene->overrideMaterial;
 
-    for (const auto &renderItem : renderList) {
+    for (const auto& renderItem : renderList) {
 
         auto object = renderItem->object;
         auto geometry = renderItem->geometry;
@@ -571,16 +571,16 @@ void GLRenderer::renderObjects(
 }
 
 void GLRenderer::renderObject(
-        Object3D *object,
-        Scene *scene,
-        Camera *camera,
-        BufferGeometry *geometry,
-        Material *material,
+        Object3D* object,
+        Scene* scene,
+        Camera* camera,
+        BufferGeometry* geometry,
+        Material* material,
         std::optional<GeometryGroup> group) {
 
     if (object->onBeforeRender) {
 
-        object->onBeforeRender.value()((void *) this, scene, camera, geometry, material, group);
+        object->onBeforeRender.value()((void*) this, scene, camera, geometry, material, group);
     }
 
     object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, *object->matrixWorld);
@@ -595,9 +595,9 @@ void GLRenderer::renderObject(
 }
 
 std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
-        Material *material,
-        Scene *scene,
-        Object3D *object) {
+        Material* material,
+        Scene* scene,
+        Object3D* object) {
 
     //    bool isScene = instanceof <Scene>(scene);
     //
@@ -605,15 +605,15 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     auto materialProperties = properties.materialProperties.get(material->uuid());
 
-    auto &lights = currentRenderState->getLights();
-    auto &shadowsArray = currentRenderState->getShadowsArray();
+    auto& lights = currentRenderState->getLights();
+    auto& shadowsArray = currentRenderState->getShadowsArray();
 
     auto lightsStateVersion = lights.state.version;
 
     auto parameters = gl::GLPrograms::getParameters(*this, material, lights.state, shadowsArray.size(), scene, object);
     auto programCacheKey = gl::GLPrograms::getProgramCacheKey(*this, parameters);
 
-    auto &programs = materialProperties->programs;
+    auto& programs = materialProperties->programs;
 
     // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
 
@@ -655,7 +655,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
         materialProperties->uniforms = parameters.uniforms;
     }
 
-    auto &uniforms = *materialProperties->uniforms;
+    auto& uniforms = *materialProperties->uniforms;
 
     if (!material->as<ShaderMaterial>() && !material->as<RawShaderMaterial>() || material->clipping) {
 
@@ -703,7 +703,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
     return materialProperties->currentProgram;
 }
 
-void GLRenderer::updateCommonMaterialProperties(Material *material, gl::ProgramParameters &parameters) {
+void GLRenderer::updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
 
     auto materialProperties = properties.materialProperties.get(material->uuid());
 
@@ -716,10 +716,10 @@ void GLRenderer::updateCommonMaterialProperties(Material *material, gl::ProgramP
 
 
 std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
-        Camera *camera,
-        Scene *scene,
-        Material *material,
-        Object3D *object) {
+        Camera* camera,
+        Scene* scene,
+        Material* material,
+        Object3D* object) {
 
     //    bool isScene = instanceof <Scene>(scene);
 
@@ -747,7 +747,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
                         object->geometry()->getAttribute<float>("color")->itemSize() == 4;
 
     auto materialProperties = properties.materialProperties.get(material->uuid());
-    auto &lights = currentRenderState->getLights();
+    auto& lights = currentRenderState->getLights();
 
     if (_clippingEnabled) {
 
@@ -824,7 +824,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     bool refreshLights = false;
 
     auto p_uniforms = program->getUniforms();
-    auto &m_uniforms = materialProperties->uniforms;
+    auto& m_uniforms = materialProperties->uniforms;
 
     if (state.useProgram(program->program, textEnabled_)) {
 
@@ -872,7 +872,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
             if (p_uniforms->map.count("cameraPosition")) {
 
-                auto &uCamPos = p_uniforms->map["cameraPosition"];
+                auto& uCamPos = p_uniforms->map["cameraPosition"];
                 _vector3.setFromMatrixPosition(*camera->matrixWorld);
                 uCamPos->setValue(_vector3);
             }
@@ -938,7 +938,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
 
     if (isShaderMaterial) {
 
-        auto m = dynamic_cast<ShaderMaterial *>(material);
+        auto m = dynamic_cast<ShaderMaterial*>(material);
         if (m->uniformsNeedUpdate) {
 
             gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
@@ -960,7 +960,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::setProgram(
     return program;
 }
 
-void GLRenderer::markUniformsLightsNeedsUpdate(UniformMap &uniforms, bool value) {
+void GLRenderer::markUniformsLightsNeedsUpdate(UniformMap& uniforms, bool value) {
     uniforms.at("ambientLightColor").needsUpdate = value;
     uniforms.at("lightProbe").needsUpdate = value;
 
@@ -974,7 +974,7 @@ void GLRenderer::markUniformsLightsNeedsUpdate(UniformMap &uniforms, bool value)
     uniforms.at("hemisphereLights").needsUpdate = value;
 }
 
-bool GLRenderer::materialNeedsLights(Material *material) {
+bool GLRenderer::materialNeedsLights(Material* material) {
 
     bool isMeshLambertMaterial = material->as<MeshLambertMaterial>();
     bool isMeshToonMaterial = material->as<MeshToonMaterial>();
@@ -993,7 +993,7 @@ bool GLRenderer::materialNeedsLights(Material *material) {
            (isShaderMaterial && lights);
 }
 
-void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget, int activeCubeFace, int activeMipmapLevel) {
+void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     _currentRenderTarget = renderTarget;
     _currentActiveCubeFace = activeCubeFace;
@@ -1008,7 +1008,7 @@ void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTa
 
     if (renderTarget) {
 
-        const auto &texture = renderTarget->texture;
+        const auto& texture = renderTarget->texture;
 
         framebuffer = *properties.renderTargetProperties.get(renderTarget->uuid)->glFramebuffer;
 
@@ -1068,7 +1068,7 @@ void GLRenderer::enableTextRendering() {
     }
 }
 
-TextHandle &GLRenderer::textHandle(const std::string &str) {
+TextHandle& GLRenderer::textHandle(const std::string& str) {
     textHandles_.emplace_back(std::make_unique<TextHandle>(str));
     return *textHandles_.back();
 }
@@ -1099,10 +1099,10 @@ GLRenderer::~GLRenderer() {
     }
 }
 
-GLRenderer::OnMaterialDispose::OnMaterialDispose(GLRenderer &scope) : scope_(scope) {}
+GLRenderer::OnMaterialDispose::OnMaterialDispose(GLRenderer& scope): scope_(scope) {}
 
-void GLRenderer::OnMaterialDispose::onEvent(Event &event) {
-    auto material = static_cast<Material *>(event.target);
+void GLRenderer::OnMaterialDispose::onEvent(Event& event) {
+    auto material = static_cast<Material*>(event.target);
 
     material->removeEventListener("dispose", this);
 

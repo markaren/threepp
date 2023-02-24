@@ -6,8 +6,8 @@ using namespace threepp;
 
 
 Line::Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-        : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-          material_(material ? std::move(material) : LineBasicMaterial::create()) {}
+    : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
+      material_(material ? std::move(material) : LineBasicMaterial::create()) {}
 
 void Line::computeLineDistances() {
 

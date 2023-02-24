@@ -51,7 +51,7 @@ ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, int color, s
     this->setLength(length, headLength, headWidth);
 }
 
-void ArrowHelper::setDirection(const Vector3 &dir) {
+void ArrowHelper::setDirection(const Vector3& dir) {
 
     // dir is assumed to be normalized
 

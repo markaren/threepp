@@ -2,10 +2,10 @@
 #ifndef THREEPP_ASSIMPLOADER_HPP
 #define THREEPP_ASSIMPLOADER_HPP
 
-#include "threepp/objects/Group.hpp"
 #include "threepp/loaders/AssimpLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
+#include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 #include <assimp/Importer.hpp>
@@ -19,8 +19,7 @@ namespace threepp {
     class AssimpLoader {
 
     public:
-
-        std::shared_ptr<Group> load(const std::filesystem::path &path, bool basicMaterial = false) {
+        std::shared_ptr<Group> load(const std::filesystem::path& path, bool basicMaterial = false) {
 
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
@@ -38,7 +37,7 @@ namespace threepp {
         TextureLoader texLoader_;
         Assimp::Importer importer_;
 
-        void parseNodes(const std::filesystem::path &path, const aiScene *aiScene, aiNode *aiNode, Object3D &parent, bool basicMaterial) {
+        void parseNodes(const std::filesystem::path& path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent, bool basicMaterial) {
 
             auto group = Group::create();
             group->name = aiNode->mName.C_Str();
@@ -157,32 +156,30 @@ namespace threepp {
                         }
 
                         float shininess;
-                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_SHININESS, &shininess) ) {
+                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_SHININESS, &shininess)) {
                             m->shininess = shininess;
                         }
 
                         float emmisiveIntensity;
-                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity) ) {
+                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity)) {
                             m->emissiveIntensity = emmisiveIntensity;
                         }
-
                     }
 
-//                    C_STRUCT aiColor4D ambient;
-//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
-//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
-//                    }
-//
-//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
-//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
-//                    }
+                    //                    C_STRUCT aiColor4D ambient;
+                    //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
+                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
+                    //                    }
+                    //
+                    //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
+                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
+                    //                    }
 
                     float opacity;
-                    if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity) ) {
+                    if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity)) {
                         material->transparent = true;
                         material->opacity = opacity;
                     }
-
                 }
 
                 auto mesh = Mesh::create(geometry, material);
@@ -193,9 +190,9 @@ namespace threepp {
             auto t = aiNode->mTransformation;
             Matrix4 m;
             m.set(t.a1, t.a2, t.a3, t.a4,
-                    t.b1, t.b2, t.b3, t.b4,
-                    t.c1, t.c2, t.c3, t.c4,
-                    t.d1, t.d2, t.d3, t.d4);
+                  t.b1, t.b2, t.b3, t.b4,
+                  t.c1, t.c2, t.c3, t.c4,
+                  t.d1, t.d2, t.d3, t.d4);
             group->applyMatrix4(m);
 
             parent.add(group);
@@ -204,10 +201,8 @@ namespace threepp {
                 parseNodes(path, aiScene, aiNode->mChildren[i], *group, basicMaterial);
             }
         }
-
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_ASSIMPLOADER_HPP

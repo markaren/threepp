@@ -11,7 +11,7 @@ namespace threepp::gl {
 
     struct BufferRenderer {
 
-        explicit BufferRenderer(GLInfo &info) : info_(info) {}
+        explicit BufferRenderer(GLInfo& info): info_(info) {}
 
         void setMode(unsigned int mode);
 
@@ -22,13 +22,13 @@ namespace threepp::gl {
         virtual ~BufferRenderer() = default;
 
     protected:
-        GLInfo &info_;
+        GLInfo& info_;
         unsigned int mode_;
     };
 
-    struct GLBufferRenderer : BufferRenderer {
+    struct GLBufferRenderer: BufferRenderer {
 
-        explicit GLBufferRenderer(GLInfo &info)
+        explicit GLBufferRenderer(GLInfo& info)
             : BufferRenderer(info) {}
 
         void render(int start, int count) override;
@@ -36,12 +36,12 @@ namespace threepp::gl {
         void renderInstances(int start, int count, int primcount) override;
     };
 
-    struct GLIndexedBufferRenderer : BufferRenderer {
+    struct GLIndexedBufferRenderer: BufferRenderer {
 
-        explicit GLIndexedBufferRenderer(GLInfo &info)
+        explicit GLIndexedBufferRenderer(GLInfo& info)
             : BufferRenderer(info) {}
 
-        void setIndex(const Buffer &value);
+        void setIndex(const Buffer& value);
 
         void render(int start, int count) override;
 

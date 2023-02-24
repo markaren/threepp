@@ -9,19 +9,19 @@ using namespace threepp;
 
 namespace {
 
-    struct MyEventListener : EventListener {
+    struct MyEventListener: EventListener {
 
         int numCalled = 0;
 
-        void onEvent(Event &e) override {
+        void onEvent(Event& e) override {
             ++numCalled;
         }
     };
 
-    struct OnMaterialDispose : EventListener {
+    struct OnMaterialDispose: EventListener {
 
-        void onEvent(Event &event) override {
-            auto *material = static_cast<Material *>(event.target);
+        void onEvent(Event& event) override {
+            auto* material = static_cast<Material*>(event.target);
             material->removeEventListener("dispose", this);
         }
     };
@@ -35,7 +35,7 @@ TEST_CASE("Test events") {
     MyEventListener l;
 
     bool l1Called = false;
-    LambdaEventListener l1([&l1Called](Event &e) {
+    LambdaEventListener l1([&l1Called](Event& e) {
         l1Called = true;
     });
 
@@ -65,5 +65,4 @@ TEST_CASE("Test events") {
     REQUIRE(material->hasEventListener("dispose", &onDispose));
     material->dispose();
     REQUIRE(!material->hasEventListener("dispose", &onDispose));
-
 }

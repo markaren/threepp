@@ -26,12 +26,12 @@ namespace threepp {
 
             int type = PCFShadowMap;
 
-            explicit GLShadowMap(GLObjects &_objects);
+            explicit GLShadowMap(GLObjects& _objects);
 
-            void render(GLRenderer &_renderer, const std::vector<Light *> &lights, Scene *scene, Camera *camera);
+            void render(GLRenderer& _renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera);
 
         private:
-            GLObjects &_objects;
+            GLObjects& _objects;
 
             Frustum _frustum;
 
@@ -40,8 +40,8 @@ namespace threepp {
 
             Vector4 _viewport;
 
-            std::vector<Material *> _depthMaterials;
-            std::vector<Material *> _distanceMaterials;
+            std::vector<Material*> _depthMaterials;
+            std::vector<Material*> _distanceMaterials;
 
             std::unordered_map<std::string, std::string> _materialCache;
 
@@ -49,8 +49,7 @@ namespace threepp {
 
             std::shared_ptr<Mesh> fullScreenMesh;
 
-            void VSMPass(GLRenderer &_renderer, LightShadow *shadow, Camera *camera);
-
+            void VSMPass(GLRenderer& _renderer, LightShadow* shadow, Camera* camera);
         };
 
     }// namespace gl

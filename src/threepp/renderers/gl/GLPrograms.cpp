@@ -32,7 +32,7 @@ namespace {
 }// namespace
 
 
-GLPrograms::GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping)
+GLPrograms::GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping)
     : logarithmicDepthBuffer(GLCapabilities::instance().logarithmicDepthBuffer),
       floatVertexTextures(GLCapabilities::instance().floatVertexTextures),
       maxVertexUniforms(GLCapabilities::instance().maxVertexUniforms),
@@ -42,9 +42,9 @@ GLPrograms::GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping)
 
 
 ProgramParameters GLPrograms::getParameters(
-        const GLRenderer &renderer,
-        Material *material,
-        const GLLights::LightState &lights,
+        const GLRenderer& renderer,
+        Material* material,
+        const GLLights::LightState& lights,
         size_t numShadows,
         Scene* scene,
         Object3D* object) {
@@ -52,7 +52,7 @@ ProgramParameters GLPrograms::getParameters(
     return {renderer, lights, numShadows, object, scene, material, shaderIDs};
 }
 
-std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters) {
+std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters) {
 
     std::vector<std::string> array;
 
@@ -68,7 +68,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
 
     if (!parameters.defines.empty()) {
 
-        for (const auto &[name, value] : parameters.defines) {
+        for (const auto& [name, value] : parameters.defines) {
 
             array.emplace_back(name);
             array.emplace_back(value);
@@ -78,7 +78,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer &renderer, const Pro
     if (!parameters.isRawShaderMaterial) {
 
         auto hash = utils::split(parameters.hash(), '\n');
-        for (const auto &value : hash) {
+        for (const auto& value : hash) {
 
             array.emplace_back(value);
         }
@@ -100,7 +100,6 @@ std::shared_ptr<UniformMap> GLPrograms::getUniforms(Material* material) {
 
         auto& shader = shaders::ShaderLib::instance().get(shaderID);
         return std::make_shared<UniformMap>(shader.uniforms);
-
     }
     auto shaderMaterial = material->as<ShaderMaterial>();
     if (shaderMaterial) {
@@ -110,12 +109,12 @@ std::shared_ptr<UniformMap> GLPrograms::getUniforms(Material* material) {
     }
 }
 
-std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey) {
+std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey) {
 
     std::shared_ptr<GLProgram> program = nullptr;
 
     // Check if code has been already compiled
-    for (auto &preexistingProgram : programs) {
+    for (auto& preexistingProgram : programs) {
 
         if (preexistingProgram->cacheKey == cacheKey) {
 
@@ -134,7 +133,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer &renderer
     return program;
 }
 
-void GLPrograms::releaseProgram(const std::shared_ptr<GLProgram> &program) {
+void GLPrograms::releaseProgram(const std::shared_ptr<GLProgram>& program) {
 
     if (--(program->usedTimes) == 0) {
 

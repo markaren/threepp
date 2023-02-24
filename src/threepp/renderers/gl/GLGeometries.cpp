@@ -6,7 +6,7 @@
 using namespace threepp;
 using namespace threepp::gl;
 
-GLGeometries::GLGeometries(GLAttributes &attributes, GLInfo &info, GLBindingStates &bindingStates)
+GLGeometries::GLGeometries(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates)
     : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(*this) {
 }
 
@@ -21,19 +21,19 @@ void GLGeometries::get(Object3D* object, BufferGeometry* geometry) {
     ++info_.memory.geometries;
 }
 
-void GLGeometries::update(BufferGeometry *geometry) {
+void GLGeometries::update(BufferGeometry* geometry) {
 
-    auto &geometryAttributes = geometry->getAttributes();
+    auto& geometryAttributes = geometry->getAttributes();
 
     // Updating index buffer in VAO now. See WebGLBindingStates.
 
-    for (auto &[name, value] : geometryAttributes) {
+    for (auto& [name, value] : geometryAttributes) {
 
         attributes_.update(value.get(), GL_ARRAY_BUFFER);
     }
 }
 
-void GLGeometries::updateWireframeAttribute(BufferGeometry *geometry) {
+void GLGeometries::updateWireframeAttribute(BufferGeometry* geometry) {
 
     std::vector<int> indices;
 
@@ -43,7 +43,7 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry *geometry) {
 
     if (geometryIndex != nullptr) {
 
-        const auto &array = geometryIndex->array();
+        const auto& array = geometryIndex->array();
         version = geometryIndex->version;
 
         for (unsigned i = 0, l = array.size(); i < l; i += 3) {
@@ -57,7 +57,7 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry *geometry) {
 
     } else {
 
-        const auto &array = geometryPosition->array();
+        const auto& array = geometryPosition->array();
         version = geometryPosition->version;
 
         for (int i = 0, l = static_cast<int>(array.size() / 3) - 1; i < l; i += 3) {
@@ -83,11 +83,11 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry *geometry) {
     wireframeAttributes_[geometry] = std::move(attribute);
 }
 
-IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry *geometry) {
+IntBufferAttribute* GLGeometries::getWireframeAttribute(BufferGeometry* geometry) {
 
     if (wireframeAttributes_.count(geometry)) {
 
-        const auto &currentAttribute = wireframeAttributes_.at(geometry);
+        const auto& currentAttribute = wireframeAttributes_.at(geometry);
 
         if (geometry->hasIndex()) {
 
@@ -110,18 +110,18 @@ IntBufferAttribute *GLGeometries::getWireframeAttribute(BufferGeometry *geometry
 }
 
 
-GLGeometries::OnGeometryDispose::OnGeometryDispose(GLGeometries &scope) : scope_(scope) {}
+GLGeometries::OnGeometryDispose::OnGeometryDispose(GLGeometries& scope): scope_(scope) {}
 
-void GLGeometries::OnGeometryDispose::onEvent(Event &event) {
+void GLGeometries::OnGeometryDispose::onEvent(Event& event) {
 
-    auto geometry = static_cast<BufferGeometry *>(event.target);
+    auto geometry = static_cast<BufferGeometry*>(event.target);
 
     if (geometry->hasIndex()) {
 
         scope_.attributes_.remove(geometry->getIndex());
     }
 
-    for (const auto &[name, value] : geometry->getAttributes()) {
+    for (const auto& [name, value] : geometry->getAttributes()) {
 
         scope_.attributes_.remove(value.get());
     }
@@ -133,7 +133,7 @@ void GLGeometries::OnGeometryDispose::onEvent(Event &event) {
 
     if (scope_.wireframeAttributes_.count(geometry)) {
 
-        const auto &attribute = scope_.wireframeAttributes_.at(geometry);
+        const auto& attribute = scope_.wireframeAttributes_.at(geometry);
 
         scope_.attributes_.remove(attribute.get());
         scope_.wireframeAttributes_.erase(geometry);
@@ -141,7 +141,7 @@ void GLGeometries::OnGeometryDispose::onEvent(Event &event) {
 
     scope_.bindingStates_.releaseStatesOfGeometry(geometry);
 
-    auto ig = dynamic_cast <InstancedBufferGeometry*>(geometry);
+    auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry);
     if (ig) {
         ig->_maxInstanceCount = 0;
     }

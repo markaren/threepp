@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class BoxGeometry : public BufferGeometry {
+    class BoxGeometry: public BufferGeometry {
 
     public:
         const float width;

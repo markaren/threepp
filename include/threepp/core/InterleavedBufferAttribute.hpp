@@ -3,12 +3,12 @@
 #ifndef THREEPP_INTERLEAVEDBUFFERATTRIBUTE_HPP
 #define THREEPP_INTERLEAVEDBUFFERATTRIBUTE_HPP
 
-#include <vector>
 #include <memory>
+#include <vector>
 
-#include "threepp/math/Matrix4.hpp"
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/InterleavedBuffer.hpp"
+#include "threepp/math/Matrix4.hpp"
 
 namespace threepp {
 
@@ -19,7 +19,7 @@ namespace threepp {
         std::shared_ptr<InterleavedBuffer> data;
 
         InterleavedBufferAttribute(std::shared_ptr<InterleavedBuffer> data, int itemSize, unsigned int offset, bool normalized)
-            :  data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
+            : data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
 
         [[nodiscard]] std::vector<float>& array() override {
             return data->array();
@@ -28,9 +28,8 @@ namespace threepp {
         [[nodiscard]] int count() const override {
             return data->count();
         }
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_INTERLEAVEDBUFFERATTRIBUTE_HPP

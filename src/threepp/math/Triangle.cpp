@@ -5,9 +5,9 @@
 
 using namespace threepp;
 
-Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c) : a_(a), b_(b), c_(c) {}
+Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c): a_(a), b_(b), c_(c) {}
 
-void Triangle::getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target) {
+void Triangle::getNormal(const Vector3& a, const Vector3& b, const Vector3& c, Vector3& target) {
 
     Vector3 _v0{};
 
@@ -26,7 +26,7 @@ void Triangle::getNormal(const Vector3 &a, const Vector3 &b, const Vector3 &c, V
     }
 }
 
-void Triangle::getBarycoord(const Vector3 &point, const Vector3 &a, const Vector3 &b, const Vector3 &c, Vector3 &target) {
+void Triangle::getBarycoord(const Vector3& point, const Vector3& a, const Vector3& b, const Vector3& c, Vector3& target) {
 
     Vector3 _v0{};
     Vector3 _v1{};
@@ -62,7 +62,7 @@ void Triangle::getBarycoord(const Vector3 &point, const Vector3 &a, const Vector
     }
 }
 
-bool Triangle::containsPoint(const Vector3 &point, const Vector3 &a, const Vector3 &b, const Vector3 &c) {
+bool Triangle::containsPoint(const Vector3& point, const Vector3& a, const Vector3& b, const Vector3& c) {
 
     Vector3 _v3{};
 
@@ -71,7 +71,7 @@ bool Triangle::containsPoint(const Vector3 &point, const Vector3 &a, const Vecto
     return (_v3.x >= 0) && (_v3.y >= 0) && ((_v3.x + _v3.y) <= 1);
 }
 
-void Triangle::getUV(const Vector3 &point, const Vector3 &p1, const Vector3 &p2, const Vector3 &p3, const Vector2 &uv1, const Vector2 &uv2, const Vector2 &uv3, Vector2 &target) {
+void Triangle::getUV(const Vector3& point, const Vector3& p1, const Vector3& p2, const Vector3& p3, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target) {
 
     Vector3 _v3{};
 
@@ -83,7 +83,7 @@ void Triangle::getUV(const Vector3 &point, const Vector3 &p1, const Vector3 &p2,
     target.addScaledVector(uv3, _v3.z);
 }
 
-bool Triangle::isFrontFacing(const Vector3 &a, const Vector3 &b, const Vector3 &c, const Vector3 &direction) {
+bool Triangle::isFrontFacing(const Vector3& a, const Vector3& b, const Vector3& c, const Vector3& direction) {
 
     Vector3 _v0{};
     Vector3 _v1{};
@@ -95,7 +95,7 @@ bool Triangle::isFrontFacing(const Vector3 &a, const Vector3 &b, const Vector3 &
     return (_v0.cross(_v1).dot(direction) < 0) ? true : false;
 }
 
-Triangle &Triangle::set(const Vector3 &a, const Vector3 &b, const Vector3 &c) {
+Triangle& Triangle::set(const Vector3& a, const Vector3& b, const Vector3& c) {
 
     this->a_ = (a);
     this->b_ = (b);
@@ -115,37 +115,37 @@ float Triangle::getArea() const {
     return _v0.cross(_v1).length() * 0.5f;
 }
 
-void Triangle::getMidpoint(Vector3 &target) {
+void Triangle::getMidpoint(Vector3& target) {
 
     target.addVectors(this->a_, this->b_).add(this->c_).addScalar(1.0f / 3);
 }
 
-void Triangle::getNormal(Vector3 &target) {
+void Triangle::getNormal(Vector3& target) {
 
     return Triangle::getNormal(this->a_, this->b_, this->c_, target);
 }
 
-void Triangle::getBarycoord(Vector3 &point, Vector3 &target) {
+void Triangle::getBarycoord(Vector3& point, Vector3& target) {
 
     return Triangle::getBarycoord(point, this->a_, this->b_, this->c_, target);
 }
 
-void Triangle::getUV(const Vector3 &point, const Vector2 &uv1, const Vector2 &uv2, const Vector2 &uv3, Vector2 &target) {
+void Triangle::getUV(const Vector3& point, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target) {
 
     return Triangle::getUV(point, this->a_, this->b_, this->c_, uv1, uv2, uv3, target);
 }
 
-bool Triangle::containsPoint(const Vector3 &point) {
+bool Triangle::containsPoint(const Vector3& point) {
 
     return Triangle::containsPoint(point, this->a_, this->b_, this->c_);
 }
 
-bool Triangle::isFrontFacing(const Vector3 &direction) {
+bool Triangle::isFrontFacing(const Vector3& direction) {
 
     return Triangle::isFrontFacing(this->a_, this->b_, this->c_, direction);
 }
 
-void Triangle::closestPointToPoint(const Vector3 &p, Vector3 &target) {
+void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) {
 
     const auto a = this->a_, b = this->b_, c = this->c_;
     float v, w;

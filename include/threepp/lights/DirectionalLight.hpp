@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class DirectionalLight : public Light, public LightWithShadow<DirectionalLightShadow>, public LightWithTarget {
+    class DirectionalLight: public Light, public LightWithShadow<DirectionalLightShadow>, public LightWithTarget {
 
     public:
         std::shared_ptr<Object3D> target = Object3D::create();

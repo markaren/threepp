@@ -9,8 +9,8 @@
 #include "threepp/Canvas.hpp"
 
 #include <iostream>
-#include <utility>
 #include <optional>
+#include <utility>
 
 namespace threepp::gl {
 
@@ -26,7 +26,7 @@ namespace threepp::gl {
 
         Vector4 color{};
         std::optional<bool> currentColorMask;
-        Vector4 currentColorClear {0, 0, 0, 0};
+        Vector4 currentColorClear{0, 0, 0, 0};
 
         void setMask(bool colorMask);
 
@@ -139,9 +139,9 @@ namespace threepp::gl {
         Vector4 currentScissor;
         Vector4 currentViewport;
 
-        const Canvas &canvas;
+        const Canvas& canvas;
 
-        explicit GLState(const Canvas &canvas);
+        explicit GLState(const Canvas& canvas);
 
         void enable(int id);
 
@@ -162,7 +162,7 @@ namespace threepp::gl {
                 std::optional<bool> premultipliedAlpha = std::nullopt);
 
 
-        void setMaterial(const Material *material, bool frontFaceCW);
+        void setMaterial(const Material* material, bool frontFaceCW);
 
         void setFlipSided(bool flipSided);
 
@@ -182,15 +182,15 @@ namespace threepp::gl {
 
         void unbindTexture();
 
-        void texImage2D(unsigned int target, int level, int internalFormat, int width, int height, unsigned int format, unsigned int type, const void *pixels);
+        void texImage2D(unsigned int target, int level, int internalFormat, int width, int height, unsigned int format, unsigned int type, const void* pixels);
 
-        void texImage3D(unsigned int target, int level, int internalFormat, int width, int height, int depth, unsigned int format, unsigned int type, const void *pixels);
+        void texImage3D(unsigned int target, int level, int internalFormat, int width, int height, int depth, unsigned int format, unsigned int type, const void* pixels);
 
         //
 
-        void scissor(const Vector4 &scissor);
+        void scissor(const Vector4& scissor);
 
-        void viewport(const Vector4 &viewport);
+        void viewport(const Vector4& viewport);
 
         //
 

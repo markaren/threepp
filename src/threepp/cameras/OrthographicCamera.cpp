@@ -4,7 +4,7 @@
 using namespace threepp;
 
 OrthographicCamera::OrthographicCamera(int left, int right, int top, int bottom, float near, float far)
-        : Camera(near, far), left(left), right(right), top(top), bottom(bottom) {
+    : Camera(near, far), left(left), right(right), top(top), bottom(bottom) {
 
     OrthographicCamera::updateProjectionMatrix();
 }

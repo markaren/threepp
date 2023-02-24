@@ -14,10 +14,10 @@
 
 namespace threepp {
 
-    class Line : public Object3D {
+    class Line: public Object3D {
 
     public:
-        BufferGeometry *geometry() override {
+        BufferGeometry* geometry() override {
 
             return geometry_.get();
         }
@@ -27,13 +27,13 @@ namespace threepp {
             return material_.get();
         }
 
-        std::vector<Material *> materials() override {
+        std::vector<Material*> materials() override {
             return {material_.get()};
         }
 
         virtual void computeLineDistances();
 
-        static std::shared_ptr<Line> create(const std::shared_ptr<BufferGeometry> &geometry = nullptr, const std::shared_ptr<Material> &material = nullptr) {
+        static std::shared_ptr<Line> create(const std::shared_ptr<BufferGeometry>& geometry = nullptr, const std::shared_ptr<Material>& material = nullptr) {
 
             return std::shared_ptr<Line>(new Line(geometry, (material)));
         }

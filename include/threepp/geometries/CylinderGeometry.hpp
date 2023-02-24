@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    class CylinderGeometry : public BufferGeometry {
+    class CylinderGeometry: public BufferGeometry {
 
     public:
         const float radiusTop;

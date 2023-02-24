@@ -29,7 +29,7 @@ namespace {
     } painterSortStable;
 
     struct {
-        bool operator()(const RenderItem *a, const RenderItem *b) {
+        bool operator()(const RenderItem* a, const RenderItem* b) {
 
             if (a->groupOrder != b->groupOrder) {
                 return a->groupOrder < b->groupOrder;
@@ -45,7 +45,7 @@ namespace {
 
 }// namespace
 
-gl::GLRenderList::GLRenderList(gl::GLProperties &properties) : properties(properties) {}
+gl::GLRenderList::GLRenderList(gl::GLProperties& properties): properties(properties) {}
 
 void gl::GLRenderList::init() {
 
@@ -56,9 +56,9 @@ void gl::GLRenderList::init() {
 }
 
 gl::RenderItem* gl::GLRenderList::getNextRenderItem(
-        Object3D *object,
-        BufferGeometry *geometry,
-        Material *material,
+        Object3D* object,
+        BufferGeometry* geometry,
+        Material* material,
         unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     gl::RenderItem* renderItem = nullptr;
@@ -66,14 +66,14 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
 
     if (renderItemsIndex >= renderItems.size()) {
         auto r = std::make_unique<RenderItem>(RenderItem{object->id,
-                                                object,
-                                                geometry,
-                                                material,
-                                                materialProperties->program.get(),
-                                                groupOrder,
-                                                object->renderOrder,
-                                                z,
-                                                group});
+                                                         object,
+                                                         geometry,
+                                                         material,
+                                                         materialProperties->program.get(),
+                                                         groupOrder,
+                                                         object->renderOrder,
+                                                         z,
+                                                         group});
         renderItems.emplace_back(std::move(r));
         renderItem = renderItems.back().get();
 
@@ -100,9 +100,9 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
 }
 
 void gl::GLRenderList::push(
-        Object3D *object,
-        BufferGeometry *geometry,
-        Material *material,
+        Object3D* object,
+        BufferGeometry* geometry,
+        Material* material,
         unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
@@ -118,9 +118,9 @@ void gl::GLRenderList::push(
 }
 
 void GLRenderList::unshift(
-        Object3D *object,
-        BufferGeometry *geometry,
-        Material *material,
+        Object3D* object,
+        BufferGeometry* geometry,
+        Material* material,
         unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);

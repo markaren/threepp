@@ -15,17 +15,17 @@ namespace {
         std::vector<float> normals;
         std::vector<float> uvs;
 
-        explicit Helper(BoxGeometry &g) {
+        explicit Helper(BoxGeometry& g) {
 
             buildPlane(g, 2, 1, 0, -1, -1, g.depth, g.height, g.width, g.depthSegments, g.heightSegments, 0); // px
-            buildPlane(g,2, 1, 0, 1, -1, g.depth, g.height, -g.width, g.depthSegments, g.heightSegments, 1); // nx
-            buildPlane(g,0, 2, 1, 1, 1, g.width, g.depth, g.height, g.widthSegments, g.depthSegments, 2);    // py
-            buildPlane(g,0, 2, 1, 1, -1, g.width, g.depth, -g.height, g.widthSegments, g.depthSegments, 3);  // ny
-            buildPlane(g,0, 1, 2, 1, -1, g.width, g.height, g.depth, g.widthSegments, g.heightSegments, 4);  // pz
-            buildPlane(g,0, 1, 2, -1, -1, g.width, g.height, -g.depth, g.widthSegments, g.heightSegments, 5);// nz
+            buildPlane(g, 2, 1, 0, 1, -1, g.depth, g.height, -g.width, g.depthSegments, g.heightSegments, 1); // nx
+            buildPlane(g, 0, 2, 1, 1, 1, g.width, g.depth, g.height, g.widthSegments, g.depthSegments, 2);    // py
+            buildPlane(g, 0, 2, 1, 1, -1, g.width, g.depth, -g.height, g.widthSegments, g.depthSegments, 3);  // ny
+            buildPlane(g, 0, 1, 2, 1, -1, g.width, g.height, g.depth, g.widthSegments, g.heightSegments, 4);  // pz
+            buildPlane(g, 0, 1, 2, -1, -1, g.width, g.height, -g.depth, g.widthSegments, g.heightSegments, 5);// nz
         }
 
-        void buildPlane( BoxGeometry &g, int u, int v, int w, int udir, int vdir, float width, float height, float depth, int gridX, int gridY, int materialIndex) {
+        void buildPlane(BoxGeometry& g, int u, int v, int w, int udir, int vdir, float width, float height, float depth, int gridX, int gridY, int materialIndex) {
 
             const auto segmentWidth = width / gridX;
             const auto segmentHeight = height / gridY;
@@ -60,7 +60,7 @@ namespace {
 
                     // now apply vector to vertex buffer
 
-                    vertices.insert(vertices.end(), {vector.x, vector.y, vector.z} );
+                    vertices.insert(vertices.end(), {vector.x, vector.y, vector.z});
 
                     // set values to correct vector component
 
@@ -70,7 +70,7 @@ namespace {
 
                     // now apply vector to normal buffer
 
-                    normals.insert(normals.end(), {vector.x, vector.y, vector.z} );
+                    normals.insert(normals.end(), {vector.x, vector.y, vector.z});
 
                     // uvs
 
@@ -121,13 +121,12 @@ namespace {
 
             numberOfVertices += vertexCounter;
         }
-
     };
 
-}
+}// namespace
 
 BoxGeometry::BoxGeometry(float width, float height, float depth, int widthSegments, int heightSegments, int depthSegments)
-        : width(width), height(height), depth(depth), widthSegments(widthSegments), heightSegments(heightSegments), depthSegments(depthSegments) {
+    : width(width), height(height), depth(depth), widthSegments(widthSegments), heightSegments(heightSegments), depthSegments(depthSegments) {
 
     Helper h(*this);
     this->setIndex(h.indices);

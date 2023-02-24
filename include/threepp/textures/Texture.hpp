@@ -18,7 +18,7 @@
 
 namespace threepp {
 
-    class Texture : public EventDispatcher {
+    class Texture: public EventDispatcher {
 
     public:
         inline static int DEFAULT_MAPPING = UVMapping;
@@ -64,19 +64,19 @@ namespace threepp {
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding = LinearEncoding;
 
-        std::optional<std::function<void(Texture &)>> onUpdate;
+        std::optional<std::function<void(Texture&)>> onUpdate;
 
         void updateMatrix();
 
         void dispose();
 
-        void transformUv(Vector2 &uv) const;
+        void transformUv(Vector2& uv) const;
 
         void needsUpdate();
 
         [[nodiscard]] unsigned int version() const;
 
-        Texture &copy(const Texture &source);
+        Texture& copy(const Texture& source);
 
         static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt) {
 

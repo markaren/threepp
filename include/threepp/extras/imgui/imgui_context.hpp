@@ -13,7 +13,6 @@
 class imgui_context {
 
 public:
-
     explicit imgui_context(void* window) {
         ImGui::CreateContext();
         ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) window, true);
@@ -39,7 +38,6 @@ public:
 
 protected:
     virtual void onRender() = 0;
-
 };
 
 class imgui_functional_context: public imgui_context {

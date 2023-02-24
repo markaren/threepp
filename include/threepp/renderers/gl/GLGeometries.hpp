@@ -15,25 +15,25 @@ namespace threepp::gl {
 
     struct GLGeometries {
 
-        struct OnGeometryDispose : EventListener {
+        struct OnGeometryDispose: EventListener {
 
-            explicit OnGeometryDispose(GLGeometries &scope);
+            explicit OnGeometryDispose(GLGeometries& scope);
 
-            void onEvent(Event &event) override;
+            void onEvent(Event& event) override;
 
         private:
-            GLGeometries &scope_;
+            GLGeometries& scope_;
         };
 
-        GLGeometries(GLAttributes &attributes, GLInfo &info, GLBindingStates &bindingStates);
+        GLGeometries(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates);
 
         void get(Object3D* object, BufferGeometry* geometry);
 
-        void update(BufferGeometry *geometry);
+        void update(BufferGeometry* geometry);
 
-        void updateWireframeAttribute(BufferGeometry *geometry);
+        void updateWireframeAttribute(BufferGeometry* geometry);
 
-        IntBufferAttribute *getWireframeAttribute(BufferGeometry *geometry);
+        IntBufferAttribute* getWireframeAttribute(BufferGeometry* geometry);
 
     private:
         GLInfo& info_;
@@ -44,7 +44,6 @@ namespace threepp::gl {
 
         std::unordered_map<BufferGeometry*, bool> geometries_;
         std::unordered_map<BufferGeometry*, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;
-
     };
 
 }// namespace threepp::gl

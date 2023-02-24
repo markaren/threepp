@@ -11,7 +11,7 @@ namespace {
     std::vector<std::vector<float>> arrayCacheF32;
     std::vector<std::vector<int>> arrayCacheI32;
 
-    void ensureCapacity(std::vector<float> &v, unsigned int size) {
+    void ensureCapacity(std::vector<float>& v, unsigned int size) {
 
         while (v.size() < size) {
             v.emplace_back();
@@ -19,11 +19,11 @@ namespace {
     }
 
     template<class ArrayLike>
-    std::vector<float> &flatten(const ArrayLike &array, int nBlocks, int blockSize) {
+    std::vector<float>& flatten(const ArrayLike& array, int nBlocks, int blockSize) {
 
         const auto n = nBlocks * blockSize;
         arrayCacheF32.resize(n + 1);
-        auto &r = arrayCacheF32[n];
+        auto& r = arrayCacheF32[n];
 
         if (r.empty()) r.resize(n + 1);
 
@@ -41,7 +41,7 @@ namespace {
     }
 
     template<class ArrayLike1, class ArrayLike2>
-    bool arraysEqual(const ArrayLike1 &a, const ArrayLike2 &b) {
+    bool arraysEqual(const ArrayLike1& a, const ArrayLike2& b) {
 
         if (a.size() != b.size()) return false;
 
@@ -54,7 +54,7 @@ namespace {
     }
 
     template<class ArrayLike1, class ArrayLike2>
-    void copyArray(ArrayLike1 &a, const ArrayLike2 &b) {
+    void copyArray(ArrayLike1& a, const ArrayLike2& b) {
 
         for (unsigned i = 0, l = b.size(); i < l; ++i) {
 
@@ -64,9 +64,9 @@ namespace {
 
     // Texture unit allocation
 
-    std::vector<int> &allocTexUnits(threepp::gl::GLTextures &textures, int n) {
+    std::vector<int>& allocTexUnits(threepp::gl::GLTextures& textures, int n) {
 
-        auto &r = arrayCacheI32[n];
+        auto& r = arrayCacheI32[n];
 
         if (r.empty()) {
 

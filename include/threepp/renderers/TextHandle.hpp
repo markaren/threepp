@@ -5,17 +5,18 @@
 #include "threepp/math/Color.hpp"
 
 
-#include <string>
 #include <memory>
+#include <string>
 
 namespace threepp {
 
     class TextHandle {
 
     public:
-
-        enum Alignment: int {
-            LEFT = 0, CENTER = 1, RIGHT = 2
+        enum Alignment : int {
+            LEFT = 0,
+            CENTER = 1,
+            RIGHT = 2
         };
 
         int x = 0;
@@ -66,6 +67,6 @@ namespace threepp {
         friend class GLRenderer;
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_TEXTHANDLE_HPP

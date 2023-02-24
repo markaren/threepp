@@ -37,4 +37,3 @@ std::string threepp::utils::generateUUID() {
     };
     return ss.str();
 }
-

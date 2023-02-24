@@ -12,7 +12,7 @@
 
 namespace threepp {
 
-    class PerspectiveCamera : public Camera {
+    class PerspectiveCamera: public Camera {
 
     public:
         float fov;
@@ -25,7 +25,7 @@ namespace threepp {
         float filmOffset = 0;// horizontal film offset (same unit as gauge)
 
         PerspectiveCamera(float fov, float aspect, float near, float far);
-        PerspectiveCamera(const PerspectiveCamera &) = delete;
+        PerspectiveCamera(const PerspectiveCamera&) = delete;
 
         /**
          * Sets the FOV by focal length in respect to the current .filmGauge.

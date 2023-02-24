@@ -10,19 +10,15 @@ namespace threepp {
     class WireframeGeometry: public BufferGeometry {
 
     public:
-
         static std::shared_ptr<WireframeGeometry> create(BufferGeometry& geometry) {
 
             return std::shared_ptr<WireframeGeometry>(new WireframeGeometry(geometry));
         }
 
     protected:
-
         explicit WireframeGeometry(BufferGeometry& geometry);
-
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_WIREFRAMEGEOMETRY_HPP

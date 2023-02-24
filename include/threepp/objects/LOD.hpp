@@ -5,8 +5,8 @@
 
 #include <utility>
 
-#include "threepp/core/Object3D.hpp"
 #include "threepp/cameras/Camera.hpp"
+#include "threepp/core/Object3D.hpp"
 
 namespace threepp {
 
@@ -19,12 +19,12 @@ namespace threepp {
             : distance(distance), object(object) {}
     };
 
-    class LOD : public Object3D {
+    class LOD: public Object3D {
 
     public:
         bool autoUpdate = true;
 
-        LOD &addLevel(const std::shared_ptr<Object3D> &object, float distance = 0) {
+        LOD& addLevel(const std::shared_ptr<Object3D>& object, float distance = 0) {
 
             distance = std::abs(distance);
 
@@ -51,7 +51,7 @@ namespace threepp {
             return _currentLevel;
         }
 
-        void update(Camera *camera) {
+        void update(Camera* camera) {
 
             if (levels.size() > 1) {
 

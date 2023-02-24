@@ -20,7 +20,7 @@ namespace threepp {
             return value_;
         }
 
-        float_view &operator=(float v) {
+        float_view& operator=(float v) {
             this->value_ = v;
             if (f_) f_.value()();
             return *this;
@@ -30,11 +30,11 @@ namespace threepp {
             return value_ * f;
         }
 
-        float operator*(const float_view &f) const {
+        float operator*(const float_view& f) const {
             return value_ * f.value_;
         }
 
-        float_view &operator*=(float f) {
+        float_view& operator*=(float f) {
             value_ *= f;
             if (f_) f_.value()();
             return *this;
@@ -44,7 +44,7 @@ namespace threepp {
             return value_ / f;
         }
 
-        float_view &operator/=(float f) {
+        float_view& operator/=(float f) {
             value_ /= f;
             if (f_) f_.value()();
             return *this;
@@ -54,11 +54,11 @@ namespace threepp {
             return value_ + f;
         }
 
-        float operator+(const float_view &f) const {
+        float operator+(const float_view& f) const {
             return value_ + f.value_;
         }
 
-        float_view &operator+=(float f) {
+        float_view& operator+=(float f) {
             value_ += f;
             if (f_) f_.value()();
             return *this;
@@ -68,23 +68,23 @@ namespace threepp {
             return value_ - f;
         }
 
-        float operator-(const float_view &f) const {
+        float operator-(const float_view& f) const {
             return value_ - f.value_;
         }
 
-        float_view &operator-=(float f) {
+        float_view& operator-=(float f) {
             value_ -= f;
             if (f_) f_.value()();
             return *this;
         }
 
-        float_view &operator++() {
+        float_view& operator++() {
             value_++;
             if (f_) f_.value()();
             return *this;
         }
 
-        float_view &operator--() {
+        float_view& operator--() {
             value_--;
             if (f_) f_.value()();
             return *this;
@@ -100,12 +100,12 @@ namespace threepp {
             return value_ != other;
         }
 
-        bool operator==(const float_view &other) const {
+        bool operator==(const float_view& other) const {
 
             return value_ == other.value_;
         }
 
-        bool operator!=(const float_view &other) const {
+        bool operator!=(const float_view& other) const {
 
             return value_ != other.value_;
         }
@@ -120,7 +120,7 @@ namespace threepp {
             f_ = std::move(f);
         }
 
-        friend std::ostream &operator<<(std::ostream &os, const float_view &f) {
+        friend std::ostream& operator<<(std::ostream& os, const float_view& f) {
             os << f.value_;
             return os;
         }

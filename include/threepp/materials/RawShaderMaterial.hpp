@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    class RawShaderMaterial : public ShaderMaterial {
+    class RawShaderMaterial: public ShaderMaterial {
 
     public:
         [[nodiscard]] std::string type() const override {

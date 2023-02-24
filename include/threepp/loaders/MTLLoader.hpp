@@ -61,20 +61,20 @@ namespace threepp {
             wrap = this->options ? this->options->wrap : RepeatWrapping;
         }
 
-        MaterialsInfo convert(const MaterialsInfo &mi);
+        MaterialsInfo convert(const MaterialsInfo& mi);
 
-        MaterialCreator &preload() {
-            for (auto &[mn, _] : materialsInfo) {
+        MaterialCreator& preload() {
+            for (auto& [mn, _] : materialsInfo) {
                 create(mn);
             }
             return *this;
         }
 
-        void setMaterials(const MaterialsInfo &mi) {
+        void setMaterials(const MaterialsInfo& mi) {
             this->materialsInfo = convert(mi);
         }
 
-        std::shared_ptr<Material> create(const std::string &materialName) {
+        std::shared_ptr<Material> create(const std::string& materialName) {
 
             if (materials.find(materialName) == materials.end()) {
                 createMaterial(materialName);
@@ -85,9 +85,9 @@ namespace threepp {
 
 
     private:
-        void createMaterial(const std::string &materialName);
+        void createMaterial(const std::string& materialName);
 
-        std::shared_ptr<Texture> loadTexture(const std::filesystem::path &path, std::optional<int> mapping = std::nullopt);
+        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<int> mapping = std::nullopt);
     };
 
 
@@ -100,15 +100,15 @@ namespace threepp {
     public:
         std::optional<MaterialOptions> materialOptions;
 
-        void setPath(const std::filesystem::path &path) {
+        void setPath(const std::filesystem::path& path) {
             path_ = path;
         }
 
-        void setResourcePath(const std::filesystem::path &resourcePath) {
+        void setResourcePath(const std::filesystem::path& resourcePath) {
             resourcePath_ = resourcePath;
         }
 
-        MaterialCreator load(const std::filesystem::path &path);
+        MaterialCreator load(const std::filesystem::path& path);
     };
 
 }// namespace threepp

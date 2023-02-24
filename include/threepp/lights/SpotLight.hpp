@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class SpotLight : public Light, public LightWithShadow<SpotLightShadow> {
+    class SpotLight: public Light, public LightWithShadow<SpotLightShadow> {
 
     public:
         float distance;

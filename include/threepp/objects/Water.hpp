@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class Water : public Mesh {
+    class Water: public Mesh {
 
     public:
         struct Options {
@@ -29,7 +29,7 @@ namespace threepp {
             std::optional<bool> fog;
         };
 
-        static std::shared_ptr<Water> create(const std::shared_ptr<BufferGeometry> &geometry, Options options = Options()) {
+        static std::shared_ptr<Water> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options()) {
 
             return std::shared_ptr<Water>(new Water(geometry, std::move(options)));
         }
@@ -40,7 +40,7 @@ namespace threepp {
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
 
-        Water(const std::shared_ptr<BufferGeometry> &geometry, Options options);
+        Water(const std::shared_ptr<BufferGeometry>& geometry, Options options);
     };
 
 }// namespace threepp

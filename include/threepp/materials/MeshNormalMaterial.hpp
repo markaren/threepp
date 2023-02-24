@@ -8,8 +8,8 @@
 
 namespace threepp {
 
-    class MeshNormalMaterial : public virtual Material,
-                               public MaterialWithFlatShading {
+    class MeshNormalMaterial: public virtual Material,
+                              public MaterialWithFlatShading {
 
     public:
         static std::shared_ptr<MeshNormalMaterial> create() {

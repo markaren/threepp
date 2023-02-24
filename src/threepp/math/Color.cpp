@@ -3,18 +3,18 @@
 
 #include "threepp/math/MathUtils.hpp"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 
 using namespace threepp;
 
-Color::Color(float r, float g, float b) : r(r), g(g), b(b) {}
+Color::Color(float r, float g, float b): r(r), g(g), b(b) {}
 
 Color::Color(unsigned int hex) {
     setHex(hex);
 }
 
-float &Color::operator[](unsigned int index) {
+float& Color::operator[](unsigned int index) {
     switch (index) {
         case 0:
             return r;
@@ -27,7 +27,7 @@ float &Color::operator[](unsigned int index) {
     }
 }
 
-Color &Color::setScalar(float scalar) {
+Color& Color::setScalar(float scalar) {
 
     this->r = scalar;
     this->g = scalar;
@@ -36,7 +36,7 @@ Color &Color::setScalar(float scalar) {
     return *this;
 }
 
-Color &Color::setHex(unsigned int hex) {
+Color& Color::setHex(unsigned int hex) {
 
     this->r = (hex >> 16 & 255) / 255.f;
     this->g = (hex >> 8 & 255) / 255.f;
@@ -45,7 +45,7 @@ Color &Color::setHex(unsigned int hex) {
     return *this;
 }
 
-Color &Color::setRGB(float r, float g, float b) {
+Color& Color::setRGB(float r, float g, float b) {
 
     this->r = r;
     this->g = g;
@@ -54,7 +54,7 @@ Color &Color::setRGB(float r, float g, float b) {
     return *this;
 }
 
-Color &Color::copy(const Color &color) {
+Color& Color::copy(const Color& color) {
 
     this->r = color.r;
     this->g = color.g;
@@ -63,7 +63,7 @@ Color &Color::copy(const Color &color) {
     return *this;
 }
 
-Color &Color::add(const Color &color) {
+Color& Color::add(const Color& color) {
 
     this->r += color.r;
     this->g += color.g;
@@ -72,7 +72,7 @@ Color &Color::add(const Color &color) {
     return *this;
 }
 
-Color &Color::addColors(const Color &color1, const Color &color2) {
+Color& Color::addColors(const Color& color1, const Color& color2) {
 
     this->r = color1.r + color2.r;
     this->g = color1.g + color2.g;
@@ -81,7 +81,7 @@ Color &Color::addColors(const Color &color1, const Color &color2) {
     return *this;
 }
 
-Color &Color::addScalar(float s) {
+Color& Color::addScalar(float s) {
 
     this->r += s;
     this->g += s;
@@ -90,7 +90,7 @@ Color &Color::addScalar(float s) {
     return *this;
 }
 
-Color &Color::sub(const Color &color) {
+Color& Color::sub(const Color& color) {
 
     this->r = std::max(0.f, this->r - color.r);
     this->g = std::max(0.f, this->g - color.g);
@@ -99,7 +99,7 @@ Color &Color::sub(const Color &color) {
     return *this;
 }
 
-Color &Color::multiply(const Color &color) {
+Color& Color::multiply(const Color& color) {
 
     this->r *= color.r;
     this->g *= color.g;
@@ -108,7 +108,7 @@ Color &Color::multiply(const Color &color) {
     return *this;
 }
 
-Color &Color::multiplyScalar(float s) {
+Color& Color::multiplyScalar(float s) {
 
     this->r *= s;
     this->g *= s;
@@ -117,7 +117,7 @@ Color &Color::multiplyScalar(float s) {
     return *this;
 }
 
-Color &Color::lerp(const Color &color, float alpha) {
+Color& Color::lerp(const Color& color, float alpha) {
 
     this->r += (color.r - this->r) * alpha;
     this->g += (color.g - this->g) * alpha;
@@ -126,7 +126,7 @@ Color &Color::lerp(const Color &color, float alpha) {
     return *this;
 }
 
-Color &Color::lerpColors(const Color &color1, const Color &color2, float alpha) {
+Color& Color::lerpColors(const Color& color1, const Color& color2, float alpha) {
 
     this->r = color1.r + (color2.r - color1.r) * alpha;
     this->g = color1.g + (color2.g - color1.g) * alpha;
@@ -135,7 +135,7 @@ Color &Color::lerpColors(const Color &color1, const Color &color2, float alpha) 
     return *this;
 }
 
-Color &Color::randomize() {
+Color& Color::randomize() {
 
     this->r = math::randomInRange(0.f, 1.f);
     this->g = math::randomInRange(0.f, 1.f);
@@ -144,8 +144,7 @@ Color &Color::randomize() {
     return *this;
 }
 
-bool Color::equals(const Color &c) const {
+bool Color::equals(const Color& c) const {
 
     return (c.r == this->r) && (c.g == this->g) && (c.b == this->b);
 }
-

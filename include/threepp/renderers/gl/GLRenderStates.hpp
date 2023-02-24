@@ -11,15 +11,15 @@ namespace threepp::gl {
 
         GLRenderState() = default;
 
-        const GLLights &getLights() const {
+        const GLLights& getLights() const {
 
             return lights_;
         }
-        const std::vector<Light *> &getLightsArray() const {
+        const std::vector<Light*>& getLightsArray() const {
 
             return lightsArray_;
         }
-        const std::vector<Light *> &getShadowsArray() const {
+        const std::vector<Light*>& getShadowsArray() const {
 
             return shadowsArray_;
         }
@@ -30,12 +30,12 @@ namespace threepp::gl {
             shadowsArray_.clear();
         }
 
-        void pushLight(Light *light) {
+        void pushLight(Light* light) {
 
             lightsArray_.emplace_back(light);
         }
 
-        void pushShadow(Light *shadowLight) {
+        void pushShadow(Light* shadowLight) {
 
             shadowsArray_.emplace_back(shadowLight);
         }
@@ -45,7 +45,7 @@ namespace threepp::gl {
             lights_.setup(lightsArray_);
         }
 
-        void setupLightsView(Camera *camera) {
+        void setupLightsView(Camera* camera) {
 
             lights_.setupView(lightsArray_, camera);
         }
@@ -54,15 +54,15 @@ namespace threepp::gl {
     private:
         GLLights lights_;
 
-        std::vector<Light *> lightsArray_;
-        std::vector<Light *> shadowsArray_;
+        std::vector<Light*> lightsArray_;
+        std::vector<Light*> shadowsArray_;
     };
 
     struct GLRenderStates {
 
         GLRenderStates() = default;
 
-        std::shared_ptr<GLRenderState> get(Scene *scene, size_t renderCallDepth = 1) {
+        std::shared_ptr<GLRenderState> get(Scene* scene, size_t renderCallDepth = 1) {
 
             if (renderCallDepth >= renderStates_[scene->uuid].size()) {
 

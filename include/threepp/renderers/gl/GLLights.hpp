@@ -18,7 +18,7 @@ namespace threepp::gl {
 
     struct UniformsCache {
 
-        LightUniforms* get(const Light &light) {
+        LightUniforms* get(const Light& light) {
 
             if (lights.count(light.id)) {
 
@@ -79,7 +79,7 @@ namespace threepp::gl {
 
     struct ShadowUniformsCache {
 
-        LightUniforms* get(const Light &light) {
+        LightUniforms* get(const Light& light) {
 
             if (lights.count(light.id)) {
 
@@ -165,9 +165,9 @@ namespace threepp::gl {
 
         LightState state{};
 
-        void setup(std::vector<Light *> &lights);
+        void setup(std::vector<Light*>& lights);
 
-        void setupView(std::vector<Light *> &lights, Camera *camera);
+        void setupView(std::vector<Light*>& lights, Camera* camera);
 
     private:
         UniformsCache cache_;

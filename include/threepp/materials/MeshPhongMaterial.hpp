@@ -28,7 +28,6 @@ namespace threepp {
           public MaterialWithFlatShading {
 
     public:
-
         [[nodiscard]] std::string type() const override {
 
             return "MeshPhongMaterial";
@@ -40,8 +39,8 @@ namespace threepp {
 
             copyInto(m.get());
 
-            m->color.copy( color );
-            m->specular.copy( specular );
+            m->color.copy(color);
+            m->specular.copy(specular);
             m->shininess = shininess;
 
             m->map = map;
@@ -52,7 +51,7 @@ namespace threepp {
             m->aoMap = aoMap;
             m->aoMapIntensity = aoMapIntensity;
 
-            m->emissive.copy( emissive );
+            m->emissive.copy(emissive);
             m->emissiveMap = emissiveMap;
             m->emissiveIntensity = emissiveIntensity;
 
@@ -61,7 +60,7 @@ namespace threepp {
 
             m->normalMap = normalMap;
             m->normalMapType = normalMapType;
-            m->normalScale.copy( normalScale );
+            m->normalScale.copy(normalScale);
 
             m->displacementMap = displacementMap;
             m->displacementScale = displacementScale;
@@ -82,7 +81,6 @@ namespace threepp {
             m->flatShading = flatShading;
 
             return m;
-
         }
 
         static std::shared_ptr<MeshPhongMaterial> create() {

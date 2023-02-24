@@ -10,16 +10,16 @@
 
 using namespace threepp;
 
-float &Matrix3::operator[](unsigned int index) {
+float& Matrix3::operator[](unsigned int index) {
 
     if (index >= 9) throw std::runtime_error("index out of bounds: " + std::to_string(index));
 
     return elements[index];
 }
 
-Matrix3 &Matrix3::set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33) {
+Matrix3& Matrix3::set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33) {
 
-    auto &te = this->elements;
+    auto& te = this->elements;
 
     // clang-format off
     te[ 0 ] = n11; te[ 1 ] = n21; te[ 2 ] = n31;
@@ -30,7 +30,7 @@ Matrix3 &Matrix3::set(float n11, float n12, float n13, float n21, float n22, flo
     return *this;
 }
 
-Matrix3 &Matrix3::identity() {
+Matrix3& Matrix3::identity() {
 
     this->set(
 
@@ -43,10 +43,10 @@ Matrix3 &Matrix3::identity() {
     return *this;
 }
 
-Matrix3 &Matrix3::copy(const Matrix3 &m) {
+Matrix3& Matrix3::copy(const Matrix3& m) {
 
-    auto &te = this->elements;
-    const auto &me = m.elements;
+    auto& te = this->elements;
+    const auto& me = m.elements;
 
     // clang-format off
     te[ 0 ] = me[ 0 ]; te[ 1 ] = me[ 1 ]; te[ 2 ] = me[ 2 ];
@@ -57,7 +57,7 @@ Matrix3 &Matrix3::copy(const Matrix3 &m) {
     return *this;
 }
 
-Matrix3 &Matrix3::extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis) {
+Matrix3& Matrix3::extractBasis(Vector3& xAxis, Vector3& yAxis, Vector3& zAxis) {
 
     xAxis.setFromMatrix3Column(*this, 0);
     yAxis.setFromMatrix3Column(*this, 1);
@@ -66,9 +66,9 @@ Matrix3 &Matrix3::extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis) {
     return *this;
 }
 
-Matrix3 &Matrix3::setFromMatrix4(const Matrix4 &m) {
+Matrix3& Matrix3::setFromMatrix4(const Matrix4& m) {
 
-    auto &me = m.elements;
+    auto& me = m.elements;
 
     this->set(
 
@@ -81,21 +81,21 @@ Matrix3 &Matrix3::setFromMatrix4(const Matrix4 &m) {
     return *this;
 }
 
-Matrix3 &Matrix3::multiply(const Matrix3 &m) {
+Matrix3& Matrix3::multiply(const Matrix3& m) {
 
     return this->multiplyMatrices(*this, m);
 }
 
-Matrix3 &Matrix3::premultiply(const Matrix3 &m) {
+Matrix3& Matrix3::premultiply(const Matrix3& m) {
 
     return this->multiplyMatrices(m, *this);
 }
 
-Matrix3 &Matrix3::multiplyMatrices(const Matrix3 &a, const Matrix3 &b) {
+Matrix3& Matrix3::multiplyMatrices(const Matrix3& a, const Matrix3& b) {
 
-    const auto &ae = a.elements;
-    const auto &be = b.elements;
-    auto &te = this->elements;
+    const auto& ae = a.elements;
+    const auto& be = b.elements;
+    auto& te = this->elements;
 
     const auto a11 = ae[0], a12 = ae[3], a13 = ae[6];
     const auto a21 = ae[1], a22 = ae[4], a23 = ae[7];
@@ -120,9 +120,9 @@ Matrix3 &Matrix3::multiplyMatrices(const Matrix3 &a, const Matrix3 &b) {
     return *this;
 }
 
-Matrix3 &Matrix3::multiplyScalar(float s) {
+Matrix3& Matrix3::multiplyScalar(float s) {
 
-    auto &te = this->elements;
+    auto& te = this->elements;
 
     // clang-format off
     te[ 0 ] *= s; te[ 3 ] *= s; te[ 6 ] *= s;
@@ -135,7 +135,7 @@ Matrix3 &Matrix3::multiplyScalar(float s) {
 
 float Matrix3::determinant() const {
 
-    auto &te = this->elements;
+    auto& te = this->elements;
 
     const auto a = te[0], b = te[1], c = te[2],
                d = te[3], e = te[4], f = te[5],
@@ -144,9 +144,9 @@ float Matrix3::determinant() const {
     return a * e * i - a * f * h - b * d * i + b * f * g + c * d * h - c * e * g;
 }
 
-Matrix3 &Matrix3::invert() {
+Matrix3& Matrix3::invert() {
 
-    auto &te = this->elements;
+    auto& te = this->elements;
 
     const auto n11 = te[0], n21 = te[1], n31 = te[2],
                n12 = te[3], n22 = te[4], n32 = te[5],
@@ -179,10 +179,10 @@ Matrix3 &Matrix3::invert() {
     return *this;
 }
 
-Matrix3 &Matrix3::transpose() {
+Matrix3& Matrix3::transpose() {
 
     float tmp;
-    auto &m = this->elements;
+    auto& m = this->elements;
 
     // clang-format off
     tmp = m[ 1 ]; m[ 1 ] = m[ 3 ]; m[ 3 ] = tmp;
@@ -193,12 +193,12 @@ Matrix3 &Matrix3::transpose() {
     return *this;
 }
 
-Matrix3 &Matrix3::getNormalMatrix(const Matrix4 &m) {
+Matrix3& Matrix3::getNormalMatrix(const Matrix4& m) {
 
     return this->setFromMatrix4(m).invert().transpose();
 }
 
-Matrix3 &Matrix3::setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy) {
+Matrix3& Matrix3::setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy) {
 
     const float c = std::cos(rotation);
     const float s = std::sin(rotation);
@@ -211,9 +211,9 @@ Matrix3 &Matrix3::setUvTransform(float tx, float ty, float sx, float sy, float r
     return *this;
 }
 
-Matrix3 &Matrix3::scale(float sx, float sy) {
+Matrix3& Matrix3::scale(float sx, float sy) {
 
-    auto &te = this->elements;
+    auto& te = this->elements;
 
     // clang-format off
     te[ 0 ] *= sx; te[ 3 ] *= sx; te[ 6 ] *= sx;
@@ -223,12 +223,12 @@ Matrix3 &Matrix3::scale(float sx, float sy) {
     return *this;
 }
 
-Matrix3 &Matrix3::rotate(float theta) {
+Matrix3& Matrix3::rotate(float theta) {
 
     const float c = std::cos(theta);
     const float s = std::sin(theta);
 
-    auto &te = this->elements;
+    auto& te = this->elements;
 
     const float a11 = te[0], a12 = te[3], a13 = te[6];
     const float a21 = te[1], a22 = te[4], a23 = te[7];
@@ -244,9 +244,9 @@ Matrix3 &Matrix3::rotate(float theta) {
     return *this;
 }
 
-Matrix3 &Matrix3::translate(float tx, float ty) {
+Matrix3& Matrix3::translate(float tx, float ty) {
 
-    auto &te = this->elements;
+    auto& te = this->elements;
 
     te[0] += tx * te[2];
     te[3] += tx * te[5];
@@ -258,10 +258,10 @@ Matrix3 &Matrix3::translate(float tx, float ty) {
     return *this;
 }
 
-bool Matrix3::equals(const Matrix3 &matrix) const {
+bool Matrix3::equals(const Matrix3& matrix) const {
 
-    const auto &te = this->elements;
-    const auto &me = matrix.elements;
+    const auto& te = this->elements;
+    const auto& me = matrix.elements;
 
     for (int i = 0; i < 9; i++) {
 

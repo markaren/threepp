@@ -9,7 +9,7 @@ namespace threepp {
     class STLLoader {
 
     public:
-        [[nodiscard]] std::shared_ptr<BufferGeometry> load(const std::string &path) const;
+        [[nodiscard]] std::shared_ptr<BufferGeometry> load(const std::string& path) const;
     };
 
 }// namespace threepp

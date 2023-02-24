@@ -15,13 +15,13 @@ namespace threepp::math {
     const float RAD2DEG = 180.f / PI;
 
     template<class T>
-    T clamp(T value, T min, T max) {
+    inline T clamp(T value, T min, T max) {
 
         return std::max(min, std::min(max, value));
     }
 
     template<class T>
-    void clampInPlace(T& value, T min, T max) {
+    inline void clampInPlace(T& value, T min, T max) {
 
         value = std::max(min, std::min(max, value));
     }

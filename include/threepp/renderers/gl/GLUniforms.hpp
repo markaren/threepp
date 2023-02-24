@@ -17,9 +17,9 @@ namespace threepp::gl {
 
         std::string id;
 
-        explicit UniformObject(std::string id) : id(std::move(id)) {}
+        explicit UniformObject(std::string id): id(std::move(id)) {}
 
-        virtual void setValue(const UniformValue &value, GLTextures *textures = nullptr) = 0;
+        virtual void setValue(const UniformValue& value, GLTextures* textures = nullptr) = 0;
 
         virtual ~UniformObject() = default;
     };
@@ -32,15 +32,15 @@ namespace threepp::gl {
         virtual ~Container() = default;
     };
 
-    struct GLUniforms : Container {
+    struct GLUniforms: Container {
 
         explicit GLUniforms(unsigned int program);
 
-        void setValue(const std::string &name, const UniformValue &value, GLTextures *textures = nullptr);
+        void setValue(const std::string& name, const UniformValue& value, GLTextures* textures = nullptr);
 
-        static void upload(std::vector<std::shared_ptr<UniformObject>> &seq, UniformMap &values, GLTextures *textures);
+        static void upload(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values, GLTextures* textures);
 
-        static std::vector<std::shared_ptr<UniformObject>> seqWithValue(std::vector<std::shared_ptr<UniformObject>> &seq, UniformMap &values);
+        static std::vector<std::shared_ptr<UniformObject>> seqWithValue(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values);
     };
 
 }// namespace threepp::gl

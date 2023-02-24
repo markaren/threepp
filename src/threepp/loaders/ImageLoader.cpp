@@ -13,12 +13,12 @@ namespace {
     struct ImageStruct {
         int width;
         int height;
-        unsigned char *pixels;
+        unsigned char* pixels;
     };
 
 }// namespace
 
-std::optional<Image> ImageLoader::load(const std::filesystem::path &imagePath, int channels, bool flipY) {
+std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, int channels, bool flipY) {
 
     if (!std::filesystem::exists(imagePath)) {
         return std::nullopt;

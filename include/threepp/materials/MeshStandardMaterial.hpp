@@ -8,21 +8,21 @@
 
 namespace threepp {
 
-    class MeshStandardMaterial : public virtual Material,
-                                 public MaterialWithColor,
-                                 public MaterialWithRoughness,
-                                 public MaterialWithMetalness,
-                                 public MaterialWithNormalMap,
-                                 public MaterialWithEmissive,
-                                 public MaterialWithBumpMap,
-                                 public MaterialWithAoMap,
-                                 public MaterialWithAlphaMap,
-                                 public MaterialWithEnvMap,
-                                 public MaterialWithLightMap,
-                                 public MaterialWithDisplacementMap,
-                                 public MaterialWithWireframe,
-                                 public MaterialWithFlatShading,
-                                 public MaterialWithDefines {
+    class MeshStandardMaterial: public virtual Material,
+                                public MaterialWithColor,
+                                public MaterialWithRoughness,
+                                public MaterialWithMetalness,
+                                public MaterialWithNormalMap,
+                                public MaterialWithEmissive,
+                                public MaterialWithBumpMap,
+                                public MaterialWithAoMap,
+                                public MaterialWithAlphaMap,
+                                public MaterialWithEnvMap,
+                                public MaterialWithLightMap,
+                                public MaterialWithDisplacementMap,
+                                public MaterialWithWireframe,
+                                public MaterialWithFlatShading,
+                                public MaterialWithDefines {
 
     public:
         [[nodiscard]] std::string type() const override {

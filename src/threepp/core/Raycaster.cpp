@@ -10,12 +10,12 @@ using namespace threepp;
 
 namespace {
 
-    bool ascSort(const Intersection &a, const Intersection &b) {
+    bool ascSort(const Intersection& a, const Intersection& b) {
 
         return a.distance < b.distance;
     }
 
-    void intersectObject(Object3D *object, Raycaster &raycaster, std::vector<Intersection> &intersects, bool recursive) {
+    void intersectObject(Object3D* object, Raycaster& raycaster, std::vector<Intersection>& intersects, bool recursive) {
 
         if (object->layers.test(raycaster.layers)) {
 
@@ -24,9 +24,9 @@ namespace {
 
         if (recursive) {
 
-            auto &children = object->children;
+            auto& children = object->children;
 
-            for (auto &child : children) {
+            for (auto& child : children) {
 
                 intersectObject(child.get(), raycaster, intersects, true);
             }
@@ -36,14 +36,14 @@ namespace {
 }// namespace
 
 
-void Raycaster::set(const Vector3 &origin, const Vector3 &direction) {
+void Raycaster::set(const Vector3& origin, const Vector3& direction) {
 
     // direction is assumed to be normalized (for accurate distance calculations)
 
     this->ray.set(origin, direction);
 }
 
-std::vector<Intersection> Raycaster::intersectObject(Object3D *object, bool recursive) {
+std::vector<Intersection> Raycaster::intersectObject(Object3D* object, bool recursive) {
 
     std::vector<Intersection> intersects;
 
@@ -54,11 +54,11 @@ std::vector<Intersection> Raycaster::intersectObject(Object3D *object, bool recu
     return intersects;
 }
 
-std::vector<Intersection> Raycaster::intersectObjects(std::vector<std::shared_ptr<Object3D>> &objects, bool recursive) {
+std::vector<Intersection> Raycaster::intersectObjects(std::vector<std::shared_ptr<Object3D>>& objects, bool recursive) {
 
     std::vector<Intersection> intersects;
 
-    for (auto &object : objects) {
+    for (auto& object : objects) {
 
         ::intersectObject(object.get(), *this, intersects, recursive);
     }
@@ -68,7 +68,7 @@ std::vector<Intersection> Raycaster::intersectObjects(std::vector<std::shared_pt
     return intersects;
 }
 
-void Raycaster::setFromCamera(const Vector2 &coords, Camera* camera) {
+void Raycaster::setFromCamera(const Vector2& coords, Camera* camera) {
 
     if (camera->as<PerspectiveCamera>()) {
 

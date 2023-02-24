@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    class DirectionalLightHelper : public Object3D {
+    class DirectionalLightHelper: public Object3D {
 
     public:
         void update() {
@@ -41,10 +41,9 @@ namespace threepp {
 
             this->targetLine->lookAt(_v2);
             this->targetLine->scale.z = _v3.length();
-
         }
 
-        static std::shared_ptr<DirectionalLightHelper> create(const std::shared_ptr<DirectionalLight> &light, float size = 1, std::optional<unsigned int> color = std::nullopt) {
+        static std::shared_ptr<DirectionalLightHelper> create(const std::shared_ptr<DirectionalLight>& light, float size = 1, std::optional<unsigned int> color = std::nullopt) {
 
             return std::shared_ptr<DirectionalLightHelper>(new DirectionalLightHelper(light, size, color));
         }

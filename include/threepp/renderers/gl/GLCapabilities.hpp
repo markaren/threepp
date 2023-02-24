@@ -33,10 +33,10 @@ namespace threepp::gl {
 
         const int maxSamples;
 
-        GLCapabilities(const GLCapabilities &) = delete;
-        void operator=(const GLCapabilities &) = delete;
+        GLCapabilities(const GLCapabilities&) = delete;
+        void operator=(const GLCapabilities&) = delete;
 
-        friend std::ostream &operator<<(std::ostream &os, const GLCapabilities &v) {
+        friend std::ostream& operator<<(std::ostream& os, const GLCapabilities& v) {
             os << "GLCapabilities(\n"
                << "maxAnisotropy: " << v.maxAnisotropy << "\n"
                << "maxTextures: " << v.maxTextures << "\n"
@@ -52,7 +52,7 @@ namespace threepp::gl {
             return os;
         }
 
-        static GLCapabilities &instance() {
+        static GLCapabilities& instance() {
             static GLCapabilities instance;
             return instance;
         }

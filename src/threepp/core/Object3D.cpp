@@ -18,10 +18,9 @@ Object3D::Object3D()
     quaternion._onChange([this] {
         rotation.setFromQuaternion(quaternion, std::nullopt, false);
     });
-    
 }
 
-void Object3D::applyMatrix4(const Matrix4 &m) {
+void Object3D::applyMatrix4(const Matrix4& m) {
 
     if (this->matrixAutoUpdate) this->updateMatrix();
 
@@ -30,40 +29,40 @@ void Object3D::applyMatrix4(const Matrix4 &m) {
     this->matrix->decompose(this->position, this->quaternion, this->scale);
 }
 
-Object3D &Object3D::applyQuaternion(const Quaternion &q) {
+Object3D& Object3D::applyQuaternion(const Quaternion& q) {
 
     this->quaternion.premultiply(q);
 
     return *this;
 }
 
-void Object3D::setRotationFromAxisAngle(const Vector3 &axis, float angle) {
+void Object3D::setRotationFromAxisAngle(const Vector3& axis, float angle) {
 
     // assumes axis is normalized
 
     this->quaternion.setFromAxisAngle(axis, angle);
 }
 
-void Object3D::setRotationFromEuler(const Euler &euler) {
+void Object3D::setRotationFromEuler(const Euler& euler) {
 
     this->quaternion.setFromEuler(euler, true);
 }
 
-void Object3D::setRotationFromMatrix(const Matrix4 &m) {
+void Object3D::setRotationFromMatrix(const Matrix4& m) {
 
     // assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)
 
     this->quaternion.setFromRotationMatrix(m);
 }
 
-void Object3D::setRotationFromQuaternion(const Quaternion &q) {
+void Object3D::setRotationFromQuaternion(const Quaternion& q) {
 
     // assumes q is normalized
 
     this->quaternion = q;
 }
 
-Object3D &Object3D::rotateOnAxis(const Vector3 &axis, float angle) {
+Object3D& Object3D::rotateOnAxis(const Vector3& axis, float angle) {
 
     // rotate object on axis in object space
     // axis is assumed to be normalized
@@ -77,7 +76,7 @@ Object3D &Object3D::rotateOnAxis(const Vector3 &axis, float angle) {
     return *this;
 }
 
-Object3D &Object3D::rotateOnWorldAxis(const Vector3 &axis, float angle) {
+Object3D& Object3D::rotateOnWorldAxis(const Vector3& axis, float angle) {
 
     // rotate object on axis in world space
     // axis is assumed to be normalized
@@ -92,22 +91,22 @@ Object3D &Object3D::rotateOnWorldAxis(const Vector3 &axis, float angle) {
     return *this;
 }
 
-Object3D &Object3D::rotateX(float angle) {
+Object3D& Object3D::rotateX(float angle) {
 
     return this->rotateOnAxis(Vector3::X, angle);
 }
 
-Object3D &Object3D::rotateY(float angle) {
+Object3D& Object3D::rotateY(float angle) {
 
     return this->rotateOnAxis(Vector3::Y, angle);
 }
 
-Object3D &Object3D::rotateZ(float angle) {
+Object3D& Object3D::rotateZ(float angle) {
 
     return this->rotateOnAxis(Vector3::Z, angle);
 }
 
-Object3D &Object3D::translateOnAxis(const Vector3 &axis, float distance) {
+Object3D& Object3D::translateOnAxis(const Vector3& axis, float distance) {
 
     // translate object by distance along axis in object space
     // axis is assumed to be normalized
@@ -121,34 +120,34 @@ Object3D &Object3D::translateOnAxis(const Vector3 &axis, float distance) {
     return *this;
 }
 
-Object3D &Object3D::translateX(float distance) {
+Object3D& Object3D::translateX(float distance) {
 
     return this->translateOnAxis(Vector3::X, distance);
 }
 
-Object3D &Object3D::translateY(float distance) {
+Object3D& Object3D::translateY(float distance) {
 
     return this->translateOnAxis(Vector3::Y, distance);
 }
 
-Object3D &Object3D::translateZ(float distance) {
+Object3D& Object3D::translateZ(float distance) {
 
     return this->translateOnAxis(Vector3::Z, distance);
 }
 
-void Object3D::localToWorld(Vector3 &vector) const {
+void Object3D::localToWorld(Vector3& vector) const {
 
     vector.applyMatrix4(*this->matrixWorld);
 }
 
-void Object3D::worldToLocal(Vector3 &vector) const {
+void Object3D::worldToLocal(Vector3& vector) const {
 
     Matrix4 _m1{};
 
     vector.applyMatrix4(_m1.copy(*this->matrixWorld).invert());
 }
 
-void Object3D::lookAt(const Vector3 &vector) {
+void Object3D::lookAt(const Vector3& vector) {
 
     lookAt(vector.x, vector.y, vector.z);
 }
@@ -187,7 +186,7 @@ void Object3D::lookAt(float x, float y, float z) {
     }
 }
 
-Object3D &Object3D::add(const std::shared_ptr<Object3D> &object) {
+Object3D& Object3D::add(const std::shared_ptr<Object3D>& object) {
 
     if (object->parent) {
 
@@ -202,14 +201,14 @@ Object3D &Object3D::add(const std::shared_ptr<Object3D> &object) {
     return *this;
 }
 
-Object3D &Object3D::remove(const std::shared_ptr<Object3D> &object) {
+Object3D& Object3D::remove(const std::shared_ptr<Object3D>& object) {
 
     return remove(object.get());
 }
 
-Object3D &Object3D::remove(Object3D *object) {
+Object3D& Object3D::remove(Object3D* object) {
 
-    auto find = find_if(children.begin(), children.end(), [&object](const auto &obj) {
+    auto find = find_if(children.begin(), children.end(), [&object](const auto& obj) {
         return obj.get() == object;
     });
     if (find != children.end()) {
@@ -221,7 +220,7 @@ Object3D &Object3D::remove(Object3D *object) {
     return *this;
 }
 
-Object3D &Object3D::removeFromParent() {
+Object3D& Object3D::removeFromParent() {
 
     if (parent) {
 
@@ -231,9 +230,9 @@ Object3D &Object3D::removeFromParent() {
     return *this;
 }
 
-Object3D &Object3D::clear() {
+Object3D& Object3D::clear() {
 
-    for (auto &object : this->children) {
+    for (auto& object : this->children) {
 
         object->parent = nullptr;
 
@@ -245,11 +244,11 @@ Object3D &Object3D::clear() {
     return *this;
 }
 
-Object3D *Object3D::getObjectByName(const std::string &name) {
+Object3D* Object3D::getObjectByName(const std::string& name) {
 
     if (this->name == name) return this;
 
-    for (auto &child : this->children) {
+    for (auto& child : this->children) {
 
         auto object = child->getObjectByName(name);
 
@@ -262,14 +261,14 @@ Object3D *Object3D::getObjectByName(const std::string &name) {
     return nullptr;
 }
 
-Vector3 &Object3D::getWorldPosition(Vector3 &target) {
+Vector3& Object3D::getWorldPosition(Vector3& target) {
 
     this->updateWorldMatrix(true, false);
 
     return target.setFromMatrixPosition(*this->matrixWorld);
 }
 
-Quaternion &Object3D::getWorldQuaternion(Quaternion &target) {
+Quaternion& Object3D::getWorldQuaternion(Quaternion& target) {
 
     Vector3 _position{};
     Vector3 _scale{};
@@ -281,7 +280,7 @@ Quaternion &Object3D::getWorldQuaternion(Quaternion &target) {
     return target;
 }
 
-Vector3 &Object3D::getWorldScale(Vector3 &target) {
+Vector3& Object3D::getWorldScale(Vector3& target) {
 
     Vector3 _position{};
     Quaternion _quaternion{};
@@ -293,38 +292,38 @@ Vector3 &Object3D::getWorldScale(Vector3 &target) {
     return target;
 }
 
-void Object3D::getWorldDirection(Vector3 &target) {
+void Object3D::getWorldDirection(Vector3& target) {
 
     this->updateWorldMatrix(true, false);
 
-    const auto &e = this->matrixWorld->elements;
+    const auto& e = this->matrixWorld->elements;
 
     target.set(e[8], e[9], e[10]).normalize();
 }
 
-void Object3D::traverse(const std::function<void(Object3D &)> &callback) {
+void Object3D::traverse(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    for (auto &i : children) {
+    for (auto& i : children) {
 
         i->traverse(callback);
     }
 }
 
-void Object3D::traverseVisible(const std::function<void(Object3D &)> &callback) {
+void Object3D::traverseVisible(const std::function<void(Object3D&)>& callback) {
 
     if (!this->visible) return;
 
     callback(*this);
 
-    for (auto &i : children) {
+    for (auto& i : children) {
 
         i->traverseVisible(callback);
     }
 }
 
-void Object3D::traverseAncestors(const std::function<void(Object3D &)> &callback) {
+void Object3D::traverseAncestors(const std::function<void(Object3D&)>& callback) {
 
     if (parent) {
 
@@ -363,7 +362,7 @@ void Object3D::updateMatrixWorld(bool force) {
 
     // update children
 
-    for (auto &child : this->children) {
+    for (auto& child : this->children) {
 
         child->updateMatrixWorld(force);
     }
@@ -391,7 +390,7 @@ void Object3D::updateWorldMatrix(std::optional<bool> updateParents, std::optiona
 
     if (updateChildren && updateChildren.value()) {
 
-        for (auto &child : children) {
+        for (auto& child : children) {
 
             child->updateWorldMatrix(false, true);
         }
@@ -402,15 +401,15 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
     this->name = source.name;
 
-    this->up.copy( source.up );
+    this->up.copy(source.up);
 
-    this->position.copy( source.position );
+    this->position.copy(source.position);
     this->rotation.order_ = source.rotation.order_;
-    this->quaternion.copy( source.quaternion );
-    this->scale.copy( source.scale );
+    this->quaternion.copy(source.quaternion);
+    this->scale.copy(source.scale);
 
-    this->matrix->copy( *source.matrix );
-    this->matrixWorld->copy( *source.matrixWorld );
+    this->matrix->copy(*source.matrix);
+    this->matrixWorld->copy(*source.matrixWorld);
 
     this->matrixAutoUpdate = source.matrixAutoUpdate;
     this->matrixWorldNeedsUpdate = source.matrixWorldNeedsUpdate;
@@ -430,7 +429,6 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
             this->add(child->clone());
         }
-
     }
 }
 

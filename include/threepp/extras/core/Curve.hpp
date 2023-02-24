@@ -54,9 +54,9 @@ namespace threepp {
 
         // Virtual base class method to overwrite and implement in subclasses
         //	- t [0 .. 1]
-        virtual void getPoint(float t, T &target) = 0;
+        virtual void getPoint(float t, T& target) = 0;
 
-        void getPointAt(float u, T &target) {
+        void getPointAt(float u, T& target) {
 
             const auto t = this->getUtoTmapping(u);
             return this->getPoint(t, target);
@@ -69,7 +69,7 @@ namespace threepp {
             std::vector<T> points;
 
             for (int d = 0; d <= divisions; d++) {
-                T &point = points.emplace_back();
+                T& point = points.emplace_back();
                 this->getPoint(static_cast<float>(d) / static_cast<float>(divisions));
             }
 
@@ -84,7 +84,7 @@ namespace threepp {
 
             for (int d = 0; d <= divisions; d++) {
 
-                T &point = points.emplace_back();
+                T& point = points.emplace_back();
                 this->getPointAt(static_cast<float>(d) / static_cast<float>(divisions));
             }
 
@@ -149,7 +149,7 @@ namespace threepp {
             float i;
             float il = static_cast<float>(arcLengths.size());
 
-            float targetArcLength; // The targeted u distance value to get
+            float targetArcLength;// The targeted u distance value to get
 
             if (distance) {
 
@@ -217,7 +217,7 @@ namespace threepp {
         // 2 points a small delta apart will be used to find its gradient
         // which seems to give a reasonable approximation
 
-        void getTangent(float t, T &tangent) {
+        void getTangent(float t, T& tangent) {
 
             const float delta = 0.0001f;
             float t1 = t - delta;
@@ -235,7 +235,7 @@ namespace threepp {
             tangent.copy(pt2).sub(pt1).normalize();
         }
 
-        void getTangentAt(float u, T &optionalTarget) {
+        void getTangentAt(float u, T& optionalTarget) {
 
             const float t = this->getUtoTmapping(u);
             this->getTangent(t, optionalTarget);
@@ -260,7 +260,7 @@ namespace threepp {
 
                 const float u = static_cast<float>(i) / static_cast<float>(segments);
 
-                auto &tangent = tangents.emplace_back();
+                auto& tangent = tangents.emplace_back();
                 this->getTangentAt(u, tangent);
                 tangent.normalize();
             }
@@ -304,7 +304,7 @@ namespace threepp {
 
                 normals.emplace_back(normals[i - 1].clone());
 
-                binormals.emplace_back( binormals[i - 1].clone());
+                binormals.emplace_back(binormals[i - 1].clone());
 
                 vec.crossVectors(tangents[i - 1], tangents[i]);
 

@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class AmbientLight : public Light {
+    class AmbientLight: public Light {
 
     public:
         [[nodiscard]] std::string type() const override {
@@ -21,7 +21,7 @@ namespace threepp {
         }
 
     protected:
-        explicit AmbientLight(const Color& color, std::optional<float> intensity) : Light(color, intensity) {}
+        explicit AmbientLight(const Color& color, std::optional<float> intensity): Light(color, intensity) {}
     };
 
 }// namespace threepp

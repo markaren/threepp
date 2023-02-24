@@ -23,9 +23,9 @@ const Vector3 Vector3::Z = Vector3{0, 0, 1};
 const Vector3 Vector3::ONES = Vector3{1, 1, 1};
 const Vector3 Vector3::ZEROS = Vector3{0, 0, 0};
 
-Vector3::Vector3(float x, float y, float z) : x(x), y(y), z(z) {}
+Vector3::Vector3(float x, float y, float z): x(x), y(y), z(z) {}
 
-Vector3 &Vector3::set(float x, float y, float z) {
+Vector3& Vector3::set(float x, float y, float z) {
 
     this->x = x;
     this->y = y;
@@ -34,7 +34,7 @@ Vector3 &Vector3::set(float x, float y, float z) {
     return *this;
 }
 
-Vector3 &Vector3::setScalar(float value) {
+Vector3& Vector3::setScalar(float value) {
 
     this->x = value;
     this->y = value;
@@ -43,28 +43,28 @@ Vector3 &Vector3::setScalar(float value) {
     return *this;
 }
 
-Vector3 &Vector3::setX(float value) {
+Vector3& Vector3::setX(float value) {
 
     this->x = value;
 
     return *this;
 }
 
-Vector3 &Vector3::setY(float value) {
+Vector3& Vector3::setY(float value) {
 
     y = value;
 
     return *this;
 }
 
-Vector3 &Vector3::setZ(float value) {
+Vector3& Vector3::setZ(float value) {
 
     z = value;
 
     return *this;
 }
 
-float &Vector3::operator[](unsigned int index) {
+float& Vector3::operator[](unsigned int index) {
     switch (index) {
         case 0:
             return x;
@@ -77,7 +77,7 @@ float &Vector3::operator[](unsigned int index) {
     }
 }
 
-Vector3 &Vector3::copy(const Vector3 &v) {
+Vector3& Vector3::copy(const Vector3& v) {
 
     this->x = v.x;
     this->y = v.y;
@@ -86,7 +86,7 @@ Vector3 &Vector3::copy(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::add(const Vector3 &v) {
+Vector3& Vector3::add(const Vector3& v) {
 
     this->x += v.x;
     this->y += v.y;
@@ -95,7 +95,7 @@ Vector3 &Vector3::add(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::addScalar(float s) {
+Vector3& Vector3::addScalar(float s) {
 
     this->x += s;
     this->y += s;
@@ -104,7 +104,7 @@ Vector3 &Vector3::addScalar(float s) {
     return *this;
 }
 
-Vector3 &Vector3::addVectors(const Vector3 &a, const Vector3 &b) {
+Vector3& Vector3::addVectors(const Vector3& a, const Vector3& b) {
 
     this->x = a.x + b.x;
     this->y = a.y + b.y;
@@ -113,7 +113,7 @@ Vector3 &Vector3::addVectors(const Vector3 &a, const Vector3 &b) {
     return *this;
 }
 
-Vector3 &Vector3::addScaledVector(const Vector3 &v, float s) {
+Vector3& Vector3::addScaledVector(const Vector3& v, float s) {
 
     this->x += v.x * s;
     this->y += v.y * s;
@@ -122,7 +122,7 @@ Vector3 &Vector3::addScaledVector(const Vector3 &v, float s) {
     return *this;
 }
 
-Vector3 &Vector3::sub(const Vector3 &v) {
+Vector3& Vector3::sub(const Vector3& v) {
 
     this->x -= v.x;
     this->y -= v.y;
@@ -131,7 +131,7 @@ Vector3 &Vector3::sub(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::subScalar(float s) {
+Vector3& Vector3::subScalar(float s) {
 
     this->x -= s;
     this->y -= s;
@@ -140,7 +140,7 @@ Vector3 &Vector3::subScalar(float s) {
     return *this;
 }
 
-Vector3 &Vector3::subVectors(const Vector3 &a, const Vector3 &b) {
+Vector3& Vector3::subVectors(const Vector3& a, const Vector3& b) {
 
     this->x = a.x - b.x;
     this->y = a.y - b.y;
@@ -149,7 +149,7 @@ Vector3 &Vector3::subVectors(const Vector3 &a, const Vector3 &b) {
     return *this;
 }
 
-Vector3 &Vector3::multiply(const Vector3 &v) {
+Vector3& Vector3::multiply(const Vector3& v) {
 
     this->x *= v.x;
     this->y *= v.y;
@@ -158,7 +158,7 @@ Vector3 &Vector3::multiply(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::multiplyScalar(float scalar) {
+Vector3& Vector3::multiplyScalar(float scalar) {
 
     this->x *= scalar;
     this->y *= scalar;
@@ -167,7 +167,7 @@ Vector3 &Vector3::multiplyScalar(float scalar) {
     return *this;
 }
 
-Vector3 &Vector3::multiplyVectors(const Vector3 &a, const Vector3 &b) {
+Vector3& Vector3::multiplyVectors(const Vector3& a, const Vector3& b) {
 
     this->x = a.x * b.x;
     this->y = a.y * b.y;
@@ -176,10 +176,10 @@ Vector3 &Vector3::multiplyVectors(const Vector3 &a, const Vector3 &b) {
     return *this;
 }
 
-Vector3 &Vector3::applyMatrix3(const Matrix3 &m) {
+Vector3& Vector3::applyMatrix3(const Matrix3& m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z;
-    const auto &e = m.elements;
+    const auto& e = m.elements;
 
     this->x = e[0] * x_ + e[3] * y_ + e[6] * z_;
     this->y = e[1] * x_ + e[4] * y_ + e[7] * z_;
@@ -188,15 +188,15 @@ Vector3 &Vector3::applyMatrix3(const Matrix3 &m) {
     return *this;
 }
 
-Vector3 &Vector3::applyNormalMatrix(const Matrix3 &m) {
+Vector3& Vector3::applyNormalMatrix(const Matrix3& m) {
 
     return applyMatrix3(m).normalize();
 }
 
-Vector3 &Vector3::applyMatrix4(const Matrix4 &m) {
+Vector3& Vector3::applyMatrix4(const Matrix4& m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z;
-    const auto &e = m.elements;
+    const auto& e = m.elements;
 
     const auto w = 1.0f / (e[3] * x + e[7] * y + e[11] * z + e[15]);
 
@@ -207,7 +207,7 @@ Vector3 &Vector3::applyMatrix4(const Matrix4 &m) {
     return *this;
 }
 
-Vector3 &Vector3::applyQuaternion(const Quaternion &q) {
+Vector3& Vector3::applyQuaternion(const Quaternion& q) {
 
     const auto x = this->x, y = this->y, z = this->z;
     const auto qx = q.x(), qy = q.y(), qz = q.z(), qw = q.w();
@@ -228,23 +228,23 @@ Vector3 &Vector3::applyQuaternion(const Quaternion &q) {
     return *this;
 }
 
-Vector3 &Vector3::project(const Camera &camera) {
+Vector3& Vector3::project(const Camera& camera) {
 
     return this->applyMatrix4(camera.matrixWorldInverse).applyMatrix4(camera.projectionMatrix);
 }
 
-Vector3 &Vector3::unproject(const Camera &camera) {
+Vector3& Vector3::unproject(const Camera& camera) {
 
     return this->applyMatrix4(camera.projectionMatrixInverse).applyMatrix4(*camera.matrixWorld);
 }
 
-Vector3 &Vector3::transformDirection(const Matrix4 &m) {
+Vector3& Vector3::transformDirection(const Matrix4& m) {
 
     // input: THREE.Matrix4 affine matrix
     // vector interpreted as a direction
 
     const auto x = this->x, y = this->y, z = this->z;
-    const auto &e = m.elements;
+    const auto& e = m.elements;
 
     this->x = e[0] * x + e[4] * y + e[8] * z;
     this->y = e[1] * x + e[5] * y + e[9] * z;
@@ -253,7 +253,7 @@ Vector3 &Vector3::transformDirection(const Matrix4 &m) {
     return this->normalize();
 }
 
-Vector3 &Vector3::divide(const Vector3 &v) {
+Vector3& Vector3::divide(const Vector3& v) {
     this->x /= v.x;
     this->y /= v.y;
     this->z /= v.z;
@@ -261,7 +261,7 @@ Vector3 &Vector3::divide(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::divideScalar(float v) {
+Vector3& Vector3::divideScalar(float v) {
     this->x /= v;
     this->y /= v;
     this->z /= v;
@@ -269,7 +269,7 @@ Vector3 &Vector3::divideScalar(float v) {
     return *this;
 }
 
-Vector3 &Vector3::min(const Vector3 &v) {
+Vector3& Vector3::min(const Vector3& v) {
 
     this->x = std::min(this->x, v.x);
     this->y = std::min(this->y, v.y);
@@ -278,7 +278,7 @@ Vector3 &Vector3::min(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::max(const Vector3 &v) {
+Vector3& Vector3::max(const Vector3& v) {
 
     this->x = std::max(this->x, v.x);
     this->y = std::max(this->y, v.y);
@@ -287,7 +287,7 @@ Vector3 &Vector3::max(const Vector3 &v) {
     return *this;
 }
 
-Vector3 &Vector3::clamp(const Vector3 &min, const Vector3 &max) {
+Vector3& Vector3::clamp(const Vector3& min, const Vector3& max) {
 
     // assumes min < max, componentwise
 
@@ -298,7 +298,7 @@ Vector3 &Vector3::clamp(const Vector3 &min, const Vector3 &max) {
     return *this;
 }
 
-Vector3 &Vector3::floor() {
+Vector3& Vector3::floor() {
 
     this->x = std::floor(this->x);
     this->y = std::floor(this->y);
@@ -307,7 +307,7 @@ Vector3 &Vector3::floor() {
     return *this;
 }
 
-Vector3 &Vector3::ceil() {
+Vector3& Vector3::ceil() {
 
     this->x = std::ceil(this->x);
     this->y = std::ceil(this->y);
@@ -316,7 +316,7 @@ Vector3 &Vector3::ceil() {
     return *this;
 }
 
-Vector3 &Vector3::round() {
+Vector3& Vector3::round() {
 
     this->x = std::round(this->x);
     this->y = std::round(this->y);
@@ -325,7 +325,7 @@ Vector3 &Vector3::round() {
     return *this;
 }
 
-Vector3 &Vector3::roundToZero() {
+Vector3& Vector3::roundToZero() {
 
     this->x = (x < 0) ? std::ceil(this->x) : std::floor(this->x);
     this->y = (y < 0) ? std::ceil(this->y) : std::floor(this->y);
@@ -334,7 +334,7 @@ Vector3 &Vector3::roundToZero() {
     return *this;
 }
 
-Vector3 &Vector3::negate() {
+Vector3& Vector3::negate() {
 
     x = -x;
     y = -y;
@@ -343,7 +343,7 @@ Vector3 &Vector3::negate() {
     return *this;
 }
 
-float Vector3::dot(const Vector3 &v) const {
+float Vector3::dot(const Vector3& v) const {
 
     return x * v.x + y * v.y + z * v.z;
 }
@@ -363,7 +363,7 @@ float Vector3::manhattanLength() const {
     return std::abs(x) + std::abs(y) + std::abs(z);
 }
 
-Vector3 &Vector3::normalize() {
+Vector3& Vector3::normalize() {
 
     auto l = length();
     this->divideScalar(std::isnan(l) ? 1 : l);
@@ -371,12 +371,12 @@ Vector3 &Vector3::normalize() {
     return *this;
 }
 
-Vector3 &Vector3::setLength(float length) {
+Vector3& Vector3::setLength(float length) {
 
     return normalize().multiplyScalar(length);
 }
 
-Vector3 &Vector3::lerp(const Vector3 &v, float alpha) {
+Vector3& Vector3::lerp(const Vector3& v, float alpha) {
 
     this->x += (v.x - x) * alpha;
     this->y += (v.y - y) * alpha;
@@ -385,7 +385,7 @@ Vector3 &Vector3::lerp(const Vector3 &v, float alpha) {
     return *this;
 }
 
-Vector3 &Vector3::lerpVectors(const Vector3 &v1, const Vector3 &v2, float alpha) {
+Vector3& Vector3::lerpVectors(const Vector3& v1, const Vector3& v2, float alpha) {
 
     this->x = v1.x + (v2.x - v1.x) * alpha;
     this->y = v1.y + (v2.y - v1.y) * alpha;
@@ -394,12 +394,12 @@ Vector3 &Vector3::lerpVectors(const Vector3 &v1, const Vector3 &v2, float alpha)
     return *this;
 }
 
-Vector3 &Vector3::cross(const Vector3 &v) {
+Vector3& Vector3::cross(const Vector3& v) {
 
     return crossVectors(*this, v);
 }
 
-Vector3 &Vector3::crossVectors(const Vector3 &a, const Vector3 &b) {
+Vector3& Vector3::crossVectors(const Vector3& a, const Vector3& b) {
 
     const auto ax = a.x, ay = a.y, az = a.z;
     const auto bx = b.x, by = b.y, bz = b.z;
@@ -411,7 +411,7 @@ Vector3 &Vector3::crossVectors(const Vector3 &a, const Vector3 &b) {
     return *this;
 }
 
-Vector3 &Vector3::projectOnVector(const Vector3 &v) {
+Vector3& Vector3::projectOnVector(const Vector3& v) {
 
     const auto denominator = v.lengthSq();
 
@@ -422,7 +422,7 @@ Vector3 &Vector3::projectOnVector(const Vector3 &v) {
     return this->copy(v).multiplyScalar(scalar);
 }
 
-Vector3 &Vector3::projectOnPlane(const Vector3 &planeNormal) {
+Vector3& Vector3::projectOnPlane(const Vector3& planeNormal) {
 
     Vector3 _vector;
     _vector.copy(*this).projectOnVector(planeNormal);
@@ -430,7 +430,7 @@ Vector3 &Vector3::projectOnPlane(const Vector3 &planeNormal) {
     return this->sub(_vector);
 }
 
-Vector3 &Vector3::reflect(const Vector3 &normal) {
+Vector3& Vector3::reflect(const Vector3& normal) {
 
     // reflect incident vector off plane orthogonal to normal
     // normal is assumed to have unit length
@@ -439,7 +439,7 @@ Vector3 &Vector3::reflect(const Vector3 &normal) {
     return this->sub(_vector.copy(normal).multiplyScalar(2 * this->dot(normal)));
 }
 
-float Vector3::angleTo(const Vector3 &v) const {
+float Vector3::angleTo(const Vector3& v) const {
 
     const auto denominator = std::sqrt(lengthSq() * v.lengthSq());
 
@@ -452,29 +452,29 @@ float Vector3::angleTo(const Vector3 &v) const {
     return std::acos(std::clamp(theta, -1.0f, 1.0f));
 }
 
-float Vector3::distanceTo(const Vector3 &v) const {
+float Vector3::distanceTo(const Vector3& v) const {
 
     return std::sqrt(distanceToSquared(v));
 }
 
-float Vector3::distanceToSquared(const Vector3 &v) const {
+float Vector3::distanceToSquared(const Vector3& v) const {
 
     const auto dx = this->x - v.x, dy = this->y - v.y, dz = this->z - v.z;
 
     return dx * dx + dy * dy + dz * dz;
 }
 
-float Vector3::manhattanDistanceTo(const Vector3 &v) const {
+float Vector3::manhattanDistanceTo(const Vector3& v) const {
 
     return std::abs(this->x - v.x) + std::abs(this->y - v.y) + std::abs(this->z - v.z);
 }
 
-Vector3 &Vector3::setFromSpherical(const Spherical &s) {
+Vector3& Vector3::setFromSpherical(const Spherical& s) {
 
     return this->setFromSphericalCoords(s.radius, s.phi, s.theta);
 }
 
-Vector3 &Vector3::setFromSphericalCoords(float radius, float phi, float theta) {
+Vector3& Vector3::setFromSphericalCoords(float radius, float phi, float theta) {
 
     const auto sinPhiRadius = std::sin(phi) * radius;
 
@@ -485,9 +485,9 @@ Vector3 &Vector3::setFromSphericalCoords(float radius, float phi, float theta) {
     return *this;
 }
 
-Vector3 &Vector3::setFromMatrixPosition(const Matrix4 &m) {
+Vector3& Vector3::setFromMatrixPosition(const Matrix4& m) {
 
-    const auto &e = m.elements;
+    const auto& e = m.elements;
 
     this->x = e[12];
     this->y = e[13];
@@ -496,7 +496,7 @@ Vector3 &Vector3::setFromMatrixPosition(const Matrix4 &m) {
     return *this;
 }
 
-Vector3 &Vector3::setFromMatrixScale(const Matrix4 &m) {
+Vector3& Vector3::setFromMatrixScale(const Matrix4& m) {
 
     const auto sx = this->setFromMatrixColumn(m, 0).length();
     const auto sy = this->setFromMatrixColumn(m, 1).length();
@@ -509,22 +509,22 @@ Vector3 &Vector3::setFromMatrixScale(const Matrix4 &m) {
     return *this;
 }
 
-Vector3 &Vector3::setFromMatrixColumn(const Matrix4 &m, unsigned int index) {
+Vector3& Vector3::setFromMatrixColumn(const Matrix4& m, unsigned int index) {
 
     return this->fromArray(m.elements, index * 4);
 }
 
-Vector3 &Vector3::setFromMatrix3Column(const Matrix3 &m, unsigned int index) {
+Vector3& Vector3::setFromMatrix3Column(const Matrix3& m, unsigned int index) {
 
     return this->fromArray(m.elements, index * 3);
 }
 
 Vector3 Vector3::clone() const {
 
-    return Vector3{x,y,z};
+    return Vector3{x, y, z};
 }
 
-bool Vector3::equals(const Vector3 &v) const {
+bool Vector3::equals(const Vector3& v) const {
 
     return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z));
 }

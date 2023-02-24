@@ -10,11 +10,11 @@
 
 namespace threepp {
 
-    class PointsMaterial : public virtual Material,
-                           public MaterialWithColor,
-                           public MaterialWithMap,
-                           public MaterialWithAlphaMap,
-                           public MaterialWithSize {
+    class PointsMaterial: public virtual Material,
+                          public MaterialWithColor,
+                          public MaterialWithMap,
+                          public MaterialWithAlphaMap,
+                          public MaterialWithSize {
 
     public:
         [[nodiscard]] std::string type() const override {
@@ -31,7 +31,6 @@ namespace threepp {
         PointsMaterial()
             : MaterialWithColor(0xffffff),
               MaterialWithSize(1, true) {}
-
     };
 
 }// namespace threepp

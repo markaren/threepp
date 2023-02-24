@@ -8,9 +8,9 @@
 
 using namespace threepp;
 
-Sphere::Sphere(Vector3 center, float radius) : center(center), radius(radius) {}
+Sphere::Sphere(Vector3 center, float radius): center(center), radius(radius) {}
 
-Sphere &Sphere::set(const Vector3 &center, float radius) {
+Sphere& Sphere::set(const Vector3& center, float radius) {
 
     this->center = (center);
     this->radius = radius;
@@ -18,7 +18,7 @@ Sphere &Sphere::set(const Vector3 &center, float radius) {
     return *this;
 }
 
-Sphere &Sphere::setFromPoints(const std::vector<Vector3> &points, Vector3 *optionalCenter) {
+Sphere& Sphere::setFromPoints(const std::vector<Vector3>& points, Vector3* optionalCenter) {
 
     if (optionalCenter) {
 
@@ -32,7 +32,7 @@ Sphere &Sphere::setFromPoints(const std::vector<Vector3> &points, Vector3 *optio
 
     float maxRadiusSq = 0;
 
-    for (auto &point : points) {
+    for (auto& point : points) {
 
         maxRadiusSq = std::max(maxRadiusSq, center.distanceToSquared(point));
     }
@@ -42,7 +42,7 @@ Sphere &Sphere::setFromPoints(const std::vector<Vector3> &points, Vector3 *optio
     return *this;
 }
 
-Sphere &Sphere::copy(const Sphere &sphere) {
+Sphere& Sphere::copy(const Sphere& sphere) {
 
     this->center.copy(sphere.center);
     this->radius = sphere.radius;
@@ -55,7 +55,7 @@ bool Sphere::isEmpty() const {
     return (this->radius < 0);
 }
 
-Sphere &Sphere::makeEmpty() {
+Sphere& Sphere::makeEmpty() {
 
     this->center.set(0, 0, 0);
     this->radius = -1;
@@ -63,34 +63,34 @@ Sphere &Sphere::makeEmpty() {
     return *this;
 }
 
-bool Sphere::containsPoint(const Vector3 &point) const {
+bool Sphere::containsPoint(const Vector3& point) const {
 
     return (point.distanceToSquared(this->center) <= (this->radius * this->radius));
 }
 
-float Sphere::distanceToPoint(const Vector3 &point) const {
+float Sphere::distanceToPoint(const Vector3& point) const {
 
     return (point.distanceTo(this->center) - this->radius);
 }
 
-bool Sphere::intersectsSphere(const Sphere &sphere) const {
+bool Sphere::intersectsSphere(const Sphere& sphere) const {
 
     const auto radiusSum = this->radius + sphere.radius;
 
     return sphere.center.distanceToSquared(this->center) <= (radiusSum * radiusSum);
 }
 
-bool Sphere::intersectsBox(const Box3 &box) const {
+bool Sphere::intersectsBox(const Box3& box) const {
 
     return box.intersectsSphere(*this);
 }
 
-bool Sphere::intersectsPlane(const Plane &plane) const {
+bool Sphere::intersectsPlane(const Plane& plane) const {
 
     return std::abs(plane.distanceToPoint(this->center)) <= this->radius;
 }
 
-void Sphere::clampPoint(const Vector3 &point, Vector3 &target) const {
+void Sphere::clampPoint(const Vector3& point, Vector3& target) const {
 
     const auto deltaLengthSq = this->center.distanceToSquared(point);
 
@@ -103,7 +103,7 @@ void Sphere::clampPoint(const Vector3 &point, Vector3 &target) const {
     }
 }
 
-void Sphere::getBoundingBox(Box3 &target) const {
+void Sphere::getBoundingBox(Box3& target) const {
 
     if (this->isEmpty()) {
 
@@ -115,7 +115,7 @@ void Sphere::getBoundingBox(Box3 &target) const {
     target.expandByScalar(this->radius);
 }
 
-Sphere &Sphere::applyMatrix4(const Matrix4 &matrix) {
+Sphere& Sphere::applyMatrix4(const Matrix4& matrix) {
 
     this->center.applyMatrix4(matrix);
     this->radius = this->radius * matrix.getMaxScaleOnAxis();
@@ -123,14 +123,14 @@ Sphere &Sphere::applyMatrix4(const Matrix4 &matrix) {
     return *this;
 }
 
-Sphere &Sphere::translate(const Vector3 &offset) {
+Sphere& Sphere::translate(const Vector3& offset) {
 
     this->center.add(offset);
 
     return *this;
 }
 
-Sphere &Sphere::expandByPoint(const Vector3 &point) {
+Sphere& Sphere::expandByPoint(const Vector3& point) {
 
     // from https://github.com/juj/MathGeoLib/blob/2940b99b99cfe575dd45103ef20f4019dee15b54/src/Geometry/Sphere.cpp#L649-L671
 
@@ -156,7 +156,7 @@ Sphere &Sphere::expandByPoint(const Vector3 &point) {
     return *this;
 }
 
-Sphere &Sphere::union_(const Sphere &sphere) {
+Sphere& Sphere::union_(const Sphere& sphere) {
 
     // from https://github.com/juj/MathGeoLib/blob/2940b99b99cfe575dd45103ef20f4019dee15b54/src/Geometry/Sphere.cpp#L759-L769
 

@@ -8,7 +8,7 @@
 namespace threepp {
 
     template<class T>
-    class InstancedBufferAttribute : public TypedBufferAttribute<T> {
+    class InstancedBufferAttribute: public TypedBufferAttribute<T> {
 
     protected:
         InstancedBufferAttribute(std::vector<T> array, int itemSize, bool normalized, int meshPerAttribute = 1)

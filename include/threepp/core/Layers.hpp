@@ -8,7 +8,7 @@ namespace threepp {
     class Layers {
 
     public:
-        Layers() : mask_(1 | 0) {}
+        Layers(): mask_(1 | 0) {}
 
         void set(unsigned int channel) {
 
@@ -40,7 +40,7 @@ namespace threepp {
             this->mask_ = 0;
         }
 
-        bool test(Layers &layers) const {
+        bool test(Layers& layers) const {
 
             return (this->mask_ & layers.mask_) != 0;
         }

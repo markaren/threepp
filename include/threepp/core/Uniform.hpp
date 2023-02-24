@@ -9,11 +9,11 @@
 #include <vector>
 
 #include "threepp/math/Color.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/math/Vector4.hpp"
-#include "threepp/math/Matrix3.hpp"
-#include "threepp/math/Matrix4.hpp"
 
 #include "threepp/textures/Texture.hpp"
 
@@ -34,12 +34,12 @@ namespace threepp {
             return value_.has_value();
         }
 
-        UniformValue &value() {
+        UniformValue& value() {
             return *value_;
         }
 
         template<class T>
-        [[nodiscard]] T &value() {
+        [[nodiscard]] T& value() {
             if (!value_.has_value()) value_ = T();
             return std::get<T>(*value_);
         }

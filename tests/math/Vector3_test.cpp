@@ -33,7 +33,7 @@ TEST_CASE("from arraylike") {
 
     std::array<float, 3> arr{1, 2, 3};
     std::vector<float> v{arr.begin(), arr.end()};
-    for (auto &value : v) { value += 1; }
+    for (auto& value : v) { value += 1; }
 
     Vector3 result;
 

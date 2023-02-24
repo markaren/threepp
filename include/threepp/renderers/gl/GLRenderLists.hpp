@@ -33,7 +33,7 @@ namespace threepp::gl {
         std::vector<std::unique_ptr<RenderItem>> renderItems;
         size_t renderItemsIndex = 0;
 
-        explicit GLRenderList(GLProperties &properties);
+        explicit GLRenderList(GLProperties& properties);
 
         void init();
 
@@ -60,23 +60,23 @@ namespace threepp::gl {
         void finish();
 
     private:
-        GLProperties &properties;
+        GLProperties& properties;
     };
 
     struct GLRenderLists {
 
-        explicit GLRenderLists(GLProperties &properties) : properties(properties) {}
+        explicit GLRenderLists(GLProperties& properties): properties(properties) {}
 
-        std::shared_ptr<GLRenderList> get(Scene *scene, size_t renderCallDepth) {
+        std::shared_ptr<GLRenderList> get(Scene* scene, size_t renderCallDepth) {
 
             if (!lists.count(scene->uuid)) {
 
-                auto &l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{std::make_shared<GLRenderList>(properties)};
+                auto& l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{std::make_shared<GLRenderList>(properties)};
                 return l.back();
 
             } else {
 
-                auto &l = lists.at(scene->uuid);
+                auto& l = lists.at(scene->uuid);
                 if (renderCallDepth >= l.size()) {
 
                     l.emplace_back(std::make_shared<GLRenderList>(properties));
@@ -95,7 +95,7 @@ namespace threepp::gl {
         }
 
     private:
-        GLProperties &properties;
+        GLProperties& properties;
 
         std::unordered_map<std::string, std::vector<std::shared_ptr<GLRenderList>>> lists;
     };

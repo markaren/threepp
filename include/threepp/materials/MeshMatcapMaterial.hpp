@@ -7,16 +7,16 @@
 
 namespace threepp {
 
-    class MeshMatcapMaterial : public virtual Material,
-                               public MaterialWithColor,
-                               public MaterialWithMap,
-                               public MaterialWithAlphaMap,
-                               public MaterialWithBumpMap,
-                               public MaterialWithDisplacementMap,
-                               public MaterialWithNormalMap,
-                               public MaterialWithMatCap,
-                               public MaterialWithFlatShading,
-                               public MaterialWithDefines {
+    class MeshMatcapMaterial: public virtual Material,
+                              public MaterialWithColor,
+                              public MaterialWithMap,
+                              public MaterialWithAlphaMap,
+                              public MaterialWithBumpMap,
+                              public MaterialWithDisplacementMap,
+                              public MaterialWithNormalMap,
+                              public MaterialWithMatCap,
+                              public MaterialWithFlatShading,
+                              public MaterialWithDefines {
 
         [[nodiscard]] std::string type() const override {
 

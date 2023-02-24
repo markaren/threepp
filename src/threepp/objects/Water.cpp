@@ -15,7 +15,7 @@ namespace {
 
     Shader mirrorShader() {
 
-        auto &uniformsLib = shaders::UniformsLib::instance();
+        auto& uniformsLib = shaders::UniformsLib::instance();
 
         static Shader mirrorShader{
 
@@ -124,7 +124,7 @@ namespace {
 
 struct Water::Impl {
 
-    Impl(Water &water, Water::Options options)
+    Impl(Water& water, Water::Options options)
         : water_(water),
           clipBias(options.clipBias.value_or(0.f)),
           eye(options.eye.value_or(Vector3{0, 0, 0})) {
@@ -175,7 +175,7 @@ struct Water::Impl {
         (*material->uniforms)["distortionScale"].setValue(distortionScale);
         (*material->uniforms)["eye"].setValue(&eye);
 
-        water_.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
+        water_.onBeforeRender = RenderCallback([this, material](void* renderer, auto scene, auto camera, auto, auto, auto) {
             mirrorWorldPosition.setFromMatrixPosition(*water_.matrixWorld);
             cameraWorldPosition.setFromMatrixPosition(*camera->matrixWorld);
             rotationMatrix.extractRotation(*water_.matrixWorld);
@@ -214,7 +214,7 @@ struct Water::Impl {
             mirrorPlane.setFromNormalAndCoplanarPoint(normal, mirrorWorldPosition);
             mirrorPlane.applyMatrix4(mirrorCamera->matrixWorldInverse);
             clipPlane.set(mirrorPlane.normal.x, mirrorPlane.normal.y, mirrorPlane.normal.z, mirrorPlane.constant);
-            auto &projectionMatrix = mirrorCamera->projectionMatrix;
+            auto& projectionMatrix = mirrorCamera->projectionMatrix;
             q.x = (static_cast<float>(math::sgn(clipPlane.x)) + projectionMatrix.elements[8]) / projectionMatrix.elements[0];
             q.y = (static_cast<float>(math::sgn(clipPlane.y)) + projectionMatrix.elements[9]) / projectionMatrix.elements[5];
             q.z = -1.0;
@@ -228,7 +228,7 @@ struct Water::Impl {
             projectionMatrix.elements[14] = clipPlane.w;
             eye.setFromMatrixPosition(*camera->matrixWorld);// Render
 
-            auto _renderer = static_cast<GLRenderer *>(renderer);
+            auto _renderer = static_cast<GLRenderer*>(renderer);
 
             const auto currentRenderTarget = _renderer->getRenderTarget();
             const auto currentShadowAutoUpdate = _renderer->shadowMap.autoUpdate;
@@ -252,7 +252,7 @@ struct Water::Impl {
     ~Impl() = default;
 
 private:
-    Water &water_;
+    Water& water_;
 
     float clipBias;
     Vector3 eye;
@@ -273,7 +273,7 @@ private:
     std::shared_ptr<GLRenderTarget> renderTarget;
 };
 
-Water::Water(const std::shared_ptr<BufferGeometry> &geometry, Water::Options options)
+Water::Water(const std::shared_ptr<BufferGeometry>& geometry, Water::Options options)
     : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {}
 
 threepp::Water::~Water() = default;

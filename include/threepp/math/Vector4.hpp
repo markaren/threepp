@@ -27,41 +27,41 @@ namespace threepp {
 
         Vector4(float x, float y, float z, float w);
 
-        float &operator[](unsigned int index);
+        float& operator[](unsigned int index);
 
-        Vector4 &set(float x, float y, float z, float w);
+        Vector4& set(float x, float y, float z, float w);
 
-        Vector4 &setScalar(float value);
+        Vector4& setScalar(float value);
 
-        Vector4 &copy(const Vector4 &v);
+        Vector4& copy(const Vector4& v);
 
-        Vector4 &add(const Vector4 &v);
+        Vector4& add(const Vector4& v);
 
-        Vector4 &addScalar(float s);
+        Vector4& addScalar(float s);
 
-        Vector4 &addVectors(const Vector4 &a, const Vector4 &b);
+        Vector4& addVectors(const Vector4& a, const Vector4& b);
 
-        Vector4 &addScaledVector(const Vector4 &v, float s);
+        Vector4& addScaledVector(const Vector4& v, float s);
 
-        Vector4 &multiply(const Vector4 &v);
+        Vector4& multiply(const Vector4& v);
 
-        Vector4 &multiplyScalar(float scalar);
+        Vector4& multiplyScalar(float scalar);
 
-        Vector4 &applyMatrix4(const Matrix4 &m);
+        Vector4& applyMatrix4(const Matrix4& m);
 
-        Vector4 &divideScalar(float scalar);
+        Vector4& divideScalar(float scalar);
 
-        Vector4 &floor();
+        Vector4& floor();
 
-        Vector4 &ceil();
+        Vector4& ceil();
 
-        Vector4 &round();
+        Vector4& round();
 
-        Vector4 &roundToZero();
+        Vector4& roundToZero();
 
-        Vector4 &negate();
+        Vector4& negate();
 
-        [[nodiscard]] float dot(const Vector4 &v) const;
+        [[nodiscard]] float dot(const Vector4& v) const;
 
         [[nodiscard]] float lengthSq() const;
 
@@ -69,20 +69,20 @@ namespace threepp {
 
         [[nodiscard]] float manhattanLength() const;
 
-        Vector4 &normalize();
+        Vector4& normalize();
 
-        Vector4 &setLength(float length);
+        Vector4& setLength(float length);
 
         [[nodiscard]] Vector4 clone() const;
 
-        [[nodiscard]] bool equals(const Vector4 &v) const;
+        [[nodiscard]] bool equals(const Vector4& v) const;
 
-        bool operator==(const Vector4 &other) const {
+        bool operator==(const Vector4& other) const {
             return equals(other);
         }
 
         template<class ArrayLike>
-        Vector4 &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Vector4& fromArray(const ArrayLike& array, unsigned int offset = 0) {
 
             this->x = array[offset + 0];
             this->y = array[offset + 1];
@@ -93,7 +93,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, unsigned int offset = 0) const {
+        void toArray(ArrayLike& array, unsigned int offset = 0) const {
 
             array[offset + 0] = this->x;
             array[offset + 1] = this->y;
@@ -101,7 +101,7 @@ namespace threepp {
             array[offset + 3] = this->w;
         }
 
-        friend std::ostream &operator<<(std::ostream &os, const Vector4 &v) {
+        friend std::ostream& operator<<(std::ostream& os, const Vector4& v) {
             os << "Vector4(x=" << v.x << ", y=" << v.y << ", z=" << v.z << ", w=" << v.w << ")";
             return os;
         }

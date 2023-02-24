@@ -16,14 +16,14 @@
 
 namespace threepp {
 
-    class CameraHelper : public LineSegments {
+    class CameraHelper: public LineSegments {
 
     public:
-        static std::shared_ptr<CameraHelper> create(const std::shared_ptr<Camera> &camera) {
+        static std::shared_ptr<CameraHelper> create(const std::shared_ptr<Camera>& camera) {
             return std::make_shared<CameraHelper>(camera);
         }
 
-        explicit CameraHelper(const std::shared_ptr<Camera> &camera)
+        explicit CameraHelper(const std::shared_ptr<Camera>& camera)
             : LineSegments(BufferGeometry::create(), LineBasicMaterial::create()), camera(camera) {
 
             auto m = dynamic_cast<LineBasicMaterial*>(material_.get());
@@ -43,14 +43,14 @@ namespace threepp {
             const Color colorCross(0x333333);
 
 
-            auto addPoint = [&](const std::string &id, const Color &color) {
+            auto addPoint = [&](const std::string& id, const Color& color) {
                 vertices.insert(vertices.end(), {0, 0, 0});
                 colors.insert(colors.end(), {color.r, color.g, color.b});
 
                 pointMap[id].emplace_back(static_cast<float>(vertices.size()) / 3 - 1);
             };
 
-            auto addLine = [&](const std::string &a, const std::string &b, const Color &color) {
+            auto addLine = [&](const std::string& a, const std::string& b, const Color& color) {
                 addPoint(a, color);
                 addPoint(b, color);
             };
@@ -161,7 +161,6 @@ namespace threepp {
             setPoint("cn4", 0, h, -1);
 
             geometry()->getAttribute<float>("position")->needsUpdate();
-
         }
 
     private:
@@ -169,16 +168,16 @@ namespace threepp {
         std::shared_ptr<Camera> camera;
         std::unordered_map<std::string, std::vector<float>> pointMap;
 
-        void setPoint(const std::string &point, float x, float y, float z) {
+        void setPoint(const std::string& point, float x, float y, float z) {
 
             Vector3 _vector;
             _vector.set(x, y, z).unproject(_camera);
 
             if (pointMap.count(point)) {
-                auto &points = pointMap.at(point);
+                auto& points = pointMap.at(point);
                 auto position = geometry()->getAttribute<float>("position");
 
-                for (float &p : points) {
+                for (float& p : points) {
 
                     position->setXYZ(static_cast<int>(p), _vector.x, _vector.y, _vector.z);
                 }

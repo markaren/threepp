@@ -13,9 +13,8 @@ namespace threepp {
         int offsetY{};
         int width{};
         int height{};
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_CAMERAVIEW_HPP

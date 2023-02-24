@@ -23,7 +23,7 @@ BufferGeometry* GLObjects::update(Object3D* object) {
         updateMap_[geometry] = frame;
     }
 
-    auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
+    auto instancedMesh = dynamic_cast<InstancedMesh*>(object);
     if (instancedMesh) {
 
         if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {

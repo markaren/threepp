@@ -127,31 +127,30 @@ CylinderGeometry::CylinderGeometry(
 
         int groupCount = 0;
 
-        float radius = ( top ) ? radiusTop : radiusBottom;
-        float sign = ( top ) ? 1 : - 1;
+        float radius = (top) ? radiusTop : radiusBottom;
+        float sign = (top) ? 1 : -1;
 
         // first we generate the center vertex data of the cap.
         // because the geometry needs one set of uvs per face,
         // we must generate a center vertex per face/segment
 
-        for ( unsigned x = 1; x <= radialSegments; x ++ ) {
+        for (unsigned x = 1; x <= radialSegments; x++) {
 
             // vertex
 
-            vertices.insert(vertices.end(), {0, halfHeight * sign, 0} );
+            vertices.insert(vertices.end(), {0, halfHeight * sign, 0});
 
             // normal
 
-            normals.insert(normals.end(), {0, sign, 0} );
+            normals.insert(normals.end(), {0, sign, 0});
 
             // uv
 
-            uvs.insert(uvs.end(), {0.5, 0.5} );
+            uvs.insert(uvs.end(), {0.5, 0.5});
 
             // increase index
 
-            index ++;
-
+            index++;
         }
 
         // save the index of the last center vertex
@@ -159,70 +158,66 @@ CylinderGeometry::CylinderGeometry(
 
         // now we generate the surrounding vertices, normals and uvs
 
-        for ( unsigned x = 0; x <= radialSegments; x ++ ) {
+        for (unsigned x = 0; x <= radialSegments; x++) {
 
             float u = static_cast<float>(x) / radialSegments;
             float theta = u * thetaLength + thetaStart;
 
-            float cosTheta = std::cos( theta );
-            float sinTheta = std::sin( theta );
+            float cosTheta = std::cos(theta);
+            float sinTheta = std::sin(theta);
 
             // vertex
 
             vertex.x = radius * sinTheta;
             vertex.y = halfHeight * sign;
             vertex.z = radius * cosTheta;
-            vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z} );
+            vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
 
             // normal
 
-            normals.insert(normals.end(), {0, sign, 0} );
+            normals.insert(normals.end(), {0, sign, 0});
 
             // uv
 
-            uv.x = ( cosTheta * 0.5f ) + 0.5f;
-            uv.y = ( sinTheta * 0.5f * sign ) + 0.5f;
-            uvs.insert(uvs.end(), {uv.x, uv.y} );
+            uv.x = (cosTheta * 0.5f) + 0.5f;
+            uv.y = (sinTheta * 0.5f * sign) + 0.5f;
+            uvs.insert(uvs.end(), {uv.x, uv.y});
 
             // increase index
 
-            index ++;
-
+            index++;
         }
 
         // generate indices
 
-        for ( int x = 0; x < radialSegments; x ++ ) {
+        for (int x = 0; x < radialSegments; x++) {
 
             int c = centerIndexStart + x;
             int i = centerIndexEnd + x;
 
-            if ( top) {
+            if (top) {
 
                 // face top
 
-                indices.insert(indices.end(), {i, i + 1, c} );
+                indices.insert(indices.end(), {i, i + 1, c});
 
             } else {
 
                 // face bottom
 
-                indices.insert(indices.end(), {i + 1, i, c} );
-
+                indices.insert(indices.end(), {i + 1, i, c});
             }
 
             groupCount += 3;
-
         }
 
         // add a group to the geometry. this will ensure multi material support
 
-        addGroup( groupStart, groupCount, top ? 1 : 2 );
+        addGroup(groupStart, groupCount, top ? 1 : 2);
 
         // calculate new start value for groups
 
         groupStart += groupCount;
-
     };
 
     if (!openEnded) {

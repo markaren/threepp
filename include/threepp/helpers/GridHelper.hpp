@@ -8,7 +8,7 @@
 
 namespace threepp {
 
-    class GridHelper : public LineSegments {
+    class GridHelper: public LineSegments {
 
     public:
         static std::shared_ptr<GridHelper> create(int size = 10, int divisions = 10, Color color1 = 0x444444, Color color2 = 0x888888) {
@@ -37,7 +37,7 @@ namespace threepp {
                 vertices.insert(vertices.end(), {-halfSize, 0, k, halfSize, 0, k});
                 vertices.insert(vertices.end(), {k, 0, -halfSize, k, 0, halfSize});
 
-                Color &color = (i == center ? c1 : c2);
+                Color& color = (i == center ? c1 : c2);
 
                 color.toArray(colors, j);
                 j += 3;

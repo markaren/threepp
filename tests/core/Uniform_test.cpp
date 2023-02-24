@@ -38,5 +38,4 @@ TEST_CASE("test_Uniform") {
     uniforms["light"] = Uniform(v);
     uniforms["light"].value<Vector3>().x = 1;
     CHECK(v.clone().setX(1) == uniforms.at("light").value<Vector3>());
-
 }

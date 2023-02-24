@@ -113,10 +113,10 @@ namespace threepp::shaders {
                 {"alphaMap", Uniform()},
                 {"uvTransform", Uniform(Matrix3())}};
 
-        UniformsLib(const UniformsLib &) = delete;
-        void operator=(const UniformsLib &) = delete;
+        UniformsLib(const UniformsLib&) = delete;
+        void operator=(const UniformsLib&) = delete;
 
-        static UniformsLib &instance() {
+        static UniformsLib& instance() {
             static UniformsLib instance;
             return instance;
         }

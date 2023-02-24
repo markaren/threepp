@@ -13,21 +13,21 @@
 
 namespace threepp {
 
-    inline btVector3 convert(const threepp::Vector3 &v) {
+    inline btVector3 convert(const threepp::Vector3& v) {
         return {v.x, v.y, v.z};
     }
 
-    inline btQuaternion convert(const threepp::Quaternion &q) {
+    inline btQuaternion convert(const threepp::Quaternion& q) {
         return {q.x(), q.y(), q.z(), q.w()};
     }
 
-    inline btTransform convert(const threepp::Matrix4 &m) {
+    inline btTransform convert(const threepp::Matrix4& m) {
         return btTransform{
                 convert(threepp::Quaternion().setFromRotationMatrix(m)),
                 convert(threepp::Vector3().setFromMatrixPosition(m))};
     }
 
-    std::unique_ptr<btCollisionShape> fromGeometry(const std::shared_ptr<BufferGeometry> &geometry) {
+    std::unique_ptr<btCollisionShape> fromGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
 
         if (!geometry) {
             return std::make_unique<btEmptyShape>();
@@ -63,12 +63,12 @@ namespace threepp {
         std::unique_ptr<btMotionState> state;
         std::unique_ptr<btRigidBody> body;
 
-        static std::shared_ptr<RbWrapper> create(const std::shared_ptr<BufferGeometry> &shape, float mass = 0) {
+        static std::shared_ptr<RbWrapper> create(const std::shared_ptr<BufferGeometry>& shape, float mass = 0) {
             return std::shared_ptr<RbWrapper>(new RbWrapper(shape, mass));
         }
 
     private:
-        RbWrapper(const std::shared_ptr<BufferGeometry> &shape, float mass)
+        RbWrapper(const std::shared_ptr<BufferGeometry>& shape, float mass)
             : shape(fromGeometry(shape)),
               state(std::make_unique<btDefaultMotionState>()) {
 
@@ -88,7 +88,7 @@ namespace threepp {
     class BulletWrapper {
 
     public:
-        explicit BulletWrapper(const Vector3 &gravity = {0, -9.81f, 0})
+        explicit BulletWrapper(const Vector3& gravity = {0, -9.81f, 0})
             : dispatcher{&collisionConfiguration},
               world{&dispatcher, &broadphase, &solver, &collisionConfiguration} {
             world.setGravity(convert(gravity));
@@ -97,9 +97,9 @@ namespace threepp {
         void step(float dt, int maxSubSteps = 1, btScalar fixedTimeStep = btScalar(1.) / btScalar(60.)) {
             world.stepSimulation(dt, maxSubSteps, fixedTimeStep);
 
-            for (auto &[m, info] : bodies) {
-                auto &t = info->body->getWorldTransform();
-                auto &p = t.getOrigin();
+            for (auto& [m, info] : bodies) {
+                auto& t = info->body->getWorldTransform();
+                auto& p = t.getOrigin();
                 auto r = t.getRotation();
 
                 m->quaternion.set(r.x(), r.y(), r.z(), r.w());
@@ -107,12 +107,12 @@ namespace threepp {
             }
         }
 
-        BulletWrapper &setGravity(const Vector3 &g) {
+        BulletWrapper& setGravity(const Vector3& g) {
             world.setGravity(convert(g));
             return *this;
         }
 
-        BulletWrapper &addRigidbody(const std::shared_ptr<RbWrapper> &rb, const std::shared_ptr<Object3D> &obj) {
+        BulletWrapper& addRigidbody(const std::shared_ptr<RbWrapper>& rb, const std::shared_ptr<Object3D>& obj) {
 
             obj->updateMatrixWorld();
             auto t = convert(*obj->matrixWorld);
@@ -124,7 +124,7 @@ namespace threepp {
             return *this;
         }
 
-        void addConstraint(btTypedConstraint *c, bool disableCollisionsBetweenLinkedBodies = false) {
+        void addConstraint(btTypedConstraint* c, bool disableCollisionsBetweenLinkedBodies = false) {
             world.addConstraint(c, disableCollisionsBetweenLinkedBodies);
         }
 

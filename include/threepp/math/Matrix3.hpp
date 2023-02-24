@@ -13,7 +13,6 @@ namespace threepp {
     class Matrix3 {
 
     public:
-
         std::array<float, 9> elements{
                 1.f, 0.f, 0.f,
                 0.f, 1.f, 0.f,
@@ -21,38 +20,38 @@ namespace threepp {
 
         Matrix3() = default;
 
-        float &operator[](unsigned int index);
+        float& operator[](unsigned int index);
 
-        Matrix3 &set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33);
+        Matrix3& set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33);
 
-        Matrix3 &identity();
+        Matrix3& identity();
 
-        Matrix3 &copy(const Matrix3 &m);
+        Matrix3& copy(const Matrix3& m);
 
-        Matrix3 &extractBasis(Vector3 &xAxis, Vector3 &yAxis, Vector3 &zAxis);
+        Matrix3& extractBasis(Vector3& xAxis, Vector3& yAxis, Vector3& zAxis);
 
-        Matrix3 &setFromMatrix4(const Matrix4 &m);
+        Matrix3& setFromMatrix4(const Matrix4& m);
 
-        Matrix3 &multiply(const Matrix3 &m);
+        Matrix3& multiply(const Matrix3& m);
 
-        Matrix3 &premultiply(const Matrix3 &m);
+        Matrix3& premultiply(const Matrix3& m);
 
-        Matrix3 &multiplyMatrices(const Matrix3 &a, const Matrix3 &b);
+        Matrix3& multiplyMatrices(const Matrix3& a, const Matrix3& b);
 
-        Matrix3 &multiplyScalar(float s);
+        Matrix3& multiplyScalar(float s);
 
         [[nodiscard]] float determinant() const;
 
-        Matrix3 &invert();
+        Matrix3& invert();
 
-        Matrix3 &transpose();
+        Matrix3& transpose();
 
-        Matrix3 &getNormalMatrix(const Matrix4 &m);
+        Matrix3& getNormalMatrix(const Matrix4& m);
 
         template<class ArrayLike>
-        Matrix3 &transposeIntoArray(ArrayLike &r) {
+        Matrix3& transposeIntoArray(ArrayLike& r) {
 
-            const auto &m = this->elements;
+            const auto& m = this->elements;
 
             r[0] = m[0];
             r[1] = m[3];
@@ -67,22 +66,22 @@ namespace threepp {
             return *this;
         }
 
-        Matrix3 &setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy);
+        Matrix3& setUvTransform(float tx, float ty, float sx, float sy, float rotation, float cx, float cy);
 
-        Matrix3 &scale(float sx, float sy);
+        Matrix3& scale(float sx, float sy);
 
-        Matrix3 &rotate(float theta);
+        Matrix3& rotate(float theta);
 
-        Matrix3 &translate(float tx, float ty);
+        Matrix3& translate(float tx, float ty);
 
-        [[nodiscard]] bool equals(const Matrix3 &matrix) const;
+        [[nodiscard]] bool equals(const Matrix3& matrix) const;
 
-        bool operator==(const Matrix3 &matrix) const {
+        bool operator==(const Matrix3& matrix) const {
             return equals(matrix);
         }
 
         template<class ArrayLike>
-        Matrix3 &fromArray(ArrayLike &array, unsigned int offset = 0) {
+        Matrix3& fromArray(ArrayLike& array, unsigned int offset = 0) {
 
             for (auto i = 0; i < 9; i++) {
 
@@ -93,9 +92,9 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, unsigned int offset = 0) const {
+        void toArray(ArrayLike& array, unsigned int offset = 0) const {
 
-            const auto &te = this->elements;
+            const auto& te = this->elements;
 
             array[offset] = te[0];
             array[offset + 1] = te[1];
@@ -109,7 +108,6 @@ namespace threepp {
             array[offset + 7] = te[7];
             array[offset + 8] = te[8];
         }
-
     };
 
 }// namespace threepp

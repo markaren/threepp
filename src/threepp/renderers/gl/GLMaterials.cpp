@@ -8,23 +8,23 @@ using namespace threepp::gl;
 
 namespace {
 
-    void refreshUniformsCommon(UniformMap &uniforms, Material *material, GLProperties &properties) {
+    void refreshUniformsCommon(UniformMap& uniforms, Material* material, GLProperties& properties) {
 
-        auto colorMaterial = dynamic_cast<MaterialWithColor *>(material);
-        auto mapMaterial = dynamic_cast<MaterialWithMap *>(material);
-        auto specularMaterial = dynamic_cast<MaterialWithSpecularMap *>(material);
-        auto displacementMaterial = dynamic_cast<MaterialWithDisplacementMap *>(material);
-        auto normalMaterial = dynamic_cast<MaterialWithNormalMap *>(material);
-        auto bumpMaterial = dynamic_cast<MaterialWithBumpMap *>(material);
-        auto roughnessMaterial = dynamic_cast<MaterialWithRoughness *>(material);
-        auto metalnessMaterial = dynamic_cast<MaterialWithMetalness *>(material);
-        auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap *>(material);
-        auto emissiveMaterial = dynamic_cast<MaterialWithEmissive *>(material);
-        auto spriteMaterial = dynamic_cast<SpriteMaterial *>(material);
+        auto colorMaterial = dynamic_cast<MaterialWithColor*>(material);
+        auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
+        auto specularMaterial = dynamic_cast<MaterialWithSpecularMap*>(material);
+        auto displacementMaterial = dynamic_cast<MaterialWithDisplacementMap*>(material);
+        auto normalMaterial = dynamic_cast<MaterialWithNormalMap*>(material);
+        auto bumpMaterial = dynamic_cast<MaterialWithBumpMap*>(material);
+        auto roughnessMaterial = dynamic_cast<MaterialWithRoughness*>(material);
+        auto metalnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
+        auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
+        auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
+        auto spriteMaterial = dynamic_cast<SpriteMaterial*>(material);
         // TODO clearcoat
 
-        auto aoMaterial = dynamic_cast<MaterialWithAoMap *>(material);
-        auto lightMaterial = dynamic_cast<MaterialWithLightMap *>(material);
+        auto aoMaterial = dynamic_cast<MaterialWithAoMap*>(material);
+        auto lightMaterial = dynamic_cast<MaterialWithLightMap*>(material);
 
         uniforms.at("opacity").setValue(material->opacity);
 
@@ -59,13 +59,13 @@ namespace {
             uniforms.at("envMap").setValue(envMap);
             uniforms.at("flipEnvMap").value<bool>() = false;//TODO
 
-            auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity *>(material);
+            auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity*>(material);
             if (reflectiveMaterial) {
                 uniforms.at("reflectivity").value<float>() = reflectiveMaterial->reflectivity;
                 uniforms.at("refractionRatio").value<float>() = reflectiveMaterial->refractionRatio;
             }
 
-            const auto &maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
+            const auto& maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
             if (maxMipMapLevel) {
                 uniforms.at("maxMipLevel").value<int>() = *maxMipMapLevel;
             }
@@ -155,26 +155,26 @@ namespace {
         }
     }
 
-    void refreshUniformsLambert(UniformMap &uniforms, MeshLambertMaterial *material) {
+    void refreshUniformsLambert(UniformMap& uniforms, MeshLambertMaterial* material) {
 
-        auto &emissiveMap = material->emissiveMap;
+        auto& emissiveMap = material->emissiveMap;
         if (emissiveMap) {
             uniforms.at("emissiveMap").setValue(emissiveMap);
         }
     }
 
-    void refreshUniformsPhong(UniformMap &uniforms, MeshPhongMaterial *material) {
+    void refreshUniformsPhong(UniformMap& uniforms, MeshPhongMaterial* material) {
 
         uniforms.at("specular").value<Color>().copy(material->specular);
         uniforms.at("shininess").value<float>() = std::max(material->shininess, (float) 1E-4);// to prevent pow( 0.0, 0.0 )
 
-        auto &emissiveMap = material->emissiveMap;
+        auto& emissiveMap = material->emissiveMap;
         if (emissiveMap) {
 
             uniforms.at("emissiveMap").setValue(emissiveMap);
         }
 
-        auto &bumpMap = material->bumpMap;
+        auto& bumpMap = material->bumpMap;
         if (bumpMap) {
 
             uniforms.at("bumpMap").setValue(bumpMap);
@@ -184,7 +184,7 @@ namespace {
             }
         }
 
-        auto &normalMap = material->normalMap;
+        auto& normalMap = material->normalMap;
         if (normalMap) {
 
             uniforms.at("normalMap").setValue(normalMap);
@@ -194,7 +194,7 @@ namespace {
             }
         }
 
-        auto &displacementMap = material->displacementMap;
+        auto& displacementMap = material->displacementMap;
         if (displacementMap) {
 
             uniforms.at("displacementMap").setValue(displacementMap);
@@ -203,21 +203,21 @@ namespace {
         }
     }
 
-    void refreshUniformsToon(UniformMap &uniforms, MeshToonMaterial *material) {
+    void refreshUniformsToon(UniformMap& uniforms, MeshToonMaterial* material) {
 
-        auto &gradientMap = material->gradientMap;
+        auto& gradientMap = material->gradientMap;
         if (gradientMap) {
 
             uniforms.at("gradientMap").setValue(gradientMap);
         }
 
-        auto &emissiveMap = material->emissiveMap;
+        auto& emissiveMap = material->emissiveMap;
         if (emissiveMap) {
 
             uniforms.at("emissiveMap").setValue(emissiveMap);
         }
 
-        auto &bumpMap = material->bumpMap;
+        auto& bumpMap = material->bumpMap;
         if (bumpMap) {
 
             uniforms.at("bumpMap").setValue(bumpMap);
@@ -227,7 +227,7 @@ namespace {
             }
         }
 
-        auto &normalMap = material->normalMap;
+        auto& normalMap = material->normalMap;
         if (normalMap) {
 
             uniforms.at("normalMap").setValue(normalMap);
@@ -237,7 +237,7 @@ namespace {
             }
         }
 
-        auto &displacementMap = material->displacementMap;
+        auto& displacementMap = material->displacementMap;
         if (displacementMap) {
 
             uniforms.at("displacementMap").setValue(displacementMap);
@@ -247,13 +247,13 @@ namespace {
     }
 
 
-    void refreshUniformsLine(UniformMap &uniforms, LineBasicMaterial *material) {
+    void refreshUniformsLine(UniformMap& uniforms, LineBasicMaterial* material) {
 
         uniforms.at("diffuse").value<Color>().copy(material->color);
         uniforms.at("opacity").value<float>() = material->opacity;
     }
 
-    void refreshUniformsPoints(UniformMap &uniforms, PointsMaterial *material, int pixelRatio, float height) {
+    void refreshUniformsPoints(UniformMap& uniforms, PointsMaterial* material, int pixelRatio, float height) {
 
         uniforms.at("diffuse").value<Color>().copy(material->color);
         uniforms.at("opacity").value<float>() = material->opacity;
@@ -261,21 +261,19 @@ namespace {
         uniforms.at("scale").value<float>() = height * 0.5f;
     }
 
-    void refreshUniformsSprites(UniformMap &uniforms, SpriteMaterial* material) {
-        uniforms.at("diffuse").value<Color>().copy( material->color );
+    void refreshUniformsSprites(UniformMap& uniforms, SpriteMaterial* material) {
+        uniforms.at("diffuse").value<Color>().copy(material->color);
         uniforms.at("opacity").value<float>() = material->opacity;
         uniforms.at("rotation").value<float>() = material->rotation;
 
-        if ( material->map ) {
+        if (material->map) {
 
             uniforms.at("map").setValue(material->map);
-
         }
 
-        if ( material->alphaMap ) {
+        if (material->alphaMap) {
 
             uniforms.at("alphaMap").setValue(material->alphaMap);
-
         }
 
         // uv repeat and offset setting priorities
@@ -284,50 +282,47 @@ namespace {
 
         std::shared_ptr<Texture> uvScaleMap = nullptr;
 
-        if ( material->map ) {
+        if (material->map) {
 
             uvScaleMap = material->map;
 
-        } else if ( material->alphaMap ) {
+        } else if (material->alphaMap) {
 
             uvScaleMap = material->alphaMap;
-
         }
 
-        if ( uvScaleMap ) {
+        if (uvScaleMap) {
 
-            if ( uvScaleMap->matrixAutoUpdate ) {
+            if (uvScaleMap->matrixAutoUpdate) {
 
                 uvScaleMap->updateMatrix();
-
             }
 
-            uniforms.at("uvTransform").value<Matrix3>().copy( uvScaleMap->matrix );
-
+            uniforms.at("uvTransform").value<Matrix3>().copy(uvScaleMap->matrix);
         }
     }
 
 }// namespace
 
-void GLMaterials::refreshFogUniforms(UniformMap &uniforms, FogVariant &fog) {
+void GLMaterials::refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
 
     if (fog.index() == 0) {
 
-        auto &f = std::get<Fog>(fog);
+        auto& f = std::get<Fog>(fog);
         uniforms.at("fogColor").value<Color>().copy(f.color);
 
         uniforms.at("fogNear").value<float>() = f.near;
         uniforms.at("fogFar").value<float>() = f.far;
     } else {
 
-        auto &f = std::get<FogExp2>(fog);
+        auto& f = std::get<FogExp2>(fog);
         uniforms.at("fogColor").value<Color>().copy(f.color);
 
         uniforms.at("fogDensity").value<float>() = f.density;
     }
 }
 
-void GLMaterials::refreshMaterialUniforms(UniformMap &uniforms, Material *material, int pixelRatio, int height) {
+void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height) {
 
     if (material->is<MeshBasicMaterial>()) {
 
@@ -361,7 +356,7 @@ void GLMaterials::refreshMaterialUniforms(UniformMap &uniforms, Material *materi
     } else if (material->as<SpriteMaterial>()) {
 
         auto m = material->as<SpriteMaterial>();
-        refreshUniformsSprites( uniforms, material->as<SpriteMaterial>() );
+        refreshUniformsSprites(uniforms, material->as<SpriteMaterial>());
 
     } else if (material->as<ShaderMaterial>()) {
 

@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class PointLightHelper : public Mesh {
+    class PointLightHelper: public Mesh {
 
     public:
         void update() {
@@ -24,7 +24,7 @@ namespace threepp {
             }
         }
 
-        static std::shared_ptr<PointLightHelper> create(const std::shared_ptr<PointLight> &light, float sphereSize, std::optional<unsigned int> color = std::nullopt) {
+        static std::shared_ptr<PointLightHelper> create(const std::shared_ptr<PointLight>& light, float sphereSize, std::optional<unsigned int> color = std::nullopt) {
 
             return std::shared_ptr<PointLightHelper>(new PointLightHelper(light, sphereSize, color));
         }

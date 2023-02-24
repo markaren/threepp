@@ -11,7 +11,7 @@ using namespace threepp::gl;
 
 namespace {
 
-    int getTextureEncodingFromMap(const std::shared_ptr<Texture> &map) {
+    int getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
 
         return map ? map->encoding : LinearEncoding;
     }
@@ -19,39 +19,39 @@ namespace {
 }// namespace
 
 ProgramParameters::ProgramParameters(
-        const GLRenderer &renderer,
-        const GLLights::LightState &lights,
+        const GLRenderer& renderer,
+        const GLLights::LightState& lights,
         size_t numShadows,
-        Object3D *object,
-        Scene *scene,
-        Material *material,
-        const std::unordered_map<std::string, std::string> &shaderIDs) {
+        Object3D* object,
+        Scene* scene,
+        Material* material,
+        const std::unordered_map<std::string, std::string>& shaderIDs) {
 
-    auto &clipping = renderer.clipping;
-    auto &shadowMap = renderer.shadowMap;
+    auto& clipping = renderer.clipping;
+    auto& shadowMap = renderer.shadowMap;
 
-    auto mapMaterial = dynamic_cast<MaterialWithMap *>(material);
-    auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap *>(material);
-    auto aomapMaterial = dynamic_cast<MaterialWithAoMap *>(material);
-    auto bumpmapMaterial = dynamic_cast<MaterialWithBumpMap *>(material);
-    auto matcapMaterial = dynamic_cast<MaterialWithMatCap *>(material);
-    auto gradientMaterial = dynamic_cast<MaterialWithGradientMap *>(material);
-    auto envmapMaterial = dynamic_cast<MaterialWithEnvMap *>(material);
-    auto lightmapMaterial = dynamic_cast<MaterialWithLightMap *>(material);
-    auto emissiveMaterial = dynamic_cast<MaterialWithEmissive *>(material);
-    auto normalMaterial = dynamic_cast<MaterialWithNormalMap *>(material);
-    auto specularMapMaterial = dynamic_cast<MaterialWithSpecularMap *>(material);
-    auto displacementMapMaterial = dynamic_cast<MaterialWithDisplacementMap *>(material);
-    auto combineMaterial = dynamic_cast<MaterialWithCombine *>(material);
-    auto flatshadeMaterial = dynamic_cast<MaterialWithFlatShading *>(material);
-    auto vertextangentsMaterial = dynamic_cast<MaterialWithVertexTangents *>(material);
-    auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking *>(material);
-    auto sheenMaterial = dynamic_cast<MaterialWithSheen *>(material);
-    auto shaderMaterial = dynamic_cast<ShaderMaterial *>(material);
-    auto definesMaterial = dynamic_cast<MaterialWithDefines *>(material);
-    auto thicknessMaterial = dynamic_cast<MaterialWithThickness *>(material);
-    auto roughnessMaterial = dynamic_cast<MaterialWithRoughness *>(material);
-    auto metallnessMaterial = dynamic_cast<MaterialWithMetalness *>(material);
+    auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
+    auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
+    auto aomapMaterial = dynamic_cast<MaterialWithAoMap*>(material);
+    auto bumpmapMaterial = dynamic_cast<MaterialWithBumpMap*>(material);
+    auto matcapMaterial = dynamic_cast<MaterialWithMatCap*>(material);
+    auto gradientMaterial = dynamic_cast<MaterialWithGradientMap*>(material);
+    auto envmapMaterial = dynamic_cast<MaterialWithEnvMap*>(material);
+    auto lightmapMaterial = dynamic_cast<MaterialWithLightMap*>(material);
+    auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
+    auto normalMaterial = dynamic_cast<MaterialWithNormalMap*>(material);
+    auto specularMapMaterial = dynamic_cast<MaterialWithSpecularMap*>(material);
+    auto displacementMapMaterial = dynamic_cast<MaterialWithDisplacementMap*>(material);
+    auto combineMaterial = dynamic_cast<MaterialWithCombine*>(material);
+    auto flatshadeMaterial = dynamic_cast<MaterialWithFlatShading*>(material);
+    auto vertextangentsMaterial = dynamic_cast<MaterialWithVertexTangents*>(material);
+    auto depthpackMaterial = dynamic_cast<MaterialWithDepthPacking*>(material);
+    auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
+    auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
+    auto definesMaterial = dynamic_cast<MaterialWithDefines*>(material);
+    auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
+    auto roughnessMaterial = dynamic_cast<MaterialWithRoughness*>(material);
+    auto metallnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
 
     std::string vShader, fShader;
     if (shaderIDs.count(material->type())) {
@@ -80,7 +80,7 @@ ProgramParameters::ProgramParameters(
 
     precision = "highp";
 
-    auto instancedMesh = dynamic_cast<InstancedMesh *>(object);
+    auto instancedMesh = dynamic_cast<InstancedMesh*>(object);
     instancing = instancedMesh != nullptr;
     instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor != nullptr;
 

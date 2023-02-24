@@ -11,8 +11,8 @@
 #include "threepp/math/Vector3.hpp"
 #include <threepp/math/Spherical.hpp>
 
-#include <memory>
 #include <limits>
+#include <memory>
 
 namespace threepp {
 
@@ -76,7 +76,7 @@ namespace threepp {
 
         State state = State::NONE;
 
-        OrbitControls(std::shared_ptr<Camera> camera, Canvas &canvas);
+        OrbitControls(std::shared_ptr<Camera> camera, Canvas& canvas);
 
         bool update();
 
@@ -88,9 +88,9 @@ namespace threepp {
 
         void rotateUp(float angle);
 
-        void panLeft(float distance, const Matrix4 &objectMatrix);
+        void panLeft(float distance, const Matrix4& objectMatrix);
 
-        void panUp(float distance, const Matrix4 &objectMatrix);
+        void panUp(float distance, const Matrix4& objectMatrix);
 
         // deltaX and deltaY are in pixels; right and down are positive
         void pan(float deltaX, float deltaY);
@@ -102,7 +102,7 @@ namespace threepp {
         ~OrbitControls();
 
     private:
-        Canvas &canvas;
+        Canvas& canvas;
         std::shared_ptr<Camera> camera;
 
         std::unique_ptr<KeyListener> keyListener;
@@ -130,23 +130,23 @@ namespace threepp {
 
         void handleKeyDown(int key);
 
-        void handleMouseDownRotate(const Vector2 &pos);
+        void handleMouseDownRotate(const Vector2& pos);
 
-        void handleMouseDownDolly(const Vector2 &pos);
+        void handleMouseDownDolly(const Vector2& pos);
 
-        void handleMouseDownPan(const Vector2 &pos);
+        void handleMouseDownPan(const Vector2& pos);
 
-        void handleMouseMoveRotate(const Vector2 &pos);
+        void handleMouseMoveRotate(const Vector2& pos);
 
-        void handleMouseMoveDolly(const Vector2 &pos);
+        void handleMouseMoveDolly(const Vector2& pos);
 
-        void handleMouseMovePan(const Vector2 &pos);
+        void handleMouseMovePan(const Vector2& pos);
 
-        void handleMouseWheel(const Vector2 &delta);
+        void handleMouseWheel(const Vector2& delta);
 
-        struct MyKeyListener : KeyListener {
+        struct MyKeyListener: KeyListener {
 
-            explicit MyKeyListener(OrbitControls &scope)
+            explicit MyKeyListener(OrbitControls& scope)
                 : scope(scope) {}
 
             void onKeyPressed(KeyEvent evt) override {
@@ -162,12 +162,12 @@ namespace threepp {
             }
 
         private:
-            OrbitControls &scope;
+            OrbitControls& scope;
         };
 
         struct MyMouseMoveListener: MouseListener {
 
-            explicit MyMouseMoveListener(OrbitControls &scope) : scope(scope) {}
+            explicit MyMouseMoveListener(OrbitControls& scope): scope(scope) {}
 
             void onMouseMove(const Vector2& pos) override {
                 if (scope.enabled) {
@@ -196,13 +196,13 @@ namespace threepp {
             }
 
         private:
-            OrbitControls &scope;
+            OrbitControls& scope;
         };
 
 
         struct MyMouseUpListener: MouseListener {
 
-            explicit MyMouseUpListener(OrbitControls &scope, MyMouseMoveListener* mouseMoveListener)
+            explicit MyMouseUpListener(OrbitControls& scope, MyMouseMoveListener* mouseMoveListener)
                 : scope(scope), mouseMoveListener(mouseMoveListener) {}
 
             void onMouseUp(int button, const Vector2& pos) override {
@@ -215,32 +215,32 @@ namespace threepp {
             }
 
         private:
-            OrbitControls &scope;
+            OrbitControls& scope;
             MouseListener* mouseMoveListener;
         };
 
-        struct MyMouseListener : MouseListener {
+        struct MyMouseListener: MouseListener {
 
-            explicit MyMouseListener(OrbitControls &scope)
+            explicit MyMouseListener(OrbitControls& scope)
                 : scope(scope), mouseMoveListener(scope), mouseUpListener(scope, &mouseMoveListener) {}
 
             void onMouseDown(int button, const Vector2& pos) override {
                 if (scope.enabled) {
                     switch (button) {
-                        case 0: // LEFT
+                        case 0:// LEFT
                             if (scope.enableRotate) {
                                 scope.handleMouseDownRotate(pos);
                                 scope.state = State::ROTATE;
                             }
                             break;
-                        case 1: // RIGHT
+                        case 1:// RIGHT
                             if (scope.enablePan) {
                                 scope.handleMouseDownRotate(pos);
                                 scope.handleMouseDownPan(pos);
                                 scope.state = State::PAN;
                             }
                             break;
-                        case 2: // MIDDLE
+                        case 2:// MIDDLE
                             if (scope.enableZoom) {
                                 scope.handleMouseDownDolly(pos);
                                 scope.state = State::DOLLY;
@@ -253,9 +253,7 @@ namespace threepp {
 
                     scope.canvas.addMouseListener(&mouseMoveListener);
                     scope.canvas.addMouseListener(&mouseUpListener);
-
                 }
-
             }
 
             void onMouseWheel(const Vector2& delta) override {
@@ -265,11 +263,10 @@ namespace threepp {
             }
 
         private:
-            OrbitControls &scope;
+            OrbitControls& scope;
             MyMouseMoveListener mouseMoveListener;
             MyMouseUpListener mouseUpListener;
         };
-
     };
 
 }// namespace threepp

@@ -3,9 +3,9 @@
 #include <catch2/catch.hpp>
 
 #include "threepp/math/Euler.hpp"
+#include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
-#include "threepp/math/Matrix3.hpp"
 
 #include "threepp/math/MathUtils.hpp"
 
@@ -74,24 +74,23 @@ TEST_CASE("identity") {
     REQUIRE(a.elements[14] == 11);
     REQUIRE(a.elements[15] == 15);
 
-    REQUIRE(!matrixEquals4( a, b));
+    REQUIRE(!matrixEquals4(a, b));
 
     a.identity();
 
-    REQUIRE(matrixEquals4( a, b));
+    REQUIRE(matrixEquals4(a, b));
 }
 
 TEST_CASE("copy") {
-    
-    auto a = Matrix4().set( 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 );
-    auto b = Matrix4().copy( a );
-    
-    REQUIRE( matrixEquals4( a, b ));
+
+    auto a = Matrix4().set(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+    auto b = Matrix4().copy(a);
+
+    REQUIRE(matrixEquals4(a, b));
 
     // ensure that it is a true copy
-    a.elements[ 0 ] = 2;
-    REQUIRE( ! matrixEquals4( a, b ));
-    
+    a.elements[0] = 2;
+    REQUIRE(!matrixEquals4(a, b));
 }
 
 TEST_CASE("setFromMatrix3") {
@@ -99,30 +98,26 @@ TEST_CASE("setFromMatrix3") {
     auto a = Matrix3().set(
             0, 1, 2,
             3, 4, 5,
-            6, 7, 8
-    );
+            6, 7, 8);
     auto b = Matrix4();
     auto c = Matrix4().set(
             0, 1, 2, 0,
             3, 4, 5, 0,
             6, 7, 8, 0,
-            0, 0, 0, 1
-    );
-    b.setFromMatrix3( a );
-    REQUIRE( b.equals( c ) );
-
+            0, 0, 0, 1);
+    b.setFromMatrix3(a);
+    REQUIRE(b.equals(c));
 }
 
 TEST_CASE("copyPosition") {
 
-    auto a = Matrix4().set( 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 );
-    auto b = Matrix4().set( 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11, 0, 13, 14, 15, 16 );
-    
-    REQUIRE( !matrixEquals4( a, b ));
+    auto a = Matrix4().set(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
+    auto b = Matrix4().set(1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11, 0, 13, 14, 15, 16);
 
-    b.copyPosition( a );
-    REQUIRE( matrixEquals4( a, b ));
+    REQUIRE(!matrixEquals4(a, b));
 
+    b.copyPosition(a);
+    REQUIRE(matrixEquals4(a, b));
 }
 
 TEST_CASE("makeRotationFromEuler/extractRotation") {
@@ -134,24 +129,22 @@ TEST_CASE("makeRotationFromEuler/extractRotation") {
             Euler(0, 0, 0.5, Euler::RotationOrders::YZX),
             Euler(0, 0, -0.5, Euler::RotationOrders::YZX)};
 
-    for (const auto & v : testValues) {
+    for (const auto& v : testValues) {
 
-        auto m = Matrix4().makeRotationFromEuler( v );
+        auto m = Matrix4().makeRotationFromEuler(v);
 
-        auto v2 = Euler().setFromRotationMatrix( m, v.getOrder() );
-        auto m2 = Matrix4().makeRotationFromEuler( v2 );
+        auto v2 = Euler().setFromRotationMatrix(m, v.getOrder());
+        auto m2 = Matrix4().makeRotationFromEuler(v2);
 
-        REQUIRE( matrixEquals4( m, m2, eps ));
-        REQUIRE( eulerEquals( v, v2, eps ));
+        REQUIRE(matrixEquals4(m, m2, eps));
+        REQUIRE(eulerEquals(v, v2, eps));
 
-        auto m3 = Matrix4().extractRotation( m2 );
-        auto v3 = Euler().setFromRotationMatrix( m3, v.getOrder() );
+        auto m3 = Matrix4().extractRotation(m2);
+        auto v3 = Euler().setFromRotationMatrix(m3, v.getOrder());
 
-        REQUIRE( matrixEquals4( m, m3, eps ));
-        REQUIRE( eulerEquals( v, v3, eps ));
-
+        REQUIRE(matrixEquals4(m, m3, eps));
+        REQUIRE(eulerEquals(v, v3, eps));
     }
-
 }
 
 TEST_CASE("lookat") {
@@ -212,13 +205,13 @@ TEST_CASE("transpose") {
 
     Matrix4 a;
     Matrix4 b = Matrix4(a).transpose();
-    REQUIRE(matrixEquals4( a, b));
+    REQUIRE(matrixEquals4(a, b));
 
     b = Matrix4().set(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
     Matrix4 c = Matrix4(b).transpose();
-    REQUIRE(!matrixEquals4( b, c));
+    REQUIRE(!matrixEquals4(b, c));
     c.transpose();
-    REQUIRE(matrixEquals4( b, c));
+    REQUIRE(matrixEquals4(b, c));
 }
 
 TEST_CASE("multipyMatrices") {
@@ -256,7 +249,7 @@ TEST_CASE("invert") {
     auto b = Matrix4().set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
     a.copy(b).invert();
-    REQUIRE(matrixEquals4( a, zero));
+    REQUIRE(matrixEquals4(a, zero));
 
     std::vector<Matrix4> testMatrices = {
             Matrix4().makeRotationX(0.3),
@@ -271,14 +264,14 @@ TEST_CASE("invert") {
             Matrix4().makePerspective(-16, 16, 9, -9, 0.1, 10000),
             Matrix4().makeTranslation(1, 2, 3)};
 
-    for (const auto &m : testMatrices) {
+    for (const auto& m : testMatrices) {
 
         auto mInverse = Matrix4().copy(m).invert();
         auto mSelfInverse = Matrix4(m);
         mSelfInverse.copy(mSelfInverse).invert();
 
         // self-inverse should the same as inverse
-        REQUIRE(matrixEquals4( mSelfInverse, mInverse));
+        REQUIRE(matrixEquals4(mSelfInverse, mInverse));
 
         // the determinant of the inverse should be the reciprocal
         REQUIRE(std::abs((m.determinant() * mInverse.determinant()) - 1) < 0.0001);
@@ -298,7 +291,7 @@ TEST_CASE("scale") {
     auto c = Matrix4().set(2, 6, 12, 4, 10, 18, 28, 8, 18, 30, 44, 12, 26, 42, 60, 16);
 
     a.scale(b);
-    REQUIRE(matrixEquals4( a, c));
+    REQUIRE(matrixEquals4(a, c));
 }
 
 TEST_CASE("getMaxScaleOnAxis") {
@@ -315,7 +308,7 @@ TEST_CASE("makeScale") {
     auto c = Matrix4().set(2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1);
 
     a.makeScale(2, 3, 4);
-    REQUIRE(matrixEquals4( a, c));
+    REQUIRE(matrixEquals4(a, c));
 }
 
 TEST_CASE("makeShear") {
@@ -324,7 +317,7 @@ TEST_CASE("makeShear") {
     auto c = Matrix4().set(1, 3, 5, 0, 1, 1, 6, 0, 2, 4, 1, 0, 0, 0, 0, 1);
 
     a.makeShear(1, 2, 3, 4, 5, 6);
-    REQUIRE(matrixEquals4( a, c));
+    REQUIRE(matrixEquals4(a, c));
 }
 
 TEST_CASE("makePerspective") {
@@ -335,7 +328,7 @@ TEST_CASE("makePerspective") {
             0, -1, 0, 0,
             0, 0, -101 / 99., -200 / 99.,
             0, 0, -1, 0);
-    REQUIRE(matrixEquals4( a, expected));
+    REQUIRE(matrixEquals4(a, expected));
 }
 
 TEST_CASE("equals") {

@@ -7,9 +7,9 @@
 
 namespace threepp {
 
-    class LineBasicMaterial : public virtual Material,
-                              public MaterialWithColor,
-                              public MaterialWithLineWidth {
+    class LineBasicMaterial: public virtual Material,
+                             public MaterialWithColor,
+                             public MaterialWithLineWidth {
 
     public:
         [[nodiscard]] std::string type() const override {

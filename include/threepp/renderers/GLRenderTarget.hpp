@@ -16,7 +16,7 @@
 
 namespace threepp {
 
-    class GLRenderTarget : public EventDispatcher {
+    class GLRenderTarget: public EventDispatcher {
 
     public:
         struct Options {
@@ -54,7 +54,7 @@ namespace threepp {
         bool stencilBuffer;
         std::shared_ptr<DepthTexture> depthTexture;
 
-        void setTexture(const std::shared_ptr<Texture> &tex) {
+        void setTexture(const std::shared_ptr<Texture>& tex) {
 
             texture->image = Image{width, height, depth};
 
@@ -80,7 +80,7 @@ namespace threepp {
             this->scissor.set(0, 0, (float) width, (float) height);
         }
 
-        GLRenderTarget &copy(const GLRenderTarget &source) {
+        GLRenderTarget& copy(const GLRenderTarget& source) {
 
             this->width = source.width;
             this->height = source.height;
@@ -103,13 +103,13 @@ namespace threepp {
             this->dispatchEvent("dispose", this);
         }
 
-        static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options &options) {
+        static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options) {
 
             return std::shared_ptr<GLRenderTarget>(new GLRenderTarget(width, height, options));
         }
 
     protected:
-        GLRenderTarget(unsigned int width, unsigned int height, const Options &options)
+        GLRenderTarget(unsigned int width, unsigned int height, const Options& options)
             : width(width), height(height),
               scissor(0.f, 0.f, (float) width, (float) height),
               viewport(0.f, 0.f, (float) width, (float) height),

@@ -28,7 +28,7 @@ float Quaternion::operator[](unsigned int index) const {
     }
 }
 
-Quaternion &Quaternion::set(float x, float y, float z, float w) {
+Quaternion& Quaternion::set(float x, float y, float z, float w) {
 
     this->x.value_ = x;
     this->y.value_ = y;
@@ -40,7 +40,7 @@ Quaternion &Quaternion::set(float x, float y, float z, float w) {
     return *this;
 }
 
-Quaternion &Quaternion::copy(const Quaternion &quaternion) {
+Quaternion& Quaternion::copy(const Quaternion& quaternion) {
 
     this->x.value_ = quaternion.x();
     this->y.value_ = quaternion.y();
@@ -52,7 +52,7 @@ Quaternion &Quaternion::copy(const Quaternion &quaternion) {
     return *this;
 }
 
-Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
+Quaternion& Quaternion::setFromEuler(const Euler& euler, bool update) {
 
     const auto x = euler.x(), y = euler.y(), z = euler.z();
     const auto order = euler.order_;
@@ -121,7 +121,7 @@ Quaternion &Quaternion::setFromEuler(const Euler &euler, bool update) {
     return *this;
 }
 
-Quaternion &Quaternion::setFromAxisAngle(const Vector3 &axis, float angle) {
+Quaternion& Quaternion::setFromAxisAngle(const Vector3& axis, float angle) {
 
     // http://www.euclideanspace.com/maths/geometry/rotations/conversions/angleToQuaternion/index.htm
 
@@ -139,13 +139,13 @@ Quaternion &Quaternion::setFromAxisAngle(const Vector3 &axis, float angle) {
     return *this;
 }
 
-Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
+Quaternion& Quaternion::setFromRotationMatrix(const Matrix4& m) {
 
     // http://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/index.htm
 
     // assumes the upper 3x3 of m is a pure rotation matrix (i.e, unscaled)
 
-    const auto &te = m.elements;
+    const auto& te = m.elements;
 
     const auto m11 = te[0], m12 = te[4], m13 = te[8],
                m21 = te[1], m22 = te[5], m23 = te[9],
@@ -195,7 +195,7 @@ Quaternion &Quaternion::setFromRotationMatrix(const Matrix4 &m) {
     return *this;
 }
 
-Quaternion &Quaternion::setFromUnitVectors(const Vector3 &vFrom, const Vector3 &vTo) {
+Quaternion& Quaternion::setFromUnitVectors(const Vector3& vFrom, const Vector3& vTo) {
     // assumes direction vectors vFrom and vTo are normalized
 
     const auto EPS = 0.000001f;
@@ -237,12 +237,12 @@ Quaternion &Quaternion::setFromUnitVectors(const Vector3 &vFrom, const Vector3 &
 }
 
 
-float Quaternion::angleTo(const Quaternion &q) const {
+float Quaternion::angleTo(const Quaternion& q) const {
 
     return 2 * std::acos(std::abs(std::clamp(this->dot(q), -1.0f, 1.0f)));
 }
 
-Quaternion &Quaternion::rotateTowards(const Quaternion &q, float step) {
+Quaternion& Quaternion::rotateTowards(const Quaternion& q, float step) {
 
     const float angle = this->angleTo(q);
 
@@ -255,7 +255,7 @@ Quaternion &Quaternion::rotateTowards(const Quaternion &q, float step) {
     return *this;
 }
 
-Quaternion &Quaternion::slerp(const Quaternion &qb, float t) {
+Quaternion& Quaternion::slerp(const Quaternion& qb, float t) {
 
     if (t == 0) return *this;
     if (t == 1) return this->copy(qb);
@@ -321,19 +321,19 @@ Quaternion &Quaternion::slerp(const Quaternion &qb, float t) {
     return *this;
 }
 
-Quaternion &Quaternion::identity() {
+Quaternion& Quaternion::identity() {
 
     return this->set(0, 0, 0, 1);
 }
 
-Quaternion &Quaternion::invert() {
+Quaternion& Quaternion::invert() {
 
     // Quaternion is assumed to have unit length
 
     return this->conjugate();
 }
 
-Quaternion &Quaternion::conjugate() {
+Quaternion& Quaternion::conjugate() {
 
     this->x.value_ *= -1;
     this->y.value_ *= -1;
@@ -344,7 +344,7 @@ Quaternion &Quaternion::conjugate() {
     return *this;
 }
 
-float Quaternion::dot(const Quaternion &v) const {
+float Quaternion::dot(const Quaternion& v) const {
 
     return this->x * v.x + this->y * v.y + this->z * v.z + this->w * v.w;
 }
@@ -359,7 +359,7 @@ float Quaternion::length() const {
     return std::sqrt(this->x * this->x + this->y * this->y + this->z * this->z + this->w * this->w);
 }
 
-Quaternion &Quaternion::normalize() {
+Quaternion& Quaternion::normalize() {
 
     auto l = length();
 
@@ -385,17 +385,17 @@ Quaternion &Quaternion::normalize() {
     return *this;
 }
 
-Quaternion &Quaternion::multiply(const Quaternion &q) {
+Quaternion& Quaternion::multiply(const Quaternion& q) {
 
     return this->multiplyQuaternions(*this, q);
 }
 
-Quaternion &Quaternion::premultiply(const Quaternion &q) {
+Quaternion& Quaternion::premultiply(const Quaternion& q) {
 
     return this->multiplyQuaternions(q, *this);
 }
 
-Quaternion &Quaternion::multiplyQuaternions(const Quaternion &a, const Quaternion &b) {
+Quaternion& Quaternion::multiplyQuaternions(const Quaternion& a, const Quaternion& b) {
 
     // from http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/code/index.htm
 
@@ -417,12 +417,12 @@ Quaternion Quaternion::clone() const {
     return Quaternion(x.value_, y.value_, z.value_, w.value_);
 }
 
-bool Quaternion::equals(const Quaternion &v) const {
+bool Quaternion::equals(const Quaternion& v) const {
 
     return ((v.x() == this->x()) && (v.y() == this->y()) && (v.z() == this->z()) && (v.w() == this->w()));
 }
 
-Quaternion &Quaternion::_onChange(std::function<void()> callback) {
+Quaternion& Quaternion::_onChange(std::function<void()> callback) {
 
     this->onChangeCallback_ = std::move(callback);
     this->x.setCallback(this->onChangeCallback_);

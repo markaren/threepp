@@ -89,7 +89,7 @@ void PerspectiveCamera::updateProjectionMatrix() {
     if (this->view && this->view->enabled) {
 
         const auto fullWidth = static_cast<float>(view->fullWidth),
-                    fullHeight = static_cast<float>(view->fullHeight);
+                   fullHeight = static_cast<float>(view->fullHeight);
 
         left += static_cast<float>(view->offsetX) * width / fullWidth;
         top -= static_cast<float>(view->offsetY) * height / fullHeight;

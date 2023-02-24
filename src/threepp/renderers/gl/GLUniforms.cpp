@@ -14,7 +14,7 @@ namespace {
 
     // helper type for the visitor
     template<class... Ts>
-    struct overloaded : Ts... {
+    struct overloaded: Ts... {
         using Ts::operator()...;
     };
     // explicit deduction guide (not needed as of C++20)
@@ -36,7 +36,7 @@ namespace {
         }
     };
 
-    struct SingleUniform : UniformObject {
+    struct SingleUniform: UniformObject {
 
         explicit SingleUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
             : UniformObject(std::move(id)),
@@ -45,7 +45,7 @@ namespace {
               setValueFun(getSingularSetter()) {
         }
 
-        void setValue(const UniformValue &value, GLTextures *textures) override {
+        void setValue(const UniformValue& value, GLTextures* textures) override {
             setValueFun(value, textures);
         }
 
@@ -53,54 +53,54 @@ namespace {
         int addr;
         std::vector<float> cache;
         ActiveUniformInfo activeInfo;
-        std::function<void(const UniformValue &, GLTextures *)> setValueFun;
+        std::function<void(const UniformValue&, GLTextures*)> setValueFun;
 
-        std::function<void(const UniformValue &, GLTextures *)> getSingularSetter() {
+        std::function<void(const UniformValue&, GLTextures*)> getSingularSetter() {
 
             switch (activeInfo.type) {
 
                 case 0x1406:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV1f(value); };
+                    return [&](const UniformValue& value, GLTextures*) { setValueV1f(value); };
 
                 case 0x8b50:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV2f(value); };
+                    return [&](const UniformValue& value, GLTextures*) { setValueV2f(value); };
 
                 case 0x8b51:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV3f(value); };
+                    return [&](const UniformValue& value, GLTextures*) { setValueV3f(value); };
 
                 case 0x8b52:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV4f(value); };
+                    return [&](const UniformValue& value, GLTextures*) { setValueV4f(value); };
 
                 case 0x8b5b:
-                    return [&](const UniformValue &value, GLTextures *) { setValueM3(value); };
+                    return [&](const UniformValue& value, GLTextures*) { setValueM3(value); };
 
                 case 0x8b5c:
-                    return [&](const UniformValue &value, GLTextures *) { setValueM4(value); };
+                    return [&](const UniformValue& value, GLTextures*) { setValueM4(value); };
 
                 case 0x8b5e:
                 case 0x8d66:
-                    return [&](const UniformValue &value, GLTextures *textures) { setValueT1(value, textures); };
+                    return [&](const UniformValue& value, GLTextures* textures) { setValueT1(value, textures); };
 
                 case 0x1404:
                 case 0x8b56:
-                    return [&](const UniformValue &value, GLTextures *) { setValueV1i(value); };
+                    return [&](const UniformValue& value, GLTextures*) { setValueV1i(value); };
 
                 default:
-                    return [&](const UniformValue &value, GLTextures *) {
+                    return [&](const UniformValue& value, GLTextures*) {
                         std::cout << "SingleUniform TODO: "
                                   << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
                     };
             }
         }
 
-        void setValueT1(const UniformValue &value, GLTextures *textures) const {
+        void setValueT1(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
             auto tex = std::get<std::shared_ptr<Texture>>(value);
             textures->setTexture2D(*tex, unit);
         }
 
-        void setValueV1i(const UniformValue &value) const {
+        void setValueV1i(const UniformValue& value) const {
 
             if (std::holds_alternative<bool>(value)) {
                 bool b = std::get<bool>(value);
@@ -113,7 +113,7 @@ namespace {
             }
         }
 
-        void setValueV1f(const UniformValue &value) {
+        void setValueV1f(const UniformValue& value) {
 
             float f = std::get<float>(value);
 
@@ -125,7 +125,7 @@ namespace {
         }
 
         template<class ArrayLike>
-        void setValueV2fHelper(ArrayLike &value) {
+        void setValueV2fHelper(ArrayLike& value) {
 
             float x = value[0];
             float y = value[1];
@@ -140,7 +140,7 @@ namespace {
             }
         }
 
-        void setValueV2f(const UniformValue &value) {
+        void setValueV2f(const UniformValue& value) {
 
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
@@ -150,7 +150,7 @@ namespace {
         }
 
         template<class ArrayLike>
-        void setValueV3fHelper(ArrayLike &value) {
+        void setValueV3fHelper(ArrayLike& value) {
 
             float x = value[0];
             float y = value[1];
@@ -167,7 +167,7 @@ namespace {
             }
         }
 
-        void setValueV3f(const UniformValue &value) {
+        void setValueV3f(const UniformValue& value) {
 
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
@@ -179,7 +179,7 @@ namespace {
         }
 
         template<class ArrayLike>
-        void setValueV4fHelper(ArrayLike &value) {
+        void setValueV4fHelper(ArrayLike& value) {
 
             float x = value[0];
             float y = value[1];
@@ -198,7 +198,7 @@ namespace {
             }
         }
 
-        void setValueV4f(const UniformValue &value) {
+        void setValueV4f(const UniformValue& value) {
 
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
@@ -209,7 +209,7 @@ namespace {
         }
 
         template<class ArrayLike>
-        void setValueM3Helper(ArrayLike &value) {
+        void setValueM3Helper(ArrayLike& value) {
 
             if (arraysEqual(cache, value)) return;
 
@@ -219,7 +219,7 @@ namespace {
             copyArray(cache, value);
         }
 
-        void setValueM3(const UniformValue &value) {
+        void setValueM3(const UniformValue& value) {
 
             std::visit(overloaded{
                                [&](auto) { std::cout << "setValueM3: unsupported variant at index: " << value.index() << std::endl; },
@@ -229,7 +229,7 @@ namespace {
         }
 
         template<class ArrayLike>
-        void setValueM4Helper(ArrayLike &value) {
+        void setValueM4Helper(ArrayLike& value) {
 
             if (arraysEqual(cache, value)) return;
 
@@ -239,17 +239,17 @@ namespace {
             copyArray(cache, value);
         }
 
-        void setValueM4(const UniformValue &value) {
+        void setValueM4(const UniformValue& value) {
 
             std::visit(overloaded{
                                [&](auto arg) { std::cout << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
-                               [&](Matrix4 *arg) { setValueM4Helper(arg->elements); }},
+                               [&](Matrix4* arg) { setValueM4Helper(arg->elements); }},
                        value);
         }
     };
 
-    struct PureArrayUniform : UniformObject {
+    struct PureArrayUniform: UniformObject {
 
         explicit PureArrayUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
             : UniformObject(std::move(id)),
@@ -257,43 +257,43 @@ namespace {
               addr(addr),
               setValueFun(getPureArraySetter()) {}
 
-        void setValue(const UniformValue &value, GLTextures *textures) override {
+        void setValue(const UniformValue& value, GLTextures* textures) override {
             setValueFun(value, textures);
             //            std::cout << "PureArrayUniform '" << id << "'" << std::endl;
         }
 
-        [[nodiscard]] std::function<void(const UniformValue &, GLTextures *)> getPureArraySetter() const {
+        [[nodiscard]] std::function<void(const UniformValue&, GLTextures*)> getPureArraySetter() const {
 
             switch (activeInfo.type) {
 
                 case 0x1406:// FLOAT
-                    return [&](const UniformValue &value, GLTextures *) {
-                        auto &data = std::get<std::vector<float>>(value);
+                    return [&](const UniformValue& value, GLTextures*) {
+                        auto& data = std::get<std::vector<float>>(value);
                         glUniform2fv(addr, activeInfo.size, data.data());
                     };
                 case 0x8b50:// VEC2"
-                    return [&](const UniformValue &value, GLTextures *) {
-                        auto &data = std::get<std::vector<Vector2>>(value);
+                    return [&](const UniformValue& value, GLTextures*) {
+                        auto& data = std::get<std::vector<Vector2>>(value);
                         glUniform2fv(addr, activeInfo.size, flatten(data, activeInfo.size, 2).data());
                     };
                 case 0x8b51:// VEC3"
-                    return [&](const UniformValue &value, GLTextures *) {
-                        auto &data = std::get<std::vector<Vector3>>(value);
+                    return [&](const UniformValue& value, GLTextures*) {
+                        auto& data = std::get<std::vector<Vector3>>(value);
                         glUniform3fv(addr, activeInfo.size, flatten(data, activeInfo.size, 3).data());
                     };
 
                 case 0x8b5b:// MAT3"
-                    return [&](const UniformValue &value, GLTextures *) {
-                        auto &data = std::get<std::vector<Matrix3>>(value);
+                    return [&](const UniformValue& value, GLTextures*) {
+                        auto& data = std::get<std::vector<Matrix3>>(value);
                         glUniformMatrix3fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 9).data());
                     };
                 case 0x8b5c:// MAT4"
-                    return [&](const UniformValue &value, GLTextures *) {
-                        auto &data = std::get<std::vector<Matrix4>>(value);
+                    return [&](const UniformValue& value, GLTextures*) {
+                        auto& data = std::get<std::vector<Matrix4>>(value);
                         glUniformMatrix4fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 16).data());
                     };
                 default:
-                    return [&](const UniformValue &value, GLTextures *) {
+                    return [&](const UniformValue& value, GLTextures*) {
                         std::cout << "PureArrayUniform TODO: "
                                   << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
                     };
@@ -303,24 +303,24 @@ namespace {
     private:
         int addr;
         ActiveUniformInfo activeInfo;
-        std::function<void(const UniformValue &, GLTextures *)> setValueFun;
+        std::function<void(const UniformValue&, GLTextures*)> setValueFun;
     };
 
-    struct StructuredUniform : UniformObject, Container {
+    struct StructuredUniform: UniformObject, Container {
 
         explicit StructuredUniform(std::string id, ActiveUniformInfo activeInfo)
             : UniformObject(std::move(id)),
               activeInfo(std::move(activeInfo)) {}
 
-        void setValue(const UniformValue &value, GLTextures *textures) override {
+        void setValue(const UniformValue& value, GLTextures* textures) override {
             //            std::cout << "StructuredUniform '" << id << "', index=" << value.index() << std::endl;
 
             std::visit(
                     overloaded{
                             [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
                             [&](std::unordered_map<std::string, NestedUniformValue> arg) {
-                                for (auto &u : seq) {
-                                    NestedUniformValue &v = arg.at(u->id);
+                                for (auto& u : seq) {
+                                    NestedUniformValue& v = arg.at(u->id);
                                     std::visit(overloaded{
                                                        [&](auto) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
                                                        [&](int arg) { u->setValue(arg, textures); },
@@ -331,8 +331,8 @@ namespace {
                                                v);
                                 }
                             },
-                            [&](std::vector<std::unordered_map<std::string, NestedUniformValue> *> arg) {
-                                for (auto &u : seq) {
+                            [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
+                                for (auto& u : seq) {
                                     int index = std::stoi(u->id);
                                     u->setValue(*arg[index], textures);
                                 }
@@ -344,13 +344,13 @@ namespace {
         ActiveUniformInfo activeInfo;
     };
 
-    void addUniform(Container *container, const std::shared_ptr<UniformObject> &uniformObject) {
+    void addUniform(Container* container, const std::shared_ptr<UniformObject>& uniformObject) {
 
         container->seq.emplace_back(uniformObject);
         container->map[uniformObject->id] = uniformObject;
     }
 
-    void parseUniform(ActiveUniformInfo &activeInfo, int addr, Container *container) {
+    void parseUniform(ActiveUniformInfo& activeInfo, int addr, Container* container) {
 
         static std::regex rex(R"(([\w\d_]+)(\])?(\[|\.)?)");
 
@@ -387,7 +387,7 @@ namespace {
                     addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo));
                 }
 
-                container = dynamic_cast<Container *>(container->map.at(id).get());
+                container = dynamic_cast<Container*>(container->map.at(id).get());
             }
 
             ++rex_it;
@@ -408,11 +408,11 @@ GLUniforms::GLUniforms(unsigned int program) {
         ActiveUniformInfo info(program, i);
         GLint addr = glGetUniformLocation(program, info.name.c_str());
 
-        parseUniform(info, addr, dynamic_cast<Container *>(this));
+        parseUniform(info, addr, dynamic_cast<Container*>(this));
     }
 }
 
-void GLUniforms::setValue(const std::string &name, const UniformValue &value, GLTextures *textures) {
+void GLUniforms::setValue(const std::string& name, const UniformValue& value, GLTextures* textures) {
 
     if (map.count(name)) {
 
@@ -420,11 +420,11 @@ void GLUniforms::setValue(const std::string &name, const UniformValue &value, GL
     }
 }
 
-void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>> &seq, UniformMap &values, GLTextures *textures) {
+void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values, GLTextures* textures) {
 
-    for (const auto &u : seq) {
+    for (const auto& u : seq) {
 
-        Uniform &v = values.at(u->id);
+        Uniform& v = values.at(u->id);
 
         if (!v.needsUpdate || (v.needsUpdate && v.needsUpdate.value())) {
 
@@ -434,11 +434,11 @@ void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>> &seq, Unifor
     }
 }
 
-std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector<std::shared_ptr<UniformObject>> &seq, UniformMap &values) {
+std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values) {
 
     std::vector<std::shared_ptr<UniformObject>> r;
 
-    for (const auto &u : seq) {
+    for (const auto& u : seq) {
 
         if (values.count(u->id)) r.emplace_back(u);
     }

@@ -11,7 +11,7 @@
 
 namespace threepp {
 
-    class SphereGeometry : public BufferGeometry {
+    class SphereGeometry: public BufferGeometry {
 
     public:
         const float radius;

@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class InstancedBufferGeometry : public BufferGeometry {
+    class InstancedBufferGeometry: public BufferGeometry {
 
     public:
         int instanceCount = Infinity<int>;
@@ -21,7 +21,7 @@ namespace threepp {
         }
 
     protected:
-        InstancedBufferGeometry() : BufferGeometry() {}
+        InstancedBufferGeometry(): BufferGeometry() {}
     };
 
 }// namespace threepp

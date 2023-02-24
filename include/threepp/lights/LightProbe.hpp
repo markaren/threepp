@@ -11,13 +11,12 @@
 
 namespace threepp {
 
-    class LightProbe : Light {
+    class LightProbe: Light {
 
     public:
         SphericalHarmonis3 sh;
 
     protected:
-
         explicit LightProbe(SphericalHarmonis3 sh = SphericalHarmonis3(), float intensity = 1)
             : Light(0xffffff, intensity), sh(std::move(sh)) {}
     };

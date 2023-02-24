@@ -8,7 +8,7 @@ using namespace threepp;
 
 namespace {
 
-    std::optional<Intersection> checkIntersection(Object3D *object, Material *material, Raycaster &raycaster, Ray &ray, const Vector3 &pA, const Vector3 &pB, const Vector3 &pC, Vector3 &point) {
+    std::optional<Intersection> checkIntersection(Object3D* object, Material* material, Raycaster& raycaster, Ray& ray, const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
         Vector3 _intersectionPointWorld{};
 
@@ -38,7 +38,7 @@ namespace {
         return intersection;
     }
 
-    std::optional<Intersection> checkBufferGeometryIntersection(Object3D *object, Material *material, Raycaster &raycaster, Ray &ray, const FloatBufferAttribute &position, const FloatBufferAttribute *uv, const FloatBufferAttribute *uv2, int a, int b, int c) {
+    std::optional<Intersection> checkBufferGeometryIntersection(Object3D* object, Material* material, Raycaster& raycaster, Ray& ray, const FloatBufferAttribute& position, const FloatBufferAttribute* uv, const FloatBufferAttribute* uv2, int a, int b, int c) {
 
         Vector3 _vA{};
         Vector3 _vB{};
@@ -91,7 +91,7 @@ namespace {
 
 }// namespace
 
-void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {
+void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     if (material() == nullptr) return;
 
@@ -136,7 +136,7 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
 
         if (numMaterials() > 1) {
 
-            for (auto &group : groups) {
+            for (auto& group : groups) {
 
                 auto groupMaterial = materials_[group.materialIndex].get();
 
@@ -187,7 +187,7 @@ void Mesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) 
 
         if (numMaterials() > 1) {
 
-            for (auto &group : groups) {
+            for (auto& group : groups) {
 
                 auto groupMaterial = materials_[group.materialIndex].get();
 

@@ -9,10 +9,10 @@ namespace threepp {
 
     class PointLight;
 
-    class PointLightShadow : public LightShadow {
+    class PointLightShadow: public LightShadow {
 
     public:
-        void updateMatrices(PointLight *light, int viewportIndex = 0);
+        void updateMatrices(PointLight* light, int viewportIndex = 0);
 
         static std::shared_ptr<PointLightShadow> create() {
 

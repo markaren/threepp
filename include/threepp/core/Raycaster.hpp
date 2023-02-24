@@ -19,7 +19,7 @@ namespace threepp {
 
         float distance;
         Vector3 point;
-        Object3D *object;
+        Object3D* object;
 
         std::optional<int> faceIndex;
         std::optional<Vector2> uv;
@@ -35,23 +35,23 @@ namespace threepp {
         float far;
 
         Ray ray;
-        Camera *camera;
+        Camera* camera;
         Layers layers{};
 
-        explicit Raycaster(const Vector3 &origin = Vector3(), const Vector3 &direction = Vector3(), float near = 0, float far = std::numeric_limits<float>::infinity())
+        explicit Raycaster(const Vector3& origin = Vector3(), const Vector3& direction = Vector3(), float near = 0, float far = std::numeric_limits<float>::infinity())
             : near(near), far(far), ray(origin, direction), camera(nullptr) {}
 
-        void set(const Vector3 &origin, const Vector3 &direction);
+        void set(const Vector3& origin, const Vector3& direction);
 
-        void setFromCamera(const Vector2 &coords, Camera *camera);
+        void setFromCamera(const Vector2& coords, Camera* camera);
 
-        void setFromCamera(const Vector2 &coords, const std::shared_ptr<Camera> &camera) {
+        void setFromCamera(const Vector2& coords, const std::shared_ptr<Camera>& camera) {
             setFromCamera(coords, camera.get());
         }
 
-        std::vector<Intersection> intersectObject(Object3D *object, bool recursive = false);
+        std::vector<Intersection> intersectObject(Object3D* object, bool recursive = false);
 
-        std::vector<Intersection> intersectObjects(std::vector<std::shared_ptr<Object3D>> &objects, bool recursive = false);
+        std::vector<Intersection> intersectObjects(std::vector<std::shared_ptr<Object3D>>& objects, bool recursive = false);
     };
 
 }// namespace threepp

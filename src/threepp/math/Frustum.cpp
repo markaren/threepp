@@ -9,12 +9,12 @@ using namespace threepp;
 namespace {
     Sphere _sphere{};
     Vector3 _vector{};
-}
+}// namespace
 
 Frustum::Frustum(Plane p0, Plane p1, Plane p2, Plane p3, Plane p4, Plane p5)
     : planes_{p0, p1, p2, p3, p4, p5} {}
 
-Frustum &Frustum::set(const Plane &p0, const Plane &p1, const Plane &p2, const Plane &p3, const Plane &p4, const Plane &p5) {
+Frustum& Frustum::set(const Plane& p0, const Plane& p1, const Plane& p2, const Plane& p3, const Plane& p4, const Plane& p5) {
 
     planes_[0].copy(p0);
     planes_[1].copy(p1);
@@ -26,7 +26,7 @@ Frustum &Frustum::set(const Plane &p0, const Plane &p1, const Plane &p2, const P
     return *this;
 }
 
-Frustum &Frustum::copy(const Frustum &frustum) {
+Frustum& Frustum::copy(const Frustum& frustum) {
 
     for (int i = 0; i < 6; i++) {
 
@@ -36,9 +36,9 @@ Frustum &Frustum::copy(const Frustum &frustum) {
     return *this;
 }
 
-Frustum &Frustum::setFromProjectionMatrix(const Matrix4 &m) {
+Frustum& Frustum::setFromProjectionMatrix(const Matrix4& m) {
 
-    const auto &me = m.elements;
+    const auto& me = m.elements;
     const float me0 = me[0], me1 = me[1], me2 = me[2], me3 = me[3];
     const float me4 = me[4], me5 = me[5], me6 = me[6], me7 = me[7];
     const float me8 = me[8], me9 = me[9], me10 = me[10], me11 = me[11];
@@ -54,7 +54,7 @@ Frustum &Frustum::setFromProjectionMatrix(const Matrix4 &m) {
     return *this;
 }
 
-bool Frustum::intersectsObject(Object3D &object) {
+bool Frustum::intersectsObject(Object3D& object) {
 
 
     auto geometry = object.geometry();
@@ -66,7 +66,7 @@ bool Frustum::intersectsObject(Object3D &object) {
     return this->intersectsSphere(_sphere);
 }
 
-bool Frustum::intersectsSprite(const Sprite &sprite) {
+bool Frustum::intersectsSprite(const Sprite& sprite) {
     _sphere.center.set(0, 0, 0);
     _sphere.radius = 0.7071067811865476;
     _sphere.applyMatrix4(*sprite.matrixWorld);
@@ -74,9 +74,9 @@ bool Frustum::intersectsSprite(const Sprite &sprite) {
     return this->intersectsSphere(_sphere);
 }
 
-bool Frustum::intersectsSphere(const Sphere &sphere) {
+bool Frustum::intersectsSphere(const Sphere& sphere) {
 
-    const auto &center = sphere.center;
+    const auto& center = sphere.center;
     const float negRadius = -sphere.radius;
 
     for (int i = 0; i < 6; i++) {
@@ -92,11 +92,11 @@ bool Frustum::intersectsSphere(const Sphere &sphere) {
     return true;
 }
 
-bool Frustum::intersectsBox(const Box3 &box) {
+bool Frustum::intersectsBox(const Box3& box) {
 
     for (int i = 0; i < 6; i++) {
 
-        const auto &plane = planes_[i];
+        const auto& plane = planes_[i];
 
         // corner at max distance
 
@@ -113,7 +113,7 @@ bool Frustum::intersectsBox(const Box3 &box) {
     return true;
 }
 
-bool Frustum::containsPoint(const Vector3 &point) {
+bool Frustum::containsPoint(const Vector3& point) {
 
     for (int i = 0; i < 6; i++) {
 

@@ -10,7 +10,7 @@
 
 namespace threepp {
 
-    class Camera : public Object3D {
+    class Camera: public Object3D {
 
     public:
         float zoom = 1;
@@ -26,14 +26,14 @@ namespace threepp {
         Matrix4 projectionMatrixInverse{};
 
         Camera() = default;
-        Camera(float near, float far) : near(near), far(far){};
-        Camera(const Camera &) = delete;
+        Camera(float near, float far): near(near), far(far){};
+        Camera(const Camera&) = delete;
 
-        void getWorldDirection(Vector3 &target) override {
+        void getWorldDirection(Vector3& target) override {
 
             this->updateWorldMatrix(true, false);
 
-            const auto &e = this->matrixWorld->elements;
+            const auto& e = this->matrixWorld->elements;
 
             target.set(-e[8], -e[9], -e[10]).normalize();
         }
@@ -52,8 +52,7 @@ namespace threepp {
             this->matrixWorldInverse.copy(*this->matrixWorld).invert();
         }
 
-        virtual void updateProjectionMatrix() {};
-
+        virtual void updateProjectionMatrix(){};
     };
 
 }// namespace threepp

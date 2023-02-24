@@ -18,7 +18,6 @@ namespace threepp {
     class Quaternion {
 
     public:
-
         float_view x;
         float_view y;
         float_view z;
@@ -29,62 +28,62 @@ namespace threepp {
 
         float operator[](unsigned int index) const;
 
-        Quaternion &set(float x, float y, float z, float w);
+        Quaternion& set(float x, float y, float z, float w);
 
-        Quaternion &copy(const Quaternion &quaternion);
+        Quaternion& copy(const Quaternion& quaternion);
 
-        Quaternion &setFromEuler(const Euler &euler, bool update = true);
+        Quaternion& setFromEuler(const Euler& euler, bool update = true);
 
-        Quaternion &setFromAxisAngle(const Vector3 &axis, float angle);
+        Quaternion& setFromAxisAngle(const Vector3& axis, float angle);
 
-        Quaternion &setFromRotationMatrix(const Matrix4 &m);
+        Quaternion& setFromRotationMatrix(const Matrix4& m);
 
-        Quaternion &setFromUnitVectors(const Vector3 &vFrom, const Vector3 &vTo);
+        Quaternion& setFromUnitVectors(const Vector3& vFrom, const Vector3& vTo);
 
-        [[nodiscard]] float angleTo(const Quaternion &q) const;
+        [[nodiscard]] float angleTo(const Quaternion& q) const;
 
-        Quaternion &rotateTowards(const Quaternion& q, float step);
+        Quaternion& rotateTowards(const Quaternion& q, float step);
 
-        Quaternion &identity();
+        Quaternion& identity();
 
-        Quaternion &invert();
+        Quaternion& invert();
 
-        Quaternion &conjugate();
+        Quaternion& conjugate();
 
-        [[nodiscard]] float dot(const Quaternion &v) const;
+        [[nodiscard]] float dot(const Quaternion& v) const;
 
         [[nodiscard]] float lengthSq() const;
 
         [[nodiscard]] float length() const;
 
-        Quaternion &normalize();
+        Quaternion& normalize();
 
-        Quaternion &multiply(const Quaternion &q);
+        Quaternion& multiply(const Quaternion& q);
 
-        Quaternion &premultiply(const Quaternion &q);
+        Quaternion& premultiply(const Quaternion& q);
 
-        Quaternion &multiplyQuaternions(const Quaternion &a, const Quaternion &b);
+        Quaternion& multiplyQuaternions(const Quaternion& a, const Quaternion& b);
 
-        Quaternion &slerp(const Quaternion& qb, float t);
+        Quaternion& slerp(const Quaternion& qb, float t);
 
         [[nodiscard]] Quaternion clone() const;
 
-        [[nodiscard]] bool equals(const Quaternion &v) const;
+        [[nodiscard]] bool equals(const Quaternion& v) const;
 
-        bool operator==(const Quaternion &other) const {
+        bool operator==(const Quaternion& other) const {
 
             return equals(other);
         }
 
-        bool operator!=(const Quaternion &other) const {
+        bool operator!=(const Quaternion& other) const {
 
             return !equals(other);
         }
 
-        Quaternion &_onChange(std::function<void()> callback);
+        Quaternion& _onChange(std::function<void()> callback);
 
         template<class ArrayLike>
-        Quaternion &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Quaternion& fromArray(const ArrayLike& array, unsigned int offset = 0) {
 
             this->x.value_ = array[offset];
             this->y.value_ = array[offset + 1];
@@ -97,7 +96,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, unsigned int offset = 0) const {
+        void toArray(ArrayLike& array, unsigned int offset = 0) const {
 
             array[offset] = this->x();
             array[offset + 1] = this->y();
@@ -105,13 +104,12 @@ namespace threepp {
             array[offset + 3] = this->w();
         }
 
-        friend std::ostream &operator<<(std::ostream &os, const Quaternion &v) {
+        friend std::ostream& operator<<(std::ostream& os, const Quaternion& v) {
             os << "Quaternion(x=" << v.x << ", y=" << v.y << ", z=" << v.z << ", w=" << v.w << ")";
             return os;
         }
 
     private:
-
         std::function<void()> onChangeCallback_ = [] {};
     };
 

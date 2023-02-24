@@ -14,17 +14,17 @@ namespace {
 
 }// namespace
 
-void InstancedMesh::getColorAt(size_t index, Color &color) const {
+void InstancedMesh::getColorAt(size_t index, Color& color) const {
 
     color.fromArray(this->instanceColor->array(), index * 3);
 }
 
-void InstancedMesh::getMatrixAt(size_t index, Matrix4 &matrix) const {
+void InstancedMesh::getMatrixAt(size_t index, Matrix4& matrix) const {
 
     matrix.fromArray(this->instanceMatrix->array(), index * 16);
 }
 
-void InstancedMesh::setColorAt(size_t index, const Color &color) {
+void InstancedMesh::setColorAt(size_t index, const Color& color) {
 
     if (!this->instanceColor) {
 
@@ -34,7 +34,7 @@ void InstancedMesh::setColorAt(size_t index, const Color &color) {
     color.toArray(this->instanceColor->array(), index * 3);
 }
 
-void InstancedMesh::setMatrixAt(size_t index, const Matrix4 &matrix) const {
+void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {
 
     matrix.toArray(this->instanceMatrix->array(), index * 16);
 }
@@ -44,7 +44,7 @@ void InstancedMesh::dispose() {
     dispatchEvent("dispose", this);
 }
 
-void InstancedMesh::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {
+void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto& matrixWorld = this->matrixWorld;
     const auto raycastTimes = this->count;

@@ -14,15 +14,15 @@ namespace threepp::gl {
 
     struct GLMaterials {
 
-        explicit GLMaterials(GLProperties &properties)
+        explicit GLMaterials(GLProperties& properties)
             : properties(properties) {}
 
-        void refreshFogUniforms(UniformMap &uniforms, FogVariant &fog);
+        void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog);
 
-        void refreshMaterialUniforms(UniformMap &uniforms, Material *material, int pixelRatio, int height);
+        void refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height);
 
     private:
-        GLProperties &properties;
+        GLProperties& properties;
     };
 
 

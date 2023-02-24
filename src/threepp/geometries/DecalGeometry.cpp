@@ -11,7 +11,7 @@ namespace {
         Vector3 normal;
     };
 
-    DecalVertex clip(const DecalVertex &v0, const DecalVertex &v1, const Vector3 &p, float s) {
+    DecalVertex clip(const DecalVertex& v0, const DecalVertex& v1, const Vector3& p, float s) {
 
         auto d0 = v0.position.dot(p) - s;
         auto d1 = v1.position.dot(p) - s;
@@ -34,7 +34,7 @@ namespace {
         return v;
     }
 
-    std::vector<DecalVertex> clipGeometry(std::vector<DecalVertex> &inVertices, const Vector3 &plane, const Vector3 &size) {
+    std::vector<DecalVertex> clipGeometry(std::vector<DecalVertex>& inVertices, const Vector3& plane, const Vector3& size) {
 
         std::vector<DecalVertex> outVertices;
 
@@ -176,10 +176,10 @@ namespace {
 
 
 DecalGeometry::DecalGeometry(
-        const Mesh &mesh,
-        const Vector3 &position,
-        const Euler &orientation,
-        const Vector3 &size) {
+        const Mesh& mesh,
+        const Vector3& position,
+        const Euler& orientation,
+        const Vector3& size) {
 
     // buffers
 
@@ -200,7 +200,7 @@ DecalGeometry::DecalGeometry(
 
     // generate buffers
 
-    auto pushDecalVertex = [&](std::vector<DecalVertex> &decalVertices, Vector3 &vertex, Vector3 &normal) {
+    auto pushDecalVertex = [&](std::vector<DecalVertex>& decalVertices, Vector3& vertex, Vector3& normal) {
         // transform the vertex to world space, then to projector space
 
         vertex.applyMatrix4(*mesh.matrixWorld);
@@ -267,7 +267,7 @@ DecalGeometry::DecalGeometry(
 
         // third, generate final vertices, normals and uvs
 
-        for (auto &decalVertex : decalVertices) {
+        for (auto& decalVertex : decalVertices) {
 
             // create texture coordinates (we are still in projector space)
 

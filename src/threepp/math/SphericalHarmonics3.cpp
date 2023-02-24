@@ -3,9 +3,9 @@
 
 using namespace threepp;
 
-SphericalHarmonis3::SphericalHarmonis3() : coefficients_(9) {}
+SphericalHarmonis3::SphericalHarmonis3(): coefficients_(9) {}
 
-SphericalHarmonis3 &SphericalHarmonis3::set(const std::vector<Vector3> &coefficients) {
+SphericalHarmonis3& SphericalHarmonis3::set(const std::vector<Vector3>& coefficients) {
 
     for (int i = 0; i < 9; i++) {
 
@@ -15,7 +15,7 @@ SphericalHarmonis3 &SphericalHarmonis3::set(const std::vector<Vector3> &coeffici
     return *this;
 }
 
-SphericalHarmonis3 &SphericalHarmonis3::zero() {
+SphericalHarmonis3& SphericalHarmonis3::zero() {
 
     for (int i = 0; i < 9; i++) {
 
@@ -25,13 +25,13 @@ SphericalHarmonis3 &SphericalHarmonis3::zero() {
     return *this;
 }
 
-void SphericalHarmonis3::getAt(const Vector3 &normal, Vector3 &target) {
+void SphericalHarmonis3::getAt(const Vector3& normal, Vector3& target) {
 
     // normal is assumed to be unit length
 
     const auto x = normal.x, y = normal.y, z = normal.z;
 
-    const auto &coeff = this->coefficients_;
+    const auto& coeff = this->coefficients_;
 
     // band 0
     target.copy(coeff[0]).multiplyScalar(0.282095f);
@@ -49,13 +49,13 @@ void SphericalHarmonis3::getAt(const Vector3 &normal, Vector3 &target) {
     target.addScaledVector(coeff[8], 0.546274f * (x * x - y * y));
 }
 
-void SphericalHarmonis3::getIrradianceAt(const Vector3 &normal, Vector3 &target) {
+void SphericalHarmonis3::getIrradianceAt(const Vector3& normal, Vector3& target) {
 
     // normal is assumed to be unit length
 
     const auto x = normal.x, y = normal.y, z = normal.z;
 
-    const auto &coeff = this->coefficients_;
+    const auto& coeff = this->coefficients_;
 
     // band 0
     target.copy(coeff[0]).multiplyScalar(0.886227f);// π * 0.282095
@@ -73,7 +73,7 @@ void SphericalHarmonis3::getIrradianceAt(const Vector3 &normal, Vector3 &target)
     target.addScaledVector(coeff[8], 0.429043f * (x * x - y * y));// ( π / 4 ) * 0.546274
 }
 
-SphericalHarmonis3 &SphericalHarmonis3::add(const SphericalHarmonis3 &sh) {
+SphericalHarmonis3& SphericalHarmonis3::add(const SphericalHarmonis3& sh) {
 
     for (int i = 0; i < 9; i++) {
 
@@ -83,7 +83,7 @@ SphericalHarmonis3 &SphericalHarmonis3::add(const SphericalHarmonis3 &sh) {
     return *this;
 }
 
-SphericalHarmonis3 &SphericalHarmonis3::addScaledSH(const SphericalHarmonis3 &sh, float s) {
+SphericalHarmonis3& SphericalHarmonis3::addScaledSH(const SphericalHarmonis3& sh, float s) {
 
     for (int i = 0; i < 9; i++) {
 
@@ -93,7 +93,7 @@ SphericalHarmonis3 &SphericalHarmonis3::addScaledSH(const SphericalHarmonis3 &sh
     return *this;
 }
 
-SphericalHarmonis3 &SphericalHarmonis3::scale(float s) {
+SphericalHarmonis3& SphericalHarmonis3::scale(float s) {
 
     for (int i = 0; i < 9; i++) {
 
@@ -103,7 +103,7 @@ SphericalHarmonis3 &SphericalHarmonis3::scale(float s) {
     return *this;
 }
 
-SphericalHarmonis3 &SphericalHarmonis3::lerp(const SphericalHarmonis3 &sh, float alpha) {
+SphericalHarmonis3& SphericalHarmonis3::lerp(const SphericalHarmonis3& sh, float alpha) {
 
     for (int i = 0; i < 9; i++) {
 
@@ -113,6 +113,6 @@ SphericalHarmonis3 &SphericalHarmonis3::lerp(const SphericalHarmonis3 &sh, float
     return *this;
 }
 
-const std::vector<Vector3> &SphericalHarmonis3::getCoefficients() const {
+const std::vector<Vector3>& SphericalHarmonis3::getCoefficients() const {
     return coefficients_;
 }

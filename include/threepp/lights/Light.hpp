@@ -10,13 +10,13 @@
 
 namespace threepp {
 
-    class Light : public Object3D {
+    class Light: public Object3D {
 
     public:
         Color color;
         float intensity;
 
-        Light(const Light &) = delete;
+        Light(const Light&) = delete;
 
         [[nodiscard]] virtual std::string type() const {
 
@@ -26,10 +26,8 @@ namespace threepp {
         virtual void dispose(){};
 
     protected:
-
         Light(const Color& color, std::optional<float> intensity)
             : color(color), intensity(intensity.value_or(1)) {}
-
     };
 
 }// namespace threepp

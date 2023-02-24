@@ -1,6 +1,6 @@
 
-#include "threepp/threepp.hpp"
 #include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 
@@ -40,7 +40,7 @@ int main() {
 
     renderer.enableTextRendering();
     auto& textHandle = renderer.textHandle("Hello World");
-    textHandle.setPosition(0, canvas.getSize().height-30);
+    textHandle.setPosition(0, canvas.getSize().height - 30);
     textHandle.scale = 2;
 
 
@@ -54,20 +54,17 @@ int main() {
         ImGui::End();
     });
 
-    canvas.onWindowResize([&](WindowSize size){
+    canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        textHandle.setPosition(0, size.height-30);
+        textHandle.setPosition(0, size.height - 30);
     });
 
     canvas.animate([&] {
-
         renderer.render(scene, camera);
 
         ui.render();
         group->position.fromArray(posBuf);
-
     });
-
 }

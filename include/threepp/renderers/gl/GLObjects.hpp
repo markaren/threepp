@@ -13,12 +13,12 @@ namespace threepp::gl {
 
     struct GLObjects {
 
-        struct OnInstancedMeshDispose : public EventListener {
+        struct OnInstancedMeshDispose: public EventListener {
 
-            explicit OnInstancedMeshDispose(GLObjects &scope) : scope(scope) {}
+            explicit OnInstancedMeshDispose(GLObjects& scope): scope(scope) {}
 
-            void onEvent(Event &event) override {
-                auto instancedMesh = static_cast<InstancedMesh *>(event.target);
+            void onEvent(Event& event) override {
+                auto instancedMesh = static_cast<InstancedMesh*>(event.target);
 
                 instancedMesh->removeEventListener("dispose", this);
 
@@ -28,10 +28,10 @@ namespace threepp::gl {
             }
 
         private:
-            GLObjects &scope;
+            GLObjects& scope;
         };
 
-        GLObjects(GLGeometries &geometries, GLAttributes &attributes, GLInfo &info)
+        GLObjects(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
             : attributes_(attributes), geometries_(geometries), info_(info), onInstancedMeshDispose(*this) {}
 
         BufferGeometry* update(Object3D* object);
@@ -42,9 +42,9 @@ namespace threepp::gl {
         }
 
     private:
-        GLInfo &info_;
-        GLGeometries &geometries_;
-        GLAttributes &attributes_;
+        GLInfo& info_;
+        GLGeometries& geometries_;
+        GLAttributes& attributes_;
 
         OnInstancedMeshDispose onInstancedMeshDispose;
 
