@@ -10,44 +10,44 @@ bool BufferGeometry::hasIndex() const {
     return index_ != nullptr;
 }
 
-IntBufferAttribute *BufferGeometry::getIndex() {
+IntBufferAttribute* BufferGeometry::getIndex() {
 
     if (!index_) return nullptr;
 
     return this->index_.get();
 }
 
-const IntBufferAttribute *BufferGeometry::getIndex() const {
+const IntBufferAttribute* BufferGeometry::getIndex() const {
 
     if (!index_) return nullptr;
 
     return this->index_.get();
 }
 
-BufferGeometry &BufferGeometry::setIndex(std::vector<int> index) {
+BufferGeometry& BufferGeometry::setIndex(std::vector<int> index) {
 
     this->index_ = IntBufferAttribute::create(std::move(index), 1);
 
     return *this;
 }
 
-BufferGeometry &BufferGeometry::setIndex(std::unique_ptr<IntBufferAttribute> index) {
+BufferGeometry& BufferGeometry::setIndex(std::unique_ptr<IntBufferAttribute> index) {
 
     this->index_ = std::move(index);
 
     return *this;
 }
 
-const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> &BufferGeometry::getAttributes() const {
+const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& BufferGeometry::getAttributes() const {
     return attributes_;
 }
 
-void BufferGeometry::setAttribute(const std::string &name, std::unique_ptr<BufferAttribute> attribute) {
+void BufferGeometry::setAttribute(const std::string& name, std::unique_ptr<BufferAttribute> attribute) {
 
     attributes_[name] = std::move(attribute);
 }
 
-bool BufferGeometry::hasAttribute(const std::string &name) const {
+bool BufferGeometry::hasAttribute(const std::string& name) const {
 
     return attributes_.count(name);
 }
@@ -62,7 +62,7 @@ void BufferGeometry::clearGroups() {
     groups.clear();
 }
 
-BufferGeometry &BufferGeometry::setDrawRange(int start, int count) {
+BufferGeometry& BufferGeometry::setDrawRange(int start, int count) {
 
     this->drawRange.start = start;
     this->drawRange.count = count;
@@ -70,11 +70,11 @@ BufferGeometry &BufferGeometry::setDrawRange(int start, int count) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
+BufferGeometry& BufferGeometry::applyMatrix4(const Matrix4& matrix) {
 
     if (hasAttribute("position")) {
 
-        auto position = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("position").get());
+        auto position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
 
         position->applyMatrix4(matrix);
 
@@ -84,7 +84,7 @@ BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
 
     if (hasAttribute("normal")) {
 
-        auto normal = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("normal").get());
+        auto normal = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("normal").get());
 
         auto normalMatrix = Matrix3().getNormalMatrix(matrix);
 
@@ -96,7 +96,7 @@ BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
 
     if (hasAttribute("tangent")) {
 
-        auto tangent = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("tangent").get());
+        auto tangent = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("tangent").get());
 
         tangent->transformDirection(matrix);
 
@@ -116,7 +116,7 @@ BufferGeometry &BufferGeometry::applyMatrix4(const Matrix4 &matrix) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::applyQuaternion(const Quaternion &q) {
+BufferGeometry& BufferGeometry::applyQuaternion(const Quaternion& q) {
 
     Matrix4 _m1{};
     _m1.makeRotationFromQuaternion(q);
@@ -126,7 +126,7 @@ BufferGeometry &BufferGeometry::applyQuaternion(const Quaternion &q) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::rotateX(float angle) {
+BufferGeometry& BufferGeometry::rotateX(float angle) {
 
     // rotate geometry around world x-axis
 
@@ -138,7 +138,7 @@ BufferGeometry &BufferGeometry::rotateX(float angle) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::rotateY(float angle) {
+BufferGeometry& BufferGeometry::rotateY(float angle) {
 
     // rotate geometry around world y-axis
 
@@ -150,7 +150,7 @@ BufferGeometry &BufferGeometry::rotateY(float angle) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::rotateZ(float angle) {
+BufferGeometry& BufferGeometry::rotateZ(float angle) {
 
     // rotate geometry around world z-axis
 
@@ -162,7 +162,7 @@ BufferGeometry &BufferGeometry::rotateZ(float angle) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::translate(float x, float y, float z) {
+BufferGeometry& BufferGeometry::translate(float x, float y, float z) {
 
     // translate geometry
 
@@ -174,7 +174,7 @@ BufferGeometry &BufferGeometry::translate(float x, float y, float z) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::scale(float x, float y, float z) {
+BufferGeometry& BufferGeometry::scale(float x, float y, float z) {
 
     // scale geometry
 
@@ -186,7 +186,7 @@ BufferGeometry &BufferGeometry::scale(float x, float y, float z) {
     return *this;
 }
 
-BufferGeometry &BufferGeometry::center() {
+BufferGeometry& BufferGeometry::center() {
 
     this->computeBoundingBox();
 
@@ -208,7 +208,7 @@ void BufferGeometry::computeBoundingBox() {
 
     if (this->attributes_.count("position") != 0) {
 
-        const auto position = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("position").get());
+        const auto position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
 
         position->setFromBufferAttribute(*this->boundingBox);
 
@@ -232,7 +232,7 @@ void BufferGeometry::computeBoundingSphere() {
 
     if (this->attributes_.count("position")) {
 
-        const auto &position = dynamic_cast<TypedBufferAttribute<float> *>(this->attributes_.at("position").get());
+        const auto& position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
 
         // first, find the center of the bounding sphere
 
@@ -282,7 +282,7 @@ void BufferGeometry::normalizeNormals() {
     }
 }
 
-void BufferGeometry::copy(const BufferGeometry &source) {
+void BufferGeometry::copy(const BufferGeometry& source) {
     // reset
 
     this->index_ = nullptr;
@@ -293,11 +293,11 @@ void BufferGeometry::copy(const BufferGeometry &source) {
 
     // name
 
-//        this->name = source.name;
+    //        this->name = source.name;
 
     // index
 
-    auto &index = source.index_;
+    auto& index = source.index_;
 
     if (index) {
 
@@ -306,9 +306,9 @@ void BufferGeometry::copy(const BufferGeometry &source) {
 
     // attributes
 
-    auto &attributes = source.attributes_;
+    auto& attributes = source.attributes_;
 
-    for (const auto &[name, attribute] : attributes) {
+    for (const auto& [name, attribute] : attributes) {
 
         if (attribute->typed<int>()) {
             this->setAttribute(name, attribute->typed<int>()->clone());
@@ -317,20 +317,19 @@ void BufferGeometry::copy(const BufferGeometry &source) {
         } else {
             throw std::runtime_error("TODO");
         }
-
     }
 
 
     // groups
 
-    for (auto &group : source.groups) {
+    for (auto& group : source.groups) {
 
         this->addGroup(group.start, group.count, group.materialIndex);
     }
 
     // bounding box
 
-    auto &boundingBox = source.boundingBox;
+    auto& boundingBox = source.boundingBox;
 
     if (boundingBox) {
 
@@ -339,7 +338,7 @@ void BufferGeometry::copy(const BufferGeometry &source) {
 
     // bounding sphere
 
-    auto &boundingSphere = source.boundingSphere;
+    auto& boundingSphere = source.boundingSphere;
 
     if (boundingSphere) {
 

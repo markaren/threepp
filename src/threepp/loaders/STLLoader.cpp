@@ -6,13 +6,13 @@
 using namespace threepp;
 
 
-std::shared_ptr<BufferGeometry> STLLoader::load(const std::string &path) const {
+std::shared_ptr<BufferGeometry> STLLoader::load(const std::string& path) const {
 
     std::ifstream reader(path, std::ios::binary);
     reader.seekg(80, std::ios::beg);
 
     uint32_t faces;
-    reader.read(reinterpret_cast<char *>(&faces), sizeof(uint32_t));
+    reader.read(reinterpret_cast<char*>(&faces), sizeof(uint32_t));
 
     const int dataOffset = 84;
     const int faceLength = 12 * 4 + 2;
@@ -30,9 +30,9 @@ std::shared_ptr<BufferGeometry> STLLoader::load(const std::string &path) const {
         int start = dataOffset + face * faceLength;
         reader.seekg(start, std::ios::beg);
 
-        reader.read(reinterpret_cast<char *>(&normalX), sizeof(float));
-        reader.read(reinterpret_cast<char *>(&normalY), sizeof(float));
-        reader.read(reinterpret_cast<char *>(&normalZ), sizeof(float));
+        reader.read(reinterpret_cast<char*>(&normalX), sizeof(float));
+        reader.read(reinterpret_cast<char*>(&normalY), sizeof(float));
+        reader.read(reinterpret_cast<char*>(&normalZ), sizeof(float));
 
 
         for (int i = 1; i <= 3; i++) {
@@ -40,13 +40,13 @@ std::shared_ptr<BufferGeometry> STLLoader::load(const std::string &path) const {
             int componentIdx = face * 3 * 3 + (i - 1) * 3;
             reader.seekg(vertexStart, std::ios::beg);
 
-            float &x = vertices.emplace_back();
-            float &y = vertices.emplace_back();
-            float &z = vertices.emplace_back();
+            float& x = vertices.emplace_back();
+            float& y = vertices.emplace_back();
+            float& z = vertices.emplace_back();
 
-            reader.read(reinterpret_cast<char *>(&vertices[componentIdx]), 4);
-            reader.read(reinterpret_cast<char *>(&vertices[componentIdx + 1]), 4);
-            reader.read(reinterpret_cast<char *>(&vertices[componentIdx + 2]), 4);
+            reader.read(reinterpret_cast<char*>(&vertices[componentIdx]), 4);
+            reader.read(reinterpret_cast<char*>(&vertices[componentIdx + 1]), 4);
+            reader.read(reinterpret_cast<char*>(&vertices[componentIdx + 2]), 4);
 
             normals[componentIdx] = normalX;
             normals[componentIdx + 1] = normalY;

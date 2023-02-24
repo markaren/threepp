@@ -1,8 +1,8 @@
 
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
-#include "threepp/core/Raycaster.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
+#include "threepp/core/Raycaster.hpp"
 
 using namespace threepp;
 
@@ -25,7 +25,7 @@ namespace {
     Vector2 _uvC;
 
 
-    void transformVertex(Vector3 &vertexPosition, const Vector3 &mvPosition, const Vector2 &center, const Vector3 &scale, const std::optional<std::pair<float, float>> &sincos) {
+    void transformVertex(Vector3& vertexPosition, const Vector3& mvPosition, const Vector2& center, const Vector3& scale, const std::optional<std::pair<float, float>>& sincos) {
 
         // compute position in camera space
         _alignedPosition.subVectors(vertexPosition, center).addScalar(0.5f).multiply(scale);
@@ -55,7 +55,7 @@ namespace {
 }// namespace
 
 
-Sprite::Sprite(const std::shared_ptr<SpriteMaterial> &material)
+Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
     : material(material),
       _geometry(new BufferGeometry()) {
 
@@ -66,12 +66,12 @@ Sprite::Sprite(const std::shared_ptr<SpriteMaterial> &material)
             -0.5f, 0.5f, 0.f, 0.f, 1.f};
 
     auto interleavedBuffer = std::make_shared<InterleavedBuffer>(float32Array, 5);
-    _geometry->setIndex({0, 1, 2,	0, 2, 3});
+    _geometry->setIndex({0, 1, 2, 0, 2, 3});
     _geometry->setAttribute("position", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
     _geometry->setAttribute("uv", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
 }
 
-void Sprite::raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) {
+void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
     if (!raycaster.camera) {
 
         throw std::runtime_error("THREE.Sprite: 'Raycaster.camera' needs to be set in order to raycast against sprites.");

@@ -10,7 +10,7 @@ Spherical::Spherical(float radius, float phi, float theta)
     : radius(radius), phi(phi), theta(theta) {}
 
 
-Spherical &Spherical::set(float radius, float phi, float theta) {
+Spherical& Spherical::set(float radius, float phi, float theta) {
 
     this->radius = radius;
     this->phi = phi;
@@ -19,7 +19,7 @@ Spherical &Spherical::set(float radius, float phi, float theta) {
     return *this;
 }
 
-Spherical &Spherical::copy(const Spherical &other) {
+Spherical& Spherical::copy(const Spherical& other) {
 
     this->radius = other.radius;
     this->phi = other.phi;
@@ -28,7 +28,7 @@ Spherical &Spherical::copy(const Spherical &other) {
     return *this;
 }
 
-Spherical &Spherical::makeSafe() {
+Spherical& Spherical::makeSafe() {
 
     const auto EPS = 0.000001f;
     this->phi = std::max(EPS, std::min(math::PI - EPS, this->phi));
@@ -36,12 +36,12 @@ Spherical &Spherical::makeSafe() {
     return *this;
 }
 
-Spherical &Spherical::setFromVector3(const Vector3 &v) {
+Spherical& Spherical::setFromVector3(const Vector3& v) {
 
     return this->setFromCartesianCoords(v.x, v.y, v.z);
 }
 
-Spherical &Spherical::setFromCartesianCoords(float x, float y, float z) {
+Spherical& Spherical::setFromCartesianCoords(float x, float y, float z) {
 
     this->radius = std::sqrt(x * x + y * y + z * z);
 

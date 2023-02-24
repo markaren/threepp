@@ -31,7 +31,7 @@ namespace threepp::shaders {
         Shader shadow;
         Shader physical;
 
-        [[nodiscard]] Shader& get(const std::string &name) {
+        [[nodiscard]] Shader& get(const std::string& name) {
 
             if (name == "basic") {
                 return basic;
@@ -72,10 +72,10 @@ namespace threepp::shaders {
             }
         }
 
-        ShaderLib(const ShaderLib &) = delete;
-        void operator=(const ShaderLib &) = delete;
+        ShaderLib(const ShaderLib&) = delete;
+        void operator=(const ShaderLib&) = delete;
 
-        static ShaderLib &instance() {
+        static ShaderLib& instance() {
             static ShaderLib instance;
             return instance;
         }

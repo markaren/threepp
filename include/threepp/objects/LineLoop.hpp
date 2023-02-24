@@ -7,10 +7,9 @@
 
 namespace threepp {
 
-    class LineLoop : public Line {
+    class LineLoop: public Line {
 
     public:
-
         static std::shared_ptr<LineLoop> create(const std::shared_ptr<BufferGeometry>& geometry = nullptr, const std::shared_ptr<Material>& material = nullptr) {
 
             return std::shared_ptr<LineLoop>(new LineLoop(geometry, (material)));

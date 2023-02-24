@@ -11,9 +11,9 @@ Box3::Box3()
     : min_(Vector3(+Infinity<float>, +Infinity<float>, +Infinity<float>)),
       max_(Vector3(-Infinity<float>, -Infinity<float>, -Infinity<float>)) {}
 
-Box3::Box3(Vector3 min, Vector3 max) : min_(min), max_(max) {}
+Box3::Box3(Vector3 min, Vector3 max): min_(min), max_(max) {}
 
-Box3 &Box3::set(const Vector3 &min, const Vector3 &max) {
+Box3& Box3::set(const Vector3& min, const Vector3& max) {
 
     this->min_.copy(min);
     this->max_.copy(max);
@@ -21,7 +21,7 @@ Box3 &Box3::set(const Vector3 &min, const Vector3 &max) {
     return *this;
 }
 
-Box3 &Box3::set(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
+Box3& Box3::set(float minX, float minY, float minZ, float maxX, float maxY, float maxZ) {
 
     this->min_.set(minX, minY, minZ);
     this->max_.set(maxX, maxY, maxZ);
@@ -29,7 +29,7 @@ Box3 &Box3::set(float minX, float minY, float minZ, float maxX, float maxY, floa
     return *this;
 }
 
-Box3 &Box3::setFromCenterAndSize(const Vector3 &center, const Vector3 &size) {
+Box3& Box3::setFromCenterAndSize(const Vector3& center, const Vector3& size) {
 
     Vector3 _vector{};
     const auto halfSize = _vector.copy(size).multiplyScalar(0.5f);
@@ -40,14 +40,14 @@ Box3 &Box3::setFromCenterAndSize(const Vector3 &center, const Vector3 &size) {
     return *this;
 }
 
-Box3 &Box3::setFromObject(Object3D &object) {
+Box3& Box3::setFromObject(Object3D& object) {
 
     this->makeEmpty();
 
     return this->expandByObject(object);
 }
 
-Box3 &Box3::copy(const Box3 &box) {
+Box3& Box3::copy(const Box3& box) {
 
     this->min_.copy(box.min_);
     this->max_.copy(box.max_);
@@ -55,7 +55,7 @@ Box3 &Box3::copy(const Box3 &box) {
     return *this;
 }
 
-Box3 &Box3::makeEmpty() {
+Box3& Box3::makeEmpty() {
 
     this->min_.x = this->min_.y = this->min_.z = +Infinity<float>;
     this->max_.x = this->max_.y = this->max_.z = -Infinity<float>;
@@ -70,17 +70,17 @@ bool Box3::isEmpty() const {
     return (this->max_.x < this->min_.x) || (this->max_.y < this->min_.y) || (this->max_.z < this->min_.z);
 }
 
-void Box3::getCenter(Vector3 &target) const {
+void Box3::getCenter(Vector3& target) const {
 
     this->isEmpty() ? target.set(0, 0, 0) : target.addVectors(this->min_, this->max_).multiplyScalar(0.5f);
 }
 
-void Box3::getSize(Vector3 &target) const {
+void Box3::getSize(Vector3& target) const {
 
     this->isEmpty() ? target.set(0, 0, 0) : target.subVectors(this->max_, this->min_);
 }
 
-Box3 &Box3::expandByPoint(const Vector3 &point) {
+Box3& Box3::expandByPoint(const Vector3& point) {
 
     this->min_.min(point);
     this->max_.max(point);
@@ -88,7 +88,7 @@ Box3 &Box3::expandByPoint(const Vector3 &point) {
     return *this;
 }
 
-Box3 &Box3::expandByVector(const Vector3 &vector) {
+Box3& Box3::expandByVector(const Vector3& vector) {
 
     this->min_.sub(vector);
     this->max_.add(vector);
@@ -96,7 +96,7 @@ Box3 &Box3::expandByVector(const Vector3 &vector) {
     return *this;
 }
 
-Box3 &Box3::expandByScalar(float scalar) {
+Box3& Box3::expandByScalar(float scalar) {
 
     this->min_.addScalar(-scalar);
     this->max_.addScalar(scalar);
@@ -104,7 +104,7 @@ Box3 &Box3::expandByScalar(float scalar) {
     return *this;
 }
 
-bool Box3::containsPoint(const Vector3 &point) const {
+bool Box3::containsPoint(const Vector3& point) const {
 
     return point.x < this->min_.x || point.x > this->max_.x ||
                            point.y < this->min_.y || point.y > this->max_.y ||
@@ -113,7 +113,7 @@ bool Box3::containsPoint(const Vector3 &point) const {
                    : true;
 }
 
-Box3 &Box3::expandByObject(Object3D &object) {
+Box3& Box3::expandByObject(Object3D& object) {
 
     // Computes the world-axis-aligned bounding box of an object (including its children),
     // accounting for both the object's, and children's, world transforms
@@ -136,7 +136,7 @@ Box3 &Box3::expandByObject(Object3D &object) {
         this->union_(_box);
     }
 
-    for (auto &child : object.children) {
+    for (auto& child : object.children) {
 
         this->expandByObject(*child);
     }
@@ -144,14 +144,14 @@ Box3 &Box3::expandByObject(Object3D &object) {
     return *this;
 }
 
-bool Box3::containsBox(const Box3 &box) const {
+bool Box3::containsBox(const Box3& box) const {
 
     return this->min_.x <= box.min_.x && box.max_.x <= this->max_.x &&
            this->min_.y <= box.min_.y && box.max_.y <= this->max_.y &&
            this->min_.z <= box.min_.z && box.max_.z <= this->max_.z;
 }
 
-void Box3::getParameter(const Vector3 &point, Vector3 &target) const {
+void Box3::getParameter(const Vector3& point, Vector3& target) const {
 
     // This can potentially have a divide by zero if the box
     // has a size dimension of 0.
@@ -162,7 +162,7 @@ void Box3::getParameter(const Vector3 &point, Vector3 &target) const {
             (point.z - this->min_.z) / (this->max_.z - this->min_.z));
 }
 
-bool Box3::intersectsBox(const Box3 &box) const {
+bool Box3::intersectsBox(const Box3& box) const {
 
     // using 6 splitting planes to rule out intersections.
     return box.max_.x < this->min_.x || box.min_.x > this->max_.x ||
@@ -172,7 +172,7 @@ bool Box3::intersectsBox(const Box3 &box) const {
                    : true;
 }
 
-bool Box3::intersectsSphere(const Sphere &sphere) const {
+bool Box3::intersectsSphere(const Sphere& sphere) const {
 
     Vector3 _vector{};
 
@@ -184,7 +184,7 @@ bool Box3::intersectsSphere(const Sphere &sphere) const {
     return _vector.distanceToSquared(sphere.center) <= (radius * radius);
 }
 
-bool Box3::intersectsPlane(const Plane &plane) const {
+bool Box3::intersectsPlane(const Plane& plane) const {
 
     // We compute the minimum and maximum dot product values. If those values
     // are on the same side (back or front) of the plane, then there is no intersection.
@@ -227,7 +227,7 @@ bool Box3::intersectsPlane(const Plane &plane) const {
     return (min <= -plane.constant && max >= -plane.constant);
 }
 
-bool Box3::intersectsTriangle(const Triangle &triangle) const {
+bool Box3::intersectsTriangle(const Triangle& triangle) const {
 
     if (this->isEmpty()) {
 
@@ -288,12 +288,12 @@ bool Box3::intersectsTriangle(const Triangle &triangle) const {
     return satForAxes(axes, _v0, _v1, _v2, _extents);
 }
 
-Vector3 &Box3::clampPoint(const Vector3 &point, Vector3 &target) const {
+Vector3& Box3::clampPoint(const Vector3& point, Vector3& target) const {
 
     return target.copy(point).clamp(this->min_, this->max_);
 }
 
-float Box3::distanceToPoint(const Vector3 &point) const {
+float Box3::distanceToPoint(const Vector3& point) const {
 
     Vector3 _vector{};
 
@@ -302,7 +302,7 @@ float Box3::distanceToPoint(const Vector3 &point) const {
     return clampedPoint.sub(point).length();
 }
 
-void Box3::getBoundingSphere(Sphere &target) const {
+void Box3::getBoundingSphere(Sphere& target) const {
 
     this->getCenter(target.center);
 
@@ -311,7 +311,7 @@ void Box3::getBoundingSphere(Sphere &target) const {
     target.radius = _vector.length() * 0.5f;
 }
 
-Box3 &Box3::intersect(const Box3 &box) {
+Box3& Box3::intersect(const Box3& box) {
 
     this->min_.max(box.min_);
     this->max_.min(box.max_);
@@ -322,7 +322,7 @@ Box3 &Box3::intersect(const Box3 &box) {
     return *this;
 }
 
-Box3 &Box3::union_(const Box3 &box) {
+Box3& Box3::union_(const Box3& box) {
 
     this->min_.min(box.min_);
     this->max_.max(box.max_);
@@ -330,7 +330,7 @@ Box3 &Box3::union_(const Box3 &box) {
     return *this;
 }
 
-Box3 &Box3::applyMatrix4(const Matrix4 &matrix) {
+Box3& Box3::applyMatrix4(const Matrix4& matrix) {
 
     // transform of empty box is an empty box.
     if (this->isEmpty()) return *this;
@@ -352,7 +352,7 @@ Box3 &Box3::applyMatrix4(const Matrix4 &matrix) {
     return *this;
 }
 
-Box3 &Box3::translate(const Vector3 &offset) {
+Box3& Box3::translate(const Vector3& offset) {
 
     this->min_.add(offset);
     this->max_.add(offset);
@@ -360,7 +360,7 @@ Box3 &Box3::translate(const Vector3 &offset) {
     return *this;
 }
 
-bool Box3::satForAxes(const std::vector<float> &axes, const Vector3 &v0, const Vector3 &v1, const Vector3 &v2, const Vector3 &extents) {
+bool Box3::satForAxes(const std::vector<float>& axes, const Vector3& v0, const Vector3& v1, const Vector3& v2, const Vector3& extents) {
 
     Vector3 _testAxis{};
 

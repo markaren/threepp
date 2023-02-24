@@ -11,8 +11,8 @@
 
 #include <cmath>
 #include <iostream>
-#include <vector>
 #include <list>
+#include <vector>
 
 #include <glad/glad.h>
 
@@ -21,7 +21,7 @@ using namespace threepp::gl;
 
 namespace {
 
-    inline unsigned int createShader(int type, const char *str) {
+    inline unsigned int createShader(int type, const char* str) {
 
         const auto shader = glCreateShader(type);
 
@@ -57,7 +57,7 @@ namespace {
         }
     }
 
-    std::string loopReplacer(const std::smatch &match) {
+    std::string loopReplacer(const std::smatch& match) {
 
         static std::regex reg1(R"(\[\s*i\s*\])");
         static std::regex reg2("UNROLLED_LOOP_INDEX");
@@ -75,19 +75,19 @@ namespace {
         return ss.str();
     }
 
-    std::string getTexelDecodingFunction(const std::string &functionName, int encoding) {
+    std::string getTexelDecodingFunction(const std::string& functionName, int encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return " + components.first + "ToLinear" + components.second + "; }";
     }
 
-    std::string getTexelEncodingFunction(const std::string &functionName, int encoding) {
+    std::string getTexelEncodingFunction(const std::string& functionName, int encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
     }
 
-    std::string getToneMappingFunction(const std::string &functionName, int toneMapping) {
+    std::string getToneMappingFunction(const std::string& functionName, int toneMapping) {
 
         std::string toneMappingName;
 
@@ -121,11 +121,11 @@ namespace {
         return "vec3 " + functionName + "( vec3 color ) { return " + toneMappingName + "ToneMapping( color ); }";
     }
 
-    std::string generateDefines(const std::unordered_map<std::string, std::string> &defines) {
+    std::string generateDefines(const std::unordered_map<std::string, std::string>& defines) {
 
         std::list<std::string> chunks;
 
-        for (const auto &[name, value] : defines) {
+        for (const auto& [name, value] : defines) {
 
             if (value == "false") continue;
 
@@ -159,12 +159,12 @@ namespace {
         return attributes;
     }
 
-    bool filterEmptyLine(const std::string &str) {
+    bool filterEmptyLine(const std::string& str) {
 
         return str.empty();
     }
 
-    void replaceLightNums(std::string &str, const ProgramParameters *parameters) {
+    void replaceLightNums(std::string& str, const ProgramParameters* parameters) {
 
         std::string& result = str;
         utils::replaceAll(result, "NUM_DIR_LIGHTS", std::to_string(parameters->numDirLights));
@@ -177,7 +177,7 @@ namespace {
         utils::replaceAll(result, "NUM_POINT_LIGHT_SHADOWS", std::to_string(parameters->numPointLightShadows));
     }
 
-    void replaceClippingPlaneNums(std::string &str, const ProgramParameters *parameters) {
+    void replaceClippingPlaneNums(std::string& str, const ProgramParameters* parameters) {
 
         utils::replaceAll(str, "NUM_CLIPPING_PLANES", std::to_string(parameters->numClippingPlanes));
         utils::replaceAll(str, "UNION_CLIPPING_PLANES", std::to_string(parameters->numClippingPlanes - parameters->numClipIntersection));
@@ -185,7 +185,7 @@ namespace {
 
     // Resolve Includes
 
-    std::string resolveIncludes(const std::string &str) {
+    std::string resolveIncludes(const std::string& str) {
 
         static const std::regex rex("#include +<([\\w\\d.]+)>");
 
@@ -200,7 +200,7 @@ namespace {
             result.append(str, pos, match.position(0) - pos);
             pos = match.position(0) + match.length(0);
 
-            const std::ssub_match &sub = match[1];
+            const std::ssub_match& sub = match[1];
             const std::string& r = shaders::ShaderChunk::instance().get(sub.str());
             if (r.empty()) {
                 std::stringstream ss;
@@ -220,7 +220,7 @@ namespace {
 
     // Unroll loops
 
-    std::string unrollLoops(const std::string &glsl) {
+    std::string unrollLoops(const std::string& glsl) {
 
         static const std::regex rex(R"(#pragma unroll_loop_start\s+for\s*\(\s*int\s+i\s*=\s*(\d+)\s*;\s*i\s*<\s*(\d+)\s*;\s*i\s*\+\+\s*\)\s*\{([\s\S]+?)\}\s+#pragma unroll_loop_end)");
 
@@ -232,7 +232,7 @@ namespace {
         return "precision highp float;\nprecision highp int;\n#define HIGH_PRECISION";
     }
 
-    std::string generateShadowMapTypeDefine(const ProgramParameters *parameters) {
+    std::string generateShadowMapTypeDefine(const ProgramParameters* parameters) {
 
         std::string shadowMapTypeDefine = "SHADOWMAP_TYPE_BASIC";
 
@@ -252,7 +252,7 @@ namespace {
         return shadowMapTypeDefine;
     }
 
-    std::string generateEnvMapTypeDefine(const ProgramParameters *parameters) {
+    std::string generateEnvMapTypeDefine(const ProgramParameters* parameters) {
 
         std::string envMapTypeDefine = "ENVMAP_TYPE_CUBE";
 
@@ -275,7 +275,7 @@ namespace {
         return envMapTypeDefine;
     }
 
-    std::string generateEnvMapModeDefine(const ProgramParameters *parameters) {
+    std::string generateEnvMapModeDefine(const ProgramParameters* parameters) {
 
         std::string envMapModeDefine = "ENVMAP_MODE_REFLECTION";
 
@@ -294,7 +294,7 @@ namespace {
         return envMapModeDefine;
     }
 
-    std::string generateEnvMapBlendingDefine(const ProgramParameters *parameters) {
+    std::string generateEnvMapBlendingDefine(const ProgramParameters* parameters) {
 
         std::string envMapBlendingDefine = "ENVMAP_BLENDING_NONE";
 
@@ -323,10 +323,10 @@ namespace {
 }// namespace
 
 
-GLProgram::GLProgram(const GLRenderer *renderer, std::string cacheKey, const ProgramParameters *parameters, GLBindingStates *bindingStates)
+GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates)
     : cacheKey(std::move(cacheKey)), bindingStates(bindingStates) {
 
-    auto &defines = parameters->defines;
+    auto& defines = parameters->defines;
 
     auto vertexShader = parameters->vertexShader;
     auto fragmentShader = parameters->fragmentShader;
@@ -353,7 +353,7 @@ GLProgram::GLProgram(const GLRenderer *renderer, std::string cacheKey, const Pro
                     std::remove_if(
                             v.begin(),
                             v.end(),
-                            [](const std::string &s) { return filterEmptyLine(s); }),
+                            [](const std::string& s) { return filterEmptyLine(s); }),
                     v.end());
 
             prefixVertex = utils::join(v);
@@ -371,7 +371,7 @@ GLProgram::GLProgram(const GLRenderer *renderer, std::string cacheKey, const Pro
                     std::remove_if(
                             v.begin(),
                             v.end(),
-                            [](const std::string &s) { return filterEmptyLine(s); }),
+                            [](const std::string& s) { return filterEmptyLine(s); }),
                     v.end());
 
             prefixFragment = utils::join(v);
@@ -493,7 +493,7 @@ GLProgram::GLProgram(const GLRenderer *renderer, std::string cacheKey, const Pro
 
             };
 
-            v.erase(std::remove_if(v.begin(), v.end(), [](const std::string &s) {
+            v.erase(std::remove_if(v.begin(), v.end(), [](const std::string& s) {
                         return s.empty();
                     }),
                     v.end());
@@ -593,7 +593,7 @@ GLProgram::GLProgram(const GLRenderer *renderer, std::string cacheKey, const Pro
                     std::remove_if(
                             v.begin(),
                             v.end(),
-                            [](const std::string &s) { return s.empty(); }),
+                            [](const std::string& s) { return s.empty(); }),
                     v.end());
 
             prefixFragment = utils::join(v);
@@ -677,7 +677,7 @@ GLProgram::GLProgram(const GLRenderer *renderer, std::string cacheKey, const Pro
             msg.resize(length);
             glGetProgramInfoLog(program, length, nullptr, &msg.front());
 
-            std::cerr << "[Shader error] " <<  msg << std::endl;
+            std::cerr << "[Shader error] " << msg << std::endl;
         }
     }
 

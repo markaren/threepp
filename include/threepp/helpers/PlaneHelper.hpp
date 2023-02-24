@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class PlaneHelper : public Line {
+    class PlaneHelper: public Line {
 
     public:
         Plane plane;
@@ -22,20 +22,20 @@ namespace threepp {
 
             this->scale.set(0.5f * this->size, 0.5f * this->size, scale);
 
-            this->children[0]->material()->side = (scale < 0) ? BackSide : FrontSide; // renderer flips side when determinant < 0; flipping not wanted here
+            this->children[0]->material()->side = (scale < 0) ? BackSide : FrontSide;// renderer flips side when determinant < 0; flipping not wanted here
 
             this->lookAt(this->plane.normal);
 
             Object3D::updateMatrixWorld(force);
         }
 
-        static std::shared_ptr<PlaneHelper> create(const Plane &plane, float size = 1, unsigned int hex = 0xffff00) {
+        static std::shared_ptr<PlaneHelper> create(const Plane& plane, float size = 1, unsigned int hex = 0xffff00) {
 
             return std::shared_ptr<PlaneHelper>(new PlaneHelper(plane, size, hex));
         }
 
     protected:
-        PlaneHelper(const Plane &plane, float size, unsigned int hex)
+        PlaneHelper(const Plane& plane, float size, unsigned int hex)
             : Line(BufferGeometry::create(), LineBasicMaterial::create()), plane(plane), size(size) {
 
             std::vector<float> positions{1, -1, 1, -1, 1, 1, -1, -1, 1, 1, 1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0};
@@ -43,7 +43,7 @@ namespace threepp {
             geometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
             geometry_->computeBoundingSphere();
 
-            auto material = dynamic_cast<LineBasicMaterial *>(material_.get());
+            auto material = dynamic_cast<LineBasicMaterial*>(material_.get());
             material->color.setHex(hex);
             material->toneMapped = false;
 

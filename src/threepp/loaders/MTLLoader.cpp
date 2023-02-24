@@ -12,7 +12,7 @@ using namespace threepp;
 
 namespace {
 
-    bool getMapForType(const MeshPhongMaterial &mat, const std::string &mapType) {
+    bool getMapForType(const MeshPhongMaterial& mat, const std::string& mapType) {
 
         if (mapType == "map") {
             return mat.map != nullptr;
@@ -31,7 +31,7 @@ namespace {
         }
     }
 
-    void setMapForType(MeshPhongMaterial &mat, const std::string &mapType, std::shared_ptr<Texture> map) {
+    void setMapForType(MeshPhongMaterial& mat, const std::string& mapType, std::shared_ptr<Texture> map) {
 
         if (mapType == "map") {
             mat.map = std::move(map);
@@ -50,7 +50,7 @@ namespace {
         }
     }
 
-    TexParams getTextureParams(const std::string &value, MeshPhongMaterial &params) {
+    TexParams getTextureParams(const std::string& value, MeshPhongMaterial& params) {
         TexParams texParams{Vector2(1, 1), Vector2(0, 0)};
 
         auto items = utils::split(value, ' ');
@@ -84,11 +84,11 @@ namespace {
 
 }// namespace
 
-MaterialCreator MTLLoader::load(const std::filesystem::path &path) {
+MaterialCreator MTLLoader::load(const std::filesystem::path& path) {
 
     std::ifstream in(path);
 
-    std::unordered_map<std::string, MatVariant> *info;
+    std::unordered_map<std::string, MatVariant>* info;
     MaterialsInfo materialsInfo;
 
     std::string line;
@@ -133,20 +133,20 @@ MaterialCreator MTLLoader::load(const std::filesystem::path &path) {
 }
 
 
-MaterialsInfo MaterialCreator::convert(const MaterialsInfo &mi) {
+MaterialsInfo MaterialCreator::convert(const MaterialsInfo& mi) {
 
     if (!options) return mi;
 
     MaterialsInfo converted = MaterialsInfo{};
 
-    for (auto &[key, mat] : mi) {
+    for (auto& [key, mat] : mi) {
 
         auto covMat = std::unordered_map<std::string, MatVariant>{};
 
         converted[key] = covMat;
 
     loop:
-        for (auto &[prop, value] : mat) {
+        for (auto& [prop, value] : mat) {
 
             bool save = true;
             auto lprop = utils::toLower(prop);
@@ -154,7 +154,7 @@ MaterialsInfo MaterialCreator::convert(const MaterialsInfo &mi) {
             if (lprop == "kd" || lprop == "ka" || lprop == "ks") {
 
                 if (options->normalizeRGB) {
-                    auto &v = const_cast<std::vector<float> &>(std::get<std::vector<float>>(value));
+                    auto& v = const_cast<std::vector<float>&>(std::get<std::vector<float>>(value));
 
                     v[0] /= 255;
                     v[1] /= 255;
@@ -163,7 +163,7 @@ MaterialsInfo MaterialCreator::convert(const MaterialsInfo &mi) {
 
                 if (options->ignoreZeroRGBs) {
 
-                    auto &v = std::get<std::vector<float>>(value);
+                    auto& v = std::get<std::vector<float>>(value);
 
                     if (v[0] == 0 && v[1] == 0 && v[2] == 0) {
                         save = false;
@@ -183,7 +183,7 @@ MaterialsInfo MaterialCreator::convert(const MaterialsInfo &mi) {
     return converted;
 }
 
-std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path &path, std::optional<int> mapping) {
+std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path& path, std::optional<int> mapping) {
 
     auto texture = TextureLoader().loadTexture(path);
     if (mapping) {
@@ -192,14 +192,14 @@ std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::pat
     return texture;
 }
 
-void MaterialCreator::createMaterial(const std::string &materialName) {
+void MaterialCreator::createMaterial(const std::string& materialName) {
 
     auto mat = materialsInfo.at(materialName);
     auto params = MeshPhongMaterial::create();
     params->name = materialName;
     params->side = side;
 
-    std::function<void(const std::string &, const std::string &)> _setMapForType = [&](auto &mapType, auto &value) {
+    std::function<void(const std::string&, const std::string&)> _setMapForType = [&](auto& mapType, auto& value) {
         if (getMapForType(*params, mapType)) return;
 
         auto texParams = getTextureParams(value, *params);
@@ -212,7 +212,7 @@ void MaterialCreator::createMaterial(const std::string &materialName) {
         setMapForType(*params, mapType, map);
     };
 
-    for (auto &[prop, value] : mat) {
+    for (auto& [prop, value] : mat) {
 
         if (value.index() == 0 && std::get<std::string>(value).empty()) {
             continue;

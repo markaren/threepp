@@ -17,7 +17,7 @@ namespace threepp {
 
     typedef std::variant<Fog, FogExp2> FogVariant;
 
-    class Scene : public Object3D {
+    class Scene: public Object3D {
 
     public:
         std::optional<Color> background;
@@ -34,7 +34,7 @@ namespace threepp {
         }
     };
 
-    inline bool operator==(const FogVariant &f1, const FogVariant &f2) {
+    inline bool operator==(const FogVariant& f1, const FogVariant& f2) {
 
         if (f1.index() != f2.index()) return false;
 
@@ -45,7 +45,7 @@ namespace threepp {
         }
     }
 
-    inline bool operator!=(const FogVariant &f1, const FogVariant &f2) {
+    inline bool operator!=(const FogVariant& f1, const FogVariant& f2) {
 
         return !(f1 == f2);
     }

@@ -7,7 +7,7 @@
 using namespace threepp;
 using namespace threepp::gl;
 
-Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType) {
+Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType) {
 
     const auto usage = attribute->getUsage();
 
@@ -21,14 +21,14 @@ Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType)
         type = GL_UNSIGNED_INT;
         bytesPerElement = sizeof(int);
         auto attr = attribute->typed<int>();
-        const auto &array = attr->array();
+        const auto& array = attr->array();
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
 
     } else if (attribute->typed<float>()) {
         type = GL_FLOAT;
         bytesPerElement = sizeof(float);
         auto attr = attribute->typed<float>();
-        const auto &array = attr->array();
+        const auto& array = attr->array();
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
     } else {
 
@@ -38,9 +38,9 @@ Buffer GLAttributes::createBuffer(BufferAttribute *attribute, GLenum bufferType)
     return {buffer, type, bytesPerElement, attribute->version + 1};
 }
 
-void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenum bufferType, int bytesPerElement) {
+void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenum bufferType, int bytesPerElement) {
 
-    auto &updateRange = attribute->updateRange;
+    auto& updateRange = attribute->updateRange;
 
     glBindBuffer(bufferType, buffer);
 
@@ -49,13 +49,13 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
         if (attribute->typed<int>()) {
 
             auto attr = attribute->typed<int>();
-            const auto &array = attr->array();
+            const auto& array = attr->array();
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
 
         } else if (attribute->typed<float>()) {
 
             auto attr = attribute->typed<float>();
-            const auto &array = attr->array();
+            const auto& array = attr->array();
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
         } else {
 
@@ -67,14 +67,14 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
         if (attribute->typed<int>()) {
 
             auto attr = attribute->typed<int>();
-            const auto &array = attr->array();
+            const auto& array = attr->array();
             std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
 
         } else if (attribute->typed<float>()) {
 
             auto attr = attribute->typed<float>();
-            const auto &array = attr->array();
+            const auto& array = attr->array();
             std::vector<float> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
         } else {
@@ -86,7 +86,7 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute *attribute, GLenu
     }
 }
 
-Buffer GLAttributes::get(BufferAttribute *attribute) {
+Buffer GLAttributes::get(BufferAttribute* attribute) {
 
     if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
         attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
@@ -95,7 +95,7 @@ Buffer GLAttributes::get(BufferAttribute *attribute) {
     return buffers_.at(attribute);
 }
 
-void GLAttributes::remove(BufferAttribute *attribute) {
+void GLAttributes::remove(BufferAttribute* attribute) {
 
     if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
         attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
@@ -103,7 +103,7 @@ void GLAttributes::remove(BufferAttribute *attribute) {
 
     if (buffers_.count(attribute)) {
 
-        auto &data = buffers_.at(attribute);
+        auto& data = buffers_.at(attribute);
 
         glDeleteBuffers(1, &data.buffer);
 
@@ -111,7 +111,7 @@ void GLAttributes::remove(BufferAttribute *attribute) {
     }
 }
 
-void GLAttributes::update(BufferAttribute *attribute, GLenum bufferType) {
+void GLAttributes::update(BufferAttribute* attribute, GLenum bufferType) {
 
     if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
         attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
@@ -122,8 +122,8 @@ void GLAttributes::update(BufferAttribute *attribute, GLenum bufferType) {
         buffers_[attribute] = createBuffer(attribute, bufferType);
 
     } else {
-        
-        auto &data = buffers_.at(attribute);
+
+        auto& data = buffers_.at(attribute);
 
         if (data.version < attribute->version) {
             updateBuffer(data.buffer, attribute, bufferType, data.bytesPerElement);

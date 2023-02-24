@@ -10,12 +10,12 @@ namespace threepp {
 
     class SpotLight;
 
-    class SpotLightShadow : public LightShadow {
+    class SpotLightShadow: public LightShadow {
 
     public:
         float focus = 1;
 
-        void updateMatrices(SpotLight *light);
+        void updateMatrices(SpotLight* light);
 
         static std::shared_ptr<SpotLightShadow> create() {
 

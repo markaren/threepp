@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class OrthographicCamera : public Camera {
+    class OrthographicCamera: public Camera {
 
     public:
         int left;

@@ -10,7 +10,7 @@
 
 namespace threepp {
 
-    class Reflector : public Mesh {
+    class Reflector: public Mesh {
 
     public:
         struct Options {
@@ -22,7 +22,7 @@ namespace threepp {
             std::optional<Shader> shader;
         };
 
-        static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry> &geometry, Options options = Options()) {
+        static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options()) {
 
             return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));
         }
@@ -33,7 +33,7 @@ namespace threepp {
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
 
-        Reflector(const std::shared_ptr<BufferGeometry> &geometry, Options options);
+        Reflector(const std::shared_ptr<BufferGeometry>& geometry, Options options);
     };
 
 }// namespace threepp

@@ -38,27 +38,27 @@ namespace threepp {
             bool vertexTextures;
 
         private:
-            GLClipping &clipping;
-            GLBindingStates &bindingStates;
+            GLClipping& clipping;
+            GLBindingStates& bindingStates;
 
         public:
-            GLPrograms(GLBindingStates &bindingStates, GLClipping &clipping);
+            GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping);
 
             static ProgramParameters getParameters(
-                    const GLRenderer &renderer,
-                    Material *material,
-                    const GLLights::LightState &lights,
+                    const GLRenderer& renderer,
+                    Material* material,
+                    const GLLights::LightState& lights,
                     size_t numShadows,
                     Scene* scene,
                     Object3D* object);
 
-            static std::string getProgramCacheKey(const GLRenderer &renderer, const ProgramParameters &parameters);
+            static std::string getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters);
 
             static std::shared_ptr<UniformMap> getUniforms(Material* material);
 
-            std::shared_ptr<GLProgram> acquireProgram(const GLRenderer &renderer, const ProgramParameters &parameters, const std::string &cacheKey);
+            std::shared_ptr<GLProgram> acquireProgram(const GLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey);
 
-            void releaseProgram(const std::shared_ptr<GLProgram> &program);
+            void releaseProgram(const std::shared_ptr<GLProgram>& program);
         };
 
     }// namespace gl

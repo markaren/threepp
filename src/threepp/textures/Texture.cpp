@@ -15,7 +15,7 @@ void Texture::dispose() {
     this->dispatchEvent("dispose", this);
 }
 
-void Texture::transformUv(Vector2 &uv) const {
+void Texture::transformUv(Vector2& uv) const {
 
     if (this->mapping != UVMapping) return;
 
@@ -95,7 +95,7 @@ unsigned int Texture::version() const {
     return version_;
 }
 
-Texture &Texture::copy(const Texture &source) {
+Texture& Texture::copy(const Texture& source) {
 
     this->image = source.image;
     this->mipmaps = source.mipmaps;

@@ -30,7 +30,6 @@ namespace threepp {
         virtual void onMouseWheel(const Vector2& delta) {}
 
         virtual ~MouseListener() = default;
-
     };
 
     struct MouseMoveListener: MouseListener {
@@ -44,7 +43,6 @@ namespace threepp {
 
     private:
         std::function<void(Vector2)> f_;
-
     };
 
 }// namespace threepp

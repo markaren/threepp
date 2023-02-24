@@ -3,14 +3,14 @@
 
 #include "threepp/math/Box3.hpp"
 
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 
 using namespace threepp;
 
-Ray::Ray(Vector3 origin, Vector3 direction) : origin(origin), direction(direction) {}
+Ray::Ray(Vector3 origin, Vector3 direction): origin(origin), direction(direction) {}
 
-Ray &Ray::set(const Vector3 &origin, const Vector3 &direction) {
+Ray& Ray::set(const Vector3& origin, const Vector3& direction) {
 
     this->origin.copy(origin);
     this->direction.copy(direction);
@@ -18,7 +18,7 @@ Ray &Ray::set(const Vector3 &origin, const Vector3 &direction) {
     return *this;
 }
 
-Ray &Ray::copy(const Ray &ray) {
+Ray& Ray::copy(const Ray& ray) {
 
     this->origin.copy(ray.origin);
     this->direction.copy(ray.direction);
@@ -26,26 +26,26 @@ Ray &Ray::copy(const Ray &ray) {
     return *this;
 }
 
-Vector3 &Ray::at(float t, Vector3 &target) const {
+Vector3& Ray::at(float t, Vector3& target) const {
 
     return target.copy(this->direction).multiplyScalar(t).add(this->origin);
 }
 
-Ray &Ray::lookAt(const Vector3 &v) {
+Ray& Ray::lookAt(const Vector3& v) {
 
     this->direction.copy(v).sub(this->origin).normalize();
 
     return *this;
 }
 
-Ray &Ray::recast(float t) {
+Ray& Ray::recast(float t) {
 
     this->at(t, this->origin);
 
     return *this;
 }
 
-void Ray::closestPointToPoint(const Vector3 &point, Vector3 &target) const {
+void Ray::closestPointToPoint(const Vector3& point, Vector3& target) const {
 
     target.subVectors(point, this->origin);
 
@@ -61,12 +61,12 @@ void Ray::closestPointToPoint(const Vector3 &point, Vector3 &target) const {
     }
 }
 
-float Ray::distanceToPoint(const Vector3 &point) const {
+float Ray::distanceToPoint(const Vector3& point) const {
 
     return std::sqrt(this->distanceSqToPoint(point));
 }
 
-float Ray::distanceSqToPoint(const Vector3 &point) const {
+float Ray::distanceSqToPoint(const Vector3& point) const {
 
     Vector3 _vector3;
 
@@ -85,7 +85,7 @@ float Ray::distanceSqToPoint(const Vector3 &point) const {
     return _vector.distanceToSquared(point);
 }
 
-float Ray::distanceSqToSegment(const Vector3 &v0, const Vector3 &v1) const {
+float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1) const {
 
     // from http://www.geometrictools.com/GTEngine/Include/Mathematics/GteDistRaySegment.h
     // It returns the min distance between the ray and the segment
@@ -190,7 +190,7 @@ float Ray::distanceSqToSegment(const Vector3 &v0, const Vector3 &v1) const {
     return sqrDist;
 }
 
-void Ray::intersectSphere(const Sphere &sphere, Vector3 &target) const {
+void Ray::intersectSphere(const Sphere& sphere, Vector3& target) const {
 
     Vector3 _vector{};
 
@@ -231,12 +231,12 @@ void Ray::intersectSphere(const Sphere &sphere, Vector3 &target) const {
         this->at(t0, target);
     }
 }
-bool Ray::intersectsSphere(const Sphere &sphere) const {
+bool Ray::intersectsSphere(const Sphere& sphere) const {
 
     return this->distanceSqToPoint(sphere.center) <= (sphere.radius * sphere.radius);
 }
 
-float Ray::distanceToPlane(const Plane &plane) const {
+float Ray::distanceToPlane(const Plane& plane) const {
 
     const auto denominator = plane.normal.dot(this->direction);
 
@@ -260,7 +260,7 @@ float Ray::distanceToPlane(const Plane &plane) const {
     return t >= 0 ? t : NAN;
 }
 
-void Ray::intersectPlane(const Plane &plane, Vector3 &target) const {
+void Ray::intersectPlane(const Plane& plane, Vector3& target) const {
 
     const auto t = this->distanceToPlane(plane);
 
@@ -273,7 +273,7 @@ void Ray::intersectPlane(const Plane &plane, Vector3 &target) const {
     this->at(t, target);
 }
 
-bool Ray::intersectsPlane(const Plane &plane) const {
+bool Ray::intersectsPlane(const Plane& plane) const {
 
     // check if the ray lies on the plane first
 
@@ -296,7 +296,7 @@ bool Ray::intersectsPlane(const Plane &plane) const {
     return false;
 }
 
-void Ray::intersectBox(const Box3 &box, Vector3 &target) const {
+void Ray::intersectBox(const Box3& box, Vector3& target) const {
 
     float tmin, tmax, tymin, tymax, tzmin, tzmax;
 
@@ -372,7 +372,7 @@ void Ray::intersectBox(const Box3 &box, Vector3 &target) const {
     this->at(tmin >= 0 ? tmin : tmax, target);
 }
 
-bool Ray::intersectsBox(const Box3 &box) const {
+bool Ray::intersectsBox(const Box3& box) const {
 
     Vector3 _vector;
     this->intersectBox(box, _vector);
@@ -380,7 +380,7 @@ bool Ray::intersectsBox(const Box3 &box) const {
     return std::isnan(_vector.x);
 }
 
-std::optional<Vector3> Ray::intersectTriangle(const Vector3 &a, const Vector3 &b, const Vector3 &c, bool backfaceCulling, Vector3 &target) const {
+std::optional<Vector3> Ray::intersectTriangle(const Vector3& a, const Vector3& b, const Vector3& c, bool backfaceCulling, Vector3& target) const {
 
     // Compute the offset origin, edges, and normal.
 
@@ -463,10 +463,10 @@ std::optional<Vector3> Ray::intersectTriangle(const Vector3 &a, const Vector3 &b
     return this->at(QdN / DdN, target);
 }
 
-Ray &Ray::applyMatrix4(const Matrix4 &matrix4) {
+Ray& Ray::applyMatrix4(const Matrix4& matrix4) {
 
-    this->origin.applyMatrix4( matrix4 );
-    this->direction.transformDirection( matrix4 );
+    this->origin.applyMatrix4(matrix4);
+    this->direction.transformDirection(matrix4);
 
     return *this;
 }

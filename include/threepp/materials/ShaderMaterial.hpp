@@ -12,12 +12,12 @@
 
 namespace threepp {
 
-    class ShaderMaterial : public virtual Material,
-                           public MaterialWithClipping,
-                           public MaterialWithLights,
-                           public MaterialWithWireframe,
-                           public MaterialWithLineWidth,
-                           public MaterialWithDefines {
+    class ShaderMaterial: public virtual Material,
+                          public MaterialWithClipping,
+                          public MaterialWithLights,
+                          public MaterialWithWireframe,
+                          public MaterialWithLineWidth,
+                          public MaterialWithDefines {
 
     public:
         std::string vertexShader;

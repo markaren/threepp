@@ -12,14 +12,14 @@
 using namespace threepp;
 using namespace threepp::gl;
 
-class DummyMaterial : public Material {
+class DummyMaterial: public Material {
 public:
     [[nodiscard]] std::string type() const override {
         return "";
     }
 };
 
-class DummyProgram : public GLProgram {
+class DummyProgram: public GLProgram {
 };
 
 TEST_CASE("init") {

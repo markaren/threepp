@@ -28,12 +28,12 @@ namespace threepp::gl {
         int numPlanes = 0;
         int numIntersection = 0;
 
-        explicit GLClipping(GLProperties &properties) : properties(properties) {
+        explicit GLClipping(GLProperties& properties): properties(properties) {
 
             uniform.needsUpdate = false;
         }
 
-        bool init(const std::vector<Plane> &planes, bool enableLocalClipping, Camera* camera) {
+        bool init(const std::vector<Plane>& planes, bool enableLocalClipping, Camera* camera) {
 
             bool enabled =
                     !planes.empty() ||
@@ -64,7 +64,7 @@ namespace threepp::gl {
 
         void setState(Material* material, Camera* camera, bool useCache) {
 
-            auto &planes = material->clippingPlanes;
+            auto& planes = material->clippingPlanes;
             auto clipIntersection = material->clipIntersection;
             auto clipShadows = material->clipShadows;
 
@@ -90,7 +90,7 @@ namespace threepp::gl {
                 const auto nGlobal = renderingShadows ? 0 : numGlobalPlanes,
                            lGlobal = nGlobal * 4;
 
-                auto &dstArray = materialProperties->clippingState;
+                auto& dstArray = materialProperties->clippingState;
 
                 uniform.setValue(dstArray);// ensure unique state
 
@@ -126,7 +126,7 @@ namespace threepp::gl {
         }
 
         std::vector<float> projectPlanes(
-                const std::vector<Plane> &planes, Camera* camera,
+                const std::vector<Plane>& planes, Camera* camera,
                 int dstOffset, bool skipTransform = false) {
 
             int nPlanes = (int) planes.size();
@@ -141,7 +141,7 @@ namespace threepp::gl {
                 if (!skipTransform || dstArray.empty()) {
 
                     const auto flatSize = dstOffset + nPlanes * 4;
-                    const auto &viewMatrix = camera->matrixWorldInverse;
+                    const auto& viewMatrix = camera->matrixWorldInverse;
 
                     viewNormalMatrix.getNormalMatrix(viewMatrix);
 
@@ -170,7 +170,7 @@ namespace threepp::gl {
         }
 
     private:
-        GLProperties &properties;
+        GLProperties& properties;
     };
 
 }// namespace threepp::gl

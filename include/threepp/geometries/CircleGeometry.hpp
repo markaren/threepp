@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    class CircleGeometry : public BufferGeometry {
+    class CircleGeometry: public BufferGeometry {
 
     public:
         static std::shared_ptr<CircleGeometry> create(float radius = 1, int segments = 8, float thetaStart = 0, float thetaLength = math::PI * 2) {

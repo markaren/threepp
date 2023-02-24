@@ -8,10 +8,10 @@
 
 namespace threepp {
 
-    class ArrowHelper : public Object3D {
+    class ArrowHelper: public Object3D {
 
     public:
-        void setDirection(const Vector3 &dir);
+        void setDirection(const Vector3& dir);
 
         void setLength(float length, std::optional<float> headLength = std::nullopt, std::optional<float> headWidth = std::nullopt);
 

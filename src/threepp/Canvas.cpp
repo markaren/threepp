@@ -15,7 +15,7 @@ using namespace threepp;
 class Canvas::Impl {
 
 public:
-    GLFWwindow *window;
+    GLFWwindow* window;
 
     int fps_ = -1;
 
@@ -24,10 +24,10 @@ public:
 
     std::queue<std::function<void()>> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
-    std::vector<KeyListener *> keyListeners;
-    std::vector<MouseListener *> mouseListeners;
+    std::vector<KeyListener*> keyListeners;
+    std::vector<MouseListener*> mouseListeners;
 
-    explicit Impl(const Canvas::Parameters &params) : size_(params.size_) {
+    explicit Impl(const Canvas::Parameters& params): size_(params.size_) {
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
@@ -83,7 +83,7 @@ public:
         //        glEnable(GL_POINT_SMOOTH);
     }
 
-    [[nodiscard]] const WindowSize &getSize() const {
+    [[nodiscard]] const WindowSize& getSize() const {
         return size_;
     }
 
@@ -92,7 +92,7 @@ public:
     }
 
     // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
-    inline void measureFPS(double &lastTime, int &nbFrames) {
+    inline void measureFPS(double& lastTime, int& nbFrames) {
         double currentTime = glfwGetTime();
         nbFrames++;
         if (currentTime - lastTime >= 1.0) {
@@ -110,7 +110,7 @@ public:
         }
     }
 
-    void animate(const std::function<void()> &f) {
+    void animate(const std::function<void()>& f) {
         double lastTime = glfwGetTime();
         int nbFrames = 0;
         while (!glfwWindowShouldClose(window)) {
@@ -126,7 +126,7 @@ public:
         }
     }
 
-    void animate(const std::function<void(float)> &f) {
+    void animate(const std::function<void(float)>& f) {
 
         double lastTime = glfwGetTime();
         int nbFrames = 0;
@@ -148,14 +148,14 @@ public:
         this->resizeListener = std::move(f);
     }
 
-    void addKeyListener(KeyListener *listener) {
+    void addKeyListener(KeyListener* listener) {
         auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
         if (find == keyListeners.end()) {
             keyListeners.emplace_back(listener);
         }
     }
 
-    bool removeKeyListener(const KeyListener *listener) {
+    bool removeKeyListener(const KeyListener* listener) {
         auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
         if (find != keyListeners.end()) {
             keyListeners.erase(find);
@@ -164,14 +164,14 @@ public:
         return false;
     }
 
-    void addMouseListener(MouseListener *listener) {
+    void addMouseListener(MouseListener* listener) {
         auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
         if (find == mouseListeners.end()) {
             mouseListeners.emplace_back(listener);
         }
     }
 
-    bool removeMouseListener(const MouseListener *listener) {
+    bool removeMouseListener(const MouseListener* listener) {
         auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
         if (find != mouseListeners.end()) {
             mouseListeners.erase(find);
@@ -180,7 +180,7 @@ public:
         return false;
     }
 
-    void invokeLater(const std::function<void()> &f) {
+    void invokeLater(const std::function<void()>& f) {
         tasks_.emplace(f);
     }
 
@@ -189,18 +189,18 @@ public:
         glfwTerminate();
     }
 
-    static void window_size_callback(GLFWwindow *w, int width, int height) {
-        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+    static void window_size_callback(GLFWwindow* w, int width, int height) {
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         p->size_ = {width, height};
         if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
     }
 
-    static void error_callback(int error, const char *description) {
+    static void error_callback(int error, const char* description) {
         std::cerr << "Error: " << description << std::endl;
     }
 
-    static void scroll_callback(GLFWwindow *w, double xoffset, double yoffset) {
-        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+    static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         auto listeners = p->mouseListeners;
         if (listeners.empty()) return;
         Vector2 delta{(float) xoffset, (float) yoffset};
@@ -209,8 +209,8 @@ public:
         }
     }
 
-    static void mouse_callback(GLFWwindow *w, int button, int action, int mods) {
-        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+    static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
         auto listeners = p->mouseListeners;
         for (auto l : listeners) {
@@ -228,8 +228,8 @@ public:
         }
     }
 
-    static void cursor_callback(GLFWwindow *w, double xpos, double ypos) {
-        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+    static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         p->lastMousePos.set(static_cast<float>(xpos), static_cast<float>(ypos));
         auto listeners = p->mouseListeners;
         for (auto l : listeners) {
@@ -237,13 +237,13 @@ public:
         }
     }
 
-    static void key_callback(GLFWwindow *w, int key, int scancode, int action, int mods) {
+    static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
         if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
 
-        auto p = static_cast<Canvas::Impl *>(glfwGetWindowUserPointer(w));
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         if (p->keyListeners.empty()) return;
 
         KeyEvent evt{key, scancode, mods};
@@ -266,23 +266,23 @@ public:
     }
 };
 
-Canvas::Canvas(const Canvas::Parameters &params) : pimpl_(new Impl(params)) {}
+Canvas::Canvas(const Canvas::Parameters& params): pimpl_(new Impl(params)) {}
 
 int threepp::Canvas::getFPS() const {
     return pimpl_->fps_;
 }
 
-void Canvas::animate(const std::function<void()> &f) {
+void Canvas::animate(const std::function<void()>& f) {
 
     pimpl_->animate(f);
 }
 
-void Canvas::animate(const std::function<void(float)> &f) {
+void Canvas::animate(const std::function<void(float)>& f) {
 
     pimpl_->animate(f);
 }
 
-const WindowSize &Canvas::getSize() const {
+const WindowSize& Canvas::getSize() const {
 
     return pimpl_->getSize();
 }
@@ -301,66 +301,66 @@ void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
     pimpl_->onWindowResize(std::move(f));
 }
 
-void Canvas::addKeyListener(KeyListener *listener) {
+void Canvas::addKeyListener(KeyListener* listener) {
 
     pimpl_->addKeyListener(listener);
 }
 
-bool Canvas::removeKeyListener(const KeyListener *listener) {
+bool Canvas::removeKeyListener(const KeyListener* listener) {
 
     return pimpl_->removeKeyListener(listener);
 }
 
-void Canvas::addMouseListener(MouseListener *listener) {
+void Canvas::addMouseListener(MouseListener* listener) {
 
     pimpl_->addMouseListener(listener);
 }
 
-bool Canvas::removeMouseListener(const MouseListener *listener) {
+bool Canvas::removeMouseListener(const MouseListener* listener) {
 
     return pimpl_->removeMouseListener(listener);
 }
 
-void Canvas::invokeLater(const std::function<void()> &f) {
+void Canvas::invokeLater(const std::function<void()>& f) {
     pimpl_->invokeLater(f);
 }
 
 Canvas::~Canvas() = default;
 
-Canvas::Parameters &Canvas::Parameters::title(std::string value) {
+Canvas::Parameters& Canvas::Parameters::title(std::string value) {
 
     this->title_ = std::move(value);
 
     return *this;
 }
 
-Canvas::Parameters &Canvas::Parameters::size(WindowSize size) {
+Canvas::Parameters& Canvas::Parameters::size(WindowSize size) {
 
     this->size_ = size;
 
     return *this;
 }
 
-Canvas::Parameters &Canvas::Parameters::size(int width, int height) {
+Canvas::Parameters& Canvas::Parameters::size(int width, int height) {
 
     return this->size({width, height});
 }
 
-Canvas::Parameters &Canvas::Parameters::antialiasing(int antialiasing) {
+Canvas::Parameters& Canvas::Parameters::antialiasing(int antialiasing) {
 
     this->antialiasing_ = antialiasing;
 
     return *this;
 }
 
-Canvas::Parameters &Canvas::Parameters::vsync(bool flag) {
+Canvas::Parameters& Canvas::Parameters::vsync(bool flag) {
 
     this->vsync_ = flag;
 
     return *this;
 }
 
-void *Canvas::window_ptr() const {
+void* Canvas::window_ptr() const {
 
     return pimpl_->window;
 }

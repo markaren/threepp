@@ -5,11 +5,11 @@
 
 #include "threepp/cameras/Camera.hpp"
 
+#include "threepp/math/Color.hpp"
+#include "threepp/math/Frustum.hpp"
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
-#include "threepp/math/Color.hpp"
-#include "threepp/math/Frustum.hpp"
 
 #include "threepp/Canvas.hpp"
 #include "threepp/constants.hpp"
@@ -86,7 +86,7 @@ namespace threepp {
         gl::GLState state;
         gl::GLShadowMap shadowMap;
 
-        explicit GLRenderer(Canvas &canvas, const Parameters &parameters = Parameters{});
+        explicit GLRenderer(Canvas& canvas, const Parameters& parameters = Parameters{});
 
         [[nodiscard]] int getTargetPixelRatio() const;
 
@@ -96,21 +96,21 @@ namespace threepp {
 
         void setSize(WindowSize size);
 
-        void getDrawingBufferSize(Vector2 &target) const;
+        void getDrawingBufferSize(Vector2& target) const;
 
         void setDrawingBufferSize(int width, int height, int pixelRatio);
 
-        void getCurrentViewport(Vector4 &target) const;
+        void getCurrentViewport(Vector4& target) const;
 
-        void getViewport(Vector4 &target) const;
+        void getViewport(Vector4& target) const;
 
-        void setViewport(const Vector4 &v);
+        void setViewport(const Vector4& v);
 
         void setViewport(int x, int y, int width, int height);
 
-        void getScissor(Vector4 &target);
+        void getScissor(Vector4& target);
 
-        void setScissor(const Vector4 &v);
+        void setScissor(const Vector4& v);
 
         void setScissor(int x, int y, int width, int height);
 
@@ -120,9 +120,9 @@ namespace threepp {
 
         // Clearing
 
-        void getClearColor(Color &target) const;
+        void getClearColor(Color& target) const;
 
-        void setClearColor(const Color &color, float alpha = 1);
+        void setClearColor(const Color& color, float alpha = 1);
 
         [[nodiscard]] float getClearAlpha() const;
 
@@ -138,7 +138,7 @@ namespace threepp {
 
         void render(Scene* scene, Camera* camera);
 
-        void render(const std::shared_ptr<Scene> &scene, const std::shared_ptr<Camera> &camera) {
+        void render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera) {
             render(scene.get(), camera.get());
         }
 
@@ -152,12 +152,12 @@ namespace threepp {
             return _currentActiveMipmapLevel;
         }
 
-        std::shared_ptr<GLRenderTarget> &getRenderTarget() {
+        std::shared_ptr<GLRenderTarget>& getRenderTarget() {
 
             return _currentRenderTarget;
         }
 
-        void setRenderTarget(const std::shared_ptr<GLRenderTarget> &renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
+        void setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
 
         void enableTextRendering();
 
@@ -166,17 +166,17 @@ namespace threepp {
         ~GLRenderer();
 
     private:
-        struct OnMaterialDispose : EventListener {
+        struct OnMaterialDispose: EventListener {
 
-            explicit OnMaterialDispose(GLRenderer &scope);
+            explicit OnMaterialDispose(GLRenderer& scope);
 
-            void onEvent(Event &event) override;
+            void onEvent(Event& event) override;
 
         private:
-            GLRenderer &scope_;
+            GLRenderer& scope_;
         };
 
-        Canvas &canvas_;
+        Canvas& canvas_;
 
         bool textEnabled_ = false;
         std::vector<std::shared_ptr<TextHandle>> textHandles_;
@@ -244,9 +244,9 @@ namespace threepp {
         std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
         std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
-        void deallocateMaterial(Material *material);
+        void deallocateMaterial(Material* material);
 
-        void releaseMaterialProgramReferences(Material *material);
+        void releaseMaterialProgramReferences(Material* material);
 
         void renderBufferDirect(
                 Camera* camera,
@@ -262,7 +262,7 @@ namespace threepp {
                 unsigned int groupOrder, bool sortObjects);
 
         void renderObjects(
-                const std::vector<gl::RenderItem*> &renderList,
+                const std::vector<gl::RenderItem*>& renderList,
                 Scene* scene, Camera* camera);
 
         void renderObject(
@@ -270,7 +270,7 @@ namespace threepp {
                 Scene* scene,
                 Camera* camera,
                 BufferGeometry* geometry,
-                Material *material,
+                Material* material,
                 std::optional<GeometryGroup> group);
 
         std::shared_ptr<gl::GLProgram> getProgram(
@@ -280,7 +280,7 @@ namespace threepp {
 
         void updateCommonMaterialProperties(
                 Material* material,
-                gl::ProgramParameters &parameters);
+                gl::ProgramParameters& parameters);
 
         std::shared_ptr<gl::GLProgram> setProgram(
                 Camera* camera,
@@ -288,7 +288,7 @@ namespace threepp {
                 Material* material,
                 Object3D* object);
 
-        void markUniformsLightsNeedsUpdate(UniformMap &uniforms, bool value);
+        void markUniformsLightsNeedsUpdate(UniformMap& uniforms, bool value);
 
         bool materialNeedsLights(Material* material);
 

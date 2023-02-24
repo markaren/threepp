@@ -14,9 +14,8 @@ namespace threepp {
         UniformMap uniforms;
         std::string vertexShader;
         std::string fragmentShader;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_SHADER_HPP

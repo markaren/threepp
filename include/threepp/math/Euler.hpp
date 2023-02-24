@@ -43,20 +43,20 @@ namespace threepp {
             onChangeCallback_();
         }
 
-        Euler &set(float x, float y, float z, const std::optional<RotationOrders> &order = std::nullopt);
+        Euler& set(float x, float y, float z, const std::optional<RotationOrders>& order = std::nullopt);
 
-        Euler &copy(const Euler & e);
+        Euler& copy(const Euler& e);
 
-        Euler &setFromRotationMatrix(const Matrix4 &m, std::optional<RotationOrders> order = std::nullopt, bool update = true);
+        Euler& setFromRotationMatrix(const Matrix4& m, std::optional<RotationOrders> order = std::nullopt, bool update = true);
 
-        Euler &setFromQuaternion(const Quaternion &q, std::optional<RotationOrders> order = std::nullopt, bool update = true);
+        Euler& setFromQuaternion(const Quaternion& q, std::optional<RotationOrders> order = std::nullopt, bool update = true);
 
-        Euler &setFromVector3(const Vector3 &v, std::optional<RotationOrders> order = std::nullopt);
+        Euler& setFromVector3(const Vector3& v, std::optional<RotationOrders> order = std::nullopt);
 
-        Euler &_onChange(std::function<void()> callback);
+        Euler& _onChange(std::function<void()> callback);
 
         template<class ArrayLike>
-        Euler &fromArray(const ArrayLike &array, unsigned int offset = 0) {
+        Euler& fromArray(const ArrayLike& array, unsigned int offset = 0) {
 
             this->x.value_ = array[offset];
             this->y.value_ = array[offset + 1];
@@ -68,7 +68,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, unsigned int offset = 0) const {
+        void toArray(ArrayLike& array, unsigned int offset = 0) const {
 
             array[offset] = this->x();
             array[offset + 1] = this->y();

@@ -10,7 +10,7 @@
 
 namespace threepp::utils {
 
-    inline std::vector<std::string> split(const std::string &s, char delimiter) {
+    inline std::vector<std::string> split(const std::string& s, char delimiter) {
 
         std::string token;
         std::vector<std::string> tokens;
@@ -23,20 +23,20 @@ namespace threepp::utils {
         return tokens;
     }
 
-    template <class ArrayLike>
-    inline std::string join(const ArrayLike &v, char c = '\n') {
+    template<class ArrayLike>
+    inline std::string join(const ArrayLike& v, char c = '\n') {
 
         auto p = v.cbegin();
         std::stringstream ss;
         for (unsigned i = 0; i < v.size(); ++i) {
             ss << *p;
-            if (i != v.size()-1) ss << c;
+            if (i != v.size() - 1) ss << c;
             ++p;
         }
         return ss.str();
     }
 
-    inline std::string addLineNumbers(const std::string &str) {
+    inline std::string addLineNumbers(const std::string& str) {
 
         auto lines = split(str, '\n');
 
@@ -48,7 +48,7 @@ namespace threepp::utils {
         return join(lines, '\n');
     }
 
-    inline void replaceAll(std::string &text, const std::string &replaceFrom, const std::string &replaceTo) {
+    inline void replaceAll(std::string& text, const std::string& replaceFrom, const std::string& replaceTo) {
         std::string& result = text;
         size_t start_pos = 0;
         while (((start_pos = text.find(replaceFrom, start_pos)) != std::string::npos)) {

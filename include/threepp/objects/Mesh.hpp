@@ -12,7 +12,7 @@
 
 namespace threepp {
 
-    class Mesh : public Object3D {
+    class Mesh: public Object3D {
 
     public:
         std::shared_ptr<BufferGeometry> geometry_;
@@ -40,7 +40,7 @@ namespace threepp {
 
         [[nodiscard]] std::vector<Material*> materials() override {
             std::vector<Material*> res(materials_.size());
-            std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) {return m.get();});
+            std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) { return m.get(); });
             return res;
         }
 
@@ -54,7 +54,7 @@ namespace threepp {
             return materials_.size();
         }
 
-        void raycast(Raycaster &raycaster, std::vector<Intersection> &intersects) override;
+        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         std::shared_ptr<Mesh> clone(bool recursive = false);
 
@@ -75,7 +75,6 @@ namespace threepp {
         ~Mesh() override = default;
 
     protected:
-
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
             : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
               materials_{material ? std::move(material) : MeshBasicMaterial::create()} {

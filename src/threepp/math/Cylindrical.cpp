@@ -7,9 +7,9 @@
 
 using namespace threepp;
 
-Cylindrical::Cylindrical(float radius, float theta, float y) : radius(radius), theta(theta), y(y) {}
+Cylindrical::Cylindrical(float radius, float theta, float y): radius(radius), theta(theta), y(y) {}
 
-Cylindrical &Cylindrical::set(float radius, float theta, float y) {
+Cylindrical& Cylindrical::set(float radius, float theta, float y) {
 
     this->radius = radius;
     this->theta = theta;
@@ -18,7 +18,7 @@ Cylindrical &Cylindrical::set(float radius, float theta, float y) {
     return *this;
 }
 
-Cylindrical &Cylindrical::copy(const Cylindrical &other) {
+Cylindrical& Cylindrical::copy(const Cylindrical& other) {
 
     this->radius = other.radius;
     this->theta = other.theta;
@@ -27,12 +27,12 @@ Cylindrical &Cylindrical::copy(const Cylindrical &other) {
     return *this;
 }
 
-Cylindrical &Cylindrical::setFromVector3(const Vector3 &v) {
+Cylindrical& Cylindrical::setFromVector3(const Vector3& v) {
 
     return this->setFromCartesianCoords(v.x, v.y, v.z);
 }
 
-Cylindrical &Cylindrical::setFromCartesianCoords(float x, float y, float z) {
+Cylindrical& Cylindrical::setFromCartesianCoords(float x, float y, float z) {
 
     this->radius = std::sqrt(x * x + z * z);
     this->theta = std::atan2(x, z);

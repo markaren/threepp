@@ -6,7 +6,7 @@
 
 namespace threepp {
 
-    class Group : public Object3D {
+    class Group: public Object3D {
 
     public:
         static std::shared_ptr<Group> create() {

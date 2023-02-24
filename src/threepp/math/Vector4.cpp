@@ -7,11 +7,11 @@
 
 using namespace threepp;
 
-Vector4::Vector4(int x, int y, int z, int w) : x((float) x), y((float) y), z((float) z), w((float) w) {}
+Vector4::Vector4(int x, int y, int z, int w): x((float) x), y((float) y), z((float) z), w((float) w) {}
 
-Vector4::Vector4(float x, float y, float z, float w) : x(x), y(y), z(z), w(w) {}
+Vector4::Vector4(float x, float y, float z, float w): x(x), y(y), z(z), w(w) {}
 
-float &Vector4::operator[](unsigned int index) {
+float& Vector4::operator[](unsigned int index) {
     switch (index) {
         case 0:
             return x;
@@ -26,7 +26,7 @@ float &Vector4::operator[](unsigned int index) {
     }
 }
 
-Vector4 &Vector4::set(float x, float y, float z, float w) {
+Vector4& Vector4::set(float x, float y, float z, float w) {
 
     this->x = x;
     this->y = y;
@@ -36,7 +36,7 @@ Vector4 &Vector4::set(float x, float y, float z, float w) {
     return *this;
 }
 
-Vector4 &Vector4::setScalar(float value) {
+Vector4& Vector4::setScalar(float value) {
 
     this->x = value;
     this->y = value;
@@ -46,7 +46,7 @@ Vector4 &Vector4::setScalar(float value) {
     return *this;
 }
 
-Vector4 &Vector4::copy(const Vector4 &v) {
+Vector4& Vector4::copy(const Vector4& v) {
 
     this->x = v.x;
     this->y = v.y;
@@ -56,7 +56,7 @@ Vector4 &Vector4::copy(const Vector4 &v) {
     return *this;
 }
 
-Vector4 &Vector4::add(const Vector4 &v) {
+Vector4& Vector4::add(const Vector4& v) {
 
     this->x += v.x;
     this->y += v.y;
@@ -65,7 +65,7 @@ Vector4 &Vector4::add(const Vector4 &v) {
 
     return *this;
 }
-Vector4 &Vector4::addScalar(float s) {
+Vector4& Vector4::addScalar(float s) {
 
     this->x += s;
     this->y += s;
@@ -75,7 +75,7 @@ Vector4 &Vector4::addScalar(float s) {
     return *this;
 }
 
-Vector4 &Vector4::addVectors(const Vector4 &a, const Vector4 &b) {
+Vector4& Vector4::addVectors(const Vector4& a, const Vector4& b) {
 
     this->x = a.x + b.x;
     this->y = a.y + b.y;
@@ -84,7 +84,7 @@ Vector4 &Vector4::addVectors(const Vector4 &a, const Vector4 &b) {
 
     return *this;
 }
-Vector4 &Vector4::addScaledVector(const Vector4 &v, float s) {
+Vector4& Vector4::addScaledVector(const Vector4& v, float s) {
 
     this->x += v.x * s;
     this->y += v.y * s;
@@ -94,7 +94,7 @@ Vector4 &Vector4::addScaledVector(const Vector4 &v, float s) {
     return *this;
 }
 
-Vector4 &Vector4::multiply(const Vector4 &v) {
+Vector4& Vector4::multiply(const Vector4& v) {
 
     this->x *= v.x;
     this->y *= v.y;
@@ -103,7 +103,7 @@ Vector4 &Vector4::multiply(const Vector4 &v) {
 
     return *this;
 }
-Vector4 &Vector4::multiplyScalar(float scalar) {
+Vector4& Vector4::multiplyScalar(float scalar) {
 
     this->x *= scalar;
     this->y *= scalar;
@@ -113,10 +113,10 @@ Vector4 &Vector4::multiplyScalar(float scalar) {
     return *this;
 }
 
-Vector4 &Vector4::applyMatrix4(const Matrix4 &m) {
+Vector4& Vector4::applyMatrix4(const Matrix4& m) {
 
     const auto x_ = this->x, y_ = this->y, z_ = this->z, w_ = this->w;
-    const auto &e = m.elements;
+    const auto& e = m.elements;
 
     this->x = e[0] * x_ + e[4] * y_ + e[8] * z_ + e[12] * w_;
     this->y = e[1] * x_ + e[5] * y_ + e[9] * z_ + e[13] * w_;
@@ -126,12 +126,12 @@ Vector4 &Vector4::applyMatrix4(const Matrix4 &m) {
     return *this;
 }
 
-Vector4 &Vector4::divideScalar(float scalar) {
+Vector4& Vector4::divideScalar(float scalar) {
 
     return this->multiplyScalar(1.f / scalar);
 }
 
-Vector4 &Vector4::floor() {
+Vector4& Vector4::floor() {
 
     this->x = std::floor(this->x);
     this->y = std::floor(this->y);
@@ -140,7 +140,7 @@ Vector4 &Vector4::floor() {
 
     return *this;
 }
-Vector4 &Vector4::ceil() {
+Vector4& Vector4::ceil() {
 
     this->x = std::ceil(this->x);
     this->y = std::ceil(this->y);
@@ -149,7 +149,7 @@ Vector4 &Vector4::ceil() {
 
     return *this;
 }
-Vector4 &Vector4::round() {
+Vector4& Vector4::round() {
 
     this->x = std::round(this->x);
     this->y = std::round(this->y);
@@ -158,7 +158,7 @@ Vector4 &Vector4::round() {
 
     return *this;
 }
-Vector4 &Vector4::roundToZero() {
+Vector4& Vector4::roundToZero() {
 
     this->x = (this->x < 0) ? std::ceil(this->x) : std::floor(this->x);
     this->y = (this->y < 0) ? std::ceil(this->y) : std::floor(this->y);
@@ -167,7 +167,7 @@ Vector4 &Vector4::roundToZero() {
 
     return *this;
 }
-Vector4 &Vector4::negate() {
+Vector4& Vector4::negate() {
 
     this->x = -this->x;
     this->y = -this->y;
@@ -177,7 +177,7 @@ Vector4 &Vector4::negate() {
     return *this;
 }
 
-float Vector4::dot(const Vector4 &v) const {
+float Vector4::dot(const Vector4& v) const {
 
     return this->x * v.x + this->y * v.y + this->z * v.z + this->w * v.w;
 }
@@ -197,13 +197,13 @@ float Vector4::manhattanLength() const {
     return std::abs(this->x) + std::abs(this->y) + std::abs(this->z) + std::abs(this->w);
 }
 
-Vector4 &Vector4::normalize() {
+Vector4& Vector4::normalize() {
 
     const auto len = this->length();
     return this->divideScalar(std::isnan(len) ? 1 : len);
 }
 
-Vector4 &Vector4::setLength(float length) {
+Vector4& Vector4::setLength(float length) {
 
     return this->normalize().multiplyScalar(length);
 }
@@ -213,7 +213,7 @@ Vector4 Vector4::clone() const {
     return Vector4{x, y, z, w};
 }
 
-bool Vector4::equals(const Vector4 &v) const {
+bool Vector4::equals(const Vector4& v) const {
 
     return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z) && (v.w == this->w));
 }

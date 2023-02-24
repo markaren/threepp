@@ -125,5 +125,4 @@ TEST_CASE("constants") {
     REQUIRE(threepp::sRGBEncoding == 3001);
     REQUIRE(threepp::BasicDepthPacking == 3200);
     REQUIRE(threepp::RGBADepthPacking == 3201);
-
 }

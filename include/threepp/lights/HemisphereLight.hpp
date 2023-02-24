@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    class HemisphereLight : public Light {
+    class HemisphereLight: public Light {
 
     public:
         Color groundColor;
@@ -23,7 +23,7 @@ namespace threepp {
         }
 
     protected:
-        HemisphereLight(const Color &skyColor, const Color &groundColor,  std::optional<float> intensity)
+        HemisphereLight(const Color& skyColor, const Color& groundColor, std::optional<float> intensity)
             : Light(skyColor, intensity),
               groundColor(groundColor) {
 

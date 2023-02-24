@@ -11,13 +11,13 @@
 
 namespace threepp::shaders {
 
-    inline UniformMap mergeUniforms(const std::vector<UniformMap> &uniforms) {
+    inline UniformMap mergeUniforms(const std::vector<UniformMap>& uniforms) {
 
         auto merged = UniformMap();
 
-        for (const auto &u : uniforms) {
+        for (const auto& u : uniforms) {
 
-            for (const auto &[key, value] : u) {
+            for (const auto& [key, value] : u) {
 
                 merged[key] = value;
             }

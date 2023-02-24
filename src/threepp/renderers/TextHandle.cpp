@@ -10,14 +10,14 @@ using namespace threepp;
 
 struct TextHandle::Impl {
 
-    GLTtext *text = gltCreateText();
+    GLTtext* text = gltCreateText();
 
     ~Impl() {
         gltDeleteText(text);
     }
 };
 
-TextHandle::TextHandle(const std::string &str)
+TextHandle::TextHandle(const std::string& str)
     : pimpl_(std::make_unique<Impl>()) {
     setText(str);
 }
@@ -26,7 +26,7 @@ bool threepp::TextHandle::init() {
     return gltInit();
 }
 
-void TextHandle::setText(const std::string &str) {
+void TextHandle::setText(const std::string& str) {
     gltSetText(pimpl_->text, str.c_str());
 }
 

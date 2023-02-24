@@ -17,13 +17,13 @@ namespace threepp {
 
         struct GLBackground {
 
-            GLBackground(GLState &state, bool premultipliedAlpha);
+            GLBackground(GLState& state, bool premultipliedAlpha);
 
-            void render(GLRenderer &renderer, Object3D *scene);
+            void render(GLRenderer& renderer, Object3D* scene);
 
-            [[nodiscard]] const Color &getClearColor() const;
+            [[nodiscard]] const Color& getClearColor() const;
 
-            void setClearColor(const Color &color, float alpha = 1);
+            void setClearColor(const Color& color, float alpha = 1);
 
             [[nodiscard]] float getClearAlpha() const;
 
@@ -31,14 +31,14 @@ namespace threepp {
 
 
         private:
-            GLState &state;
+            GLState& state;
 
             bool premultipliedAlpha;
 
             Color clearColor = Color(0x000000);
             float clearAlpha = 0;
 
-            void setClear(const Color &color, float alpha);
+            void setClear(const Color& color, float alpha);
         };
 
     }// namespace gl

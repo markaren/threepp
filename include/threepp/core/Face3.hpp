@@ -16,10 +16,10 @@ namespace threepp {
 
         int materialIndex;
 
-        Face3(int a, int b, int c, const Vector3 &normal, int materialIndex)
+        Face3(int a, int b, int c, const Vector3& normal, int materialIndex)
             : a(a), b(b), c(c), normal(normal), materialIndex(materialIndex) {}
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_FACE3_HPP

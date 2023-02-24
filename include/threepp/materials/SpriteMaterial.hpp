@@ -9,12 +9,12 @@
 
 namespace threepp {
 
-    class SpriteMaterial : public virtual Material,
-                           public MaterialWithColor,
-                           public MaterialWithRotation,
-                           public MaterialWithMap,
-                           public MaterialWithAlphaMap,
-                           public MaterialWithSize {
+    class SpriteMaterial: public virtual Material,
+                          public MaterialWithColor,
+                          public MaterialWithRotation,
+                          public MaterialWithMap,
+                          public MaterialWithAlphaMap,
+                          public MaterialWithSize {
 
     public:
         [[nodiscard]] std::string type() const override {

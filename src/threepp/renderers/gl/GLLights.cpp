@@ -9,12 +9,12 @@ using namespace threepp::gl;
 
 namespace {
 
-    bool shadowCastingLightsFirst(const Light *lightA, const Light *lightB) {
+    bool shadowCastingLightsFirst(const Light* lightA, const Light* lightB) {
 
         return (lightB->castShadow ? 1 : 0) > (lightA->castShadow ? 1 : 0);
     }
 
-    template <class T>
+    template<class T>
     void ensureCapacity(T& container, size_t capacity) {
         while (container.size() < capacity) {
             container.emplace_back();
@@ -24,7 +24,7 @@ namespace {
 }// namespace
 
 
-void GLLights::setup(std::vector<Light *> &lights) {
+void GLLights::setup(std::vector<Light*>& lights) {
 
     float r = 0, g = 0, b = 0;
 
@@ -41,9 +41,9 @@ void GLLights::setup(std::vector<Light *> &lights) {
 
     std::stable_sort(lights.begin(), lights.end(), shadowCastingLightsFirst);
 
-    for (auto &light : lights) {
+    for (auto& light : lights) {
 
-        auto &color = light->color;
+        auto& color = light->color;
         auto intensity = light->intensity;
 
         if (light->as<AmbientLight>()) {
@@ -86,7 +86,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 ++numDirectionalShadows;
             }
 
-            ensureCapacity(state.directional, directionalLength+1);
+            ensureCapacity(state.directional, directionalLength + 1);
             state.directional[directionalLength] = uniforms;
 
             ++directionalLength;
@@ -122,15 +122,15 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 ++numSpotShadows;
             }
 
-            ensureCapacity(state.spot, spotLength+1);
+            ensureCapacity(state.spot, spotLength + 1);
             state.spot[spotLength] = uniforms;
 
             ++spotLength;
 
         } else if (light->as<PointLight>()) {
 
-            auto l = dynamic_cast<PointLight *>(light);
-            auto &shadow = l->shadow;
+            auto l = dynamic_cast<PointLight*>(light);
+            auto& shadow = l->shadow;
 
             auto uniforms = cache_.get(*light);
 
@@ -156,30 +156,29 @@ void GLLights::setup(std::vector<Light *> &lights) {
                 ++numPointShadows;
             }
 
-            ensureCapacity(state.point, pointLength+1);
+            ensureCapacity(state.point, pointLength + 1);
             state.point[pointLength] = uniforms;
 
             ++pointLength;
 
         } else if (light->as<HemisphereLight>()) {
 
-            auto l = dynamic_cast<HemisphereLight *>(light);
-            auto uniforms = cache_.get( *light );
+            auto l = dynamic_cast<HemisphereLight*>(light);
+            auto uniforms = cache_.get(*light);
 
-            std::get<Color>(uniforms->at("skyColor")).copy( l->color ).multiplyScalar( intensity );
-            std::get<Color>(uniforms->at("groundColor")).copy( l->groundColor ).multiplyScalar( intensity );
+            std::get<Color>(uniforms->at("skyColor")).copy(l->color).multiplyScalar(intensity);
+            std::get<Color>(uniforms->at("groundColor")).copy(l->groundColor).multiplyScalar(intensity);
 
-            ensureCapacity(state.hemi, hemiLength+1);
-            state.hemi[ hemiLength ] = uniforms;
+            ensureCapacity(state.hemi, hemiLength + 1);
+            state.hemi[hemiLength] = uniforms;
 
             ++hemiLength;
-
         }
     }
 
     state.ambient.setRGB(r, g, b);
 
-    auto &hash = state.hash;
+    auto& hash = state.hash;
 
     if (hash.directionalLength != directionalLength ||
         hash.pointLength != pointLength ||
@@ -217,7 +216,7 @@ void GLLights::setup(std::vector<Light *> &lights) {
     }
 }
 
-void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
+void GLLights::setupView(std::vector<Light*>& lights, Camera* camera) {
 
     int directionalLength = 0;
     int pointLength = 0;
@@ -231,9 +230,9 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
         if (light->as<DirectionalLight>()) {
 
             auto l = light->as<DirectionalLight>();
-            auto &uniforms = state.directional.at(directionalLength);
+            auto& uniforms = state.directional.at(directionalLength);
 
-            auto &direction = std::get<Vector3>(uniforms->at("direction"));
+            auto& direction = std::get<Vector3>(uniforms->at("direction"));
 
             direction.setFromMatrixPosition(*light->matrixWorld);
 
@@ -246,11 +245,11 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
         } else if (light->as<SpotLight>()) {
 
-            auto l = dynamic_cast<SpotLight *>(light);
-            auto &uniforms = state.spot.at(spotLength);
+            auto l = dynamic_cast<SpotLight*>(light);
+            auto& uniforms = state.spot.at(spotLength);
 
-            auto &position = std::get<Vector3>(uniforms->at("position"));
-            auto &direction = std::get<Vector3>(uniforms->at("direction"));
+            auto& position = std::get<Vector3>(uniforms->at("position"));
+            auto& direction = std::get<Vector3>(uniforms->at("direction"));
 
             position.setFromMatrixPosition(*l->matrixWorld);
             position.applyMatrix4(viewMatrix);
@@ -266,27 +265,26 @@ void GLLights::setupView(std::vector<Light *> &lights, Camera *camera) {
 
         } else if (light->as<PointLight>()) {
 
-            auto &uniforms = state.point.at(pointLength);
+            auto& uniforms = state.point.at(pointLength);
 
-            auto &position = std::get<Vector3>(uniforms->at("position"));
+            auto& position = std::get<Vector3>(uniforms->at("position"));
 
             position.setFromMatrixPosition(*light->matrixWorld);
             position.applyMatrix4(viewMatrix);
 
             ++pointLength;
 
-        } else if ( light->as<HemisphereLight>()) {
+        } else if (light->as<HemisphereLight>()) {
 
-            auto &uniforms = state.hemi.at(hemiLength);
+            auto& uniforms = state.hemi.at(hemiLength);
 
-            auto &direction = std::get<Vector3>(uniforms->at("direction"));
+            auto& direction = std::get<Vector3>(uniforms->at("direction"));
 
             direction.setFromMatrixPosition(*light->matrixWorld);
             direction.transformDirection(viewMatrix);
             direction.normalize();
 
             ++hemiLength;
-
         }
     }
 }

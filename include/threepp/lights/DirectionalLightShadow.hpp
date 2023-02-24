@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class DirectionalLightShadow : public LightShadow {
+    class DirectionalLightShadow: public LightShadow {
 
     public:
         static std::shared_ptr<DirectionalLightShadow> create() {

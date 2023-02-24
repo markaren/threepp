@@ -7,13 +7,13 @@
 
 namespace threepp {
 
-    class PlaneGeometry : public BufferGeometry {
+    class PlaneGeometry: public BufferGeometry {
 
     public:
         const float width;
         const float height;
 
-        PlaneGeometry(const PlaneGeometry &) = delete;
+        PlaneGeometry(const PlaneGeometry&) = delete;
 
         static std::shared_ptr<PlaneGeometry> create(float width = 1, float height = 1, int widthSegments = 1, int heightSegments = 1) {
             return std::shared_ptr<PlaneGeometry>(new PlaneGeometry(width, height, widthSegments, heightSegments));
@@ -25,4 +25,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif //THREEPP_SPHEREGEOMETRY_HPP
+#endif//THREEPP_SPHEREGEOMETRY_HPP

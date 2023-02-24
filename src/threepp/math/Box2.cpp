@@ -9,9 +9,9 @@ Box2::Box2()
     : min_(+Infinity<float>, +Infinity<float>),
       max_(-Infinity<float>, -Infinity<float>) {}
 
-Box2::Box2(const Vector2 &min, const Vector2 &max) : min_(min), max_(max) {}
+Box2::Box2(const Vector2& min, const Vector2& max): min_(min), max_(max) {}
 
-Box2 &Box2::set(const Vector2 &min, const Vector2 &max) {
+Box2& Box2::set(const Vector2& min, const Vector2& max) {
 
     this->min_ = min;
     this->max_ = max;
@@ -19,11 +19,11 @@ Box2 &Box2::set(const Vector2 &min, const Vector2 &max) {
     return *this;
 }
 
-Box2 &Box2::setFromPoints(const std::vector<Vector2> &points) {
+Box2& Box2::setFromPoints(const std::vector<Vector2>& points) {
 
     this->makeEmpty();
 
-    for (const auto &point : points) {
+    for (const auto& point : points) {
 
         this->expandByPoint(point);
     }
@@ -31,7 +31,7 @@ Box2 &Box2::setFromPoints(const std::vector<Vector2> &points) {
     return *this;
 }
 
-Box2 &Box2::copy(const Box2 &box) {
+Box2& Box2::copy(const Box2& box) {
 
     this->min_.copy(box.min_);
     this->max_.copy(box.max_);
@@ -39,7 +39,7 @@ Box2 &Box2::copy(const Box2 &box) {
     return *this;
 }
 
-Box2 &Box2::makeEmpty() {
+Box2& Box2::makeEmpty() {
     this->min_.x = +Infinity<float>;
     this->min_.y = +Infinity<float>;
     this->max_.x = -Infinity<float>;
@@ -54,17 +54,17 @@ bool Box2::isEmpty() const {
     return (this->max_.x < this->min_.x) || (this->max_.y < this->min_.y);
 }
 
-void Box2::getCenter(Vector2 &target) {
+void Box2::getCenter(Vector2& target) {
 
     this->isEmpty() ? target.set(0, 0) : target.addVectors(this->min_, this->max_).multiplyScalar(0.5f);
 }
 
-void Box2::getSize(Vector2 &target) {
+void Box2::getSize(Vector2& target) {
 
     this->isEmpty() ? target.set(0, 0) : target.subVectors(this->max_, this->min_);
 }
 
-Box2 &Box2::expandByPoint(const Vector2 &point) {
+Box2& Box2::expandByPoint(const Vector2& point) {
 
     this->min_.min(point);
     this->max_.max(point);

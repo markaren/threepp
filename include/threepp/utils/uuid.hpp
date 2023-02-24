@@ -9,6 +9,6 @@ namespace threepp::utils {
     //https://stackoverflow.com/questions/24365331/how-can-i-generate-uuid-in-c-without-using-boost-library/58467162
     std::string generateUUID();
 
-}
+}// namespace threepp::utils
 
 #endif//THREEPP_UUID_HPP

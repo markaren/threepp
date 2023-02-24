@@ -170,7 +170,7 @@ TEST_CASE("setFromEuler/setFromQuaternion") {
     // ensure euler conversion to/from Quaternion matches.
     for (auto order : orders) {
 
-        for (auto &angle : angles) {
+        for (auto& angle : angles) {
 
             auto eulers2 = Euler().setFromQuaternion(Quaternion().setFromEuler(Euler(angle.x, angle.y, angle.z, order)), order);
             auto newAngle = Vector3(eulers2.x(), eulers2.y(), eulers2.z());

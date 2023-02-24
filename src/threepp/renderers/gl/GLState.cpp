@@ -287,7 +287,7 @@ void gl::StencilBuffer::reset() {
     currentStencilClear = std::nullopt;
 }
 
-gl::GLState::GLState(const Canvas &canvas)
+gl::GLState::GLState(const Canvas& canvas)
     : canvas(canvas), maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)) {
 
     GLint scissorParam[4];
@@ -528,7 +528,7 @@ void gl::GLState::setBlending(
     currentPremultipledAlpha = std::nullopt;
 }
 
-void gl::GLState::setMaterial(const Material *material, bool frontFaceCW) {
+void gl::GLState::setMaterial(const Material* material, bool frontFaceCW) {
 
     material->side == DoubleSide
             ? disable(GL_CULL_FACE)
@@ -698,7 +698,7 @@ void gl::GLState::unbindTexture() {
 
     if (currentTextureSlot && currentBoundTextures.count(*currentTextureSlot)) {
 
-        auto &boundTexture = currentBoundTextures.at(*currentTextureSlot);
+        auto& boundTexture = currentBoundTextures.at(*currentTextureSlot);
 
         if (boundTexture.type) {
 
@@ -710,17 +710,17 @@ void gl::GLState::unbindTexture() {
     }
 }
 
-void gl::GLState::texImage2D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLuint format, GLuint type, const void *pixels) {
+void gl::GLState::texImage2D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLuint format, GLuint type, const void* pixels) {
 
     glTexImage2D(target, level, internalFormat, width, height, 0, format, type, pixels);
 }
 
-void gl::GLState::texImage3D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLint depth, GLuint format, GLuint type, const void *pixels) {
+void gl::GLState::texImage3D(GLuint target, GLint level, GLint internalFormat, GLint width, GLint height, GLint depth, GLuint format, GLuint type, const void* pixels) {
 
     glTexImage3D(target, level, internalFormat, width, height, depth, 0, format, type, pixels);
 }
 
-void gl::GLState::scissor(const Vector4 &scissor) {
+void gl::GLState::scissor(const Vector4& scissor) {
 
     if (!currentScissor.equals(scissor)) {
 
@@ -729,7 +729,7 @@ void gl::GLState::scissor(const Vector4 &scissor) {
     }
 }
 
-void gl::GLState::viewport(const Vector4 &viewport) {
+void gl::GLState::viewport(const Vector4& viewport) {
 
     if (!currentViewport.equals(viewport)) {
 

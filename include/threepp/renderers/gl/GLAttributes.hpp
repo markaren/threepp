@@ -18,18 +18,18 @@ namespace threepp::gl {
 
     struct GLAttributes {
 
-        Buffer createBuffer(BufferAttribute *attribute, unsigned int bufferType);
+        Buffer createBuffer(BufferAttribute* attribute, unsigned int bufferType);
 
-        void updateBuffer(unsigned int buffer, BufferAttribute *attribute, unsigned int bufferType, int bytesPerElement);
+        void updateBuffer(unsigned int buffer, BufferAttribute* attribute, unsigned int bufferType, int bytesPerElement);
 
-        Buffer get(BufferAttribute *attribute);
+        Buffer get(BufferAttribute* attribute);
 
-        void remove(BufferAttribute *attribute);
+        void remove(BufferAttribute* attribute);
 
-        void update(BufferAttribute *attribute, unsigned int bufferType);
+        void update(BufferAttribute* attribute, unsigned int bufferType);
 
     private:
-        std::unordered_map<BufferAttribute *, Buffer> buffers_;
+        std::unordered_map<BufferAttribute*, Buffer> buffers_;
     };
 
 }// namespace threepp::gl

@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    class LineSegments : public Line {
+    class LineSegments: public Line {
 
     public:
         void computeLineDistances() override {

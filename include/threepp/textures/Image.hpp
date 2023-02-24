@@ -26,12 +26,12 @@ namespace threepp {
             return flipped_;
         }
 
-        [[nodiscard]] unsigned char *getData() {
+        [[nodiscard]] unsigned char* getData() {
 
             return data_.get();
         }
 
-        [[nodiscard]] const unsigned char *getData() const {
+        [[nodiscard]] const unsigned char* getData() const {
 
             return data_.get();
         }

@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class Points : public Object3D {
+    class Points: public Object3D {
 
     public:
         BufferGeometry* geometry() override {

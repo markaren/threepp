@@ -8,18 +8,18 @@
 
 namespace threepp {
 
-    class MeshToonMaterial : public virtual Material,
-                             public MaterialWithColor,
-                             public MaterialWithMap,
-                             public MaterialWithGradientMap,
-                             public MaterialWithBumpMap,
-                             public MaterialWithNormalMap,
-                             public MaterialWithLightMap,
-                             public MaterialWithAoMap,
-                             public MaterialWithDisplacementMap,
-                             public MaterialWithEmissive,
-                             public MaterialWithWireframe,
-                             public MaterialWithDefines {
+    class MeshToonMaterial: public virtual Material,
+                            public MaterialWithColor,
+                            public MaterialWithMap,
+                            public MaterialWithGradientMap,
+                            public MaterialWithBumpMap,
+                            public MaterialWithNormalMap,
+                            public MaterialWithLightMap,
+                            public MaterialWithAoMap,
+                            public MaterialWithDisplacementMap,
+                            public MaterialWithEmissive,
+                            public MaterialWithWireframe,
+                            public MaterialWithDefines {
 
     public:
         [[nodiscard]] std::string type() const override {

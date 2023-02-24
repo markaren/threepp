@@ -19,48 +19,48 @@ namespace threepp {
 
         Color(unsigned int hex);
 
-        float &operator[](unsigned int index);
+        float& operator[](unsigned int index);
 
         Color(float r, float g, float b);
 
-        Color &setScalar(float scalar);
+        Color& setScalar(float scalar);
 
-        Color &setRGB(float r, float g, float b);
+        Color& setRGB(float r, float g, float b);
 
-        Color &setHex(unsigned int hex);
+        Color& setHex(unsigned int hex);
 
-        Color &copy(const Color &color);
+        Color& copy(const Color& color);
 
-        Color &add(const Color &color);
+        Color& add(const Color& color);
 
-        Color &addColors(const Color &color1, const Color &color2);
+        Color& addColors(const Color& color1, const Color& color2);
 
-        Color &addScalar(float s);
+        Color& addScalar(float s);
 
-        Color &sub(const Color &color);
+        Color& sub(const Color& color);
 
-        Color &multiply(const Color &color);
+        Color& multiply(const Color& color);
 
-        Color& operator *=(const Color& color) {
+        Color& operator*=(const Color& color) {
             return multiply(color);
         }
 
-        Color &multiplyScalar(float s);
+        Color& multiplyScalar(float s);
 
-        Color& operator *=(float s) {
+        Color& operator*=(float s) {
             return multiplyScalar(s);
         }
 
-        Color &lerp(const Color &color, float alpha);
+        Color& lerp(const Color& color, float alpha);
 
-        Color &lerpColors(const Color &color1, const Color &color2, float alpha);
+        Color& lerpColors(const Color& color1, const Color& color2, float alpha);
 
-        Color &randomize();
+        Color& randomize();
 
-        [[nodiscard]] bool equals(const Color &c) const;
+        [[nodiscard]] bool equals(const Color& c) const;
 
         template<class ArrayLike>
-        Color &fromArray(const ArrayLike &array, size_t offset = 0) {
+        Color& fromArray(const ArrayLike& array, size_t offset = 0) {
 
             this->r = array[offset];
             this->g = array[offset + 1];
@@ -70,19 +70,19 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike &array, size_t offset = 0) const {
+        void toArray(ArrayLike& array, size_t offset = 0) const {
 
             array[offset] = this->r;
             array[offset + 1] = this->g;
             array[offset + 2] = this->b;
         }
 
-        friend std::ostream &operator<<(std::ostream &os, const Color &c) {
+        friend std::ostream& operator<<(std::ostream& os, const Color& c) {
             os << "Color(r=" << c.r << ", g=" << c.g << ", b=" << c.b << ")";
             return os;
         }
 
-        bool operator==(const Color &c) const {
+        bool operator==(const Color& c) const {
 
             return equals(c);
         }

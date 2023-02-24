@@ -9,7 +9,7 @@
 
 namespace threepp {
 
-    class SpotLightHelper : public Object3D {
+    class SpotLightHelper: public Object3D {
 
     public:
         void update() {
@@ -37,11 +37,11 @@ namespace threepp {
         }
 
         ~SpotLightHelper() override {
-//            this->cone->geometry()->dispose();
-//            this->cone->material()->dispose();
+            //            this->cone->geometry()->dispose();
+            //            this->cone->material()->dispose();
         }
 
-        static std::shared_ptr<SpotLightHelper> create(const std::shared_ptr<SpotLight> &light, std::optional<unsigned int> color = std::nullopt) {
+        static std::shared_ptr<SpotLightHelper> create(const std::shared_ptr<SpotLight>& light, std::optional<unsigned int> color = std::nullopt) {
 
             return std::shared_ptr<SpotLightHelper>(new SpotLightHelper(light, color));
         }

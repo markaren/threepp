@@ -12,7 +12,7 @@
 
 namespace threepp {
 
-    class Material : public EventDispatcher {
+    class Material: public EventDispatcher {
 
     public:
         const unsigned int id = materialId++;
@@ -95,15 +95,15 @@ namespace threepp {
         [[nodiscard]] virtual std::string type() const = 0;
 
         template<class T>
-        T *as() {
+        T* as() {
 
-            return dynamic_cast<T *>(this);
+            return dynamic_cast<T*>(this);
         }
 
         template<class T>
         bool is() {
 
-            return dynamic_cast<T *>(this) != nullptr;
+            return dynamic_cast<T*>(this) != nullptr;
         }
 
         virtual ~Material() = default;
@@ -111,7 +111,7 @@ namespace threepp {
     protected:
         Material() = default;
 
-        void copyInto(Material *m) const {
+        void copyInto(Material* m) const {
 
             m->name = name;
 
@@ -144,7 +144,7 @@ namespace threepp {
             m->stencilZPass = stencilZPass;
             m->stencilWrite = stencilWrite;
 
-            const auto &srcPlanes = clippingPlanes;
+            const auto& srcPlanes = clippingPlanes;
             std::vector<Plane> dstPlanes;
 
             if (!srcPlanes.empty()) {
@@ -184,7 +184,6 @@ namespace threepp {
     private:
         std::string uuid_ = utils::generateUUID();
         inline static unsigned int materialId = 0;
-
     };
 
 }// namespace threepp

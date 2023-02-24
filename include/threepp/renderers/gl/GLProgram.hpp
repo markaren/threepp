@@ -25,7 +25,7 @@ namespace threepp {
             int usedTimes = 1;
             unsigned int program = -1;
 
-            GLProgram(const GLRenderer *renderer, std::string cacheKey, const ProgramParameters *parameters, GLBindingStates *bindingStates);
+            GLProgram(const GLRenderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates);
 
             std::shared_ptr<GLUniforms> getUniforms();
 
@@ -34,7 +34,7 @@ namespace threepp {
             void destroy();
 
         private:
-            GLBindingStates *bindingStates;
+            GLBindingStates* bindingStates;
             std::shared_ptr<GLUniforms> cachedUniforms;
             std::unordered_map<std::string, int> cachedAttributes;
 

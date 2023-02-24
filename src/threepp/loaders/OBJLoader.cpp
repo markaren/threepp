@@ -19,12 +19,12 @@ using namespace threepp;
 
 namespace {
 
-    size_t parseVertexOrNormalIndex(const std::string &value, size_t len) {
+    size_t parseVertexOrNormalIndex(const std::string& value, size_t len) {
         int index = std::stoi(value);
         return (index > 0 ? (index - 1) : index + len / 3) * 3;
     }
 
-    size_t parseUvIndex(const std::string &value, size_t len) {
+    size_t parseUvIndex(const std::string& value, size_t len) {
         int index = std::stoi(value);
         return (index > 0 ? (index - 1) : index + len / 2) * 2;
     }
@@ -67,7 +67,7 @@ namespace {
             return materials.back();
         }
 
-        std::shared_ptr<OBJMaterial> startMaterial(const std::string &mname, const std::vector<std::string> &libraries) {
+        std::shared_ptr<OBJMaterial> startMaterial(const std::string& mname, const std::vector<std::string>& libraries) {
 
             auto previous = finalize(false);
 
@@ -99,7 +99,6 @@ namespace {
                 lastMultiMaterial->groupEnd = static_cast<int>(geometry.vertices.size()) / 3;
                 lastMultiMaterial->groupCount = lastMultiMaterial->groupEnd - lastMultiMaterial->groupStart;
                 lastMultiMaterial->inherited = false;
-
             }
 
             if (end && !materials.empty()) {
@@ -139,7 +138,7 @@ namespace {
             startObject("", false);
         }
 
-        void startObject(const std::string &name, bool fromDeclaration = false) {
+        void startObject(const std::string& name, bool fromDeclaration = false) {
 
             if (object) {
                 if (!object->fromDeclaration) {
@@ -173,8 +172,8 @@ namespace {
 
         void addVertex(size_t a, size_t b, size_t c) {
 
-            auto &src = vertices;
-            auto &dst = object->geometry.vertices;
+            auto& src = vertices;
+            auto& dst = object->geometry.vertices;
 
             dst.insert(dst.end(), {src[a + 0], src[a + 1], src[a + 2],
                                    src[b + 0], src[b + 1], src[b + 2],
@@ -183,16 +182,16 @@ namespace {
 
         void addVertexPointOrLine(size_t a) {
 
-            auto &src = vertices;
-            auto &dst = object->geometry.vertices;
+            auto& src = vertices;
+            auto& dst = object->geometry.vertices;
 
             dst.insert(dst.end(), {src[a + 0], src[a + 1], src[a + 2]});
         }
 
         void addNormal(size_t a, size_t b, size_t c) {
 
-            auto &src = normals;
-            auto &dst = object->geometry.normals;
+            auto& src = normals;
+            auto& dst = object->geometry.normals;
 
             dst.insert(dst.end(), {src[a + 0], src[a + 1], src[a + 2],
                                    src[b + 0], src[b + 1], src[b + 2],
@@ -201,8 +200,8 @@ namespace {
 
         void addColor(size_t a, size_t b, size_t c) {
 
-            auto &src = colors;
-            auto &dst = object->geometry.colors;
+            auto& src = colors;
+            auto& dst = object->geometry.colors;
 
             dst.insert(dst.end(), {src[a + 0], src[a + 1], src[a + 2],
                                    src[b + 0], src[b + 1], src[b + 2],
@@ -211,8 +210,8 @@ namespace {
 
         void addUv(size_t a, size_t b, size_t c) {
 
-            auto &src = uvs;
-            auto &dst = object->geometry.uvs;
+            auto& src = uvs;
+            auto& dst = object->geometry.uvs;
 
             dst.insert(dst.end(), {src[a + 0], src[a + 1],
                                    src[b + 0], src[b + 1],
@@ -221,15 +220,15 @@ namespace {
 
         void addUvLine(size_t a) {
 
-            auto &src = uvs;
-            auto &dst = object->geometry.uvs;
+            auto& src = uvs;
+            auto& dst = object->geometry.uvs;
 
             dst.insert(dst.end(), {src[a + 0], src[a + 1]});
         }
 
-        void addFace(const std::string &a, const std::string &b, const std::string &c,
-                     const std::string &ua, const std::string &ub, const std::string &uc,
-                     const std::string &na, const std::string &nb, const std::string &nc) {
+        void addFace(const std::string& a, const std::string& b, const std::string& c,
+                     const std::string& ua, const std::string& ub, const std::string& uc,
+                     const std::string& na, const std::string& nb, const std::string& nc) {
 
             auto vLen = vertices.size();
 
@@ -266,13 +265,13 @@ namespace {
             }
         }
 
-        void addPointGeometry(const std::vector<std::string> &verts) {
+        void addPointGeometry(const std::vector<std::string>& verts) {
 
             object->geometry.type = "Points";
 
             auto vLen = verts.size();
 
-            for (const auto &v : verts) {
+            for (const auto& v : verts) {
                 addVertexPointOrLine(parseVertexOrNormalIndex(v, vLen));
             }
         }
@@ -281,7 +280,7 @@ namespace {
 }// namespace
 
 
-std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool tryLoadMtl) {
+std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool tryLoadMtl) {
 
     if (!exists(path)) return nullptr;
 
@@ -308,7 +307,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
         if (lineLength == 0) continue;
 
-        auto &lineFirstChar = line.front();
+        auto& lineFirstChar = line.front();
 
         if (lineFirstChar == '#') continue;
 
@@ -341,7 +340,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             auto vertexData = utils::split(lineData, ' ');
             std::vector<std::vector<std::string>> faceVertices;
 
-            for (const auto &vertex : vertexData) {
+            for (const auto& vertex : vertexData) {
 
                 if (!vertexData.empty()) {
                     auto vertexParts = utils::split(vertex, '/');
@@ -349,12 +348,12 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
                 }
             }
 
-            auto &v1 = faceVertices[0];
+            auto& v1 = faceVertices[0];
 
             for (unsigned j = 1; j < faceVertices.size() - 1; ++j) {
 
-                auto &v2 = faceVertices[j];
-                auto &v3 = faceVertices[j + 1];
+                auto& v2 = faceVertices[j];
+                auto& v3 = faceVertices[j + 1];
 
                 state.addFace(v1[0], v2[0], v3[0],
                               v1[1], v2[1], v3[1],
@@ -421,10 +420,10 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
     auto container = Group::create();
 
-    for (const auto &object : state.objects) {
+    for (const auto& object : state.objects) {
 
-        auto &geometry = object->geometry;
-        auto &materials = object->materials;
+        auto& geometry = object->geometry;
+        auto& materials = object->materials;
         bool isLine = geometry.type == "Line";
         bool isPoints = geometry.type == "Points";
         bool hasVertexColors = false;
@@ -456,18 +455,18 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
         std::vector<std::shared_ptr<Material>> createdMaterials;
 
-        for (auto &sourceMaterial : materials) {
+        for (auto& sourceMaterial : materials) {
 
             std::shared_ptr<Material> material;
 
             if (this->materials) {
                 material = this->materials->create(sourceMaterial->name);
 
-                if (isLine && material && ! material->is<LineBasicMaterial>()) {
+                if (isLine && material && !material->is<LineBasicMaterial>()) {
 
                     // TODO
 
-                } else if (isPoints && material && ! material->is<PointsMaterial>()) {
+                } else if (isPoints && material && !material->is<PointsMaterial>()) {
 
                     // TODO
                 }
@@ -487,7 +486,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
                 }
 
                 material->name = sourceMaterial->name;
-
             }
 
             material->vertexColors = hasVertexColors;
@@ -496,7 +494,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
             }
 
             createdMaterials.emplace_back(material);
-
         }
 
         std::shared_ptr<Object3D> mesh;
@@ -507,7 +504,6 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path &path, bool t
 
                 auto& sourceMaterial = materials.at(mi);
                 bufferGeometry->addGroup(sourceMaterial->groupStart, sourceMaterial->groupCount, mi);
-
             }
 
             if (isLine) {

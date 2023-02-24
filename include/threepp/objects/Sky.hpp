@@ -20,10 +20,9 @@ namespace threepp {
      *
      * Three.js integration by zz85 http://twitter.com/blurspline
     */
-    class Sky : public Mesh {
+    class Sky: public Mesh {
 
     public:
-
         static std::shared_ptr<Sky> create() {
             return std::shared_ptr<Sky>(new Sky());
         }

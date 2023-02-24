@@ -4,8 +4,8 @@
 #define THREEPP_INTERLEAVEDBUFFER_HPP
 
 #include "threepp/constants.hpp"
-#include "threepp/utils/uuid.hpp"
 #include "threepp/core/misc.hpp"
+#include "threepp/utils/uuid.hpp"
 
 #include <vector>
 
@@ -14,8 +14,7 @@ namespace threepp {
     class InterleavedBuffer: public TypedBufferAttribute<float> {
 
     public:
-
-        InterleavedBuffer(const std::vector<float> &array, int stride)
+        InterleavedBuffer(const std::vector<float>& array, int stride)
             : TypedBufferAttribute<float>(array, static_cast<int>(array.size() / stride)),
               stride_(stride) {}
 
@@ -24,10 +23,9 @@ namespace threepp {
         }
 
     private:
-
         int stride_;
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_INTERLEAVEDBUFFER_HPP

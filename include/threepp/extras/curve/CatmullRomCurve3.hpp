@@ -19,7 +19,7 @@ namespace threepp {
      * curve.type accepts centripetal(default), chordal and catmullrom
      * curve.tension is used for catmullrom which defaults to 0.5
      */
-    class CatmullRomCurve3 : public Curve3 {
+    class CatmullRomCurve3: public Curve3 {
 
     public:
         enum CurveType {
@@ -33,7 +33,7 @@ namespace threepp {
         CurveType type;
         float tension;
 
-        void getPoint(float t, Vector3 &point) {
+        void getPoint(float t, Vector3& point) {
 
             const auto l = static_cast<float>(points.size());
 
@@ -118,8 +118,7 @@ namespace threepp {
         CubicPoly px{}, py{}, pz{};
 
         explicit CatmullRomCurve3(std::vector<Vector3> points, bool closed, CurveType type, float tension)
-                : points(std::move(points)), closed(closed), type(type), tension(tension) {}
-
+            : points(std::move(points)), closed(closed), type(type), tension(tension) {}
     };
 
     class CubicPoly {

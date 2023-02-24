@@ -4,9 +4,9 @@
 
 #include "threepp/utils/StringUtils.hpp"
 
-#include <vector>
-#include <list>
 #include <array>
+#include <list>
+#include <vector>
 
 using namespace threepp;
 
@@ -26,7 +26,6 @@ TEST_CASE("join") {
         std::string join = utils::join(std::array<std::string, 4>{"1", "2", "3", "4"}, ' ');
         REQUIRE(join == "1 2 3 4");
     }
-
 }
 
 TEST_CASE("split") {
@@ -42,7 +41,6 @@ TEST_CASE("split") {
         auto split = utils::split("1\n2\n3\n4", '\n');
         REQUIRE(split == answer);
     }
-
 }
 
 
@@ -68,21 +66,20 @@ TEST_CASE("trim") {
     {
         std::string str{" hello "};
         auto trim = utils::trimEnd(str);
-        REQUIRE(trim == std::string{str.begin(), str.end()-1});
+        REQUIRE(trim == std::string{str.begin(), str.end() - 1});
 
         str = "    hello    ";
         trim = utils::trimEnd(str);
-        REQUIRE(trim == std::string{str.begin(), str.end()-4});
+        REQUIRE(trim == std::string{str.begin(), str.end() - 4});
     }
 
     {
         std::string str{" hello "};
         auto trim = utils::trim(str);
-        REQUIRE(trim == std::string{str.begin()+1, str.end()-1});
+        REQUIRE(trim == std::string{str.begin() + 1, str.end() - 1});
 
         str = "    hello    ";
         trim = utils::trim(str);
-        REQUIRE(trim == std::string{str.begin()+4, str.end()-4});
+        REQUIRE(trim == std::string{str.begin() + 4, str.end() - 4});
     }
-
 }

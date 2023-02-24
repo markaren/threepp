@@ -18,11 +18,10 @@ namespace threepp {
         explicit Fog(T color, float near = 1, float far = 1000)
             : color(color), near(near), far(far) {}
 
-        bool operator==(const Fog &f) const {
+        bool operator==(const Fog& f) const {
 
             return f.color == this->color && f.near == this->near && f.far == this->far;
         }
-
     };
 
 }// namespace threepp

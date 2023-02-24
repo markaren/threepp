@@ -127,13 +127,13 @@ namespace threepp {
             std::shared_ptr<UniformMap> uniforms = nullptr;
 
             ProgramParameters(
-                    const GLRenderer &renderer,
-                    const GLLights::LightState &lights,
+                    const GLRenderer& renderer,
+                    const GLLights::LightState& lights,
                     size_t numShadows,
                     Object3D* object,
                     Scene* scene,
-                    Material *material,
-                    const std::unordered_map<std::string, std::string> &shaderIDs);
+                    Material* material,
+                    const std::unordered_map<std::string, std::string>& shaderIDs);
 
             [[nodiscard]] std::string hash() const;
         };

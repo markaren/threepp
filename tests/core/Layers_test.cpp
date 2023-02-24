@@ -73,27 +73,27 @@ TEST_CASE("Test test") {
 
     Layers a;
     Layers b;
-    
-    CHECK( a.test( b ));
 
-    a.set( 1 );
-    CHECK( !a.test( b ));
+    CHECK(a.test(b));
 
-    b.toggle( 1 );
-    CHECK( a.test( b ));
+    a.set(1);
+    CHECK(!a.test(b));
+
+    b.toggle(1);
+    CHECK(a.test(b));
 }
 
 TEST_CASE("Test isEnabled") {
 
     Layers a;
 
-    a.enable( 1 );
-    CHECK( a.isEnabled( 1 ));
+    a.enable(1);
+    CHECK(a.isEnabled(1));
 
-    a.enable( 2 );
-    CHECK( a.isEnabled( 2 ));
+    a.enable(2);
+    CHECK(a.isEnabled(2));
 
-    a.toggle( 1 );
-    CHECK( !a.isEnabled( 1 ));
-    CHECK( a.isEnabled( 2 ));
+    a.toggle(1);
+    CHECK(!a.isEnabled(1));
+    CHECK(a.isEnabled(2));
 }

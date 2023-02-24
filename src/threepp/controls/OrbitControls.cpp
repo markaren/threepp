@@ -21,7 +21,7 @@ namespace {
 
 }// namespace
 
-OrbitControls::OrbitControls(std::shared_ptr<Camera> camera, Canvas &canvas)
+OrbitControls::OrbitControls(std::shared_ptr<Camera> camera, Canvas& canvas)
     : camera(std::move(camera)), canvas(canvas),
       keyListener(new MyKeyListener(*this)),
       mouseListener(new MyMouseListener(*this)) {
@@ -43,7 +43,7 @@ bool OrbitControls::update() {
     Vector3 lastPosition{};
     Quaternion lastQuaternion{};
 
-    auto &position = this->camera->position;
+    auto& position = this->camera->position;
 
     offset.copy(position).sub(this->target);
 
@@ -156,7 +156,7 @@ void OrbitControls::rotateUp(float angle) {
     sphericalDelta.phi -= angle;
 }
 
-void OrbitControls::panLeft(float distance, const Matrix4 &objectMatrix) {
+void OrbitControls::panLeft(float distance, const Matrix4& objectMatrix) {
 
     Vector3 v{};
 
@@ -166,7 +166,7 @@ void OrbitControls::panLeft(float distance, const Matrix4 &objectMatrix) {
     panOffset.add(v);
 }
 
-void OrbitControls::panUp(float distance, const Matrix4 &objectMatrix) {
+void OrbitControls::panUp(float distance, const Matrix4& objectMatrix) {
 
     Vector3 v{};
 
@@ -191,10 +191,10 @@ void OrbitControls::pan(float deltaX, float deltaY) {
 
     if (camera->as<PerspectiveCamera>()) {
 
-        auto perspective = dynamic_cast<PerspectiveCamera *>(camera.get());
+        auto perspective = dynamic_cast<PerspectiveCamera*>(camera.get());
 
         // perspective
-        auto &position = this->camera->position;
+        auto& position = this->camera->position;
         offset.copy(position).sub(this->target);
         auto targetDistance = offset.length();
 
@@ -285,22 +285,22 @@ void OrbitControls::handleKeyDown(int key) {
     }
 }
 
-void OrbitControls::handleMouseDownRotate(const Vector2 &pos) {
+void OrbitControls::handleMouseDownRotate(const Vector2& pos) {
 
     rotateStart.copy(pos);
 }
 
-void OrbitControls::handleMouseDownDolly(const Vector2 &pos) {
+void OrbitControls::handleMouseDownDolly(const Vector2& pos) {
 
     dollyStart.copy(pos);
 }
 
-void OrbitControls::handleMouseDownPan(const Vector2 &pos) {
+void OrbitControls::handleMouseDownPan(const Vector2& pos) {
 
     panStart.copy(pos);
 }
 
-void OrbitControls::handleMouseMoveRotate(const Vector2 &pos) {
+void OrbitControls::handleMouseMoveRotate(const Vector2& pos) {
 
     rotateEnd.copy(pos);
 
@@ -316,7 +316,7 @@ void OrbitControls::handleMouseMoveRotate(const Vector2 &pos) {
     update();
 }
 
-void OrbitControls::handleMouseMoveDolly(const Vector2 &pos) {
+void OrbitControls::handleMouseMoveDolly(const Vector2& pos) {
 
     dollyEnd.copy(pos);
 
@@ -337,7 +337,7 @@ void OrbitControls::handleMouseMoveDolly(const Vector2 &pos) {
 }
 
 
-void OrbitControls::handleMouseMovePan(const Vector2 &pos) {
+void OrbitControls::handleMouseMovePan(const Vector2& pos) {
 
     panEnd.copy(pos);
 
@@ -350,7 +350,7 @@ void OrbitControls::handleMouseMovePan(const Vector2 &pos) {
     update();
 }
 
-void OrbitControls::handleMouseWheel(const Vector2 &delta) {
+void OrbitControls::handleMouseWheel(const Vector2& delta) {
     if (delta.y < 0) {
 
         dollyOut(getZoomScale());

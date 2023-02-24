@@ -51,7 +51,7 @@ namespace {
 
 struct Reflector::Impl {
 
-    Impl(Reflector &reflector, Reflector::Options options)
+    Impl(Reflector& reflector, Reflector::Options options)
         : reflector_(reflector), clipBias(options.clipBias.value_or(0.f)) {
 
         Color color{options.color.value_or(0x7f7f7f)};
@@ -80,7 +80,7 @@ struct Reflector::Impl {
         (*material->uniforms)["color"].setValue(color);
         (*material->uniforms)["textureMatrix"].setValue(&textureMatrix);
 
-        reflector.onBeforeRender = RenderCallback([this, material](void *renderer, auto scene, auto camera, auto, auto, auto) {
+        reflector.onBeforeRender = RenderCallback([this, material](void* renderer, auto scene, auto camera, auto, auto, auto) {
             reflectorWorldPosition.setFromMatrixPosition(*reflector_.matrixWorld);
             cameraWorldPosition.setFromMatrixPosition(*camera->matrixWorld);
             rotationMatrix.extractRotation(*reflector_.matrixWorld);
@@ -120,7 +120,7 @@ struct Reflector::Impl {
             reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition);
             reflectorPlane.applyMatrix4(virtualCamera->matrixWorldInverse);
             clipPlane.set(reflectorPlane.normal.x, reflectorPlane.normal.y, reflectorPlane.normal.z, reflectorPlane.constant);
-            auto &projectionMatrix = virtualCamera->projectionMatrix;
+            auto& projectionMatrix = virtualCamera->projectionMatrix;
             q.x = (static_cast<float>(math::sgn(clipPlane.x)) + projectionMatrix.elements[8]) / projectionMatrix.elements[0];
             q.y = (static_cast<float>(math::sgn(clipPlane.y)) + projectionMatrix.elements[9]) / projectionMatrix.elements[5];
             q.z = -1.f;
@@ -133,7 +133,7 @@ struct Reflector::Impl {
             projectionMatrix.elements[10] = clipPlane.z + 1.f - clipBias;
             projectionMatrix.elements[14] = clipPlane.w;// Render
 
-            auto _renderer = static_cast<GLRenderer *>(renderer);
+            auto _renderer = static_cast<GLRenderer*>(renderer);
 
             renderTarget->texture->encoding = _renderer->outputEncoding;
             reflector_.visible = false;
@@ -152,7 +152,7 @@ struct Reflector::Impl {
 
             reflector_.visible = true;
 
-//            material->uniforms->operator[]("textureMatrix").setValue(textureMatrix);
+            //            material->uniforms->operator[]("textureMatrix").setValue(textureMatrix);
         });
 
         reflector.materials_[0] = material;
@@ -161,7 +161,7 @@ struct Reflector::Impl {
     ~Impl() = default;
 
 private:
-    Reflector &reflector_;
+    Reflector& reflector_;
 
     float clipBias;
 
@@ -181,7 +181,7 @@ private:
     std::shared_ptr<GLRenderTarget> renderTarget;
 };
 
-Reflector::Reflector(const std::shared_ptr<BufferGeometry> &geometry, Reflector::Options options)
+Reflector::Reflector(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options)
     : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {}
 
 threepp::Reflector::~Reflector() = default;
