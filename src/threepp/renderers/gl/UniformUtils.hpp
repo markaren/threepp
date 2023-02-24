@@ -64,17 +64,21 @@ namespace {
 
     // Texture unit allocation
 
-    std::vector<int>& allocTexUnits(threepp::gl::GLTextures& textures, int n) {
+    std::vector<int>& allocTexUnits(threepp::gl::GLTextures& textures, size_t n) {
+
+        while (n >= arrayCacheI32.size()) {
+            arrayCacheI32.emplace_back(arrayCacheI32.size());
+        }
 
         auto& r = arrayCacheI32[n];
 
-        if (r.empty()) {
+//        if (r.empty()) {
+//
+//            r.resize(n);
+//            arrayCacheI32[n] = r;
+//        }
 
-            r.resize(n);
-            arrayCacheI32[n] = r;
-        }
-
-        for (int i = 0; i != n; ++i) {
+        for (size_t i = 0; i != n; ++i) {
 
             r[i] = textures.allocateTextureUnit();
         }

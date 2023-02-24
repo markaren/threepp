@@ -43,10 +43,10 @@ PointLightShadow::PointLightShadow()
                                       Vector4(1, 0, 1, 1)};
 }
 
-void PointLightShadow::updateMatrices(PointLight* light, int viewportIndex) {
+void PointLightShadow::updateMatrices(PointLight* light, size_t viewportIndex) {
 
     auto camera = this->camera;
-    auto shadowMatrix = this->matrix;
+    auto& shadowMatrix = this->matrix;
 
     auto far = (light->distance > 0) ? light->distance : camera->far;
 

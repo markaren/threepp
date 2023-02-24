@@ -7,6 +7,7 @@ int main() {
 
     Canvas canvas;
     GLRenderer renderer(canvas);
+    renderer.shadowMap.enabled = true;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
@@ -15,6 +16,8 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = PointLight::create();
+    light->castShadow = true;
+    light->shadow->bias = -0.005;
     light->distance = 10;
     light->position.set(0, 1, 0);
     scene->add(light);
@@ -29,21 +32,24 @@ int main() {
     const auto boxMaterial = MeshPhongMaterial::create();
     boxMaterial->color.setHex(0xff0000);
     auto box = Mesh::create(boxGeometry, boxMaterial);
+    box->castShadow = true;
     box->position.setX(-1);
     group->add(box);
 
     auto box2 = Mesh::create(boxGeometry, boxMaterial->clone());
     box2->material()->as<MaterialWithColor>()->color.setHex(0x00ff00);
+    box2->castShadow = true;
     box2->position.setX(1);
     group->add(box2);
 
 
-    const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshLambertMaterial::create();
-    planeMaterial->color.setHex(Color::gray);
+    const auto planeGeometry = PlaneGeometry::create(15, 15);
+    const auto planeMaterial = MeshPhongMaterial::create();
+    planeMaterial->color.setHex(Color::white);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setY(-1);
+    plane->receiveShadow = true;
     plane->rotateX(math::degToRad(90));
     scene->add(plane);
 

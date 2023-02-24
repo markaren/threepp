@@ -127,10 +127,10 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             ++spotLength;
 
-        } else if (light->as<PointLight>()) {
+        } else if (light->is<PointLight>()) {
 
-            auto l = dynamic_cast<PointLight*>(light);
-            auto& shadow = l->shadow;
+            auto l = light->as<PointLight>();
+            auto shadow = l->shadow;
 
             auto uniforms = cache_.get(*light);
 
@@ -149,7 +149,10 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 shadowUniforms->at("shadowCameraNear") = shadow->camera->near;
                 shadowUniforms->at("shadowCameraFar") = shadow->camera->far;
 
-                state.pointShadow.emplace_back(shadowUniforms);
+                ensureCapacity(state.pointShadow, pointLength + 1);
+                ensureCapacity(state.pointShadowMap, pointLength + 1);
+                ensureCapacity(state.pointShadowMatrix, pointLength + 1);
+                state.pointShadow[pointLength] = shadowUniforms;
                 state.pointShadowMap[pointLength] = shadow->map->texture;
                 state.pointShadowMatrix[pointLength] = shadow->matrix;
 

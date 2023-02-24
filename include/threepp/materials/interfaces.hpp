@@ -46,9 +46,9 @@ namespace threepp {
 
     struct MaterialWithLineWidth: virtual Material {
 
-        float lineWidth;
+        float linewidth;
 
-        explicit MaterialWithLineWidth(float lineWidth): lineWidth(lineWidth) {}
+        explicit MaterialWithLineWidth(float linewidth): linewidth(linewidth) {}
     };
 
     struct MaterialWithEmissive: virtual Material {

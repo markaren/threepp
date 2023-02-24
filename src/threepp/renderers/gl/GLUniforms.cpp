@@ -271,26 +271,42 @@ namespace {
                         auto& data = std::get<std::vector<float>>(value);
                         glUniform2fv(addr, activeInfo.size, data.data());
                     };
-                case 0x8b50:// VEC2"
+                case 0x8b50:// VEC2
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<Vector2>>(value);
                         glUniform2fv(addr, activeInfo.size, flatten(data, activeInfo.size, 2).data());
                     };
-                case 0x8b51:// VEC3"
+                case 0x8b51:// VEC3
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<Vector3>>(value);
                         glUniform3fv(addr, activeInfo.size, flatten(data, activeInfo.size, 3).data());
                     };
 
-                case 0x8b5b:// MAT3"
+                case 0x8b5b:// MAT3
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<Matrix3>>(value);
                         glUniformMatrix3fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 9).data());
                     };
-                case 0x8b5c:// MAT4"
+                case 0x8b5c:// MAT4
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<Matrix4>>(value);
                         glUniformMatrix4fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 16).data());
+                    };
+                case 0x8b5e: // SAMPLER_2D
+                case 0x8d66: // SAMPLER_EXTERNAL_OES
+                case 0x8dca: // INT_SAMPLER_2D
+                case 0x8dd2: // UNSIGNED_INT_SAMPLER_2D
+                case 0x8b62: // SAMPLER_2D_SHADOW
+                    return [&](const UniformValue& value, GLTextures* textures) {
+                        auto& data = std::get<std::vector<std::shared_ptr<Texture>>>(value);
+                        const auto n = data.size();
+                        auto units = allocTexUnits(*textures, n);
+
+                        glUniform1iv(addr, (int) n, units.data());
+
+                        for (unsigned i = 0; i != n; ++i) {
+                            textures->setTexture2D(*data[i], units[i]);
+                        }
                     };
                 default:
                     return [&](const UniformValue& value, GLTextures*) {

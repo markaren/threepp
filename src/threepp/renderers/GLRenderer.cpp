@@ -12,6 +12,12 @@
 
 using namespace threepp;
 
+namespace {
+
+    Scene _emptyScene;
+
+}
+
 GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
     : canvas_(canvas), _size(canvas.getSize()),
       _viewport(0, 0, _size.width, _size.height),
@@ -207,15 +213,16 @@ void GLRenderer::releaseMaterialProgramReferences(Material* material) {
 
 void GLRenderer::renderBufferDirect(
         Camera* camera,
-        Scene* scene,
+        Scene* _scene,
         BufferGeometry* geometry,
         Material* material,
         Object3D* object,
         std::optional<GeometryGroup> group) {
 
+    auto scene = _scene;
+
     if (scene == nullptr) {
-        throw std::runtime_error("TODO");
-        //scene = &_emptyScene; // renderBufferDirect second parameter used to be fog (could be nullptr)
+        scene = &_emptyScene;
     }
 
     bool isMesh = object->as<Mesh>();

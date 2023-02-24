@@ -6,6 +6,7 @@
 
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/materials/MeshDistanceMaterial.hpp"
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
 #include "threepp/materials/MeshMatcapMaterial.hpp"
