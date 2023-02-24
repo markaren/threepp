@@ -16,19 +16,23 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     TextureLoader loader;
-
     auto material = SpriteMaterial::create();
     material->map = loader.loadTexture("favicon.png");
     material->map->offset.set(0.5, 0.5);
 
+    auto sprites = Group::create();
     for (int x = -4; x <= 4; x++) {
         for (int y = -4; y <= 4; y++) {
             auto sprite = Sprite::create(material);
             sprite->position.x = static_cast<float>(x);
             sprite->position.y = static_cast<float>(y);
-            scene->add(sprite);
+            sprites->add(sprite);
         }
     }
+    scene->add(sprites);
+
+    auto helper = Mesh::create(SphereGeometry::create(0.1));
+    scene->add(helper);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -36,9 +40,26 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Vector2 mouse{-Infinity<float>, -Infinity<float>};
+    MouseMoveListener l([&](auto &pos) {
+        auto size = canvas.getSize();
+        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+    });
+    canvas.addMouseListener(&l);
 
+    Raycaster raycaster;
+    canvas.animate([&](float dt) {
+        helper->visible = false;
         material->rotation += 1 * dt;
+
+        raycaster.setFromCamera(mouse, camera.get());
+        auto intersects = raycaster.intersectObject(sprites.get(), true);
+        if (!intersects.empty()) {
+            auto &i = intersects.front();
+            helper->position.copy(i.point);
+            helper->visible = true;
+        }
 
         renderer.render(scene, camera);
     });
