@@ -124,7 +124,7 @@ Box3& Box3::expandByObject(Object3D& object) {
 
     if (geometry) {
 
-        if (geometry->boundingBox) {
+        if (!geometry->boundingBox) {
 
             geometry->computeBoundingBox();
         }
