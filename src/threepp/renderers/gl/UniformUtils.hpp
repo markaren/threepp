@@ -40,6 +40,28 @@ namespace {
         return r;
     }
 
+    template<class ArrayLike>
+    std::vector<float>& flattenP(const ArrayLike& array, int nBlocks, int blockSize) {
+
+        const auto n = nBlocks * blockSize;
+        arrayCacheF32.resize(n + 1);
+        auto& r = arrayCacheF32[n];
+
+        if (r.empty()) r.resize(n + 1);
+
+        if (nBlocks != 0) {
+
+            int offset = 0;
+            for (int i = 0; i < nBlocks; ++i) {
+
+                array[i]->toArray(r, offset);
+                offset += blockSize;
+            }
+        }
+
+        return r;
+    }
+
     template<class ArrayLike1, class ArrayLike2>
     bool arraysEqual(const ArrayLike1& a, const ArrayLike2& b) {
 

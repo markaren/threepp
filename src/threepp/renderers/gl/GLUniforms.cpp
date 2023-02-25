@@ -143,7 +143,7 @@ namespace {
         void setValueV2f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cout << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto arg) { std::cerr << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector2 arg) { setValueV2fHelper(arg); },
                        },
                        value);
@@ -170,7 +170,7 @@ namespace {
         void setValueV3f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cout << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto arg) { std::cerr << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector3 arg) { setValueV3fHelper(arg); },
                                [&](Vector3* arg) { setValueV3fHelper(*arg); },
                                [&](Color arg) { setValueV3fHelper(arg); },
@@ -201,7 +201,7 @@ namespace {
         void setValueV4f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cout << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto arg) { std::cerr << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector4 arg) { setValueV4fHelper(arg); },
                                [&](Quaternion arg) { setValueV4fHelper(arg); },
                        },
@@ -222,7 +222,7 @@ namespace {
         void setValueM3(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto) { std::cout << "setValueM3: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueM3: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Matrix3 arg) { setValueM3Helper(arg.elements); },
                        },
                        value);
@@ -242,7 +242,7 @@ namespace {
         void setValueM4(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cout << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
                                [&](Matrix4* arg) { setValueM4Helper(arg->elements); }},
                        value);
@@ -259,7 +259,6 @@ namespace {
 
         void setValue(const UniformValue& value, GLTextures* textures) override {
             setValueFun(value, textures);
-            //            std::cout << "PureArrayUniform '" << id << "'" << std::endl;
         }
 
         [[nodiscard]] std::function<void(const UniformValue&, GLTextures*)> getPureArraySetter() const {
@@ -289,8 +288,11 @@ namespace {
                     };
                 case 0x8b5c:// MAT4
                     return [&](const UniformValue& value, GLTextures*) {
-                        auto& data = std::get<std::vector<Matrix4>>(value);
-                        glUniformMatrix4fv(addr, activeInfo.size, false, flatten(data, activeInfo.size, 16).data());
+                        std::visit(overloaded{
+                                           [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                                           [&](std::vector<Matrix4> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
+                                           [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
+                                   value);
                     };
                 case 0x8b5e: // SAMPLER_2D
                 case 0x8d66: // SAMPLER_EXTERNAL_OES
@@ -302,7 +304,7 @@ namespace {
                         const auto n = data.size();
                         auto units = allocTexUnits(*textures, n);
 
-                        glUniform1iv(addr, (int) n, units.data());
+                        glUniform1iv(addr, static_cast<int>(n), units.data());
 
                         for (unsigned i = 0; i != n; ++i) {
                             textures->setTexture2D(*data[i], units[i]);

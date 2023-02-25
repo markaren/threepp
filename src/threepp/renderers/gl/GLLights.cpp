@@ -77,14 +77,14 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
-                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
+                std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
 
                 ensureCapacity(state.directionalShadow, directionalLength + 1);
                 ensureCapacity(state.directionalShadowMap, directionalLength + 1);
                 ensureCapacity(state.directionalShadowMatrix, directionalLength + 1);
                 state.directionalShadow[directionalLength] = shadowUniforms;
-                state.directionalShadowMap[directionalLength] = shadow->map->texture;
-                state.directionalShadowMatrix[directionalLength] = shadow->matrix;
+                state.directionalShadowMap[directionalLength] = shadow->map ? shadow->map->texture : nullptr;
+                state.directionalShadowMatrix[directionalLength] = &shadow->matrix;
 
                 ++numDirectionalShadows;
             }
@@ -116,14 +116,14 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
-                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
+                std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
 
                 ensureCapacity(state.spotShadow, spotLength + 1);
                 ensureCapacity(state.spotShadowMap, spotLength + 1);
                 ensureCapacity(state.spotShadowMatrix, spotLength + 1);
                 state.spotShadow[spotLength] = shadowUniforms;
-                state.spotShadowMap[spotLength] = shadow->map->texture;
-                state.spotShadowMatrix[spotLength] = shadow->matrix;
+                state.spotShadowMap[spotLength] = shadow->map ? shadow->map->texture : nullptr;
+                state.spotShadowMatrix[spotLength] = &shadow->matrix;
 
                 ++numSpotShadows;
             }
@@ -146,12 +146,12 @@ void GLLights::setup(std::vector<Light*>& lights) {
             if (light->castShadow) {
 
                 auto shadow = l->shadow;
-                auto shadowUniforms = shadowCache_.get(*light);
+                LightUniforms* shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
-                shadowUniforms->at("shadowMapSize") = shadow->mapSize;
+                std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
                 shadowUniforms->at("shadowCameraNear") = shadow->camera->near;
                 shadowUniforms->at("shadowCameraFar") = shadow->camera->far;
 
@@ -159,8 +159,8 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 ensureCapacity(state.pointShadowMap, pointLength + 1);
                 ensureCapacity(state.pointShadowMatrix, pointLength + 1);
                 state.pointShadow[pointLength] = shadowUniforms;
-                state.pointShadowMap[pointLength] = shadow->map->texture;
-                state.pointShadowMatrix[pointLength] = shadow->matrix;
+                state.pointShadowMap[pointLength] = shadow->map ? shadow->map->texture : nullptr;
+                state.pointShadowMatrix[pointLength] = &shadow->matrix;
 
                 ++numPointShadows;
             }

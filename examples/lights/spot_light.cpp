@@ -54,7 +54,7 @@ int main() {
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setY(-1);
-    plane->rotateX(math::degToRad(90));
+    plane->rotateX(math::degToRad(-90));
     plane->receiveShadow = true;
     scene->add(plane);
 
@@ -66,6 +66,8 @@ int main() {
 
     canvas.animate([&](float dt) {
       group->rotation.y += 0.5f * dt;
+
+      light->position.x += 1 * dt;
 
       renderer.render(scene, camera);
     });

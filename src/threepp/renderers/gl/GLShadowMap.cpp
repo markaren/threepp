@@ -154,7 +154,7 @@ void GLShadowMap::render(GLRenderer& _renderer, const std::vector<Light*>& light
 
         for (unsigned vp = 0; vp < viewportCount; vp++) {
 
-            auto viewport = shadow->getViewport(vp);
+            const auto& viewport = shadow->getViewport(vp);
 
             _viewport.set(
                     _viewportSize.x * viewport.x,

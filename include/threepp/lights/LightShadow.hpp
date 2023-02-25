@@ -73,12 +73,12 @@ namespace threepp {
             shadowMatrix.multiply(shadowCamera->matrixWorldInverse);
         }
 
-        Vector4 getViewport(size_t viewportIndex) {
+        Vector4& getViewport(size_t viewportIndex) {
 
             return this->_viewports[viewportIndex];
         }
 
-        Vector2 getFrameExtents() {
+        Vector2& getFrameExtents() {
 
             return this->_frameExtents;
         }

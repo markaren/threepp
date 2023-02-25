@@ -11,21 +11,29 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
-    camera->position.set(0, 1, 5);
+    camera->position.set(5, 3, 5);
 
     OrbitControls controls{camera, canvas};
 
-    auto light = PointLight::create();
-    light->castShadow = true;
-    light->shadow->bias = -0.005;
-    light->distance = 10;
-    light->position.set(0, 1, 0);
-    scene->add(light);
+    auto light1 = PointLight::create();
+    light1->castShadow = true;
+    light1->shadow->bias = -0.005;
+    light1->distance = 5;
+    light1->position.set(0, 2, 0);
+    scene->add(light1);
 
-    scene->add(AmbientLight::create(0xffffff, 0.1f));
+    auto lightHelper1 = PointLightHelper::create(light1, 0.25f);
+    scene->add(lightHelper1);
 
-    auto helper = PointLightHelper::create(light, 0.25f);
-    scene->add(helper);
+    auto light2 = PointLight::create();
+    light2->castShadow = true;
+    light2->shadow->bias = -0.005;
+    light2->distance = 5;
+    light2->position.set(0, 2, 0);
+    scene->add(light2);
+
+    auto lightHelper2 = PointLightHelper::create(light2, 0.25f);
+    scene->add(lightHelper2);
 
     auto group = Group::create();
     scene->add(group);
@@ -61,8 +69,14 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    canvas.animate([&](float t, float dt) {
         group->rotation.y += 0.5f * dt;
+
+        light1->position.x = 2 * std::sin(t);
+        light1->position.z = 7 * std::cos(t);
+
+        light2->position.x = 5 * std::sin(t);
+        light2->position.z = 1 * std::sin(t);
 
         renderer.render(scene, camera);
     });

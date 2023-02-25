@@ -150,16 +150,16 @@ namespace threepp::gl {
             std::vector<LightUniforms*> directional;
             std::vector<LightUniforms*> directionalShadow;
             std::vector<std::shared_ptr<Texture>> directionalShadowMap;
-            std::vector<Matrix4> directionalShadowMatrix;
+            std::vector<Matrix4*> directionalShadowMatrix;
             std::vector<LightUniforms*> spot;
             std::vector<LightUniforms*> spotShadow;
             std::vector<std::shared_ptr<Texture>> spotShadowMap;
-            std::vector<Matrix4> spotShadowMatrix;
+            std::vector<Matrix4*> spotShadowMatrix;
             std::vector<LightUniforms*> rectArea;
             std::vector<LightUniforms*> point;
             std::vector<LightUniforms*> pointShadow;
             std::vector<std::shared_ptr<Texture>> pointShadowMap;
-            std::vector<Matrix4> pointShadowMatrix;
+            std::vector<Matrix4*> pointShadowMatrix;
             std::vector<LightUniforms*> hemi;
         };
 
