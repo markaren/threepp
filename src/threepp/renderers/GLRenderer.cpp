@@ -12,6 +12,12 @@
 
 using namespace threepp;
 
+namespace {
+
+    Scene _emptyScene;
+
+}
+
 GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
     : canvas_(canvas), _size(canvas.getSize()),
       _viewport(0, 0, _size.width, _size.height),
@@ -207,15 +213,16 @@ void GLRenderer::releaseMaterialProgramReferences(Material* material) {
 
 void GLRenderer::renderBufferDirect(
         Camera* camera,
-        Scene* scene,
+        Scene* _scene,
         BufferGeometry* geometry,
         Material* material,
         Object3D* object,
         std::optional<GeometryGroup> group) {
 
+    auto scene = _scene;
+
     if (scene == nullptr) {
-        throw std::runtime_error("TODO");
-        //scene = &_emptyScene; // renderBufferDirect second parameter used to be fog (could be nullptr)
+        scene = &_emptyScene;
     }
 
     bool isMesh = object->as<Mesh>();
@@ -976,12 +983,12 @@ void GLRenderer::markUniformsLightsNeedsUpdate(UniformMap& uniforms, bool value)
 
 bool GLRenderer::materialNeedsLights(Material* material) {
 
-    bool isMeshLambertMaterial = material->as<MeshLambertMaterial>();
-    bool isMeshToonMaterial = material->as<MeshToonMaterial>();
-    bool isMeshPhongMaterial = material->as<MeshPhongMaterial>();
-    bool isMeshStandardMaterial = material->as<MeshStandardMaterial>();
-    bool isShadowMaterial = material->as<ShadowMaterial>();
-    bool isShaderMaterial = material->as<ShaderMaterial>();
+    bool isMeshLambertMaterial = material->is<MeshLambertMaterial>();
+    bool isMeshToonMaterial = material->is<MeshToonMaterial>();
+    bool isMeshPhongMaterial = material->is<MeshPhongMaterial>();
+    bool isMeshStandardMaterial = material->is<MeshStandardMaterial>();
+    bool isShadowMaterial = material->is<ShadowMaterial>();
+    bool isShaderMaterial = material->is<ShaderMaterial>();
     bool lights = false;
 
     if (material->as<MaterialWithLights>()) {

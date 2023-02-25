@@ -37,8 +37,8 @@ namespace threepp {
         }
 
         ~SpotLightHelper() override {
-            //            this->cone->geometry()->dispose();
-            //            this->cone->material()->dispose();
+            this->cone->geometry()->dispose();
+            this->cone->material()->dispose();
         }
 
         static std::shared_ptr<SpotLightHelper> create(const std::shared_ptr<SpotLight>& light, std::optional<unsigned int> color = std::nullopt) {

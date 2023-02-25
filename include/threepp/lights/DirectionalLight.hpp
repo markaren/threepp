@@ -9,19 +9,18 @@
 
 namespace threepp {
 
-    class DirectionalLight: public Light, public LightWithShadow<DirectionalLightShadow>, public LightWithTarget {
+    class DirectionalLight: public Light, public LightWithShadow, public LightWithTarget {
 
     public:
-        std::shared_ptr<Object3D> target = Object3D::create();
-
-        void dispose() override {
-
-            this->shadow->dispose();
-        }
 
         [[nodiscard]] std::string type() const override {
 
             return "DirectionalLight";
+        }
+
+        void dispose() override {
+
+            this->shadow->dispose();
         }
 
         static std::shared_ptr<DirectionalLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt) {
@@ -31,7 +30,7 @@ namespace threepp {
 
     protected:
         DirectionalLight(const Color& color, std::optional<float> intensity)
-            : Light(color, intensity), LightWithShadow<DirectionalLightShadow>(DirectionalLightShadow::create()) {
+            : Light(color, intensity), LightWithShadow(DirectionalLightShadow::create()) {
 
             this->position.copy(Object3D::defaultUp);
             this->updateMatrix();

@@ -12,7 +12,7 @@
 
 namespace threepp {
 
-    class Material: public EventDispatcher {
+    class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
     public:
         const unsigned int id = materialId++;
@@ -95,9 +95,9 @@ namespace threepp {
         [[nodiscard]] virtual std::string type() const = 0;
 
         template<class T>
-        T* as() {
-
-            return dynamic_cast<T*>(this);
+        std::shared_ptr<T> as() {
+            auto m = shared_from_this();
+            return std::dynamic_pointer_cast<T>(m);
         }
 
         template<class T>
@@ -105,6 +105,8 @@ namespace threepp {
 
             return dynamic_cast<T*>(this) != nullptr;
         }
+
+        virtual std::shared_ptr<Material> clone() const { return nullptr; };
 
         virtual ~Material() = default;
 

@@ -40,6 +40,28 @@ namespace {
         return r;
     }
 
+    template<class ArrayLike>
+    std::vector<float>& flattenP(const ArrayLike& array, int nBlocks, int blockSize) {
+
+        const auto n = nBlocks * blockSize;
+        arrayCacheF32.resize(n + 1);
+        auto& r = arrayCacheF32[n];
+
+        if (r.empty()) r.resize(n + 1);
+
+        if (nBlocks != 0) {
+
+            int offset = 0;
+            for (int i = 0; i < nBlocks; ++i) {
+
+                array[i]->toArray(r, offset);
+                offset += blockSize;
+            }
+        }
+
+        return r;
+    }
+
     template<class ArrayLike1, class ArrayLike2>
     bool arraysEqual(const ArrayLike1& a, const ArrayLike2& b) {
 
@@ -64,17 +86,21 @@ namespace {
 
     // Texture unit allocation
 
-    std::vector<int>& allocTexUnits(threepp::gl::GLTextures& textures, int n) {
+    std::vector<int>& allocTexUnits(threepp::gl::GLTextures& textures, size_t n) {
+
+        while (n >= arrayCacheI32.size()) {
+            arrayCacheI32.emplace_back(arrayCacheI32.size());
+        }
 
         auto& r = arrayCacheI32[n];
 
-        if (r.empty()) {
+//        if (r.empty()) {
+//
+//            r.resize(n);
+//            arrayCacheI32[n] = r;
+//        }
 
-            r.resize(n);
-            arrayCacheI32[n] = r;
-        }
-
-        for (int i = 0; i != n; ++i) {
+        for (size_t i = 0; i != n; ++i) {
 
             r[i] = textures.allocateTextureUnit();
         }

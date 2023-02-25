@@ -49,6 +49,8 @@ namespace threepp {
 
         void animate(const std::function<void(float)>& f);
 
+        void animate(const std::function<void(float, float)>& f);
+
         void invokeLater(const std::function<void()>& f);
 
         [[nodiscard]] void* window_ptr() const;

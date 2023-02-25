@@ -11,16 +11,13 @@ however much remains to be done..
 ##### What works?
 
 * Box, Sphere, Plane, Cylindrical and Tube geometries  
-* 2D Textures
-* Sprites
-* Transparency
+* 2D Textures, Sprites, RenderTarget
+* Transparency, Shadows
 * OrbitControls
-* AmbientLight, DirectionalLight, PointLight, SpotLight 
-* Most materials
-* RenderTarget
+* Ambient, Directional, Point, Spot and Hemi lights
 * InstancedMesh
 * Water and Sky shader
-* Raycasting against Mesh
+* Raycasting
 * Binary STL loader
 * OBJ/MTL Loader
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)

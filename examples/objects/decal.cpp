@@ -146,7 +146,7 @@ int main() {
 
                 Vector3 scale = Vector3::ONES * math::randomInRange(0.4f, 1.f);
 
-                auto mat = decalMat->clone();
+                auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();
                 orientation.z = math::PI * math::randomInRange(0.f, 1.f);
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);

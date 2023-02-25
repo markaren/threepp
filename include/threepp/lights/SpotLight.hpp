@@ -9,17 +9,13 @@
 
 namespace threepp {
 
-    class SpotLight: public Light, public LightWithShadow<SpotLightShadow> {
+    class SpotLight: public Light, public LightWithShadow, public LightWithTarget {
 
     public:
         float distance;
         float angle;
         float penumbra;
         float decay;
-
-        std::shared_ptr<Object3D> target{Object3D::create()};
-
-        std::shared_ptr<SpotLightShadow> shadow{SpotLightShadow::create()};
 
         float getPower();
 
@@ -39,7 +35,7 @@ namespace threepp {
 
     protected:
         SpotLight(const Color& color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay)
-            : Light(color, intensity), LightWithShadow<SpotLightShadow>(SpotLightShadow::create()), distance(distance), angle(angle), penumbra(penumbra), decay(decay) {
+            : Light(color, intensity), LightWithShadow(SpotLightShadow::create()), distance(distance), angle(angle), penumbra(penumbra), decay(decay) {
 
             this->position.copy(Object3D::defaultUp);
             this->updateMatrix();

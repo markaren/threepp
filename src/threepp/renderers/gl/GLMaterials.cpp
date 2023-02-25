@@ -168,39 +168,98 @@ namespace {
         uniforms.at("specular").value<Color>().copy(material->specular);
         uniforms.at("shininess").value<float>() = std::max(material->shininess, (float) 1E-4);// to prevent pow( 0.0, 0.0 )
 
-        auto& emissiveMap = material->emissiveMap;
-        if (emissiveMap) {
+        if (material->emissiveMap) {
 
-            uniforms.at("emissiveMap").setValue(emissiveMap);
+            uniforms.at("emissiveMap").setValue(material->emissiveMap);
         }
 
-        auto& bumpMap = material->bumpMap;
-        if (bumpMap) {
+        if (material->bumpMap) {
 
-            uniforms.at("bumpMap").setValue(bumpMap);
+            uniforms.at("bumpMap").setValue(material->bumpMap);
             uniforms.at("bumpScale").setValue(material->bumpScale);
             if (material->side == BackSide) {
                 uniforms.at("bumpScale").value<float>() *= -1;
             }
         }
 
-        auto& normalMap = material->normalMap;
-        if (normalMap) {
+        if (material->normalMap) {
 
-            uniforms.at("normalMap").setValue(normalMap);
+            uniforms.at("normalMap").setValue(material->normalMap);
             uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
             if (material->side == BackSide) {
                 uniforms.at("normalScale").value<Vector2>().negate();
             }
         }
 
-        auto& displacementMap = material->displacementMap;
-        if (displacementMap) {
+        if (material->displacementMap) {
 
-            uniforms.at("displacementMap").setValue(displacementMap);
+            uniforms.at("displacementMap").setValue(material->displacementMap);
             uniforms.at("displacementScale").value<float>() = material->displacementScale;
             uniforms.at("displacementBias").value<float>() = material->displacementBias;
         }
+    }
+
+    void refreshUniformsMatcap( UniformMap& uniforms, MeshMatcapMaterial* material ) {
+
+        if ( material->matcap ) {
+
+            uniforms.at("matcap").setValue(material->matcap);
+
+        }
+
+        if (material->bumpMap) {
+
+            uniforms.at("bumpMap").setValue(material->bumpMap);
+            uniforms.at("bumpScale").setValue(material->bumpScale);
+            if (material->side == BackSide) {
+                uniforms.at("bumpScale").value<float>() *= -1;
+            }
+        }
+
+        if (material->normalMap) {
+
+            uniforms.at("normalMap").setValue(material->normalMap);
+            uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
+            if (material->side == BackSide) {
+                uniforms.at("normalScale").value<Vector2>().negate();
+            }
+        }
+
+        if (material->displacementMap) {
+
+            uniforms.at("displacementMap").setValue(material->displacementMap);
+            uniforms.at("displacementScale").value<float>() = material->displacementScale;
+            uniforms.at("displacementBias").value<float>() = material->displacementBias;
+        }
+
+    }
+
+    void refreshUniformsDepth( UniformMap& uniforms, MeshDepthMaterial* material ) {
+
+        if ( material->displacementMap ) {
+
+            uniforms.at("displacementMap").setValue(material->displacementMap);
+            uniforms.at("displacementScale").value<float>() = material->displacementScale;
+            uniforms.at("displacementBias").value<float>() = material->displacementBias;
+
+        }
+
+    }
+
+    void refreshUniformsDistance( UniformMap&uniforms, MeshDistanceMaterial* material ) {
+
+        if ( material->displacementMap ) {
+
+            uniforms.at("displacementMap").setValue(material->displacementMap);
+            uniforms.at("displacementScale").value<float>() = material->displacementScale;
+            uniforms.at("displacementBias").value<float>() = material->displacementBias;
+
+        }
+
+        uniforms.at("referencePosition").value<Vector3>().copy( material->referencePosition );
+        uniforms.at("nearDistance").value<float>() = material->nearDistance;
+        uniforms.at("farDistance").value<float>() = material->farDistance;
+
     }
 
     void refreshUniformsToon(UniformMap& uniforms, MeshToonMaterial* material) {
@@ -329,36 +388,54 @@ void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* materi
         refreshUniformsCommon(uniforms, material, properties);
     } else if (material->is<MeshLambertMaterial>()) {
 
-        auto m = material->as<MeshLambertMaterial>();
+        auto m = material->as<MeshLambertMaterial>().get();
         refreshUniformsCommon(uniforms, m, properties);
         refreshUniformsLambert(uniforms, m);
 
     } else if (material->is<MeshToonMaterial>()) {
 
-        auto m = material->as<MeshToonMaterial>();
+        auto m = material->as<MeshToonMaterial>().get();
         refreshUniformsCommon(uniforms, m, properties);
         refreshUniformsToon(uniforms, m);
 
     } else if (material->is<MeshPhongMaterial>()) {
 
-        auto m = material->as<MeshPhongMaterial>();
+        auto m = material->as<MeshPhongMaterial>().get();
         refreshUniformsCommon(uniforms, m, properties);
         refreshUniformsPhong(uniforms, m);
 
+    } else if (material->is<MeshMatcapMaterial>()) {
+
+        auto m = material->as<MeshMatcapMaterial>().get();
+        refreshUniformsCommon(uniforms, m, properties);
+        refreshUniformsMatcap(uniforms, m);
+
+    } else if (material->is<MeshDepthMaterial>()) {
+
+        auto m = material->as<MeshDepthMaterial>().get();
+        refreshUniformsCommon(uniforms, m, properties);
+        refreshUniformsDepth(uniforms, m);
+
+    } else if (material->is<MeshDistanceMaterial>()) {
+
+        auto m = material->as<MeshDistanceMaterial>().get();
+        refreshUniformsCommon(uniforms, m, properties);
+        refreshUniformsDistance(uniforms, m);
+
     } else if (material->is<LineBasicMaterial>()) {
 
-        refreshUniformsLine(uniforms, material->as<LineBasicMaterial>());
+        refreshUniformsLine(uniforms, material->as<LineBasicMaterial>().get());
 
-    } else if (material->as<PointsMaterial>()) {
+    } else if (material->is<PointsMaterial>()) {
 
-        refreshUniformsPoints(uniforms, material->as<PointsMaterial>(), pixelRatio, static_cast<float>(height));
+        refreshUniformsPoints(uniforms, material->as<PointsMaterial>().get(), pixelRatio, static_cast<float>(height));
 
-    } else if (material->as<SpriteMaterial>()) {
+    } else if (material->is<SpriteMaterial>()) {
 
         auto m = material->as<SpriteMaterial>();
-        refreshUniformsSprites(uniforms, material->as<SpriteMaterial>());
+        refreshUniformsSprites(uniforms, material->as<SpriteMaterial>().get());
 
-    } else if (material->as<ShaderMaterial>()) {
+    } else if (material->is<ShaderMaterial>()) {
 
         material->as<ShaderMaterial>()->uniformsNeedUpdate = false;
     }

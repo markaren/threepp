@@ -40,16 +40,24 @@ namespace threepp {
 
             Vector4 _viewport;
 
-            std::vector<Material*> _depthMaterials;
-            std::vector<Material*> _distanceMaterials;
+            std::vector<std::shared_ptr<MeshDepthMaterial>> _depthMaterials;
+            std::vector<std::shared_ptr<MeshDistanceMaterial>> _distanceMaterials;
 
-            std::unordered_map<std::string, std::string> _materialCache;
+            std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<Material>>> _materialCache;
 
             int _maxTextureSize;
 
             std::shared_ptr<Mesh> fullScreenMesh;
 
+            MeshDepthMaterial* getDepthMaterialVariant(bool useMorphing);
+
+            MeshDistanceMaterial* getDistanceMaterialVariant(bool useMorphing);
+
+            Material* getDepthMaterial(GLRenderer& _renderer, Object3D* object, BufferGeometry* geometry, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar);
+
             void VSMPass(GLRenderer& _renderer, LightShadow* shadow, Camera* camera);
+
+            void renderObject(GLRenderer& _renderer, Object3D* object, Camera* camera, Camera* shadowCamera, Light* light);
         };
 
     }// namespace gl

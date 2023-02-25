@@ -76,7 +76,7 @@ ProgramParameters::ProgramParameters(
         defines = definesMaterial->defines;
     }
 
-    isRawShaderMaterial = material->as<RawShaderMaterial>();
+    isRawShaderMaterial = material->is<RawShaderMaterial>();
 
     precision = "highp";
 
