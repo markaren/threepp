@@ -49,7 +49,7 @@ namespace threepp {
 
             std::shared_ptr<Mesh> fullScreenMesh;
 
-            MeshDepthMaterial* GLShadowMap::getDepthMaterialVariant(bool useMorphing);
+            MeshDepthMaterial* getDepthMaterialVariant(bool useMorphing);
 
             MeshDistanceMaterial* getDistanceMaterialVariant(bool useMorphing);
 
