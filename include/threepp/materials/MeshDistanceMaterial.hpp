@@ -22,6 +22,25 @@ namespace threepp {
             return "MeshDistanceMaterial";
         }
 
+        std::shared_ptr<Material> clone() const override {
+            auto m = create();
+            copyInto(m.get());
+
+            m->referencePosition.copy(referencePosition);
+            m->nearDistance = nearDistance;
+            m->farDistance = farDistance;
+            
+            m->map = map;
+            
+            m->alphaMap = alphaMap;
+
+            m->displacementMap = displacementMap;
+            m->displacementScale = displacementScale;
+            m->displacementBias = displacementBias;
+
+            return m;
+        }
+
         static std::shared_ptr<MeshDistanceMaterial> create() {
 
             return std::shared_ptr<MeshDistanceMaterial>(new MeshDistanceMaterial());

@@ -983,12 +983,12 @@ void GLRenderer::markUniformsLightsNeedsUpdate(UniformMap& uniforms, bool value)
 
 bool GLRenderer::materialNeedsLights(Material* material) {
 
-    bool isMeshLambertMaterial = material->as<MeshLambertMaterial>();
-    bool isMeshToonMaterial = material->as<MeshToonMaterial>();
-    bool isMeshPhongMaterial = material->as<MeshPhongMaterial>();
-    bool isMeshStandardMaterial = material->as<MeshStandardMaterial>();
-    bool isShadowMaterial = material->as<ShadowMaterial>();
-    bool isShaderMaterial = material->as<ShaderMaterial>();
+    bool isMeshLambertMaterial = material->is<MeshLambertMaterial>();
+    bool isMeshToonMaterial = material->is<MeshToonMaterial>();
+    bool isMeshPhongMaterial = material->is<MeshPhongMaterial>();
+    bool isMeshStandardMaterial = material->is<MeshStandardMaterial>();
+    bool isShadowMaterial = material->is<ShadowMaterial>();
+    bool isShaderMaterial = material->is<ShaderMaterial>();
     bool lights = false;
 
     if (material->as<MaterialWithLights>()) {

@@ -11,7 +11,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
-    camera->position.z = 5;
+    camera->position.set(0, 1, 5);
 
     OrbitControls controls{camera, canvas};
 
@@ -21,6 +21,8 @@ int main() {
     light->distance = 10;
     light->position.set(0, 1, 0);
     scene->add(light);
+
+    scene->add(AmbientLight::create(0xffffff, 0.1f));
 
     auto helper = PointLightHelper::create(light, 0.25f);
     scene->add(helper);
@@ -43,14 +45,14 @@ int main() {
     group->add(box2);
 
 
-    const auto planeGeometry = PlaneGeometry::create(15, 15);
+    const auto planeGeometry = PlaneGeometry::create(105, 105);
     const auto planeMaterial = MeshPhongMaterial::create();
     planeMaterial->color.setHex(Color::white);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setY(-1);
     plane->receiveShadow = true;
-    plane->rotateX(math::degToRad(90));
+    plane->rotateX(math::degToRad(-90));
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {

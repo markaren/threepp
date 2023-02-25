@@ -8,14 +8,12 @@
 
 namespace threepp {
 
-    class SpotLight;
-
     class SpotLightShadow: public LightShadow {
 
     public:
         float focus = 1;
 
-        void updateMatrices(SpotLight* light);
+        void updateMatrices(Light* light) override;
 
         static std::shared_ptr<SpotLightShadow> create() {
 
@@ -23,8 +21,7 @@ namespace threepp {
         }
 
     protected:
-        SpotLightShadow()
-            : LightShadow(PerspectiveCamera::create(50, 1, 0.5f, 500)) {}
+        SpotLightShadow();
     };
 
 }// namespace threepp

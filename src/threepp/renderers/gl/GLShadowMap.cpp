@@ -271,21 +271,15 @@ Material* GLShadowMap::getDepthMaterial(GLRenderer& _renderer, Object3D* object,
 
         auto materialsForVariant = _materialCache[keyA];
 
-        //        if (materialsForVariant == = undefined) {
-        //
-        //            materialsForVariant = {};
-        //            _materialCache[keyA] = materialsForVariant;
-        //        }
-        //
-        //        let cachedMaterial = materialsForVariant[keyB];
-        //
-        //        if (cachedMaterial == = undefined) {
-        //
-        //            cachedMaterial = result.clone();
-        //            materialsForVariant[keyB] = cachedMaterial;
-        //        }
-        //
-        //        result = cachedMaterial;
+        auto cachedMaterial = materialsForVariant[keyB];
+
+        if (!cachedMaterial) {
+
+            cachedMaterial = result->clone();
+            materialsForVariant[keyB] = cachedMaterial;
+        }
+
+        result = cachedMaterial.get();
     }
 
     result->visible = material->visible;
@@ -317,7 +311,7 @@ Material* GLShadowMap::getDepthMaterial(GLRenderer& _renderer, Object3D* object,
     }
 
     auto distanceMaterial = result->as<MeshDistanceMaterial>();
-    if (light->as<PointLight>() && distanceMaterial) {
+    if (light->is<PointLight>() && distanceMaterial) {
 
         distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
         distanceMaterial->nearDistance = shadowCameraNear;
@@ -348,13 +342,15 @@ void GLShadowMap::renderObject(GLRenderer& _renderer, Object3D* object, Camera* 
 
                 for (const auto& group : groups) {
 
-                    const auto groupMaterial = material[group.materialIndex];
+                    if (material.size() > group.materialIndex) {
+                        const auto groupMaterial = material[group.materialIndex];
 
-                    if (groupMaterial && groupMaterial->visible) {
+                        if (groupMaterial && groupMaterial->visible) {
 
-                        const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, groupMaterial, light, shadowCamera->near, shadowCamera->far);
+                            const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, groupMaterial, light, shadowCamera->near, shadowCamera->far);
 
-                        _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, group);
+                            _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, group);
+                        }
                     }
                 }
 

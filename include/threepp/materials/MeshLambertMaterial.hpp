@@ -28,9 +28,8 @@ namespace threepp {
             return "MeshLambertMaterial";
         }
 
-        [[nodiscard]] std::shared_ptr<MeshLambertMaterial> clone() const {
-
-            auto m = std::shared_ptr<MeshLambertMaterial>(new MeshLambertMaterial());
+        [[nodiscard]] std::shared_ptr<Material> clone() const override {
+            auto m = create();
             copyInto(m.get());
 
             m->color.copy(color);

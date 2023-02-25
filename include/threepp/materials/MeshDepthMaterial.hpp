@@ -22,6 +22,28 @@ namespace threepp {
             return "MeshDepthMaterial";
         }
 
+        std::shared_ptr<Material> clone() const override {
+            auto m = create();
+            copyInto(m.get());
+
+            m->depthPacking = depthPacking;
+
+            m->map = map;
+
+            m->alphaMap = alphaMap;
+
+            m->displacementMap = displacementMap;
+            m->displacementScale = displacementScale;
+            m->displacementBias = displacementBias;
+
+            m->wireframe = false;
+            m->wireframeLinewidth = 1;
+
+            m->fog = false;
+
+            return m;
+        }
+
         static std::shared_ptr<MeshDepthMaterial> create() {
 
             return std::shared_ptr<MeshDepthMaterial>(new MeshDepthMaterial());

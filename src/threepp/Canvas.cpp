@@ -144,6 +144,24 @@ public:
         }
     }
 
+    void animate(const std::function<void(float, float)>& f) {
+
+        double lastTime = glfwGetTime();
+        int nbFrames = 0;
+        Clock clock;
+        while (!glfwWindowShouldClose(window)) {
+
+            measureFPS(lastTime, nbFrames);
+
+            handleTasks();
+
+            f(static_cast<float>(glfwGetTime()), clock.getDelta());
+
+            glfwSwapBuffers(window);
+            glfwPollEvents();
+        }
+    }
+
     void onWindowResize(std::function<void(WindowSize)> f) {
         this->resizeListener = std::move(f);
     }
@@ -278,6 +296,11 @@ void Canvas::animate(const std::function<void()>& f) {
 }
 
 void Canvas::animate(const std::function<void(float)>& f) {
+
+    pimpl_->animate(f);
+}
+
+void Canvas::animate(const std::function<void(float, float)>& f) {
 
     pimpl_->animate(f);
 }

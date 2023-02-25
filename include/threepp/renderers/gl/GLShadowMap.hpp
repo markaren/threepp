@@ -43,7 +43,7 @@ namespace threepp {
             std::vector<std::shared_ptr<MeshDepthMaterial>> _depthMaterials;
             std::vector<std::shared_ptr<MeshDistanceMaterial>> _distanceMaterials;
 
-            std::unordered_map<std::string, std::string> _materialCache;
+            std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<Material>>> _materialCache;
 
             int _maxTextureSize;
 

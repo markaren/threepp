@@ -4,13 +4,18 @@
 
 using namespace threepp;
 
-void SpotLightShadow::updateMatrices(SpotLight* light) {
+SpotLightShadow::SpotLightShadow()
+    : LightShadow(PerspectiveCamera::create(50, 1, 0.5f, 500)) {}
+
+void SpotLightShadow::updateMatrices(Light* _light) {
+
+    auto light = _light->as<SpotLight>();
 
     const auto fov = math::RAD2DEG * 2 * light->angle * this->focus;
     const auto aspect = this->mapSize.x / this->mapSize.y;
     const auto far = (light->distance > 0) ? light->distance : camera->far;
 
-    auto c = dynamic_cast<PerspectiveCamera*>(camera.get());
+    auto c = camera->as<PerspectiveCamera>();
 
     if (fov != c->fov || aspect != c->aspect || far != camera->far) {
 
@@ -20,5 +25,5 @@ void SpotLightShadow::updateMatrices(SpotLight* light) {
         c->updateProjectionMatrix();
     }
 
-    LightShadow::updateMatrices(light);
+    LightShadow::updateMatrices(_light);
 }

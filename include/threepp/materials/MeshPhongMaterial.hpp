@@ -33,10 +33,9 @@ namespace threepp {
             return "MeshPhongMaterial";
         }
 
-        [[nodiscard]] std::shared_ptr<MeshPhongMaterial> clone() const {
+        [[nodiscard]] std::shared_ptr<Material> clone() const override {
 
-            auto m = std::shared_ptr<MeshPhongMaterial>(new MeshPhongMaterial());
-
+            auto m = create();
             copyInto(m.get());
 
             m->color.copy(color);

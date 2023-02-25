@@ -9,17 +9,13 @@
 
 namespace threepp {
 
-    class SpotLight: public Light, public LightWithShadow {
+    class SpotLight: public Light, public LightWithShadow, public LightWithTarget {
 
     public:
         float distance;
         float angle;
         float penumbra;
         float decay;
-
-        std::shared_ptr<Object3D> target{Object3D::create()};
-
-        std::shared_ptr<SpotLightShadow> shadow{SpotLightShadow::create()};
 
         float getPower();
 

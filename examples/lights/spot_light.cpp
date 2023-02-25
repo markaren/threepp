@@ -7,6 +7,7 @@ int main() {
 
     Canvas canvas;
     GLRenderer renderer(canvas);
+    renderer.shadowMap.enabled = true;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
@@ -17,6 +18,7 @@ int main() {
     auto light = SpotLight::create();
     light->distance = 5;
     light->position.set(0, 2, 0);
+    light->castShadow = true;
     scene->add(light);
 
     auto helper = SpotLightHelper::create(light);
@@ -30,6 +32,7 @@ int main() {
         boxMaterial->color.setHex(0xff0000);
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.setX(-1);
+        box->castShadow = true;
         group->add(box);
     }
 
@@ -39,18 +42,20 @@ int main() {
         boxMaterial->color.setHex(0x00ff00);
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.setX(1);
+        box->castShadow = true;
         group->add(box);
     }
 
     scene->add(group);
 
-    const auto planeGeometry = PlaneGeometry::create(5, 5);
+    const auto planeGeometry = PlaneGeometry::create(150, 150);
     const auto planeMaterial = MeshPhongMaterial::create();
     planeMaterial->color.setHex(Color::gray);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setY(-1);
     plane->rotateX(math::degToRad(90));
+    plane->receiveShadow = true;
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
