@@ -16,13 +16,20 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = SpotLight::create();
-    light->distance = 5;
-    light->position.set(0, 2, 0);
+    light->distance = 30;
+    light->angle = math::degToRad(20);
+    light->position.set(10, 10, 0);
     light->castShadow = true;
     scene->add(light);
 
+    scene->add(AmbientLight::create(0xffffff, 0.1f));
+
     auto helper = SpotLightHelper::create(light);
     scene->add(helper);
+
+    auto target = Object3D::create();
+    light->target = target;
+    scene->add(target);
 
     auto group = Group::create();
 
@@ -64,10 +71,13 @@ int main() {
       renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    canvas.animate([&](float t, float dt) {
       group->rotation.y += 0.5f * dt;
 
-      light->position.x += 1 * dt;
+      target->position.x = 5 * std::sin(t);
+      target->position.z = 5 * std::cos(t);
+
+      helper->update();
 
       renderer.render(scene, camera);
     });
