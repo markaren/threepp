@@ -18,8 +18,8 @@ namespace threepp {
 
         static std::shared_ptr<SphereGeometry> create(
                 float radius = 1,
-                int widthSegments = 8,
-                int heightSegments = 6,
+                unsigned int widthSegments = 8,
+                unsigned int heightSegments = 6,
                 float phiStart = 0,
                 float phiLength = math::PI * 2,
                 float thetaStart = 0,
@@ -29,7 +29,7 @@ namespace threepp {
         }
 
     private:
-        SphereGeometry(float radius, int widthSegments, int heightSegments, float phiStart, float phiLength, float thetaStart, float thetaLength);
+        SphereGeometry(float radius, unsigned int widthSegments, unsigned int heightSegments, float phiStart, float phiLength, float thetaStart, float thetaLength);
     };
 
 }// namespace threepp

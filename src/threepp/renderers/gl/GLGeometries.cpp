@@ -35,7 +35,7 @@ void GLGeometries::update(BufferGeometry* geometry) {
 
 void GLGeometries::updateWireframeAttribute(BufferGeometry* geometry) {
 
-    std::vector<int> indices;
+    std::vector<unsigned int> indices;
 
     const auto geometryIndex = geometry->getIndex();
     const auto geometryPosition = geometry->getAttribute<float>("position");
@@ -60,7 +60,7 @@ void GLGeometries::updateWireframeAttribute(BufferGeometry* geometry) {
         const auto& array = geometryPosition->array();
         version = geometryPosition->version;
 
-        for (int i = 0, l = static_cast<int>(array.size() / 3) - 1; i < l; i += 3) {
+        for (unsigned i = 0, l = array.size() / 3 - 1; i < l; i += 3) {
 
             const auto a = i + 0;
             const auto b = i + 1;

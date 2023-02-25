@@ -10,16 +10,21 @@ namespace threepp {
     class CircleGeometry: public BufferGeometry {
 
     public:
-        static std::shared_ptr<CircleGeometry> create(float radius = 1, int segments = 8, float thetaStart = 0, float thetaLength = math::PI * 2) {
+        static std::shared_ptr<CircleGeometry> create(
+                float radius = 1,
+                unsigned int segments = 8,
+                float thetaStart = 0,
+                float thetaLength = math::TWO_PI) {
+
             return std::shared_ptr<CircleGeometry>(new CircleGeometry(radius, segments, thetaStart, thetaLength));
         }
 
     protected:
-        CircleGeometry(float radius, int segments, float thetaStart, float thetaLength) {
+        CircleGeometry(float radius, unsigned int segments, float thetaStart, float thetaLength) {
 
             // buffers
 
-            std::vector<int> indices;
+            std::vector<unsigned int> indices;
             std::vector<float> vertices;
             std::vector<float> normals;
             std::vector<float> uvs;
@@ -33,11 +38,11 @@ namespace threepp {
 
             vertices.insert(vertices.end(), {0, 0, 0});
             normals.insert(normals.end(), {0, 0, 1});
-            uvs.insert(uvs.end(), {0.5, 0.5});
+            uvs.insert(uvs.end(), {0.5f, 0.5f});
 
-            for (int s = 0, i = 3; s <= segments; s++, i += 3) {
+            for (unsigned s = 0, i = 3; s <= segments; s++, i += 3) {
 
-                const auto segment = thetaStart + s / segments * thetaLength;
+                const auto segment = thetaStart + static_cast<float>(s) / static_cast<float>(segments) * thetaLength;
 
                 // vertex
 
@@ -60,7 +65,7 @@ namespace threepp {
 
             // indices
 
-            for (int i = 1; i <= segments; i++) {
+            for (unsigned i = 1; i <= segments; i++) {
 
                 indices.insert(indices.end(), {i, i + 1, 0});
             }

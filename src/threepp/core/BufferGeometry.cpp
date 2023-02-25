@@ -24,7 +24,7 @@ const IntBufferAttribute* BufferGeometry::getIndex() const {
     return this->index_.get();
 }
 
-BufferGeometry& BufferGeometry::setIndex(std::vector<int> index) {
+BufferGeometry& BufferGeometry::setIndex(std::vector<unsigned int> index) {
 
     this->index_ = IntBufferAttribute::create(std::move(index), 1);
 

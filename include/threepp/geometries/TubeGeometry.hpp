@@ -17,7 +17,7 @@ namespace threepp {
         std::shared_ptr<Curve3> path;
         float radius;
 
-        static std::shared_ptr<TubeGeometry> create(const std::shared_ptr<Curve3>& path, int tubularSegments = 64, float radius = 1, int radialSegments = 8, bool closed = false) {
+        static std::shared_ptr<TubeGeometry> create(const std::shared_ptr<Curve3>& path, unsigned int tubularSegments = 64, float radius = 1, unsigned int radialSegments = 8, bool closed = false) {
 
             return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, tubularSegments, radius, radialSegments, closed));
         }
@@ -25,7 +25,7 @@ namespace threepp {
     private:
         Curve3::FrenetFrames frames;
 
-        TubeGeometry(std::shared_ptr<Curve3> path, int tubularSegments, float radius, int radialSegments, bool closed)
+        TubeGeometry(std::shared_ptr<Curve3> path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed)
             : path(std::move(path)), radius(radius) {
 
             this->frames = this->path->computeFrenetFrames(tubularSegments, closed);
@@ -42,11 +42,11 @@ namespace threepp {
             std::vector<float> vertices;
             std::vector<float> normals;
             std::vector<float> uvs;
-            std::vector<int> indices;
+            std::vector<unsigned int> indices;
 
             // functions
 
-            auto generateSegment = std::function<void(int)>([&](int i) {
+            auto generateSegment = std::function<void(unsigned int)>([&](unsigned int i) {
                 // we use getPointAt to sample evenly distributed points from the given path
 
                 this->path->getPointAt(static_cast<float>(i) / static_cast<float>(tubularSegments), P);
@@ -58,9 +58,9 @@ namespace threepp {
 
                 // generate normals and vertices for the current segment
 
-                for (int j = 0; j <= radialSegments; j++) {
+                for (unsigned j = 0; j <= radialSegments; j++) {
 
-                    const float v = static_cast<float>(j) / static_cast<float>(radialSegments) * math::PI * 2;
+                    const float v = static_cast<float>(j) / static_cast<float>(radialSegments) * math::TWO_PI;
 
                     const float sin = std::sin(v);
                     const float cos = -std::cos(v);
@@ -85,14 +85,14 @@ namespace threepp {
             });
 
             auto generateIndices = std::function<void()>([&] {
-                for (int j = 1; j <= tubularSegments; j++) {
+                for (unsigned j = 1; j <= tubularSegments; j++) {
 
-                    for (int i = 1; i <= radialSegments; i++) {
+                    for (unsigned i = 1; i <= radialSegments; i++) {
 
-                        const int a = (radialSegments + 1) * (j - 1) + (i - 1);
-                        const int b = (radialSegments + 1) * j + (i - 1);
-                        const int c = (radialSegments + 1) * j + i;
-                        const int d = (radialSegments + 1) * (j - 1) + i;
+                        const auto a = (radialSegments + 1) * (j - 1) + (i - 1);
+                        const auto b = (radialSegments + 1) * j + (i - 1);
+                        const auto c = (radialSegments + 1) * j + i;
+                        const auto d = (radialSegments + 1) * (j - 1) + i;
 
                         // faces
 
@@ -103,9 +103,9 @@ namespace threepp {
             });
 
             auto generateUVs = std::function<void()>([&] {
-                for (int i = 0; i <= tubularSegments; i++) {
+                for (unsigned i = 0; i <= tubularSegments; i++) {
 
-                    for (int j = 0; j <= radialSegments; j++) {
+                    for (unsigned j = 0; j <= radialSegments; j++) {
 
                         uv.x = static_cast<float>(i) / static_cast<float>(tubularSegments);
                         uv.y = static_cast<float>(j) / static_cast<float>(radialSegments);
@@ -116,7 +116,7 @@ namespace threepp {
             });
 
             auto generateBufferData = std::function<void()>([&] {
-                for (int i = 0; i < tubularSegments; i++) {
+                for (unsigned i = 0; i < tubularSegments; i++) {
 
                     generateSegment(i);
                 }

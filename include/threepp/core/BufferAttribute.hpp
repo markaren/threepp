@@ -411,7 +411,7 @@ namespace threepp {
         int count_{};
     };
 
-    typedef TypedBufferAttribute<int> IntBufferAttribute;
+    typedef TypedBufferAttribute<unsigned int> IntBufferAttribute;
     typedef TypedBufferAttribute<float> FloatBufferAttribute;
 
 

@@ -17,10 +17,10 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
 
     GLint type;
     GLsizei bytesPerElement;
-    if (attribute->typed<int>()) {
+    if (attribute->typed<unsigned int>()) {
         type = GL_UNSIGNED_INT;
         bytesPerElement = sizeof(int);
-        auto attr = attribute->typed<int>();
+        auto attr = attribute->typed<unsigned int>();
         const auto& array = attr->array();
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
 
@@ -48,7 +48,7 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenu
 
         if (attribute->typed<int>()) {
 
-            auto attr = attribute->typed<int>();
+            auto attr = attribute->typed<unsigned int>();
             const auto& array = attr->array();
             glBufferSubData(bufferType, 0, (GLsizei) (array.size() * bytesPerElement), array.data());
 
@@ -66,7 +66,7 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenu
 
         if (attribute->typed<int>()) {
 
-            auto attr = attribute->typed<int>();
+            auto attr = attribute->typed<unsigned int>();
             const auto& array = attr->array();
             std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());

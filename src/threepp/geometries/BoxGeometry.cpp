@@ -7,10 +7,10 @@ namespace {
 
     struct Helper {
 
-        int numberOfVertices = 0;
+        unsigned int numberOfVertices = 0;
         int groupStart = 0;
 
-        std::vector<int> indices;
+        std::vector<unsigned int> indices;
         std::vector<float> vertices;
         std::vector<float> normals;
         std::vector<float> uvs;
@@ -25,7 +25,7 @@ namespace {
             buildPlane(g, 0, 1, 2, -1, -1, g.width, g.height, -g.depth, g.widthSegments, g.heightSegments, 5);// nz
         }
 
-        void buildPlane(BoxGeometry& g, int u, int v, int w, int udir, int vdir, float width, float height, float depth, int gridX, int gridY, int materialIndex) {
+        void buildPlane(BoxGeometry& g, int u, int v, int w, int udir, int vdir, float width, float height, float depth, unsigned int gridX, unsigned int gridY, int materialIndex) {
 
             const auto segmentWidth = width / gridX;
             const auto segmentHeight = height / gridY;

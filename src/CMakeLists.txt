@@ -45,6 +45,7 @@ set(publicHeaders
         "threepp/geometries/PlaneGeometry.hpp"
         "threepp/geometries/RingGeometry.hpp"
         "threepp/geometries/SphereGeometry.hpp"
+        "threepp/geometries/TorusKnotGeometry.hpp"
         "threepp/geometries/TubeGeometry.hpp"
         "threepp/geometries/WireframeGeometry.hpp"
 
@@ -201,6 +202,7 @@ set(sources
         "threepp/geometries/PlaneGeometry.cpp"
         "threepp/geometries/RingGeometry.cpp"
         "threepp/geometries/SphereGeometry.cpp"
+        "threepp/geometries/TorusKnotGeometry.cpp"
         "threepp/geometries/WireframeGeometry.cpp"
 
         "threepp/helpers/ArrowHelper.cpp"

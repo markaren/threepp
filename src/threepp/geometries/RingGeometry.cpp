@@ -6,12 +6,12 @@
 using namespace threepp;
 
 
-RingGeometry::RingGeometry(float innerRadius, float outerRadius, int thetaSegments, int phiSegments, float thetaStart, float thetaLength) {
+RingGeometry::RingGeometry(float innerRadius, float outerRadius, unsigned int thetaSegments, unsigned int phiSegments, float thetaStart, float thetaLength) {
 
-    thetaSegments = std::max(3, thetaSegments);
-    phiSegments = std::max(1, phiSegments);
+    thetaSegments = std::max(3u, thetaSegments);
+    phiSegments = std::max(1u, phiSegments);
 
-    std::vector<int> indices;
+    std::vector<unsigned int> indices;
     std::vector<float> vertices;
     std::vector<float> normals;
     std::vector<float> uvs;
@@ -20,14 +20,14 @@ RingGeometry::RingGeometry(float innerRadius, float outerRadius, int thetaSegmen
 
     float radius = innerRadius;
     const auto radiusStep = ((outerRadius - innerRadius) / static_cast<float>(phiSegments));
-    auto vertex = Vector3();
-    auto uv = Vector2();
+    Vector3 vertex;
+    Vector2 uv;
 
     // generate vertices, normals and uvs
 
-    for (int j = 0; j <= phiSegments; j++) {
+    for (unsigned j = 0; j <= phiSegments; j++) {
 
-        for (int i = 0; i <= thetaSegments; i++) {
+        for (unsigned i = 0; i <= thetaSegments; i++) {
 
             // values are generate from the inside of the ring to the outside
 
@@ -59,11 +59,11 @@ RingGeometry::RingGeometry(float innerRadius, float outerRadius, int thetaSegmen
 
     // indices
 
-    for (int j = 0; j < phiSegments; j++) {
+    for (unsigned j = 0; j < phiSegments; j++) {
 
         const auto thetaSegmentLevel = j * (thetaSegments + 1);
 
-        for (int i = 0; i < thetaSegments; i++) {
+        for (unsigned i = 0; i < thetaSegments; i++) {
 
             const auto segment = i + thetaSegmentLevel;
 
@@ -82,7 +82,7 @@ RingGeometry::RingGeometry(float innerRadius, float outerRadius, int thetaSegmen
     // build geometry
 
     this->setIndex(indices);
-    this->setAttribute("position", FloatBufferAttribute ::create(vertices, 3));
-    this->setAttribute("normal", FloatBufferAttribute ::create(normals, 3));
-    this->setAttribute("uv", FloatBufferAttribute ::create(uvs, 2));
+    this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
+    this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+    this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }

@@ -15,14 +15,14 @@ namespace threepp {
 
         PlaneGeometry(const PlaneGeometry&) = delete;
 
-        static std::shared_ptr<PlaneGeometry> create(float width = 1, float height = 1, int widthSegments = 1, int heightSegments = 1) {
+        static std::shared_ptr<PlaneGeometry> create(float width = 1, float height = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1) {
             return std::shared_ptr<PlaneGeometry>(new PlaneGeometry(width, height, widthSegments, heightSegments));
         }
 
     protected:
-        PlaneGeometry(float width, float height, int widthSegments, int heightSegments);
+        PlaneGeometry(float width, float height, unsigned int widthSegments, unsigned int heightSegments);
     };
 
 }// namespace threepp
 
-#endif//THREEPP_SPHEREGEOMETRY_HPP
+#endif//THREEPP_PLANEGEOMETRY_HPP

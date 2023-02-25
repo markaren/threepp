@@ -7,8 +7,8 @@ CylinderGeometry::CylinderGeometry(
         float radiusTop,
         float radiusBottom,
         float height,
-        int radialSegments,
-        int heightSegments,
+        unsigned int radialSegments,
+        unsigned int heightSegments,
         bool openEnded,
         float thetaStart,
         float thetaLength)
@@ -16,14 +16,14 @@ CylinderGeometry::CylinderGeometry(
       radiusBottom(radiusBottom),
       height(height) {
 
-    std::vector<int> indices;
+    std::vector<unsigned int> indices;
     std::vector<float> vertices;
     std::vector<float> normals;
     std::vector<float> uvs;
 
-    int index = 0;
+    size_t index = 0;
     const auto halfHeight = height / 2;
-    std::vector<std::vector<int>> indexArray;
+    std::vector<std::vector<unsigned int>> indexArray;
     int groupStart = 0;
 
     auto generateTorso = [&] {
@@ -37,19 +37,19 @@ CylinderGeometry::CylinderGeometry(
 
         // generate vertices, normals and uvs
 
-        for (int y = 0; y <= heightSegments; y++) {
+        for (unsigned y = 0; y <= heightSegments; y++) {
 
-            std::vector<int> indexRow;
+            std::vector<unsigned int> indexRow;
 
-            const auto v = (float) y / heightSegments;
+            const auto v = static_cast<float>(y) / heightSegments;
 
             // calculate the radius of the current row
 
             const auto radius = v * (radiusBottom - radiusTop) + radiusTop;
 
-            for (int x = 0; x <= radialSegments; x++) {
+            for (unsigned x = 0; x <= radialSegments; x++) {
 
-                const auto u = (float) x / radialSegments;
+                const auto u = static_cast<float>(x) / radialSegments;
 
                 const auto theta = u * thetaLength + thetaStart;
 
@@ -154,7 +154,7 @@ CylinderGeometry::CylinderGeometry(
         }
 
         // save the index of the last center vertex
-        int centerIndexEnd = index;
+        const auto centerIndexEnd = index;
 
         // now we generate the surrounding vertices, normals and uvs
 
@@ -185,15 +185,15 @@ CylinderGeometry::CylinderGeometry(
 
             // increase index
 
-            index++;
+            ++index;
         }
 
         // generate indices
 
-        for (int x = 0; x < radialSegments; x++) {
+        for (unsigned x = 0; x < radialSegments; x++) {
 
-            int c = centerIndexStart + x;
-            int i = centerIndexEnd + x;
+            unsigned int c = centerIndexStart + x;
+            unsigned int i = centerIndexEnd + x;
 
             if (top) {
 

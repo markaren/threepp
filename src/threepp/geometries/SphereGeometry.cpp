@@ -9,35 +9,35 @@ using namespace threepp;
 
 SphereGeometry::SphereGeometry(
         float radius,
-        int widthSegments,
-        int heightSegments,
+        unsigned int widthSegments,
+        unsigned int heightSegments,
         float phiStart,
         float phiLength,
         float thetaStart,
         float thetaLength)
     : radius(radius) {
 
-    std::vector<int> indices;
+    std::vector<unsigned int> indices;
     std::vector<float> vertices;
     std::vector<float> normals;
     std::vector<float> uvs;
 
-    widthSegments = std::max(3, widthSegments);
-    heightSegments = std::max(2, heightSegments);
+    widthSegments = std::max(3u, widthSegments);
+    heightSegments = std::max(2u, heightSegments);
 
     const auto thetaEnd = std::min(thetaStart + thetaLength, math::PI);
 
-    int index = 0;
-    std::vector<std::vector<int>> grid;
+    unsigned int index = 0;
+    std::vector<std::vector<unsigned int>> grid;
 
-    auto vertex = Vector3();
-    auto normal = Vector3();
+    Vector3 vertex;
+    Vector3 normal;
 
     // generate vertices, normals and uvs
 
-    for (int iy = 0; iy <= heightSegments; iy++) {
+    for (unsigned iy = 0; iy <= heightSegments; iy++) {
 
-        std::vector<int> verticesRow;
+        std::vector<unsigned int> verticesRow;
 
         const float v = static_cast<float>(iy) / static_cast<float>(heightSegments);
 
@@ -54,7 +54,7 @@ SphereGeometry::SphereGeometry(
             uOffset = -0.5f / static_cast<float>(widthSegments);
         }
 
-        for (int ix = 0; ix <= widthSegments; ix++) {
+        for (unsigned ix = 0; ix <= widthSegments; ix++) {
 
             const float u = static_cast<float>(ix) / static_cast<float>(widthSegments);
 

@@ -43,7 +43,7 @@ namespace threepp {
 
         const IntBufferAttribute* getIndex() const;
 
-        BufferGeometry& setIndex(std::vector<int> index);
+        BufferGeometry& setIndex(std::vector<unsigned int> index);
 
         BufferGeometry& setIndex(std::unique_ptr<IntBufferAttribute> index);
 

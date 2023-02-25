@@ -9,6 +9,7 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/geometries/RingGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
+#include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/geometries/TubeGeometry.hpp"
 #include "threepp/geometries/WireframeGeometry.hpp"
 

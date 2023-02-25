@@ -4,13 +4,13 @@
 using namespace threepp;
 
 
-PlaneGeometry::PlaneGeometry(float width, float height, int widthSegments, int heightSegments): width(width), height(height) {
+PlaneGeometry::PlaneGeometry(float width, float height, unsigned int widthSegments, unsigned int heightSegments): width(width), height(height) {
 
     const auto width_half = width / 2;
     const auto height_half = height / 2;
 
-    const auto gridX = std::floor(widthSegments);
-    const auto gridY = std::floor(heightSegments);
+    const auto gridX = widthSegments;
+    const auto gridY = heightSegments;
 
     const auto gridX1 = gridX + 1;
     const auto gridY1 = gridY + 1;
@@ -20,12 +20,12 @@ PlaneGeometry::PlaneGeometry(float width, float height, int widthSegments, int h
 
     //
 
-    std::vector<int> indices;
+    std::vector<unsigned int> indices;
     std::vector<float> vertices;
     std::vector<float> normals;
     std::vector<float> uvs;
 
-    for (int iy = 0; iy < gridY1; iy++) {
+    for (unsigned iy = 0; iy < gridY1; iy++) {
 
         const auto y = (float) (iy * segment_height - height_half);
 
@@ -42,14 +42,14 @@ PlaneGeometry::PlaneGeometry(float width, float height, int widthSegments, int h
         }
     }
 
-    for (int iy = 0; iy < gridY; iy++) {
+    for (unsigned iy = 0; iy < gridY; iy++) {
 
-        for (int ix = 0; ix < gridX; ix++) {
+        for (unsigned ix = 0; ix < gridX; ix++) {
 
-            const auto a = (int) (ix + gridX1 * iy);
-            const auto b = (int) (ix + gridX1 * (iy + 1));
-            const auto c = (int) ((ix + 1) + gridX1 * (iy + 1));
-            const auto d = (int) ((ix + 1) + gridX1 * iy);
+            const auto a = (ix + gridX1 * iy);
+            const auto b = (ix + gridX1 * (iy + 1));
+            const auto c = ((ix + 1) + gridX1 * (iy + 1));
+            const auto d = ((ix + 1) + gridX1 * iy);
 
             indices.insert(indices.end(), {a, b, d});
             indices.insert(indices.end(), {b, c, d});

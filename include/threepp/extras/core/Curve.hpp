@@ -241,7 +241,7 @@ namespace threepp {
             this->getTangent(t, optionalTarget);
         }
 
-        FrenetFrames computeFrenetFrames(int segments, bool closed) {
+        FrenetFrames computeFrenetFrames(unsigned int segments, bool closed) {
 
             // see http://www.cs.indiana.edu/pub/techreports/TR425.pdf
 
@@ -256,7 +256,7 @@ namespace threepp {
 
             // compute the tangent vectors for each segment on the curve
 
-            for (int i = 0; i <= segments; i++) {
+            for (unsigned i = 0; i <= segments; i++) {
 
                 const float u = static_cast<float>(i) / static_cast<float>(segments);
 
@@ -325,14 +325,14 @@ namespace threepp {
             if (closed) {
 
                 float theta = std::acos(std::clamp(normals[0].dot(normals[segments]), -1.f, 1.f));
-                theta /= segments;
+                theta /= static_cast<float>(segments);
 
                 if (tangents[0].dot(vec.crossVectors(normals[0], normals[segments])) > 0) {
 
                     theta = -theta;
                 }
 
-                for (int i = 1; i <= segments; i++) {
+                for (unsigned i = 1; i <= segments; i++) {
 
                     // twist a little...
                     normals[i].applyMatrix4(mat.makeRotationAxis(tangents[i], theta * i));
