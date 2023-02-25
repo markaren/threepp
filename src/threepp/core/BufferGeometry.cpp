@@ -310,8 +310,8 @@ void BufferGeometry::copy(const BufferGeometry& source) {
 
     for (const auto& [name, attribute] : attributes) {
 
-        if (attribute->typed<int>()) {
-            this->setAttribute(name, attribute->typed<int>()->clone());
+        if (attribute->typed<unsigned int>()) {
+            this->setAttribute(name, attribute->typed<unsigned int>()->clone());
         } else if (attribute->typed<float>()) {
             this->setAttribute(name, attribute->typed<float>()->clone());
         } else {

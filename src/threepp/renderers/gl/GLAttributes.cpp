@@ -46,7 +46,7 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenu
 
     if (updateRange.count == -1) {
 
-        if (attribute->typed<int>()) {
+        if (attribute->typed<unsigned int>()) {
 
             auto attr = attribute->typed<unsigned int>();
             const auto& array = attr->array();
@@ -64,11 +64,11 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenu
 
     } else {
 
-        if (attribute->typed<int>()) {
+        if (attribute->typed<unsigned int>()) {
 
             auto attr = attribute->typed<unsigned int>();
             const auto& array = attr->array();
-            std::vector<int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
+            std::vector<unsigned int> sub(array.begin() + updateRange.offset, array.begin() + updateRange.offset + updateRange.count);
             glBufferSubData(bufferType, updateRange.offset * bytesPerElement, (GLsizei) (sub.size() * bytesPerElement), sub.data());
 
         } else if (attribute->typed<float>()) {
