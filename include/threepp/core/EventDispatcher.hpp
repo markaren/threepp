@@ -27,18 +27,6 @@ namespace threepp {
         virtual ~EventListener() = default;
     };
 
-    struct LambdaEventListener: EventListener {
-
-        explicit LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)) {}
-
-        void onEvent(Event& event) override {
-            f_(event);
-        }
-
-    private:
-        std::function<void(Event&)> f_;
-    };
-
     class EventDispatcher {
 
     public:
