@@ -41,18 +41,16 @@ int main() {
         renderer.setSize(size);
     });
 
-    float t = 0;
-    canvas.animate([&](float dt) {
+    canvas.animate([&](float t, float dt) {
         arrow->rotation.z += 0.5f * dt;
         axes->rotation.y += 0.5f * dt;
 
-        float sineWave = 0.5f * std::sin(2 * math::PI * 0.1f * t) + 1;
+        float sineWave = 0.5f * std::sin(math::TWO_PI * 0.1f * t) + 1;
         box.setFromCenterAndSize(
                 {0, 0, 0},
                 Vector3(1, 1, 1).multiplyScalar(sineWave));
 
         renderer.render(scene, camera);
 
-        t += dt;
     });
 }

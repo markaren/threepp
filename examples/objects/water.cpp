@@ -72,8 +72,7 @@ int main() {
         renderer.setSize(size);
     });
 
-    float t = 0;
-    canvas.animate([&](float dt) {
+    canvas.animate([&](float t, float dt) {
         sphere->position.y = std::sin(t) * 20 + 5;
         sphere->rotation.x = t * 0.05f;
         sphere->rotation.z = t * 0.051f;
@@ -81,7 +80,5 @@ int main() {
         water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
 
         renderer.render(scene, camera);
-
-        t += dt;
     });
 }

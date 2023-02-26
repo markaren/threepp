@@ -15,7 +15,7 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = SpotLight::create();
+    auto light = SpotLight::create(Color::peachpuff);
     light->distance = 30;
     light->angle = math::degToRad(20);
     light->position.set(10, 10, 0);

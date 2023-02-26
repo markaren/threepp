@@ -50,11 +50,10 @@ int main() {
     auto points = Points::create(geometry, material);
     scene->add(points);
 
-    float time = 0;
-    canvas.animate([&](float dt) {
-        time += dt;
-        points->rotation.x = time * 0.25f;
-        points->rotation.y = time * 0.5f;
+    canvas.animate([&](float t, float dt) {
+
+        points->rotation.x = t * 0.25f;
+        points->rotation.y = t * 0.5f;
 
         renderer.render(scene, camera);
     });

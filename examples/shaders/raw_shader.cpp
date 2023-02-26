@@ -56,7 +56,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 1, 10);
     camera->position.z = 2;
 
-    int triangles = 500;
+    int triangles = 1000;
 
     auto geometry = BufferGeometry::create();
 
@@ -93,11 +93,9 @@ int main() {
         renderer.setSize(size);
     });
 
-    float value = 0.f;
-    canvas.animate([&](float dt) {
-        value += 0.005f ;
-        mesh->rotation.y = value;
-        material->uniforms->at("time").setValue(value * 10);
+    canvas.animate([&](float t, float dt) {
+        mesh->rotation.y = t * 0.5f;
+        material->uniforms->at("time").setValue(t*5);
 
         renderer.render(scene, camera);
     });

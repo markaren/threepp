@@ -41,11 +41,10 @@ int main() {
         material->uniforms->at("iResolution").value<Vector2>().set(size.width, size.height);
     });
 
-    float value = 0.f;
-    canvas.animate([&](float dt) {
-        value += 1 * dt;
-        mesh->rotation.y = value;
-        material->uniforms->at("iTime").setValue(value);
+    canvas.animate([&](float t, float dt) {
+
+        mesh->rotation.y = t;
+        material->uniforms->at("iTime").setValue(t);
 
         renderer.render(scene, camera);
     });

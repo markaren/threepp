@@ -48,7 +48,7 @@ int main() {
         renderer.setSize(size);
     });
 
-    Vector2 mouse{-1, -1};
+    Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](Vector2 pos) {
         // calculate mouse position in normalized device coordinates
         // (-1 to +1) for both components
@@ -60,7 +60,6 @@ int main() {
     canvas.addMouseListener(&l);
 
     Raycaster raycaster;
-
     canvas.animate([&](float dt) {
 
         raycaster.setFromCamera(mouse, camera);

@@ -17,15 +17,15 @@ int main() {
     auto objModel = loader.load("data/models/obj/female02/female02.obj");
     scene->add(objModel);
 
-    auto light1 = PointLight::create(Color(0xffffff), 1.f);
+    auto light1 = PointLight::create(0xffffff, 0.8f);
     light1->position.set(25, 115, 25);
     scene->add(light1);
 
-    auto light2 = PointLight::create(Color(0xffffff), 1.f);
+    auto light2 = PointLight::create(0xffffff, 0.8f);
     light2->position.set(-25, 115, 125);
     scene->add(light2);
 
-    auto light3 = PointLight::create(Color(0xffffff), 1.f);
+    auto light3 = PointLight::create(0xffffff, 0.8f);
     light3->position.set(0, 25, -30);
     scene->add(light3);
 

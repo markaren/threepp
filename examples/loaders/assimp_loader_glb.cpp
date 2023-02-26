@@ -19,7 +19,7 @@ int main() {
     auto objModel = loader.load("data/models/gltf/zedm.glb", true);
     scene->add(objModel);
 
-    auto light = AmbientLight::create(Color(0xfffff));
+    auto light = AmbientLight::create();
     scene->add(light);
 
     canvas.onWindowResize([&](WindowSize size) {

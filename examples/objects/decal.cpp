@@ -15,7 +15,7 @@ namespace {
         decalMaterial->specular = 0x444444;
         decalMaterial->map = tl.loadTexture("data/textures/decal/decal-diffuse.png");
         decalMaterial->normalMap = tl.loadTexture("data/textures/decal/decal-normal.jpg");
-        decalMaterial->normalScale = Vector2(1, 1);
+        decalMaterial->normalScale.set(1, 1);
         decalMaterial->shininess = 30;
         decalMaterial->depthTest = true;
         decalMaterial->depthWrite = false;
@@ -29,7 +29,7 @@ namespace {
     class MyMouseListener : public MouseListener {
 
     public:
-        Vector2 mouse{-1, -1};
+        Vector2 mouse{-Infinity<float>, -Infinity<float>};
 
         explicit MyMouseListener(Canvas &canvas) : canvas(canvas) {}
 
@@ -43,7 +43,9 @@ namespace {
         }
 
         void onMouseDown(int button, const Vector2 &pos) override {
-            mouseDown = true;
+            if (button == 0) { // left mousebutton
+                mouseDown = true;
+            }
             updateMousePos(pos);
         }
 

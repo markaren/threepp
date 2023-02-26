@@ -25,8 +25,7 @@ int main() {
     sphereMesh->add(sphereMeshWireframe);
 
     auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 1000);
-    camera2->position.z = 5;
-    camera2->position.x = 10;
+    camera2->position.x = 30;
 
     OrbitControls controls{camera2, canvas};
     controls.target = sphereMesh->position;
@@ -43,8 +42,7 @@ int main() {
         renderer.setSize(size);
     });
 
-    float t = 0;
-    canvas.animate([&](float dt) {
+    canvas.animate([&](float t, float dt) {
         auto size = canvas.getSize();
 
         renderer.clear();
@@ -59,7 +57,7 @@ int main() {
         renderer.setViewport({0, 0, size.width / 2, size.height});
         renderer.render(scene, camera2);
 
-        camera->position.z = 5 * std::sin(2 * math::PI * 0.1f * (t+=dt));
+        camera->position.z = 5 * std::sin(math::TWO_PI * 0.1f * t);
 
     });
 }

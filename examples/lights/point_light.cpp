@@ -15,21 +15,21 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light1 = PointLight::create();
+    auto light1 = PointLight::create(Color::yellow);
     light1->castShadow = true;
     light1->shadow->bias = -0.005;
     light1->distance = 5;
-    light1->position.set(0, 2, 0);
+    light1->position.y = 2;
     scene->add(light1);
 
     auto lightHelper1 = PointLightHelper::create(light1, 0.25f);
     scene->add(lightHelper1);
 
-    auto light2 = PointLight::create();
+    auto light2 = PointLight::create(Color::white);
     light2->castShadow = true;
     light2->shadow->bias = -0.005;
     light2->distance = 5;
-    light2->position.set(0, 2, 0);
+    light2->position.y = 2;
     scene->add(light2);
 
     auto lightHelper2 = PointLightHelper::create(light2, 0.25f);
@@ -39,17 +39,17 @@ int main() {
     scene->add(group);
 
     const auto boxGeometry = BoxGeometry::create();
-    const auto boxMaterial = MeshPhongMaterial::create();
+    const auto boxMaterial = MeshLambertMaterial::create();
     boxMaterial->color.setHex(0xff0000);
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->castShadow = true;
-    box->position.setX(-1);
+    box->position.x = -1;
     group->add(box);
 
     auto box2 = Mesh::create(boxGeometry, boxMaterial->clone());
     box2->material()->as<MaterialWithColor>()->color.setHex(0x00ff00);
     box2->castShadow = true;
-    box2->position.setX(1);
+    box2->position.x = 1;
     group->add(box2);
 
 
@@ -58,7 +58,7 @@ int main() {
     planeMaterial->color.setHex(Color::white);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.setY(-1);
+    plane->position.y = -1;
     plane->receiveShadow = true;
     plane->rotateX(math::degToRad(-90));
     scene->add(plane);

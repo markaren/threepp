@@ -16,7 +16,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = DirectionalLight::create();
-    light->position += 5;
+    light->position.y = 10;
     light->castShadow = true;
     scene->add(light);
 
@@ -30,7 +30,7 @@ int main() {
         const auto boxMaterial = MeshPhongMaterial::create();
         boxMaterial->color.setHex(0xff0000);
         auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.setX(-1);
+        box->position.x = -1;
         box->castShadow = true;
         group->add(box);
     }
@@ -40,7 +40,7 @@ int main() {
         const auto boxMaterial = MeshPhongMaterial::create();
         boxMaterial->color.setHex(0x00ff00);
         auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.setX(1);
+        box->position.x = 1;
         box->castShadow = true;
         group->add(box);
     }
@@ -48,11 +48,11 @@ int main() {
     scene->add(group);
 
     const auto planeGeometry = PlaneGeometry::create(15, 15);
-    const auto planeMaterial = MeshPhongMaterial::create();
-    planeMaterial->color.setHex(Color::gray);
+    const auto planeMaterial = MeshLambertMaterial::create();
+    planeMaterial->color = Color::gray;
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.setY(-1);
+    plane->position.y = -1;
     plane->rotateX(math::degToRad(90));
     plane->receiveShadow = true;
     scene->add(plane);
@@ -63,8 +63,13 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
-        group->rotation.y += 0.5f * dt;
+    canvas.animate([&](float t, float dt) {
+        group->rotation.y -= 0.5f * dt;
+
+        light->position.x = 10 * std::sin(t);
+        light->position.z = 10 * std::cos(t);
+
+        helper->update();
 
         renderer.render(scene, camera);
     });

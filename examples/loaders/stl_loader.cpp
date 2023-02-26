@@ -22,8 +22,8 @@ int main() {
     material->color = Color::brown;
     auto mesh = Mesh::create(geometry, material);
     mesh->scale *= 2;
-    mesh->rotateX(-math::PI/2);
-    mesh->rotateZ(math::PI/2);
+    mesh->rotateX(-math::PI / 2);
+    mesh->rotateZ(math::PI / 2);
     scene->add(mesh);
 
     auto wireframeMaterial = MeshBasicMaterial::create();
@@ -32,16 +32,8 @@ int main() {
     auto wireframe = Mesh::create(geometry, wireframeMaterial);
     mesh->add(wireframe);
 
-    {
-        auto light = DirectionalLight::create(0xffffff, 0.6f);
-        light->position.set(1,1,1);
-        scene->add(light);
-    }
-    {
-        auto light = DirectionalLight::create(0xffffff, 0.6f);
-        light->position.set(-1,1,-1);
-        scene->add(light);
-    }
+    auto light = HemisphereLight::create(Color::aliceblue, Color::grey);
+    scene->add(light);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -50,7 +42,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         mesh->rotation.z += 1 * dt;
 
         renderer.render(scene, camera);
