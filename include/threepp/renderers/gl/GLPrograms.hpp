@@ -58,7 +58,7 @@ namespace threepp {
 
             std::shared_ptr<GLProgram> acquireProgram(const GLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey);
 
-            void releaseProgram(const std::shared_ptr<GLProgram>& program);
+            void releaseProgram(std::shared_ptr<GLProgram> program);
         };
 
     }// namespace gl

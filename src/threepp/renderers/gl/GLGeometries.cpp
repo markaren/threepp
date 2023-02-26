@@ -108,6 +108,11 @@ IntBufferAttribute* GLGeometries::getWireframeAttribute(BufferGeometry* geometry
 
     return wireframeAttributes_.at(geometry).get();
 }
+GLGeometries::~GLGeometries() {
+    for (auto& [g, flag] : geometries_) {
+        g->removeEventListener("dispose", &onGeometryDispose_);
+    }
+}
 
 
 GLGeometries::OnGeometryDispose::OnGeometryDispose(GLGeometries& scope): scope_(scope) {}

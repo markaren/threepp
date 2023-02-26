@@ -212,9 +212,10 @@ Object3D& Object3D::remove(Object3D* object) {
         return obj.get() == object;
     });
     if (find != children.end()) {
+        std::shared_ptr<Object3D> child = *find;
         children.erase(find);
-        object->parent = nullptr;
-        object->dispatchEvent("remove");
+        child->parent = nullptr;
+        child->dispatchEvent("remove", child.get());
     }
 
     return *this;
@@ -434,8 +435,10 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
 std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
 
-    auto clone = std::shared_ptr<Object3D>(new Object3D());
+    auto clone = std::make_shared<Object3D>();
     clone->copy(*this);
 
     return clone;
 }
+
+Object3D::~Object3D() = default;

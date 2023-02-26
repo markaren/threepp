@@ -83,8 +83,10 @@ namespace threepp {
         }
 
         void dispose() {
-
-            dispatchEvent("dispose", this);
+            if (!disposed_) {
+                disposed_ = true;
+                dispatchEvent("dispose", this);
+            }
         }
 
         void needsUpdate() {
@@ -108,7 +110,9 @@ namespace threepp {
 
         virtual std::shared_ptr<Material> clone() const { return nullptr; };
 
-        virtual ~Material() = default;
+        virtual ~Material() {
+            dispose();
+        }
 
     protected:
         Material() = default;
@@ -184,9 +188,11 @@ namespace threepp {
         }
 
     private:
+        bool disposed_ = false;
         std::string uuid_ = utils::generateUUID();
         inline static unsigned int materialId = 0;
     };
+
 
 }// namespace threepp
 

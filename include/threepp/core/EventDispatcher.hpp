@@ -26,7 +26,6 @@ namespace threepp {
 
         virtual ~EventListener() = default;
     };
-    using EventListenerPtr = EventListener*;
 
     struct LambdaEventListener: EventListener {
 
@@ -43,12 +42,12 @@ namespace threepp {
     class EventDispatcher {
 
     public:
-        void addEventListener(const std::string& type, EventListenerPtr listener) {
+        void addEventListener(const std::string& type, EventListener* listener) {
 
             listeners_[type].push_back(listener);
         }
 
-        bool hasEventListener(const std::string& type, const EventListenerPtr& listener) {
+        bool hasEventListener(const std::string& type, const EventListener* listener) {
 
             if (!listeners_.count(type)) return false;
 
@@ -56,11 +55,13 @@ namespace threepp {
             return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
         }
 
-        void removeEventListener(const std::string& type, const EventListenerPtr& listener) {
+        void removeEventListener(const std::string& type, const EventListener* listener) {
 
             if (!listeners_.count(type)) return;
 
             auto& listenerArray = listeners_.at(type);
+            if (listenerArray.empty()) return;
+
             auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
             if (find != listenerArray.end()) {
                 listenerArray.erase(find);
@@ -81,7 +82,7 @@ namespace threepp {
         }
 
     private:
-        std::unordered_map<std::string, std::vector<EventListenerPtr>> listeners_;
+        std::unordered_map<std::string, std::vector<EventListener*>> listeners_;
     };
 
 }// namespace threepp

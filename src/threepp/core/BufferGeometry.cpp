@@ -339,5 +339,9 @@ void BufferGeometry::copy(const BufferGeometry& source) {
 
 void BufferGeometry::dispose() {
 
-    this->dispatchEvent("dispose", this);
+    if (!disposed_) {
+        disposed_ = true;
+        this->dispatchEvent("dispose", this);
+    }
+
 }

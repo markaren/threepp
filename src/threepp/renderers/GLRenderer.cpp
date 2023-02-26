@@ -24,18 +24,18 @@ GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
       _scissor(0, 0, _size.width, _size.height),
       state(canvas),
       background(state, parameters.premultipliedAlpha),
-      bufferRenderer(new gl::GLBufferRenderer(info)),
-      indexedBufferRenderer(new gl::GLIndexedBufferRenderer(info)),
+      bufferRenderer(new gl::GLBufferRenderer(_info)),
+      indexedBufferRenderer(new gl::GLIndexedBufferRenderer(_info)),
       clipping(properties),
       bindingStates(attributes),
-      geometries(attributes, info, bindingStates),
-      textures(state, properties, info),
-      objects(geometries, attributes, info),
+      geometries(attributes, _info, bindingStates),
+      textures(state, properties, _info),
+      objects(geometries, attributes, _info),
       renderLists(properties),
       shadowMap(objects),
       materials(properties),
       programCache(bindingStates, clipping),
-      onMaterialDispose(*this),
+      onMaterialDispose(this),
       _currentDrawBuffers(GL_BACK) {}
 
 int GLRenderer::getTargetPixelRatio() const {
@@ -405,7 +405,7 @@ void GLRenderer::render(Scene* scene, Camera* camera) {
 
     //
 
-    if (this->info.autoReset) this->info.reset();
+    if (this->_info.autoReset) this->_info.reset();
 
     //
 
@@ -1106,12 +1106,18 @@ GLRenderer::~GLRenderer() {
     }
 }
 
-GLRenderer::OnMaterialDispose::OnMaterialDispose(GLRenderer& scope): scope_(scope) {}
+GLRenderer::OnMaterialDispose::OnMaterialDispose(GLRenderer* scope): scope_(scope) {}
 
 void GLRenderer::OnMaterialDispose::onEvent(Event& event) {
-    auto material = static_cast<Material*>(event.target);
+    if (scope_) {
+        auto material = static_cast<Material*>(event.target);
 
-    material->removeEventListener("dispose", this);
+        material->removeEventListener("dispose", this);
 
-    scope_.deallocateMaterial(material);
+        scope_->deallocateMaterial(material);
+    }
+}
+
+GLRenderer::OnMaterialDispose::~OnMaterialDispose() {
+    scope_ = nullptr;
 }

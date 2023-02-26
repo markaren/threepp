@@ -116,9 +116,12 @@ namespace threepp {
             return std::make_shared<BufferGeometry>();
         }
 
-        virtual ~BufferGeometry() = default;
+        virtual ~BufferGeometry() {
+            dispose();
+        };
 
     private:
+        bool disposed_ = false;
         std::unique_ptr<IntBufferAttribute> index_;
         std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
 

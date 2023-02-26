@@ -391,8 +391,8 @@ void GLBindingStates::releaseStatesOfProgram(GLProgram& program) {
             auto& value = stateMap.at(wireframe.first);
             deleteVertexArrayObject(*value->object);
 
-            stateMap.erase(wireframe.first);
         }
+        stateMap.clear();
 
         programMap.erase(program.id);
     }

@@ -198,7 +198,7 @@ namespace threepp {
 
         std::shared_ptr<Object3D> clone(bool recursive = false);
 
-        virtual ~Object3D() = default;
+        virtual ~Object3D();
 
     private:
         inline static unsigned int _object3Did{0};
