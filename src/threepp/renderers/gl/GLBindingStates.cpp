@@ -357,21 +357,21 @@ void GLBindingStates::releaseStatesOfGeometry(BufferGeometry* geometry) {
 
     if (!bindingStates.count(geometry->id)) return;
 
-    auto& programMap = bindingStates[geometry->id];
+    ProgramMap& programMap = bindingStates[geometry->id];
 
     for (const auto& programId : programMap) {
 
-        auto& stateMap = programMap.at(programId.first);
+        StateMap& stateMap = programMap.at(programId.first);
 
         for (const auto& wireframe : stateMap) {
 
             deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
-
-            stateMap.erase(wireframe.first);
         }
 
-        programMap.erase(programId.first);
+        stateMap.clear();
     }
+
+    programMap.clear();
 
     bindingStates.erase(geometry->id);
 }
