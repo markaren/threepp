@@ -133,7 +133,7 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer& renderer
     return program;
 }
 
-void GLPrograms::releaseProgram(std::shared_ptr<GLProgram> program) {
+void GLPrograms::releaseProgram(const std::shared_ptr<GLProgram>& program) {
 
     if (--(program->usedTimes) == 0) {
 
