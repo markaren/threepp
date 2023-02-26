@@ -7,6 +7,7 @@
 
 #include <memory>
 #include <vector>
+#include <ostream>
 
 namespace threepp::gl {
 
@@ -14,6 +15,11 @@ namespace threepp::gl {
 
         int geometries{0};
         int textures{0};
+
+        friend std::ostream& operator<<(std::ostream& os, const MemoryInfo& m) {
+            os << "MemoryInfo: geomestries=" << m.geometries << ", textures=" << m.textures;
+            return os;
+        }
     };
 
     struct RenderInfo {
@@ -23,6 +29,11 @@ namespace threepp::gl {
         int triangles{0};
         int points{0};
         int lines{0};
+
+        friend std::ostream& operator<<(std::ostream& os, const RenderInfo& m) {
+            os << "RenderInfo: frame=" << m.frame << ", calls=" << m.calls << ", triangles=" << m.triangles << ", points=" << m.points << ", lines=" << m.lines;
+            return os;
+        }
     };
 
     struct GLInfo {
@@ -35,6 +46,11 @@ namespace threepp::gl {
         void update(int count, unsigned int mode, int instanceCount);
 
         void reset();
+
+        friend std::ostream& operator<<(std::ostream& os, const GLInfo& m) {
+            os << m.memory << "\n" << m.render;
+            return os;
+        }
     };
 
 }// namespace threepp::gl
