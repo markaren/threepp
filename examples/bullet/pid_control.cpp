@@ -117,12 +117,12 @@ int main() {
     BulletWrapper engine;
 
     auto rb = RbWrapper::create(nullptr, 10);
-    engine.addRigidbody(rb, controllable);
+    engine.addRigidbody(rb, *controllable);
     btHingeConstraint c(*rb->body, btVector3(0, 0, 0), btVector3(0, 0, 1));
     c.enableAngularMotor(true, 0, 1.f);
     engine.addConstraint(&c);
 
-    PID pid(1, 0.001, 0.1);
+    PID pid(1, 0.001f, 0.1f);
     pid.setWindupGuard(0.1f);
 
     ControllableOptions opt(pid);
