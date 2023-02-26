@@ -25,10 +25,10 @@ namespace {
             buildPlane(g, 0, 1, 2, -1, -1, g.width, g.height, -g.depth, g.widthSegments, g.heightSegments, 5);// nz
         }
 
-        void buildPlane(BoxGeometry& g, int u, int v, int w, int udir, int vdir, float width, float height, float depth, unsigned int gridX, unsigned int gridY, int materialIndex) {
+        void buildPlane(BoxGeometry& g, int u, int v, int w, float udir, float vdir, float width, float height, float depth, unsigned int gridX, unsigned int gridY, int materialIndex) {
 
-            const auto segmentWidth = width / gridX;
-            const auto segmentHeight = height / gridY;
+            const auto segmentWidth = width / static_cast<float>(gridX);
+            const auto segmentHeight = height / static_cast<float>(gridY);
 
             const auto widthHalf = width / 2;
             const auto heightHalf = height / 2;
@@ -46,11 +46,11 @@ namespace {
 
             for (auto iy = 0; iy < gridY1; iy++) {
 
-                const auto y = iy * segmentHeight - heightHalf;
+                const auto y = static_cast<float>(iy) * segmentHeight - heightHalf;
 
                 for (auto ix = 0; ix < gridX1; ix++) {
 
-                    const auto x = ix * segmentWidth - widthHalf;
+                    const auto x = static_cast<float>(ix) * segmentWidth - widthHalf;
 
                     // set values to correct vector component
 
@@ -74,12 +74,12 @@ namespace {
 
                     // uvs
 
-                    uvs.emplace_back((float) ix / gridX);
-                    uvs.emplace_back(1 - (float) (iy / gridY));
+                    uvs.emplace_back(static_cast<float>(ix) / static_cast<float>(gridX));
+                    uvs.emplace_back(1 - (static_cast<float>(iy) / static_cast<float>(gridY)));
 
                     // counters
 
-                    vertexCounter += 1;
+                    ++vertexCounter;
                 }
             }
 
