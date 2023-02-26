@@ -44,7 +44,7 @@ int main() {
     planeMaterial->color.setHex(Color::gray);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.y = -1
+    plane->position.y = -1;
     plane->rotateX(math::degToRad(90));
     scene->add(plane);
 
