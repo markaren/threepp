@@ -81,14 +81,16 @@ int main() {
     AssimpLoader loader;
     std::filesystem::path folder = "data/models/gltf/LeePerrySmith";
     auto model = loader.load(folder / "LeePerrySmith.glb");
-    auto mesh = model->children[0]->children[0]->as<Mesh>();
-    auto mat = MeshPhongMaterial::create();
-    mat->map = texLoader.loadTexture(folder / "Map-COL.jpg", false);
-    mat->specularMap = texLoader.loadTexture(folder / "Map-SPEC.jpg", false);
-    mat->normalMap = texLoader.loadTexture(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
-    mat->shininess = 25;
-    mesh->materials_.front() = mat;
-
+    Mesh* mesh = nullptr;
+    model->traverseType<Mesh>([&](Mesh& _){
+        mesh = &_;
+        auto mat = MeshPhongMaterial::create();
+        mat->map = texLoader.loadTexture(folder / "Map-COL.jpg", false);
+        mat->specularMap = texLoader.loadTexture(folder / "Map-SPEC.jpg", false);
+        mat->normalMap = texLoader.loadTexture(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
+        mat->shininess = 25;
+        mesh->setMaterial(mat);
+    });
     scene->add(model);
 
     auto light = AmbientLight::create(0x443333, 1.f);

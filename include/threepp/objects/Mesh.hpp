@@ -15,8 +15,6 @@ namespace threepp {
     class Mesh: public Object3D {
 
     public:
-        std::shared_ptr<BufferGeometry> geometry_;
-        std::vector<std::shared_ptr<Material>> materials_;
 
         BufferGeometry* geometry() override {
 
@@ -44,7 +42,12 @@ namespace threepp {
             return res;
         }
 
-        void setMaterial(const std::vector<std::shared_ptr<Material>>& materials) {
+        void setMaterial(const std::shared_ptr<Material>& material) {
+
+            setMaterials({material});
+        }
+
+        void setMaterials(const std::vector<std::shared_ptr<Material>>& materials) {
 
             materials_ = materials;
         }
@@ -75,6 +78,10 @@ namespace threepp {
         ~Mesh() override = default;
 
     protected:
+
+        std::shared_ptr<BufferGeometry> geometry_;
+        std::vector<std::shared_ptr<Material>> materials_;
+
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
             : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
               materials_{material ? std::move(material) : MeshBasicMaterial::create()} {

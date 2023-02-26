@@ -50,7 +50,7 @@ void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& int
     const auto raycastTimes = this->count;
 
     _mesh->setGeometry(geometry_);
-    _mesh->setMaterial(materials_);
+    _mesh->setMaterials(materials_);
 
     if (!_mesh->material()) return;
 
