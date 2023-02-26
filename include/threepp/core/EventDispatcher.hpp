@@ -70,11 +70,13 @@ namespace threepp {
 
         void dispatchEvent(const std::string& type, void* target = nullptr) {
 
+            if (shutdown) return;
+
             if (listeners_.count(type)) {
 
                 Event e{type, target};
 
-                auto& listenersOfType = listeners_.at(type);
+                auto listenersOfType = listeners_.at(type);//copy
                 for (auto& l : listenersOfType) {
                     l->onEvent(e);
                 }
@@ -82,7 +84,10 @@ namespace threepp {
         }
 
     private:
+        inline static bool shutdown = false;
         std::unordered_map<std::string, std::vector<EventListener*>> listeners_;
+
+        friend class GLRenderer;
     };
 
 }// namespace threepp

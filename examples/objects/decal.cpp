@@ -4,6 +4,10 @@
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/threepp.hpp>
 
+#ifdef HAS_IMGUI
+#include "threepp/extras/imgui/imgui_context.hpp"
+#endif
+
 using namespace threepp;
 
 namespace {
@@ -46,7 +50,6 @@ namespace {
             if (button == 0) { // left mousebutton
                 mouseDown = true;
             }
-            updateMousePos(pos);
         }
 
         void onMouseMove(const Vector2 &pos) override {
@@ -63,6 +66,33 @@ namespace {
             mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
         }
     };
+
+
+#ifdef HAS_IMGUI
+
+    struct MyGui: public imgui_context {
+
+        bool clear = false;
+        bool mouseHover = false;
+
+        explicit MyGui(const Canvas &canvas) : imgui_context(canvas.window_ptr()) {}
+
+        void onRender() override {
+
+            ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+            ImGui::SetNextWindowSize({100, 0}, 0);
+
+            ImGui::Begin("Options");
+            ImGui::Checkbox("Clear", &clear);
+
+            mouseHover = ImGui::IsWindowHovered();
+
+            ImGui::End();
+
+        }
+    };
+#endif
+
 
 }// namespace
 
@@ -93,7 +123,7 @@ int main() {
     });
     scene->add(model);
 
-    auto light = AmbientLight::create(0x443333, 1.f);
+    auto light = AmbientLight::create(0x443333, 0.8f);
     scene->add(light);
 
     auto light2 = DirectionalLight::create(0xffddcc, 1.f);
@@ -117,6 +147,11 @@ int main() {
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
+
+#ifdef HAS_IMGUI
+    MyGui ui(canvas);
+    std::vector<Mesh*> decals;
+#endif
 
     Matrix4 mouseHelper;
     Vector3 position;
@@ -154,10 +189,26 @@ int main() {
                 mat->color.randomize();
                 orientation.z = math::PI * math::randomInRange(0.f, 1.f);
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
+                decals.emplace_back(m.get());
                 scene->add(m);
             }
         }
 
         renderer.render(scene, camera);
+
+#ifdef HAS_IMGUI
+        controls.enabled = !ui.mouseHover;
+
+        if (ui.clear) {
+            for (auto decal : decals) {
+                decal->removeFromParent();
+            }
+            decals.clear();
+            ui.clear = false;
+        }
+        ui.render();
+
+#endif
+
     });
 }

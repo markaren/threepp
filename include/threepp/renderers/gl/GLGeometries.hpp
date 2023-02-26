@@ -34,9 +34,7 @@ namespace threepp::gl {
         void updateWireframeAttribute(BufferGeometry* geometry);
 
         IntBufferAttribute* getWireframeAttribute(BufferGeometry* geometry);
-
-        ~GLGeometries();
-
+        
     private:
         GLInfo& info_;
         GLAttributes& attributes_;

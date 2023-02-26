@@ -1101,6 +1101,7 @@ void GLRenderer::renderText() {
 }
 
 GLRenderer::~GLRenderer() {
+    EventDispatcher::shutdown = true;
     if (textEnabled_) {
         TextHandle::terminate();
     }
@@ -1109,15 +1110,10 @@ GLRenderer::~GLRenderer() {
 GLRenderer::OnMaterialDispose::OnMaterialDispose(GLRenderer* scope): scope_(scope) {}
 
 void GLRenderer::OnMaterialDispose::onEvent(Event& event) {
-    if (scope_) {
-        auto material = static_cast<Material*>(event.target);
 
-        material->removeEventListener("dispose", this);
+    auto material = static_cast<Material*>(event.target);
 
-        scope_->deallocateMaterial(material);
-    }
-}
+    material->removeEventListener("dispose", this);
 
-GLRenderer::OnMaterialDispose::~OnMaterialDispose() {
-    scope_ = nullptr;
+    scope_->deallocateMaterial(material);
 }

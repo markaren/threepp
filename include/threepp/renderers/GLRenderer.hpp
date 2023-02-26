@@ -176,8 +176,6 @@ namespace threepp {
 
             void onEvent(Event& event) override;
 
-            ~OnMaterialDispose() override;
-
         private:
             GLRenderer* scope_;
         };
