@@ -39,7 +39,7 @@ namespace threepp {
             lineMaterial->color.setHex(color);
             lineMaterial->toneMapped = false;
 
-            geometry_->setIndex(IntBufferAttribute::create(indices, 1));
+            geometry_->setIndex(indices);
 
             geometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
 

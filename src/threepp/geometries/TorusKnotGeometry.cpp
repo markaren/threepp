@@ -1,6 +1,8 @@
 
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 
+#include <list>
+
 using namespace threepp;
 
 namespace {
@@ -23,10 +25,10 @@ TorusKnotGeometry::TorusKnotGeometry(float radius, float tube, unsigned int tubu
 
     // buffers
 
-    std::vector<unsigned int> indices;
-    std::vector<float> vertices;
-    std::vector<float> normals;
-    std::vector<float> uvs;
+    std::list<unsigned int> indices;
+    std::list<float> vertices;
+    std::list<float> normals;
+    std::list<float> uvs;
 
     // helper variables
 

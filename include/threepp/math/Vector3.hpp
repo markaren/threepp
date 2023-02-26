@@ -37,7 +37,7 @@ namespace threepp {
 
         Vector3& setZ(float value);
 
-        float& operator[](unsigned int index);
+        float& operator[](size_t index);
 
         Vector3& copy(const Vector3& v);
 
@@ -234,7 +234,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        Vector3& fromArray(const ArrayLike& array, unsigned int offset = 0) {
+        Vector3& fromArray(const ArrayLike& array, size_t offset = 0) {
 
             this->x = array[offset];
             this->y = array[offset + 1];
@@ -244,7 +244,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        void toArray(ArrayLike& array, unsigned int offset = 0) const {
+        void toArray(ArrayLike& array, size_t offset = 0) const {
 
             array[offset] = this->x;
             array[offset + 1] = this->y;

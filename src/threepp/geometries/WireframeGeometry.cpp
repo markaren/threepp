@@ -1,13 +1,15 @@
 
 #include "threepp/geometries/WireframeGeometry.hpp"
 
+#include <list>
+
 using namespace threepp;
 
 WireframeGeometry::WireframeGeometry(BufferGeometry& geometry) {
 
     // buffer
 
-    std::vector<float> vertices;
+    std::list<float> vertices;
 
     // helper variables
 

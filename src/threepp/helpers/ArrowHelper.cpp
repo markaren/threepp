@@ -23,7 +23,7 @@ ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, int color, s
     if (!_lineGeometry) {
 
         _lineGeometry = std::make_shared<BufferGeometry>();
-        _lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 1, 0}, 3));
+        _lineGeometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 1, 0}, 3));
 
         _coneGeometry = CylinderGeometry::create(0, 0.5f, 1, 5, 1);
         _coneGeometry->translate(0, -0.5f, 0);

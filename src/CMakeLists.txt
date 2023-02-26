@@ -198,6 +198,7 @@ set(sources
         "threepp/core/Raycaster.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
+        "threepp/geometries/CircleGeometry.cpp"
         "threepp/geometries/CylinderGeometry.cpp"
         "threepp/geometries/DecalGeometry.cpp"
         "threepp/geometries/PlaneGeometry.cpp"
@@ -205,6 +206,7 @@ set(sources
         "threepp/geometries/SphereGeometry.cpp"
         "threepp/geometries/TorusGeometry.cpp"
         "threepp/geometries/TorusKnotGeometry.cpp"
+        "threepp/geometries/TubeGeometry.cpp"
         "threepp/geometries/WireframeGeometry.cpp"
 
         "threepp/helpers/ArrowHelper.cpp"

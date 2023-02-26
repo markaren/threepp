@@ -1,7 +1,10 @@
 
 #include "threepp/geometries/CylinderGeometry.hpp"
 
+#include <list>
+
 using namespace threepp;
+
 
 CylinderGeometry::CylinderGeometry(
         float radiusTop,
@@ -16,10 +19,10 @@ CylinderGeometry::CylinderGeometry(
       radiusBottom(radiusBottom),
       height(height) {
 
-    std::vector<unsigned int> indices;
-    std::vector<float> vertices;
-    std::vector<float> normals;
-    std::vector<float> uvs;
+    std::list<unsigned int> indices;
+    std::list<float> vertices;
+    std::list<float> normals;
+    std::list<float> uvs;
 
     unsigned int index = 0;
     const auto halfHeight = height / 2;
@@ -41,7 +44,7 @@ CylinderGeometry::CylinderGeometry(
 
             std::vector<unsigned int> indexRow;
 
-            const auto v = static_cast<float>(y) / heightSegments;
+            const auto v = static_cast<float>(y) /  static_cast<float>(heightSegments);
 
             // calculate the radius of the current row
 
@@ -49,7 +52,7 @@ CylinderGeometry::CylinderGeometry(
 
             for (unsigned x = 0; x <= radialSegments; x++) {
 
-                const auto u = static_cast<float>(x) / radialSegments;
+                const auto u = static_cast<float>(x) /  static_cast<float>(radialSegments);
 
                 const auto theta = u * thetaLength + thetaStart;
 
@@ -120,10 +123,10 @@ CylinderGeometry::CylinderGeometry(
 
     auto generateCap = [&](bool top) {
         // save the index of the first center vertex
-        int centerIndexStart = index;
+        auto centerIndexStart = index;
 
-        auto uv = Vector2();
-        auto vertex = Vector3();
+        Vector2 uv;
+        Vector3 vertex;
 
         int groupCount = 0;
 
@@ -160,7 +163,7 @@ CylinderGeometry::CylinderGeometry(
 
         for (unsigned x = 0; x <= radialSegments; x++) {
 
-            float u = static_cast<float>(x) / radialSegments;
+            float u = static_cast<float>(x) / static_cast<float>(radialSegments);
             float theta = u * thetaLength + thetaStart;
 
             float cosTheta = std::cos(theta);

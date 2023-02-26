@@ -64,7 +64,7 @@ Vector3& Vector3::setZ(float value) {
     return *this;
 }
 
-float& Vector3::operator[](unsigned int index) {
+float& Vector3::operator[](size_t index) {
     switch (index) {
         case 0:
             return x;

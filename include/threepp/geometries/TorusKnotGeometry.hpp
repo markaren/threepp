@@ -10,7 +10,13 @@ namespace threepp {
     class TorusKnotGeometry: public BufferGeometry {
 
     public:
-        static std::shared_ptr<TorusKnotGeometry> create(float radius = 1, float tube = 0.4, unsigned int tubularSegments = 64, unsigned int radialSegments = 8, unsigned int p = 2, unsigned int q = 3) {
+        static std::shared_ptr<TorusKnotGeometry> create(
+                float radius = 1,
+                float tube = 0.4f,
+                unsigned int tubularSegments = 64,
+                unsigned int radialSegments = 8,
+                unsigned int p = 2,
+                unsigned int q = 3) {
 
             return std::shared_ptr<TorusKnotGeometry>(new TorusKnotGeometry(radius, tube, tubularSegments, radialSegments, p, q));
         }

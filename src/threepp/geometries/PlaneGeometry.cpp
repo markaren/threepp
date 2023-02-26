@@ -1,6 +1,8 @@
 
 #include "threepp/geometries/PlaneGeometry.hpp"
 
+#include <list>
+
 using namespace threepp;
 
 
@@ -15,30 +17,30 @@ PlaneGeometry::PlaneGeometry(float width, float height, unsigned int widthSegmen
     const auto gridX1 = gridX + 1;
     const auto gridY1 = gridY + 1;
 
-    const auto segment_width = width / gridX;
-    const auto segment_height = height / gridY;
+    const auto segment_width = width / static_cast<float>(gridX);
+    const auto segment_height = height / static_cast<float>(gridY);
 
     //
 
     std::vector<unsigned int> indices;
-    std::vector<float> vertices;
-    std::vector<float> normals;
-    std::vector<float> uvs;
+    std::list<float> vertices;
+    std::list<float> normals;
+    std::list<float> uvs;
 
     for (unsigned iy = 0; iy < gridY1; iy++) {
 
-        const auto y = (float) (iy * segment_height - height_half);
+        const auto y = static_cast<float>(iy) * segment_height - height_half;
 
-        for (int ix = 0; ix < gridX1; ix++) {
+        for (unsigned ix = 0; ix < gridX1; ix++) {
 
-            const auto x = (float) (ix * segment_width - width_half);
+            const auto x = static_cast<float>(ix) * segment_width - width_half;
 
             vertices.insert(vertices.end(), {x, -y, 0});
 
             normals.insert(normals.end(), {0, 0, 1});
 
-            uvs.emplace_back((float) (ix / gridX));
-            uvs.emplace_back((float) (1 - (iy / gridY)));
+            uvs.emplace_back(static_cast<float>(ix) / static_cast<float>(gridX));
+            uvs.emplace_back(1 - (static_cast<float>(iy) / static_cast<float>(gridY)));
         }
     }
 

@@ -15,7 +15,12 @@ namespace threepp {
 
         PlaneGeometry(const PlaneGeometry&) = delete;
 
-        static std::shared_ptr<PlaneGeometry> create(float width = 1, float height = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1) {
+        static std::shared_ptr<PlaneGeometry> create(
+                float width = 1,
+                float height = 1,
+                unsigned int widthSegments = 1,
+                unsigned int heightSegments = 1) {
+
             return std::shared_ptr<PlaneGeometry>(new PlaneGeometry(width, height, widthSegments, heightSegments));
         }
 

@@ -14,15 +14,20 @@ namespace threepp {
     class InterleavedBuffer: public TypedBufferAttribute<float> {
 
     public:
-        InterleavedBuffer(const std::vector<float>& array, int stride)
-            : TypedBufferAttribute<float>(array, static_cast<int>(array.size() / stride)),
-              stride_(stride) {}
-
         [[nodiscard]] int stride() const {
             return stride_;
         }
 
-    private:
+        static std::shared_ptr<InterleavedBuffer> create(const std::vector<float>& array, int stride) {
+
+            return std::shared_ptr<InterleavedBuffer>(new InterleavedBuffer(array, stride));
+        }
+
+    protected:
+        InterleavedBuffer(const std::vector<float>& array, int stride)
+            : TypedBufferAttribute<float>(array, static_cast<int>(array.size() / stride)),
+              stride_(stride) {}
+
         int stride_;
     };
 

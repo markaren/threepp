@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <list>
 #include <vector>
 
 using namespace threepp;
@@ -17,10 +18,10 @@ SphereGeometry::SphereGeometry(
         float thetaLength)
     : radius(radius) {
 
-    std::vector<unsigned int> indices;
-    std::vector<float> vertices;
-    std::vector<float> normals;
-    std::vector<float> uvs;
+    std::list<unsigned int> indices;
+    std::list<float> vertices;
+    std::list<float> normals;
+    std::list<float> uvs;
 
     widthSegments = std::max(3u, widthSegments);
     heightSegments = std::max(2u, heightSegments);

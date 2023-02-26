@@ -21,7 +21,7 @@ namespace threepp {
                 unsigned int widthSegments = 8,
                 unsigned int heightSegments = 6,
                 float phiStart = 0,
-                float phiLength = math::PI * 2,
+                float phiLength = math::TWO_PI,
                 float thetaStart = 0,
                 float thetaLength = math::PI) {
 

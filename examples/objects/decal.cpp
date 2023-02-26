@@ -105,7 +105,7 @@ int main() {
     scene->add(light3);
 
     auto lineGeometry = BufferGeometry::create();
-    lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
+    lineGeometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 1}, 3));
     auto line = Line::create(lineGeometry);
     scene->add(line);
 

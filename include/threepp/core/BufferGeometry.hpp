@@ -41,12 +41,16 @@ namespace threepp {
 
         IntBufferAttribute* getIndex();
 
-        const IntBufferAttribute* getIndex() const;
+        [[nodiscard]] const IntBufferAttribute* getIndex() const;
 
-        BufferGeometry& setIndex(std::vector<unsigned int> index);
+        template <class ArrayLike>
+        BufferGeometry& setIndex(const ArrayLike& index) {
 
-        BufferGeometry& setIndex(std::unique_ptr<IntBufferAttribute> index);
+            this->index_ = IntBufferAttribute::create(index, 1);
 
+            return *this;
+        }
+        
         template<class T>
         TypedBufferAttribute<T>* getAttribute(const std::string& name) {
 

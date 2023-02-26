@@ -65,8 +65,8 @@ Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
             0.5f, 0.5f, 0.f, 1.f, 1.f,
             -0.5f, 0.5f, 0.f, 0.f, 1.f};
 
-    auto interleavedBuffer = std::make_shared<InterleavedBuffer>(float32Array, 5);
-    _geometry->setIndex({0, 1, 2, 0, 2, 3});
+    auto interleavedBuffer = InterleavedBuffer::create(float32Array, 5);
+    _geometry->setIndex(std::vector<int>{0, 1, 2, 0, 2, 3});
     _geometry->setAttribute("position", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
     _geometry->setAttribute("uv", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
 }

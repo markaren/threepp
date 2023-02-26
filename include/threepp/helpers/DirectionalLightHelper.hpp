@@ -66,11 +66,11 @@ namespace threepp {
 
             auto geometry = BufferGeometry::create();
             geometry->setAttribute("position", FloatBufferAttribute::create(
-                                                       {-size, size, 0,
-                                                        size, size, 0,
-                                                        size, -size, 0,
-                                                        -size, -size, 0,
-                                                        -size, size, 0},
+                                                       std::vector<float>{-size, size, 0,
+                                                                          size, size, 0,
+                                                                          size, -size, 0,
+                                                                          -size, -size, 0,
+                                                                          -size, size, 0},
                                                        3));
 
             auto material = LineBasicMaterial::create();
@@ -81,7 +81,7 @@ namespace threepp {
             this->add(this->lightPlane);
 
             geometry = BufferGeometry::create();
-            geometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
+            geometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 1}, 3));
 
             this->targetLine = Line::create(geometry, material);
             this->add(this->targetLine);

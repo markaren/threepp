@@ -24,20 +24,6 @@ const IntBufferAttribute* BufferGeometry::getIndex() const {
     return this->index_.get();
 }
 
-BufferGeometry& BufferGeometry::setIndex(std::vector<unsigned int> index) {
-
-    this->index_ = IntBufferAttribute::create(std::move(index), 1);
-
-    return *this;
-}
-
-BufferGeometry& BufferGeometry::setIndex(std::unique_ptr<IntBufferAttribute> index) {
-
-    this->index_ = std::move(index);
-
-    return *this;
-}
-
 const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& BufferGeometry::getAttributes() const {
     return attributes_;
 }
@@ -301,7 +287,7 @@ void BufferGeometry::copy(const BufferGeometry& source) {
 
     if (index) {
 
-        this->setIndex(index->clone());
+        this->index_ = index->clone();
     }
 
     // attributes

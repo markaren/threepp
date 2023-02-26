@@ -5,7 +5,6 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
-#include <cmath>
 
 namespace threepp {
 
@@ -15,16 +14,16 @@ namespace threepp {
         const float width;
         const float height;
         const float depth;
-        const int widthSegments;
-        const int heightSegments;
-        const int depthSegments;
+        const unsigned int widthSegments;
+        const unsigned int heightSegments;
+        const unsigned int depthSegments;
 
-        static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, int widthSegments = 1, int heightSegments = 1, int depthSegments = 1) {
+        static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1, unsigned int depthSegments = 1) {
             return std::shared_ptr<BoxGeometry>(new BoxGeometry(width, height, depth, widthSegments, heightSegments, depthSegments));
         }
 
     protected:
-        explicit BoxGeometry(float width, float height, float depth, int widthSegments, int heightSegments, int depthSegments);
+        explicit BoxGeometry(float width, float height, float depth, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments);
     };
 
 }// namespace threepp

@@ -1,6 +1,8 @@
 
 #include "threepp/geometries/BoxGeometry.hpp"
 
+#include <list>
+
 using namespace threepp;
 
 namespace {
@@ -10,10 +12,10 @@ namespace {
         unsigned int numberOfVertices = 0;
         int groupStart = 0;
 
-        std::vector<unsigned int> indices;
-        std::vector<float> vertices;
-        std::vector<float> normals;
-        std::vector<float> uvs;
+        std::list<unsigned int> indices;
+        std::list<float> vertices;
+        std::list<float> normals;
+        std::list<float> uvs;
 
         explicit Helper(BoxGeometry& g) {
 
@@ -125,7 +127,7 @@ namespace {
 
 }// namespace
 
-BoxGeometry::BoxGeometry(float width, float height, float depth, int widthSegments, int heightSegments, int depthSegments)
+BoxGeometry::BoxGeometry(float width, float height, float depth, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments)
     : width(width), height(height), depth(depth), widthSegments(widthSegments), heightSegments(heightSegments), depthSegments(depthSegments) {
 
     Helper h(*this);
