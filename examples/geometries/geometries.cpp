@@ -3,77 +3,115 @@
 
 using namespace threepp;
 
-auto createBox(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = BoxGeometry::create();
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
+namespace {
 
-auto createSphere(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = SphereGeometry::create(0.5f);
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
+    struct CustomSineCurve: Curve3 {
 
-auto createPlane(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = PlaneGeometry::create();
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
+        float scale;
 
-auto createCylinder(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = CylinderGeometry::create(0.5f, 0.5f, 1.f);
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
+        explicit CustomSineCurve(float scale): scale(scale) {}
 
-auto createCone(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = ConeGeometry::create(0.5f, 1.f);
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
+        void getPoint(float t, Vector3& target) override {
+            float tx = t * 3 - 1.5f;
+            float ty = std::sin(math::TWO_PI * t);
+            float tz = 0;
 
-auto createRing(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = RingGeometry::create(0.25f, 0.5f);
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
+            target.set(tx, ty, tz).multiplyScalar(scale);
+        }
+    };
 
-auto createCircle(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = CircleGeometry::create(0.5f);
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
 
-auto createTorus(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-    const auto geometry = TorusKnotGeometry::create(0.5, 0.1);
-    auto mesh = Mesh::create(geometry, m1);
-    auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
-    mesh->add(wire);
-    return mesh;
-}
+    auto createBox(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = BoxGeometry::create();
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createSphere(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = SphereGeometry::create(0.5f);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createPlane(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = PlaneGeometry::create();
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createCylinder(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = CylinderGeometry::create(0.5f, 0.5f, 1.f);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createCone(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = ConeGeometry::create(0.5f, 1.f);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createRing(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = RingGeometry::create(0.25f, 0.5f);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createCircle(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = CircleGeometry::create(0.5f);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createTorus(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = TorusGeometry::create(0.5, 0.1);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createTorusKnot(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        const auto geometry = TorusKnotGeometry::create(0.5, 0.1);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+    auto createTube(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
+        auto curve = std::make_shared<CustomSineCurve>(0.5f);
+        const auto geometry = TubeGeometry::create(curve, 32, 0.1f);
+        auto mesh = Mesh::create(geometry, m1);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        mesh->add(wire);
+        return mesh;
+    }
+
+}// namespace
 
 int main() {
-    Canvas canvas;
+
+    Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
-    camera->position.z = 6;
+    camera->position.z = 8;
 
     TextureLoader tl;
     auto material = MeshBasicMaterial::create();
@@ -86,7 +124,7 @@ int main() {
     lineMaterial->transparent = true;
     lineMaterial->depthWrite = false;
 
-    std::vector<std::shared_ptr<Mesh>> meshes {
+    std::vector<std::shared_ptr<Mesh>> meshes{
             createBox(material, lineMaterial),
             createCircle(material, lineMaterial),
             createSphere(material, lineMaterial),
@@ -94,8 +132,9 @@ int main() {
             createCylinder(material, lineMaterial),
             createPlane(material, lineMaterial),
             createRing(material, lineMaterial),
-            createTorus(material, lineMaterial)
-    };
+            createTorus(material, lineMaterial),
+            createTorusKnot(material, lineMaterial),
+            createTube(material, lineMaterial)};
 
     Box3 box;
     float x = 0;
@@ -105,7 +144,7 @@ int main() {
         if (i % 2 == 0) {
             m->position.y = 2;
         } else {
-            x+=2;
+            x += 2;
         }
 
         scene->add(m);
@@ -124,7 +163,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         for (auto& m : meshes) {
             m->rotation.y += 1 * dt;
         }
