@@ -43,14 +43,14 @@ namespace threepp {
 
         [[nodiscard]] const IntBufferAttribute* getIndex() const;
 
-        template <class ArrayLike>
+        template<class ArrayLike>
         BufferGeometry& setIndex(const ArrayLike& index) {
 
             this->index_ = IntBufferAttribute::create(index, 1);
 
             return *this;
         }
-        
+
         template<class T>
         TypedBufferAttribute<T>* getAttribute(const std::string& name) {
 
