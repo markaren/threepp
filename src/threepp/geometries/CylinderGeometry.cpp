@@ -21,7 +21,7 @@ CylinderGeometry::CylinderGeometry(
     std::vector<float> normals;
     std::vector<float> uvs;
 
-    size_t index = 0;
+    unsigned int index = 0;
     const auto halfHeight = height / 2;
     std::vector<std::vector<unsigned int>> indexArray;
     int groupStart = 0;
