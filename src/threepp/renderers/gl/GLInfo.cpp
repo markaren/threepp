@@ -5,7 +5,7 @@
 
 using namespace threepp;
 
-void gl::GLInfo::update(int count, unsigned int mode, int instanceCount) {
+void gl::GLInfo::update(int count, unsigned int mode, size_t instanceCount) {
 
     ++render.calls;
 
