@@ -426,9 +426,10 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
     if (recursive) {
 
-        for (auto& child : children) {
+        for (auto& child : source.children) {
 
-            this->add(child->clone());
+            auto clone = child->clone();
+            this->add(clone);
         }
     }
 }
@@ -436,7 +437,7 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
 
     auto clone = std::make_shared<Object3D>();
-    clone->copy(*this);
+    clone->copy(*this, recursive);
 
     return clone;
 }

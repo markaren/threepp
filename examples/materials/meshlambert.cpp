@@ -39,6 +39,11 @@ int main() {
 
     scene->add(group);
 
+    auto group2 = group->clone(true);
+    group2->position.z = -2;
+    group2->rotateY(math::degToRad(180));
+    group->add(group2);
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();

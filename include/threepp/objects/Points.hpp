@@ -26,6 +26,13 @@ namespace threepp {
             return {material_.get()};
         }
 
+        std::shared_ptr<Object3D> clone(bool recursive = false) override {
+            auto clone = create(geometry_, material_);
+            clone->copy(*this, recursive);
+
+            return clone;
+        }
+
         static std::shared_ptr<Points> create(
                 std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
                 std::shared_ptr<Material> material = PointsMaterial::create()) {
