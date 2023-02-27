@@ -26,29 +26,16 @@ namespace threepp {
 
         virtual ~EventListener() = default;
     };
-    using EventListenerPtr = EventListener*;
-
-    struct LambdaEventListener: EventListener {
-
-        explicit LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)) {}
-
-        void onEvent(Event& event) override {
-            f_(event);
-        }
-
-    private:
-        std::function<void(Event&)> f_;
-    };
 
     class EventDispatcher {
 
     public:
-        void addEventListener(const std::string& type, EventListenerPtr listener) {
+        void addEventListener(const std::string& type, EventListener* listener) {
 
             listeners_[type].push_back(listener);
         }
 
-        bool hasEventListener(const std::string& type, const EventListenerPtr& listener) {
+        bool hasEventListener(const std::string& type, const EventListener* listener) {
 
             if (!listeners_.count(type)) return false;
 
@@ -56,11 +43,13 @@ namespace threepp {
             return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
         }
 
-        void removeEventListener(const std::string& type, const EventListenerPtr& listener) {
+        void removeEventListener(const std::string& type, const EventListener* listener) {
 
             if (!listeners_.count(type)) return;
 
             auto& listenerArray = listeners_.at(type);
+            if (listenerArray.empty()) return;
+
             auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
             if (find != listenerArray.end()) {
                 listenerArray.erase(find);
@@ -69,11 +58,13 @@ namespace threepp {
 
         void dispatchEvent(const std::string& type, void* target = nullptr) {
 
+            if (shutdown) return;
+
             if (listeners_.count(type)) {
 
                 Event e{type, target};
 
-                auto& listenersOfType = listeners_.at(type);
+                auto listenersOfType = listeners_.at(type);//copy
                 for (auto& l : listenersOfType) {
                     l->onEvent(e);
                 }
@@ -81,7 +72,10 @@ namespace threepp {
         }
 
     private:
-        std::unordered_map<std::string, std::vector<EventListenerPtr>> listeners_;
+        inline static bool shutdown = false;
+        std::unordered_map<std::string, std::vector<EventListener*>> listeners_;
+
+        friend class GLRenderer;
     };
 
 }// namespace threepp

@@ -163,17 +163,21 @@ namespace threepp {
 
         TextHandle& textHandle(const std::string& str = "");
 
+        [[nodiscard]] const gl::GLInfo info() const {
+            return _info;
+        }
+
         ~GLRenderer();
 
     private:
         struct OnMaterialDispose: EventListener {
 
-            explicit OnMaterialDispose(GLRenderer& scope);
+            explicit OnMaterialDispose(GLRenderer* scope);
 
             void onEvent(Event& event) override;
 
         private:
-            GLRenderer& scope_;
+            GLRenderer* scope_;
         };
 
         Canvas& canvas_;
@@ -226,7 +230,7 @@ namespace threepp {
 
         Vector3 _vector3{};
 
-        gl::GLInfo info;
+        gl::GLInfo _info;
 
         gl::GLBackground background;
         gl::GLProperties properties;

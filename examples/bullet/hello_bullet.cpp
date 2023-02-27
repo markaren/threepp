@@ -3,6 +3,8 @@
 
 #include "threepp/extras/bullet/BulletWrapper.hpp"
 
+#include <sstream>
+
 using namespace threepp;
 
 int main() {
@@ -57,11 +59,12 @@ int main() {
 
     BulletWrapper bullet(Vector3::Y * -9.81f);
 
-    bullet.addRigidbody(RbWrapper::create(boxGeometry, 1), box);
-    bullet.addRigidbody(RbWrapper::create(sphereGeometry, 2), sphere);
-    bullet.addRigidbody(RbWrapper::create(cylinderGeometry, 5), cylinder);
-    bullet.addRigidbody(RbWrapper::create(planeGeometry), plane);
+    bullet.addRigidbody(RbWrapper::create(boxGeometry, 1), *box);
+    bullet.addRigidbody(RbWrapper::create(sphereGeometry, 2), *sphere);
+    bullet.addRigidbody(RbWrapper::create(cylinderGeometry, 5), *cylinder);
+    bullet.addRigidbody(RbWrapper::create(planeGeometry), *plane);
 
+    std::vector<Object3D*> spheres;
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt){
        if (evt.key == 32) { // space
            auto geom = SphereGeometry::create(0.1);
@@ -72,16 +75,34 @@ int main() {
            Vector3 dir;
            camera->getWorldDirection(dir);
            rb->body->setLinearVelocity(convert(dir * 10));
-           bullet.addRigidbody(rb, mesh);
+           bullet.addRigidbody(rb, *mesh);
            scene->add(mesh);
+           spheres.emplace_back(mesh.get());
        }
     });
     canvas.addKeyListener(&keyListener);
 
+    renderer.enableTextRendering();
+    auto& handle = renderer.textHandle();
+
+    float t = 0;
     canvas.animate([&](float dt) {
         bullet.step(dt);
 
+        if (!spheres.empty() && t > 3) {
+            for (auto p : spheres) {
+                scene->remove(p);
+            }
+            spheres.clear();
+            t = 0;
+        }
+
         renderer.render(scene, camera);
+        t+=dt;
+
+        std::stringstream ss;
+        ss << renderer.info();
+        handle.setText(ss.str());
     });
 
 }

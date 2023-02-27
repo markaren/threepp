@@ -85,7 +85,7 @@ namespace threepp {
     };
 
 
-    class BulletWrapper {
+    class BulletWrapper: public EventListener {
 
     public:
         explicit BulletWrapper(const Vector3& gravity = {0, -9.81f, 0})
@@ -112,15 +112,18 @@ namespace threepp {
             return *this;
         }
 
-        BulletWrapper& addRigidbody(const std::shared_ptr<RbWrapper>& rb, const std::shared_ptr<Object3D>& obj) {
+        BulletWrapper& addRigidbody(const std::shared_ptr<RbWrapper>& rb, Object3D& obj) {
 
-            obj->updateMatrixWorld();
-            auto t = convert(*obj->matrixWorld);
+            obj.updateMatrixWorld();
+            auto t = convert(*obj.matrixWorld);
             rb->state->setWorldTransform(t);
             rb->body->setWorldTransform(t);
 
             world.addRigidBody(rb->body.get());
-            bodies[obj] = rb;
+            bodies[&obj] = rb;
+
+            obj.addEventListener("remove", this);
+
             return *this;
         }
 
@@ -128,8 +131,19 @@ namespace threepp {
             world.addConstraint(c, disableCollisionsBetweenLinkedBodies);
         }
 
+        void onEvent(Event& event) override {
+            if (event.type == "remove") {
+                auto o = static_cast<Object3D*>(event.target);
+                if (bodies.count(o)) {
+                    auto& rb = bodies.at(o);
+                    world.removeRigidBody(rb->body.get());
+                    bodies.erase(o);
+                }
+            }
+        }
+
     private:
-        std::unordered_map<std::shared_ptr<threepp::Object3D>, std::shared_ptr<RbWrapper>> bodies{};
+        std::unordered_map<threepp::Object3D*, std::shared_ptr<RbWrapper>> bodies{};
 
         btDbvtBroadphase broadphase{};
 
