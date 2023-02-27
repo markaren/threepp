@@ -20,8 +20,6 @@ namespace threepp {
 
     struct EventListener {
 
-        const std::string uuid = utils::generateUUID();
-
         virtual void onEvent(Event& event) = 0;
 
         virtual ~EventListener() = default;
@@ -30,46 +28,15 @@ namespace threepp {
     class EventDispatcher {
 
     public:
-        void addEventListener(const std::string& type, EventListener* listener) {
+        void addEventListener(const std::string& type, EventListener* listener);
 
-            listeners_[type].push_back(listener);
-        }
+        bool hasEventListener(const std::string& type, const EventListener* listener);
 
-        bool hasEventListener(const std::string& type, const EventListener* listener) {
+        void removeEventListener(const std::string& type, const EventListener* listener);
 
-            if (!listeners_.count(type)) return false;
+        void dispatchEvent(const std::string& type, void* target = nullptr);
 
-            auto& listenerArray = listeners_.at(type);
-            return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
-        }
-
-        void removeEventListener(const std::string& type, const EventListener* listener) {
-
-            if (!listeners_.count(type)) return;
-
-            auto& listenerArray = listeners_.at(type);
-            if (listenerArray.empty()) return;
-
-            auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
-            if (find != listenerArray.end()) {
-                listenerArray.erase(find);
-            }
-        }
-
-        void dispatchEvent(const std::string& type, void* target = nullptr) {
-
-            if (shutdown) return;
-
-            if (listeners_.count(type)) {
-
-                Event e{type, target};
-
-                auto listenersOfType = listeners_.at(type);//copy
-                for (auto& l : listenersOfType) {
-                    l->onEvent(e);
-                }
-            }
-        }
+        virtual ~EventDispatcher() = default;
 
     private:
         inline static bool shutdown = false;

@@ -11,6 +11,7 @@ set(publicHeaders
         "threepp/core/BufferAttribute.hpp"
         "threepp/core/BufferGeometry.hpp"
         "threepp/core/Clock.hpp"
+        "threepp/core/EventDispatcher.hpp"
         "threepp/core/Face3.hpp"
         "threepp/core/Layers.hpp"
         "threepp/core/misc.hpp"
@@ -194,6 +195,7 @@ set(sources
         "threepp/controls/OrbitControls.cpp"
 
         "threepp/core/BufferGeometry.cpp"
+        "threepp/core/EventDispatcher.cpp"
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 
