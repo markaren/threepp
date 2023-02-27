@@ -46,25 +46,25 @@ void OrthographicCamera::clearViewOffset() {
 
 void OrthographicCamera::updateProjectionMatrix() {
 
-    const auto dx = (this->right - this->left) / (2 * this->zoom);
-    const auto dy = (this->top - this->bottom) / (2 * this->zoom);
-    const auto cx = (this->right + this->left) / 2;
-    const auto cy = (this->top + this->bottom) / 2;
+    const auto dx = static_cast<float>(this->right - this->left) / (2 * this->zoom);
+    const auto dy = static_cast<float>(this->top - this->bottom) / (2 * this->zoom);
+    const auto cx = static_cast<float>(this->right + this->left) / 2;
+    const auto cy = static_cast<float>(this->top + this->bottom) / 2;
 
-    int left = cx - dx;
-    int right = cx + dx;
-    int top = cy + dy;
-    int bottom = cy - dy;
+    float left = cx - dx;
+    float right = cx + dx;
+    float top = cy + dy;
+    float bottom = cy - dy;
 
     if (this->view && this->view->enabled) {
 
-        const auto scaleW = (this->right - this->left) / this->view->fullWidth / this->zoom;
-        const auto scaleH = (this->top - this->bottom) / this->view->fullHeight / this->zoom;
+        const auto scaleW = static_cast<float>(this->right - this->left) /static_cast<float>(this->view->fullWidth) / this->zoom;
+        const auto scaleH = static_cast<float>(this->top - this->bottom) / static_cast<float>(this->view->fullHeight) / this->zoom;
 
-        left += scaleW * this->view->offsetX;
-        right = left + scaleW * this->view->width;
-        top -= scaleH * this->view->offsetY;
-        bottom = top - scaleH * this->view->height;
+        left += scaleW * static_cast<float>(this->view->offsetX);
+        right = left + scaleW * static_cast<float>(this->view->width);
+        top -= scaleH * static_cast<float>(this->view->offsetY);
+        bottom = top - scaleH * static_cast<float>(this->view->height);
     }
 
     this->projectionMatrix.makeOrthographic((float) left, (float) right, (float) top, (float) bottom, this->near, this->far);
