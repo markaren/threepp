@@ -3,7 +3,7 @@
 #ifndef THREEPP_EVENTDISPATCHER_HPP
 #define THREEPP_EVENTDISPATCHER_HPP
 
-#include <functional>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
