@@ -64,7 +64,6 @@ int main() {
     bullet.addRigidbody(RbWrapper::create(cylinderGeometry, 5), *cylinder);
     bullet.addRigidbody(RbWrapper::create(planeGeometry), *plane);
 
-    std::vector<Object3D*> spheres;
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt){
        if (evt.key == 32) { // space
            auto geom = SphereGeometry::create(0.1);
@@ -77,7 +76,10 @@ int main() {
            rb->body->setLinearVelocity(convert(dir * 10));
            bullet.addRigidbody(rb, *mesh);
            scene->add(mesh);
-           spheres.emplace_back(mesh.get());
+
+           canvas.invokeLater([mesh]{
+               mesh->removeFromParent();
+           }, 2);
        }
     });
     canvas.addKeyListener(&keyListener);
@@ -88,14 +90,6 @@ int main() {
     float t = 0;
     canvas.animate([&](float dt) {
         bullet.step(dt);
-
-        if (!spheres.empty() && t > 3) {
-            for (auto p : spheres) {
-                scene->remove(p);
-            }
-            spheres.clear();
-            t = 0;
-        }
 
         renderer.render(scene, camera);
         t+=dt;

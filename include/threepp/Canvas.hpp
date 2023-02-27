@@ -51,14 +51,14 @@ namespace threepp {
 
         void animate(const std::function<void(float, float)>& f);
 
-        void invokeLater(const std::function<void()>& f);
+        void invokeLater(const std::function<void()>& f, float t = 0);
 
         [[nodiscard]] void* window_ptr() const;
 
         ~Canvas();
 
     private:
-        class Impl;
+        struct Impl;
         std::unique_ptr<Impl> pimpl_;
 
     public:
@@ -86,7 +86,7 @@ namespace threepp {
             std::string title_;
             bool vsync_;
 
-            friend class Canvas::Impl;
+            friend struct Canvas::Impl;
         };
     };
 

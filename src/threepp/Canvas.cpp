@@ -12,9 +12,18 @@
 
 using namespace threepp;
 
-class Canvas::Impl {
+namespace {
 
-public:
+    typedef std::pair<std::function<void()>, float> task;
+
+    struct CustomComparator {
+        bool operator()(const task& l, const task& r) const { return l.second > r.second; }
+    };
+
+}// namespace
+
+struct Canvas::Impl {
+
     GLFWwindow* window;
 
     int fps_ = -1;
@@ -22,7 +31,7 @@ public:
     WindowSize size_;
     Vector2 lastMousePos{};
 
-    std::queue<std::function<void()>> tasks_;
+    std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
     std::vector<KeyListener*> keyListeners;
     std::vector<MouseListener*> mouseListeners;
@@ -104,9 +113,13 @@ public:
 
     inline void handleTasks() {
         while (!tasks_.empty()) {
-            auto task = tasks_.front();
-            task();
-            tasks_.pop();
+            auto& task = tasks_.top();
+            if (task.second < glfwGetTime()) {
+                task.first();
+                tasks_.pop();
+            } else {
+                break;
+            }
         }
     }
 
@@ -198,8 +211,8 @@ public:
         return false;
     }
 
-    void invokeLater(const std::function<void()>& f) {
-        tasks_.emplace(f);
+    void invokeLater(const std::function<void()>& f, float t) {
+        tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
     }
 
     ~Impl() {
@@ -344,8 +357,8 @@ bool Canvas::removeMouseListener(const MouseListener* listener) {
     return pimpl_->removeMouseListener(listener);
 }
 
-void Canvas::invokeLater(const std::function<void()>& f) {
-    pimpl_->invokeLater(f);
+void Canvas::invokeLater(const std::function<void()>& f, float t) {
+    pimpl_->invokeLater(f, t);
 }
 
 Canvas::~Canvas() = default;
