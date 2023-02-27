@@ -196,7 +196,7 @@ namespace threepp {
 
         void copy(const Object3D& source, bool recursive = true);
 
-        virtual std::shared_ptr<Object3D> clone(bool recursive = false);
+        virtual std::shared_ptr<Object3D> clone(bool recursive = true);
 
         ~Object3D() override;
 

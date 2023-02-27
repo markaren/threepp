@@ -10,7 +10,7 @@ namespace threepp {
 
     public:
 
-        std::shared_ptr<Object3D> clone(bool recursive = false) override {
+        std::shared_ptr<Object3D> clone(bool recursive = true) override {
             auto clone = create();
             clone->copy(*this, recursive);
 
