@@ -17,12 +17,12 @@ namespace threepp::gl {
 
         struct OnGeometryDispose: EventListener {
 
-            explicit OnGeometryDispose(GLGeometries& scope);
+            explicit OnGeometryDispose(GLGeometries* scope);
 
             void onEvent(Event& event) override;
 
         private:
-            GLGeometries& scope_;
+            GLGeometries* scope_;
         };
 
         GLGeometries(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates);
@@ -40,7 +40,7 @@ namespace threepp::gl {
         GLAttributes& attributes_;
         GLBindingStates& bindingStates_;
 
-        OnGeometryDispose onGeometryDispose_;
+        std::shared_ptr<OnGeometryDispose> onGeometryDispose_;
 
         std::unordered_map<BufferGeometry*, bool> geometries_;
         std::unordered_map<BufferGeometry*, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;

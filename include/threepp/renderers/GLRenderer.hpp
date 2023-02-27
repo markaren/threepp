@@ -185,7 +185,7 @@ namespace threepp {
         bool textEnabled_ = false;
         std::vector<std::shared_ptr<TextHandle>> textHandles_;
 
-        OnMaterialDispose onMaterialDispose;
+        std::shared_ptr<OnMaterialDispose> onMaterialDispose;
 
         std::shared_ptr<gl::GLRenderList> currentRenderList;
         std::shared_ptr<gl::GLRenderState> currentRenderState;

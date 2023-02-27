@@ -7,14 +7,14 @@ using namespace threepp;
 using namespace threepp::gl;
 
 GLGeometries::GLGeometries(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates)
-    : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(*this) {
+    : info_(info), attributes_(attributes), bindingStates_(bindingStates), onGeometryDispose_(std::make_shared<OnGeometryDispose>(this)) {
 }
 
 void GLGeometries::get(Object3D* object, BufferGeometry* geometry) {
 
     if (geometries_.count(geometry) && geometries_.at(geometry)) return;
 
-    geometry->addEventListener("dispose", &onGeometryDispose_);
+    geometry->addEventListener("dispose", onGeometryDispose_);
 
     geometries_[geometry] = true;
 
@@ -109,7 +109,7 @@ IntBufferAttribute* GLGeometries::getWireframeAttribute(BufferGeometry* geometry
     return wireframeAttributes_.at(geometry).get();
 }
 
-GLGeometries::OnGeometryDispose::OnGeometryDispose(GLGeometries& scope): scope_(scope) {}
+GLGeometries::OnGeometryDispose::OnGeometryDispose(GLGeometries* scope): scope_(scope) {}
 
 void GLGeometries::OnGeometryDispose::onEvent(Event& event) {
 
@@ -117,33 +117,33 @@ void GLGeometries::OnGeometryDispose::onEvent(Event& event) {
 
     if (geometry->hasIndex()) {
 
-        scope_.attributes_.remove(geometry->getIndex());
+        scope_->attributes_.remove(geometry->getIndex());
     }
 
     for (const auto& [name, value] : geometry->getAttributes()) {
 
-        scope_.attributes_.remove(value.get());
+        scope_->attributes_.remove(value.get());
     }
 
     geometry->removeEventListener("dispose", this);
 
-    scope_.geometries_.erase(geometry);
+    scope_->geometries_.erase(geometry);
 
 
-    if (scope_.wireframeAttributes_.count(geometry)) {
+    if (scope_->wireframeAttributes_.count(geometry)) {
 
-        const auto& attribute = scope_.wireframeAttributes_.at(geometry);
+        const auto& attribute = scope_->wireframeAttributes_.at(geometry);
 
-        scope_.attributes_.remove(attribute.get());
-        scope_.wireframeAttributes_.erase(geometry);
+        scope_->attributes_.remove(attribute.get());
+        scope_->wireframeAttributes_.erase(geometry);
     }
 
-    scope_.bindingStates_.releaseStatesOfGeometry(geometry);
+    scope_->bindingStates_.releaseStatesOfGeometry(geometry);
 
     auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry);
     if (ig) {
         ig->_maxInstanceCount = 0;
     }
 
-    --scope_.info_.memory.geometries;
+    --scope_->info_.memory.geometries;
 }

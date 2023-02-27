@@ -45,37 +45,37 @@ TEST_CASE("Test events") {
 
     EventDispatcher evt;
 
-    MyEventListener l;
+    auto l = std::make_shared<MyEventListener>();
 
     bool l1Called = false;
-    LambdaEventListener l1([&l1Called](Event& e) {
+    auto l1 = std::make_shared<LambdaEventListener>([&l1Called](Event& e) {
         l1Called = true;
     });
 
-    evt.addEventListener("test1", &l);
-    evt.addEventListener("test2", &l1);
+    evt.addEventListener("test1", l);
+    evt.addEventListener("test2", l1);
 
     evt.dispatchEvent("test1");
     evt.dispatchEvent("test1");
 
-    REQUIRE(2 == l.numCalled);
+    REQUIRE(2 == l->numCalled);
 
-    evt.removeEventListener("test1", &l);
+    evt.removeEventListener("test1", l.get());
 
     evt.dispatchEvent("test1");
     evt.dispatchEvent("test2");
 
-    REQUIRE(2 == l.numCalled);
+    REQUIRE(2 == l->numCalled);
     REQUIRE(l1Called);
 
-    REQUIRE(!evt.hasEventListener("test1", &l));
-    REQUIRE(evt.hasEventListener("test2", &l1));
+    REQUIRE(!evt.hasEventListener("test1", l.get()));
+    REQUIRE(evt.hasEventListener("test2", l1.get()));
 
-    auto onDispose = OnMaterialDispose();
+    auto onDispose = std::make_shared<OnMaterialDispose>();
     auto material = MeshBasicMaterial::create();
-    material->addEventListener("dispose", &onDispose);
+    material->addEventListener("dispose", onDispose);
 
-    REQUIRE(material->hasEventListener("dispose", &onDispose));
+    REQUIRE(material->hasEventListener("dispose", onDispose.get()));
     material->dispose();
-    REQUIRE(!material->hasEventListener("dispose", &onDispose));
+    REQUIRE(!material->hasEventListener("dispose", onDispose.get()));
 }

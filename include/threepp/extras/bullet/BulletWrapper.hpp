@@ -85,12 +85,14 @@ namespace threepp {
     };
 
 
-    class BulletWrapper: public EventListener {
+    class BulletWrapper {
 
     public:
         explicit BulletWrapper(const Vector3& gravity = {0, -9.81f, 0})
             : dispatcher{&collisionConfiguration},
-              world{&dispatcher, &broadphase, &solver, &collisionConfiguration} {
+              world{&dispatcher, &broadphase, &solver, &collisionConfiguration},
+              listener(std::make_shared<ObjectRemovedListener>(this)) {
+
             world.setGravity(convert(gravity));
         }
 
@@ -122,7 +124,7 @@ namespace threepp {
             world.addRigidBody(rb->body.get());
             bodies[&obj] = rb;
 
-            obj.addEventListener("remove", this);
+            obj.addEventListener("remove", listener);
 
             return *this;
         }
@@ -131,18 +133,26 @@ namespace threepp {
             world.addConstraint(c, disableCollisionsBetweenLinkedBodies);
         }
 
-        void onEvent(Event& event) override {
-            if (event.type == "remove") {
-                auto o = static_cast<Object3D*>(event.target);
-                if (bodies.count(o)) {
-                    auto& rb = bodies.at(o);
-                    world.removeRigidBody(rb->body.get());
-                    bodies.erase(o);
+    private:
+        struct ObjectRemovedListener: EventListener {
+
+            explicit ObjectRemovedListener(BulletWrapper* scope): scope(scope) {}
+
+            void onEvent(Event& event) override {
+                if (event.type == "remove") {
+                    auto o = static_cast<Object3D*>(event.target);
+                    if (scope->bodies.count(o)) {
+                        auto& rb = scope->bodies.at(o);
+                        scope->world.removeRigidBody(rb->body.get());
+                        scope->bodies.erase(o);
+                    }
                 }
             }
-        }
 
-    private:
+        private:
+            BulletWrapper* scope;
+        };
+
         std::unordered_map<threepp::Object3D*, std::shared_ptr<RbWrapper>> bodies{};
 
         btDbvtBroadphase broadphase{};
@@ -157,6 +167,8 @@ namespace threepp {
         btCollisionDispatcher dispatcher;
 
         btDiscreteDynamicsWorld world;
+
+        std::shared_ptr<ObjectRemovedListener> listener;
     };
 
 }// namespace threepp

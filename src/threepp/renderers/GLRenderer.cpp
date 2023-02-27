@@ -35,7 +35,7 @@ GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
       shadowMap(objects),
       materials(properties),
       programCache(bindingStates, clipping),
-      onMaterialDispose(this),
+      onMaterialDispose(std::make_shared<OnMaterialDispose>(this)),
       _currentDrawBuffers(GL_BACK) {}
 
 int GLRenderer::getTargetPixelRatio() const {
@@ -632,7 +632,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
         // new material
 
-        material->addEventListener("dispose", &onMaterialDispose);
+        material->addEventListener("dispose", onMaterialDispose);
     }
 
     std::shared_ptr<gl::GLProgram> program = nullptr;
@@ -1101,7 +1101,6 @@ void GLRenderer::renderText() {
 }
 
 GLRenderer::~GLRenderer() {
-    EventDispatcher::shutdown = true;
     if (textEnabled_) {
         TextHandle::terminate();
     }

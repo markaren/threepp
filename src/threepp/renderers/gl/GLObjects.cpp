@@ -26,9 +26,9 @@ BufferGeometry* GLObjects::update(Object3D* object) {
     auto instancedMesh = dynamic_cast<InstancedMesh*>(object);
     if (instancedMesh) {
 
-        if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
+        if (!object->hasEventListener("dispose", onInstancedMeshDispose.get())) {
 
-            object->addEventListener("dispose", &onInstancedMeshDispose);
+            object->addEventListener("dispose", onInstancedMeshDispose);
         }
 
         attributes_.update(instancedMesh->instanceMatrix.get(), GL_ARRAY_BUFFER);

@@ -70,7 +70,11 @@ namespace {
 }// namespace
 
 gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl::GLInfo& info)
-    : state(state), properties(properties), info(info), onTextureDispose_(*this), onRenderTargetDispose_(*this) {
+    : state(state),
+      properties(properties),
+      info(info),
+      onTextureDispose_(std::make_shared<TextureEventListener>(this)),
+      onRenderTargetDispose_(std::make_shared<RenderTargetEventListener>(this)) {
 }
 
 void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuint width, GLuint height) {
@@ -159,7 +163,7 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
 
         textureProperties->glInit = true;
 
-        texture.addEventListener("dispose", &onTextureDispose_);
+        texture.addEventListener("dispose", onTextureDispose_);
 
         GLuint glTexture;
         glGenTextures(1, &glTexture);
@@ -419,7 +423,7 @@ void gl::GLTextures::setupRenderTarget(const std::shared_ptr<GLRenderTarget>& re
     auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
     auto textureProperties = properties.textureProperties.get(texture->uuid);
 
-    renderTarget->addEventListener("dispose", &onRenderTargetDispose_);
+    renderTarget->addEventListener("dispose", onRenderTargetDispose_);
 
     GLuint glTexture;
     glGenTextures(1, &glTexture);
@@ -487,9 +491,9 @@ void gl::GLTextures::TextureEventListener::onEvent(Event& event) {
 
     texture->removeEventListener("dispose", this);
 
-    scope_.deallocateTexture(texture);
+    scope_->deallocateTexture(texture);
 
-    --scope_.info.memory.textures;
+    --scope_->info.memory.textures;
 }
 
 void gl::GLTextures::RenderTargetEventListener::onEvent(Event& event) {
@@ -498,5 +502,5 @@ void gl::GLTextures::RenderTargetEventListener::onEvent(Event& event) {
 
     renderTarget->removeEventListener("dispose", this);
 
-    scope_.deallocateRenderTarget(renderTarget);
+    scope_->deallocateRenderTarget(renderTarget);
 }

@@ -28,7 +28,7 @@ namespace threepp {
     class EventDispatcher {
 
     public:
-        void addEventListener(const std::string& type, EventListener* listener);
+        void addEventListener(const std::string& type, std::weak_ptr<EventListener> listener);
 
         bool hasEventListener(const std::string& type, const EventListener* listener);
 
@@ -39,10 +39,7 @@ namespace threepp {
         virtual ~EventDispatcher() = default;
 
     private:
-        inline static bool shutdown = false;
-        std::unordered_map<std::string, std::vector<EventListener*>> listeners_;
-
-        friend class GLRenderer;
+        std::unordered_map<std::string, std::vector<std::weak_ptr<EventListener>>> listeners_;
     };
 
 }// namespace threepp
