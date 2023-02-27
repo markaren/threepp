@@ -26,10 +26,11 @@ int main() {
     mesh->rotateZ(math::PI / 2);
     scene->add(mesh);
 
-    auto wireframeMaterial = MeshBasicMaterial::create();
-    wireframeMaterial->wireframe = true;
+    auto wireframeMaterial = LineBasicMaterial::create();
     wireframeMaterial->color *= 0.1f;
-    auto wireframe = Mesh::create(geometry, wireframeMaterial);
+    wireframeMaterial->opacity = 0.25f;
+    wireframeMaterial->transparent = true;
+    auto wireframe = LineSegments::create(WireframeGeometry::create(*geometry), wireframeMaterial);
     mesh->add(wireframe);
 
     auto light = HemisphereLight::create(Color::aliceblue, Color::grey);
