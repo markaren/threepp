@@ -19,7 +19,7 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
     GLsizei bytesPerElement;
     if (attribute->typed<unsigned int>()) {
         type = GL_UNSIGNED_INT;
-        bytesPerElement = sizeof(int);
+        bytesPerElement = sizeof(unsigned int);
         auto attr = attribute->typed<unsigned int>();
         const auto& array = attr->array();
         glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
