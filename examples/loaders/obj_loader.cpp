@@ -20,7 +20,6 @@ int main() {
     TextureLoader tl;
     auto tex = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
     auto obj2 = loader.load("data/models/obj/female02/female02.obj", false);
-    obj2->materials().clear();
     obj2->position.x = 30;
     obj2->traverseType<Mesh>([tex](Mesh& child) {
         auto m = MeshPhongMaterial::create();
