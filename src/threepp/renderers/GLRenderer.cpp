@@ -686,9 +686,6 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
         uniforms.at("directionalLightShadows").setValue(lights.state.directionalShadow);
         uniforms.at("spotLights").setValue(lights.state.spot);
         uniforms.at("spotLightShadows").setValue(lights.state.spotShadow);
-        uniforms.at("rectAreaLights").setValue(lights.state.rectArea);
-        //        uniforms.at("ltc_1").setValue(lights.state.rectAreaLTC1);
-        //        uniforms.at("ltc_2").setValue(lights.state.rectAreaLTC2);
         uniforms.at("pointLights").setValue(lights.state.point);
         uniforms.at("pointLightShadows").setValue(lights.state.pointShadow);
         uniforms.at("hemisphereLights").setValue(lights.state.hemi);

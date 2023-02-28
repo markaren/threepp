@@ -59,13 +59,6 @@ namespace threepp::gl {
                         {"skyColor", Color()},
                         {"groundColor", Color()}};
 
-            } else if (type == "RectAreaLight") {
-
-                uniforms = {
-                        {"color", Color()},
-                        {"position", Vector3()},
-                        {"halfWidth", Vector3()},
-                        {"halfHeight", Vector3()}};
             }
 
             lights[light.id] = std::make_unique<LightUniforms>(uniforms);
@@ -155,7 +148,6 @@ namespace threepp::gl {
             std::vector<LightUniforms*> spotShadow;
             std::vector<std::shared_ptr<Texture>> spotShadowMap;
             std::vector<Matrix4*> spotShadowMatrix;
-            std::vector<LightUniforms*> rectArea;
             std::vector<LightUniforms*> point;
             std::vector<LightUniforms*> pointShadow;
             std::vector<std::shared_ptr<Texture>> pointShadowMap;

@@ -232,7 +232,7 @@ void GLLights::setupView(std::vector<Light*>& lights, Camera* camera) {
     int spotLength = 0;
     int hemiLength = 0;
 
-    const auto viewMatrix = camera->matrixWorldInverse;
+    const auto& viewMatrix = camera->matrixWorldInverse;
 
     for (auto light : lights) {
 
