@@ -14,6 +14,7 @@ std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path&
     auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
 
     auto texture = Texture::create(image);
+    texture->name = path.stem().string();
 
     texture->format = isJPEG ? RGBFormat : RGBAFormat;
     texture->needsUpdate();
