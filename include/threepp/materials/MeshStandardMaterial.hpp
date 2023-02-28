@@ -69,7 +69,7 @@ namespace threepp {
 
             m->roughnessMap = roughnessMap;
 
-            m->metallnessMap = metallnessMap;
+            m->metalnessMap = metalnessMap;
 
             m->alphaMap = alphaMap;
 

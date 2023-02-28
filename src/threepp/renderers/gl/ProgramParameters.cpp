@@ -111,7 +111,7 @@ ProgramParameters::ProgramParameters(
     clearcoatNormalMap = false;   //TODO
     displacementMap = displacementMapMaterial && displacementMapMaterial->displacementMap;
     roughnessMap = roughnessMaterial && roughnessMaterial->roughnessMap;
-    metalnessMap = metallnessMaterial && metallnessMaterial->metallnessMap;
+    metalnessMap = metallnessMaterial && metallnessMaterial->metalnessMap;
     specularMap = specularMapMaterial && specularMapMaterial->specularMap;
     alphaMap = alphaMaterial && alphaMaterial->alphaMap;
 

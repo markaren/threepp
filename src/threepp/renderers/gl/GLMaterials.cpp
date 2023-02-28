@@ -110,8 +110,8 @@ namespace {
             uvScaleMap = bumpMaterial->bumpMap;
         } else if (roughnessMaterial && roughnessMaterial->roughnessMap) {
             uvScaleMap = roughnessMaterial->roughnessMap;
-        } else if (metalnessMaterial && metalnessMaterial->metallnessMap) {
-            uvScaleMap = metalnessMaterial->metallnessMap;
+        } else if (metalnessMaterial && metalnessMaterial->metalnessMap) {
+            uvScaleMap = metalnessMaterial->metalnessMap;
         } else if (alphaMaterial && alphaMaterial->alphaMap) {
             uvScaleMap = alphaMaterial->alphaMap;
         } else if (emissiveMaterial && emissiveMaterial->emissiveMap) {
@@ -197,6 +197,56 @@ namespace {
             uniforms.at("displacementScale").value<float>() = material->displacementScale;
             uniforms.at("displacementBias").value<float>() = material->displacementBias;
         }
+    }
+
+    void refreshUniformsStandard(UniformMap& uniforms, MeshStandardMaterial* material) {
+
+        uniforms.at("roughness").value<float>() = material->roughness;
+        uniforms.at("metalness").value<float>() = material->metalness;
+
+        if (material->roughnessMap) {
+
+            uniforms.at("roughnessMap").setValue(material->roughnessMap);
+
+        }
+
+        if (material->metalnessMap) {
+
+            uniforms.at("metalnessMap").setValue(material->metalnessMap);
+
+        }
+
+        if (material->emissiveMap) {
+
+            uniforms.at("emissiveMap").setValue(material->emissiveMap);
+        }
+
+        if (material->bumpMap) {
+
+            uniforms.at("bumpMap").setValue(material->bumpMap);
+            uniforms.at("bumpScale").setValue(material->bumpScale);
+            if (material->side == BackSide) {
+                uniforms.at("bumpScale").value<float>() *= -1;
+            }
+        }
+
+        if (material->normalMap) {
+
+            uniforms.at("normalMap").setValue(material->normalMap);
+            uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
+            if (material->side == BackSide) {
+                uniforms.at("normalScale").value<Vector2>().negate();
+            }
+        }
+
+        if (material->displacementMap) {
+
+            uniforms.at("displacementMap").setValue(material->displacementMap);
+            uniforms.at("displacementScale").value<float>() = material->displacementScale;
+            uniforms.at("displacementBias").value<float>() = material->displacementBias;
+        }
+
+        // TODO envMap
     }
 
     void refreshUniformsMatcap( UniformMap& uniforms, MeshMatcapMaterial* material ) {
@@ -386,6 +436,7 @@ void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* materi
     if (material->is<MeshBasicMaterial>()) {
 
         refreshUniformsCommon(uniforms, material, properties);
+
     } else if (material->is<MeshLambertMaterial>()) {
 
         auto m = material->as<MeshLambertMaterial>().get();
@@ -403,6 +454,12 @@ void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* materi
         auto m = material->as<MeshPhongMaterial>().get();
         refreshUniformsCommon(uniforms, m, properties);
         refreshUniformsPhong(uniforms, m);
+
+    } else if (material->is<MeshStandardMaterial>()) {
+
+        auto m = material->as<MeshStandardMaterial>().get();
+        refreshUniformsCommon(uniforms, material, properties);
+        refreshUniformsStandard(uniforms, m);
 
     } else if (material->is<MeshMatcapMaterial>()) {
 

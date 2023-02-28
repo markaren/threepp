@@ -176,7 +176,7 @@ namespace threepp {
     struct MaterialWithMetalness: virtual Material {
 
         float metalness;
-        std::shared_ptr<Texture> metallnessMap;
+        std::shared_ptr<Texture> metalnessMap;
 
         explicit MaterialWithMetalness(float metalness): metalness(metalness) {}
     };
