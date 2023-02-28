@@ -57,7 +57,7 @@ namespace threepp::utils {
         }
     }
 
-    // trim from start (in place)
+
     inline std::string trimStart(std::string s) {
         s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
                     return !std::isspace(ch);
@@ -71,7 +71,6 @@ namespace threepp::utils {
                 }));
     }
 
-    // trim from end (in place)
     inline std::string trimEnd(std::string s) {
         s.erase(std::find_if(s.rbegin(), s.rend(), [](unsigned char ch) {
                     return !std::isspace(ch);
