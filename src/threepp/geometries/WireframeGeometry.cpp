@@ -13,7 +13,7 @@ WireframeGeometry::WireframeGeometry(BufferGeometry& geometry) {
 
     // helper variables
 
-    std::pair<int, int> edge;
+    std::pair<unsigned int, unsigned int> edge;
     std::unordered_map<std::string, std::pair<int, int>> edges;
 
     Vector3 vertex;
