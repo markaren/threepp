@@ -12,6 +12,9 @@
 
 #include "threepp/textures/Image.hpp"
 
+#include "threepp/utils/uuid.hpp"
+
+#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>

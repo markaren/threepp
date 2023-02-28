@@ -1,6 +1,7 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
+#include <algorithm>
 
 using namespace threepp;
 

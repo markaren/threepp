@@ -8,7 +8,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "threepp/utils/uuid.hpp"
 
 namespace threepp {
 
