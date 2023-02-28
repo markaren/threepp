@@ -12,7 +12,11 @@ void Texture::updateMatrix() {
 
 void Texture::dispose() {
 
-    this->dispatchEvent("dispose", this);
+    if (!disposed_) {
+        disposed_ = true;
+        this->dispatchEvent("dispose", this);
+    }
+
 }
 
 void Texture::transformUv(Vector2& uv) const {
@@ -128,4 +132,8 @@ Texture& Texture::copy(const Texture& source) {
     this->encoding = source.encoding;
 
     return *this;
+}
+
+Texture::~Texture() {
+    dispose();
 }

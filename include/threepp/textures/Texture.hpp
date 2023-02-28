@@ -81,6 +81,8 @@ namespace threepp {
 
         Texture& copy(const Texture& source);
 
+        ~Texture() override;
+
         static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt) {
 
             return std::shared_ptr<Texture>(new Texture(std::move(image)));
@@ -91,6 +93,7 @@ namespace threepp {
             : image(std::move(image)) {}
 
     private:
+        bool disposed_ = false;
         unsigned int version_ = 0;
 
         inline static unsigned int textureId = 0;
