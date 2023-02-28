@@ -67,6 +67,9 @@ namespace threepp {
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding = LinearEncoding;
 
+        Texture(const Texture&) = delete;
+        Texture operator=(const Texture&) = delete;
+
         std::optional<std::function<void(Texture&)>> onUpdate;
 
         void updateMatrix();

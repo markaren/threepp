@@ -96,26 +96,26 @@ namespace {
         // 12. clearcoat roughnessMap map
 
 
-        std::optional<Texture> uvScaleMap{};
+        std::shared_ptr<Texture> uvScaleMap = nullptr;
 
         if (mapMaterial && mapMaterial->map) {
-            uvScaleMap = *mapMaterial->map;
+            uvScaleMap = mapMaterial->map;
         } else if (specularMaterial && specularMaterial->specularMap) {
-            uvScaleMap = *specularMaterial->specularMap;
+            uvScaleMap = specularMaterial->specularMap;
         } else if (displacementMaterial && displacementMaterial->displacementMap) {
-            uvScaleMap = *displacementMaterial->displacementMap;
+            uvScaleMap = displacementMaterial->displacementMap;
         } else if (normalMaterial && normalMaterial->normalMap) {
-            uvScaleMap = *normalMaterial->normalMap;
+            uvScaleMap = normalMaterial->normalMap;
         } else if (bumpMaterial && bumpMaterial->bumpMap) {
-            uvScaleMap = *bumpMaterial->bumpMap;
+            uvScaleMap = bumpMaterial->bumpMap;
         } else if (roughnessMaterial && roughnessMaterial->roughnessMap) {
-            uvScaleMap = *roughnessMaterial->roughnessMap;
+            uvScaleMap = roughnessMaterial->roughnessMap;
         } else if (metalnessMaterial && metalnessMaterial->metallnessMap) {
-            uvScaleMap = *metalnessMaterial->metallnessMap;
+            uvScaleMap = metalnessMaterial->metallnessMap;
         } else if (alphaMaterial && alphaMaterial->alphaMap) {
-            uvScaleMap = *alphaMaterial->alphaMap;
+            uvScaleMap = alphaMaterial->alphaMap;
         } else if (emissiveMaterial && emissiveMaterial->emissiveMap) {
-            uvScaleMap = *emissiveMaterial->emissiveMap;
+            uvScaleMap = emissiveMaterial->emissiveMap;
         }
         // TODO clearcoat
 
@@ -133,15 +133,15 @@ namespace {
         // 1. ao map
         // 2. light map
 
-        std::optional<Texture> uv2ScaleMap{};
+        std::shared_ptr<Texture> uv2ScaleMap = nullptr;
 
         if (aoMaterial && aoMaterial->aoMap) {
 
-            uv2ScaleMap = *aoMaterial->aoMap;
+            uv2ScaleMap = aoMaterial->aoMap;
 
         } else if (lightMaterial && lightMaterial->lightMap) {
 
-            uv2ScaleMap = *lightMaterial->lightMap;
+            uv2ScaleMap = lightMaterial->lightMap;
         }
 
         if (uv2ScaleMap) {
