@@ -84,6 +84,7 @@ namespace threepp {
             geometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 1}, 3));
 
             this->targetLine = Line::create(geometry, material);
+            this->targetLine->frustumCulled = false;
             this->add(this->targetLine);
 
             this->update();

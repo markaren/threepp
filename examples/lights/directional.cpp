@@ -16,7 +16,7 @@ int main() {
     camera->position.set(-5, 2, -5);
 
     auto light = DirectionalLight::create();
-    light->position.set(150, 75, 150);
+    light->position.set(150, 50, 150);
     light->castShadow = true;
     scene->add(light);
 
@@ -24,8 +24,8 @@ int main() {
     sky->scale.setScalar(1000);
     sky->material()->as<ShaderMaterial>()->uniforms->at("turbidity").value<float>() = 10;
     sky->material()->as<ShaderMaterial>()->uniforms->at("rayleigh").value<float>() = 1;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("mieCoefficient").value<float>() = 0.005;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("mieDirectionalG").value<float>() = 0.8;
+    sky->material()->as<ShaderMaterial>()->uniforms->at("mieCoefficient").value<float>() = 0.005f;
+    sky->material()->as<ShaderMaterial>()->uniforms->at("mieDirectionalG").value<float>() = 0.8f;
     sky->material()->as<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
     scene->add(sky);
 
