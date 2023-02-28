@@ -7,6 +7,13 @@
 
 using namespace threepp;
 
+auto createTennisBallMaterial(TextureLoader& tl) {
+    auto m = MeshPhongMaterial::create();
+    m->map = tl.loadTexture("data/textures/NewTennisBallColor.jpg");
+    m->bumpMap = tl.loadTexture("data/textures/TennisBallBump.jpg");
+    return m;
+}
+
 int main() {
 
     Canvas canvas;
@@ -20,25 +27,26 @@ int main() {
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
+    scene->add(HemisphereLight::create());
+
+    TextureLoader tl;
     const auto boxGeometry = BoxGeometry::create();
-    const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->color = Color::blue;
+    const auto boxMaterial = MeshPhongMaterial::create();
+    boxMaterial->map = tl.loadTexture("data/textures/crate.gif");
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setY(6);
     scene->add(box);
 
     const auto sphereGeometry = SphereGeometry::create(0.5);
-    const auto sphereMaterial = MeshBasicMaterial::create();
-    sphereMaterial->color = Color::gray;
-    sphereMaterial->wireframe = true;
+    const auto sphereMaterial = MeshPhongMaterial::create();
+    sphereMaterial->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.set(0, 5, 0.5);
     scene->add(sphere);
 
     const auto cylinderGeometry = CylinderGeometry::create(0.5, 0.5);
-    const auto cylinderMaterial = MeshBasicMaterial::create();
-    cylinderMaterial->color = Color::gray;
-    cylinderMaterial->wireframe = true;
+    const auto cylinderMaterial = MeshPhongMaterial::create();
+    cylinderMaterial->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
     auto cylinder = Mesh::create(cylinderGeometry, cylinderMaterial);
     cylinder->position.set(0, 5, -0.5);
     cylinder->rotateZ(math::DEG2RAD*45);
@@ -46,8 +54,8 @@ int main() {
 
     const auto planeGeometry = PlaneGeometry::create(20, 20);
     planeGeometry->rotateX(math::DEG2RAD*-90);
-    const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->color = Color::red;
+    const auto planeMaterial = MeshPhongMaterial::create();
+    planeMaterial->map = TextureLoader().loadTexture("data/textures/checker.png");
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     scene->add(plane);
 
@@ -64,11 +72,12 @@ int main() {
     bullet.addRigidbody(RbWrapper::create(cylinderGeometry, 5), *cylinder);
     bullet.addRigidbody(RbWrapper::create(planeGeometry), *plane);
 
+    auto tennisBallMaterial = createTennisBallMaterial(tl);
+
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt){
        if (evt.key == 32) { // space
            auto geom = SphereGeometry::create(0.1);
-           auto mat = MeshBasicMaterial::create();
-           auto mesh = Mesh::create(geom, mat);
+           auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
            mesh->position.copy(camera->position);
            auto rb = RbWrapper::create(geom, 10);
            Vector3 dir;
