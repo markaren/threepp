@@ -5,7 +5,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
     renderer.shadowMap.enabled = true;
 
@@ -18,8 +18,8 @@ int main() {
     auto light1 = PointLight::create(Color::yellow);
     light1->castShadow = true;
     light1->shadow->bias = -0.005;
-    light1->distance = 5;
-    light1->position.y = 2;
+    light1->distance = 8;
+    light1->position.y = 4;
     scene->add(light1);
 
     auto lightHelper1 = PointLightHelper::create(light1, 0.25f);
@@ -28,37 +28,29 @@ int main() {
     auto light2 = PointLight::create(Color::white);
     light2->castShadow = true;
     light2->shadow->bias = -0.005;
-    light2->distance = 5;
-    light2->position.y = 2;
+    light2->distance = 8;
+    light2->position.y = 4;
     scene->add(light2);
 
     auto lightHelper2 = PointLightHelper::create(light2, 0.25f);
     scene->add(lightHelper2);
 
-    auto group = Group::create();
-    scene->add(group);
-
-    const auto boxGeometry = BoxGeometry::create();
-    const auto boxMaterial = MeshLambertMaterial::create();
-    boxMaterial->color.setHex(0xff0000);
-    auto box = Mesh::create(boxGeometry, boxMaterial);
-    box->castShadow = true;
-    box->position.x = -1;
-    group->add(box);
-
-    auto box2 = Mesh::create(boxGeometry, boxMaterial->clone());
-    box2->material()->as<MaterialWithColor>()->color.setHex(0x00ff00);
-    box2->castShadow = true;
-    box2->position.x = 1;
-    group->add(box2);
-
+    const auto geometry = TorusKnotGeometry::create(0.75f, 0.2f, 128, 64);
+    const auto material = MeshStandardMaterial::create();
+    material->roughness = 0.1;
+    material->metalness = 0.1;
+    material->color = 0xff0000;
+    material->emissive = 0x000000;
+    auto mesh = Mesh::create(geometry, material);
+    mesh->castShadow = true;
+    mesh->position.y = 1;
+    scene->add(mesh);
 
     const auto planeGeometry = PlaneGeometry::create(105, 105);
     const auto planeMaterial = MeshPhongMaterial::create();
     planeMaterial->color.setHex(Color::white);
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.y = -1;
     plane->receiveShadow = true;
     plane->rotateX(math::degToRad(-90));
     scene->add(plane);
@@ -70,7 +62,7 @@ int main() {
     });
 
     canvas.animate([&](float t, float dt) {
-        group->rotation.y += 0.5f * dt;
+        mesh->rotation.y += 0.5f * dt;
 
         light1->position.x = 2 * std::sin(t);
         light1->position.z = 7 * std::cos(t);
