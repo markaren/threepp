@@ -17,6 +17,17 @@ namespace threepp {
             return "LineBasicMaterial";
         }
 
+        std::shared_ptr<Material> clone() const override {
+            auto m = create();
+            copyInto(m.get());
+
+            m->color.copy(color);
+
+            m->linewidth = linewidth;
+
+            return m;
+        }
+
         static std::shared_ptr<LineBasicMaterial> create() {
 
             return std::shared_ptr<LineBasicMaterial>(new LineBasicMaterial());

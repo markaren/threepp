@@ -11,6 +11,7 @@ namespace threepp {
     class MeshToonMaterial: public virtual Material,
                             public MaterialWithColor,
                             public MaterialWithMap,
+                            public MaterialWithAlphaMap,
                             public MaterialWithGradientMap,
                             public MaterialWithBumpMap,
                             public MaterialWithNormalMap,
@@ -25,6 +26,45 @@ namespace threepp {
         [[nodiscard]] std::string type() const override {
 
             return "MeshToonMaterial";
+        }
+
+        [[nodiscard]] std::shared_ptr<Material> clone() const override {
+
+            auto m = create();
+            copyInto(m.get());
+
+            m->color.copy(color);
+
+            m->map = map;
+            m->gradientMap = gradientMap;
+
+            m->lightMap = lightMap;
+            m->lightMapIntensity = lightMapIntensity;
+
+            m->aoMap = aoMap;
+            m->aoMapIntensity = aoMapIntensity;
+
+            m->emissive.copy(emissive);
+            m->emissiveMap = emissiveMap;
+            m->emissiveIntensity = emissiveIntensity;
+
+            m->bumpMap = bumpMap;
+            m->bumpScale = bumpScale;
+
+            m->normalMap = normalMap;
+            m->normalMapType = normalMapType;
+            m->normalScale.copy(normalScale);
+
+            m->displacementMap = displacementMap;
+            m->displacementScale = displacementScale;
+            m->displacementBias = displacementBias;
+
+            m->alphaMap = alphaMap;
+
+            m->wireframe = wireframe;
+            m->wireframeLinewidth = wireframeLinewidth;
+
+            return m;
         }
 
         static std::shared_ptr<MeshToonMaterial> create() {

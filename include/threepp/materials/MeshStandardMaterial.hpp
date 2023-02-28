@@ -9,6 +9,7 @@
 namespace threepp {
 
     class MeshStandardMaterial: public virtual Material,
+                                public MaterialWithMap,
                                 public MaterialWithColor,
                                 public MaterialWithRoughness,
                                 public MaterialWithMetalness,
@@ -22,12 +23,69 @@ namespace threepp {
                                 public MaterialWithDisplacementMap,
                                 public MaterialWithWireframe,
                                 public MaterialWithFlatShading,
+                                public MaterialWithVertexTangents,
+                                public MaterialWithReflectivityRatio,
                                 public MaterialWithDefines {
 
     public:
         [[nodiscard]] std::string type() const override {
 
             return "MeshStandardMaterial";
+        }
+
+        [[nodiscard]] std::shared_ptr<Material> clone() const override {
+
+            auto m = create();
+            copyInto(m.get());
+
+            m->defines["STANDARD"] = "";
+
+            m->color.copy(color);
+            m->roughness = roughness;
+            m->metalness = metalness;
+
+            m->map = map;
+
+            m->lightMap = lightMap;
+            m->lightMapIntensity = lightMapIntensity;
+
+            m->aoMap = aoMap;
+            m->aoMapIntensity = aoMapIntensity;
+
+            m->emissive.copy(emissive);
+            m->emissiveMap = emissiveMap;
+            m->emissiveIntensity = emissiveIntensity;
+
+            m->bumpMap = bumpMap;
+            m->bumpScale = bumpScale;
+
+            m->normalMap = normalMap;
+            m->normalMapType = normalMapType;
+            m->normalScale.copy(normalScale);
+
+            m->displacementMap = displacementMap;
+            m->displacementScale = displacementScale;
+            m->displacementBias = displacementBias;
+
+            m->roughnessMap = roughnessMap;
+
+            m->metallnessMap = metallnessMap;
+
+            m->alphaMap = alphaMap;
+
+            m->envMap = envMap;
+            m->envMapIntensity = envMapIntensity;
+
+            m->refractionRatio = refractionRatio;
+
+            m->wireframe = wireframe;
+            m->wireframeLinewidth = wireframeLinewidth;
+
+            m->flatShading = flatShading;
+
+            m->vertexTangents = vertexTangents;
+
+            return m;
         }
 
         static std::shared_ptr<MeshStandardMaterial> create() {
@@ -47,7 +105,9 @@ namespace threepp {
               MaterialWithBumpMap(1),
               MaterialWithEnvMap(1.f),
               MaterialWithDisplacementMap(1, 0),
+              MaterialWithReflectivityRatio(0.98),
               MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
+              MaterialWithVertexTangents(false),
               MaterialWithFlatShading(false) {
 
             defines["STANDARD"] = "";

@@ -68,12 +68,18 @@ namespace threepp {
         MaterialWithSpecular(Color specular, float shininess): specular(specular), shininess(shininess) {}
     };
 
-    struct MaterialWithReflectivity: virtual Material {
+    struct MaterialWithReflectivityRatio: virtual Material {
 
-        float reflectivity;
         float refractionRatio;
 
-        MaterialWithReflectivity(float reflectivity, float refractionRatio): reflectivity(reflectivity), refractionRatio(refractionRatio) {}
+        MaterialWithReflectivityRatio(float refractionRatio): refractionRatio(refractionRatio) {}
+    };
+
+    struct MaterialWithReflectivity: virtual Material, public MaterialWithReflectivityRatio {
+
+        float reflectivity;
+
+        MaterialWithReflectivity(float reflectivity, float refractionRatio): MaterialWithReflectivityRatio(refractionRatio), reflectivity(reflectivity) {}
     };
 
     struct MaterialWithWireframe: virtual Material {

@@ -22,6 +22,22 @@ namespace threepp {
             return "PointsMaterial";
         }
 
+        std::shared_ptr<Material> clone() const override {
+            auto m = create();
+            copyInto(m.get());
+
+            m->color.copy(color);
+
+            m->map = map;
+
+            m->alphaMap = alphaMap;
+
+            m->size = size;
+            m->sizeAttenuation = sizeAttenuation;
+
+            return m;
+        }
+
         static std::shared_ptr<PointsMaterial> create() {
 
             return std::shared_ptr<PointsMaterial>(new PointsMaterial());
