@@ -284,8 +284,9 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool t
 
     if (!exists(path)) return nullptr;
 
-    if (cache_.count(path.string())) {
-        return cache_[path.string()];
+    if (useCache && cache_.count(path.string())) {
+
+        return std::dynamic_pointer_cast<Group>(cache_[path.string()]->clone());
     }
 
     std::ifstream in(path);
@@ -307,7 +308,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool t
 
         if (lineLength == 0) continue;
 
-        auto& lineFirstChar = line.front();
+        auto lineFirstChar = line.front();
 
         if (lineFirstChar == '#') continue;
 
@@ -412,7 +413,7 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool t
 
             if (line == "\\0") continue;
 
-            throw std::runtime_error("Unexpected line: " + line);
+            throw std::runtime_error("[OBJLoader] Unexpected line: " + line);
         }
     }
 
@@ -529,6 +530,8 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool t
 
         container->add(mesh);
     }
+
+    if (useCache) cache_[path.string()] = container;
 
     return container;
 }

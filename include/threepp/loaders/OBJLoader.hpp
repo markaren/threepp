@@ -13,6 +13,7 @@ namespace threepp {
     class OBJLoader {
 
     public:
+        bool useCache = true;
         std::optional<MaterialCreator> materials;
 
         std::shared_ptr<Group> load(const std::filesystem::path& path, bool tryLoadMtl = true);
