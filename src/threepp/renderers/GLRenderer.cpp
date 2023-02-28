@@ -974,7 +974,6 @@ void GLRenderer::markUniformsLightsNeedsUpdate(UniformMap& uniforms, bool value)
     uniforms.at("pointLightShadows").needsUpdate = value;
     uniforms.at("spotLights").needsUpdate = value;
     uniforms.at("spotLightShadows").needsUpdate = value;
-    uniforms.at("rectAreaLights").needsUpdate = value;
     uniforms.at("hemisphereLights").needsUpdate = value;
 }
 
