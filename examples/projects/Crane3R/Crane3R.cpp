@@ -10,7 +10,7 @@ using namespace threepp;
 
 namespace {
 
-    std::shared_ptr<Group> make_house_attachment(int i, float len, const Vector3 &p) {
+    std::shared_ptr<Group> make_house_attachment(int i, float len, const Vector3& p) {
 
         auto material = MeshPhongMaterial::create();
         material->color = threepp::Color::gray;
@@ -34,7 +34,7 @@ namespace {
         return group;
     }
 
-    std::shared_ptr<Group> make_rod_attachment(int i, float len, const Vector3 &p) {
+    std::shared_ptr<Group> make_rod_attachment(int i, float len, const Vector3& p) {
 
         auto material = threepp::MeshPhongMaterial::create();
         material->color = threepp::Color::grey;
@@ -58,9 +58,9 @@ namespace {
         return group;
     }
 
-    void updateCylinders(std::array<std::pair<threepp::Object3D *, threepp::Object3D *>, 2> cylinders) {
+    void updateCylinders(std::array<std::pair<threepp::Object3D*, threepp::Object3D*>, 2> cylinders) {
         Vector3 tmp;
-        for (const auto &cylinder : cylinders) {
+        for (const auto& cylinder : cylinders) {
 
             auto house = cylinder.first;
             auto rod = cylinder.second;
@@ -72,7 +72,7 @@ namespace {
 
 }// namespace
 
-Crane3R::Crane3R(const std::shared_ptr<threepp::Group> &obj) {
+Crane3R::Crane3R(const std::shared_ptr<threepp::Group>& obj) {
 
     parts_[0] = obj->getObjectByName("part1");
     parts_[1] = obj->getObjectByName("part2");
@@ -138,7 +138,7 @@ std::vector<Angle> Crane3R::getValues() const {
     return angles;
 }
 
-void Crane3R::setTargetValues(const std::vector<Angle> &values) {
+void Crane3R::setTargetValues(const std::vector<Angle>& values) {
 
     if (controllerEnabled) {
         controller_->setTargetValues(values);
@@ -147,7 +147,6 @@ void Crane3R::setTargetValues(const std::vector<Angle> &values) {
         parts_[1]->rotation.y = values[1].inRadians();
         parts_[2]->rotation.y = values[2].inRadians();
     }
-
 }
 
 void Crane3R::update(float dt) {
@@ -159,20 +158,20 @@ void Crane3R::update(float dt) {
     }
 }
 
-Crane3R::Controller::Controller(const Crane3R &c) {
+Crane3R::Controller::Controller(const Crane3R& c) {
     actuators_[0] = std::make_unique<Object3DActuator>(c.parts_[0], Object3DActuator::Axis::Z, 1 * math::DEG2RAD, std::make_pair<float, float>(-90.f, 90.f));
     actuators_[1] = std::make_unique<Object3DActuator>(c.parts_[1], Object3DActuator::Axis::Y, 1 * math::DEG2RAD, std::make_pair<float, float>(-80.f, 0.f));
     actuators_[2] = std::make_unique<Object3DActuator>(c.parts_[2], Object3DActuator::Axis::Y, 1 * math::DEG2RAD, std::make_pair<float, float>(-140.f, 40.f));
 }
 
-void Crane3R::Controller::setGains(const std::vector<float> &values) {
+void Crane3R::Controller::setGains(const std::vector<float>& values) {
     mode_ = DIRECT;
     for (unsigned i = 0; i < actuators_.size(); ++i) {
         actuators_[i]->setGain(values[i]);
     }
 }
 
-void Crane3R::Controller::setTargetValues(const std::vector<Angle> &values) {
+void Crane3R::Controller::setTargetValues(const std::vector<Angle>& values) {
     mode_ = POSITION;
     for (unsigned i = 0; i < 3; ++i) {
         targetValues[i] = values[i].inRadians();
@@ -183,8 +182,8 @@ void Crane3R::Controller::update(float dt) {
 
     if (mode_ == POSITION) {
         for (unsigned i = 0; i < 3; ++i) {
-            auto &pid = pids_[i];
-            auto &act = actuators_[i];
+            auto& pid = pids_[i];
+            auto& act = actuators_[i];
             auto v = pid.regulate(targetValues[i], act->getProcessOutput(), dt);
             act->setGain(v);
         }
@@ -194,7 +193,7 @@ void Crane3R::Controller::update(float dt) {
         }
     }
 
-    for (auto &actuator : actuators_) {
+    for (auto& actuator : actuators_) {
         actuator->update();
     }
 }

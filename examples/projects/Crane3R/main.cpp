@@ -9,12 +9,12 @@ using namespace threepp;
 #ifdef HAS_IMGUI
 #include "threepp/extras/imgui/imgui_context.hpp"
 
-#include "Kine.hpp"
-#include "ik/CCDSolver.hpp"
+#include "kine/Kine.hpp"
+#include "kine/ik/CCDSolver.hpp"
 
 using namespace kine;
 
-struct MyUI : imgui_context {
+struct MyUI: imgui_context {
 
     bool mouseHover = false;
     bool jointMode = true;
@@ -25,7 +25,7 @@ struct MyUI : imgui_context {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit MyUI(const Canvas &canvas, Kine &kine)
+    explicit MyUI(const Canvas& canvas, Kine& kine)
         : imgui_context(canvas.window_ptr()),
           limits(kine.limits()),
           values(kine.meanAngles()) {

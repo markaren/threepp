@@ -5,16 +5,15 @@
 #include "threepp/objects/Group.hpp"
 
 #include "Actuator.hpp"
-#include "Angle.hpp"
+#include "utility/Angle.hpp"
 
 #include <array>
 #include <utility>
 
 
-class Crane3R : public threepp::Group {
+class Crane3R: public threepp::Group {
 
 public:
-
     bool controllerEnabled = false;
 
     [[nodiscard]] std::vector<Angle> getValues() const;
@@ -26,7 +25,6 @@ public:
     static std::shared_ptr<Crane3R> create();
 
 private:
-
     class Controller {
     public:
         enum ControlMode {
@@ -38,13 +36,12 @@ private:
 
         void update(float dt);
 
-        void setGains(const std::vector<float> &values);
+        void setGains(const std::vector<float>& values);
 
-        void setTargetValues(const std::vector<Angle> &values);
+        void setTargetValues(const std::vector<Angle>& values);
 
 
     private:
-
         ControlMode mode_{DIRECT};
 
         std::array<PID, 3> pids_{};
@@ -53,12 +50,10 @@ private:
     };
 
     std::unique_ptr<Controller> controller_;
-    std::array<threepp::Object3D *, 3> parts_{};
-    std::array<std::pair<threepp::Object3D *, threepp::Object3D *>, 2> cylinders_{};
+    std::array<threepp::Object3D*, 3> parts_{};
+    std::array<std::pair<threepp::Object3D*, threepp::Object3D*>, 2> cylinders_{};
 
-    explicit Crane3R(const std::shared_ptr<threepp::Group> &obj);
-
-
+    explicit Crane3R(const std::shared_ptr<threepp::Group>& obj);
 };
 
 

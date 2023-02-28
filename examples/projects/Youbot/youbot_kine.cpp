@@ -1,9 +1,9 @@
 
 #include "threepp/threepp.hpp"
 
-#include "Kine.hpp"
+#include "kine/Kine.hpp"
 #include "Youbot.hpp"
-#include "ik/CCDSolver.hpp"
+#include "kine/ik/CCDSolver.hpp"
 
 #include <thread>
 

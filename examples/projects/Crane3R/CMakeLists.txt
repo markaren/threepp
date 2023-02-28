@@ -1,7 +1,7 @@
 
 add_executable(Crane3R main.cpp Crane3R.cpp)
-target_link_libraries(Crane3R PRIVATE threepp kine)
-target_include_directories(Crane3R PRIVATE "${CMAKE_SOURCE_DIR}/examples/utility")
+target_link_libraries(Crane3R PRIVATE threepp)
+target_include_directories(Crane3R PRIVATE "${CMAKE_SOURCE_DIR}/examples/libs")
 if (UNIX)
     target_link_libraries(Crane3R PRIVATE pthread)
 endif()

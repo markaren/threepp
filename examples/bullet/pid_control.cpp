@@ -3,7 +3,7 @@
 #include "threepp/extras/imgui/imgui_context.hpp"
 #include "threepp/threepp.hpp"
 
-#include "PID.hpp"
+#include "utility/PID.hpp"
 
 #ifdef HAS_MATPLOTLIB
 #include "matplotlibcpp.h"
@@ -50,15 +50,15 @@ struct ControllableOptions {
     float targetAngle;
     float maxMotorVelocity;
 
-    PID &pid;
+    PID& pid;
 
-    explicit ControllableOptions(PID &pid, float targetAngle = 0, float maxMotorVelocity = 5) : targetAngle(targetAngle), maxMotorVelocity(maxMotorVelocity), pid(pid) {}
+    explicit ControllableOptions(PID& pid, float targetAngle = 0, float maxMotorVelocity = 5): targetAngle(targetAngle), maxMotorVelocity(maxMotorVelocity), pid(pid) {}
 };
 
 
-struct MyUI : imgui_context {
+struct MyUI: imgui_context {
 
-    explicit MyUI(const Canvas &canvas, ControllableOptions &opt)
+    explicit MyUI(const Canvas& canvas, ControllableOptions& opt)
         : imgui_context(canvas.window_ptr()), opt(opt) {}
 
     void onRender() override {
@@ -87,7 +87,7 @@ struct MyUI : imgui_context {
     }
 
 private:
-    ControllableOptions &opt;
+    ControllableOptions& opt;
     std::vector<float> errors;
 };
 
