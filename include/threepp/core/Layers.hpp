@@ -40,7 +40,7 @@ namespace threepp {
             this->mask_ = 0;
         }
 
-        bool test(Layers& layers) const {
+        [[nodiscard]] bool test(const Layers& layers) const {
 
             return (this->mask_ & layers.mask_) != 0;
         }
