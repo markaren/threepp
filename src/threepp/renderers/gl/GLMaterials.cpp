@@ -366,8 +366,46 @@ namespace {
 
         uniforms.at("diffuse").value<Color>().copy(material->color);
         uniforms.at("opacity").value<float>() = material->opacity;
-        uniforms.at("size").value<float>() = material->size * (float) pixelRatio;
+        uniforms.at("size").value<float>() = material->size * static_cast<float>(pixelRatio);
         uniforms.at("scale").value<float>() = height * 0.5f;
+
+        if (material->map) {
+
+            uniforms.at("map").setValue(material->map);
+
+        }
+
+        if (material->alphaMap) {
+
+            uniforms.at("alphaMap").setValue(material->alphaMap);
+
+        }
+
+        // uv repeat and offset setting priorities
+        // 1. color map
+        // 2. alpha map
+
+        std::shared_ptr<Texture> uvScaleMap = nullptr;
+
+        if (material->map) {
+
+            uvScaleMap = material->map;
+
+        } else if (material->alphaMap) {
+
+            uvScaleMap = material->alphaMap;
+        }
+
+        if (uvScaleMap) {
+
+            if (uvScaleMap->matrixAutoUpdate) {
+
+                uvScaleMap->updateMatrix();
+            }
+
+            uniforms.at("uvTransform").value<Matrix3>().copy(uvScaleMap->matrix);
+        }
+
     }
 
     void refreshUniformsSprites(UniformMap& uniforms, SpriteMaterial* material) {
@@ -485,7 +523,8 @@ void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* materi
 
     } else if (material->is<PointsMaterial>()) {
 
-        refreshUniformsPoints(uniforms, material->as<PointsMaterial>().get(), pixelRatio, static_cast<float>(height));
+        auto m = material->as<PointsMaterial>().get();
+        refreshUniformsPoints(uniforms, m, pixelRatio, static_cast<float>(height));
 
     } else if (material->is<SpriteMaterial>()) {
 
