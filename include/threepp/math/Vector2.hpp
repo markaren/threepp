@@ -118,6 +118,11 @@ namespace threepp {
 
         Vector2& lerpVectors(const Vector2& v1, const Vector2& v2, float alpha);
 
+        [[nodiscard]] bool isNan() const {
+
+            return std::isnan(x) || std::isnan(y);
+        }
+
         [[nodiscard]] Vector2 clone() const;
 
         [[nodiscard]] bool equals(const Vector2& v) const;

@@ -56,7 +56,7 @@ namespace threepp {
         //	- t [0 .. 1]
         virtual void getPoint(float t, T& target) = 0;
 
-        void getPointAt(float u, T& target) {
+        virtual void getPointAt(float u, T& target) {
 
             const auto t = this->getUtoTmapping(u);
             return this->getPoint(t, target);
@@ -64,13 +64,13 @@ namespace threepp {
 
         // Get sequence of points using getPoint( t )
 
-        std::vector<T> getPoints(int divisions = 5) {
+        virtual std::vector<T> getPoints(unsigned int divisions = 5) {
 
             std::vector<T> points;
 
-            for (int d = 0; d <= divisions; d++) {
+            for (unsigned d = 0; d <= divisions; d++) {
                 T& point = points.emplace_back();
-                this->getPoint(static_cast<float>(d) / static_cast<float>(divisions));
+                this->getPoint(static_cast<float>(d) / static_cast<float>(divisions), point);
             }
 
             return points;
@@ -78,21 +78,21 @@ namespace threepp {
 
         // Get sequence of points using getPointAt( u )
 
-        std::vector<T> getSpacedPoints(int divisions = 5) {
+        virtual std::vector<T> getSpacedPoints(unsigned int divisions = 5) {
 
             std::vector<T> points;
 
-            for (int d = 0; d <= divisions; d++) {
+            for (unsigned d = 0; d <= divisions; d++) {
 
                 T& point = points.emplace_back();
-                this->getPointAt(static_cast<float>(d) / static_cast<float>(divisions));
+                this->getPointAt(static_cast<float>(d) / static_cast<float>(divisions), point);
             }
 
             return points;
         }
 
         // Get total curve arc length
-        float getLength() {
+        virtual float getLength() {
 
             const auto lengths = this->getLengths();
             return lengths[lengths.size() - 1];
@@ -134,7 +134,7 @@ namespace threepp {
             return cache;
         }
 
-        void updateArcLengths() {
+        virtual void updateArcLengths() {
 
             this->needsUpdate = true;
             this->getLengths();
@@ -217,7 +217,7 @@ namespace threepp {
         // 2 points a small delta apart will be used to find its gradient
         // which seems to give a reasonable approximation
 
-        void getTangent(float t, T& tangent) {
+        virtual void getTangent(float t, T& tangent) {
 
             const float delta = 0.0001f;
             float t1 = t - delta;
@@ -300,7 +300,7 @@ namespace threepp {
 
             // compute the slowly-varying normal and binormal vectors for each segment on the curve
 
-            for (int i = 1; i <= segments; i++) {
+            for (unsigned i = 1; i <= segments; i++) {
 
                 normals.emplace_back(normals[i - 1].clone());
 
@@ -355,7 +355,7 @@ namespace threepp {
             std::vector<T> binormals;
         };
 
-    private:
+    protected:
         std::vector<float> cacheArcLengths;
     };
 

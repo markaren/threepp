@@ -31,7 +31,11 @@ set(publicHeaders
 
         "threepp/extras/bullet/BulletWrapper.hpp"
         "threepp/extras/core/Curve.hpp"
+        "threepp/extras/core/CurvePath.hpp"
+        "threepp/extras/core/Path.hpp"
         "threepp/extras/curve/CatmullRomCurve3.hpp"
+        "threepp/extras/curve/EllipseCurve.hpp"
+        "threepp/extras/curve/LineCurve.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
 
         "threepp/input/KeyListener.hpp"
@@ -39,6 +43,7 @@ set(publicHeaders
 
         "threepp/geometries/geometries.hpp"
         "threepp/geometries/BoxGeometry.hpp"
+        "threepp/geometries/CapsuleGeometry.hpp"
         "threepp/geometries/CircleGeometry.hpp"
         "threepp/geometries/ConeGeometry.hpp"
         "threepp/geometries/CylinderGeometry.hpp"
@@ -201,6 +206,7 @@ set(sources
         "threepp/core/Raycaster.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
+        "threepp/geometries/CapsuleGeometry.cpp"
         "threepp/geometries/CircleGeometry.cpp"
         "threepp/geometries/CylinderGeometry.cpp"
         "threepp/geometries/DecalGeometry.cpp"
