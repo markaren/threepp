@@ -4,8 +4,6 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 
-#include <algorithm>
-#include <iostream>
 #include <string>
 
 using namespace threepp;
@@ -310,4 +308,9 @@ Vector2 Vector2::clone() const {
 bool Vector2::equals(const Vector2& v) const {
 
     return ((v.x == this->x) && (v.y == this->y));
+}
+
+bool Vector2::isNan() const {
+
+    return std::isnan(x) || std::isnan(y);
 }
