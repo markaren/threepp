@@ -27,32 +27,44 @@ namespace threepp {
                 convert(threepp::Vector3().setFromMatrixPosition(m))};
     }
 
-    std::unique_ptr<btCollisionShape> fromGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+    std::unique_ptr<btCollisionShape> fromGeometry(const BufferGeometry* geometry) {
 
         if (!geometry) {
             return std::make_unique<btEmptyShape>();
         }
 
-        if (std::dynamic_pointer_cast<const BoxGeometry>(geometry)) {
+        if (dynamic_cast<const BoxGeometry*>(geometry)) {
 
-            auto g = std::dynamic_pointer_cast<const BoxGeometry>(geometry);
+            auto g = dynamic_cast<const BoxGeometry*>(geometry);
             return std::make_unique<btBoxShape>(btVector3(g->width, g->height, g->depth) / 2);
 
-        } else if (std::dynamic_pointer_cast<const PlaneGeometry>(geometry)) {
+        } else if (dynamic_cast<const PlaneGeometry*>(geometry)) {
 
-            auto g = std::dynamic_pointer_cast<const PlaneGeometry>(geometry);
+            auto g = dynamic_cast<const PlaneGeometry*>(geometry);
             return std::make_unique<btBoxShape>(btVector3(g->width / 2, 0.1f, g->height / 2));
 
-        } else if (std::dynamic_pointer_cast<const SphereGeometry>(geometry)) {
+        } else if (dynamic_cast<const SphereGeometry*>(geometry)) {
 
-            auto g = std::dynamic_pointer_cast<const SphereGeometry>(geometry);
+            auto g = dynamic_cast<const SphereGeometry*>(geometry);
             return std::make_unique<btSphereShape>(g->radius);
 
-        } else if (std::dynamic_pointer_cast<const CylinderGeometry>(geometry)) {
+        } else if (dynamic_cast<const ConeGeometry*>(geometry)) {
 
-            auto g = std::dynamic_pointer_cast<const CylinderGeometry>(geometry);
+            auto g = dynamic_cast<const ConeGeometry*>(geometry);
+            return std::make_unique<btConeShape>(g->radiusBottom, g->height);
+
+        } else if (dynamic_cast<const CylinderGeometry*>(geometry)) {
+
+            auto g = dynamic_cast<const CylinderGeometry*>(geometry);
             return std::make_unique<btCylinderShape>(btVector3(g->radiusTop, g->height / 2, g->radiusTop));
+
+        } else if (dynamic_cast<const CapsuleGeometry*>(geometry)) {
+
+            auto g = dynamic_cast<const CapsuleGeometry*>(geometry);
+            return std::make_unique<btCapsuleShape>(g->radius, g->length);
+
         } else {
+
             return std::make_unique<btEmptyShape>();
         }
     }
@@ -63,12 +75,12 @@ namespace threepp {
         std::unique_ptr<btMotionState> state;
         std::unique_ptr<btRigidBody> body;
 
-        static std::shared_ptr<RbWrapper> create(const std::shared_ptr<BufferGeometry>& shape, float mass = 0) {
+        static std::shared_ptr<RbWrapper> create(const BufferGeometry* shape, float mass = 0) {
             return std::shared_ptr<RbWrapper>(new RbWrapper(shape, mass));
         }
 
     private:
-        RbWrapper(const std::shared_ptr<BufferGeometry>& shape, float mass)
+        RbWrapper(const BufferGeometry* shape, float mass)
             : shape(fromGeometry(shape)),
               state(std::make_unique<btDefaultMotionState>()) {
 
