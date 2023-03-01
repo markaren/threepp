@@ -1,5 +1,5 @@
 
-#include "threepp/extras/bullet/BulletWrapper.hpp"
+#include "threepp/extras/physics/BulletPhysics.hpp"
 #include "threepp/extras/imgui/imgui_context.hpp"
 #include "threepp/threepp.hpp"
 
@@ -27,7 +27,7 @@ std::shared_ptr<Object3D> createTarget() {
     return target;
 }
 
-std::shared_ptr<Object3D> createObject() {
+std::shared_ptr<Mesh> createObject() {
 
     auto cylinderGeometry = CylinderGeometry::create(0.5, 0.5, 0.1);
     cylinderGeometry->rotateX(math::DEG2RAD * 90);
@@ -113,14 +113,11 @@ int main() {
         renderer.setSize(size);
     });
 
-
-    BulletWrapper engine;
-
-    auto rb = RbWrapper::create(nullptr, 10);
-    engine.addRigidbody(rb, *controllable);
+    BulletPhysics bullet;
+    auto rb = bullet.addMesh(*controllable, 10, true);
     btHingeConstraint c(*rb->body, btVector3(0, 0, 0), btVector3(0, 0, 1));
     c.enableAngularMotor(true, 0, 1.f);
-    engine.addConstraint(&c);
+    bullet.addConstraint(&c);
 
     PID pid(1, 0.001f, 0.1f);
     pid.setWindupGuard(0.1f);
@@ -154,7 +151,7 @@ int main() {
 #endif
 
     canvas.animate([&](float dt) {
-        engine.step(dt);
+        bullet.step(dt);
 
         float out = pid.regulate(opt.targetAngle * math::DEG2RAD, c.getHingeAngle(), dt);
         c.setMotorTargetVelocity(out * opt.maxMotorVelocity);
