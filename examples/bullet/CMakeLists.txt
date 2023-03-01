@@ -2,8 +2,11 @@
 add_executable(hello_bullet hello_bullet.cpp)
 target_link_libraries(hello_bullet PRIVATE threepp Bullet::Bullet)
 
-add_executable(hello_bullet2 hello_bullet2.cpp)
-target_link_libraries(hello_bullet2 PRIVATE threepp Bullet::Bullet)
+add_executable(bullet_demo bullet_demo.cpp)
+target_link_libraries(bullet_demo PRIVATE threepp Bullet::Bullet)
+
+add_executable(instanced_physics instanced_physics.cpp)
+target_link_libraries(instanced_physics PRIVATE threepp Bullet::Bullet)
 
 if (imgui_FOUND)
     add_executable(pid_control pid_control.cpp)

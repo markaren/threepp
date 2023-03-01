@@ -14,7 +14,7 @@ namespace threepp {
     class InstancedMesh: public Mesh {
 
     public:
-        int count;
+        const int count;
         std::unique_ptr<FloatBufferAttribute> instanceMatrix;
         std::unique_ptr<FloatBufferAttribute> instanceColor = nullptr;
 
@@ -33,15 +33,15 @@ namespace threepp {
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
-                int count) {
+                unsigned int count) {
 
             return std::shared_ptr<InstancedMesh>(new InstancedMesh(std::move(geometry), std::move(material), count));
         }
 
 
     protected:
-        InstancedMesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, int count)
-            : Mesh(std::move(geometry), std::move(material)), count(count), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
+        InstancedMesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, unsigned int count)
+            : Mesh(std::move(geometry), std::move(material)), count(static_cast<int>(count)), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
 
             this->frustumCulled = false;
         }
