@@ -52,11 +52,27 @@ namespace {
     }
 
     auto createPlane(TextureLoader& tl) {
-        const auto planeGeometry = PlaneGeometry::create(20, 20);
-        planeGeometry->rotateX(math::DEG2RAD * -90);
-        const auto planeMaterial = MeshPhongMaterial::create();
-        planeMaterial->map = tl.loadTexture("data/textures/checker.png");
-        return Mesh::create(planeGeometry, planeMaterial);
+        const auto geometry = PlaneGeometry::create(20, 20);
+        geometry->rotateX(math::DEG2RAD * -90);
+        const auto material = MeshPhongMaterial::create();
+        material->map = tl.loadTexture("data/textures/checker.png");
+        return Mesh::create(geometry, material);
+    }
+
+    auto createTriangleMesh(TextureLoader& tl) {
+        STLLoader loader;
+        const auto geometry = loader.load("data/models/stl/pr2_head_pan.stl");
+        geometry->scale(5, 5, 5);
+        const auto material = MeshPhongMaterial::create();
+        material->color = Color::brown;
+        material->flatShading = true;
+        auto m = Mesh::create(geometry, material);
+        auto wire = LineSegments::create(WireframeGeometry::create(*geometry));
+        wire->material()->as<LineBasicMaterial>()->color = 0x000000;
+        wire->material()->as<LineBasicMaterial>()->transparent = true;
+        wire->material()->as<LineBasicMaterial>()->opacity = 0.5f;
+        m->add(wire);
+        return m;
     }
 
 }// namespace
@@ -83,6 +99,7 @@ int main() {
     auto cone = createCone(tl);
     auto capsule = createCapsule(tl);
     auto plane = createPlane(tl);
+    auto trimesh = createTriangleMesh(tl);
 
     box->position.set(0, 4, 0);
     sphere->position.set(0, 5, 0.5);
@@ -91,6 +108,7 @@ int main() {
     cone->position.set(0, 4, 0);
     capsule->position.set(0, 6, 1);
     capsule->rotateZ(math::DEG2RAD * -45);
+    trimesh->position.set(1, 3, -2);
 
     scene->add(box);
     scene->add(sphere);
@@ -98,6 +116,7 @@ int main() {
     scene->add(cone);
     scene->add(capsule);
     scene->add(plane);
+    scene->add(trimesh);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -107,12 +126,13 @@ int main() {
 
     BulletPhysics bullet;
 
-    bullet.addMesh(*box, 2);
-    bullet.addMesh(*sphere, 2);
-    bullet.addMesh(*cylinder, 2);
-    bullet.addMesh(*capsule, 2);
-    bullet.addMesh(*cone, 2);
+    bullet.addMesh(*box, 5);
+    bullet.addMesh(*sphere, 3);
+    bullet.addMesh(*cylinder, 4);
+    bullet.addMesh(*capsule, 8);
+    bullet.addMesh(*cone, 3);
     bullet.addMesh(*plane);
+    bullet.addMesh(*trimesh, 10);
 
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 

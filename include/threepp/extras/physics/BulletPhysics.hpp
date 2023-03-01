@@ -74,6 +74,20 @@ namespace threepp {
                 shape->setMargin(0.05f);
 
                 return shape;
+            } else {
+
+                if (geometry->hasAttribute("position")) {
+
+                    auto& array = geometry->getAttribute<float>("position")->array();
+                    auto shape = std::make_unique<btConvexHullShape>();
+                    for (unsigned i = 0; i < array.size(); i += 3) {
+
+                        auto lastOne = (i >= (array.size() - 3));
+                        shape->addPoint(btVector3{array[i], array[i + 1], array[i + 2]}, lastOne);
+                    }
+
+                    return shape;
+                }
             }
 
             return nullptr;
@@ -258,7 +272,6 @@ namespace threepp {
         }
 
     private:
-
         // NB! The order of the fields matter!
 
         std::map<Mesh*, std::unique_ptr<RigidBodyConstructionInfo>> meshMap;
@@ -314,7 +327,6 @@ namespace threepp {
 
         std::shared_ptr<MeshRemovedListener> onMeshRemovedListener;
         std::shared_ptr<InstancedMeshRemovedListener> onInstancedMeshRemovedListener;
-
     };
 
 }// namespace threepp
