@@ -10,6 +10,9 @@ namespace threepp {
 
     public:
 
+        const float radius;
+        const float length;
+
         static std::shared_ptr<CapsuleGeometry> create(float radius = 0.5f, float length = 1, unsigned int capSegments = 8, unsigned int radialSegments = 16) {
 
             return std::shared_ptr<CapsuleGeometry>(new CapsuleGeometry(radius, length, capSegments, radialSegments));

@@ -20,5 +20,5 @@ namespace {
 }// namespace
 
 CapsuleGeometry::CapsuleGeometry(float radius, float length, unsigned int capSegments, unsigned int radialSegments)
-    : LatheGeometry(generatePoints(radius, length, capSegments), radialSegments) {
+    : LatheGeometry(generatePoints(radius, length, capSegments), radialSegments), radius(radius), length(length) {
 }
