@@ -14,6 +14,11 @@ namespace threepp {
         const float radiusBottom;
         const float height;
 
+        [[nodiscard]] std::string type() const override {
+
+            return "CylinderGeometry";
+        }
+
         static std::shared_ptr<CylinderGeometry> create(
                 float radiusTop = 1,
                 float radiusBottom = 1,

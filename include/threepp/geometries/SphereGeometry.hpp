@@ -16,6 +16,11 @@ namespace threepp {
     public:
         const float radius;
 
+        [[nodiscard]] std::string type() const override {
+
+            return "SphereGeometry";
+        }
+
         static std::shared_ptr<SphereGeometry> create(
                 float radius = 1,
                 unsigned int widthSegments = 8,

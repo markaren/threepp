@@ -9,6 +9,11 @@ namespace threepp {
     class RingGeometry: public BufferGeometry {
 
     public:
+        [[nodiscard]] std::string type() const override {
+
+            return "RingGeometry";
+        }
+
         static std::shared_ptr<RingGeometry> create(
                 float innerRadius = 0.5f,
                 float outerRadius = 1,

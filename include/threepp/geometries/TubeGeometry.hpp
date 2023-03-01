@@ -14,8 +14,13 @@ namespace threepp {
     class TubeGeometry: public BufferGeometry {
 
     public:
-        std::shared_ptr<Curve3> path;
-        float radius;
+        const std::shared_ptr<Curve3> path;
+        const float radius;
+
+        [[nodiscard]] std::string type() const override {
+
+            return "TubeGeometry";
+        }
 
         static std::shared_ptr<TubeGeometry> create(
                 const std::shared_ptr<Curve3>& path,

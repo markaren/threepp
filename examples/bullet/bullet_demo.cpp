@@ -1,7 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "threepp/extras/bullet/BulletWrapper.hpp"
+#include "threepp/extras/physics/BulletPhysics.hpp"
 
 #include <sstream>
 
@@ -63,8 +63,6 @@ namespace {
 
 int main() {
 
-    std::cerr << "Warning: This Demo uses a depreacted API. See the others demos instead" << std::endl;
-
     Canvas canvas(Canvas::Parameters().antialiasing(4));
 
     auto scene = Scene::create();
@@ -107,14 +105,14 @@ int main() {
         renderer.setSize(size);
     });
 
-    BulletWrapper bullet(Vector3::Y * -9.81f);
+    BulletPhysics bullet;
 
-    bullet.addRigidbody(RbWrapper::create(box->geometry(), 2), *box);
-    bullet.addRigidbody(RbWrapper::create(sphere->geometry(), 2), *sphere);
-    bullet.addRigidbody(RbWrapper::create(cylinder->geometry(), 5), *cylinder);
-    bullet.addRigidbody(RbWrapper::create(cone->geometry(), 5), *cone);
-    bullet.addRigidbody(RbWrapper::create(capsule->geometry(), 3), *capsule);
-    bullet.addRigidbody(RbWrapper::create(plane->geometry()), *plane);
+    bullet.addMesh(*box, 2);
+    bullet.addMesh(*sphere, 2);
+    bullet.addMesh(*cylinder, 2);
+    bullet.addMesh(*capsule, 2);
+    bullet.addMesh(*cone, 2);
+    bullet.addMesh(*plane);
 
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
@@ -123,17 +121,14 @@ int main() {
             auto geom = SphereGeometry::create(0.1);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
             mesh->position.copy(camera->position);
-            auto rb = RbWrapper::create(geom.get(), 2);
+            mesh->rotation.set(math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI));
             Vector3 dir;
             camera->getWorldDirection(dir);
-            rb->body->setLinearVelocity(convert(dir * 10));
-            bullet.addRigidbody(rb, *mesh);
+            bullet.addMesh(*mesh, 1);
+            bullet.get(*mesh)->body->setLinearVelocity(tobtVector(dir * 10));
             scene->add(mesh);
 
-            canvas.invokeLater([mesh] {
-                mesh->removeFromParent();
-            },
-                               2);
+            canvas.invokeLater([mesh] { mesh->removeFromParent(); }, 2);
         }
     });
     canvas.addKeyListener(&keyListener);

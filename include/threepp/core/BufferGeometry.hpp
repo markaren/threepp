@@ -37,6 +37,11 @@ namespace threepp {
 
         BufferGeometry() = default;
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "BufferGeometry";
+        }
+
         [[nodiscard]] bool hasIndex() const;
 
         IntBufferAttribute* getIndex();

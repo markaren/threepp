@@ -10,6 +10,12 @@ namespace threepp {
     class CircleGeometry: public BufferGeometry {
 
     public:
+
+        [[nodiscard]] std::string type() const override {
+
+            return "CircleGeometry";
+        }
+
         static std::shared_ptr<CircleGeometry> create(
                 float radius = 1,
                 unsigned int segments = 8,

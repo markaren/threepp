@@ -14,9 +14,11 @@ namespace threepp {
         const float width;
         const float height;
         const float depth;
-        const unsigned int widthSegments;
-        const unsigned int heightSegments;
-        const unsigned int depthSegments;
+
+        [[nodiscard]] std::string type() const override {
+
+            return "BoxGeometry";
+        }
 
         static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1, unsigned int depthSegments = 1) {
             return std::shared_ptr<BoxGeometry>(new BoxGeometry(width, height, depth, widthSegments, heightSegments, depthSegments));

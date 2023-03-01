@@ -17,14 +17,14 @@ namespace {
         std::list<float> normals;
         std::list<float> uvs;
 
-        explicit Helper(BoxGeometry& g) {
+        explicit Helper(BoxGeometry& g, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments) {
 
-            buildPlane(g, 2, 1, 0, -1, -1, g.depth, g.height, g.width, g.depthSegments, g.heightSegments, 0); // px
-            buildPlane(g, 2, 1, 0, 1, -1, g.depth, g.height, -g.width, g.depthSegments, g.heightSegments, 1); // nx
-            buildPlane(g, 0, 2, 1, 1, 1, g.width, g.depth, g.height, g.widthSegments, g.depthSegments, 2);    // py
-            buildPlane(g, 0, 2, 1, 1, -1, g.width, g.depth, -g.height, g.widthSegments, g.depthSegments, 3);  // ny
-            buildPlane(g, 0, 1, 2, 1, -1, g.width, g.height, g.depth, g.widthSegments, g.heightSegments, 4);  // pz
-            buildPlane(g, 0, 1, 2, -1, -1, g.width, g.height, -g.depth, g.widthSegments, g.heightSegments, 5);// nz
+            buildPlane(g, 2, 1, 0, -1, -1, g.depth, g.height, g.width, depthSegments, heightSegments, 0); // px
+            buildPlane(g, 2, 1, 0, 1, -1, g.depth, g.height, -g.width, depthSegments, heightSegments, 1); // nx
+            buildPlane(g, 0, 2, 1, 1, 1, g.width, g.depth, g.height, widthSegments, depthSegments, 2);    // py
+            buildPlane(g, 0, 2, 1, 1, -1, g.width, g.depth, -g.height, widthSegments, depthSegments, 3);  // ny
+            buildPlane(g, 0, 1, 2, 1, -1, g.width, g.height, g.depth, widthSegments, heightSegments, 4);  // pz
+            buildPlane(g, 0, 1, 2, -1, -1, g.width, g.height, -g.depth, widthSegments, heightSegments, 5);// nz
         }
 
         void buildPlane(BoxGeometry& g, int u, int v, int w, float udir, float vdir, float width, float height, float depth, unsigned int gridX, unsigned int gridY, int materialIndex) {
@@ -128,9 +128,9 @@ namespace {
 }// namespace
 
 BoxGeometry::BoxGeometry(float width, float height, float depth, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments)
-    : width(width), height(height), depth(depth), widthSegments(widthSegments), heightSegments(heightSegments), depthSegments(depthSegments) {
+    : width(width), height(height), depth(depth) {
 
-    Helper h(*this);
+    Helper h(*this, widthSegments, heightSegments, depthSegments);
     this->setIndex(h.indices);
     this->setAttribute("position", FloatBufferAttribute::create(h.vertices, 3));
     this->setAttribute("normal", FloatBufferAttribute::create(h.normals, 3));

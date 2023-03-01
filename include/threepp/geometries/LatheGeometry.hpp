@@ -10,6 +10,11 @@ namespace threepp {
     class LatheGeometry: public BufferGeometry {
 
     public:
+        [[nodiscard]] std::string type() const override {
+
+            return "LatheGeometry";
+        }
+
         template<class ArrayLike>
         static std::shared_ptr<LatheGeometry> create(const ArrayLike& points, unsigned int segments = 12, float phiStart = 0, float phiLength = math::TWO_PI) {
 
@@ -18,7 +23,7 @@ namespace threepp {
         }
 
     protected:
-        LatheGeometry(const std::vector<Vector2>& points, unsigned int segments = 12, float phiStart = 0, float phiLength = math::TWO_PI);
+        explicit LatheGeometry(const std::vector<Vector2>& points, unsigned int segments = 12, float phiStart = 0, float phiLength = math::TWO_PI);
 
     };
 
