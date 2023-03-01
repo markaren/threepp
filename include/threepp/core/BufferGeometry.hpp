@@ -101,6 +101,8 @@ namespace threepp {
 
         void normalizeNormals();
 
+        void computeVertexNormals();
+
         void dispose();
 
         void copy(const BufferGeometry& source);
@@ -116,7 +118,7 @@ namespace threepp {
             return std::make_shared<BufferGeometry>();
         }
 
-        virtual ~BufferGeometry() {
+        ~BufferGeometry() override {
             dispose();
         };
 
