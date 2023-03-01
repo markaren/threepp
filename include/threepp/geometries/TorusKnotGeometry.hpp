@@ -10,6 +10,11 @@ namespace threepp {
     class TorusKnotGeometry: public BufferGeometry {
 
     public:
+        [[nodiscard]] std::string type() const override {
+
+            return "TorusKnotGeometry";
+        }
+
         static std::shared_ptr<TorusKnotGeometry> create(
                 float radius = 1,
                 float tube = 0.4f,

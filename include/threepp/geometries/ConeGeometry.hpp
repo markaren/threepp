@@ -12,6 +12,11 @@ namespace threepp {
     class ConeGeometry: public CylinderGeometry {
 
     public:
+        [[nodiscard]] std::string type() const override {
+
+            return "ConeGeometry";
+        }
+
         static std::shared_ptr<ConeGeometry> create(
                 float radius = 1,
                 float height = 1,

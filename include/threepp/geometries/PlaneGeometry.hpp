@@ -15,6 +15,11 @@ namespace threepp {
 
         PlaneGeometry(const PlaneGeometry&) = delete;
 
+        [[nodiscard]] std::string type() const override {
+
+            return "PlaneGeometry";
+        }
+
         static std::shared_ptr<PlaneGeometry> create(
                 float width = 1,
                 float height = 1,
