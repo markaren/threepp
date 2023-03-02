@@ -74,6 +74,11 @@ namespace threepp {
 
         Object3D();
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "Object3D";
+        }
+
         void applyMatrix4(const Matrix4& matrix);
 
         Object3D& applyQuaternion(const Quaternion& q);

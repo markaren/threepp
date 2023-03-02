@@ -16,6 +16,11 @@ namespace threepp {
 
     public:
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "Mesh";
+        }
+
         BufferGeometry* geometry() override {
 
             return geometry_.get();

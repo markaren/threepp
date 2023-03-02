@@ -38,6 +38,12 @@ namespace threepp {
         Camera* camera;
         Layers layers{};
 
+        struct Params {
+            float lineThreshold = 1;
+            float pointsThreshold = 1;
+        };
+        Params params;
+
         explicit Raycaster(const Vector3& origin = Vector3(), const Vector3& direction = Vector3(), float near = 0, float far = std::numeric_limits<float>::infinity())
             : near(near), far(far), ray(origin, direction), camera(nullptr) {}
 

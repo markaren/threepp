@@ -10,6 +10,11 @@ namespace threepp {
 
     public:
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "Group";
+        }
+
         std::shared_ptr<Object3D> clone(bool recursive = true) override {
             auto clone = create();
             clone->copy(*this, recursive);

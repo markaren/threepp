@@ -24,6 +24,11 @@ namespace threepp {
     public:
         bool autoUpdate = true;
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "LOD";
+        }
+
         LOD& addLevel(const std::shared_ptr<Object3D>& object, float distance = 0) {
 
             distance = std::abs(distance);

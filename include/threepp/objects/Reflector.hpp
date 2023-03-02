@@ -22,6 +22,11 @@ namespace threepp {
             std::optional<Shader> shader;
         };
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "Reflector";
+        }
+
         static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options()) {
 
             return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));

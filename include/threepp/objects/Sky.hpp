@@ -23,6 +23,12 @@ namespace threepp {
     class Sky: public Mesh {
 
     public:
+
+        [[nodiscard]] virtual std::string type() const {
+
+            return "Sky";
+        }
+
         static std::shared_ptr<Sky> create() {
             return std::shared_ptr<Sky>(new Sky());
         }

@@ -18,6 +18,11 @@ namespace threepp {
         std::unique_ptr<FloatBufferAttribute> instanceMatrix;
         std::unique_ptr<FloatBufferAttribute> instanceColor = nullptr;
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "InstancedMesh";
+        }
+
         void getColorAt(size_t index, Color& color) const;
 
         void getMatrixAt(size_t index, Matrix4& matrix) const;

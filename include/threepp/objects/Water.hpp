@@ -29,6 +29,11 @@ namespace threepp {
             std::optional<bool> fog;
         };
 
+        [[nodiscard]] virtual std::string type() const {
+
+            return "Water";
+        }
+
         static std::shared_ptr<Water> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options()) {
 
             return std::shared_ptr<Water>(new Water(geometry, std::move(options)));

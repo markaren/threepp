@@ -12,6 +12,12 @@ namespace threepp {
     class Points: public Object3D {
 
     public:
+
+        [[nodiscard]] virtual std::string type() const {
+
+            return "Points";
+        }
+
         BufferGeometry* geometry() override {
 
             return geometry_.get();

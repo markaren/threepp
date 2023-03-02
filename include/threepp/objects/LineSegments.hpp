@@ -10,6 +10,12 @@ namespace threepp {
     class LineSegments: public Line {
 
     public:
+
+        [[nodiscard]] virtual std::string type() const {
+
+            return "LineSegments";
+        }
+
         void computeLineDistances() override {
 
             // we assume non-indexed geometry
