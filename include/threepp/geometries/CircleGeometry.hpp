@@ -18,7 +18,7 @@ namespace threepp {
 
         static std::shared_ptr<CircleGeometry> create(
                 float radius = 1,
-                unsigned int segments = 8,
+                unsigned int segments = 16,
                 float thetaStart = 0,
                 float thetaLength = math::TWO_PI) {
 

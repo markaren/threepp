@@ -20,7 +20,7 @@ namespace threepp {
         static std::shared_ptr<ConeGeometry> create(
                 float radius = 1,
                 float height = 1,
-                unsigned int radialSegments = 8,
+                unsigned int radialSegments = 16,
                 unsigned int heightSegments = 1,
                 bool openEnded = false,
                 float thetaStart = 0,
