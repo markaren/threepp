@@ -27,7 +27,7 @@ namespace threepp {
                 convert(threepp::Vector3().setFromMatrixPosition(m))};
     }
 
-    std::unique_ptr<btCollisionShape> fromGeometry(const BufferGeometry* geometry) {
+    inline std::unique_ptr<btCollisionShape> fromGeometry(const BufferGeometry* geometry) {
 
         if (!geometry) {
             return std::make_unique<btEmptyShape>();
