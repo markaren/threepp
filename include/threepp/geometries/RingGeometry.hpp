@@ -17,8 +17,8 @@ namespace threepp {
         static std::shared_ptr<RingGeometry> create(
                 float innerRadius = 0.5f,
                 float outerRadius = 1,
-                unsigned int thetaSegments = 8,
-                unsigned int phiSegments = 1,
+                unsigned int thetaSegments = 16,
+                unsigned int phiSegments = 2,
                 float thetaStart = 0,
                 float thetaLength = math::TWO_PI) {
 

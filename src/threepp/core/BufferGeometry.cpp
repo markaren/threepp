@@ -38,7 +38,7 @@ bool BufferGeometry::hasAttribute(const std::string& name) const {
     return attributes_.count(name);
 }
 
-void BufferGeometry::addGroup(int start, int count, int materialIndex) {
+void BufferGeometry::addGroup(int start, int count, unsigned int materialIndex) {
 
     groups.emplace_back(GeometryGroup{start, count, materialIndex});
 }

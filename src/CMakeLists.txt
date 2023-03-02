@@ -130,6 +130,7 @@ set(publicHeaders
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
+        "threepp/utils/BufferGeometryUtils.hpp"
         "threepp/utils/uuid.hpp"
 
         "threepp/lights/lights.hpp"
@@ -263,6 +264,7 @@ set(sources
 
         "threepp/textures/Texture.cpp"
 
+        "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/uuid.cpp"
 
         "threepp/renderers/TextHandle.cpp"

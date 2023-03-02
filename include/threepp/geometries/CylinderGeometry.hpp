@@ -23,7 +23,7 @@ namespace threepp {
                 float radiusTop = 1,
                 float radiusBottom = 1,
                 float height = 1,
-                unsigned int radialSegments = 8,
+                unsigned int radialSegments = 16,
                 unsigned int heightSegments = 1,
                 bool openEnded = false,
                 float thetaStart = 0,

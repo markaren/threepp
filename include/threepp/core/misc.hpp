@@ -8,7 +8,7 @@ namespace threepp {
 
         int start{};
         int count{};
-        int materialIndex{};
+        unsigned int materialIndex{};
     };
 
     struct UpdateRange {

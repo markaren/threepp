@@ -23,8 +23,8 @@ namespace threepp {
 
         static std::shared_ptr<SphereGeometry> create(
                 float radius = 1,
-                unsigned int widthSegments = 8,
-                unsigned int heightSegments = 6,
+                unsigned int widthSegments = 16,
+                unsigned int heightSegments = 12,
                 float phiStart = 0,
                 float phiLength = math::TWO_PI,
                 float thetaStart = 0,

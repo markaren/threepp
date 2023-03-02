@@ -17,7 +17,21 @@ namespace {
     }
 
     auto createSpheres(TextureLoader& tl, unsigned int count) {
-        const auto geometry = SphereGeometry::create(0.25, 32, 32);
+        const auto geometry = SphereGeometry::create(0.25f);
+        const auto material = MeshPhongMaterial::create();
+        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        return InstancedMesh::create(geometry, material, count);
+    }
+
+    auto createCapsules(TextureLoader& tl, unsigned int count) {
+        const auto geometry = CapsuleGeometry::create(0.25f, 0.5f);
+        const auto material = MeshPhongMaterial::create();
+        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        return InstancedMesh::create(geometry, material, count);
+    }
+
+    auto createBoxes(TextureLoader& tl, unsigned int count) {
+        const auto geometry = BoxGeometry::create(0.5f, 0.5f, 0.5f);
         const auto material = MeshPhongMaterial::create();
         material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
         return InstancedMesh::create(geometry, material, count);
@@ -26,9 +40,37 @@ namespace {
     auto createPlane(TextureLoader& tl) {
         const auto planeGeometry = PlaneGeometry::create(100, 100);
         planeGeometry->rotateX(math::DEG2RAD * -90);
+        planeGeometry->translate(0, 0.1f, 0);
         const auto planeMaterial = MeshPhongMaterial::create();
-        planeMaterial->map = tl.loadTexture("data/textures/checker.png");
+        planeMaterial->color = Color::gray;
         return Mesh::create(planeGeometry, planeMaterial);
+    }
+
+    inline Vector3 randomPosition() {
+        return {math::randomInRange(-5.f, 5.f), math::randomInRange(5.f, 15.f), math::randomInRange(-5.f, 5.f)};
+    }
+
+    void initPositions(InstancedMesh& m) {
+        Matrix4 matrix;
+        for (unsigned i = 0; i < m.count; i++) {
+
+            matrix.setPosition(randomPosition());
+            m.setMatrixAt(i, matrix);
+        }
+    }
+
+    auto createShadowLight() {
+        auto shadowLight = DirectionalLight::create();
+        shadowLight->position.set(100, 100, 100);
+        shadowLight->castShadow = true;
+        shadowLight->shadow->radius = 1;
+        shadowLight->shadow->camera->as<OrthographicCamera>()->top = 100;
+        shadowLight->shadow->camera->as<OrthographicCamera>()->bottom = -100;
+        shadowLight->shadow->camera->as<OrthographicCamera>()->left = 100;
+        shadowLight->shadow->camera->as<OrthographicCamera>()->right = -100;
+        shadowLight->shadow->camera->as<OrthographicCamera>()->right = -100;
+        shadowLight->shadow->mapSize.multiplyScalar(10);
+        return shadowLight;
     }
 
 }// namespace
@@ -37,6 +79,8 @@ int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = PCFSoftShadowMap;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
@@ -45,21 +89,30 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    scene->add(HemisphereLight::create());
+    scene->add(AmbientLight::create(0xffffff, 0.1f));
+    scene->add(createShadowLight());
 
     TextureLoader tl;
-    auto spheres = createSpheres(tl, 1500);
+    unsigned int count = 250;
+    auto spheres = createSpheres(tl, count);
     spheres->instanceMatrix->setUsage(DynamicDrawUsage);
+    spheres->castShadow = true;
+    auto capsules = createCapsules(tl, count);
+    capsules->instanceMatrix->setUsage(DynamicDrawUsage);
+    capsules->castShadow = true;
+    auto boxes = createBoxes(tl, count);
+    boxes->instanceMatrix->setUsage(DynamicDrawUsage);
+    boxes->castShadow = true;
     auto plane = createPlane(tl);
+    plane->receiveShadow = true;
 
-    Matrix4 matrix;
-    for (unsigned i = 0; i < spheres->count; i++) {
-
-        matrix.setPosition( math::randomInRange(-10.f, 10.f), math::randomInRange(5.f, 20.f) , math::randomInRange(-10.f, 10.f));
-        spheres->setMatrixAt(i, matrix);
-    }
+    initPositions(*spheres);
+    initPositions(*capsules);
+    initPositions(*boxes);
 
     scene->add(spheres);
+    scene->add(capsules);
+    scene->add(boxes);
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -71,14 +124,18 @@ int main() {
     BulletPhysics bullet;
 
     bullet.addMesh(*spheres, 2);
+    bullet.addMesh(*capsules, 2);
+    bullet.addMesh(*boxes, 2);
     bullet.addMesh(*plane);
 
+    auto tennisBallGeom = SphereGeometry::create(0.1);
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
         if (evt.key == 32) {// space
-            auto geom = SphereGeometry::create(0.1);
-            auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
+
+            auto mesh = Mesh::create(tennisBallGeom, tennisBallMaterial);
+            mesh->castShadow = true;
             mesh->position.copy(camera->position);
             mesh->rotation.set(math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI));
             Vector3 dir;
@@ -88,6 +145,14 @@ int main() {
             scene->add(mesh);
 
             canvas.invokeLater([mesh] { mesh->removeFromParent(); }, 2);
+        } else if (evt.key == 82) {// r
+
+            for (unsigned i = 0; i < count; i++) {
+
+                bullet.setInstancedMeshPosition(*spheres, randomPosition(), i);
+                bullet.setInstancedMeshPosition(*capsules, randomPosition(), i);
+                bullet.setInstancedMeshPosition(*boxes, randomPosition(), i);
+            }
         }
     });
     canvas.addKeyListener(&keyListener);

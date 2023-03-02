@@ -26,7 +26,7 @@ namespace threepp {
                 const std::shared_ptr<Curve3>& path,
                 unsigned int tubularSegments = 64,
                 float radius = 1,
-                unsigned int radialSegments = 8,
+                unsigned int radialSegments = 16,
                 bool closed = false) {
 
             return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, tubularSegments, radius, radialSegments, closed));

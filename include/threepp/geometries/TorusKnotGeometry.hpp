@@ -19,7 +19,7 @@ namespace threepp {
                 float radius = 1,
                 float tube = 0.4f,
                 unsigned int tubularSegments = 64,
-                unsigned int radialSegments = 8,
+                unsigned int radialSegments = 16,
                 unsigned int p = 2,
                 unsigned int q = 3) {
 

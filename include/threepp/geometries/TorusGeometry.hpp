@@ -18,8 +18,8 @@ namespace threepp {
         static std::shared_ptr<TorusGeometry> create(
                 float radius = 1,
                 float tube = 0.4f,
-                unsigned int radialSegments = 10,
-                unsigned int tubularSegments = 32,
+                unsigned int radialSegments = 20,
+                unsigned int tubularSegments = 64,
                 float arc = math::TWO_PI) {
 
             return std::shared_ptr<TorusGeometry>(new TorusGeometry(radius, tube, radialSegments, tubularSegments, arc));

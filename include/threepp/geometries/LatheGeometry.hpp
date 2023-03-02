@@ -16,7 +16,7 @@ namespace threepp {
         }
 
         template<class ArrayLike>
-        static std::shared_ptr<LatheGeometry> create(const ArrayLike& points, unsigned int segments = 12, float phiStart = 0, float phiLength = math::TWO_PI) {
+        static std::shared_ptr<LatheGeometry> create(const ArrayLike& points, unsigned int segments = 24, float phiStart = 0, float phiLength = math::TWO_PI) {
 
             return std::shared_ptr<LatheGeometry>(new LatheGeometry({points.begin(), points.end()}, segments, phiStart, phiLength));
 
