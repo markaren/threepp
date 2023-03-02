@@ -114,7 +114,8 @@ int main() {
     });
 
     BulletPhysics bullet;
-    auto rb = bullet.addMesh(*controllable, 10, true);
+    bullet.addMesh(*controllable, 10, true);
+    auto rb = bullet.get(*controllable);
     btHingeConstraint c(*rb->body, btVector3(0, 0, 0), btVector3(0, 0, 1));
     c.enableAngularMotor(true, 0, 1.f);
     bullet.addConstraint(&c);
