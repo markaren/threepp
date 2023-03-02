@@ -140,5 +140,5 @@ as a library a separate project using vcpkg.
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
 ![Shadows](doc/screenshots/Shadows.png)
 ![Crane](doc/screenshots/crane.png)
-![Shadows](doc/screenshots/instanced_physics.png)
+![Physics](doc/screenshots/instanced_physics.png)
 ![Water](doc/screenshots/OlympicOctopus.PNG)
