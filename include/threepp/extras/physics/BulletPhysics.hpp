@@ -1,3 +1,4 @@
+// https://github.com/mrdoob/three.js/blob/r150/examples/jsm/physics/AmmoPhysics.js
 
 #ifndef THREEPP_BULLETPHYSICS_HPP
 #define THREEPP_BULLETPHYSICS_HPP
@@ -226,6 +227,37 @@ namespace threepp {
             }
 
             mesh->addEventListener("remove", onInstancedMeshRemovedListener);
+        }
+
+        void setMeshPosition(Mesh& mesh, const Vector3& position, unsigned int index = 0) {
+
+            if (!meshMap.count(&mesh)) return;
+
+            auto& body = meshMap.at(&mesh);
+
+            body->body->setAngularVelocity(btVector3(0, 0, 0));
+            body->body->setLinearVelocity(btVector3(0, 0, 0));
+
+            worldTransform.setIdentity();
+            worldTransform.setOrigin(btVector3(position.x, position.y, position.z));
+            body->body->setWorldTransform(worldTransform);
+            body->body->activate(true);
+        }
+
+        void setInstancedMeshPosition(InstancedMesh& mesh, const Vector3& position, unsigned int index = 0) {
+
+            if (!instancedMeshMap.count(&mesh)) return;
+
+            auto& bodies = instancedMeshMap.at(&mesh);
+            auto& body = bodies[index];
+
+            body->body->setAngularVelocity(btVector3(0, 0, 0));
+            body->body->setLinearVelocity(btVector3(0, 0, 0));
+
+            worldTransform.setIdentity();
+            worldTransform.setOrigin(btVector3(position.x, position.y, position.z));
+            body->body->setWorldTransform(worldTransform);
+            body->body->activate(true);
         }
 
         void addConstraint(btTypedConstraint* c, bool disableCollisionsBetweenLinkedBodies = false) {
