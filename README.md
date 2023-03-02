@@ -137,7 +137,8 @@ See [here](tests/threepp_vcpkg_test) for an example of how `threepp` may be cons
 as a library a separate project using vcpkg.
 
 ### Screenshots
-
-![Crane](doc/screenshots/crane.png)
-![Water](doc/screenshots/OlympicOctopus.PNG)
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
+![Shadows](doc/screenshots/Shadows.png)
+![Crane](doc/screenshots/crane.png)
+![Shadows](doc/screenshots/instanced_physics.png)
+![Water](doc/screenshots/OlympicOctopus.PNG)
