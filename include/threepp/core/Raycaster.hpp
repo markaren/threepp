@@ -21,6 +21,7 @@ namespace threepp {
         Vector3 point;
         Object3D* object;
 
+        std::optional<int> index;
         std::optional<int> faceIndex;
         std::optional<Vector2> uv;
         std::optional<Vector2> uv2;
@@ -36,7 +37,7 @@ namespace threepp {
 
         Ray ray;
         Camera* camera;
-        Layers layers{};
+        Layers layers;
 
         struct Params {
             float lineThreshold = 1;

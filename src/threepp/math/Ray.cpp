@@ -8,6 +8,20 @@
 
 using namespace threepp;
 
+namespace {
+
+    Vector3 _vector;
+
+    Vector3 _segCenter;
+    Vector3 _segDir;
+    Vector3 _diff;
+
+    Vector3 _edge1;
+    Vector3 _edge2;
+    Vector3 _normal;
+
+}
+
 Ray::Ray(Vector3 origin, Vector3 direction): origin(origin), direction(direction) {}
 
 Ray& Ray::set(const Vector3& origin, const Vector3& direction) {
@@ -68,9 +82,7 @@ float Ray::distanceToPoint(const Vector3& point) const {
 
 float Ray::distanceSqToPoint(const Vector3& point) const {
 
-    Vector3 _vector3;
-
-    const auto directionDistance = _vector3.subVectors(point, this->origin).dot(this->direction);
+    const auto directionDistance = _vector.subVectors(point, this->origin).dot(this->direction);
 
     // point behind the ray
 
@@ -79,13 +91,13 @@ float Ray::distanceSqToPoint(const Vector3& point) const {
         return this->origin.distanceToSquared(point);
     }
 
-    Vector3 _vector{};
+
     _vector.copy(this->direction).multiplyScalar(directionDistance).add(this->origin);
 
     return _vector.distanceToSquared(point);
 }
 
-float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1) const {
+float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1, Vector3* optionalPointOnRay, Vector3* optionalPointOnSegment) const {
 
     // from http://www.geometrictools.com/GTEngine/Include/Mathematics/GteDistRaySegment.h
     // It returns the min distance between the ray and the segment
@@ -93,10 +105,6 @@ float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1) const {
     // It can also set two optional targets :
     // - The closest point on the ray
     // - The closest point on the segment
-
-    Vector3 _segCenter{};
-    Vector3 _segDir{};
-    Vector3 _diff{};
 
     _segCenter.copy(v0).add(v1).addScalar(0.5f);
     _segDir.copy(v1).sub(v0).normalize();
@@ -187,12 +195,20 @@ float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1) const {
         sqrDist = -s0 * s0 + s1 * (s1 + 2 * b1) + c;
     }
 
+    if (optionalPointOnRay) {
+
+        optionalPointOnRay->copy(this->direction).multiplyScalar(s0).add(this->origin);
+    }
+
+    if (optionalPointOnSegment) {
+
+        optionalPointOnSegment->copy(_segDir).multiplyScalar(s1).add(_segCenter);
+    }
+
     return sqrDist;
 }
 
 void Ray::intersectSphere(const Sphere& sphere, Vector3& target) const {
-
-    Vector3 _vector{};
 
     _vector.subVectors(sphere.center, this->origin);
     const auto tca = _vector.dot(this->direction);
@@ -374,7 +390,6 @@ void Ray::intersectBox(const Box3& box, Vector3& target) const {
 
 bool Ray::intersectsBox(const Box3& box) const {
 
-    Vector3 _vector;
     this->intersectBox(box, _vector);
 
     return std::isnan(_vector.x);
@@ -385,10 +400,6 @@ std::optional<Vector3> Ray::intersectTriangle(const Vector3& a, const Vector3& b
     // Compute the offset origin, edges, and normal.
 
     // from http://www.geometrictools.com/GTEngine/Include/Mathematics/GteIntrRay3Triangle3.h
-
-    Vector3 _edge1{};
-    Vector3 _edge2{};
-    Vector3 _normal{};
 
     _edge1.subVectors(b, a);
     _edge2.subVectors(c, a);
@@ -422,7 +433,6 @@ std::optional<Vector3> Ray::intersectTriangle(const Vector3& a, const Vector3& b
         return std::nullopt;
     }
 
-    Vector3 _diff{};
     _diff.subVectors(this->origin, a);
     const float DdQxE2 = sign * this->direction.dot(_edge2.crossVectors(_diff, _edge2));
 

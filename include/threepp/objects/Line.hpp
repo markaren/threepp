@@ -39,7 +39,9 @@ namespace threepp {
 
         virtual void computeLineDistances();
 
-        std::shared_ptr<Object3D> clone(bool recursive = false) override {
+        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+
+        std::shared_ptr<Object3D> clone(bool recursive = true) override {
             auto clone = create(geometry_, material_);
             clone->copy(*this, recursive);
 

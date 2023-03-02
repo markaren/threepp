@@ -194,7 +194,7 @@ void BufferGeometry::computeBoundingBox() {
 
     if (this->attributes_.count("position") != 0) {
 
-        const auto position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
+        const auto position = this->attributes_.at("position")->typed<float>();
 
         position->setFromBufferAttribute(*this->boundingBox);
 
@@ -218,16 +218,14 @@ void BufferGeometry::computeBoundingSphere() {
 
     if (this->attributes_.count("position")) {
 
-        const auto& position = dynamic_cast<TypedBufferAttribute<float>*>(this->attributes_.at("position").get());
+        const auto& position = this->attributes_.at("position")->typed<float>();
 
         // first, find the center of the bounding sphere
 
-        auto center = this->boundingSphere->center;
+        auto& center = this->boundingSphere->center;
 
-        Box3 _box{};
+        Box3 _box;
         position->setFromBufferAttribute(_box);
-
-        // process morph attributes if present
 
         _box.getCenter(center);
 
@@ -238,7 +236,7 @@ void BufferGeometry::computeBoundingSphere() {
 
         for (unsigned i = 0, il = position->count(); i < il; i++) {
 
-            Vector3 _vector{};
+            Vector3 _vector;
             position->setFromBufferAttribute(_vector, i);
 
             maxRadiusSq = std::max(maxRadiusSq, center.distanceToSquared(_vector));

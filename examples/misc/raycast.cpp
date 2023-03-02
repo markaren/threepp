@@ -61,21 +61,19 @@ int main() {
 
     Raycaster raycaster;
     canvas.animate([&](float dt) {
-
         raycaster.setFromCamera(mouse, camera);
 
         sphere->visible = false;
         auto intersects = raycaster.intersectObjects(scene->children);
 
         if (!intersects.empty()) {
-            auto &intersect = intersects.front();
+            auto& intersect = intersects.front();
 
             sphere->position.copy(intersect.point);
             if (intersect.face) {
                 sphere->position += (intersect.face.value().normal * sphereRadius);
             }
             sphere->visible = true;
-
         }
 
         renderer.render(scene, camera);

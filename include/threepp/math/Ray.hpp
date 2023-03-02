@@ -37,7 +37,7 @@ namespace threepp {
 
         [[nodiscard]] float distanceSqToPoint(const Vector3& point) const;
 
-        [[nodiscard]] float distanceSqToSegment(const Vector3& v0, const Vector3& v1) const;
+        [[nodiscard]] float distanceSqToSegment(const Vector3& v0, const Vector3& v1, Vector3* optionalPointOnRay = nullptr, Vector3* optionalPointOnSegment = nullptr) const;
 
         void intersectSphere(const Sphere& sphere, Vector3& target) const;
 
