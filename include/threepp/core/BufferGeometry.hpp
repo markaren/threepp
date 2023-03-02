@@ -76,9 +76,9 @@ namespace threepp {
 
         void setAttribute(const std::string& name, std::unique_ptr<BufferAttribute> attribute);
 
-        bool hasAttribute(const std::string& name) const;
+        [[nodiscard]] bool hasAttribute(const std::string& name) const;
 
-        void addGroup(int start, int count, int materialIndex = 0);
+        void addGroup(int start, int count, unsigned int materialIndex = 0);
 
         void clearGroups();
 

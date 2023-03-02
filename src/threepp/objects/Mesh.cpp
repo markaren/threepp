@@ -38,7 +38,10 @@ namespace {
         return intersection;
     }
 
-    std::optional<Intersection> checkBufferGeometryIntersection(Object3D* object, Material* material, Raycaster& raycaster, Ray& ray, const FloatBufferAttribute& position, const FloatBufferAttribute* uv, const FloatBufferAttribute* uv2, int a, int b, int c) {
+    std::optional<Intersection> checkBufferGeometryIntersection(
+            Object3D* object, Material* material, Raycaster& raycaster, Ray& ray,
+            const FloatBufferAttribute& position, const FloatBufferAttribute* uv, const FloatBufferAttribute* uv2,
+            unsigned int a, unsigned int b, unsigned int c) {
 
         Vector3 _vA{};
         Vector3 _vB{};
@@ -79,7 +82,7 @@ namespace {
                 intersection->uv2 = uv2Target;
             }
 
-            Face3 face{a, b, c, Vector3{}, 0};
+            Face3 face{a, b, c, {}, 0};
 
             Triangle::getNormal(_vA, _vB, _vC, face.normal);
 
@@ -153,7 +156,7 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
                     if (intersection) {
 
-                        intersection->faceIndex = (int) std::floor(j / 3);// triangle number in indexed buffer semantics
+                        intersection->faceIndex = j / 3;// triangle number in indexed buffer semantics
                         intersection->face->materialIndex = group.materialIndex;
                         intersects.emplace_back(*intersection);
                     }
