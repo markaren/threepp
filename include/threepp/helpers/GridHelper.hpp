@@ -11,20 +11,21 @@ namespace threepp {
     class GridHelper: public LineSegments {
 
     public:
-        static std::shared_ptr<GridHelper> create(int size = 10, int divisions = 10, Color color1 = 0x444444, Color color2 = 0x888888) {
+        static std::shared_ptr<GridHelper> create(
+                unsigned int size = 10,
+                unsigned int divisions = 10,
+                const Color& color1 = 0x444444,
+                const Color& color2 = 0x888888) {
 
             return std::shared_ptr<GridHelper>(new GridHelper(size, divisions, color1, color2));
         }
 
     protected:
-        GridHelper(int size, int divisions, Color color1, Color color2)
+        GridHelper(unsigned int size, unsigned int divisions, const Color& color1, const Color& color2)
             : LineSegments(nullptr, nullptr) {
 
-            Color c1{color1};
-            Color c2{color2};
-
             const auto center = divisions / 2;
-            const auto step = static_cast<float>(size) / divisions;
+            const auto step = static_cast<float>(size) / static_cast<float>(divisions);
             const auto halfSize = static_cast<float>(size) / 2;
 
             std::vector<float> vertices;
@@ -37,7 +38,7 @@ namespace threepp {
                 vertices.insert(vertices.end(), {-halfSize, 0, k, halfSize, 0, k});
                 vertices.insert(vertices.end(), {k, 0, -halfSize, k, 0, halfSize});
 
-                Color& color = (i == center ? c1 : c2);
+                auto& color = (i == center ? color1 : color2);
 
                 color.toArray(colors, j);
                 j += 3;
