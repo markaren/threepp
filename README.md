@@ -138,7 +138,7 @@ as a library a separate project using vcpkg.
 
 ### Screenshots
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
-![Shadows](doc/screenshots/Shadows.png)
+![Shadows](doc/screenshots/Shadows.PNG)
 ![Crane](doc/screenshots/crane.png)
-![Physics](doc/screenshots/instanced_physics.png)
+![Physics](doc/screenshots/instanced_physics.PNG)
 ![Water](doc/screenshots/OlympicOctopus.PNG)
