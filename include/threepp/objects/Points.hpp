@@ -12,7 +12,6 @@ namespace threepp {
     class Points: public Object3D {
 
     public:
-
         [[nodiscard]] virtual std::string type() const {
 
             return "Points";
@@ -29,15 +28,18 @@ namespace threepp {
         }
 
         std::vector<Material*> materials() override {
+
             return {material_.get()};
         }
 
-        std::shared_ptr<Object3D> clone(bool recursive = false) override {
+        std::shared_ptr<Object3D> clone(bool recursive = true) override {
             auto clone = create(geometry_, material_);
             clone->copy(*this, recursive);
 
             return clone;
         }
+
+        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         static std::shared_ptr<Points> create(
                 std::shared_ptr<BufferGeometry> geometry = BufferGeometry::create(),
@@ -47,13 +49,13 @@ namespace threepp {
         }
 
     protected:
+        std::shared_ptr<BufferGeometry> geometry_;
+        std::shared_ptr<Material> material_;
+
         Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
             : geometry_(std::move(geometry)), material_(std::move(material)) {
         }
 
-    private:
-        std::shared_ptr<BufferGeometry> geometry_;
-        std::shared_ptr<Material> material_;
     };
 
 }// namespace threepp

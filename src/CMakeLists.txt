@@ -257,6 +257,7 @@ set(sources
         "threepp/objects/Line.cpp"
         "threepp/objects/InstancedMesh.cpp"
         "threepp/objects/Mesh.cpp"
+        "threepp/objects/Points.cpp"
         "threepp/objects/Sky.cpp"
         "threepp/objects/Sprite.cpp"
         "threepp/objects/Reflector.cpp"
