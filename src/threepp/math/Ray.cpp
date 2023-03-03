@@ -106,7 +106,7 @@ float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1, Vector3* op
     // - The closest point on the ray
     // - The closest point on the segment
 
-    _segCenter.copy(v0).add(v1).addScalar(0.5f);
+    _segCenter.copy(v0).add(v1).multiplyScalar(0.5f);
     _segDir.copy(v1).sub(v0).normalize();
     _diff.copy(this->origin).sub(_segCenter);
 
