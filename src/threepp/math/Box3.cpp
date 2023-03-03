@@ -341,7 +341,7 @@ Box3& Box3::applyMatrix4(const Matrix4& matrix) {
     // transform of empty box is an empty box.
     if (this->isEmpty()) return *this;
 
-    std::array<Vector3, 9> _points;
+    std::array<Vector3, 8> _points;
 
     // NOTE: I am using a binary pattern to specify all 2^3 combinations below
     _points[0].set(this->min_.x, this->min_.y, this->min_.z).applyMatrix4(matrix);// 000
