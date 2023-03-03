@@ -35,13 +35,13 @@ namespace threepp {
         template<class ArrayLike>
         Box3& setFromArray(const ArrayLike& array) {
 
-            const auto minX = +Infinity<float>;
-            const auto minY = +Infinity<float>;
-            const auto minZ = +Infinity<float>;
+            auto minX = +Infinity<float>;
+            auto minY = +Infinity<float>;
+            auto minZ = +Infinity<float>;
 
-            const auto maxX = -Infinity<float>;
-            const auto maxY = -Infinity<float>;
-            const auto maxZ = -Infinity<float>;
+            auto maxX = -Infinity<float>;
+            auto maxY = -Infinity<float>;
+            auto maxZ = -Infinity<float>;
 
             for (int i = 0, l = array.size(); i < l; i += 3) {
 
