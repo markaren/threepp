@@ -109,6 +109,7 @@ void Sphere::getBoundingBox(Box3& target) const {
 
         // Empty sphere produces empty bounding box
         target.makeEmpty();
+        return;
     }
 
     target.set(this->center, this->center);
