@@ -81,6 +81,8 @@ namespace threepp {
 
         Box3& setFromObject(Object3D& object);
 
+        [[nodiscard]] Box3 clone() const;
+
         Box3& copy(const Box3& box);
 
         Box3& makeEmpty();
@@ -126,6 +128,8 @@ namespace threepp {
         Box3& applyMatrix4(const Matrix4& matrix);
 
         Box3& translate(const Vector3& offset);
+
+        [[nodiscard]] bool equals(const Box3& box) const;
 
         friend std::ostream& operator<<(std::ostream& os, const Box3& v) {
             os << "Box3(max=" << v.min_ << ", max=" << v.max_ << ")";

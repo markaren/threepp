@@ -47,6 +47,12 @@ Box3& Box3::setFromObject(Object3D& object) {
     return this->expandByObject(object);
 }
 
+Box3 Box3::clone() const {
+
+    return Box3().copy(*this);
+
+}
+
 Box3& Box3::copy(const Box3& box) {
 
     this->min_.copy(box.min_);
@@ -383,4 +389,10 @@ bool Box3::satForAxes(const std::vector<float>& axes, const Vector3& v0, const V
     }
 
     return true;
+}
+
+bool Box3::equals(const Box3& box) const {
+
+    return box.min_.equals( this->min_ ) && box.max_.equals( this->max_ );
+
 }
