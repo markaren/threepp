@@ -18,7 +18,7 @@ namespace threepp {
         Vector3 center;
         float radius;
 
-        explicit Sphere(Vector3 center = Vector3(), float radius = -1);
+        explicit Sphere(const Vector3& center = Vector3(), float radius = -1);
 
         Sphere& set(const Vector3& center, float radius);
 
@@ -51,6 +51,10 @@ namespace threepp {
         Sphere& expandByPoint(const Vector3& point);
 
         Sphere& union_(const Sphere& sphere);
+
+        [[nodiscard]] bool equals( const Sphere& sphere ) const;
+
+        [[nodiscard]] Sphere clone() const;
     };
 
 }// namespace threepp

@@ -8,7 +8,7 @@
 
 using namespace threepp;
 
-Sphere::Sphere(Vector3 center, float radius): center(center), radius(radius) {}
+Sphere::Sphere(const Vector3& center, float radius): center(center), radius(radius) {}
 
 Sphere& Sphere::set(const Vector3& center, float radius) {
 
@@ -172,4 +172,16 @@ Sphere& Sphere::union_(const Sphere& sphere) {
     this->expandByPoint(_v1.copy(sphere.center).sub(_toFarthestPoint));
 
     return *this;
+}
+
+bool Sphere::equals(const Sphere& sphere) const {
+
+    return sphere.center.equals( this->center ) && ( sphere.radius == this->radius );
+
+}
+
+Sphere Sphere::clone() const {
+
+    return Sphere().copy( *this );
+
 }
