@@ -19,7 +19,7 @@ namespace threepp {
         Vector3 origin;
         Vector3 direction;
 
-        explicit Ray(Vector3 origin = Vector3(), Vector3 direction = Vector3());
+        explicit Ray(const Vector3& origin = Vector3(), const Vector3& direction = Vector3());
 
         Ray& set(const Vector3& origin, const Vector3& direction);
 

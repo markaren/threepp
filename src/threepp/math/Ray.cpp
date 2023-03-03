@@ -22,7 +22,7 @@ namespace {
 
 }
 
-Ray::Ray(Vector3 origin, Vector3 direction): origin(origin), direction(direction) {}
+Ray::Ray(const Vector3& origin, const Vector3& direction): origin(origin), direction(direction) {}
 
 Ray& Ray::set(const Vector3& origin, const Vector3& direction) {
 
