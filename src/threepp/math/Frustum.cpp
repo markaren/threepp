@@ -54,8 +54,7 @@ Frustum& Frustum::setFromProjectionMatrix(const Matrix4& m) {
     return *this;
 }
 
-bool Frustum::intersectsObject(Object3D& object) {
-
+bool Frustum::intersectsObject(Object3D& object) const {
 
     auto geometry = object.geometry();
 
@@ -66,15 +65,15 @@ bool Frustum::intersectsObject(Object3D& object) {
     return this->intersectsSphere(_sphere);
 }
 
-bool Frustum::intersectsSprite(const Sprite& sprite) {
+bool Frustum::intersectsSprite(const Sprite& sprite) const {
     _sphere.center.set(0, 0, 0);
-    _sphere.radius = 0.7071067811865476;
+    _sphere.radius = 0.7071067811865476f;
     _sphere.applyMatrix4(*sprite.matrixWorld);
 
     return this->intersectsSphere(_sphere);
 }
 
-bool Frustum::intersectsSphere(const Sphere& sphere) {
+bool Frustum::intersectsSphere(const Sphere& sphere) const {
 
     const auto& center = sphere.center;
     const float negRadius = -sphere.radius;
@@ -92,7 +91,7 @@ bool Frustum::intersectsSphere(const Sphere& sphere) {
     return true;
 }
 
-bool Frustum::intersectsBox(const Box3& box) {
+bool Frustum::intersectsBox(const Box3& box) const {
 
     for (int i = 0; i < 6; i++) {
 
@@ -113,7 +112,7 @@ bool Frustum::intersectsBox(const Box3& box) {
     return true;
 }
 
-bool Frustum::containsPoint(const Vector3& point) {
+bool Frustum::containsPoint(const Vector3& point) const {
 
     for (int i = 0; i < 6; i++) {
 

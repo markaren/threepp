@@ -25,16 +25,20 @@ namespace threepp {
 
         Frustum& setFromProjectionMatrix(const Matrix4& m);
 
-        bool intersectsObject(Object3D& object);
+        bool intersectsObject(Object3D& object) const;
 
-        bool intersectsSprite(const Sprite& sprite);
+        [[nodiscard]] bool intersectsSprite(const Sprite& sprite) const;
 
-        bool intersectsSphere(const Sphere& sphere);
+        [[nodiscard]] bool intersectsSphere(const Sphere& sphere) const;
 
-        bool intersectsBox(const Box3& box);
+        [[nodiscard]] bool intersectsBox(const Box3& box) const;
 
-        bool containsPoint(const Vector3& point);
+        [[nodiscard]] bool containsPoint(const Vector3& point) const;
 
+        [[nodiscard]] const std::array<Plane, 6>& planes() const {
+
+            return planes_;
+        }
 
     private:
         std::array<Plane, 6> planes_;
