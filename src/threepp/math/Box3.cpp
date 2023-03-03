@@ -7,6 +7,29 @@
 
 using namespace threepp;
 
+namespace {
+
+    Vector3 _vector;
+
+
+    Vector3 _v0;
+    Vector3 _v1;
+    Vector3 _v2;
+
+    Vector3 _f0;
+    Vector3 _f1;
+    Vector3 _f2;
+
+    Vector3 _center;
+    Vector3 _extents;
+
+    Vector3 _triangleNormal;
+    Vector3 _testAxis;
+
+    std::array<Vector3, 8> _points;
+
+}// namespace
+
 Box3::Box3()
     : min_(Vector3(+Infinity<float>, +Infinity<float>, +Infinity<float>)),
       max_(Vector3(-Infinity<float>, -Infinity<float>, -Infinity<float>)) {}
@@ -31,7 +54,6 @@ Box3& Box3::set(float minX, float minY, float minZ, float maxX, float maxY, floa
 
 Box3& Box3::setFromCenterAndSize(const Vector3& center, const Vector3& size) {
 
-    Vector3 _vector{};
     const auto halfSize = _vector.copy(size).multiplyScalar(0.5f);
 
     this->min_.copy(center).sub(halfSize);
@@ -50,7 +72,6 @@ Box3& Box3::setFromObject(Object3D& object) {
 Box3 Box3::clone() const {
 
     return Box3().copy(*this);
-
 }
 
 Box3& Box3::copy(const Box3& box) {
@@ -180,8 +201,6 @@ bool Box3::intersectsBox(const Box3& box) const {
 
 bool Box3::intersectsSphere(const Sphere& sphere) const {
 
-    Vector3 _vector{};
-
     // Find the point on the AABB closest to the sphere center.
     this->clampPoint(sphere.center, _vector);
 
@@ -240,17 +259,6 @@ bool Box3::intersectsTriangle(const Triangle& triangle) const {
         return false;
     }
 
-    Vector3 _center{};
-    Vector3 _extents{};
-
-    Vector3 _v0{};
-    Vector3 _v1{};
-    Vector3 _v2{};
-
-    Vector3 _f0{};
-    Vector3 _f1{};
-    Vector3 _f2{};
-
     // compute box center and extents
     this->getCenter(_center);
     _extents.subVectors(this->max_, _center);
@@ -284,8 +292,6 @@ bool Box3::intersectsTriangle(const Triangle& triangle) const {
         return false;
     }
 
-    Vector3 _triangleNormal{};
-
     // finally testing the face normal of the triangle
     // use already existing triangle edge vectors here
     _triangleNormal.crossVectors(_f0, _f1);
@@ -301,8 +307,6 @@ Vector3& Box3::clampPoint(const Vector3& point, Vector3& target) const {
 
 float Box3::distanceToPoint(const Vector3& point) const {
 
-    Vector3 _vector{};
-
     auto clampedPoint = _vector.copy(point).clamp(this->min_, this->max_);
 
     return clampedPoint.sub(point).length();
@@ -312,7 +316,6 @@ void Box3::getBoundingSphere(Sphere& target) const {
 
     this->getCenter(target.center);
 
-    Vector3 _vector{};
     this->getSize(_vector);
     target.radius = _vector.length() * 0.5f;
 }
@@ -341,8 +344,6 @@ Box3& Box3::applyMatrix4(const Matrix4& matrix) {
     // transform of empty box is an empty box.
     if (this->isEmpty()) return *this;
 
-    std::array<Vector3, 8> _points;
-
     // NOTE: I am using a binary pattern to specify all 2^3 combinations below
     _points[0].set(this->min_.x, this->min_.y, this->min_.z).applyMatrix4(matrix);// 000
     _points[1].set(this->min_.x, this->min_.y, this->max_.z).applyMatrix4(matrix);// 001
@@ -368,8 +369,6 @@ Box3& Box3::translate(const Vector3& offset) {
 
 bool Box3::satForAxes(const std::vector<float>& axes, const Vector3& v0, const Vector3& v1, const Vector3& v2, const Vector3& extents) {
 
-    Vector3 _testAxis{};
-
     for (size_t i = 0, j = axes.size() - 3; i <= j; i += 3) {
 
         _testAxis.fromArray(axes, static_cast<unsigned int>(i));
@@ -393,6 +392,5 @@ bool Box3::satForAxes(const std::vector<float>& axes, const Vector3& v0, const V
 
 bool Box3::equals(const Box3& box) const {
 
-    return box.min_.equals( this->min_ ) && box.max_.equals( this->max_ );
-
+    return box.min_.equals(this->min_) && box.max_.equals(this->max_);
 }
