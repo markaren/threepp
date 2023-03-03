@@ -112,44 +112,42 @@ TEST_CASE("distanceSqToPoint") {
 
 TEST_CASE("distanceSqToSegment") {
 
-    //TODO test fails
+    Ray a(one3, Vector3(0, 0, 1));
+    Vector3 ptOnLine;
+    Vector3 ptOnSegment;
 
-//    Ray a(one3, Vector3(0, 0, 1));
-//    Vector3 ptOnLine;
-//    Vector3 ptOnSegment;
-//
-//    {
-//        //segment in front of the ray
-//        auto v0 = Vector3(3, 5, 50);
-//        auto v1 = Vector3(50, 50, 50);// just a far away point
-//        auto distSqr = a.distanceSqToSegment(v0, v1, &ptOnLine, &ptOnSegment);
-//
-//        CHECK(ptOnSegment.distanceTo(v0) < 0.0001f);
-//        CHECK(ptOnLine.distanceTo(Vector3(1, 1, 50)) < 0.0001f);
-//        // ((3-1) * (3-1) + (5-1) * (5-1) = 4 + 16 = 20
-//        CHECK(std::abs(distSqr - 20) < 0.0001f);
-//    }
-//
-//    {
-//        //segment behind the ray
-//        auto v0 = Vector3(-50, -50, -50);// just a far away point
-//        auto v1 = Vector3(-3, -5, -4);
-//        auto distSqr = a.distanceSqToSegment(v0, v1, &ptOnLine, &ptOnSegment);
-//
-//        CHECK(ptOnSegment.distanceTo(v1) < 0.0001f);
-//        CHECK(ptOnLine.distanceTo(one3) < 0.0001f);
-//        // ((-3-1) * (-3-1) + (-5-1) * (-5-1) + (-4-1) + (-4-1) = 16 + 36 + 25 = 77
-//        CHECK(std::abs(distSqr - 77) < 0.0001f);
-//    }
-//
-//    {
-//        //exact intersection between the ray and the segment
-//        auto v0 = Vector3(-50, -50, -50);
-//        auto v1 = Vector3(50, 50, 50);
-//        auto distSqr = a.distanceSqToSegment(v0, v1, &ptOnLine, &ptOnSegment);
-//
-//        CHECK(ptOnSegment.distanceTo(one3) < 0.0001f);
-//        CHECK(ptOnLine.distanceTo(one3) < 0.0001f);
-//        CHECK(distSqr < 0.0001f);
-//    }
+    {
+        //segment in front of the ray
+        auto v0 = Vector3(3, 5, 50);
+        auto v1 = Vector3(50, 50, 50);// just a far away point
+        auto distSqr = a.distanceSqToSegment(v0, v1, &ptOnLine, &ptOnSegment);
+
+        CHECK(ptOnSegment.distanceTo(v0) < 0.0001f);
+        CHECK(ptOnLine.distanceTo(Vector3(1, 1, 50)) < 0.0001f);
+        // ((3-1) * (3-1) + (5-1) * (5-1) = 4 + 16 = 20
+        CHECK(std::abs(distSqr - 20) < 0.0001f);
+    }
+
+    {
+        //segment behind the ray
+        auto v0 = Vector3(-50, -50, -50);// just a far away point
+        auto v1 = Vector3(-3, -5, -4);
+        auto distSqr = a.distanceSqToSegment(v0, v1, &ptOnLine, &ptOnSegment);
+
+        CHECK(ptOnSegment.distanceTo(v1) < 0.0001f);
+        CHECK(ptOnLine.distanceTo(one3) < 0.0001f);
+        // ((-3-1) * (-3-1) + (-5-1) * (-5-1) + (-4-1) + (-4-1) = 16 + 36 + 25 = 77
+        CHECK(std::abs(distSqr - 77) < 0.0001f);
+    }
+
+    {
+        //exact intersection between the ray and the segment
+        auto v0 = Vector3(-50, -50, -50);
+        auto v1 = Vector3(50, 50, 50);
+        auto distSqr = a.distanceSqToSegment(v0, v1, &ptOnLine, &ptOnSegment);
+
+        CHECK(ptOnSegment.distanceTo(one3) < 0.0001f);
+        CHECK(ptOnLine.distanceTo(one3) < 0.0001f);
+        CHECK(distSqr < 0.0001f);
+    }
 }
