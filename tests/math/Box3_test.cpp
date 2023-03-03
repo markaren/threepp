@@ -266,3 +266,20 @@ TEST_CASE("union") {
     CHECK(a.clone().union_(c).equals(c));
     CHECK(b.clone().union_(c).equals(c));
 }
+
+TEST_CASE("applyMatrix4") {
+
+    Box3 a( zero3.clone(), zero3.clone() );
+    Box3 b( zero3.clone(), one3.clone() );
+    Box3 c( one3.clone().negate(), one3.clone() );
+    Box3 d( one3.clone().negate(), zero3.clone() );
+    
+    auto m =  Matrix4().makeTranslation( 1, - 2, 1 );
+    Vector3 t1 =  Vector3( 1, - 2, 1 );
+
+    CHECK( compareBox( a.clone().applyMatrix4( m ), a.clone().translate( t1 ) ));
+    CHECK( compareBox( b.clone().applyMatrix4( m ), b.clone().translate( t1 ) ));
+    CHECK( compareBox( c.clone().applyMatrix4( m ), c.clone().translate( t1 ) ));
+    CHECK( compareBox( d.clone().applyMatrix4( m ), d.clone().translate( t1 ) ));
+
+}
