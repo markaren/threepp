@@ -110,12 +110,12 @@ float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1, Vector3* op
     _segDir.copy(v1).sub(v0).normalize();
     _diff.copy(this->origin).sub(_segCenter);
 
-    const auto segExtent = v0.distanceTo(v1) * 0.5f;
-    const auto a01 = -this->direction.dot(_segDir);
-    const auto b0 = _diff.dot(this->direction);
-    const auto b1 = -_diff.dot(_segDir);
-    const auto c = _diff.lengthSq();
-    const auto det = std::abs(1 - a01 * a01);
+    const float segExtent = v0.distanceTo(v1) * 0.5f;
+    const float a01 = -this->direction.dot(_segDir);
+    const float b0 = _diff.dot(this->direction);
+    const float b1 = -_diff.dot(_segDir);
+    const float c = _diff.lengthSq();
+    const float det = std::abs(1 - a01 * a01);
     float s0, s1, sqrDist, extDet;
 
     if (det > 0) {
@@ -197,12 +197,12 @@ float Ray::distanceSqToSegment(const Vector3& v0, const Vector3& v1, Vector3* op
 
     if (optionalPointOnRay) {
 
-        optionalPointOnRay->copy(this->direction).multiplyScalar(s0).add(this->origin);
+        optionalPointOnRay->copy(this->origin).addScaledVector(this->direction, s0);
     }
 
     if (optionalPointOnSegment) {
 
-        optionalPointOnSegment->copy(_segDir).multiplyScalar(s1).add(_segCenter);
+        optionalPointOnSegment->copy(_segCenter).addScaledVector(_segDir, s1);
     }
 
     return sqrDist;

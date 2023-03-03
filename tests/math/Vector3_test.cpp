@@ -3,30 +3,86 @@
 #include <catch2/catch.hpp>
 
 #include "threepp/math/Vector3.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 #include <array>
 #include <vector>
 
 using namespace threepp;
 
+namespace {
+
+    const float x = 2;
+    const float y = 3;
+    const float z = 4;
+
+}// namespace
+
 TEST_CASE("add") {
 
-    Vector3 v1{1, 2, 3};
-    Vector3 v2{9, 8, 7};
+    Vector3 a{x, y, z};
+    Vector3 b{-x, -y, -z};
 
-    Vector3 result = v1.add(v2);
+    a.add(b);
 
-    REQUIRE(result == Vector3{10, 10, 10});
+    CHECK(a.x == 0);
+    CHECK(a.y == 0);
+    CHECK(a.z == 0);
+
+    auto c = Vector3().addVectors(b, b);
+    CHECK(c.x == -2 * x);
+    CHECK(c.y == -2 * y);
+    CHECK(c.z == -2 * z);
 }
 
-TEST_CASE("subtract") {
+TEST_CASE("sub") {
 
-    Vector3 v1{1, 2, 3};
-    Vector3 v2{9, 8, 7};
+    Vector3 a{x, y, z};
+    Vector3 b{-x, -y, -z};
 
-    Vector3 result = v1.sub(v2);
+    a.sub(b);
 
-    REQUIRE(result == Vector3{-8, -6, -4});
+    CHECK(a.x == 2 * x);
+    CHECK(a.y == 2 * y);
+    CHECK(a.z == 2 * z);
+
+    auto c = Vector3().subVectors(b, b);
+    CHECK(c.x == 0);
+    CHECK(c.y == 0);
+    CHECK(c.z == 0);
+}
+
+TEST_CASE("dot") {
+
+    Vector3 a(x, y, z);
+    Vector3 b(-x, -y, -z);
+    Vector3 c;
+
+    float result = a.dot(b);
+    CHECK(result == (-x * x - y * y - z * z));
+
+    result = a.dot(c);
+    CHECK(result == 0);
+}
+
+TEST_CASE("angleTo") {
+    
+    Vector3 a ( 0, - 0.18851655680720186f, 0.9820700116639124f );
+    Vector3 b ( 0, 0.18851655680720186f, - 0.9820700116639124f );
+    
+    CHECK( a.angleTo( a ) == 0 );
+    CHECK( a.angleTo( b ) == Approx(math::PI) );
+
+    Vector3 _x ( 1, 0, 0 );
+    Vector3 _y ( 0, 1, 0 );
+    Vector3 _z ( 0, 0, 1 );
+
+    CHECK( _x.angleTo( _y ) == Approx(math::PI / 2) );
+    CHECK( _x.angleTo( _z ) == Approx(math::PI / 2) );
+    CHECK( _z.angleTo( _x ) == Approx(math::PI / 2) );
+
+    CHECK(std::abs( _x.angleTo( Vector3( 1, 1, 0 ) ) - ( math::PI / 4 ) ) < 0.0000001 );
+    
 }
 
 TEST_CASE("from arraylike") {
