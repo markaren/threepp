@@ -46,8 +46,6 @@ void Line::computeLineDistances() {
 }
 void Line::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
-    return; // TODO the code does not work properly
-
     auto geometry = this->geometry();
     auto threshold = raycaster.params.lineThreshold;
     auto drawRange = geometry->drawRange;

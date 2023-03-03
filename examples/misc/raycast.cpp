@@ -42,6 +42,10 @@ int main() {
     sphere->layers.set(1);
     scene->add(sphere);
 
+    auto grid = GridHelper::create();
+    grid->position.y = -4;
+    scene->add(grid);
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
@@ -60,6 +64,7 @@ int main() {
     canvas.addMouseListener(&l);
 
     Raycaster raycaster;
+    raycaster.params.lineThreshold = 0.1f;
     canvas.animate([&](float dt) {
         raycaster.setFromCamera(mouse, camera);
 
