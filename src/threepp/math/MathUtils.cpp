@@ -81,7 +81,7 @@ float math::ceilPowerOfTwo(float value) {
     return std::pow(2.f, std::ceil(std::log(value) / LN2));
 }
 
-bool math::compareFloats(float f1, float f2) {
+bool math::compareFloats(float f1, float f2, float eps) {
 
-    return (std::fabs(f1 - f2) <= std::numeric_limits<float>::epsilon() * std::fmax(std::fabs(f1), std::fabs(f2)));
+    return (std::fabs(f1 - f2) <= eps * std::fmax(std::fabs(f1), std::fabs(f2)));
 }

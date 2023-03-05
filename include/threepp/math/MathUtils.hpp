@@ -53,7 +53,7 @@ namespace threepp::math {
         return (T(0) < val) - (val < T(0));
     }
 
-    bool compareFloats(float f1, float f2);
+    bool compareFloats(float f1, float f2, float eps = std::numeric_limits<float>::epsilon());
 
 }// namespace threepp::math
 
