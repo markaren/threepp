@@ -18,7 +18,7 @@ namespace threepp {
         std::unique_ptr<FloatBufferAttribute> instanceMatrix;
         std::unique_ptr<FloatBufferAttribute> instanceColor = nullptr;
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "InstancedMesh";
         }

@@ -18,7 +18,7 @@ namespace threepp {
         std::shared_ptr<BufferGeometry> _geometry;
         std::shared_ptr<SpriteMaterial> material;
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "Sprite";
         }

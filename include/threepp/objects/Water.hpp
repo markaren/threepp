@@ -29,7 +29,7 @@ namespace threepp {
             std::optional<bool> fog;
         };
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "Water";
         }

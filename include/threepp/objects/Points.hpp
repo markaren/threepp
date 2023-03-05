@@ -12,7 +12,7 @@ namespace threepp {
     class Points: public Object3D {
 
     public:
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "Points";
         }

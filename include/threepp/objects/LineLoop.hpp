@@ -11,12 +11,12 @@ namespace threepp {
 
     public:
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "LineLoop";
         }
 
-        std::shared_ptr<Object3D> clone(bool recursive = false) override {
+        std::shared_ptr<Object3D> clone(bool recursive = true) override {
             auto clone = create();
             clone->copy(*this, recursive);
 

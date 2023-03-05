@@ -24,7 +24,7 @@ namespace threepp {
     public:
         bool autoUpdate = true;
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "LOD";
         }

@@ -18,7 +18,7 @@ namespace threepp {
 
     public:
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "Line";
         }

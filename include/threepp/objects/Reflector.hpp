@@ -15,14 +15,14 @@ namespace threepp {
     public:
         struct Options {
 
-            std::optional<unsigned int> color;
+            std::optional<Color> color;
             std::optional<unsigned int> textureWidth;
             std::optional<unsigned int> textureHeight;
             std::optional<float> clipBias;
             std::optional<Shader> shader;
         };
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override {
 
             return "Reflector";
         }
