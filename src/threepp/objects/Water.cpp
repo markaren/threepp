@@ -164,11 +164,11 @@ struct Water::Impl {
         material->side = options.side.value_or(FrontSide);
         material->fog = options.fog.value_or(false);
 
-        (*material->uniforms)["mirrorSampler"].setValue(renderTarget->texture);
+        (*material->uniforms)["mirrorSampler"].setValue(renderTarget->texture.get());
         (*material->uniforms)["textureMatrix"].setValue(&textureMatrix);
         (*material->uniforms)["alpha"].setValue(alpha);
         (*material->uniforms)["time"].setValue(time);
-        (*material->uniforms)["normalSampler"].setValue(options.waterNormals);
+        (*material->uniforms)["normalSampler"].setValue(options.waterNormals.get());
         (*material->uniforms)["sunColor"].setValue(sunColor);
         (*material->uniforms)["waterColor"].setValue(waterColor);
         (*material->uniforms)["sunDirection"].setValue(sunDirection);

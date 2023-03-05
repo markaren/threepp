@@ -196,7 +196,7 @@ void GLShadowMap::VSMPass(GLRenderer& _renderer, LightShadow* shadow, Camera* ca
 
     // vertical pass
 
-    shadowMaterialVertical->uniforms->operator[]("shadow_pass").setValue(shadow->map->texture);
+    shadowMaterialVertical->uniforms->operator[]("shadow_pass").setValue(shadow->map->texture.get());
     shadowMaterialVertical->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
     shadowMaterialVertical->uniforms->operator[]("radius").value<float>() = shadow->radius;
     _renderer.setRenderTarget(shadow->mapPass);
@@ -205,7 +205,7 @@ void GLShadowMap::VSMPass(GLRenderer& _renderer, LightShadow* shadow, Camera* ca
 
     // horizontal pass
 
-    shadowMaterialHorizontal->uniforms->operator[]("shadow_pass").setValue(shadow->mapPass->texture);
+    shadowMaterialHorizontal->uniforms->operator[]("shadow_pass").setValue(shadow->mapPass->texture.get());
     shadowMaterialHorizontal->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
     shadowMaterialHorizontal->uniforms->operator[]("radius").value<float>() = shadow->radius;
     _renderer.setRenderTarget(shadow->map);

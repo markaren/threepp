@@ -142,15 +142,15 @@ namespace threepp::gl {
             std::vector<Vector3> probe{9};
             std::vector<LightUniforms*> directional;
             std::vector<LightUniforms*> directionalShadow;
-            std::vector<std::shared_ptr<Texture>> directionalShadowMap;
+            std::vector<Texture*> directionalShadowMap;
             std::vector<Matrix4*> directionalShadowMatrix;
             std::vector<LightUniforms*> spot;
             std::vector<LightUniforms*> spotShadow;
-            std::vector<std::shared_ptr<Texture>> spotShadowMap;
+            std::vector<Texture*> spotShadowMap;
             std::vector<Matrix4*> spotShadowMatrix;
             std::vector<LightUniforms*> point;
             std::vector<LightUniforms*> pointShadow;
-            std::vector<std::shared_ptr<Texture>> pointShadowMap;
+            std::vector<Texture*> pointShadowMap;
             std::vector<Matrix4*> pointShadowMatrix;
             std::vector<LightUniforms*> hemi;
         };

@@ -76,7 +76,7 @@ struct Reflector::Impl {
         material->fragmentShader = shader.fragmentShader;
         material->vertexShader = shader.vertexShader;
 
-        (*material->uniforms)["tDiffuse"].setValue(renderTarget->texture);
+        (*material->uniforms)["tDiffuse"].setValue(renderTarget->texture.get());
         (*material->uniforms)["color"].setValue(color);
         (*material->uniforms)["textureMatrix"].setValue(&textureMatrix);
 

@@ -96,7 +96,7 @@ namespace {
         void setValueT1(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
-            auto tex = std::get<std::shared_ptr<Texture>>(value);
+            auto tex = std::get<Texture*>(value);
             textures->setTexture2D(*tex, unit);
         }
 
@@ -300,7 +300,7 @@ namespace {
                 case 0x8dd2: // UNSIGNED_INT_SAMPLER_2D
                 case 0x8b62: // SAMPLER_2D_SHADOW
                     return [&](const UniformValue& value, GLTextures* textures) {
-                        auto& data = std::get<std::vector<std::shared_ptr<Texture>>>(value);
+                        auto& data = std::get<std::vector<Texture*>>(value);
                         const auto n = data.size();
                         auto units = allocTexUnits(*textures, n);
 

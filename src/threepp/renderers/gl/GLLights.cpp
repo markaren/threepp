@@ -83,7 +83,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 ensureCapacity(state.directionalShadowMap, directionalLength + 1);
                 ensureCapacity(state.directionalShadowMatrix, directionalLength + 1);
                 state.directionalShadow[directionalLength] = shadowUniforms;
-                state.directionalShadowMap[directionalLength] = shadow->map ? shadow->map->texture : nullptr;
+                state.directionalShadowMap[directionalLength] = shadow->map ? shadow->map->texture.get() : nullptr;
                 state.directionalShadowMatrix[directionalLength] = &shadow->matrix;
 
                 ++numDirectionalShadows;
@@ -122,7 +122,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 ensureCapacity(state.spotShadowMap, spotLength + 1);
                 ensureCapacity(state.spotShadowMatrix, spotLength + 1);
                 state.spotShadow[spotLength] = shadowUniforms;
-                state.spotShadowMap[spotLength] = shadow->map ? shadow->map->texture : nullptr;
+                state.spotShadowMap[spotLength] = shadow->map ? shadow->map->texture.get() : nullptr;
                 state.spotShadowMatrix[spotLength] = &shadow->matrix;
 
                 ++numSpotShadows;
@@ -159,7 +159,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 ensureCapacity(state.pointShadowMap, pointLength + 1);
                 ensureCapacity(state.pointShadowMatrix, pointLength + 1);
                 state.pointShadow[pointLength] = shadowUniforms;
-                state.pointShadowMap[pointLength] = shadow->map ? shadow->map->texture : nullptr;
+                state.pointShadowMap[pointLength] = shadow->map ? shadow->map->texture.get() : nullptr;
                 state.pointShadowMatrix[pointLength] = &shadow->matrix;
 
                 ++numPointShadows;
