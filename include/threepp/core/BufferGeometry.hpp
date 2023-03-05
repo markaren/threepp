@@ -28,6 +28,8 @@ namespace threepp {
 
         const std::string uuid = utils::generateUUID();
 
+        std::string name;
+
         std::vector<GeometryGroup> groups;
 
         std::optional<Box3> boundingBox;

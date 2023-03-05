@@ -277,7 +277,7 @@ void BufferGeometry::copy(const BufferGeometry& source) {
 
     // name
 
-    //        this->name = source.name;
+    this->name = source.name;
 
     // index
 
@@ -339,27 +339,25 @@ void BufferGeometry::computeVertexNormals() {
 
     auto index = getIndex();
 
-    const auto positionAttribute = this->getAttribute<float>( "position" );
+    const auto positionAttribute = this->getAttribute<float>("position");
 
-    if ( positionAttribute ) {
+    if (positionAttribute) {
 
         auto normalAttribute = this->getAttribute<float>("normal");
 
-        if ( !normalAttribute ) {
+        if (!normalAttribute) {
 
-            this->setAttribute("normal", FloatBufferAttribute::create( std::vector<float>( positionAttribute->count() * 3 ), 3 ) );
+            this->setAttribute("normal", FloatBufferAttribute::create(std::vector<float>(positionAttribute->count() * 3), 3));
             normalAttribute = this->getAttribute<float>("normal");
 
         } else {
 
             // reset existing normals to zero
 
-            for ( unsigned i = 0, il = normalAttribute->count(); i < il; i ++ ) {
+            for (unsigned i = 0, il = normalAttribute->count(); i < il; i++) {
 
-                normalAttribute->setXYZ( i, 0, 0, 0 );
-
+                normalAttribute->setXYZ(i, 0, 0, 0);
             }
-
         }
 
         Vector3 pA, pB, pC;
@@ -368,64 +366,59 @@ void BufferGeometry::computeVertexNormals() {
 
         // indexed elements
 
-        if ( index ) {
+        if (index) {
 
-            for ( unsigned i = 0, il = index->count(); i < il; i += 3 ) {
+            for (unsigned i = 0, il = index->count(); i < il; i += 3) {
 
-                auto vA = index->getX( i + 0 );
-                auto vB = index->getX( i + 1 );
-                auto vC = index->getX( i + 2 );
+                auto vA = index->getX(i + 0);
+                auto vB = index->getX(i + 1);
+                auto vC = index->getX(i + 2);
 
                 positionAttribute->setFromBufferAttribute(pA, vA);
                 positionAttribute->setFromBufferAttribute(pB, vB);
                 positionAttribute->setFromBufferAttribute(pC, vC);
 
-                cb.subVectors( pC, pB );
-                ab.subVectors( pA, pB );
-                cb.cross( ab );
+                cb.subVectors(pC, pB);
+                ab.subVectors(pA, pB);
+                cb.cross(ab);
 
                 normalAttribute->setFromBufferAttribute(nA, vA);
                 normalAttribute->setFromBufferAttribute(nB, vB);
                 normalAttribute->setFromBufferAttribute(nC, vC);
 
-                nA.add( cb );
-                nB.add( cb );
-                nC.add( cb );
+                nA.add(cb);
+                nB.add(cb);
+                nC.add(cb);
 
-                normalAttribute->setXYZ( vA, nA.x, nA.y, nA.z );
-                normalAttribute->setXYZ( vB, nB.x, nB.y, nB.z );
-                normalAttribute->setXYZ( vC, nC.x, nC.y, nC.z );
-
+                normalAttribute->setXYZ(vA, nA.x, nA.y, nA.z);
+                normalAttribute->setXYZ(vB, nB.x, nB.y, nB.z);
+                normalAttribute->setXYZ(vC, nC.x, nC.y, nC.z);
             }
 
         } else {
 
             // non-indexed elements (unconnected triangle soup)
 
-            for ( unsigned i = 0, il = positionAttribute->count(); i < il; i += 3 ) {
+            for (unsigned i = 0, il = positionAttribute->count(); i < il; i += 3) {
 
-                positionAttribute->setFromBufferAttribute(pA, i + 0 );
-                positionAttribute->setFromBufferAttribute(pB, i + 1 );
-                positionAttribute->setFromBufferAttribute(pC, i + 2 );
+                positionAttribute->setFromBufferAttribute(pA, i + 0);
+                positionAttribute->setFromBufferAttribute(pB, i + 1);
+                positionAttribute->setFromBufferAttribute(pC, i + 2);
 
-                cb.subVectors( pC, pB );
-                ab.subVectors( pA, pB );
-                cb.cross( ab );
+                cb.subVectors(pC, pB);
+                ab.subVectors(pA, pB);
+                cb.cross(ab);
 
-                normalAttribute->setXYZ( i + 0, cb.x, cb.y, cb.z );
-                normalAttribute->setXYZ( i + 1, cb.x, cb.y, cb.z );
-                normalAttribute->setXYZ( i + 2, cb.x, cb.y, cb.z );
-
+                normalAttribute->setXYZ(i + 0, cb.x, cb.y, cb.z);
+                normalAttribute->setXYZ(i + 1, cb.x, cb.y, cb.z);
+                normalAttribute->setXYZ(i + 2, cb.x, cb.y, cb.z);
             }
-
         }
 
         this->normalizeNormals();
 
         normalAttribute->needsUpdate();
-
     }
-
 }
 
 void BufferGeometry::dispose() {
@@ -434,5 +427,4 @@ void BufferGeometry::dispose() {
         disposed_ = true;
         this->dispatchEvent("dispose", this);
     }
-
 }
