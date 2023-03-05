@@ -15,13 +15,13 @@ namespace threepp {
             return "WireframeGeometry";
         }
 
-        static std::shared_ptr<WireframeGeometry> create(BufferGeometry& geometry) {
+        static std::shared_ptr<WireframeGeometry> create(const BufferGeometry& geometry) {
 
             return std::shared_ptr<WireframeGeometry>(new WireframeGeometry(geometry));
         }
 
     protected:
-        explicit WireframeGeometry(BufferGeometry& geometry);
+        explicit WireframeGeometry(const BufferGeometry& geometry);
     };
 
 }// namespace threepp

@@ -5,7 +5,7 @@
 
 using namespace threepp;
 
-WireframeGeometry::WireframeGeometry(BufferGeometry& geometry) {
+WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
     // buffer
 
