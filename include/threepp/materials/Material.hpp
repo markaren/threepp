@@ -110,7 +110,7 @@ namespace threepp {
 
         virtual std::shared_ptr<Material> clone() const { return nullptr; };
 
-        virtual ~Material() {
+        ~Material() override {
             dispose();
         }
 
