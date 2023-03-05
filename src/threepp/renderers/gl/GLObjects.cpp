@@ -9,7 +9,7 @@ using namespace threepp::gl;
 
 BufferGeometry* GLObjects::update(Object3D* object) {
 
-    const int frame = info_.render.frame;
+    const auto frame = info_.render.frame;
 
     auto geometry = object->geometry();
     geometries_.get(object, geometry);
@@ -23,7 +23,7 @@ BufferGeometry* GLObjects::update(Object3D* object) {
         updateMap_[geometry] = frame;
     }
 
-    auto instancedMesh = dynamic_cast<InstancedMesh*>(object);
+    auto instancedMesh = object->as<InstancedMesh>();
     if (instancedMesh) {
 
         if (!object->hasEventListener("dispose", onInstancedMeshDispose.get())) {

@@ -50,7 +50,7 @@ namespace threepp::gl {
 
         std::shared_ptr<OnInstancedMeshDispose> onInstancedMeshDispose;
 
-        std::unordered_map<BufferGeometry*, int> updateMap_;
+        std::unordered_map<BufferGeometry*, size_t> updateMap_;
     };
 
 }// namespace threepp::gl
