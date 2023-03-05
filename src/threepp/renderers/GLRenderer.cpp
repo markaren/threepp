@@ -664,7 +664,7 @@ std::shared_ptr<gl::GLProgram> GLRenderer::getProgram(
 
     auto& uniforms = *materialProperties->uniforms;
 
-    if (!material->as<ShaderMaterial>() && !material->as<RawShaderMaterial>() || material->clipping) {
+    if (!material->is<ShaderMaterial>() && !material->is<RawShaderMaterial>() || material->clipping) {
 
         uniforms["clippingPlanes"] = clipping.uniform;
     }
@@ -987,7 +987,7 @@ bool GLRenderer::materialNeedsLights(Material* material) {
     bool isShaderMaterial = material->is<ShaderMaterial>();
     bool lights = false;
 
-    if (material->as<MaterialWithLights>()) {
+    if (material->is<MaterialWithLights>()) {
         lights = material->as<MaterialWithLights>()->lights;
     }
 
