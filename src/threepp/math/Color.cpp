@@ -137,9 +137,9 @@ Color& Color::lerpColors(const Color& color1, const Color& color2, float alpha) 
 
 Color& Color::randomize() {
 
-    this->r = math::randomInRange(0.f, 1.f);
-    this->g = math::randomInRange(0.f, 1.f);
-    this->b = math::randomInRange(0.f, 1.f);
+    this->r = math::random();
+    this->g = math::random();
+    this->b = math::random();
 
     return *this;
 }

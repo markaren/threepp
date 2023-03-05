@@ -3,9 +3,7 @@
 #ifndef THREEPP_INTERLEAVEDBUFFER_HPP
 #define THREEPP_INTERLEAVEDBUFFER_HPP
 
-#include "threepp/constants.hpp"
-#include "threepp/core/misc.hpp"
-#include "threepp/utils/uuid.hpp"
+#include "threepp/core/BufferAttribute.hpp"
 
 #include <vector>
 

@@ -64,14 +64,14 @@ int main() {
     std::vector<float> colors;
 
     for (int i = 0; i < triangles; i++) {
-        positions.emplace_back(math::randomInRange(0.f, 1.f) - .5f);
-        positions.emplace_back(math::randomInRange(0.f, 1.f) - .5f);
-        positions.emplace_back(math::randomInRange(0.f, 1.f) - .5f);
+        positions.emplace_back(math::random() - .5f);
+        positions.emplace_back(math::random() - .5f);
+        positions.emplace_back(math::random() - .5f);
 
-        colors.emplace_back(math::randomInRange(0.f, 1.f));
-        colors.emplace_back(math::randomInRange(0.f, 1.f));
-        colors.emplace_back(math::randomInRange(0.f, 1.f));
-        colors.emplace_back(math::randomInRange(0.f, 1.f));
+        colors.emplace_back(math::random());
+        colors.emplace_back(math::random());
+        colors.emplace_back(math::random());
+        colors.emplace_back(math::random());
     }
 
     geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
@@ -87,7 +87,7 @@ int main() {
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
-    canvas.onWindowResize([&](WindowSize size){
+    canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
@@ -95,9 +95,8 @@ int main() {
 
     canvas.animate([&](float t, float dt) {
         mesh->rotation.y = t * 0.5f;
-        material->uniforms->at("time").setValue(t*5);
+        material->uniforms->at("time").setValue(t * 5);
 
         renderer.render(scene, camera);
     });
-
 }

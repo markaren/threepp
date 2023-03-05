@@ -189,7 +189,7 @@ namespace threepp {
 
     private:
         bool disposed_ = false;
-        std::string uuid_ = utils::generateUUID();
+        std::string uuid_ = math::generateUUID();
         inline static unsigned int materialId = 0;
     };
 

@@ -14,6 +14,7 @@
 #include "misc.hpp"
 #include "threepp/core/EventDispatcher.hpp"
 #include "threepp/core/Layers.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 #include <functional>
 #include <memory>
@@ -37,7 +38,7 @@ namespace threepp {
 
         unsigned int id{_object3Did++};
 
-        const std::string uuid{utils::generateUUID()};
+        const std::string uuid{math::generateUUID()};
 
         std::string name;
 

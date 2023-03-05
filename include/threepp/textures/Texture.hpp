@@ -9,10 +9,9 @@
 
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Vector2.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 #include "threepp/textures/Image.hpp"
-
-#include "threepp/utils/uuid.hpp"
 
 #include <functional>
 #include <memory>
@@ -28,7 +27,7 @@ namespace threepp {
 
         unsigned int id = textureId++;
 
-        std::string uuid = utils::generateUUID();
+        std::string uuid = math::generateUUID();
 
         std::string name;
 

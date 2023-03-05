@@ -28,9 +28,9 @@ int main() {
     const float n2 = n / 2;
 
     for (int i = 0; i < numParticles; i += 3) {
-        positions[i] = (math::randomInRange(0.f, 1.f) * n - n2);
-        positions[i + 1] = (math::randomInRange(0.f, 1.f) * n - n2);
-        positions[i + 2] = (math::randomInRange(0.f, 1.f) * n - n2);
+        positions[i] = (math::random() * n - n2);
+        positions[i + 1] = (math::random() * n - n2);
+        positions[i + 2] = (math::random() * n - n2);
 
         colors[i] = ((positions[i] / n) + 0.5f);
         colors[i + 1] = ((positions[i + 1] / n) + 0.5f);

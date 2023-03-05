@@ -3,16 +3,19 @@
 #define THREEPP_MATHUTILS_HPP
 
 #include <algorithm>
+#include <string>
 #include <cmath>
 
 namespace threepp::math {
 
-    const float LN2 = std::log(2.f);
-    const float PI = 2.f * std::acos(0.f);
-    const float TWO_PI = 2.f * PI;
+    const float LN2 = 0.6931471805599453094f;
+    const float PI = 3.14159265358979323846f; // 2.f * std::acos(0.f)
+    const float TWO_PI = 6.28318530718f;
 
     const float DEG2RAD = PI / 180.f;
     const float RAD2DEG = 180.f / PI;
+
+    std::string generateUUID();
 
     template<class T>
     inline T clamp(T value, T min, T max) {
@@ -39,6 +42,8 @@ namespace threepp::math {
     float radToDeg(float radians);
 
     int randomInRange(int min, int max);
+
+    float random();
 
     float randomInRange(float min, float max);
 

@@ -187,7 +187,7 @@ int main() {
 
                 auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();
-                orientation.z = math::PI * math::randomInRange(0.f, 1.f);
+                orientation.z = math::PI * math::random();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
                 decals.emplace_back(m.get());
                 scene->add(m);

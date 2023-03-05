@@ -137,7 +137,7 @@ int main() {
             auto mesh = Mesh::create(tennisBallGeom, tennisBallMaterial);
             mesh->castShadow = true;
             mesh->position.copy(camera->position);
-            mesh->rotation.set(math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI));
+            mesh->rotation.set(math::random() * math::TWO_PI, math::random() * math::TWO_PI, math::random() * math::TWO_PI);
             Vector3 dir;
             camera->getWorldDirection(dir);
             bullet.addMesh(*mesh, 1);

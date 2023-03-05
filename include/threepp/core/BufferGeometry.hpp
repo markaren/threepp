@@ -26,7 +26,7 @@ namespace threepp {
     public:
         const unsigned int id = ++_id;
 
-        const std::string uuid = utils::generateUUID();
+        const std::string uuid = math::generateUUID();
 
         std::string name;
 

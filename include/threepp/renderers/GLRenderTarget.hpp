@@ -10,8 +10,6 @@
 
 #include "threepp/math/Vector4.hpp"
 
-#include "threepp/utils/uuid.hpp"
-
 #include <optional>
 
 namespace threepp {
@@ -37,7 +35,7 @@ namespace threepp {
             std::shared_ptr<DepthTexture> depthTexture;
         };
 
-        const std::string uuid = utils::generateUUID();
+        const std::string uuid = math::generateUUID();
 
         unsigned int width;
         unsigned int height;

@@ -42,7 +42,6 @@ int main() {
     });
 
     canvas.animate([&](float t, float dt) {
-
         mesh->rotation.y = t;
         material->uniforms->at("iTime").setValue(t);
 
