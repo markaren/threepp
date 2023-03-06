@@ -392,7 +392,7 @@ bool Ray::intersectsBox(const Box3& box) const {
 
     this->intersectBox(box, _vector);
 
-    return std::isnan(_vector.x);
+    return !_vector.isNan();
 }
 
 std::optional<Vector3> Ray::intersectTriangle(const Vector3& a, const Vector3& b, const Vector3& c, bool backfaceCulling, Vector3& target) const {

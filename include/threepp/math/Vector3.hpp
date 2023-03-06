@@ -233,6 +233,8 @@ namespace threepp {
             return divideScalar(s);
         }
 
+        [[nodiscard]] bool isNan() const;
+
         template<class ArrayLike>
         Vector3& fromArray(const ArrayLike& array, size_t offset = 0) {
 
