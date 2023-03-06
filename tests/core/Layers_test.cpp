@@ -1,7 +1,6 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
-#define private public// evil hack
 #include "threepp/core/Layers.hpp"
 
 using namespace threepp;
@@ -12,19 +11,19 @@ TEST_CASE("Test enable") {
 
     a.set(0);
     a.enable(0);
-    CHECK(a.mask_ == 1);
+    CHECK(a.mask() == 1);
 
     a.set(0);
     a.enable(1);
-    CHECK(a.mask_ == 3);
+    CHECK(a.mask() == 3);
 
     a.set(1);
     a.enable(0);
-    CHECK(a.mask_ == 3);
+    CHECK(a.mask() == 3);
 
     a.set(1);
     a.enable(1);
-    CHECK(a.mask_ == 2);
+    CHECK(a.mask() == 2);
 }
 
 TEST_CASE("Test toggle") {
@@ -33,19 +32,19 @@ TEST_CASE("Test toggle") {
 
     a.set(0);
     a.toggle(0);
-    CHECK(a.mask_ == 0);
+    CHECK(a.mask() == 0);
 
     a.set(0);
     a.toggle(1);
-    CHECK(a.mask_ == 3);
+    CHECK(a.mask() == 3);
 
     a.set(1);
     a.toggle(0);
-    CHECK(a.mask_ == 3);
+    CHECK(a.mask() == 3);
 
     a.set(1);
     a.toggle(1);
-    CHECK(a.mask_ == 0);
+    CHECK(a.mask() == 0);
 }
 
 TEST_CASE("Test disable") {
@@ -54,19 +53,19 @@ TEST_CASE("Test disable") {
 
     a.set(0);
     a.disable(0);
-    CHECK(a.mask_ == 0);
+    CHECK(a.mask() == 0);
 
     a.set(0);
     a.disable(1);
-    CHECK(a.mask_ == 1);
+    CHECK(a.mask() == 1);
 
     a.set(1);
     a.disable(0);
-    CHECK(a.mask_ == 2);
+    CHECK(a.mask() == 2);
 
     a.set(1);
     a.disable(1);
-    CHECK(a.mask_ == 0);
+    CHECK(a.mask() == 0);
 }
 
 TEST_CASE("Test test") {

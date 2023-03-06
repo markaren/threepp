@@ -50,6 +50,9 @@ namespace threepp {
             return (mask_ & (1 << channel | 0)) != 0;
         }
 
+        [[nodiscard]] unsigned int mask() const {
+            return mask_;
+        }
 
     private:
         unsigned int mask_;
