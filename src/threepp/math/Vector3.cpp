@@ -530,5 +530,6 @@ bool Vector3::equals(const Vector3& v) const {
 }
 
 bool Vector3::isNan() const {
-    return std::isnan(x) || std::isnan(y) && !std::isnan(z);
+
+    return std::isnan(x) || std::isnan(y) || std::isnan(z);
 }
