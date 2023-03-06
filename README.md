@@ -5,23 +5,24 @@ Cross-platform C++17 port of the popular Javascript 3D library [three.js](https:
 
 #### Current state of the project
 
-Most of the core library has been ported, including basic rendering capabilities, 
+Most of the core library has been ported, including advanced rendering capabilities, 
 however much remains to be done..
 
 ##### What works?
 
-* Box, Sphere, Plane, Cylindrical and Tube geometries  
+* Box, Sphere, Plane, Cylindrical, Capsule and Tube geometries  
 * 2D Textures, Sprites, RenderTarget
 * Transparency, Shadows
 * OrbitControls
 * Ambient, Directional, Point, Spot and Hemi lights
-* InstancedMesh
+* Line, Points, Mesh, InstancedMesh
 * Water and Sky shader
-* Raycasting
+* Raycasting [Mesh, Line, Points]
 * Binary STL loader
 * OBJ/MTL Loader
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
+* Easy integration with [Bullet](https://github.com/bulletphysics/bullet3)
 * Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
 Builds on Windows, Linux, MacOS, MinGW.
