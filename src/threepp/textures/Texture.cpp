@@ -134,6 +134,13 @@ Texture& Texture::copy(const Texture& source) {
     return *this;
 }
 
+std::shared_ptr<Texture> Texture::clone() const {
+    auto tex = Texture::create();
+    tex->copy(*this);
+
+    return tex;
+}
+
 Texture::~Texture() {
     dispose();
 }

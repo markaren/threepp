@@ -4,12 +4,14 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
+#include <filesystem>
+
 namespace threepp {
 
     class STLLoader {
 
     public:
-        [[nodiscard]] std::shared_ptr<BufferGeometry> load(const std::string& path) const;
+        [[nodiscard]] std::shared_ptr<BufferGeometry> load(const std::filesystem::path& path) const;
     };
 
 }// namespace threepp

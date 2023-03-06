@@ -83,6 +83,8 @@ namespace threepp {
 
         Texture& copy(const Texture& source);
 
+        [[nodiscard]] std::shared_ptr<Texture> clone() const;
+
         ~Texture() override;
 
         static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt) {

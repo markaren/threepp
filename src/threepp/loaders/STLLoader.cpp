@@ -6,7 +6,12 @@
 using namespace threepp;
 
 
-std::shared_ptr<BufferGeometry> STLLoader::load(const std::string& path) const {
+std::shared_ptr<BufferGeometry> STLLoader::load(const std::filesystem::path& path) const {
+
+    if (!std::filesystem::exists(path)) {
+        std::cerr << "[STLLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+        return nullptr;
+    }
 
     std::ifstream reader(path, std::ios::binary);
     reader.seekg(80, std::ios::beg);

@@ -282,11 +282,19 @@ namespace {
 
 std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool tryLoadMtl) {
 
-    if (!exists(path)) return nullptr;
-
     if (useCache && cache_.count(path.string())) {
 
-        return std::dynamic_pointer_cast<Group>(cache_[path.string()]->clone());
+        auto cached = cache_[path.string()];
+        if (!cached.expired()) {
+            return std::dynamic_pointer_cast<Group>(cached.lock()->clone());
+        } else {
+            cache_.erase(path.string());
+        }
+    }
+
+    if (!std::filesystem::exists(path)) {
+        std::cerr << "[OBJLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
+        return nullptr;
     }
 
     std::ifstream in(path);
@@ -534,4 +542,9 @@ std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool t
     if (useCache) cache_[path.string()] = container;
 
     return container;
+}
+
+void OBJLoader::clearCache() {
+
+    cache_.clear();
 }

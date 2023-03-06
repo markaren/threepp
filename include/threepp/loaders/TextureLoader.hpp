@@ -6,16 +6,22 @@
 #include "threepp/textures/Texture.hpp"
 
 #include <filesystem>
+#include <memory>
+#include <unordered_map>
 
 namespace threepp {
 
     class TextureLoader {
 
     public:
+        bool useCache = true;
         std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, bool flipY = true);
+
+        void clearCache();
 
     private:
         ImageLoader imageLoader_{};
+        std::unordered_map<std::string, std::weak_ptr<Texture>> cache_;
     };
 
 }// namespace threepp
