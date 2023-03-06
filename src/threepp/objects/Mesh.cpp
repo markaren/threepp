@@ -10,7 +10,7 @@ namespace {
 
     std::optional<Intersection> checkIntersection(Object3D* object, Material* material, Raycaster& raycaster, Ray& ray, const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
-        Vector3 _intersectionPointWorld{};
+        static Vector3 _intersectionPointWorld{};
 
         if (material->side == BackSide) {
 
@@ -43,10 +43,10 @@ namespace {
             const FloatBufferAttribute& position, const FloatBufferAttribute* uv, const FloatBufferAttribute* uv2,
             unsigned int a, unsigned int b, unsigned int c) {
 
-        Vector3 _vA{};
-        Vector3 _vB{};
-        Vector3 _vC{};
-        Vector3 _intersectionPoint{};
+        static Vector3 _vA{};
+        static Vector3 _vB{};
+        static Vector3 _vC{};
+        static Vector3 _intersectionPoint{};
 
         position.setFromBufferAttribute(_vA, a);
         position.setFromBufferAttribute(_vB, b);
@@ -56,9 +56,9 @@ namespace {
 
         if (intersection) {
 
-            Vector2 _uvA{};
-            Vector2 _uvB{};
-            Vector2 _uvC{};
+            static Vector2 _uvA{};
+            static Vector2 _uvB{};
+            static Vector2 _uvC{};
 
             if (uv) {
 
@@ -98,7 +98,7 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
     if (material() == nullptr) return;
 
-    Sphere _sphere{};
+    static Sphere _sphere{};
 
     // Checking boundingSphere distance to ray
 
@@ -111,8 +111,8 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
     //
 
-    Ray _ray{};
-    Matrix4 _inverseMatrix{};
+    static Ray _ray{};
+    static Matrix4 _inverseMatrix{};
 
     _inverseMatrix.copy(*matrixWorld).invert();
     _ray.copy(raycaster.ray).applyMatrix4(_inverseMatrix);

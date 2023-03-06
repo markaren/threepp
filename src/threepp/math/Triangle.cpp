@@ -5,11 +5,18 @@
 
 using namespace threepp;
 
+namespace {
+
+    Vector3 _v0{};
+    Vector3 _v1{};
+    Vector3 _v2{};
+    Vector3 _v3{};
+
+}
+
 Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c): a_(a), b_(b), c_(c) {}
 
 void Triangle::getNormal(const Vector3& a, const Vector3& b, const Vector3& c, Vector3& target) {
-
-    Vector3 _v0{};
 
     target.subVectors(c, b);
     _v0.subVectors(a, b);
@@ -27,10 +34,6 @@ void Triangle::getNormal(const Vector3& a, const Vector3& b, const Vector3& c, V
 }
 
 void Triangle::getBarycoord(const Vector3& point, const Vector3& a, const Vector3& b, const Vector3& c, Vector3& target) {
-
-    Vector3 _v0{};
-    Vector3 _v1{};
-    Vector3 _v2{};
 
     _v0.subVectors(c, a);
     _v1.subVectors(b, a);
@@ -64,16 +67,12 @@ void Triangle::getBarycoord(const Vector3& point, const Vector3& a, const Vector
 
 bool Triangle::containsPoint(const Vector3& point, const Vector3& a, const Vector3& b, const Vector3& c) {
 
-    Vector3 _v3{};
-
     getBarycoord(point, a, b, c, _v3);
 
     return (_v3.x >= 0) && (_v3.y >= 0) && ((_v3.x + _v3.y) <= 1);
 }
 
 void Triangle::getUV(const Vector3& point, const Vector3& p1, const Vector3& p2, const Vector3& p3, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target) {
-
-    Vector3 _v3{};
 
     getBarycoord(point, p1, p2, p3, _v3);
 
@@ -85,14 +84,11 @@ void Triangle::getUV(const Vector3& point, const Vector3& p1, const Vector3& p2,
 
 bool Triangle::isFrontFacing(const Vector3& a, const Vector3& b, const Vector3& c, const Vector3& direction) {
 
-    Vector3 _v0{};
-    Vector3 _v1{};
-
     _v0.subVectors(c, b);
     _v1.subVectors(a, b);
 
     // strictly front facing
-    return (_v0.cross(_v1).dot(direction) < 0) ? true : false;
+    return _v0.cross(_v1).dot(direction) < 0;
 }
 
 Triangle& Triangle::set(const Vector3& a, const Vector3& b, const Vector3& c) {
@@ -105,9 +101,6 @@ Triangle& Triangle::set(const Vector3& a, const Vector3& b, const Vector3& c) {
 }
 
 float Triangle::getArea() const {
-
-    Vector3 _v0{};
-    Vector3 _v1{};
 
     _v0.subVectors(this->c_, this->b_);
     _v1.subVectors(this->a_, this->b_);
@@ -150,13 +143,13 @@ void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) {
     const auto a = this->a_, b = this->b_, c = this->c_;
     float v, w;
 
-    Vector3 _vab{};
-    Vector3 _vac{};
-    Vector3 _vap{};
-    Vector3 _vbp{};
-    Vector3 _vcp{};
-    Vector3 _vbc{};
-    ;
+    static Vector3 _vab{};
+    static Vector3 _vac{};
+    static Vector3 _vap{};
+    static Vector3 _vbp{};
+    static Vector3 _vcp{};
+    static Vector3 _vbc{};
+
 
     // algorithm thanks to Real-Time Collision Detection by Christer Ericson,
     // published by Morgan Kaufmann Publishers, (c) 2005 Elsevier Inc.,
