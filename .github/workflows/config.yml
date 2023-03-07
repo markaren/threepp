@@ -71,35 +71,6 @@ jobs:
         cd build/tests
         ctest --output-on-failure
 
-  conan-on-windows:
-
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2019]
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install prerequisites
-        run: |
-          pip3 install conan==1.59.0
-
-      - name: Run conan
-        run: |
-          conan install . -s build_type=Release -if build -b missing
-
-      - name: Configure and build
-        run: |
-          cmake . -A x64 -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release
-
-      - name: Test
-        run: |
-          cd build/tests
-          ctest -C Release --output-on-failure
-
   vcpkg-on-windows:
 
     runs-on: ${{ matrix.os }}
@@ -129,35 +100,6 @@ jobs:
         run: |
           cd build/tests
           ctest -C Release --output-on-failure
-
-  conan-on-darwin:
-
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-11]
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Install prerequisites
-        run: |
-          pip3 install conan==1.59.0
-
-      - name: Run conan
-        run: |
-          conan install . -s build_type=Release -if build -b missing
-
-      - name: Configure and build
-        run: |
-          cmake . -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build
-
-      - name: Test
-        run: |
-          cd build/tests
-          ctest --output-on-failure
 
   vcpkg-on-darwin:
 
