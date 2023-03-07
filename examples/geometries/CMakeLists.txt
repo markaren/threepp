@@ -12,6 +12,9 @@ if (imgui_FOUND)
    add_executable(box_geometry box_geometry.cpp)
    target_link_libraries(box_geometry PUBLIC threepp imgui::imgui)
 
+   add_executable(cylinder_geometry cylinder_geometry.cpp)
+   target_link_libraries(cylinder_geometry PUBLIC threepp imgui::imgui)
+
    add_executable(sphere_geometry sphere_geometry.cpp)
    target_link_libraries(sphere_geometry PUBLIC threepp imgui::imgui)
 endif()
