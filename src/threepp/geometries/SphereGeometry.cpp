@@ -8,25 +8,18 @@
 
 using namespace threepp;
 
-SphereGeometry::SphereGeometry(
-        float radius,
-        unsigned int widthSegments,
-        unsigned int heightSegments,
-        float phiStart,
-        float phiLength,
-        float thetaStart,
-        float thetaLength)
-    : radius(radius) {
+SphereGeometry::SphereGeometry(const Params& params)
+    : radius(params.radius) {
 
     std::list<unsigned int> indices;
     std::list<float> vertices;
     std::list<float> normals;
     std::list<float> uvs;
 
-    widthSegments = std::max(3u, widthSegments);
-    heightSegments = std::max(2u, heightSegments);
+    unsigned int widthSegments = std::max(3u, params.widthSegments);
+    unsigned int heightSegments = std::max(2u, params.heightSegments);
 
-    const auto thetaEnd = std::min(thetaStart + thetaLength, math::PI);
+    const auto thetaEnd = std::min(params.thetaStart + params.thetaLength, math::PI);
 
     unsigned int index = 0;
     std::vector<std::vector<unsigned int>> grid;
@@ -46,7 +39,7 @@ SphereGeometry::SphereGeometry(
 
         float uOffset = 0;
 
-        if (iy == 0 && thetaStart == 0) {
+        if (iy == 0 && params.thetaStart == 0) {
 
             uOffset = 0.5f / static_cast<float>(widthSegments);
 
@@ -61,9 +54,9 @@ SphereGeometry::SphereGeometry(
 
             // vertex
 
-            vertex.x = -radius * std::cos(phiStart + u * phiLength) * std::sin(thetaStart + v * thetaLength);
-            vertex.y = radius * std::cos(thetaStart + v * thetaLength);
-            vertex.z = radius * std::sin(phiStart + u * phiLength) * std::sin(thetaStart + v * thetaLength);
+            vertex.x = -radius * std::cos(params.phiStart + u * params.phiLength) * std::sin(params.thetaStart + v * params.thetaLength);
+            vertex.y = radius * std::cos(params.thetaStart + v * params.thetaLength);
+            vertex.z = radius * std::sin(params.phiStart + u * params.phiLength) * std::sin(params.thetaStart + v * params.thetaLength);
 
             vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
 
@@ -92,7 +85,7 @@ SphereGeometry::SphereGeometry(
             const auto c = grid[iy + 1][ix];
             const auto d = grid[iy + 1][ix + 1];
 
-            if (iy != 0 || thetaStart > 0) indices.insert(indices.end(), {a, b, d});
+            if (iy != 0 || params.thetaStart > 0) indices.insert(indices.end(), {a, b, d});
             if (iy != heightSegments - 1 || thetaEnd < math::PI) indices.insert(indices.end(), {b, c, d});
         }
     }

@@ -6,13 +6,14 @@
 using namespace threepp;
 
 
-PlaneGeometry::PlaneGeometry(float width, float height, unsigned int widthSegments, unsigned int heightSegments): width(width), height(height) {
+PlaneGeometry::PlaneGeometry(const Params& params)
+    : width(params.width), height(params.height) {
 
     const auto width_half = width / 2;
     const auto height_half = height / 2;
 
-    const auto gridX = widthSegments;
-    const auto gridY = heightSegments;
+    const auto gridX = params.widthSegments;
+    const auto gridY = params.heightSegments;
 
     const auto gridX1 = gridX + 1;
     const auto gridY1 = gridY + 1;
@@ -22,7 +23,7 @@ PlaneGeometry::PlaneGeometry(float width, float height, unsigned int widthSegmen
 
     //
 
-    std::vector<unsigned int> indices;
+    std::list<unsigned int> indices;
     std::list<float> vertices;
     std::list<float> normals;
     std::list<float> uvs;

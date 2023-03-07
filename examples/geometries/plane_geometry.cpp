@@ -13,9 +13,9 @@ namespace {
         return line;
     }
 
-    void updateGroupGeometry(Mesh& mesh, const BoxGeometry::Params& params) {
+    void updateGroupGeometry(Mesh& mesh, const PlaneGeometry::Params& params) {
 
-        auto g = BoxGeometry::create(params);
+        auto g = PlaneGeometry::create(params);
         mesh.setGeometry(g);
 
         mesh.children[0]->removeFromParent();
@@ -23,10 +23,11 @@ namespace {
     }
 
 
-    std::shared_ptr<Mesh> createMesh(const BoxGeometry::Params& params) {
+    std::shared_ptr<Mesh> createMesh(const PlaneGeometry::Params& params) {
 
-        auto geometry = BoxGeometry::create(params);
+        auto geometry = PlaneGeometry::create(params);
         auto material = MeshBasicMaterial::create();
+        material->side = DoubleSide;
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
@@ -46,7 +47,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 5;
 
-    BoxGeometry::Params params{};
+    PlaneGeometry::Params params{};
 
     auto mesh = createMesh(params);
     scene->add(mesh);
@@ -61,18 +62,14 @@ int main() {
     auto ui = imgui_functional_context(canvas.window_ptr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
-        ImGui::Begin("BoxGeometry");
+        ImGui::Begin("PlaneGeometry");
         ImGui::SliderFloat("width", &params.width, 0.1, 2);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderFloat("height", &params.height, 0.1, 2);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
-        ImGui::SliderFloat("depth", &params.depth, 0.1, 2);
-        paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderInt("widthSegments", reinterpret_cast<int*>(&params.widthSegments), 1, 10);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderInt("heightSegments", reinterpret_cast<int*>(&params.heightSegments), 1, 10);
-        paramsChanged = paramsChanged || ImGui::IsItemEdited();
-        ImGui::SliderInt("depthSegments", reinterpret_cast<int*>(&params.depthSegments), 1, 10);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::End();
     });

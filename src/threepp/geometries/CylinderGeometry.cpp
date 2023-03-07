@@ -6,18 +6,10 @@
 using namespace threepp;
 
 
-CylinderGeometry::CylinderGeometry(
-        float radiusTop,
-        float radiusBottom,
-        float height,
-        unsigned int radialSegments,
-        unsigned int heightSegments,
-        bool openEnded,
-        float thetaStart,
-        float thetaLength)
-    : radiusTop(radiusTop),
-      radiusBottom(radiusBottom),
-      height(height) {
+CylinderGeometry::CylinderGeometry(const Params& params)
+    : radiusTop(params.radiusTop),
+      radiusBottom(params.radiusBottom),
+      height(params.height) {
 
     std::list<unsigned int> indices;
     std::list<float> vertices;
@@ -40,21 +32,21 @@ CylinderGeometry::CylinderGeometry(
 
         // generate vertices, normals and uvs
 
-        for (unsigned y = 0; y <= heightSegments; y++) {
+        for (unsigned y = 0; y <= params.heightSegments; y++) {
 
             std::vector<unsigned int> indexRow;
 
-            const auto v = static_cast<float>(y) /  static_cast<float>(heightSegments);
+            const auto v = static_cast<float>(y) /  static_cast<float>(params.heightSegments);
 
             // calculate the radius of the current row
 
             const auto radius = v * (radiusBottom - radiusTop) + radiusTop;
 
-            for (unsigned x = 0; x <= radialSegments; x++) {
+            for (unsigned x = 0; x <= params.radialSegments; x++) {
 
-                const auto u = static_cast<float>(x) /  static_cast<float>(radialSegments);
+                const auto u = static_cast<float>(x) /  static_cast<float>(params.radialSegments);
 
-                const auto theta = u * thetaLength + thetaStart;
+                const auto theta = u * params.thetaLength + params.thetaStart;
 
                 const auto sinTheta = std::sin(theta);
                 const auto cosTheta = std::cos(theta);
@@ -87,9 +79,9 @@ CylinderGeometry::CylinderGeometry(
 
         // generate indices
 
-        for (int x = 0; x < radialSegments; x++) {
+        for (unsigned x = 0; x < params.radialSegments; x++) {
 
-            for (int y = 0; y < heightSegments; y++) {
+            for (unsigned y = 0; y < params.heightSegments; y++) {
 
                 // we use the index array to access the correct indices
 
@@ -137,7 +129,7 @@ CylinderGeometry::CylinderGeometry(
         // because the geometry needs one set of uvs per face,
         // we must generate a center vertex per face/segment
 
-        for (unsigned x = 1; x <= radialSegments; x++) {
+        for (unsigned x = 1; x <= params.radialSegments; x++) {
 
             // vertex
 
@@ -161,10 +153,10 @@ CylinderGeometry::CylinderGeometry(
 
         // now we generate the surrounding vertices, normals and uvs
 
-        for (unsigned x = 0; x <= radialSegments; x++) {
+        for (unsigned x = 0; x <= params.radialSegments; x++) {
 
-            float u = static_cast<float>(x) / static_cast<float>(radialSegments);
-            float theta = u * thetaLength + thetaStart;
+            float u = static_cast<float>(x) / static_cast<float>(params.radialSegments);
+            float theta = u * params.thetaLength + params.thetaStart;
 
             float cosTheta = std::cos(theta);
             float sinTheta = std::sin(theta);
@@ -193,7 +185,7 @@ CylinderGeometry::CylinderGeometry(
 
         // generate indices
 
-        for (unsigned x = 0; x < radialSegments; x++) {
+        for (unsigned x = 0; x < params.radialSegments; x++) {
 
             unsigned int c = centerIndexStart + x;
             unsigned int i = centerIndexEnd + x;
@@ -223,7 +215,7 @@ CylinderGeometry::CylinderGeometry(
         groupStart += groupCount;
     };
 
-    if (!openEnded) {
+    if (!params.openEnded) {
 
         if (radiusTop > 0) generateCap(true);
         if (radiusBottom > 0) generateCap(false);

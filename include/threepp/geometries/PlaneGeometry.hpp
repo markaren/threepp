@@ -10,6 +10,18 @@ namespace threepp {
     class PlaneGeometry: public BufferGeometry {
 
     public:
+
+        struct Params {
+            float width;
+            float height;
+
+            unsigned int widthSegments;
+            unsigned int heightSegments;
+
+            explicit Params(float width = 1, float height = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1)
+                : width(width), height(height), widthSegments(widthSegments), heightSegments(heightSegments) {}
+        };
+
         const float width;
         const float height;
 
@@ -20,17 +32,22 @@ namespace threepp {
             return "PlaneGeometry";
         }
 
+        static std::shared_ptr<PlaneGeometry> create(const Params& params) {
+
+            return std::shared_ptr<PlaneGeometry>(new PlaneGeometry(params));
+        }
+
         static std::shared_ptr<PlaneGeometry> create(
                 float width = 1,
                 float height = 1,
                 unsigned int widthSegments = 1,
                 unsigned int heightSegments = 1) {
 
-            return std::shared_ptr<PlaneGeometry>(new PlaneGeometry(width, height, widthSegments, heightSegments));
+            return create(Params(width, height, widthSegments, heightSegments));
         }
 
     protected:
-        PlaneGeometry(float width, float height, unsigned int widthSegments, unsigned int heightSegments);
+        PlaneGeometry(const Params& params);
     };
 
 }// namespace threepp

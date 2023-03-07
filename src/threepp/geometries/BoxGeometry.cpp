@@ -127,10 +127,10 @@ namespace {
 
 }// namespace
 
-BoxGeometry::BoxGeometry(float width, float height, float depth, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments)
-    : width(width), height(height), depth(depth) {
+BoxGeometry::BoxGeometry(const Params& params)
+    : width(params.width), height(params.height), depth(params.depth) {
 
-    Helper h(*this, widthSegments, heightSegments, depthSegments);
+    Helper h(*this, params.widthSegments, params.heightSegments, params.depthSegments);
     this->setIndex(h.indices);
     this->setAttribute("position", FloatBufferAttribute::create(h.vertices, 3));
     this->setAttribute("normal", FloatBufferAttribute::create(h.normals, 3));

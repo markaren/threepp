@@ -5,21 +5,6 @@ using namespace threepp;
 
 namespace {
 
-    struct Params {
-        float radius = 1;
-        int widthSegments = 16;
-        int heightSegments = 12;
-        float phiStart = 0;
-        float phiLength = math::TWO_PI;
-        float thetaStart = 0;
-        float thetaLength = math::PI;
-    };
-
-    std::shared_ptr<BufferGeometry> createGeometry(const Params& params) {
-
-        return SphereGeometry::create(params.radius, params.widthSegments, params.heightSegments, params.phiStart, params.phiLength, params.thetaStart, params.thetaLength);
-    }
-
     std::shared_ptr<LineSegments> createWireframe(const BufferGeometry& geometry) {
 
         auto line = LineSegments::create(WireframeGeometry::create(geometry));
@@ -27,18 +12,18 @@ namespace {
         return line;
     }
 
-    void updateGroupGeometry(Mesh& mesh, const Params& params) {
+    void updateGroupGeometry(Mesh& mesh, const SphereGeometry::Params& params) {
 
-        auto g = createGeometry(params);
+        auto g = SphereGeometry::create(params);
         mesh.setGeometry(g);
 
         mesh.children[0]->removeFromParent();
         mesh.add(createWireframe(*g));
     }
 
-    std::shared_ptr<Mesh> createMesh(const Params& params) {
+    std::shared_ptr<Mesh> createMesh(const SphereGeometry::Params& params) {
 
-        auto geometry = createGeometry(params);
+        auto geometry = SphereGeometry::create(params);
         auto material = MeshBasicMaterial::create();
         material->side = DoubleSide;
 
@@ -60,7 +45,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 5;
 
-    Params params{};
+    SphereGeometry::Params params{};
 
     auto mesh = createMesh(params);
     scene->add(mesh);
@@ -78,9 +63,9 @@ int main() {
         ImGui::Begin("SphereGeometry");
         ImGui::SliderFloat("radius", &params.radius, 0.1f, 2);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
-        ImGui::SliderInt("widthSegments", &params.widthSegments, 2, 32);
+        ImGui::SliderInt("widthSegments", reinterpret_cast<int*>(&params.widthSegments), 2, 32);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
-        ImGui::SliderInt("heightSegments", &params.heightSegments, 2, 32);
+        ImGui::SliderInt("heightSegments", reinterpret_cast<int*>(&params.heightSegments), 2, 32);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderFloat("phiStart", &params.phiStart, 0, math::TWO_PI);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();

@@ -5,22 +5,6 @@ using namespace threepp;
 
 namespace {
 
-    struct Params {
-        float radiusTop = 1;
-        float radiusBottom = 1;
-        float height = 1;
-        int radialSegments = 16;
-        int heightSegments = 1;
-        bool openEnded = false;
-        float thetaStart = 0;
-        float thetaLength = math::TWO_PI;
-    };
-
-    std::shared_ptr<BufferGeometry> createGeometry(const Params& params) {
-
-        return CylinderGeometry::create(params.radiusTop, params.radiusBottom, params.height, params.radialSegments, params.heightSegments, params.openEnded, params.thetaStart, params.thetaLength);
-    }
-
     std::shared_ptr<LineSegments> createWireframe(const BufferGeometry& geometry) {
 
         auto line = LineSegments::create(WireframeGeometry::create(geometry));
@@ -28,18 +12,18 @@ namespace {
         return line;
     }
 
-    void updateGroupGeometry(Mesh& mesh, const Params& params) {
+    void updateGroupGeometry(Mesh& mesh, const CylinderGeometry::Params& params) {
 
-        auto g = createGeometry(params);
+        auto g = CylinderGeometry::create(params);
         mesh.setGeometry(g);
 
         mesh.children[0]->removeFromParent();
         mesh.add(createWireframe(*g));
     }
 
-    std::shared_ptr<Mesh> createMesh(const Params& params) {
+    std::shared_ptr<Mesh> createMesh(const CylinderGeometry::Params& params) {
 
-        auto geometry = createGeometry(params);
+        auto geometry = CylinderGeometry::create(params);
         auto material = MeshBasicMaterial::create();
         material->side = DoubleSide;
 
@@ -61,7 +45,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 5;
 
-    Params params{};
+    CylinderGeometry::Params params{};
 
     auto mesh = createMesh(params);
     scene->add(mesh);
@@ -81,9 +65,9 @@ int main() {
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderFloat("radiusBottom", &params.radiusBottom, 0.1f, 2);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
-        ImGui::SliderInt("radialSegments", &params.radialSegments, 1, 32);
+        ImGui::SliderInt("radialSegments", reinterpret_cast<int*>(&params.radialSegments), 1, 32);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
-        ImGui::SliderInt("heightSegments", &params.heightSegments, 1, 32);
+        ImGui::SliderInt("heightSegments", reinterpret_cast<int*>(&params.heightSegments), 1, 32);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::Checkbox("openEnded", &params.openEnded);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
