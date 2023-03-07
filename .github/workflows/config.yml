@@ -88,7 +88,7 @@ jobs:
         with:
           vcpkgDirectory: '${{ github.workspace }}/vcpkg'
           vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
-          vcpkgJsonGlob: '**/vcpkg.json'
+          vcpkgJsonGlob: 'vcpkg.json'
           appendedCacheKey: vcpkginstall
 
       - name: Configure and build
@@ -118,7 +118,7 @@ jobs:
         with:
           vcpkgDirectory: '${{ github.workspace }}/vcpkg'
           vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
-          vcpkgJsonGlob: '**/vcpkg.json'
+          vcpkgJsonGlob: 'vcpkg.json'
           appendedCacheKey: vcpkginstall
 
       - name: Install prerequisites
