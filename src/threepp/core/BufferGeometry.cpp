@@ -192,7 +192,7 @@ void BufferGeometry::computeBoundingBox() {
         this->boundingBox = Box3();
     }
 
-    if (this->attributes_.count("position") != 0) {
+    if (this->attributes_.count("position")) {
 
         const auto position = this->attributes_.at("position")->typed<float>();
 
@@ -203,7 +203,7 @@ void BufferGeometry::computeBoundingBox() {
         this->boundingBox->makeEmpty();
     }
 
-    if (std::isnan(this->boundingBox->min().x) || std::isnan(this->boundingBox->min().y) || std::isnan(this->boundingBox->min().z)) {
+    if (this->boundingBox->min().isNan()) {
 
         std::cerr << "THREE.BufferGeometry.computeBoundingBox(): Computed min/max have NaN values. The 'position' attribute is likely to have NaN values." << std::endl;
     }
