@@ -108,6 +108,8 @@ namespace threepp {
 
         void normalizeNormals();
 
+        [[nodiscard]] std::shared_ptr<BufferGeometry> toNonIndexed() const;
+
         void computeVertexNormals();
 
         void dispose();

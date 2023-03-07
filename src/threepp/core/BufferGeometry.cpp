@@ -5,6 +5,42 @@
 
 using namespace threepp;
 
+namespace {
+
+    std::unique_ptr<BufferAttribute> convertBufferAttribute(BufferAttribute& _attribute, const std::vector<unsigned int>& indices) {
+
+        if (_attribute.typed<float>()) {
+
+            auto attribute = _attribute.typed<float>();
+
+            const auto& array = attribute->array();
+            const auto itemSize = attribute->itemSize();
+            const auto normalized = attribute->normalized();
+
+            auto array2 = std::vector<float>(indices.size() * itemSize);
+
+            unsigned index = 0, index2 = 0;
+
+            for (unsigned i = 0, l = indices.size(); i < l; i++) {
+
+                index = indices[i] * itemSize;
+
+                for (unsigned j = 0; j < itemSize; j++) {
+
+                    array2[index2++] = array[index++];
+                }
+            }
+
+            return FloatBufferAttribute::create(array2, itemSize, normalized);
+
+        } else {
+
+            throw std::runtime_error("Unsupported operation");
+        }
+    }
+
+}// namespace
+
 bool BufferGeometry::hasIndex() const {
 
     return index_ != nullptr;
@@ -334,6 +370,67 @@ void BufferGeometry::copy(const BufferGeometry& source) {
     this->drawRange.start = source.drawRange.start;
     this->drawRange.count = source.drawRange.count;
 }
+
+std::shared_ptr<BufferGeometry> BufferGeometry::toNonIndexed() const {
+
+    if (!this->hasIndex()) {
+
+        std::cerr << "THREE.BufferGeometry.toNonIndexed(): BufferGeometry is already non-indexed." << std::endl;
+        return nullptr;
+    }
+
+    auto geometry2 = BufferGeometry::create();
+
+    const auto& indices = this->index_->array();
+    const auto& attributes = this->attributes_;
+
+    // attributes
+
+    for (const auto& [name, attribute] : attributes) {
+
+        auto newAttribute = convertBufferAttribute(*attribute, indices);
+
+        geometry2->setAttribute(name, std::move(newAttribute));
+    }
+
+    // morph attributes
+
+    //    const morphAttributes = this.morphAttributes;
+    //
+    //    for ( const name in morphAttributes ) {
+    //
+    //        const morphArray = [];
+    //        const morphAttribute = morphAttributes[ name ]; // morphAttribute: array of Float32BufferAttributes
+    //
+    //        for ( unsigned i = 0, il = morphAttribute.length; i < il; i ++ ) {
+    //
+    //            const attribute = morphAttribute[ i ];
+    //
+    //            const newAttribute = convertBufferAttribute( attribute, indices );
+    //
+    //            morphArray.push( newAttribute );
+    //
+    //        }
+    //
+    //        geometry2.morphAttributes[ name ] = morphArray;
+    //
+    //    }
+
+    //    geometry2.morphTargetsRelative = this->morphTargetsRelative;
+
+    // groups
+
+    const auto& groups = this->groups;
+
+    for (unsigned i = 0, l = groups.size(); i < l; i++) {
+
+        const auto group = groups[i];
+        geometry2->addGroup(group.start, group.count, group.materialIndex);
+    }
+
+    return geometry2;
+}
+
 
 void BufferGeometry::computeVertexNormals() {
 
