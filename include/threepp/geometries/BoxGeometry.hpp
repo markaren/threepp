@@ -11,7 +11,6 @@ namespace threepp {
     class BoxGeometry: public BufferGeometry {
 
     public:
-
         struct Params {
             float width;
             float height;

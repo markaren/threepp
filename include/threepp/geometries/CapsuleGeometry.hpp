@@ -9,6 +9,15 @@ namespace threepp {
     class CapsuleGeometry: public LatheGeometry {
 
     public:
+        struct Params {
+            float radius;
+            float length;
+            unsigned int capSegments;
+            unsigned int radialSegments;
+
+            explicit Params(float radius = 0.5f, float length = 1, unsigned int capSegments = 8, unsigned int radialSegments = 16)
+                : radius(radius), length(length), capSegments(capSegments), radialSegments(radialSegments) {}
+        };
 
         const float radius;
         const float length;
@@ -18,16 +27,24 @@ namespace threepp {
             return "CapsuleGeometry";
         }
 
-        static std::shared_ptr<CapsuleGeometry> create(float radius = 0.5f, float length = 1, unsigned int capSegments = 8, unsigned int radialSegments = 16) {
+        static std::shared_ptr<CapsuleGeometry> create(const Params& params) {
 
-            return std::shared_ptr<CapsuleGeometry>(new CapsuleGeometry(radius, length, capSegments, radialSegments));
+            return std::shared_ptr<CapsuleGeometry>(new CapsuleGeometry(params));
+        }
+
+        static std::shared_ptr<CapsuleGeometry> create(
+                float radius = 0.5f,
+                float length = 1,
+                unsigned int capSegments = 8,
+                unsigned int radialSegments = 16) {
+
+            return create(Params(radius, length, capSegments, radialSegments));
         }
 
     protected:
-        CapsuleGeometry(float radius, float length, unsigned int capSegments, unsigned int radialSegments);
-
+        explicit CapsuleGeometry(const Params& params);
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_CAPSULEGEOMETRY_HPP

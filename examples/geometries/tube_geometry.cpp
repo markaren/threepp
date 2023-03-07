@@ -5,9 +5,8 @@ using namespace threepp;
 
 namespace {
 
-    class CustomSineCurve : public Curve3 {
+    struct CustomSineCurve : public Curve3 {
 
-    public:
         float scale;
 
         explicit CustomSineCurve(float scale) : scale(scale) {}

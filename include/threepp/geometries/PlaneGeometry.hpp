@@ -10,7 +10,6 @@ namespace threepp {
     class PlaneGeometry: public BufferGeometry {
 
     public:
-
         struct Params {
             float width;
             float height;

@@ -5,10 +5,10 @@
 
 using namespace threepp;
 
-TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed)
-        : path(std::move(path)), radius(radius) {
+TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
+    : path(std::move(path)), radius(params.radius) {
 
-    this->frames = this->path->computeFrenetFrames(tubularSegments, closed);
+    this->frames = this->path->computeFrenetFrames(params.tubularSegments, params.closed);
 
     // helper variables
 
@@ -27,95 +27,95 @@ TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, unsigned int tubularSeg
     // functions
 
     auto generateSegment = std::function<void(unsigned int)>([&](unsigned int i) {
-      // we use getPointAt to sample evenly distributed points from the given path
+        // we use getPointAt to sample evenly distributed points from the given path
 
-      this->path->getPointAt(static_cast<float>(i) / static_cast<float>(tubularSegments), P);
+        this->path->getPointAt(static_cast<float>(i) / static_cast<float>(params.tubularSegments), P);
 
-      // retrieve corresponding normal and binormal
+        // retrieve corresponding normal and binormal
 
-      const Vector3& N = frames.normals[i];
-      const Vector3& B = frames.binormals[i];
+        const Vector3& N = frames.normals[i];
+        const Vector3& B = frames.binormals[i];
 
-      // generate normals and vertices for the current segment
+        // generate normals and vertices for the current segment
 
-      for (unsigned j = 0; j <= radialSegments; j++) {
+        for (unsigned j = 0; j <= params.radialSegments; j++) {
 
-          const float v = static_cast<float>(j) / static_cast<float>(radialSegments) * math::TWO_PI;
+            const float v = static_cast<float>(j) / static_cast<float>(params.radialSegments) * math::TWO_PI;
 
-          const float sin = std::sin(v);
-          const float cos = -std::cos(v);
+            const float sin = std::sin(v);
+            const float cos = -std::cos(v);
 
-          // normal
+            // normal
 
-          normal.x = (cos * N.x + sin * B.x);
-          normal.y = (cos * N.y + sin * B.y);
-          normal.z = (cos * N.z + sin * B.z);
-          normal.normalize();
+            normal.x = (cos * N.x + sin * B.x);
+            normal.y = (cos * N.y + sin * B.y);
+            normal.z = (cos * N.z + sin * B.z);
+            normal.normalize();
 
-          normals.insert(normals.end(), {normal.x, normal.y, normal.z});
+            normals.insert(normals.end(), {normal.x, normal.y, normal.z});
 
-          // vertex
+            // vertex
 
-          vertex.x = P.x + radius * normal.x;
-          vertex.y = P.y + radius * normal.y;
-          vertex.z = P.z + radius * normal.z;
+            vertex.x = P.x + radius * normal.x;
+            vertex.y = P.y + radius * normal.y;
+            vertex.z = P.z + radius * normal.z;
 
-          vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
-      }
+            vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
+        }
     });
 
     auto generateIndices = std::function<void()>([&] {
-      for (unsigned j = 1; j <= tubularSegments; j++) {
+        for (unsigned j = 1; j <= params.tubularSegments; j++) {
 
-          for (unsigned i = 1; i <= radialSegments; i++) {
+            for (unsigned i = 1; i <= params.radialSegments; i++) {
 
-              const auto a = (radialSegments + 1) * (j - 1) + (i - 1);
-              const auto b = (radialSegments + 1) * j + (i - 1);
-              const auto c = (radialSegments + 1) * j + i;
-              const auto d = (radialSegments + 1) * (j - 1) + i;
+                const auto a = (params.radialSegments + 1) * (j - 1) + (i - 1);
+                const auto b = (params.radialSegments + 1) * j + (i - 1);
+                const auto c = (params.radialSegments + 1) * j + i;
+                const auto d = (params.radialSegments + 1) * (j - 1) + i;
 
-              // faces
+                // faces
 
-              indices.insert(indices.end(), {a, b, d});
-              indices.insert(indices.end(), {b, c, d});
-          }
-      }
+                indices.insert(indices.end(), {a, b, d});
+                indices.insert(indices.end(), {b, c, d});
+            }
+        }
     });
 
     auto generateUVs = std::function<void()>([&] {
-      for (unsigned i = 0; i <= tubularSegments; i++) {
+        for (unsigned i = 0; i <= params.tubularSegments; i++) {
 
-          for (unsigned j = 0; j <= radialSegments; j++) {
+            for (unsigned j = 0; j <= params.radialSegments; j++) {
 
-              uv.x = static_cast<float>(i) / static_cast<float>(tubularSegments);
-              uv.y = static_cast<float>(j) / static_cast<float>(radialSegments);
+                uv.x = static_cast<float>(i) / static_cast<float>(params.tubularSegments);
+                uv.y = static_cast<float>(j) / static_cast<float>(params.radialSegments);
 
-              uvs.insert(uvs.end(), {uv.x, uv.y});
-          }
-      }
+                uvs.insert(uvs.end(), {uv.x, uv.y});
+            }
+        }
     });
 
     auto generateBufferData = std::function<void()>([&] {
-      for (unsigned i = 0; i < tubularSegments; i++) {
+        for (unsigned i = 0; i < params.tubularSegments; i++) {
 
-          generateSegment(i);
-      }
+            generateSegment(i);
+        }
 
-      // if the geometry is not closed, generate the last row of vertices and normals
-      // at the regular position on the given path
-      //
-      // if the geometry is closed, duplicate the first row of vertices and normals (uvs will differ)
+        // if the geometry is not closed, generate the last row of vertices and normals
+        // at the regular position on the given path
+        //
+        // if the geometry is closed, duplicate the first row of vertices and normals (uvs will differ)
 
-      generateSegment((!closed) ? tubularSegments : 0);
+        generateSegment((!params.closed) ? params.tubularSegments : 0);
 
-      // uvs are generated in a separate function.
-      // this makes it easy compute correct values for closed geometries
+        // uvs are generated in a separate function.
+        // this makes it easy compute correct values for closed geometries
 
-      generateUVs();
+        generateUVs();
 
-      // finally create faces
+        // finally create faces
 
-      generateIndices();
+        generateIndices();
     });
 
     // create buffer data

@@ -7,7 +7,7 @@ namespace {
     std::vector<Vector2> generateLathePoints() {
         std::vector<Vector2> points;
         for (unsigned i = 0; i < 10; i++) {
-            points.emplace_back(std::sin(i * 0.2f) * 10 + 5, (i - 5.f) * 2.f);
+            points.emplace_back(std::sin(static_cast<float>(i) * 0.2f) * 10 + 5, (static_cast<float>(i) - 5.f) * 2.f);
         }
         return points;
     }
@@ -36,7 +36,6 @@ namespace {
         mesh->add(line);
 
         return mesh;
-
     }
 
 }// namespace

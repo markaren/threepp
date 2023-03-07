@@ -7,10 +7,10 @@
 using namespace threepp;
 
 
-RingGeometry::RingGeometry(float innerRadius, float outerRadius, unsigned int thetaSegments, unsigned int phiSegments, float thetaStart, float thetaLength) {
+RingGeometry::RingGeometry(const Params& params) {
 
-    thetaSegments = std::max(3u, thetaSegments);
-    phiSegments = std::max(1u, phiSegments);
+    unsigned int thetaSegments = std::max(3u, params.thetaSegments);
+    unsigned int phiSegments = std::max(1u, params.phiSegments);
 
     std::list<unsigned int> indices;
     std::list<float> vertices;
@@ -19,8 +19,8 @@ RingGeometry::RingGeometry(float innerRadius, float outerRadius, unsigned int th
 
     // some helper variables
 
-    float radius = innerRadius;
-    const auto radiusStep = ((outerRadius - innerRadius) / static_cast<float>(phiSegments));
+    float radius = params.innerRadius;
+    const auto radiusStep = ((params.outerRadius - params.innerRadius) / static_cast<float>(phiSegments));
     Vector3 vertex;
     Vector2 uv;
 
@@ -32,7 +32,7 @@ RingGeometry::RingGeometry(float innerRadius, float outerRadius, unsigned int th
 
             // values are generate from the inside of the ring to the outside
 
-            const auto segment = thetaStart + static_cast<float>(i) / static_cast<float>(thetaSegments) * thetaLength;
+            const auto segment = params.thetaStart + static_cast<float>(i) / static_cast<float>(thetaSegments) * params.thetaLength;
 
             // vertex
 
@@ -47,8 +47,8 @@ RingGeometry::RingGeometry(float innerRadius, float outerRadius, unsigned int th
 
             // uv
 
-            uv.x = (vertex.x / outerRadius + 1) / 2;
-            uv.y = (vertex.y / outerRadius + 1) / 2;
+            uv.x = (vertex.x / params.outerRadius + 1) / 2;
+            uv.y = (vertex.y / params.outerRadius + 1) / 2;
 
             uvs.insert(uvs.end(), {uv.x, uv.y});
         }

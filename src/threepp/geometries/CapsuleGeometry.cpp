@@ -12,13 +12,14 @@ namespace {
 
         Path path;
         path.absarc(0, -length / 2, radius, math::PI * 1.5f, 0);
-        path.absarc(0, length / 2, radius, 0,math::PI * 0.5f);
+        path.absarc(0, length / 2, radius, 0, math::PI * 0.5f);
 
         return path.getPoints(capSegments);
     }
 
 }// namespace
 
-CapsuleGeometry::CapsuleGeometry(float radius, float length, unsigned int capSegments, unsigned int radialSegments)
-    : LatheGeometry(generatePoints(radius, length, capSegments), radialSegments), radius(radius), length(length) {
-}
+CapsuleGeometry::CapsuleGeometry(const Params& params)
+    : LatheGeometry(generatePoints(params.radius, params.length, params.capSegments), params.radialSegments),
+      radius(params.radius),
+      length(params.length) {}

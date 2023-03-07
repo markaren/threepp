@@ -14,12 +14,30 @@ namespace threepp {
     class TubeGeometry: public BufferGeometry {
 
     public:
-        const std::shared_ptr<Curve3> path;
+        struct Params {
+            unsigned int tubularSegments;
+            float radius;
+            unsigned int radialSegments;
+            bool closed;
+
+            explicit Params(unsigned int tubularSegments = 64, float radius = 1, unsigned int radialSegments = 32, bool closed = false)
+                : tubularSegments(tubularSegments), radius(radius), radialSegments(radialSegments), closed(closed) {}
+        };
+
         const float radius;
+        const std::shared_ptr<Curve3> path;
+
 
         [[nodiscard]] std::string type() const override {
 
             return "TubeGeometry";
+        }
+
+        static std::shared_ptr<TubeGeometry> create(
+                const std::shared_ptr<Curve3>& path,
+                const Params& params) {
+
+            return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, params));
         }
 
         static std::shared_ptr<TubeGeometry> create(
@@ -29,13 +47,13 @@ namespace threepp {
                 unsigned int radialSegments = 16,
                 bool closed = false) {
 
-            return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, tubularSegments, radius, radialSegments, closed));
+            return create(path, Params(tubularSegments, radius, radialSegments, closed));
         }
 
     private:
         Curve3::FrenetFrames frames;
 
-        TubeGeometry(std::shared_ptr<Curve3> path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed);
+        TubeGeometry(std::shared_ptr<Curve3> path, const Params& params);
     };
 
 }// namespace threepp

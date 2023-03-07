@@ -6,13 +6,13 @@
 using namespace threepp;
 
 
-CircleGeometry::CircleGeometry(float radius, unsigned int segments, float thetaStart, float thetaLength) {
+CircleGeometry::CircleGeometry(const Params& params) {
 
     // buffers
 
     std::list<unsigned int> indices;
     std::vector<float> vertices;
-    std::vector<float> normals;
+    std::list<float> normals;
     std::list<float> uvs;
 
     // helper variables
@@ -26,14 +26,14 @@ CircleGeometry::CircleGeometry(float radius, unsigned int segments, float thetaS
     normals.insert(normals.end(), {0, 0, 1});
     uvs.insert(uvs.end(), {0.5f, 0.5f});
 
-    for (unsigned s = 0, i = 3; s <= segments; s++, i += 3) {
+    for (unsigned s = 0, i = 3; s <= params.segments; s++, i += 3) {
 
-        const auto segment = thetaStart + static_cast<float>(s) / static_cast<float>(segments) * thetaLength;
+        const auto segment = params.thetaStart + static_cast<float>(s) / static_cast<float>(params.segments) * params.thetaLength;
 
         // vertex
 
-        vertex.x = radius * std::cos(segment);
-        vertex.y = radius * std::sin(segment);
+        vertex.x = params.radius * std::cos(segment);
+        vertex.y = params.radius * std::sin(segment);
 
         vertices.insert(vertices.end(), {vertex.x, vertex.y, vertex.z});
 
@@ -43,15 +43,15 @@ CircleGeometry::CircleGeometry(float radius, unsigned int segments, float thetaS
 
         // uvs
 
-        uv.x = (vertices[i] / radius + 1) / 2;
-        uv.y = (vertices[i + 1] / radius + 1) / 2;
+        uv.x = (vertices[i] / params.radius + 1) / 2;
+        uv.y = (vertices[i + 1] / params.radius + 1) / 2;
 
         uvs.insert(uvs.end(), {uv.x, uv.y});
     }
 
     // indices
 
-    for (unsigned i = 1; i <= segments; i++) {
+    for (unsigned i = 1; i <= params.segments; i++) {
 
         indices.insert(indices.end(), {i, i + 1, 0});
     }

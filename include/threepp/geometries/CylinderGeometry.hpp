@@ -10,7 +10,6 @@ namespace threepp {
     class CylinderGeometry: public BufferGeometry {
 
     public:
-
         struct Params {
             float radiusTop;
             float radiusBottom;

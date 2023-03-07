@@ -29,6 +29,6 @@ namespace threepp {
         TorusGeometry(float radius, float tube, unsigned int radialSegments, unsigned int tubularSegments, float arc);
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_TORUSGEOMETRY_HPP

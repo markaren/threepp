@@ -10,10 +10,24 @@ namespace threepp {
     class CircleGeometry: public BufferGeometry {
 
     public:
+        struct Params {
+            float radius;
+            unsigned int segments;
+            float thetaStart;
+            float thetaLength;
+
+            explicit Params(float radius = 1, unsigned int segments = 16, float thetaStart = 0, float thetaLength = math::PI)
+                : radius(radius), segments(segments), thetaStart(thetaStart), thetaLength(thetaLength) {}
+        };
 
         [[nodiscard]] std::string type() const override {
 
             return "CircleGeometry";
+        }
+
+        static std::shared_ptr<CircleGeometry> create(const Params& params) {
+
+            return std::shared_ptr<CircleGeometry>(new CircleGeometry(params));
         }
 
         static std::shared_ptr<CircleGeometry> create(
@@ -22,11 +36,11 @@ namespace threepp {
                 float thetaStart = 0,
                 float thetaLength = math::TWO_PI) {
 
-            return std::shared_ptr<CircleGeometry>(new CircleGeometry(radius, segments, thetaStart, thetaLength));
+            return create(Params(radius, segments, thetaStart, thetaLength));
         }
 
     protected:
-        CircleGeometry(float radius, unsigned int segments, float thetaStart, float thetaLength);
+        explicit CircleGeometry(const Params& params);
     };
 
 }// namespace threepp

@@ -12,7 +12,6 @@ namespace threepp {
     class ConeGeometry: public CylinderGeometry {
 
     public:
-
         struct Params {
             float radius;
             float height;
