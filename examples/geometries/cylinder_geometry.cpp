@@ -65,6 +65,8 @@ int main() {
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderFloat("radiusBottom", &params.radiusBottom, 0.1f, 2);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
+        ImGui::SliderFloat("height", &params.height, 0.1f, 2);
+        paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderInt("radialSegments", reinterpret_cast<int*>(&params.radialSegments), 1, 32);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();
         ImGui::SliderInt("heightSegments", reinterpret_cast<int*>(&params.heightSegments), 1, 32);
