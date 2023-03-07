@@ -2,6 +2,7 @@
 add_test_executable(Box3_test)
 add_test_executable(Frustum_test)
 add_test_executable(Sphere_test)
+add_test_executable(Spherical_test)
 add_test_executable(Ray_test)
 add_test_executable(Vector3_test)
 add_test_executable(Matrix4_test)
