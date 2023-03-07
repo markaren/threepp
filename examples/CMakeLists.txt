@@ -10,9 +10,6 @@ endif()
 add_executable(texture2d texture2d.cpp)
 target_link_libraries(texture2d PUBLIC threepp)
 
-add_executable(points_demo points_demo.cpp)
-target_link_libraries(points_demo PUBLIC threepp)
-
 add_subdirectory(geometries)
 add_subdirectory(materials)
 add_subdirectory(shaders)

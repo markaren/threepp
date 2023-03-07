@@ -14,6 +14,9 @@ target_link_libraries(water PUBLIC threepp)
 add_executable(sprite sprite.cpp)
 target_link_libraries(sprite PUBLIC threepp)
 
+add_executable(points points.cpp)
+target_link_libraries(points PUBLIC threepp)
+
 if (assimp_FOUND)
     add_executable(decal decal.cpp)
     target_link_libraries(decal PUBLIC threepp assimp::assimp)
