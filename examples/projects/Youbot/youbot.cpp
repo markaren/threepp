@@ -31,7 +31,6 @@ int main() {
     auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    AssimpLoader loader;
     auto youbot = Youbot::create("data/models/collada/youbot.dae");
     canvas.addKeyListener(youbot.get());
     scene->add(youbot->base);
