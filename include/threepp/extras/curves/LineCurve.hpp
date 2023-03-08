@@ -10,6 +10,9 @@ namespace threepp {
     class LineCurve: public Curve2 {
 
     public:
+        Vector2 v1;
+        Vector2 v2;
+
         LineCurve(const Vector2& v1, const Vector2& v2): v1(v1), v2(v2) {}
 
         void getPoint(float t, Vector2& point) override {
@@ -34,10 +37,6 @@ namespace threepp {
 
             tangent.copy(this->v2).sub(this->v1).normalize();
         }
-
-    private:
-        Vector2 v1;
-        Vector2 v2;
     };
 
 }// namespace threepp

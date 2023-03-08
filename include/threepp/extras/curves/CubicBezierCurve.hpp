@@ -13,6 +13,11 @@ namespace threepp {
     class CubicBezierCurve: public Curve2 {
 
     public:
+        Vector2 v0;
+        Vector2 v1;
+        Vector2 v2;
+        Vector2 v3;
+
         explicit CubicBezierCurve(const Vector2& v0 = {}, const Vector2& v1 = {}, const Vector2& v2 = {}, const Vector2& v3 = {})
             : v0(v0), v1(v1), v2(v2), v3(v3) {}
 
@@ -27,12 +32,6 @@ namespace threepp {
 
             return std::make_shared<CubicBezierCurve>(v0, v1, v2, v3);
         }
-
-    private:
-        Vector2 v0;
-        Vector2 v1;
-        Vector2 v2;
-        Vector2 v3;
     };
 
 }// namespace threepp

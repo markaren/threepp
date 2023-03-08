@@ -25,8 +25,15 @@ namespace threepp {
 
         float aRotation;
 
-        explicit EllipseCurve(float aX = 0, float aY = 0, float xRadius = 1, float yRadius = 1, float aStartAngle = 0, float aEndAngle = math::TWO_PI, bool aClockwise = false, float aRotation = 0)
-            : aX(aX), aY(aY), xRadius(xRadius), yRadius(yRadius), aStartAngle(aStartAngle), aEndAngle(aEndAngle), aClockwise(aClockwise), aRotation(aRotation) {}
+        explicit EllipseCurve(
+                float aX = 0, float aY = 0,
+                float xRadius = 1, float yRadius = 1,
+                float aStartAngle = 0, float aEndAngle = math::TWO_PI,
+                bool aClockwise = false, float aRotation = 0)
+            : aX(aX), aY(aY),
+              xRadius(xRadius), yRadius(yRadius),
+              aStartAngle(aStartAngle), aEndAngle(aEndAngle),
+              aClockwise(aClockwise), aRotation(aRotation) {}
 
         void getPoint(float t, Vector2& target) override {
 
