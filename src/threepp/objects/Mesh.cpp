@@ -4,6 +4,8 @@
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
+#include <algorithm>
+
 using namespace threepp;
 
 namespace {
@@ -93,6 +95,14 @@ namespace {
     }
 
 }// namespace
+
+std::vector<Material*> Mesh::materials() {
+
+    std::vector<Material*> res(materials_.size());
+    std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) { return m.get(); });
+
+    return res;
+}
 
 void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
@@ -244,3 +254,4 @@ std::shared_ptr<Object3D> Mesh::clone(bool recursive) {
 
     return clone;
 }
+

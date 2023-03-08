@@ -4,6 +4,7 @@
 
 #include <limits>
 #include <optional>
+#include <algorithm>
 
 #include "threepp/math/MathUtils.hpp"
 
@@ -29,7 +30,7 @@ public:
         // integration with windup guarding
         integral_ += (curr_error * dt);
         if (windup_guard_) {
-            threepp::math::clamp(integral_, -windup_guard_.value(), windup_guard_.value());
+            integral_ = std::clamp(integral_, -windup_guard_.value(), windup_guard_.value());
         }
 
         // differentiation
@@ -44,7 +45,7 @@ public:
         float D = (params_.td * diff);
 
         // summation of terms
-        return threepp::math::clamp(P + I + D, -1.f, 1.f);
+        return std::clamp(P + I + D, -1.f, 1.f);
     }
 
     void setWindupGuard(const std::optional<float> &windupGuard) {

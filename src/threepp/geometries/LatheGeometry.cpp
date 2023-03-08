@@ -1,13 +1,15 @@
 
 #include "threepp/geometries/LatheGeometry.hpp"
 
+#include <algorithm>
+
 using namespace threepp;
 
 LatheGeometry::LatheGeometry(const std::vector<Vector2>& points, unsigned int segments, float phiStart, float phiLength) {
     
     // clamp phiLength so it's in range of [ 0, 2PI ]
     
-    phiLength = math::clamp( phiLength, 0.f, math::TWO_PI );
+    phiLength = std::clamp( phiLength, 0.f, math::TWO_PI );
 
     // buffers
 

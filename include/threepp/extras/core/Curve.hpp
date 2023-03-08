@@ -11,6 +11,7 @@
 #include <numeric>
 #include <optional>
 #include <vector>
+#include <algorithm>
 
 namespace threepp {
 
