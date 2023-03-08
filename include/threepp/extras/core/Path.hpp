@@ -5,12 +5,14 @@
 
 #include "threepp/extras/core/CurvePath.hpp"
 
+#include <optional>
+
 namespace threepp {
 
     class Path: public CurvePath<Vector2> {
 
     public:
-        explicit Path(const std::vector<Vector2>& points = {});
+        explicit Path(const std::optional<std::vector<Vector2>>& points = {});
 
         Path& setFromPoints(const std::vector<Vector2>& points);
 

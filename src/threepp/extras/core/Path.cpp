@@ -8,9 +8,11 @@
 using namespace threepp;
 
 
-Path::Path(const std::vector<Vector2>& points) {
+Path::Path(const std::optional<std::vector<Vector2>>& points) {
 
-    setFromPoints(points);
+    if (points) {
+        setFromPoints(*points);
+    }
 }
 
 Path& Path::setFromPoints(const std::vector<Vector2>& points) {
