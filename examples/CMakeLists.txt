@@ -18,6 +18,7 @@ add_subdirectory(lights)
 add_subdirectory(misc)
 add_subdirectory(helpers)
 add_subdirectory(loaders)
+add_subdirectory(extras)
 
 add_subdirectory(projects)
 
