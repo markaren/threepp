@@ -4,15 +4,16 @@
 #define THREEPP_PATH_HPP
 
 #include "threepp/extras/core/CurvePath.hpp"
-#include "threepp/extras/curve/EllipseCurve.hpp"
-#include "threepp/extras/curve/LineCurve.hpp"
+#include "threepp/extras/curves/EllipseCurve.hpp"
+#include "threepp/extras/curves/LineCurve.hpp"
 
 namespace threepp {
 
     class Path: public CurvePath<Vector2> {
 
     public:
-        Path(const std::vector<Vector2>& points = {}) {
+        explicit Path(const std::vector<Vector2>& points = {}) {
+
             setFromPoints(points);
         }
 

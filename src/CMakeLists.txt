@@ -33,9 +33,9 @@ set(publicHeaders
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
         "threepp/extras/core/Path.hpp"
-        "threepp/extras/curve/CatmullRomCurve3.hpp"
-        "threepp/extras/curve/EllipseCurve.hpp"
-        "threepp/extras/curve/LineCurve.hpp"
+        "threepp/extras/curves/CatmullRomCurve3.hpp"
+        "threepp/extras/curves/EllipseCurve.hpp"
+        "threepp/extras/curves/LineCurve.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
 
         "threepp/input/KeyListener.hpp"
@@ -205,7 +205,7 @@ set(sources
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 
-        "threepp/extras/curve/CatmullRomCurve3.cpp"
+        "threepp/extras/curves/CatmullRomCurve3.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CapsuleGeometry.cpp"

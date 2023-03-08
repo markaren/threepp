@@ -4,8 +4,7 @@
 #define THREEPP_CURVEPATH_HPP
 
 #include "threepp/extras/core/Curve.hpp"
-#include "threepp/extras/curve/EllipseCurve.hpp"
-#include "threepp/extras/curve/LineCurve.hpp"
+#include "threepp/extras/curves/LineCurve.hpp"
 
 namespace threepp {
 

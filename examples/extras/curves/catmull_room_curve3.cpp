@@ -1,5 +1,5 @@
 
-#include "threepp/extras/curve/CatmullRomCurve3.hpp"
+#include "threepp/extras/curves/CatmullRomCurve3.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
