@@ -2,6 +2,8 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/core/Raycaster.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 namespace {

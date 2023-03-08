@@ -1,6 +1,7 @@
 
 #include "threepp/geometries/CylinderGeometry.hpp"
 
+#include <cmath>
 #include <list>
 
 using namespace threepp;
@@ -36,7 +37,7 @@ CylinderGeometry::CylinderGeometry(const Params& params)
 
             std::vector<unsigned int> indexRow;
 
-            const auto v = static_cast<float>(y) /  static_cast<float>(params.heightSegments);
+            const auto v = static_cast<float>(y) / static_cast<float>(params.heightSegments);
 
             // calculate the radius of the current row
 
@@ -44,7 +45,7 @@ CylinderGeometry::CylinderGeometry(const Params& params)
 
             for (unsigned x = 0; x <= params.radialSegments; x++) {
 
-                const auto u = static_cast<float>(x) /  static_cast<float>(params.radialSegments);
+                const auto u = static_cast<float>(x) / static_cast<float>(params.radialSegments);
 
                 const auto theta = u * params.thetaLength + params.thetaStart;
 

@@ -3,6 +3,7 @@
 #ifndef THREEPP_CATMULLROMCURVE3_HPP
 #define THREEPP_CATMULLROMCURVE3_HPP
 
+#include <memory>
 #include <utility>
 
 #include "threepp/extras/core/Curve.hpp"
