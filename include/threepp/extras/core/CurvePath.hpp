@@ -7,6 +7,8 @@
 #include "threepp/extras/curves/EllipseCurve.hpp"
 #include "threepp/extras/curves/LineCurve.hpp"
 
+#include <memory>
+
 namespace threepp {
 
     template<class T>
