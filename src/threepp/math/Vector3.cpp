@@ -6,8 +6,6 @@
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Spherical.hpp"
 
-#include "threepp/math/MathUtils.hpp"
-
 #include "threepp/cameras/Camera.hpp"
 
 #include <algorithm>
@@ -532,4 +530,9 @@ bool Vector3::equals(const Vector3& v) const {
 bool Vector3::isNan() const {
 
     return std::isnan(x) || std::isnan(y) || std::isnan(z);
+}
+
+Vector3& Vector3::makeNan() {
+
+    return set(NAN, NAN, NAN);
 }

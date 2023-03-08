@@ -4,8 +4,6 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 
-#include <string>
-
 using namespace threepp;
 
 Vector2::Vector2(int x, int y): Vector2(static_cast<float>(x), static_cast<float>(y)) {}
@@ -313,4 +311,9 @@ bool Vector2::equals(const Vector2& v) const {
 bool Vector2::isNan() const {
 
     return std::isnan(x) || std::isnan(y);
+}
+
+Vector2& Vector2::makeNan() {
+
+    return set(NAN, NAN);
 }

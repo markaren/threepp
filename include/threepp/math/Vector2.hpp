@@ -5,7 +5,7 @@
 #ifndef THREEPP_VECTOR2_HPP
 #define THREEPP_VECTOR2_HPP
 
-#include <iostream>
+#include <ostream>
 #include <string>
 
 namespace threepp {
@@ -149,10 +149,7 @@ namespace threepp {
             return sub(other);
         }
 
-        Vector2& makeNan() {
-
-            return set(NAN, NAN);
-        }
+        Vector2& makeNan();
 
         template<class ArrayLike>
         Vector2& fromArray(const ArrayLike& array, unsigned int offset = 0) {

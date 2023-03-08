@@ -233,10 +233,7 @@ namespace threepp {
             return divideScalar(s);
         }
 
-        Vector3& makeNan() {
-
-            return set(NAN, NAN, NAN);
-        }
+        Vector3& makeNan();
 
         [[nodiscard]] bool isNan() const;
 

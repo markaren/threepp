@@ -1,6 +1,7 @@
 
 #include "threepp/loaders/TextureLoader.hpp"
 
+#include <iostream>
 #include <regex>
 
 using namespace threepp;
