@@ -32,10 +32,13 @@ set(publicHeaders
         "threepp/extras/bullet/BulletWrapper.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
+        "threepp/extras/core/Interpolations.hpp"
         "threepp/extras/core/Path.hpp"
-        "threepp/extras/curve/CatmullRomCurve3.hpp"
-        "threepp/extras/curve/EllipseCurve.hpp"
-        "threepp/extras/curve/LineCurve.hpp"
+        "threepp/extras/curves/CatmullRomCurve3.hpp"
+        "threepp/extras/curves/CubicBezierCurve.hpp"
+        "threepp/extras/curves/CubicBezierCurve3.hpp"
+        "threepp/extras/curves/EllipseCurve.hpp"
+        "threepp/extras/curves/LineCurve.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
 
         "threepp/input/KeyListener.hpp"
@@ -204,6 +207,8 @@ set(sources
         "threepp/core/EventDispatcher.cpp"
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
+
+        "threepp/extras/curves/CatmullRomCurve3.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CapsuleGeometry.cpp"

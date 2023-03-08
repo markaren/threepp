@@ -4,7 +4,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 
-#include <string>
+#include <cmath>
 
 using namespace threepp;
 
@@ -313,4 +313,9 @@ bool Vector2::equals(const Vector2& v) const {
 bool Vector2::isNan() const {
 
     return std::isnan(x) || std::isnan(y);
+}
+
+Vector2& Vector2::makeNan() {
+
+    return set(NAN, NAN);
 }

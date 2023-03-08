@@ -4,8 +4,8 @@
 #define THREEPP_CURVEPATH_HPP
 
 #include "threepp/extras/core/Curve.hpp"
-#include "threepp/extras/curve/EllipseCurve.hpp"
-#include "threepp/extras/curve/LineCurve.hpp"
+#include "threepp/extras/curves/EllipseCurve.hpp"
+#include "threepp/extras/curves/LineCurve.hpp"
 
 namespace threepp {
 
@@ -25,8 +25,8 @@ namespace threepp {
 
             T startPoint;
             T endPoint;
-            curves.front().getPoint(0, startPoint);
-            curves.back().getPoint(1);
+            curves.front()->getPoint(0, startPoint);
+            curves.back()->getPoint(1, endPoint);
 
             if (!startPoint.equals(endPoint)) {
 
@@ -43,7 +43,7 @@ namespace threepp {
         // 3. Get t for the curve
         // 4. Return curve.getPointAt(t')
 
-        void getPoint(float t, Vector2& target) override {
+        void getPoint(float t, T& target) override {
 
             auto d = t * this->getLength();
             auto curveLengths = this->getCurveLengths();
@@ -67,9 +67,7 @@ namespace threepp {
                 ++i;
             }
 
-            target.set(NAN, NAN);
-
-            return;
+            target.makeNan();
 
             // loop where sum != 0, sum > d , sum+1 <d
         }
@@ -122,9 +120,9 @@ namespace threepp {
             return lengths;
         }
 
-        std::vector<Vector2> getSpacedPoints(unsigned int divisions = 40) override {
+        std::vector<T> getSpacedPoints(unsigned int divisions = 40) override {
 
-            std::vector<Vector2> points;
+            std::vector<T> points;
 
             for (unsigned i = 0; i <= divisions; i++) {
 
@@ -140,10 +138,10 @@ namespace threepp {
             return points;
         }
 
-        std::vector<Vector2> getPoints(unsigned int divisions = 12) override {
+        std::vector<T> getPoints(unsigned int divisions = 12) override {
 
-            std::vector<Vector2> points;
-            Vector2 last;
+            std::vector<T> points;
+            T last;
 
             for (unsigned i = 0; i < curves.size(); i++) {
 

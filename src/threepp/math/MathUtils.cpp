@@ -2,7 +2,9 @@
 #include "threepp/math/MathUtils.hpp"
 
 #include <cctype>
+#include <cmath>
 #include <random>
+#include <vector>
 
 using namespace threepp;
 

@@ -2,9 +2,8 @@
 #ifndef THREEPP_MATHUTILS_HPP
 #define THREEPP_MATHUTILS_HPP
 
-#include <algorithm>
 #include <string>
-#include <cmath>
+#include <limits>
 
 namespace threepp::math {
 
@@ -16,18 +15,6 @@ namespace threepp::math {
     const float RAD2DEG = 180.f / PI;
 
     std::string generateUUID();
-
-    template<class T>
-    inline T clamp(T value, T min, T max) {
-
-        return std::max(min, std::min(max, value));
-    }
-
-    template<class T>
-    inline void clampInPlace(T& value, T min, T max) {
-
-        value = std::max(min, std::min(max, value));
-    }
 
     float mapLinear(float x, float a1, float a2, float b1, float b2);
 

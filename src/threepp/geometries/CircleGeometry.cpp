@@ -1,6 +1,7 @@
 
 #include "threepp/geometries/CircleGeometry.hpp"
 
+#include <cmath>
 #include <list>
 
 using namespace threepp;

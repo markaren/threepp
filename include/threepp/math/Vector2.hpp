@@ -5,7 +5,7 @@
 #ifndef THREEPP_VECTOR2_HPP
 #define THREEPP_VECTOR2_HPP
 
-#include <iostream>
+#include <ostream>
 #include <string>
 
 namespace threepp {
@@ -125,24 +125,31 @@ namespace threepp {
         [[nodiscard]] bool equals(const Vector2& v) const;
 
         bool operator==(const Vector2& other) const {
+
             return equals(other);
         }
 
         Vector2 operator+(const Vector2& other) const {
+
             return clone().add(other);
         }
 
         Vector2& operator+=(const Vector2& other) {
+
             return add(other);
         }
 
         Vector2 operator-(const Vector2& other) const {
+
             return clone().sub(other);
         }
 
         Vector2& operator-=(const Vector2& other) {
+
             return sub(other);
         }
+
+        Vector2& makeNan();
 
         template<class ArrayLike>
         Vector2& fromArray(const ArrayLike& array, unsigned int offset = 0) {

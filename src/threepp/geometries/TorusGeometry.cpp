@@ -1,6 +1,7 @@
 
 #include "threepp/geometries/TorusGeometry.hpp"
 
+#include <cmath>
 #include <list>
 
 using namespace threepp;

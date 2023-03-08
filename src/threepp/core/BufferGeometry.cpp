@@ -1,6 +1,7 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
+#include <cmath>
 #include <utility>
 
 using namespace threepp;
@@ -61,6 +62,7 @@ const IntBufferAttribute* BufferGeometry::getIndex() const {
 }
 
 const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& BufferGeometry::getAttributes() const {
+
     return attributes_;
 }
 
@@ -217,6 +219,40 @@ BufferGeometry& BufferGeometry::center() {
     _offset.negate();
 
     this->translate(_offset.x, _offset.y, _offset.z);
+
+    return *this;
+}
+
+BufferGeometry& BufferGeometry::setFromPoints(const std::vector<Vector2>& points) {
+
+    std::vector<float> position(points.size() * 3);
+
+    for (unsigned i = 0, j = 0, l = points.size(); i < l; i++) {
+
+        const auto& point = points[i];
+        position[j++] = point.x;
+        position[j++] = point.y;
+        position[j++] = 0;
+    }
+
+    this->setAttribute("position", FloatBufferAttribute::create(position, 3));
+
+    return *this;
+}
+
+BufferGeometry& BufferGeometry::setFromPoints(const std::vector<Vector3>& points) {
+
+    std::vector<float> position(points.size() * 3);
+
+    for (unsigned i = 0, j = 0, l = points.size(); i < l; i++) {
+
+        const auto& point = points[i];
+        position[j++] = point.x;
+        position[j++] = point.y;
+        position[j++] = point.z;
+    }
+
+    this->setAttribute("position", FloatBufferAttribute::create(position, 3));
 
     return *this;
 }

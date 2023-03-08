@@ -1,8 +1,9 @@
 
 #include "threepp/helpers/ArrowHelper.hpp"
-#include "threepp/core/BufferGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 

@@ -4,6 +4,9 @@
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
+#include <algorithm>
+
+
 using namespace threepp;
 
 namespace {
@@ -21,7 +24,7 @@ namespace {
             ray.intersectTriangle(pA, pB, pC, material->side != DoubleSide, point);
         }
 
-        if (std::isnan(point.x)) return std::nullopt;
+        if (point.isNan()) return std::nullopt;
 
         _intersectionPointWorld.copy(point);
         _intersectionPointWorld.applyMatrix4(*object->matrixWorld);
@@ -93,6 +96,14 @@ namespace {
     }
 
 }// namespace
+
+std::vector<Material*> Mesh::materials() {
+
+    std::vector<Material*> res(materials_.size());
+    std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) { return m.get(); });
+
+    return res;
+}
 
 void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
@@ -178,7 +189,7 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
                 if (intersection) {
 
-                    intersection->faceIndex = (int) std::floor(i / 3);// triangle number in indexed buffer semantics
+                    intersection->faceIndex = i / 3;// triangle number in indexed buffer semantics
                     intersects.emplace_back(*intersection);
                 }
             }
@@ -207,7 +218,7 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
                     if (intersection) {
 
-                        intersection->faceIndex = (int) std::floor(j / 3);// triangle number in non-indexed buffer semantics
+                        intersection->faceIndex = j / 3;// triangle number in non-indexed buffer semantics
                         intersection->face->materialIndex = group.materialIndex;
                         intersects.emplace_back(*intersection);
                     }
@@ -229,7 +240,7 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
                 if (intersection) {
 
-                    intersection->faceIndex = (int) std::floor(i / 3);// triangle number in non-indexed buffer semantics
+                    intersection->faceIndex = i / 3;// triangle number in non-indexed buffer semantics
                     intersects.emplace_back(*intersection);
                 }
             }

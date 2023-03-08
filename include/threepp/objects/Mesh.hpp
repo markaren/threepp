@@ -8,7 +8,6 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 
-#include <memory>
 
 namespace threepp {
 
@@ -41,11 +40,7 @@ namespace threepp {
             return materials_.front().get();
         }
 
-        [[nodiscard]] std::vector<Material*> materials() override {
-            std::vector<Material*> res(materials_.size());
-            std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) { return m.get(); });
-            return res;
-        }
+        [[nodiscard]] std::vector<Material*> materials() override;
 
         void setMaterial(const std::shared_ptr<Material>& material) {
 
