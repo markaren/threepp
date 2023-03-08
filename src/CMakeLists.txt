@@ -34,6 +34,7 @@ set(publicHeaders
         "threepp/extras/core/CurvePath.hpp"
         "threepp/extras/core/Interpolations.hpp"
         "threepp/extras/core/Path.hpp"
+        "threepp/extras/core/Shape.hpp"
         "threepp/extras/curves/CatmullRomCurve3.hpp"
         "threepp/extras/curves/CubicBezierCurve.hpp"
         "threepp/extras/curves/CubicBezierCurve3.hpp"
@@ -212,6 +213,7 @@ set(sources
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 
+        "threepp/extras/core/Path.cpp"
         "threepp/extras/curves/CatmullRomCurve3.cpp"
         "threepp/extras/curves/SplineCurve.cpp"
 
