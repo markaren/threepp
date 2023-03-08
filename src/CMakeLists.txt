@@ -39,6 +39,7 @@ set(publicHeaders
         "threepp/extras/curves/CubicBezierCurve3.hpp"
         "threepp/extras/curves/EllipseCurve.hpp"
         "threepp/extras/curves/LineCurve.hpp"
+        "threepp/extras/curves/LineCurve3.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
 
         "threepp/input/KeyListener.hpp"
