@@ -185,6 +185,23 @@ BufferGeometry& BufferGeometry::center() {
     return *this;
 }
 
+BufferGeometry& BufferGeometry::setFromPoints(const std::vector<Vector3>& points) {
+
+    std::vector<float> position(points.size()*3);
+
+    for (unsigned i = 0, j= 0, l = points.size(); i < l; i++) {
+
+        const auto& point = points[i];
+        position[j++] = point.x;
+        position[j++] = point.y;
+        position[j++] = point.z;
+    }
+
+    this->setAttribute("position", FloatBufferAttribute::create(position, 3));
+
+    return *this;
+}
+
 void BufferGeometry::computeBoundingBox() {
 
     if (!this->boundingBox) {
