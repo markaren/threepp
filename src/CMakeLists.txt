@@ -40,6 +40,7 @@ set(publicHeaders
         "threepp/extras/curves/EllipseCurve.hpp"
         "threepp/extras/curves/LineCurve.hpp"
         "threepp/extras/curves/LineCurve3.hpp"
+        "threepp/extras/curves/SplineCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve3.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
@@ -212,6 +213,7 @@ set(sources
         "threepp/core/Raycaster.cpp"
 
         "threepp/extras/curves/CatmullRomCurve3.cpp"
+        "threepp/extras/curves/SplineCurve.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CapsuleGeometry.cpp"
