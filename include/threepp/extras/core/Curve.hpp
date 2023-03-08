@@ -147,8 +147,7 @@ namespace threepp {
 
             const auto arcLengths = this->getLengths();
 
-            float i;
-            float il = static_cast<float>(arcLengths.size());
+            auto il = arcLengths.size();
 
             float targetArcLength;// The targeted u distance value to get
 
@@ -158,18 +157,19 @@ namespace threepp {
 
             } else {
 
-                targetArcLength = u * arcLengths[static_cast<int>(il) - 1];
+                targetArcLength = u * arcLengths[il - 1];
             }
 
             // binary search for the index with largest value smaller than target u distance
 
             float low = 0, high = il - 1, comparison;
 
+            float i;
             while (low <= high) {
 
                 i = std::floor(low + (high - low) / 2);
 
-                comparison = arcLengths[static_cast<int>(i)] - targetArcLength;
+                comparison = arcLengths[i] - targetArcLength;
 
                 if (comparison < 0) {
 
@@ -190,15 +190,15 @@ namespace threepp {
 
             i = high;
 
-            if (arcLengths[static_cast<int>(i)] == targetArcLength) {
+            if (arcLengths[i] == targetArcLength) {
 
-                return i / (il - 1);
+                return static_cast<float>(i) / static_cast<float>(il - 1);
             }
 
             // we could get finer grain at lengths, or use simple interpolation between two points
 
-            const float lengthBefore = arcLengths[static_cast<int>(i)];
-            const float lengthAfter = arcLengths[static_cast<int>(i) + 1];
+            const float lengthBefore = arcLengths[i];
+            const float lengthAfter = arcLengths[i + 1];
 
             const float segmentLength = lengthAfter - lengthBefore;
 
@@ -208,7 +208,7 @@ namespace threepp {
 
             // add that fractional amount to t
 
-            const float t = (i + segmentFraction) / (il - 1);
+            const float t = (i + segmentFraction) / static_cast<float>(il - 1);
 
             return t;
         }
