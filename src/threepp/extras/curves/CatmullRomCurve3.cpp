@@ -78,3 +78,36 @@ void CatmullRomCurve3::getPoint(float t, Vector3& point) {
             py.calc(weight),
             pz.calc(weight));
 }
+
+void CubicPoly::init(float x0, float x1, float t0, float t1) {
+
+    c0 = x0;
+    c1 = t0;
+    c2 = -3 * x0 + 3 * x1 - 2 * t0 - t1;
+    c3 = 2 * x0 - 2 * x1 + t0 + t1;
+}
+
+void CubicPoly::initCatmullRom(float x0, float x1, float x2, float x3, float tension) {
+
+    init(x1, x2, tension * (x2 - x0), tension * (x3 - x1));
+}
+
+void CubicPoly::initNonuniformCatmullRom(float x0, float x1, float x2, float x3, float dt0, float dt1, float dt2) {
+
+    // compute tangents when parameterized in [t1,t2]
+    float t1 = (x1 - x0) / dt0 - (x2 - x0) / (dt0 + dt1) + (x2 - x1) / dt1;
+    float t2 = (x2 - x1) / dt1 - (x3 - x1) / (dt1 + dt2) + (x3 - x2) / dt2;
+
+    // rescale tangents for parametrization in [0,1]
+    t1 *= dt1;
+    t2 *= dt1;
+
+    init(x1, x2, t1, t2);
+}
+
+float CubicPoly::calc(float t) const {
+
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    return c0 + c1 * t + c2 * t2 + c3 * t3;
+}
