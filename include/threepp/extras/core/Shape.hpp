@@ -18,7 +18,7 @@ namespace threepp {
     public:
         std::string uuid{math::generateUUID()};
 
-        explicit Shape(const std::vector<Vector2>& points): Path(points) {}
+        explicit Shape(const std::optional<std::vector<Vector2>>& points = {}): Path(points) {}
 
         std::vector<std::vector<Vector2>> getPointsHoles(unsigned int divisions) {
 

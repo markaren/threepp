@@ -14,7 +14,7 @@ namespace threepp {
 
     public:
         bool autoClose = false;
-        std::vector<std::unique_ptr<Curve<T>>> curves;
+        std::vector<std::shared_ptr<Curve<T>>> curves;
 
         void add(const Curve<T>& curve) {
 
@@ -30,7 +30,7 @@ namespace threepp {
 
             if (!startPoint.equals(endPoint)) {
 
-                curves.emplace_back(std::make_unique<LineCurve>(endPoint, startPoint));
+                curves.emplace_back(std::make_shared<LineCurve>(endPoint, startPoint));
             }
         }
 
