@@ -23,9 +23,9 @@ namespace threepp {
         void getPoint(float t, Vector3& point) override {
 
             point.set(
-                    QuadraticBezier(t, v0.x, v1.x, v2.x),
-                    QuadraticBezier(t, v0.y, v1.y, v2.y),
-                    QuadraticBezier(t, v0.z, v1.z, v2.z));
+                    interpolants::QuadraticBezier(t, v0.x, v1.x, v2.x),
+                    interpolants::QuadraticBezier(t, v0.y, v1.y, v2.y),
+                    interpolants::QuadraticBezier(t, v0.z, v1.z, v2.z));
         }
 
         static std::shared_ptr<QuadraticBezierCurve> create(const Vector3& v0 = {}, const Vector3& v1 = {}, const Vector3& v2 = {}) {

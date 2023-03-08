@@ -3,7 +3,7 @@
 #ifndef THREEPP_INTERPOLATIONS_HPP
 #define THREEPP_INTERPOLATIONS_HPP
 
-namespace threepp {
+namespace threepp::interpolants {
 
     /**
  * Bezier Curves formulas obtained from
