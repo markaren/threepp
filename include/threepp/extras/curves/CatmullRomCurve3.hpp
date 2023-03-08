@@ -72,19 +72,21 @@ namespace threepp {
         CurveType curveType;
         float tension;
 
+        explicit CatmullRomCurve3(std::vector<Vector3> points = {}, bool closed = false, CurveType type = centripetal, float tension = 0.5f)
+            : points(std::move(points)), closed(closed), curveType(type), tension(tension) {}
+
         void getPoint(float t, Vector3& point) override;
 
-        static std::shared_ptr<CatmullRomCurve3> create(const std::vector<Vector3>& points = {}, bool closed = false, CurveType type = CurveType::centripetal, float tension = 0.5f) {
+        static std::shared_ptr<CatmullRomCurve3> create(const std::vector<Vector3>& points = {}, bool closed = false, CurveType type = centripetal, float tension = 0.5f) {
 
-            return std::shared_ptr<CatmullRomCurve3>(new CatmullRomCurve3(points, closed, type, tension));
+            return std::make_shared<CatmullRomCurve3>(points, closed, type, tension);
         }
 
     private:
         Vector3 tmp;
         CubicPoly px, py, pz;
 
-        CatmullRomCurve3(std::vector<Vector3> points, bool closed, CurveType type, float tension)
-            : points(std::move(points)), closed(closed), curveType(type), tension(tension) {}
+
     };
 
 
