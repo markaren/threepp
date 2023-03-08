@@ -233,6 +233,11 @@ namespace threepp {
             return divideScalar(s);
         }
 
+        Vector3& makeNan() {
+
+            return set(NAN, NAN, NAN);
+        }
+
         [[nodiscard]] bool isNan() const;
 
         template<class ArrayLike>

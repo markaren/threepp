@@ -125,23 +125,33 @@ namespace threepp {
         [[nodiscard]] bool equals(const Vector2& v) const;
 
         bool operator==(const Vector2& other) const {
+
             return equals(other);
         }
 
         Vector2 operator+(const Vector2& other) const {
+
             return clone().add(other);
         }
 
         Vector2& operator+=(const Vector2& other) {
+
             return add(other);
         }
 
         Vector2 operator-(const Vector2& other) const {
+
             return clone().sub(other);
         }
 
         Vector2& operator-=(const Vector2& other) {
+
             return sub(other);
+        }
+
+        Vector2& makeNan() {
+
+            return set(NAN, NAN);
         }
 
         template<class ArrayLike>
