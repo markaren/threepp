@@ -102,6 +102,8 @@ namespace threepp {
 
         BufferGeometry& center();
 
+        BufferGeometry& setFromPoints(const std::vector<Vector2>& points);
+
         BufferGeometry& setFromPoints(const std::vector<Vector3>& points);
 
         void computeBoundingBox();
