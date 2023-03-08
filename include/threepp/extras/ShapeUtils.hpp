@@ -50,43 +50,7 @@ namespace threepp::shapeutils {
         }
     }
 
-    //    std::vector<std::vector<float>> triangulateShape(std::vector<Vector2>& contour, std::vector<std::vector<Vector2>>& holes) {
-    //
-    //        std::vector<float> vertices;          // flat array of vertices like [ x0,y0, x1,y1, x2,y2, ... ]
-    //        std::vector<unsigned int> holeIndices;// array of hole indices
-    //        std::vector<std::vector<float>> faces;// final array of vertex indices like [ [ a,b,d ], [ b,c,d ] ]
-    //
-    //        removeDupEndPts(contour);
-    //        addContour(vertices, contour);
-    //
-    //        //
-    //
-    //        auto holeIndex = contour.size();
-    //
-    //        for (auto& points : holes) {
-    //            removeDupEndPts(points);
-    //        }
-    //
-    //        for (const auto & hole : holes) {
-    //
-    //            holeIndices.emplace_back(holeIndex);
-    //            holeIndex += hole.size();
-    //            addContour(vertices, hole);
-    //        }
-    //
-    //        //
-    //
-    //        const auto triangles = Earcut.triangulate(vertices, holeIndices);
-    //
-    //        //
-    //
-    //        for (unsigned i = 0; i < triangles.length; i += 3) {
-    //
-    //            faces.emplace_back(triangles.slice(i, i + 3));
-    //        }
-    //
-    //        return faces;
-    //    }
+    std::vector<std::vector<unsigned int>> triangulateShape(std::vector<Vector2>& contour, std::vector<std::vector<Vector2>>& holes);
 
 
 }// namespace threepp::shapeutils

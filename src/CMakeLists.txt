@@ -212,6 +212,7 @@ set(sources
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 
+        "threepp/extras/ShapeUtils.cpp"
         "threepp/extras/curves/CatmullRomCurve3.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"
