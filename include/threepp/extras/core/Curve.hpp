@@ -336,7 +336,7 @@ namespace threepp {
                 for (unsigned i = 1; i <= segments; i++) {
 
                     // twist a little...
-                    normals[i].applyMatrix4(mat.makeRotationAxis(tangents[i], theta * i));
+                    normals[i].applyMatrix4(mat.makeRotationAxis(tangents[i], theta * static_cast<float>(i)));
                     binormals[i].crossVectors(tangents[i], normals[i]);
                 }
             }
