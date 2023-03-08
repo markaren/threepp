@@ -33,7 +33,7 @@ Because fun.
 
 ### How to build
 
-`threepp` can be used in conjunction with both `vcpkg` and `conan`.
+`threepp` can be used in conjunction with both `vcpkg` (preferred) and `conan`.
 
 #### vcpkg (using manifest mode)
 
@@ -62,7 +62,9 @@ You might also use the supplied `run_conan_XXX.sh` scripts.
 
 In general, you'll find that math classes are value types, while `threepp` expect smart pointers for other types. 
 For convenience, geometries, materials etc. has a static `::create` function that returns a `std::shared_ptr`.
-There should never be a need to handle memory explicitly using `threepp`. Yay!
+There should never be a need to handle memory explicitly using `threepp`.
+Furthermore, materials, geometries and textures are automatically disposed when they are no longer referenced.
+Yay!
 
 ### Example
 
@@ -82,7 +84,7 @@ int main() {
     
     OrbitControls controls{camera, canvas};
 
-    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.75f));
+    auto light = HemisphereLight::create();
     scene->add(light);
 
     auto group = Group::create();
