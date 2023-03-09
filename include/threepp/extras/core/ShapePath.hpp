@@ -26,11 +26,11 @@ namespace threepp {
 
         ShapePath& splineThru(const std::vector<Vector2>& pts);
 
-        std::vector<std::unique_ptr<Shape>> toShapes(bool isCCW, bool noHoles);
+        std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW, bool noHoles);
 
     private:
         Path* currentPath;
-        std::vector<std::unique_ptr<Path>> subPaths;
+        std::vector<std::shared_ptr<Path>> subPaths;
     };
 
 }// namespace threepp

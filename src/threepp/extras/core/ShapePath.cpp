@@ -1,13 +1,26 @@
 
 #include "threepp/extras/core/ShapePath.hpp"
+#include "threepp/extras/ShapeUtils.hpp"
 
 using namespace threepp;
 
 namespace {
 
-    std::vector<std::unique_ptr<Shape>> toShapesNoHoles(const std::vector<std::unique_ptr<Path>>& inSubpaths) {
+    struct NewShape {
 
-        std::vector<std::unique_ptr<Shape>> shapes;
+        std::shared_ptr<Shape> s;
+        std::vector<Vector2> p;
+    };
+
+    struct NewShapeHoles {
+
+        std::shared_ptr<Path> h;
+        Vector2 p;
+    };
+
+    std::vector<std::shared_ptr<Shape>> toShapesNoHoles(const std::vector<std::shared_ptr<Path>>& inSubpaths) {
+
+        std::vector<std::shared_ptr<Shape>> shapes;
 
         for (const auto& tmpPath : inSubpaths) {
 
@@ -117,140 +130,134 @@ ShapePath& ShapePath::splineThru(const std::vector<Vector2>& pts) {
     return *this;
 }
 
-std::vector<std::unique_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles) {
+std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles) {
 
-    return {}; // TODO
+    if (subPaths.empty()) return {};
 
-//    if (subPaths.empty()) return {};
-//
-//    if (noHoles) return toShapesNoHoles(subPaths);
-//
-//
-//    bool solid;
-//    Path* tmpPath;
-//    std::unique_ptr<Shape> tmpShape;
-//    std::vector<std::unique_ptr<Shape>> shapes;
-//
-//    if (subPaths.size() == 1) {
-//
-//        tmpPath = subPaths[0].get();
-//        tmpShape = std::make_unique<Shape>();
-//        tmpShape->curves = tmpPath->curves;
-//        shapes.emplace_back(std::move(tmpShape));
-//        return shapes;
-//    }
-//
-//    bool holesFirst = !isClockWise(subPaths[0]->getPoints());
-//    holesFirst = isCCW ? !holesFirst : holesFirst;
-//
-//    // console.log("Holes first", holesFirst);
-//
-//    const betterShapeHoles = [];
-//    const newShapes = [];
-//    let newShapeHoles = [];
-//    unsigned int mainIdx = 0;
-//    std::vector<Vector2> tmpPoints;
-//
-//    newShapes[mainIdx] = undefined;
-//    newShapeHoles[mainIdx] = [];
-//
-//    for (unsigned i = 0, l = subPaths.size(); i < l; i++) {
-//
-//        tmpPath = subPaths[i].get();
-//        tmpPoints = tmpPath->getPoints();
-//        solid = isClockWise(tmpPoints);
-//        solid = isCCW ? !solid : solid;
-//
-//        if (solid) {
-//
-//            if ((!holesFirst) && (newShapes[mainIdx])) mainIdx++;
-//
-//            newShapes[mainIdx] = {new Shape(), tmpPoints};
-//            newShapes[mainIdx].s.curves = tmpPath.curves;
-//
-//            if (holesFirst) mainIdx++;
-//            newShapeHoles[mainIdx] = [];
-//
-//            //console.log('cw', i);
-//
-//        } else {
-//
-//            newShapeHoles[mainIdx].push({h: tmpPath, p: tmpPoints[0]});
-//
-//            //console.log('ccw', i);
-//        }
-//    }
-//
-//    // only Holes? -> probably all Shapes with wrong orientation
-//    if (!newShapes[0]) return toShapesNoHoles(subPaths);
-//
-//
-//    if (newShapes.length > 1) {
-//
-//        bool ambiguous = false;
-//        const toChange = [];
-//
-//        for (unsigned sIdx = 0, sLen = newShapes.length; sIdx < sLen; sIdx++) {
-//
-//            betterShapeHoles[sIdx] = [];
-//        }
-//
-//        for (let sIdx = 0, sLen = newShapes.length; sIdx < sLen; sIdx++) {
-//
-//            const sho = newShapeHoles[sIdx];
-//
-//            for (let hIdx = 0; hIdx < sho.length; hIdx++) {
-//
-//                const ho = sho[hIdx];
-//                let hole_unassigned = true;
-//
-//                for (let s2Idx = 0; s2Idx < newShapes.length; s2Idx++) {
-//
-//                    if (isPointInsidePolygon(ho.p, newShapes[s2Idx].p)) {
-//
-//                        if (sIdx != = s2Idx) toChange.push({froms: sIdx, tos: s2Idx, hole: hIdx});
-//                        if (hole_unassigned) {
-//
-//                            hole_unassigned = false;
-//                            betterShapeHoles[s2Idx].push(ho);
-//
-//                        } else {
-//
-//                            ambiguous = true;
-//                        }
-//                    }
-//                }
-//
-//                if (hole_unassigned) {
-//
-//                    betterShapeHoles[sIdx].push(ho);
-//                }
-//            }
-//        }
-//        // console.log("ambiguous: ", ambiguous);
-//
-//        if (toChange.length > 0) {
-//
-//            // console.log("to change: ", toChange);
-//            if (!ambiguous) newShapeHoles = betterShapeHoles;
-//        }
-//    }
-//
-//    let tmpHoles;
-//
-//    for (unsigned i = 0, il = newShapes.size(); i < il; i++) {
-//
-//        tmpShape = newShapes[i].s;
-//        shapes.push(tmpShape);
-//        tmpHoles = newShapeHoles[i];
-//
-//        for (let j = 0, jl = tmpHoles.length; j < jl; j++) {
-//
-//            tmpShape.holes.push(tmpHoles[j].h);
-//        }
-//    }
-//
-//    //console.log("shape", shapes);
-//
-//    return shapes;
+    if (noHoles) return toShapesNoHoles(subPaths);
+
+
+    bool solid;
+    std::shared_ptr<Path> tmpPath;
+    std::shared_ptr<Shape> tmpShape;
+    std::vector<std::shared_ptr<Shape>> shapes;
+
+    if (subPaths.size() == 1) {
+
+        tmpPath = subPaths[0];
+        tmpShape = std::make_unique<Shape>();
+        tmpShape->curves = tmpPath->curves;
+        shapes.emplace_back(std::move(tmpShape));
+        return shapes;
+    }
+
+    bool holesFirst = !shapeutils::isClockWise(subPaths[0]->getPoints());
+    holesFirst = isCCW ? !holesFirst : holesFirst;
+
+    std::vector<std::vector<NewShapeHoles>> betterShapeHoles;
+    std::vector<std::optional<NewShape>> newShapes;
+    std::vector<std::vector<NewShapeHoles>> newShapeHoles;
+    unsigned int mainIdx = 0;
+    std::vector<Vector2> tmpPoints;
+
+    //newShapes[ mainIdx ] = undefined;
+    //newShapeHoles[ mainIdx ] = [];
+    newShapes.emplace_back();
+    newShapeHoles.emplace_back();
+
+    for (const auto& subPath : subPaths) {
+
+        tmpPath = subPath;
+        tmpPoints = tmpPath->getPoints();
+        solid = shapeutils::isClockWise(tmpPoints);
+        solid = isCCW ? !solid : solid;
+
+        if (solid) {
+
+            if ((!holesFirst) && (newShapes[mainIdx])) mainIdx++;
+
+            // newShapes[ mainIdx ] = { s: new Shape(), p: tmpPoints };
+            newShapes.emplace_back(NewShape{std::make_shared<Shape>(), tmpPoints});
+            newShapes.back()->s->curves = tmpPath->curves;
+
+            if (holesFirst) mainIdx++;
+            //newShapeHoles[ mainIdx ] = [];
+            newShapeHoles.emplace_back();
+
+        } else {
+
+            // newShapeHoles[ mainIdx ].push( { h: tmpPath, p: tmpPoints[ 0 ] } );
+            newShapeHoles.back().emplace_back(NewShapeHoles{tmpPath, tmpPoints[0]});
+        }
+    }
+
+    // only Holes? -> probably all Shapes with wrong orientation
+    if (!newShapes[0]) return toShapesNoHoles(subPaths);
+
+
+    if (newShapes.size() > 1) {
+
+        bool ambiguous = false;
+        std::vector<std::array<unsigned int, 3>> toChange;
+
+        for (unsigned sIdx = 0, sLen = newShapes.size(); sIdx < sLen; sIdx++) {
+
+            //betterShapeHoles[sIdx] = [];
+            betterShapeHoles.emplace_back();
+        }
+
+        for (unsigned sIdx = 0, sLen = newShapes.size(); sIdx < sLen; sIdx++) {
+
+            const auto& sho = newShapeHoles[sIdx];
+
+            for (unsigned hIdx = 0; hIdx < sho.size(); hIdx++) {
+
+                const auto& ho = sho[hIdx];
+                bool hole_unassigned = true;
+
+                for (unsigned s2Idx = 0; s2Idx < newShapes.size(); s2Idx++) {
+
+                    if (isPointInsidePolygon(ho.p, newShapes[s2Idx]->p)) {
+
+                        if (sIdx != s2Idx) toChange.emplace_back(std::array<unsigned int, 3>{sIdx, s2Idx, hIdx});
+                        if (hole_unassigned) {
+
+                            hole_unassigned = false;
+                            betterShapeHoles[s2Idx].emplace_back(ho);
+
+                        } else {
+
+                            ambiguous = true;
+                        }
+                    }
+                }
+
+                if (hole_unassigned) {
+
+                    betterShapeHoles[sIdx].emplace_back(ho);
+                }
+            }
+        }
+
+        if (!toChange.empty()) {
+
+            if (!ambiguous) newShapeHoles = betterShapeHoles;
+        }
+    }
+
+    std::vector<NewShapeHoles> tmpHoles;
+
+    for (unsigned i = 0, il = newShapes.size(); i < il; i++) {
+
+        tmpShape = newShapes[i]->s;
+        shapes.emplace_back(tmpShape);
+        tmpHoles = newShapeHoles[i];
+
+        for (NewShapeHoles& tmpHole : tmpHoles) {
+
+            tmpShape->holes.emplace_back(tmpHole.h);
+        }
+    }
+
+    return shapes;
 }
