@@ -6,6 +6,10 @@
 #include "threepp/extras/core/Curve.hpp"
 #include "threepp/extras/curves/EllipseCurve.hpp"
 #include "threepp/extras/curves/LineCurve.hpp"
+#include "threepp/extras/curves/LineCurve3.hpp"
+#include "threepp/extras/curves/SplineCurve.hpp"
+
+#include <memory>
 
 #include <memory>
 
@@ -16,7 +20,7 @@ namespace threepp {
 
     public:
         bool autoClose = false;
-        std::vector<std::unique_ptr<Curve<T>>> curves;
+        std::vector<std::shared_ptr<Curve<T>>> curves;
 
         void add(const Curve<T>& curve) {
 
@@ -32,7 +36,7 @@ namespace threepp {
 
             if (!startPoint.equals(endPoint)) {
 
-                curves.emplace_back(std::make_unique<LineCurve>(endPoint, startPoint));
+                curves.emplace_back(std::make_shared<LineCurve>(endPoint, startPoint));
             }
         }
 
@@ -149,15 +153,15 @@ namespace threepp {
 
                 auto& curve = curves[i];
 
-                auto ellipseCurve = dynamic_cast<EllipseCurve*>(curve.get());
-                auto lineCurve = dynamic_cast<LineCurve*>(curve.get());
-                bool lineCurve3 = false; // TODO
-                bool splineCurve = false;// TODO
+                auto ellipseCurve = std::dynamic_pointer_cast<EllipseCurve>(curve);
+                auto lineCurve = std::dynamic_pointer_cast<LineCurve>(curve);
+                auto lineCurve3 = std::dynamic_pointer_cast<LineCurve3>(curve);
+                auto splineCurve = std::dynamic_pointer_cast<SplineCurve>(curve);
 
 
                 auto resolution = (curve && ellipseCurve)                ? divisions * 2
                                   : (curve && (lineCurve || lineCurve3)) ? 1
-                                                                         //                                  : (curve && splineCurve)                 ? divisions * splineCurve->points.size()
+                                  : (curve && splineCurve)               ? divisions * splineCurve->points.size()
                                                                          : divisions;
 
                 auto pts = curve->getPoints(resolution);
