@@ -30,6 +30,7 @@ set(publicHeaders
         "threepp/cameras/CameraView.hpp"
 
         "threepp/extras/bullet/BulletWrapper.hpp"
+        "threepp/extras/ShapeUtils.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
         "threepp/extras/core/Interpolations.hpp"
@@ -214,6 +215,7 @@ set(sources
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 
+        "threepp/extras/ShapeUtils.cpp"
         "threepp/extras/core/Path.cpp"
         "threepp/extras/core/ShapePath.cpp"
         "threepp/extras/curves/CatmullRomCurve3.cpp"
