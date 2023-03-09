@@ -7,13 +7,13 @@
 
 namespace threepp {
 
-    class LineCurve: public Curve3 {
+    class LineCurve3: public Curve3 {
 
     public:
         Vector3 v1;
         Vector3 v2;
 
-        LineCurve(const Vector3& v1, const Vector3& v2): v1(v1), v2(v2) {}
+        LineCurve3(const Vector3& v1, const Vector3& v2): v1(v1), v2(v2) {}
 
         void getPoint(float t, Vector3& point) override {
 
