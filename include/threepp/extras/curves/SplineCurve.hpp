@@ -5,6 +5,7 @@
 
 #include "threepp/extras/core/Curve.hpp"
 
+#include <memory>
 
 namespace threepp {
 
@@ -17,6 +18,11 @@ namespace threepp {
             : points(std::move(points)) {}
 
         void getPoint(float t, Vector2& point) override;
+
+        static std::shared_ptr<SplineCurve> create(const std::vector<Vector2>& points = {}) {
+
+            return std::make_shared<SplineCurve>(points);
+        }
     };
 
 }// namespace threepp
