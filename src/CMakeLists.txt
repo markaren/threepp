@@ -388,7 +388,6 @@ target_link_libraries(threepp
         glfw::glfw)
 if (nlohmann_json_FOUND)
     target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
-    target_compile_definitions(threepp PRIVATE WITH_JSON)
 endif()
 target_include_directories(threepp
         PUBLIC
