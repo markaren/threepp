@@ -77,7 +77,7 @@ endif ()
 file(COPY "${CMAKE_SOURCE_DIR}/data/favicon.png" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin)
 file(COPY "${CMAKE_SOURCE_DIR}/data/models" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 file(COPY "${CMAKE_SOURCE_DIR}/data/textures" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
-file(COPY "${CMAKE_SOURCE_DIR}/data/fonts" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/fonts)
+file(COPY "${CMAKE_SOURCE_DIR}/data/fonts" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 
 
 # ==============================================================================
