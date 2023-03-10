@@ -41,7 +41,7 @@ namespace threepp {
     class Font {
 
     public:
-        Font(FontData data);
+        explicit Font(FontData data);
 
         std::vector<std::shared_ptr<Shape>> generateShapes(const std::string& text, unsigned int size = 100);
 
