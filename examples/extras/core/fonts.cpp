@@ -8,13 +8,26 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas(Canvas::Parameters().antialiasing(8));
     GLRenderer renderer(canvas);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = PCFSoftShadowMap;
 
     auto scene = Scene::create();
-    scene->background = Color::blue;
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 1000);
-    camera->position.set(0, 0, 40);
+    scene->background = Color::black;
+    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10000);
+    camera->position.set(0, 5, 40);
+
+    auto light = DirectionalLight::create();
+    light->position.set(10, 5, 10);
+    light->lookAt(Vector3::ZEROS);
+    light->castShadow = true;
+    scene->add(light);
+
+    auto pointLight = PointLight::create();
+    pointLight->intensity = 0.2f;
+    pointLight->position.set(0, 2, 10);
+    scene->add(pointLight);
 
     OrbitControls controls{camera, canvas};
 
@@ -23,12 +36,13 @@ int main() {
     Font font(*data);
     auto shapes = font.generateShapes("threepp!", 10);
 
-    auto material = MeshBasicMaterial::create();
-    material->color = 0x00ff00;
-    material->side = DoubleSide;
+    auto material = MeshStandardMaterial::create();
+    material->color = Color::orange;
     auto extrude = ExtrudeGeometry::create(shapes);
     extrude->center();
+    extrude->computeVertexNormals();
     auto mesh = Mesh::create(extrude, material);
+    mesh->castShadow = true;
     scene->add(mesh);
 
     auto lineMaterial = LineBasicMaterial::create();
@@ -36,6 +50,13 @@ int main() {
     auto edges = LineSegments::create(EdgesGeometry::create(*extrude, 10), lineMaterial);
     mesh->add(edges);
 
+    auto planeMaterial = MeshPhongMaterial::create();
+    planeMaterial->color = Color::gray;
+    auto plane = Mesh::create(PlaneGeometry::create(1000, 1000), planeMaterial);
+    plane->position.y = -8;
+    plane->rotateX(math::degToRad(-90));
+    plane->receiveShadow = true;
+    scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
