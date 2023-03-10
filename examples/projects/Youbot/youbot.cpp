@@ -31,9 +31,18 @@ int main() {
     auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    auto youbot = Youbot::create("data/models/collada/youbot.dae");
-    canvas.addKeyListener(youbot.get());
-    scene->add(youbot->base);
+    auto& handle = renderer.textHandle("Loading model..");
+    handle.scale = 2;
+
+    std::shared_ptr<Youbot> youbot;
+    canvas.threadTask([&]{
+        youbot = Youbot::create("data/models/collada/youbot.dae");
+        canvas.invokeLater([&]{
+            canvas.addKeyListener(youbot.get());
+            scene->add(youbot->base);
+            handle.setText("Use WASD keys to steer robot");
+        });
+    });
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -44,6 +53,6 @@ int main() {
     canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
-        youbot->update(dt);
+        if (youbot) youbot->update(dt);
     });
 }

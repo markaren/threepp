@@ -91,9 +91,18 @@ int main() {
     auto endEffectorHelper = AxesHelper::create(1);
     scene->add(endEffectorHelper);
 
-    auto youbot = Youbot::create("data/models/collada/youbot.dae");
-    canvas.addKeyListener(youbot.get());
-    scene->add(youbot->base);
+    auto& handle = renderer.textHandle("Loading model..");
+    handle.scale = 2;
+
+    std::shared_ptr<Youbot> youbot;
+    canvas.threadTask([&]{
+        youbot = Youbot::create("data/models/collada/youbot.dae");
+        canvas.invokeLater([&]{
+            canvas.addKeyListener(youbot.get());
+            scene->add(youbot->base);
+            handle.setText("");
+        });
+    });
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -125,24 +134,28 @@ int main() {
     canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
-        ui.render();
-        controls.enabled = !ui.mouseHover;
+        if (youbot) {
 
-        auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
-        endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
+            ui.render();
+            controls.enabled = !ui.mouseHover;
 
-        targetHelper->position.copy(ui.pos);
+            auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
+            endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
-        if (ui.jointMode) {
-            ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(youbot->getJointValues()));
-            targetHelper->visible = false;
+            targetHelper->position.copy(ui.pos);
+
+            if (ui.jointMode) {
+                ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(youbot->getJointValues()));
+                targetHelper->visible = false;
+            }
+            if (ui.posMode) {
+                ui.values = ikSolver.solveIK(kine, ui.pos, youbot->getJointValues());
+                targetHelper->visible = true;
+            }
+
+            youbot->setJointValues(ui.values);
+            youbot->update(dt);
+
         }
-        if (ui.posMode) {
-            ui.values = ikSolver.solveIK(kine, ui.pos, youbot->getJointValues());
-            targetHelper->visible = true;
-        }
-
-        youbot->setJointValues(ui.values);
-        youbot->update(dt);
     });
 }

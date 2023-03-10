@@ -1,6 +1,7 @@
 
 #include "threepp/Canvas.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/utils/ThreadPool.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -30,7 +31,9 @@ struct Canvas::Impl {
     int fps_ = -1;
 
     WindowSize size_;
-    Vector2 lastMousePos{};
+    Vector2 lastMousePos_;
+
+    std::unique_ptr<utils::ThreadPool> pool_;
 
     std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
@@ -109,6 +112,19 @@ struct Canvas::Impl {
             fps_ = nbFrames;
             nbFrames = 0;
             lastTime += 1.0;
+        }
+    }
+
+    void initThreadPool(unsigned int numThreads) {
+        if (!pool_) {
+            pool_ = std::make_unique<utils::ThreadPool>(numThreads);
+        }
+    }
+
+    void threadTask(const std::function<void()>& f) {
+        if (!pool_) initThreadPool(1);
+        if (pool_) {
+            pool_->submit(f);
         }
     }
 
@@ -249,10 +265,10 @@ struct Canvas::Impl {
 
             switch (action) {
                 case GLFW_PRESS:
-                    l->onMouseDown(button, p->lastMousePos);
+                    l->onMouseDown(button, p->lastMousePos_);
                     break;
                 case GLFW_RELEASE:
-                    l->onMouseUp(button, p->lastMousePos);
+                    l->onMouseUp(button, p->lastMousePos_);
                     break;
                 default:
                     break;
@@ -262,10 +278,10 @@ struct Canvas::Impl {
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        p->lastMousePos.set(static_cast<float>(xpos), static_cast<float>(ypos));
+        p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
         auto listeners = p->mouseListeners;
         for (auto l : listeners) {
-            l->onMouseMove(p->lastMousePos);
+            l->onMouseMove(p->lastMousePos_);
         }
     }
 
@@ -298,7 +314,8 @@ struct Canvas::Impl {
     }
 };
 
-Canvas::Canvas(const Canvas::Parameters& params): pimpl_(new Impl(params)) {}
+Canvas::Canvas(const Canvas::Parameters& params)
+    : pimpl_(new Impl(params)) {}
 
 int threepp::Canvas::getFPS() const {
     return pimpl_->fps_;
@@ -333,6 +350,7 @@ void Canvas::setSize(WindowSize size) {
 
     pimpl_->setSize(size);
 }
+
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
@@ -362,7 +380,23 @@ void Canvas::invokeLater(const std::function<void()>& f, float t) {
     pimpl_->invokeLater(f, t);
 }
 
+void Canvas::initThreadPool(unsigned int threadCount) {
+
+    pimpl_->initThreadPool(threadCount);
+}
+
+void Canvas::threadTask(const std::function<void()>& f) {
+
+    pimpl_->threadTask(f);
+}
+
+void* Canvas::window_ptr() const {
+
+    return pimpl_->window;
+}
+
 Canvas::~Canvas() = default;
+
 
 Canvas::Parameters& Canvas::Parameters::title(std::string value) {
 
@@ -395,9 +429,4 @@ Canvas::Parameters& Canvas::Parameters::vsync(bool flag) {
     this->vsync_ = flag;
 
     return *this;
-}
-
-void* Canvas::window_ptr() const {
-
-    return pimpl_->window;
 }

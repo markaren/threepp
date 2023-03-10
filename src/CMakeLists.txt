@@ -196,11 +196,14 @@ endforeach ()
 
 set(privateHeaders
 
+        "threepp/extras/earcut.hpp"
+
         "threepp/renderers/gl/GLUtils.hpp"
         "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/regex_util.hpp"
         "threepp/utils/StringUtils.hpp"
+        "threepp/utils/ThreadPool.hpp"
 
         )
 
@@ -329,6 +332,9 @@ target_link_libraries(threepp
         glfw::glfw)
 if (nlohmann_json_FOUND)
     target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
+endif()
+if(UNIX)
+    target_link_libraries(threepp PRIVATE pthread)
 endif()
 target_include_directories(threepp
         PUBLIC

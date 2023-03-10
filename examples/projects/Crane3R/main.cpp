@@ -91,7 +91,7 @@ int main() {
     scene->add(light);
 
     std::shared_ptr<Crane3R> crane;
-    std::thread t([&] {
+    canvas.threadTask([&] {
         crane = Crane3R::create();
         canvas.invokeLater([&, crane] {
             scene->add(crane);
@@ -156,5 +156,4 @@ int main() {
         }
     });
 
-    t.join();
 }
