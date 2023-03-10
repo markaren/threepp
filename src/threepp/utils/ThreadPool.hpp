@@ -15,7 +15,7 @@ namespace threepp::utils {
 
     public:
         explicit ThreadPool(unsigned int threadCount)
-            : done_(false), pendingTasks_(0) {
+            : done_(false) {
 
             threadCount = std::min(std::thread::hardware_concurrency(), std::max(1u, threadCount));
             try {
@@ -60,8 +60,6 @@ namespace threepp::utils {
 
         std::condition_variable cvWorker_;
 
-        unsigned int pendingTasks_;
-
         void worker_thread() {
 
             while (true) {
@@ -72,8 +70,6 @@ namespace threepp::utils {
                 cvWorker_.wait(lck, [this]() { return done_ || !workQueue_.empty(); });
                 if (!workQueue_.empty()) {
 
-                    ++pendingTasks_;
-
                     auto task = std::move(workQueue_.front());
                     workQueue_.pop();
 
@@ -81,10 +77,6 @@ namespace threepp::utils {
 
                     // Run work function outside mutex lock context
                     task();
-
-                    lck.lock();
-                    --pendingTasks_;
-                    lck.unlock();
 
                 } else if (done_) {
 
