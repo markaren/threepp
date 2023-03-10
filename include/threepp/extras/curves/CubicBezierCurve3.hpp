@@ -28,11 +28,6 @@ namespace threepp {
                     interpolants::CubicBezier(t, v0.y, v1.y, v2.y, v3.y),
                     interpolants::CubicBezier(t, v0.z, v1.z, v2.z, v3.z));
         }
-
-        static std::shared_ptr<CubicBezierCurve3> create(const Vector3& v0 = {}, const Vector3& v1 = {}, const Vector3& v2 = {}, const Vector3& v3 = {}) {
-
-            return std::make_shared<CubicBezierCurve3>(v0, v1, v2, v3);
-        }
     };
 
 }// namespace threepp

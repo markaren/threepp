@@ -27,11 +27,6 @@ namespace threepp {
                     interpolants::QuadraticBezier(t, v0.y, v1.y, v2.y),
                     interpolants::QuadraticBezier(t, v0.z, v1.z, v2.z));
         }
-
-        static std::shared_ptr<QuadraticBezierCurve> create(const Vector3& v0 = {}, const Vector3& v1 = {}, const Vector3& v2 = {}) {
-
-            return std::make_shared<QuadraticBezierCurve>(v0, v1, v2);
-        }
     };
 
 }// namespace threepp

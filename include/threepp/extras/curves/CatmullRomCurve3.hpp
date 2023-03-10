@@ -52,15 +52,9 @@ namespace threepp {
 
         void getPoint(float t, Vector3& point) override;
 
-        static std::shared_ptr<CatmullRomCurve3> create(const std::vector<Vector3>& points = {}, bool closed = false, CurveType type = centripetal, float tension = 0.5f) {
-
-            return std::make_shared<CatmullRomCurve3>(points, closed, type, tension);
-        }
-
     private:
         Vector3 tmp;
         CubicPoly px, py, pz;
-
     };
 
 
