@@ -68,7 +68,6 @@ namespace {
         shadowLight->shadow->camera->as<OrthographicCamera>()->bottom = -100;
         shadowLight->shadow->camera->as<OrthographicCamera>()->left = 100;
         shadowLight->shadow->camera->as<OrthographicCamera>()->right = -100;
-        shadowLight->shadow->camera->as<OrthographicCamera>()->right = -100;
         shadowLight->shadow->mapSize.multiplyScalar(10);
         return shadowLight;
     }
