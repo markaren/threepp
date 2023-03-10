@@ -77,9 +77,22 @@ ShapeGeometry::ShapeGeometry(const std::vector<Shape*>& shapes, unsigned int cur
         }
     };
 
-    for (const auto& shape : shapes) {
+    if (shapes.size() == 1) {
 
-        addShape(*shape);
+        addShape(*shapes.front());
+
+    } else {
+
+        for (unsigned i = 0; i < shapes.size(); i++) {
+
+            addShape(*shapes[i]);
+
+            this->addGroup( groupStart, groupCount, i ); // enables MultiMaterial support
+
+            groupStart += groupCount;
+            groupCount = 0;
+
+        }
     }
 
     this->setIndex(indices);
