@@ -5,9 +5,6 @@ target_link_libraries(instancing PUBLIC threepp)
 add_executable(lod lod.cpp)
 target_link_libraries(lod PUBLIC threepp)
 
-add_executable(reflector reflector.cpp)
-target_link_libraries(reflector PUBLIC threepp)
-
 add_executable(water water.cpp)
 target_link_libraries(water PUBLIC threepp)
 
