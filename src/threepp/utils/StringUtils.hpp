@@ -73,14 +73,12 @@ namespace threepp::utils {
                 s.end());
     }
 
-    // trim from both sides
     inline std::string trim(std::string s) {
         s = trimStart(s);
         s = trimEnd(s);
         return s;
     }
 
-    // trim from both sides
     inline void trimInplace(std::string& s) {
         trimStartInplace(s);
         trimEndInplace(s);
@@ -88,14 +86,14 @@ namespace threepp::utils {
 
     inline std::string toLower(std::string s) {
         std::transform(s.begin(), s.end(), s.begin(),
-                       [](unsigned char c) { return std::tolower(c); }// correct
+                       [](unsigned char c) { return std::tolower(c); }
         );
         return s;
     }
 
     inline void toLowerInplace(std::string& s) {
         std::transform(s.begin(), s.end(), s.begin(),
-                       [](unsigned char c) { return std::tolower(c); }// correct
+                       [](unsigned char c) { return std::tolower(c); }
         );
     }
 
