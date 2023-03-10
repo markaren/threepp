@@ -130,7 +130,7 @@ ShapePath& ShapePath::splineThru(const std::vector<Vector2>& pts) {
     return *this;
 }
 
-std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles) {
+std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles) const {
 
     if (subPaths.empty()) return {};
 
@@ -160,8 +160,6 @@ std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles
     unsigned int mainIdx = 0;
     std::vector<Vector2> tmpPoints;
 
-    //newShapes[ mainIdx ] = undefined;
-    //newShapeHoles[ mainIdx ] = [];
     newShapes.emplace_back();
     newShapeHoles.emplace_back();
 
@@ -176,18 +174,17 @@ std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles
 
             if ((!holesFirst) && (newShapes[mainIdx])) mainIdx++;
 
-            // newShapes[ mainIdx ] = { s: new Shape(), p: tmpPoints };
-            newShapes.emplace_back(NewShape{std::make_shared<Shape>(), tmpPoints});
-            newShapes.back()->s->curves = tmpPath->curves;
+            newShapes.resize(mainIdx+1);
+            newShapes[mainIdx] = NewShape{std::make_shared<Shape>(), tmpPoints};
+            newShapes[mainIdx]->s->curves = tmpPath->curves;
 
             if (holesFirst) mainIdx++;
-            //newShapeHoles[ mainIdx ] = [];
-            newShapeHoles.emplace_back();
+            newShapeHoles.resize(mainIdx+1);
+            newShapeHoles[mainIdx] = {};
 
         } else {
 
-            // newShapeHoles[ mainIdx ].push( { h: tmpPath, p: tmpPoints[ 0 ] } );
-            newShapeHoles.back().emplace_back(NewShapeHoles{tmpPath, tmpPoints[0]});
+            newShapeHoles[mainIdx].emplace_back(NewShapeHoles{tmpPath, tmpPoints[0]});
         }
     }
 
@@ -202,8 +199,8 @@ std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles
 
         for (unsigned sIdx = 0, sLen = newShapes.size(); sIdx < sLen; sIdx++) {
 
-            //betterShapeHoles[sIdx] = [];
-            betterShapeHoles.emplace_back();
+            betterShapeHoles.resize(sIdx+1);
+            betterShapeHoles[sIdx] = {};
         }
 
         for (unsigned sIdx = 0, sLen = newShapes.size(); sIdx < sLen; sIdx++) {
