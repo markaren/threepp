@@ -7,7 +7,8 @@ using namespace threepp;
 namespace {
 
 
-    std::vector<Vector2> generateTopUV(std::vector<float> vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC) {
+
+    std::vector<Vector2> generateTopUV(const std::vector<float>& vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC) {
 
         const auto a_x = vertices[indexA * 3];
         const auto a_y = vertices[indexA * 3 + 1];
@@ -23,7 +24,7 @@ namespace {
     }
 
 
-    std::vector<Vector2> generateSideWallUV(std::vector<float> vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC, unsigned int indexD) {
+    std::vector<Vector2> generateSideWallUV(const std::vector<float>& vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC, unsigned int indexD) {
 
         const auto a_x = vertices[indexA * 3];
         const auto a_y = vertices[indexA * 3 + 1];
@@ -337,17 +338,16 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<Shape*>& shapes, const Extrud
             if (k == il) k = 0;
 
             //  (j)---(i)---(k)
-            // console.log('i,j,k', i, j , k)
-
             contourMovements.emplace_back(getBevelVec(contour[i], contour[j], contour[k]));
         }
 
         std::vector<std::vector<Vector2>> holesMovements;
-        std::vector<Vector2> oneHoleMovements, verticesMovements = contourMovements;
+        std::vector<Vector2> oneHoleMovements;
+        std::vector<Vector2> verticesMovements = contourMovements;
 
         for (const auto& ahole : holes) {
 
-            oneHoleMovements = {};
+            oneHoleMovements.clear();
 
             for (unsigned i = 0, il = ahole.size(), j = il - 1, k = i + 1; i < il; i++, j++, k++) {
 
@@ -365,8 +365,6 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<Shape*>& shapes, const Extrud
         // Loop bevelSegments, 1 for the front, 1 for the back
 
         for (unsigned b = 0; b < bevelSegments; b++) {
-
-            //for ( b = bevelSegments; b > 0; b -- ) {
 
             const auto t = static_cast<float>(b) / static_cast<float>(bevelSegments);
             const auto z = bevelThickness * std::cos(t * math::PI / 2);
