@@ -7,11 +7,11 @@
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <optional>
 #include <vector>
-#include <algorithm>
 
 namespace threepp {
 

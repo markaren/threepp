@@ -6,8 +6,8 @@
 #include "threepp/extras/core/Shape.hpp"
 
 #include <string>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
 namespace threepp {
 
@@ -35,7 +35,6 @@ namespace threepp {
         int underlineThickness;
 
         std::unordered_map<char, Glyph> glyphs;
-
     };
 
 
@@ -48,7 +47,6 @@ namespace threepp {
 
     private:
         FontData data;
-
     };
 
 }// namespace threepp
