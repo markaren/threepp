@@ -1,8 +1,8 @@
 
 #include "Crane3R.hpp"
-#include "threepp/threepp.hpp"
 
-#include <thread>
+#include "threepp/threepp.hpp"
+#include "threepp/utils/ThreadPool.hpp"
 
 using namespace threepp;
 
@@ -90,8 +90,9 @@ int main() {
     auto light = AmbientLight::create(Color::white);
     scene->add(light);
 
+    utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
-    canvas.threadTask([&] {
+    pool.submit([&] {
         crane = Crane3R::create();
         canvas.invokeLater([&, crane] {
             scene->add(crane);

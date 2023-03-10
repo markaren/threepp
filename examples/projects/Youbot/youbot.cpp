@@ -1,9 +1,9 @@
 
 #include "threepp/threepp.hpp"
+#include "threepp/utils/ThreadPool.hpp"
 
 #include "Youbot.hpp"
 
-#include <thread>
 
 using namespace threepp;
 
@@ -34,10 +34,11 @@ int main() {
     auto& handle = renderer.textHandle("Loading model..");
     handle.scale = 2;
 
+    utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
-    canvas.threadTask([&]{
+    pool.submit([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
-        canvas.invokeLater([&]{
+        canvas.invokeLater([&] {
             canvas.addKeyListener(youbot.get());
             scene->add(youbot->base);
             handle.setText("Use WASD keys to steer robot");

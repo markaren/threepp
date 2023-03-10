@@ -1,18 +1,17 @@
 
 #include "threepp/threepp.hpp"
 
-#include "kine/Kine.hpp"
 #include "Youbot.hpp"
+#include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
-#include <thread>
-
 #include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/utils/ThreadPool.hpp"
 
 using namespace threepp;
 using namespace kine;
 
-struct MyUI : imgui_context {
+struct MyUI: imgui_context {
 
     bool mouseHover = false;
     bool jointMode = true;
@@ -22,7 +21,7 @@ struct MyUI : imgui_context {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit MyUI(const Canvas &canvas, Kine &kine)
+    explicit MyUI(const Canvas& canvas, Kine& kine)
         : imgui_context(canvas.window_ptr()),
           limits(kine.limits()),
           values(kine.meanAngles()) {
@@ -94,10 +93,11 @@ int main() {
     auto& handle = renderer.textHandle("Loading model..");
     handle.scale = 2;
 
+    utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
-    canvas.threadTask([&]{
+    pool.submit([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
-        canvas.invokeLater([&]{
+        canvas.invokeLater([&] {
             canvas.addKeyListener(youbot.get());
             scene->add(youbot->base);
             handle.setText("");
@@ -155,7 +155,6 @@ int main() {
 
             youbot->setJointValues(ui.values);
             youbot->update(dt);
-
         }
     });
 }

@@ -144,6 +144,7 @@ set(publicHeaders
         "threepp/textures/Texture.hpp"
 
         "threepp/utils/BufferGeometryUtils.hpp"
+        "threepp/utils/ThreadPool.hpp"
 
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
@@ -203,7 +204,6 @@ set(privateHeaders
 
         "threepp/utils/regex_util.hpp"
         "threepp/utils/StringUtils.hpp"
-        "threepp/utils/ThreadPool.hpp"
 
         )
 
@@ -290,6 +290,7 @@ set(sources
         "threepp/textures/Texture.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
+        "threepp/utils/ThreadPool.cpp"
 
         "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"

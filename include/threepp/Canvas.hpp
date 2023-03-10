@@ -53,10 +53,6 @@ namespace threepp {
 
         void invokeLater(const std::function<void()>& f, float t = 0);
 
-        void initThreadPool(unsigned int threadCount = 1);
-
-        void threadTask(const std::function<void()>& f);
-
         [[nodiscard]] void* window_ptr() const;
 
         ~Canvas();

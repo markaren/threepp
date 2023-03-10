@@ -1,7 +1,6 @@
 
 #include "threepp/Canvas.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
-#include "threepp/utils/ThreadPool.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -32,8 +31,6 @@ struct Canvas::Impl {
 
     WindowSize size_;
     Vector2 lastMousePos_;
-
-    std::unique_ptr<utils::ThreadPool> pool_;
 
     std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
@@ -112,19 +109,6 @@ struct Canvas::Impl {
             fps_ = nbFrames;
             nbFrames = 0;
             lastTime += 1.0;
-        }
-    }
-
-    void initThreadPool(unsigned int numThreads) {
-        if (!pool_) {
-            pool_ = std::make_unique<utils::ThreadPool>(numThreads);
-        }
-    }
-
-    void threadTask(const std::function<void()>& f) {
-        if (!pool_) initThreadPool(1);
-        if (pool_) {
-            pool_->submit(f);
         }
     }
 
@@ -378,16 +362,6 @@ bool Canvas::removeMouseListener(const MouseListener* listener) {
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
     pimpl_->invokeLater(f, t);
-}
-
-void Canvas::initThreadPool(unsigned int threadCount) {
-
-    pimpl_->initThreadPool(threadCount);
-}
-
-void Canvas::threadTask(const std::function<void()>& f) {
-
-    pimpl_->threadTask(f);
 }
 
 void* Canvas::window_ptr() const {
