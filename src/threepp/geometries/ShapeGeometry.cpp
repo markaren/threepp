@@ -4,11 +4,6 @@
 
 using namespace threepp;
 
-namespace {
-
-
-}
-
 
 ShapeGeometry::ShapeGeometry(const std::vector<Shape*>& shapes, unsigned int curveSegments) {
 
@@ -87,11 +82,10 @@ ShapeGeometry::ShapeGeometry(const std::vector<Shape*>& shapes, unsigned int cur
 
             addShape(*shapes[i]);
 
-            this->addGroup( groupStart, groupCount, i ); // enables MultiMaterial support
+            this->addGroup(groupStart, groupCount, i);// enables MultiMaterial support
 
             groupStart += groupCount;
             groupCount = 0;
-
         }
     }
 
