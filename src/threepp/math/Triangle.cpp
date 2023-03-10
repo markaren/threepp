@@ -229,3 +229,11 @@ void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) {
     target = (a);
     target.addScaledVector(_vab, v).addScaledVector(_vac, w);
 }
+const Vector3& Triangle::operator[](char c) const {
+    switch (c) {
+        case 'a': return a_;
+        case 'b': return b_;
+        case 'c': return c_;
+        default: throw std::runtime_error("[Triangle] invalid key: " + std::to_string(c));
+    }
+}

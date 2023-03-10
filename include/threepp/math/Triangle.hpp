@@ -14,6 +14,8 @@ namespace threepp {
 
         Triangle(Vector3 a, Vector3 b, Vector3 c);
 
+        const Vector3& operator[](char c) const;
+
         static void getNormal(const Vector3& a, const Vector3& b, const Vector3& c, Vector3& target);
 
         // static/instance method to calculate barycentric coordinates

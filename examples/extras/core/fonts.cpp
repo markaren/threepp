@@ -1,6 +1,7 @@
-#include "threepp/threepp.hpp"
 #include "threepp/extras/core/Font.hpp"
+#include "threepp/geometries/EdgesGeometry.hpp"
 #include "threepp/loaders/FontLoader.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 
@@ -28,6 +29,11 @@ int main() {
     material->side = DoubleSide;
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
+
+    auto lineMaterial = LineBasicMaterial::create();
+    lineMaterial->color = Color::black;
+    auto edges = LineSegments::create(EdgesGeometry::create(*geometry, 0.1f), lineMaterial);
+    mesh->add(edges);
 
 
     canvas.onWindowResize([&](WindowSize size) {
