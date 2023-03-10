@@ -14,7 +14,7 @@ however much remains to be done..
 * Geometries [Box, Sphere, Plane, Cylindrical, Capsule, Tube, ++]  
 * Lights [Ambient, Directional, Point, Spot, Hemi]
 * Raycasting [Mesh, Line, Points]
-* 2D Textures, Sprites, RenderTarget
+* 2D Textures, 3D text, Sprites, RenderTarget
 * Transparency, Shadows
 * OrbitControls
 * Water and Sky shader
