@@ -27,6 +27,7 @@ int main() {
     material->color = 0x00ff00;
     material->side = DoubleSide;
     auto extrude = ExtrudeGeometry::create(shapes);
+    extrude->center();
     auto mesh = Mesh::create(extrude, material);
     scene->add(mesh);
 
