@@ -144,6 +144,7 @@ set(publicHeaders
         "threepp/textures/Texture.hpp"
 
         "threepp/utils/BufferGeometryUtils.hpp"
+        "threepp/utils/ThreadPool.hpp"
 
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
@@ -195,6 +196,8 @@ foreach (header IN LISTS publicHeaders)
 endforeach ()
 
 set(privateHeaders
+
+        "threepp/extras/earcut.hpp"
 
         "threepp/renderers/gl/GLUtils.hpp"
         "threepp/renderers/gl/UniformUtils.hpp"
@@ -287,6 +290,7 @@ set(sources
         "threepp/textures/Texture.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
+        "threepp/utils/ThreadPool.cpp"
 
         "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"
@@ -329,6 +333,9 @@ target_link_libraries(threepp
         glfw::glfw)
 if (nlohmann_json_FOUND)
     target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
+endif()
+if(UNIX)
+    target_link_libraries(threepp PRIVATE pthread)
 endif()
 target_include_directories(threepp
         PUBLIC

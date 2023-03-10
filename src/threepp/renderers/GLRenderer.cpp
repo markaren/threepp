@@ -1072,6 +1072,7 @@ void GLRenderer::enableTextRendering() {
 }
 
 TextHandle& GLRenderer::textHandle(const std::string& str) {
+    if (!textEnabled_) enableTextRendering();
     textHandles_.emplace_back(std::make_unique<TextHandle>(str));
     return *textHandles_.back();
 }
