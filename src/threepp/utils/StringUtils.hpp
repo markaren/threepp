@@ -36,18 +36,6 @@ namespace threepp::utils {
         return ss.str();
     }
 
-    inline std::string addLineNumbers(const std::string& str) {
-
-        auto lines = split(str, '\n');
-
-        for (int i = 0; i < lines.size(); i++) {
-
-            lines[i] = std::to_string(i + 1) + ": " + lines[i];
-        }
-
-        return join(lines, '\n');
-    }
-
     inline void replaceAll(std::string& text, const std::string& replaceFrom, const std::string& replaceTo) {
         std::string& result = text;
         size_t start_pos = 0;
@@ -56,7 +44,6 @@ namespace threepp::utils {
             start_pos += replaceTo.length();
         }
     }
-
 
     inline std::string trimStart(std::string s) {
         s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
