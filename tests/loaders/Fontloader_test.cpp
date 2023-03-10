@@ -8,7 +8,7 @@ using namespace threepp;
 TEST_CASE("Test FontLoader") {
 
     FontLoader loader;
-    auto data = loader.load("data/fonts/optimer_regular.typeface.json");
+    auto data = loader.load(std::string(DATA_FOLDER) + "/fonts/optimer_regular.typeface.json");
 
     REQUIRE(data);
 
