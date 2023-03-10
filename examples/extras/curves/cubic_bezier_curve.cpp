@@ -25,13 +25,13 @@ int main() {
 
     //2D
     {
-        auto curve = CubicBezierCurve::create(
+        auto curve = CubicBezierCurve(
                 Vector2(-10, 0),
                 Vector2(-5, 15),
                 Vector2(20, 15),
                 Vector2(10, 0));
 
-        curve2Points = curve->getPoints(50);
+        curve2Points = curve.getPoints(50);
         const auto geometry = BufferGeometry::create();
         geometry->setFromPoints(curve2Points);
         const auto curveObject = Line::create(geometry, material);
@@ -41,13 +41,13 @@ int main() {
 
     //3D
     {
-        auto curve = CubicBezierCurve3::create(
+        auto curve = CubicBezierCurve3(
                 Vector3(-10, 0, 0),
                 Vector3(-5, 5, -15),
                 Vector3(20, 5, -15),
                 Vector3(10, 0, 0));
 
-        curve3Points = curve->getPoints(50);
+        curve3Points = curve.getPoints(50);
         const auto geometry = BufferGeometry::create();
         geometry->setFromPoints(curve3Points);
 
