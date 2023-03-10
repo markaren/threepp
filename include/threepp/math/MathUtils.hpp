@@ -2,13 +2,13 @@
 #ifndef THREEPP_MATHUTILS_HPP
 #define THREEPP_MATHUTILS_HPP
 
-#include <string>
 #include <limits>
+#include <string>
 
 namespace threepp::math {
 
     const float LN2 = 0.6931471805599453094f;
-    const float PI = 3.14159265358979323846f; // 2.f * std::acos(0.f)
+    const float PI = 3.14159265358979323846f;// 2.f * std::acos(0.f)
     const float TWO_PI = 6.28318530718f;
 
     const float DEG2RAD = PI / 180.f;
@@ -40,6 +40,7 @@ namespace threepp::math {
 
     float floorPowerOfTwo(float value);
 
+    //https://stackoverflow.com/questions/1903954/is-there-a-standard-sign-function-signum-sgn-in-c-c
     template<typename T>
     inline int sgn(T val) {
         return (T(0) < val) - (val < T(0));
