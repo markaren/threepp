@@ -310,6 +310,11 @@ set(sources
 
         )
 
+if (nlohmann_json_FOUND)
+    list(APPEND sources "threepp/loaders/FontLoader.cpp" "threepp/extras/core/Font.cpp")
+endif()
+
+
 set(generatedSourcesDir "${CMAKE_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${generatedSourcesDir}")
 
@@ -381,6 +386,10 @@ target_link_libraries(threepp
         PRIVATE
         glad::glad
         glfw::glfw)
+if (nlohmann_json_FOUND)
+    target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
+    target_compile_definitions(threepp PRIVATE WITH_JSON)
+endif()
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"

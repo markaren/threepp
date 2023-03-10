@@ -7,6 +7,7 @@
 #include "threepp/extras/core/Shape.hpp"
 #include "threepp/math/Color.hpp"
 
+#include <optional>
 #include <vector>
 
 namespace threepp {
@@ -26,7 +27,7 @@ namespace threepp {
 
         ShapePath& splineThru(const std::vector<Vector2>& pts);
 
-        std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW, bool noHoles);
+        [[nodiscard]] std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW = false, bool noHoles = false) const;
 
     private:
         Path* currentPath;

@@ -1,0 +1,2 @@
+
+add_test_executable(Fontloader_test)

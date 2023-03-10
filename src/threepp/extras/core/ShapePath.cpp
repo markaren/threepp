@@ -130,7 +130,7 @@ ShapePath& ShapePath::splineThru(const std::vector<Vector2>& pts) {
     return *this;
 }
 
-std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles) {
+std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles) const {
 
     if (subPaths.empty()) return {};
 
