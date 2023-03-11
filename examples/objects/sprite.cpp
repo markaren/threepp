@@ -17,7 +17,7 @@ int main() {
 
     TextureLoader loader;
     auto material = SpriteMaterial::create();
-    material->map = loader.loadTexture("favicon.png");
+    material->map = loader.load("favicon.png");
     material->map->offset.set(0.5, 0.5);
 
     auto sprites = Group::create();

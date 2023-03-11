@@ -115,7 +115,7 @@ int main() {
 
     TextureLoader tl;
     auto material = MeshBasicMaterial::create();
-    material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+    material->map = tl.load("data/textures/uv_grid_opengl.jpg");
     material->side = DoubleSide;
 
     auto lineMaterial = LineBasicMaterial::create();

@@ -17,8 +17,8 @@ namespace {
         TextureLoader tl;
         auto decalMaterial = MeshPhongMaterial::create();
         decalMaterial->specular = 0x444444;
-        decalMaterial->map = tl.loadTexture("data/textures/decal/decal-diffuse.png");
-        decalMaterial->normalMap = tl.loadTexture("data/textures/decal/decal-normal.jpg");
+        decalMaterial->map = tl.load("data/textures/decal/decal-diffuse.png");
+        decalMaterial->normalMap = tl.load("data/textures/decal/decal-normal.jpg");
         decalMaterial->normalScale.set(1, 1);
         decalMaterial->shininess = 30;
         decalMaterial->depthTest = true;
@@ -115,9 +115,9 @@ int main() {
     model->traverseType<Mesh>([&](Mesh& _){
         mesh = &_;
         auto mat = MeshPhongMaterial::create();
-        mat->map = texLoader.loadTexture(folder / "Map-COL.jpg", false);
-        mat->specularMap = texLoader.loadTexture(folder / "Map-SPEC.jpg", false);
-        mat->normalMap = texLoader.loadTexture(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
+        mat->map = texLoader.load(folder / "Map-COL.jpg", false);
+        mat->specularMap = texLoader.load(folder / "Map-SPEC.jpg", false);
+        mat->normalMap = texLoader.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
         mat->shininess = 25;
         mesh->setMaterial(mat);
     });

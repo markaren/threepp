@@ -185,7 +185,7 @@ MaterialsInfo MaterialCreator::convert(const MaterialsInfo& mi) {
 
 std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path& path, std::optional<int> mapping) {
 
-    auto texture = TextureLoader().loadTexture(path);
+    auto texture = TextureLoader().load(path);
     if (mapping) {
         texture->mapping = *mapping;
     }

@@ -112,7 +112,7 @@ namespace threepp {
                     if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                             auto texPath = path.parent_path() / p.C_Str();
-                            auto tex = texLoader_.loadTexture(texPath);
+                            auto tex = texLoader_.load(texPath);
                             //                        tex->encoding = sRGBEncoding;
                             std::dynamic_pointer_cast<MaterialWithMap>(material)->map = tex;
                         }
@@ -130,7 +130,7 @@ namespace threepp {
                         if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                             if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
                                 auto texPath = path.parent_path() / p.C_Str();
-                                auto tex = texLoader_.loadTexture(texPath);
+                                auto tex = texLoader_.load(texPath);
                                 //                        tex->encoding = sRGBEncoding;
                                 m->emissiveMap = tex;
                             }
@@ -144,7 +144,7 @@ namespace threepp {
                         if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
                             if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
                                 auto texPath = path.parent_path() / p.C_Str();
-                                auto tex = texLoader_.loadTexture(texPath);
+                                auto tex = texLoader_.load(texPath);
                                 //                        tex->encoding = sRGBEncoding;
                                 m->specularMap = tex;
                             }
