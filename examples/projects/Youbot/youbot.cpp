@@ -40,7 +40,7 @@ int main() {
         youbot = Youbot::create("data/models/collada/youbot.dae");
         canvas.invokeLater([&] {
             canvas.addKeyListener(youbot.get());
-            scene->add(youbot->base);
+            scene->add(youbot);
             handle.setText("Use WASD keys to steer robot");
         });
     });

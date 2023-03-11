@@ -88,7 +88,10 @@ int main() {
     scene->add(light2);
 
     auto endEffectorHelper = AxesHelper::create(1);
-    scene->add(endEffectorHelper);
+    endEffectorHelper->visible = false;
+
+    auto targetHelper = AxesHelper::create(2);
+    targetHelper->visible = false;
 
     auto& handle = renderer.textHandle("Loading model..");
     handle.scale = 2;
@@ -97,10 +100,13 @@ int main() {
     std::shared_ptr<Youbot> youbot;
     pool.submit([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
+        youbot->add(targetHelper);
+        scene->add(endEffectorHelper);
+        endEffectorHelper->visible = true;
         canvas.invokeLater([&] {
             canvas.addKeyListener(youbot.get());
-            scene->add(youbot->base);
-            handle.setText("");
+            scene->add(youbot);
+            handle.invalidate();
         });
     });
 
@@ -127,10 +133,6 @@ int main() {
 
     MyUI ui(canvas, kine);
 
-    auto targetHelper = AxesHelper::create(2);
-    targetHelper->visible = false;
-    scene->add(targetHelper);
-
     canvas.animate([&](float dt) {
         renderer.render(scene, camera);
 
@@ -140,6 +142,7 @@ int main() {
             controls.enabled = !ui.mouseHover;
 
             auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
+            endEffectorPosition.premultiply(*youbot->matrixWorld);
             endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
 
             targetHelper->position.copy(ui.pos);

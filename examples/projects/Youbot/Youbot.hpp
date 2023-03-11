@@ -14,10 +14,8 @@ struct wasd {
     bool down = false;
 };
 
-struct Youbot: KeyListener {
-
-    std::shared_ptr<Group> base;
-
+struct Youbot: Object3D, KeyListener {
+    
     void onKeyPressed(KeyEvent evt) override {
         if (evt.key == 87) {
             wasd_.up = true;
@@ -43,7 +41,7 @@ struct Youbot: KeyListener {
     }
 
     void driveForwards(float dt) {
-        base->translateX(translationSpeed * dt);
+        translateX(translationSpeed * dt);
         back_left_wheel->rotateY(math::DEG2RAD * translationSpeed * 100 * dt);
         back_right_wheel->rotateY(math::DEG2RAD * translationSpeed * 100 * dt);
         front_left_wheel->rotateY(math::DEG2RAD * translationSpeed * 100 * dt);
@@ -51,7 +49,7 @@ struct Youbot: KeyListener {
     }
 
     void driveBackwards(float dt) {
-        base->translateX(-translationSpeed * dt);
+        translateX(-translationSpeed * dt);
         back_left_wheel->rotateY(-math::DEG2RAD * translationSpeed * 100 * dt);
         back_right_wheel->rotateY(-math::DEG2RAD * translationSpeed * 100 * dt);
         front_left_wheel->rotateY(-math::DEG2RAD * translationSpeed * 100 * dt);
@@ -59,7 +57,7 @@ struct Youbot: KeyListener {
     }
 
     void driveRight(float dt) {
-        base->rotateY(-rotationSpeed * dt);
+        rotateY(-rotationSpeed * dt);
         back_left_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
         back_right_wheel->rotateY(-math::DEG2RAD * rotationSpeed * 200 * dt);
         front_left_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
@@ -67,7 +65,7 @@ struct Youbot: KeyListener {
     }
 
     void driveLeft(float dt) {
-        base->rotateY(rotationSpeed * dt);
+        rotateY(rotationSpeed * dt);
         back_left_wheel->rotateY(-math::DEG2RAD * rotationSpeed * 200 * dt);
         back_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
         front_left_wheel->rotateY(-math::DEG2RAD * rotationSpeed * 200 * dt);
@@ -132,18 +130,20 @@ private:
     Object3D *arm_joint4;
     Object3D *arm_joint5;
 
-    explicit Youbot(std::shared_ptr<Group> model) : base(std::move(model)) {
+    explicit Youbot(const std::shared_ptr<Group>& model) {
 
-        back_left_wheel = base->getObjectByName("back-left_wheel");
-        back_right_wheel = base->getObjectByName("back-right_wheel");
-        front_left_wheel = base->getObjectByName("front-left_wheel_join");
-        front_right_wheel = base->getObjectByName("front-right_wheel");
+        add(model);
 
-        arm_joint1 = base->getObjectByName("arm_joint_1");
-        arm_joint2 = base->getObjectByName("arm_joint_2");
-        arm_joint3 = base->getObjectByName("arm_joint_3");
-        arm_joint4 = base->getObjectByName("arm_joint_4");
-        arm_joint5 = base->getObjectByName("arm_joint_5");
+        back_left_wheel = getObjectByName("back-left_wheel");
+        back_right_wheel = getObjectByName("back-right_wheel");
+        front_left_wheel = getObjectByName("front-left_wheel_join");
+        front_right_wheel = getObjectByName("front-right_wheel");
+
+        arm_joint1 = getObjectByName("arm_joint_1");
+        arm_joint2 = getObjectByName("arm_joint_2");
+        arm_joint3 = getObjectByName("arm_joint_3");
+        arm_joint4 = getObjectByName("arm_joint_4");
+        arm_joint5 = getObjectByName("arm_joint_5");
     }
 };
 
