@@ -7,23 +7,25 @@
 
 namespace kine {
 
-    class CCDSolver : public IKSolver {
+    class CCDSolver: public IKSolver {
 
     public:
-        explicit CCDSolver(int maxTries = 10, float stepSize = 0.005f)
+        explicit CCDSolver(int maxTries = 10, float stepSize = 0.005f, float eps = 0.00001f)
             : maxTries(maxTries),
-              stepSize(stepSize) {}
+              stepSize(stepSize),
+              eps(eps) {}
 
-        std::vector<float> solveIK(const Kine &kine, const threepp::Vector3 &target, const std::vector<float>& startValues) override {
+        std::vector<float> solveIK(const Kine& kine, const threepp::Vector3& target, const std::vector<float>& startValues) override {
 
             threepp::Vector3 endPos;
             endPos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(startValues));
 
-            if (endPos.distanceTo(target) < 0.001f) return startValues;
+            float error = endPos.distanceTo(target);
+            if (error < eps) return startValues;
 
-            int tries = 0;
+            unsigned int tries = 0;
             std::vector<float> newValues = kine.normalizeValues(startValues);
-            while(true) {
+            while (true) {
 
                 for (unsigned i = 0; i < kine.numDof(); ++i) {
                     float closest = std::numeric_limits<float>::max();
@@ -34,7 +36,7 @@ namespace kine {
                         newValues[i] = k;
                         endPos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(kine.denormalizeValues(newValues)));
 
-                        float error = endPos.distanceTo(target);
+                        error = endPos.distanceTo(target);
                         if (error < closest) {
                             closest = error;
                             val = k;
@@ -42,9 +44,8 @@ namespace kine {
                     } while ((k += stepSize) <= 1);
 
                     newValues[i] = val;
-
                 }
-                if (++tries >= maxTries) break ;
+                if (++tries >= maxTries || error < eps) break;
             }
 
             return kine.denormalizeValues(newValues);
@@ -53,6 +54,7 @@ namespace kine {
     private:
         int maxTries;
         float stepSize;
+        float eps;
     };
 
 }// namespace kine

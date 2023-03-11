@@ -101,7 +101,7 @@ int main() {
     pool.submit([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
         youbot->add(targetHelper);
-        scene->add(endEffectorHelper);
+        youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
         canvas.invokeLater([&] {
             canvas.addKeyListener(youbot.get());
@@ -116,7 +116,7 @@ int main() {
         renderer.setSize(size);
     });
 
-    auto ikSolver = CCDSolver();
+    auto ikSolver = CCDSolver(1, 0.001f, 0.00001f);
     auto kine = KineBuilder()
                         .addLink(Vector3(1.67, 1.3, 0))
                         .addRevoluteJoint(Vector3::Y * -1, {-180.f, 180.f})
@@ -128,7 +128,7 @@ int main() {
                         .addRevoluteJoint(Vector3::Z * -1, {-90.f, 90.f})
                         .addLink(Vector3(0, 0.85, 0))
                         .addRevoluteJoint(Vector3::Y * -1, {-180.f, 180.f})
-                        .addLink(Vector3(0, 1.2, 0))
+                        .addLink(Vector3(0, 1.225, 0))
                         .build();
 
     MyUI ui(canvas, kine);
@@ -141,18 +141,21 @@ int main() {
             ui.render();
             controls.enabled = !ui.mouseHover;
 
-            auto endEffectorPosition = kine.calculateEndEffectorTransformation(ui.values);
-            endEffectorPosition.premultiply(*youbot->matrixWorld);
-            endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);
-
-            targetHelper->position.copy(ui.pos);
+            auto endEffectorTransformation = kine.calculateEndEffectorTransformation(ui.values);
+            endEffectorHelper->position.setFromMatrixPosition(endEffectorTransformation);
+            endEffectorHelper->quaternion.setFromRotationMatrix(endEffectorTransformation);
 
             if (ui.jointMode) {
                 ui.pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(youbot->getJointValues()));
                 targetHelper->visible = false;
             }
             if (ui.posMode) {
-                ui.values = ikSolver.solveIK(kine, ui.pos, youbot->getJointValues());
+
+                auto target = Matrix4().setPosition(ui.pos);
+                target.premultiply(Matrix4().copy(*youbot->matrixWorld).invert());
+                targetHelper->position.setFromMatrixPosition(target);
+                targetHelper->quaternion.setFromRotationMatrix(target);
+                ui.values = ikSolver.solveIK(kine, targetHelper->position, youbot->getJointValues());
                 targetHelper->visible = true;
             }
 
