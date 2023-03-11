@@ -1,12 +1,23 @@
 
 #include "threepp/loaders/TextureLoader.hpp"
 
+#include "threepp/utils/URLFetcher.hpp"
+
 #include <iostream>
 #include <regex>
+#include <vector>
 
 using namespace threepp;
 
-std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
+
+[[deprecated("Function 'loadTexture' deprecated. Use 'load'")]] std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
+
+    std::cerr << "[TextureLoader] Function 'loadTexture' deprecated. Use 'load' instead" << std::endl;
+
+    return load(path, flipY);
+}
+
+std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, bool flipY) {
 
     if (useCache && cache_.count(path.string())) {
         auto cached = cache_[path.string()];
@@ -40,7 +51,47 @@ std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path&
     return texture;
 }
 
+std::shared_ptr<Texture> TextureLoader::loadFromUrl(const std::string& url, bool flipY) {
+
+    if (useCache && cache_.count(url)) {
+        auto cached = cache_[url];
+        if (!cached.expired()) {
+            auto tex = cached.lock();
+            return tex;
+        } else {
+            cache_.erase(url);
+        }
+    }
+
+    static std::regex reg(".*jpe?g", std::regex::icase);
+
+    bool isJPEG = std::regex_match(url, reg);
+
+    std::vector<unsigned char> stream;
+
+    utils::UrlFetcher urlFetcher;
+    bool res = urlFetcher.fetch(url, stream);
+
+    if (res && !stream.empty()) {
+        auto image = imageLoader_.load(stream);
+        auto texture = Texture::create(image);
+
+        texture->format = isJPEG ? RGBFormat : RGBAFormat;
+        texture->needsUpdate();
+        if (useCache) cache_[url] = texture;
+
+        return texture;
+    } else {
+
+        std::cerr << "[TextureLoader] Failed loading texture from URL: " << url << std::endl;
+
+        return nullptr;
+    }
+
+}
+
 void TextureLoader::clearCache() {
 
     cache_.clear();
 }
+

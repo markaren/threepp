@@ -20,14 +20,14 @@ int main() {
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
     const auto sphereMaterial = MeshBasicMaterial::create();
-    sphereMaterial->map = loader.loadTexture("data/textures/checker.png");
+    sphereMaterial->map = loader.load("data/textures/checker.png");
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(1);
     scene->add(sphere);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->map = loader.loadTexture("data/textures/crate.gif");
+    boxMaterial->map = loader.loadFromUrl("https://raw.githubusercontent.com/mrdoob/three.js/r129/examples/textures/crate.gif");
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
     scene->add(box);
@@ -35,7 +35,7 @@ int main() {
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create();
     planeMaterial->side = DoubleSide;
-    planeMaterial->map = loader.loadTexture("data/textures/brick_bump.jpg");
+    planeMaterial->map = loader.load("data/textures/brick_bump.jpg");
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
     scene->add(plane);
