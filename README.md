@@ -33,7 +33,7 @@ Because fun.
 
 ### How to build
 
-`threepp` can be used in conjunction with both `vcpkg` (preferred) and `conan`.
+`threepp` is designed to be used in conjunction with `vcpkg`.
 
 #### vcpkg (using manifest mode)
 
@@ -50,13 +50,6 @@ Under MinGW you'll need to specify the vcpkg triplet:
 -DVCPKG_TARGET_TRIPLET=x64-mingw-[static|dynamic]  # choose either `static` or `dynamic`.
 -DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
 ```
-
-#### conan 1.x
-
-Run something akin to:
-`conan install . -s build_type=Debug -if cmake-build-debug -b missing` _before_ calling CMake.
-You might also use the supplied `run_conan_XXX.sh` scripts.
-
 
 ### Implementation notes
 
