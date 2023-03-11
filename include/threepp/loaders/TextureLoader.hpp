@@ -15,12 +15,15 @@ namespace threepp {
 
     public:
         bool useCache = true;
+
+        std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY = true);
         std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, bool flipY = true);
+        std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY = true);
 
         void clearCache();
 
     private:
-        ImageLoader imageLoader_{};
+        ImageLoader imageLoader_;
         std::unordered_map<std::string, std::weak_ptr<Texture>> cache_;
     };
 

@@ -145,6 +145,7 @@ set(publicHeaders
 
         "threepp/utils/BufferGeometryUtils.hpp"
         "threepp/utils/ThreadPool.hpp"
+        "threepp/utils/URLFetcher.hpp"
 
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
@@ -291,6 +292,7 @@ set(sources
 
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/ThreadPool.cpp"
+        "threepp/utils/URLFetcher.cpp"
 
         "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"
@@ -330,7 +332,8 @@ target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
-        glfw::glfw)
+        glfw::glfw
+        CURL::libcurl)
 if (nlohmann_json_FOUND)
     target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
 endif()

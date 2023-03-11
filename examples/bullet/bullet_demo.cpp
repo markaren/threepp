@@ -11,43 +11,43 @@ namespace {
 
     auto createTennisBallMaterial(TextureLoader& tl) {
         auto m = MeshPhongMaterial::create();
-        m->map = tl.loadTexture("data/textures/NewTennisBallColor.jpg");
-        m->bumpMap = tl.loadTexture("data/textures/TennisBallBump.jpg");
+        m->map = tl.load("data/textures/NewTennisBallColor.jpg");
+        m->bumpMap = tl.load("data/textures/TennisBallBump.jpg");
         return m;
     }
 
     auto createBox(TextureLoader& tl) {
         const auto geometry = BoxGeometry::create();
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/crate.gif");
+        material->map = tl.load("data/textures/crate.gif");
         return Mesh::create(geometry, material);
     }
 
     auto createSphere(TextureLoader& tl) {
         const auto geometry = SphereGeometry::create(0.5, 32, 32);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        material->map = tl.load("data/textures/uv_grid_opengl.jpg");
         return Mesh::create(geometry, material);
     }
 
     auto createCylinder(TextureLoader& tl) {
         const auto geometry = CylinderGeometry::create(0.5, 0.5, 1, 16, 4);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        material->map = tl.load("data/textures/uv_grid_opengl.jpg");
         return Mesh::create(geometry, material);
     }
 
     auto createCone(TextureLoader& tl) {
         const auto geometry = ConeGeometry::create(0.5, 1);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        material->map = tl.load("data/textures/uv_grid_opengl.jpg");
         return Mesh::create(geometry, material);
     }
 
     auto createCapsule(TextureLoader& tl) {
         const auto geometry = CapsuleGeometry::create(0.5, 1);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        material->map = tl.load("data/textures/uv_grid_opengl.jpg");
         return Mesh::create(geometry, material);
     }
 
@@ -55,7 +55,7 @@ namespace {
         const auto geometry = PlaneGeometry::create(20, 20);
         geometry->rotateX(math::DEG2RAD * -90);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/checker.png");
+        material->map = tl.load("data/textures/checker.png");
         return Mesh::create(geometry, material);
     }
 

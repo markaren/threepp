@@ -11,29 +11,29 @@ namespace {
 
     auto createTennisBallMaterial(TextureLoader& tl) {
         auto m = MeshPhongMaterial::create();
-        m->map = tl.loadTexture("data/textures/NewTennisBallColor.jpg");
-        m->bumpMap = tl.loadTexture("data/textures/TennisBallBump.jpg");
+        m->map = tl.load("data/textures/NewTennisBallColor.jpg");
+        m->bumpMap = tl.load("data/textures/TennisBallBump.jpg");
         return m;
     }
 
     auto createSpheres(TextureLoader& tl, unsigned int count) {
         const auto geometry = SphereGeometry::create(0.25f);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        material->map = tl.load("data/textures/uv_grid_opengl.jpg");
         return InstancedMesh::create(geometry, material, count);
     }
 
     auto createCapsules(TextureLoader& tl, unsigned int count) {
         const auto geometry = CapsuleGeometry::create(0.25f, 0.5f);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        material->map = tl.load("data/textures/uv_grid_opengl.jpg");
         return InstancedMesh::create(geometry, material, count);
     }
 
     auto createBoxes(TextureLoader& tl, unsigned int count) {
         const auto geometry = BoxGeometry::create(0.5f, 0.5f, 0.5f);
         const auto material = MeshPhongMaterial::create();
-        material->map = tl.loadTexture("data/textures/uv_grid_opengl.jpg");
+        material->map = tl.load("data/textures/uv_grid_opengl.jpg");
         return InstancedMesh::create(geometry, material, count);
     }
 
