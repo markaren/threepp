@@ -9,6 +9,17 @@
 
 using namespace threepp;
 
+namespace {
+
+    bool checkIsJPEG(const std::string& path) {
+
+        static std::regex reg(".*jpe?g", std::regex::icase);
+
+        return std::regex_match(path, reg);
+    }
+
+}
+
 
 [[deprecated("Function 'loadTexture' deprecated. Use 'load'")]] std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
 
@@ -34,9 +45,7 @@ std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, 
         return nullptr;
     }
 
-    static std::regex reg(".*jpe?g", std::regex::icase);
-
-    bool isJPEG = std::regex_match(path.string(), reg);
+    bool isJPEG = checkIsJPEG(path.string());
 
     auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
 
@@ -63,9 +72,7 @@ std::shared_ptr<Texture> TextureLoader::loadFromUrl(const std::string& url, bool
         }
     }
 
-    static std::regex reg(".*jpe?g", std::regex::icase);
-
-    bool isJPEG = std::regex_match(url, reg);
+    bool isJPEG = checkIsJPEG(url);
 
     std::vector<unsigned char> stream;
 
@@ -94,4 +101,3 @@ void TextureLoader::clearCache() {
 
     cache_.clear();
 }
-
