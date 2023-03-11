@@ -18,6 +18,8 @@ namespace threepp::utils {
 
         void submit(const std::function<void()>& f);
 
+        void wait();
+
         ~ThreadPool();
 
     private:
