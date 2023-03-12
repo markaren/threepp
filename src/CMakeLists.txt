@@ -106,6 +106,7 @@ set(publicHeaders
 
         "threepp/math/Box2.hpp"
         "threepp/math/Box3.hpp"
+        "threepp/math/Capsule.hpp"
         "threepp/math/Color.hpp"
         "threepp/math/Cylindrical.hpp"
         "threepp/math/Euler.hpp"
@@ -255,6 +256,7 @@ set(sources
 
         "threepp/math/Box2.cpp"
         "threepp/math/Box3.cpp"
+        "threepp/math/Capsule.cpp"
         "threepp/math/Color.cpp"
         "threepp/math/Cylindrical.cpp"
         "threepp/math/Euler.cpp"
