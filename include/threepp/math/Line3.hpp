@@ -12,8 +12,8 @@ namespace threepp {
     public:
         explicit Line3(Vector3 start = Vector3(), Vector3 end = Vector3());
 
-        const Vector3& getStart() const;
-        const Vector3& getEnd() const;
+        [[nodiscard]] const Vector3& start() const;
+        [[nodiscard]] const Vector3& end() const;
 
         Line3 set(const Vector3& start, const Vector3& end);
 
