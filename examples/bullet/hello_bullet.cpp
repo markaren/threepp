@@ -5,6 +5,8 @@
 
 #include <sstream>
 
+#include <iostream>
+
 using namespace threepp;
 
 namespace {
