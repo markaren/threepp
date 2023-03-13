@@ -3,10 +3,7 @@
 #ifndef THREEPP_GLBACKGROUND_HPP
 #define THREEPP_GLBACKGROUND_HPP
 
-#include "GLState.hpp"
-
 #include "threepp/math/Color.hpp"
-
 #include "threepp/scenes/Scene.hpp"
 
 namespace threepp {
@@ -14,6 +11,8 @@ namespace threepp {
     class GLRenderer;
 
     namespace gl {
+
+        class GLState;
 
         struct GLBackground {
 

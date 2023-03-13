@@ -5,15 +5,15 @@
 
 #include "GLObjects.hpp"
 
-#include "threepp/math/Frustum.hpp"
-
-#include "threepp/cameras/Camera.hpp"
-#include "threepp/lights/Light.hpp"
-#include "threepp/scenes/Scene.hpp"
+#include <vector>
+#include <memory>
 
 namespace threepp {
 
     class GLRenderer;
+    class Light;
+    class Scene;
+    class Camera;
 
     namespace gl {
 
@@ -26,38 +26,16 @@ namespace threepp {
 
             int type = PCFShadowMap;
 
-            explicit GLShadowMap(GLObjects& _objects);
+            explicit GLShadowMap(GLObjects& objects);
 
-            void render(GLRenderer& _renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera);
+            void render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera);
+
+            ~GLShadowMap();
 
         private:
-            GLObjects& _objects;
+            struct Impl;
+            std::unique_ptr<Impl> pimpl_;
 
-            Frustum _frustum;
-
-            Vector2 _shadowMapSize;
-            Vector2 _viewportSize;
-
-            Vector4 _viewport;
-
-            std::vector<std::shared_ptr<MeshDepthMaterial>> _depthMaterials;
-            std::vector<std::shared_ptr<MeshDistanceMaterial>> _distanceMaterials;
-
-            std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<Material>>> _materialCache;
-
-            int _maxTextureSize;
-
-            std::shared_ptr<Mesh> fullScreenMesh;
-
-            MeshDepthMaterial* getDepthMaterialVariant(bool useMorphing);
-
-            MeshDistanceMaterial* getDistanceMaterialVariant(bool useMorphing);
-
-            Material* getDepthMaterial(GLRenderer& _renderer, Object3D* object, BufferGeometry* geometry, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar);
-
-            void VSMPass(GLRenderer& _renderer, LightShadow* shadow, Camera* camera);
-
-            void renderObject(GLRenderer& _renderer, Object3D* object, Camera* camera, Camera* shadowCamera, Light* light);
         };
 
     }// namespace gl

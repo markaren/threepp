@@ -3,8 +3,6 @@
 #ifndef THREEPP_GLATTRIBUTES_HPP
 #define THREEPP_GLATTRIBUTES_HPP
 
-#include "GLCapabilities.hpp"
-
 #include "threepp/core/BufferAttribute.hpp"
 
 namespace threepp::gl {

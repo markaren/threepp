@@ -1,5 +1,6 @@
 
 #include "threepp/renderers/gl/GLBackground.hpp"
+#include "threepp/renderers/gl/GLState.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 
