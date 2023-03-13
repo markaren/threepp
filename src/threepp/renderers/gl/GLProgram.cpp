@@ -6,6 +6,7 @@
 #include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/utils/StringUtils.hpp"
 #include "threepp/utils/regex_util.hpp"
 

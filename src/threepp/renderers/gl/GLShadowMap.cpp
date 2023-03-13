@@ -1,7 +1,11 @@
 
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 
+#include "threepp/materials/MeshDepthMaterial.hpp"
+#include "threepp/materials/MeshDistanceMaterial.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Line.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
@@ -70,10 +74,11 @@ struct GLShadowMap::Impl {
 
     std::shared_ptr<Mesh> fullScreenMesh;
 
-    explicit Impl(GLShadowMap* scope, GLObjects& objects)
+    Impl(GLShadowMap* scope, GLObjects& objects)
         : scope(scope),
           _objects(objects),
           _maxTextureSize(GLCapabilities::instance().maxTextureSize) {
+
         auto fullScreenTri = BufferGeometry::create();
         fullScreenTri->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{-1, -1, 0.5, 3, -1, 0.5, -1, 3, 0.5}, 3));
 

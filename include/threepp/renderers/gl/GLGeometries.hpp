@@ -3,49 +3,41 @@
 #ifndef THREEPP_GLGEOMETRIES_HPP
 #define THREEPP_GLGEOMETRIES_HPP
 
-#include "GLAttributes.hpp"
-#include "GLBindingStates.hpp"
-#include "GLInfo.hpp"
+#include "threepp/core/BufferGeometry.hpp"
 
-#include "threepp/core/InstancedBufferGeometry.hpp"
+#include <memory>
 
-#include <unordered_map>
+namespace threepp {
 
-namespace threepp::gl {
+    class Object3D;
 
-    struct GLGeometries {
+    namespace gl {
 
-        struct OnGeometryDispose: EventListener {
+        class GLAttributes;
+        class GLInfo;
+        class GLBindingStates;
 
-            explicit OnGeometryDispose(GLGeometries* scope);
+        struct GLGeometries {
 
-            void onEvent(Event& event) override;
+            GLGeometries(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates);
+
+            void get(Object3D* object, BufferGeometry* geometry);
+
+            void update(BufferGeometry* geometry);
+
+            void updateWireframeAttribute(BufferGeometry* geometry);
+
+            IntBufferAttribute* getWireframeAttribute(BufferGeometry* geometry);
+
+            ~GLGeometries();
 
         private:
-            GLGeometries* scope_;
+            struct Impl;
+            std::unique_ptr<Impl> pimpl_;
         };
 
-        GLGeometries(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates);
+    }// namespace gl
 
-        void get(Object3D* object, BufferGeometry* geometry);
-
-        void update(BufferGeometry* geometry);
-
-        void updateWireframeAttribute(BufferGeometry* geometry);
-
-        IntBufferAttribute* getWireframeAttribute(BufferGeometry* geometry);
-        
-    private:
-        GLInfo& info_;
-        GLAttributes& attributes_;
-        GLBindingStates& bindingStates_;
-
-        std::shared_ptr<OnGeometryDispose> onGeometryDispose_;
-
-        std::unordered_map<BufferGeometry*, bool> geometries_;
-        std::unordered_map<BufferGeometry*, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;
-    };
-
-}// namespace threepp::gl
+}// namespace threepp
 
 #endif//THREEPP_GLGEOMETRIES_HPP

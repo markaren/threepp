@@ -1,11 +1,14 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include "threepp/core/InstancedBufferGeometry.hpp"
 #include "threepp/objects/Group.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/LOD.hpp"
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
 #include <glad/glad.h>
@@ -225,7 +228,7 @@ void GLRenderer::renderBufferDirect(
         scene = &_emptyScene;
     }
 
-    bool isMesh = object->as<Mesh>();
+    bool isMesh = object->is<Mesh>();
     const auto frontFaceCW = (isMesh && object->matrixWorld->determinant() < 0);
 
     auto program = setProgram(camera, scene, material, object);
@@ -304,7 +307,7 @@ void GLRenderer::renderBufferDirect(
             renderer->setMode(GL_TRIANGLES);
         }
 
-    } else if (object->as<Line>()) {
+    } else if (object->is<Line>()) {
 
         float lineWidth = 1;
         if (isWireframeMaterial) {
@@ -313,11 +316,11 @@ void GLRenderer::renderBufferDirect(
 
         state.setLineWidth(lineWidth * static_cast<float>(getTargetPixelRatio()));
 
-        if (object->as<LineSegments>()) {
+        if (object->is<LineSegments>()) {
 
             renderer->setMode(GL_LINES);
 
-        } else if (object->as<LineLoop>()) {
+        } else if (object->is<LineLoop>()) {
 
             renderer->setMode(GL_LINE_LOOP);
 
@@ -326,7 +329,7 @@ void GLRenderer::renderBufferDirect(
             renderer->setMode(GL_LINE_STRIP);
         }
 
-    } else if (object->as<Points>()) {
+    } else if (object->is<Points>()) {
 
         renderer->setMode(GL_POINTS);
 
@@ -335,13 +338,12 @@ void GLRenderer::renderBufferDirect(
         renderer->setMode(GL_TRIANGLES);
     }
 
-    if (object->as<InstancedMesh>()) {
+    if (auto im = object->as<InstancedMesh>()) {
 
-        renderer->renderInstances(drawStart, drawCount, object->as<InstancedMesh>()->count);
+        renderer->renderInstances(drawStart, drawCount, im->count);
 
-    } else if (dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+    } else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
 
-        auto g = dynamic_cast<InstancedBufferGeometry*>(geometry);
         const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
         renderer->renderInstances(drawStart, drawCount, instanceCount);

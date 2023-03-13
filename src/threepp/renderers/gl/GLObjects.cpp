@@ -1,7 +1,10 @@
 
 #include "threepp/renderers/gl/GLObjects.hpp"
+
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
+#include "threepp/renderers/gl/GLInfo.hpp"
 
 #include <glad/glad.h>
 

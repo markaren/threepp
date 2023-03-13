@@ -8,9 +8,6 @@
 #include "GLProgram.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
-#include "threepp/core/InstancedBufferAttribute.hpp"
-#include "threepp/materials/materials.hpp"
-#include "threepp/objects/InstancedMesh.hpp"
 
 #include <optional>
 #include <unordered_map>
@@ -40,10 +37,6 @@ namespace threepp::gl {
               attributeDivisors(std::move(attributeDivisors)),
               object(object) {}
     };
-
-
-    typedef std::unordered_map<bool, std::shared_ptr<GLBindingState>> StateMap;
-    typedef std::unordered_map<int, StateMap> ProgramMap;
 
     struct GLBindingStates {
 
@@ -85,14 +78,12 @@ namespace threepp::gl {
 
         void reset();
 
+        ~GLBindingStates();
+
     private:
-        GLAttributes& attributes_;
-        unsigned int maxVertexAttributes_;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
 
-        const std::shared_ptr<GLBindingState> defaultState_;
-        std::shared_ptr<GLBindingState> currentState_;
-
-        std::unordered_map<unsigned int, ProgramMap> bindingStates;
     };
 
 }// namespace threepp::gl

@@ -3,8 +3,6 @@
 #ifndef THREEPP_GLMATERIAL_HPP
 #define THREEPP_GLMATERIAL_HPP
 
-#include "GLProperties.hpp"
-
 #include "threepp/materials/Material.hpp"
 
 #include "threepp/core/Uniform.hpp"
@@ -12,20 +10,24 @@
 
 namespace threepp::gl {
 
+    class GLProperties;
+
     struct GLMaterials {
 
-        explicit GLMaterials(GLProperties& properties)
-            : properties(properties) {}
+        explicit GLMaterials(GLProperties& properties);
 
         void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog);
 
         void refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height);
 
+        ~GLMaterials();
+
     private:
-        GLProperties& properties;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
     };
 
 
-}// namespace threepp::gl
+}// namespace threepp
 
 #endif//THREEPP_GLMATERIAL_HPP

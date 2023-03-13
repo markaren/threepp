@@ -18,6 +18,7 @@
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
+#include "threepp/renderers/gl/GLBindingStates.hpp"
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLClipping.hpp"

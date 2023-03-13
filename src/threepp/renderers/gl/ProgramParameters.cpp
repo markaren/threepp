@@ -4,6 +4,9 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
+
 #include <sstream>
 
 using namespace threepp;
