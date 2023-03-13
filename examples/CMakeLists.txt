@@ -20,8 +20,13 @@ add_subdirectory(helpers)
 add_subdirectory(loaders)
 add_subdirectory(extras)
 
-add_subdirectory(projects)
-
 if (BULLET_FOUND)
     add_subdirectory(bullet)
 endif()
+
+if(THREEPP_BUILD_EXAMPLE_PROJECTS)
+    add_subdirectory(projects)
+else()
+    message(AUTHOR_WARNING "Building examples, but NOT example projects. Re-run with -DTHREEPP_BUILD_EXAMPLE_PROJECTS=ON to change this behaviour.")
+endif()
+
