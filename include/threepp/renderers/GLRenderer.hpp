@@ -163,7 +163,7 @@ namespace threepp {
 
         TextHandle& textHandle(const std::string& str = "");
 
-        [[nodiscard]] const gl::GLInfo info() const {
+        [[nodiscard]] gl::GLInfo info() const {
             return _info;
         }
 
