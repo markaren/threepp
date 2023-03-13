@@ -299,12 +299,14 @@ set(sources
 
         "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"
+        "threepp/renderers/GLRenderTarget.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
         "threepp/renderers/gl/GLBindingStates.cpp"
         "threepp/renderers/gl/GLBufferRenderer.cpp"
         "threepp/renderers/gl/GLCapabilities.cpp"
+        "threepp/renderers/gl/GLClipping.cpp"
         "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"
         "threepp/renderers/gl/GLLights.cpp"
@@ -312,11 +314,12 @@ set(sources
         "threepp/renderers/gl/GLProgram.cpp"
         "threepp/renderers/gl/GLPrograms.cpp"
         "threepp/renderers/gl/GLMaterials.cpp"
+        "threepp/renderers/gl/GLRenderLists.cpp"
+        "threepp/renderers/gl/GLRenderStates.cpp"
         "threepp/renderers/gl/GLShadowMap.cpp"
         "threepp/renderers/gl/GLState.cpp"
         "threepp/renderers/gl/GLTextures.cpp"
         "threepp/renderers/gl/GLUniforms.cpp"
-        "threepp/renderers/gl/GLRenderLists.cpp"
         "threepp/renderers/gl/ProgramParameters.cpp"
 
         "threepp/renderers/shaders/ShaderLib.cpp"

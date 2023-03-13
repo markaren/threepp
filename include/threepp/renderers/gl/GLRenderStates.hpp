@@ -9,46 +9,21 @@ namespace threepp::gl {
 
     struct GLRenderState {
 
-        GLRenderState() = default;
+        const GLLights& getLights() const;
 
-        const GLLights& getLights() const {
+        const std::vector<Light*>& getLightsArray() const;
 
-            return lights_;
-        }
-        const std::vector<Light*>& getLightsArray() const {
+        const std::vector<Light*>& getShadowsArray() const;
 
-            return lightsArray_;
-        }
-        const std::vector<Light*>& getShadowsArray() const {
+        void init();
 
-            return shadowsArray_;
-        }
+        void pushLight(Light* light);
 
-        void init() {
+        void pushShadow(Light* shadowLight);
 
-            lightsArray_.clear();
-            shadowsArray_.clear();
-        }
+        void setupLights();
 
-        void pushLight(Light* light) {
-
-            lightsArray_.emplace_back(light);
-        }
-
-        void pushShadow(Light* shadowLight) {
-
-            shadowsArray_.emplace_back(shadowLight);
-        }
-
-        void setupLights() {
-
-            lights_.setup(lightsArray_);
-        }
-
-        void setupLightsView(Camera* camera) {
-
-            lights_.setupView(lightsArray_, camera);
-        }
+        void setupLightsView(Camera* camera);
 
 
     private:
@@ -60,22 +35,9 @@ namespace threepp::gl {
 
     struct GLRenderStates {
 
-        GLRenderStates() = default;
+        std::shared_ptr<GLRenderState> get(Scene* scene, size_t renderCallDepth = 1);
 
-        std::shared_ptr<GLRenderState> get(Scene* scene, size_t renderCallDepth = 1) {
-
-            if (renderCallDepth >= renderStates_[scene->uuid].size()) {
-
-                renderStates_[scene->uuid].emplace_back(std::make_shared<GLRenderState>());
-            }
-
-            return renderStates_[scene->uuid].at(renderCallDepth);
-        }
-
-        void dispose() {
-
-            renderStates_.clear();
-        }
+        void dispose();
 
     private:
         std::unordered_map<std::string, std::vector<std::shared_ptr<GLRenderState>>> renderStates_;

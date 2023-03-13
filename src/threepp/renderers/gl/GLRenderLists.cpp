@@ -159,3 +159,32 @@ void GLRenderList::finish() {
         renderItem->group = std::nullopt;
     }
 }
+
+GLRenderLists::GLRenderLists(GLProperties& properties): properties(properties) {}
+
+std::shared_ptr<GLRenderList> GLRenderLists::get(Scene* scene, size_t renderCallDepth) {
+
+    if (!lists.count(scene->uuid)) {
+
+        auto& l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{std::make_shared<GLRenderList>(properties)};
+        return l.back();
+
+    } else {
+
+        auto& l = lists.at(scene->uuid);
+        if (renderCallDepth >= l.size()) {
+
+            l.emplace_back(std::make_shared<GLRenderList>(properties));
+            return l.back();
+
+        } else {
+
+            return l.at(renderCallDepth);
+        }
+    }
+}
+
+void GLRenderLists::dispose() {
+
+    lists.clear();
+}
