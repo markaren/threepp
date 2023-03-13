@@ -7,8 +7,8 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/utils/StringUtils.hpp"
-#include "threepp/utils/regex_util.hpp"
 
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -16,7 +16,6 @@
 #include <vector>
 
 using namespace threepp;
-
 
 namespace {
 

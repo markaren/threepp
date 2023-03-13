@@ -3,8 +3,6 @@
 #ifndef THREEPP_SHADERCHUNK_HPP
 #define THREEPP_SHADERCHUNK_HPP
 
-#include <fstream>
-#include <stdexcept>
 #include <string>
 #include <unordered_map>
 

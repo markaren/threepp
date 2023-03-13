@@ -1,6 +1,9 @@
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
+#include "threepp/renderers/shaders/ShaderChunk.hpp"
+#include "threepp/renderers/shaders/UniformsLib.hpp"
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
+
 
 using namespace threepp::shaders;
 
