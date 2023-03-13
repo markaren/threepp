@@ -2,6 +2,7 @@
 #include "threepp/controls/OrbitControls.hpp"
 
 #include <cmath>
+#include <iostream>
 #include <utility>
 
 using namespace threepp;

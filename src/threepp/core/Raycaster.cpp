@@ -5,6 +5,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
 #include <algorithm>
+#include <iostream>
 
 using namespace threepp;
 

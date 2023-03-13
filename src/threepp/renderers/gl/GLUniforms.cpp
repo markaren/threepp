@@ -5,6 +5,7 @@
 
 #include <glad/glad.h>
 
+#include <iostream>
 #include <regex>
 
 using namespace threepp;
@@ -294,11 +295,11 @@ namespace {
                                            [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
                                    value);
                     };
-                case 0x8b5e: // SAMPLER_2D
-                case 0x8d66: // SAMPLER_EXTERNAL_OES
-                case 0x8dca: // INT_SAMPLER_2D
-                case 0x8dd2: // UNSIGNED_INT_SAMPLER_2D
-                case 0x8b62: // SAMPLER_2D_SHADOW
+                case 0x8b5e:// SAMPLER_2D
+                case 0x8d66:// SAMPLER_EXTERNAL_OES
+                case 0x8dca:// INT_SAMPLER_2D
+                case 0x8dd2:// UNSIGNED_INT_SAMPLER_2D
+                case 0x8b62:// SAMPLER_2D_SHADOW
                     return [&](const UniformValue& value, GLTextures* textures) {
                         auto& data = std::get<std::vector<Texture*>>(value);
                         const auto n = data.size();

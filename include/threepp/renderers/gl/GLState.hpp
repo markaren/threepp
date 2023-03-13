@@ -8,7 +8,6 @@
 
 #include "threepp/Canvas.hpp"
 
-#include <iostream>
 #include <optional>
 #include <utility>
 

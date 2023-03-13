@@ -1,9 +1,12 @@
 
 #include "threepp/renderers/gl/GLInfo.hpp"
 
+#include <iostream>
+
 #include <glad/glad.h>
 
 using namespace threepp;
+
 
 void gl::GLInfo::update(int count, unsigned int mode, size_t instanceCount) {
 

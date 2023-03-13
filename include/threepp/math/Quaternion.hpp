@@ -6,8 +6,6 @@
 #include "threepp/math/float_view.hpp"
 
 #include <functional>
-#include <iostream>
-#include <string>
 
 namespace threepp {
 
@@ -22,7 +20,6 @@ namespace threepp {
         float_view y;
         float_view z;
         float_view w;
-
 
         explicit Quaternion(float x = 0, float y = 0, float z = 0, float w = 1);
 

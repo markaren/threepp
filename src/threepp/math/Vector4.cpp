@@ -4,12 +4,16 @@
 #include "threepp/math/Matrix4.hpp"
 
 #include <cmath>
+#include <string>
 
 using namespace threepp;
 
-Vector4::Vector4(int x, int y, int z, int w): x((float) x), y((float) y), z((float) z), w((float) w) {}
 
-Vector4::Vector4(float x, float y, float z, float w): x(x), y(y), z(z), w(w) {}
+Vector4::Vector4(int x, int y, int z, int w)
+    : x((float) x), y((float) y), z((float) z), w((float) w) {}
+
+Vector4::Vector4(float x, float y, float z, float w)
+    : x(x), y(y), z(z), w(w) {}
 
 float& Vector4::operator[](unsigned int index) {
     switch (index) {

@@ -11,7 +11,6 @@
 #include "threepp/constants.hpp"
 #include "threepp/core/misc.hpp"
 
-#include <iostream>
 #include <vector>
 
 namespace threepp {

@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 using namespace threepp;
+
 
 Quaternion::Quaternion(float x, float y, float z, float w)
     : x(x), y(y), z(z), w(w) {}

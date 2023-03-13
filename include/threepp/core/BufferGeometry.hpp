@@ -11,7 +11,6 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Sphere.hpp"
 
-#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>

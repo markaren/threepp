@@ -282,6 +282,7 @@ set(sources
         "threepp/lights/SpotLightShadow.cpp"
 
         "threepp/objects/Line.cpp"
+        "threepp/objects/LineSegments.cpp"
         "threepp/objects/InstancedMesh.cpp"
         "threepp/objects/Mesh.cpp"
         "threepp/objects/Points.cpp"

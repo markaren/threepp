@@ -3,7 +3,7 @@
 #ifndef THREEPP_GLCAPABILITIES_HPP
 #define THREEPP_GLCAPABILITIES_HPP
 
-#include <iostream>
+#include <ostream>
 #include <string>
 
 namespace threepp::gl {

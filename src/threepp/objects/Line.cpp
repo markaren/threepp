@@ -4,6 +4,8 @@
 
 #include "threepp/core/Raycaster.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 namespace {

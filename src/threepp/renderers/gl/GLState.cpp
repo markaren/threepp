@@ -4,6 +4,7 @@
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include <cstdint>
+#include <iostream>
 
 using namespace threepp;
 

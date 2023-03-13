@@ -5,6 +5,8 @@
 
 #include "threepp/math/MathUtils.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 namespace {

@@ -1,15 +1,17 @@
 
 #include "threepp/threepp.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 namespace {
 
     struct MyListener: KeyListener {
 
-        float &t;
+        float& t;
 
-        explicit MyListener(float &t) : t(t) {}
+        explicit MyListener(float& t): t(t) {}
 
         void onKeyPressed(KeyEvent evt) override {
             std::cout << "onKeyPressed at t=" << t << std::endl;
@@ -24,7 +26,7 @@ namespace {
         }
     };
 
-}
+}// namespace
 
 int main() {
 
@@ -47,6 +49,5 @@ int main() {
             canvas.addKeyListener(&l);
             finish = true;
         }
-
     });
 }

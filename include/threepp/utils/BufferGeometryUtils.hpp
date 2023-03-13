@@ -6,6 +6,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 
+#include <iostream>
 #include <memory>
 #include <vector>
 
@@ -59,7 +60,7 @@ namespace threepp {
             auto& arr = attributes[i]->array();
 
             for (unsigned j = 0; j < arr.size(); j++) {
-                array[offset+j] = arr[j];
+                array[offset + j] = arr[j];
             }
 
             offset += arr.size();

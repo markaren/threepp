@@ -7,7 +7,6 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 
-#include <iostream>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -17,7 +16,6 @@ namespace threepp {
     class Line: public Object3D {
 
     public:
-
         [[nodiscard]] std::string type() const override {
 
             return "Line";

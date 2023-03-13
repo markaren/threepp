@@ -1,12 +1,6 @@
 
 #include "threepp/loaders/OBJLoader.hpp"
 
-#include <fstream>
-#include <optional>
-#include <string>
-#include <utility>
-#include <vector>
-
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/LineSegments.hpp"
@@ -15,7 +9,14 @@
 #include "threepp/utils/StringUtils.hpp"
 #include "threepp/utils/regex_util.hpp"
 
+#include <iostream>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
 using namespace threepp;
+
 
 namespace {
 

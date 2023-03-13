@@ -2,6 +2,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 
 #include <cmath>
+#include <iostream>
 #include <utility>
 
 using namespace threepp;
