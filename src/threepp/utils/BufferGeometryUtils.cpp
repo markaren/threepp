@@ -5,6 +5,56 @@
 
 using namespace threepp;
 
+namespace {
+
+    template<typename T>
+    inline std::unique_ptr<BufferAttribute> mergeBufferAttributes(const std::vector<TypedBufferAttribute<T>*>& attributes) {
+
+
+        std::optional<int> itemSize;
+        std::optional<bool> normalized;
+        size_t arrayLength = 0;
+
+        for (unsigned i = 0; i < attributes.size(); ++i) {
+
+            TypedBufferAttribute<T>* attribute = attributes[i];
+
+            if (!itemSize) itemSize = attribute->itemSize();
+            if (itemSize.value() != attribute->itemSize()) {
+
+                std::cerr << "THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.itemSize must be consistent across matching attributes." << std::endl;
+                return nullptr;
+            }
+
+            if (!normalized) normalized = attribute->normalized();
+            if (normalized.value() != attribute->normalized()) {
+
+                std::cerr << "THREE.BufferGeometryUtils: .mergeBufferAttributes() failed. BufferAttribute.normalized must be consistent across matching attributes." << std::endl;
+                return nullptr;
+            }
+
+            arrayLength += attribute->array().size();
+        }
+
+
+        std::vector<T> array(arrayLength);
+        unsigned int offset = 0;
+
+        for (unsigned i = 0; i < attributes.size(); ++i) {
+
+            auto& arr = attributes[i]->array();
+
+            for (unsigned j = 0; j < arr.size(); j++) {
+                array[offset + j] = arr[j];
+            }
+
+            offset += arr.size();
+        }
+
+        return TypedBufferAttribute<T>::create(array, itemSize.value(), normalized.value());
+    }
+
+}// namespace
 
 std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector<BufferGeometry*>& geometries, bool useGroups) {
 
@@ -134,3 +184,10 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
     return mergedGeometry;
 }
 
+std::shared_ptr<BufferGeometry> mergeBufferGeometries(const std::vector<std::shared_ptr<BufferGeometry>>& geometries, bool useGroups) {
+    std::vector<BufferGeometry*> arr;
+    for (auto& g : geometries) {
+        arr.emplace_back(g.get());
+    }
+    return mergeBufferGeometries(arr, useGroups);
+}
