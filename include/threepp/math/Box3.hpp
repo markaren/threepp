@@ -3,15 +3,17 @@
 #ifndef THREEPP_BOX3_HPP
 #define THREEPP_BOX3_HPP
 
-#include "threepp/core/Object3D.hpp"
-#include "threepp/math/Plane.hpp"
-#include "threepp/math/Sphere.hpp"
-#include "threepp/math/Triangle.hpp"
 #include "threepp/math/Vector3.hpp"
-
 #include "threepp/math/infinity.hpp"
 
+#include <vector>
+
 namespace threepp {
+
+    class Triangle;
+    class Sphere;
+    class Plane;
+    class Object3D;
 
     class Box3 {
 
@@ -21,10 +23,12 @@ namespace threepp {
         Box3(Vector3 min, Vector3 max);
 
         [[nodiscard]] const Vector3& min() const {
+
             return min_;
         }
 
         [[nodiscard]] const Vector3& max() const {
+
             return max_;
         }
 

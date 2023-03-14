@@ -2,11 +2,11 @@
 #include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/extras/ShapeUtils.hpp"
 
+#include <functional>
+
 using namespace threepp;
 
 namespace {
-
-
 
     std::vector<Vector2> generateTopUV(const std::vector<float>& vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC) {
 
@@ -22,7 +22,6 @@ namespace {
                 Vector2(b_x, b_y),
                 Vector2(c_x, c_y)};
     }
-
 
     std::vector<Vector2> generateSideWallUV(const std::vector<float>& vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC, unsigned int indexD) {
 

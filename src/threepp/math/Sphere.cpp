@@ -2,6 +2,8 @@
 #include "threepp/math/Sphere.hpp"
 
 #include "threepp/math/Box3.hpp"
+#include "threepp/math/Plane.hpp"
+#include "threepp/math/Matrix4.hpp"
 
 #include <algorithm>
 #include <cmath>

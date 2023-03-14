@@ -1,8 +1,12 @@
 
 #include "threepp/objects/Sprite.hpp"
+
 #include "threepp/cameras/PerspectiveCamera.hpp"
+
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/core/Raycaster.hpp"
+
+#include "threepp/math/Triangle.hpp"
 
 using namespace threepp;
 

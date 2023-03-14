@@ -23,6 +23,9 @@ Line::Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> m
 
 void Line::computeLineDistances() {
 
+    Vector3 _start;
+    Vector3 _end;
+
     // we assume non-indexed geometry
 
     if (!geometry_->hasIndex()) {

@@ -17,12 +17,6 @@
 
 namespace threepp {
 
-    struct TexParams {
-        Vector2 scale;
-        Vector2 offset;
-        std::string url;
-    };
-
     struct MaterialOptions {
 
         std::string name;
@@ -37,18 +31,6 @@ namespace threepp {
     typedef std::unordered_map<std::string, std::unordered_map<std::string, MatVariant>> MaterialsInfo;
 
     class MaterialCreator {
-
-    private:
-        std::filesystem::path baseUrl;
-        std::optional<MaterialOptions> options;
-
-        int side;
-        int wrap;
-
-        std::unordered_map<std::string, std::shared_ptr<Material>> materials;
-        std::vector<std::shared_ptr<Material>> materialsArray;
-        MaterialsInfo materialsInfo;
-        std::unordered_map<std::string, int> nameLookup;
 
     public:
         explicit MaterialCreator(
@@ -83,8 +65,18 @@ namespace threepp {
             return materials.at(materialName);
         }
 
-
     private:
+        std::filesystem::path baseUrl;
+        std::optional<MaterialOptions> options;
+
+        int side;
+        int wrap;
+
+        std::unordered_map<std::string, std::shared_ptr<Material>> materials;
+        std::vector<std::shared_ptr<Material>> materialsArray;
+        MaterialsInfo materialsInfo;
+        std::unordered_map<std::string, int> nameLookup;
+
         void createMaterial(const std::string& materialName);
 
         std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<int> mapping = std::nullopt);
@@ -92,10 +84,6 @@ namespace threepp {
 
 
     class MTLLoader {
-
-    private:
-        std::optional<std::filesystem::path> path_;
-        std::optional<std::filesystem::path> resourcePath_;
 
     public:
         std::optional<MaterialOptions> materialOptions;
@@ -109,6 +97,10 @@ namespace threepp {
         }
 
         MaterialCreator load(const std::filesystem::path& path);
+
+    private:
+        std::optional<std::filesystem::path> path_;
+        std::optional<std::filesystem::path> resourcePath_;
     };
 
 }// namespace threepp

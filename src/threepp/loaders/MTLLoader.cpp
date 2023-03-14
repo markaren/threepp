@@ -12,6 +12,12 @@ using namespace threepp;
 
 namespace {
 
+    struct TexParams {
+        Vector2 scale;
+        Vector2 offset;
+        std::string url;
+    };
+
     bool getMapForType(const MeshPhongMaterial& mat, const std::string& mapType) {
 
         if (mapType == "map") {

@@ -4,8 +4,8 @@
 #define THREEPP_CAPSULE_HPP
 
 #include "threepp/math/Box3.hpp"
-#include "threepp/math/Vector3.hpp"
 #include "threepp/math/Line3.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <utility>
 
@@ -33,7 +33,7 @@ namespace threepp {
 
         [[nodiscard]] bool intersectsBox(const Box3& box) const;
 
-        std::pair<Vector3, Vector3> lineLineMinimumPoints( const Line3& line1, const Line3& line2 ) const;
+        [[nodiscard]] std::pair<Vector3, Vector3> lineLineMinimumPoints(const Line3& line1, const Line3& line2) const;
     };
 
 }// namespace threepp

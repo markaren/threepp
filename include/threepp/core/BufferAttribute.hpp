@@ -4,6 +4,7 @@
 #define THREEPP_BUFFER_ATTRIBUTE_HPP
 
 #include "threepp/math/Box3.hpp"
+#include "threepp/math/Color.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 #include "threepp/math/Vector4.hpp"
@@ -11,6 +12,7 @@
 #include "threepp/constants.hpp"
 #include "threepp/core/misc.hpp"
 
+#include <memory>
 #include <vector>
 
 namespace threepp {

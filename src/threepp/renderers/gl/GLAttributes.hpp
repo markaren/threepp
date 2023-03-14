@@ -7,6 +7,8 @@
 
 #include "threepp/renderers/gl/Buffer.hpp"
 
+#include <unordered_map>
+
 namespace threepp::gl {
 
     struct GLAttributes {

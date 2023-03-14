@@ -5,6 +5,8 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 namespace threepp {
 
     class CylinderGeometry: public BufferGeometry {

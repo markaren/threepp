@@ -32,6 +32,7 @@ namespace threepp {
         }
 
         std::vector<Material*> materials() override {
+
             return {material_.get()};
         }
 
@@ -54,9 +55,6 @@ namespace threepp {
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
         std::shared_ptr<Material> material_;
-
-        inline static Vector3 _start;
-        inline static Vector3 _end;
 
         Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
     };

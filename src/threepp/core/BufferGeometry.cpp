@@ -1,6 +1,10 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Matrix4.hpp"
+
 #include <cmath>
 #include <iostream>
 #include <utility>
@@ -42,6 +46,9 @@ namespace {
     }
 
 }// namespace
+
+BufferGeometry::BufferGeometry()
+    : uuid(math::generateUUID()) {}
 
 bool BufferGeometry::hasIndex() const {
 

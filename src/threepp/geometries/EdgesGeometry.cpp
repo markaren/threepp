@@ -1,6 +1,9 @@
 
 #include "threepp/geometries/EdgesGeometry.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Triangle.hpp"
+
 #include <cmath>
 #include <sstream>
 
@@ -132,7 +135,6 @@ EdgesGeometry::EdgesGeometry(const BufferGeometry* geometry, float thresholdAngl
             vertices.insert(vertices.end(), {_v0.x, _v0.y, _v0.z});
             vertices.insert(vertices.end(), {_v1.x, _v1.y, _v1.z});
         }
-
     }
 
     this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));

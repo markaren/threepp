@@ -4,6 +4,8 @@
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
+#include "threepp/math/Triangle.hpp"
+
 #include <algorithm>
 
 

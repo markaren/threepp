@@ -1,6 +1,7 @@
 
 #include "threepp/geometries/TubeGeometry.hpp"
 
+#include <functional>
 #include <list>
 
 using namespace threepp;
