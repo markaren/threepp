@@ -133,7 +133,6 @@ struct GLRenderer::Impl {
         : scope(scope), canvas_(canvas), _size(canvas.getSize()),
           _viewport(0, 0, _size.width, _size.height),
           _scissor(0, 0, _size.width, _size.height),
-          state(canvas),
           background(state, parameters.premultipliedAlpha),
           bufferRenderer(new gl::GLBufferRenderer(_info)),
           indexedBufferRenderer(new gl::GLIndexedBufferRenderer(_info)),
@@ -432,14 +431,11 @@ struct GLRenderer::Impl {
 
                 groupOrder = object->renderOrder;
 
-            } else if (object->as<LOD>()) {
+            } else if (auto lod = object->as<LOD>()) {
 
-                auto lod = object->as<LOD>();
                 if (lod->autoUpdate) lod->update(camera);
 
-            } else if (object->as<Light>()) {
-
-                auto light = object->as<Light>();
+            } else if (auto light = object->as<Light>()) {
 
                 currentRenderState->pushLight(light);
 
@@ -448,9 +444,8 @@ struct GLRenderer::Impl {
                     currentRenderState->pushShadow(light);
                 }
 
-            } else if (object->is<Sprite>()) {
+            } else if (auto sprite = object->as<Sprite>()) {
 
-                auto sprite = object->as<Sprite>();
                 if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
 
                     if (sortObjects) {
@@ -468,7 +463,7 @@ struct GLRenderer::Impl {
                     }
                 }
 
-            } else if (object->as<Mesh>() || object->as<Line>() || object->as<Points>()) {
+            } else if (object->is<Mesh>() || object->is<Line>() || object->is<Points>()) {
 
                 if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
 

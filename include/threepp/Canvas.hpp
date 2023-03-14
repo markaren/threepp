@@ -2,12 +2,13 @@
 #ifndef THREEPP_CANVAS_HPP
 #define THREEPP_CANVAS_HPP
 
-#include <functional>
-#include <memory>
-
-#include "threepp/core/Clock.hpp"
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/input/MouseListener.hpp"
+
+#include <functional>
+#include <memory>
+#include <string>
+
 
 namespace threepp {
 

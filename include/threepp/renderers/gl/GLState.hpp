@@ -3,198 +3,200 @@
 #ifndef THREEPP_GLSTATE_HPP
 #define THREEPP_GLSTATE_HPP
 
-#include "threepp/materials/Material.hpp"
 #include "threepp/math/Vector4.hpp"
-
-#include "threepp/Canvas.hpp"
 
 #include <optional>
 #include <utility>
+#include <functional>
 
-namespace threepp::gl {
+namespace threepp {
 
-    struct BoundTexture {
+    class Material;
 
-        std::optional<int> type;
-        std::optional<int> texture;
-    };
+    namespace gl {
 
-    struct ColorBuffer {
+        struct BoundTexture {
 
-        bool locked = false;
+            std::optional<int> type;
+            std::optional<int> texture;
+        };
 
-        Vector4 color{};
-        std::optional<bool> currentColorMask;
-        Vector4 currentColorClear{0, 0, 0, 0};
+        struct ColorBuffer {
 
-        void setMask(bool colorMask);
+            bool locked = false;
 
-        void setLocked(bool lock);
+            Vector4 color{};
+            std::optional<bool> currentColorMask;
+            Vector4 currentColorClear{0, 0, 0, 0};
 
-        void setClear(float r, float g, float b, float a, bool premultipliedAlpha = false);
+            void setMask(bool colorMask);
 
-        void reset();
-    };
+            void setLocked(bool lock);
 
-    struct DepthBuffer {
+            void setClear(float r, float g, float b, float a, bool premultipliedAlpha = false);
 
-        bool locked = false;
+            void reset();
+        };
 
-        std::optional<bool> currentDepthMask;
-        std::optional<int> currentDepthFunc;
-        std::optional<float> currentDepthClear;
+        struct DepthBuffer {
 
-        std::function<void(int)> enable;
-        std::function<void(int)> disable;
+            bool locked = false;
 
-        void setFunctions(std::function<void(int)> enable, std::function<void(int)> disable);
+            std::optional<bool> currentDepthMask;
+            std::optional<int> currentDepthFunc;
+            std::optional<float> currentDepthClear;
 
-        void setTest(bool depthTest);
+            std::function<void(int)> enable;
+            std::function<void(int)> disable;
 
-        void setMask(bool depthMask);
+            void setFunctions(std::function<void(int)> enable, std::function<void(int)> disable);
 
-        void setFunc(int depthFunc);
+            void setTest(bool depthTest);
 
-        void setLocked(bool lock);
+            void setMask(bool depthMask);
 
-        void setClear(float depth);
+            void setFunc(int depthFunc);
 
-        void reset();
-    };
+            void setLocked(bool lock);
 
-    struct StencilBuffer {
+            void setClear(float depth);
 
-        bool locked = false;
+            void reset();
+        };
 
-        std::optional<int> currentStencilMask;
-        std::optional<int> currentStencilFunc;
-        std::optional<int> currentStencilRef;
-        std::optional<int> currentStencilFuncMask;
-        std::optional<int> currentStencilFail;
-        std::optional<int> currentStencilZFail;
-        std::optional<int> currentStencilZPass;
-        std::optional<int> currentStencilClear;
+        struct StencilBuffer {
 
-        std::function<void(int)> enable;
-        std::function<void(int)> disable;
+            bool locked = false;
 
-        void setFunctions(std::function<void(int)> enable, std::function<void(int)> disable);
+            std::optional<int> currentStencilMask;
+            std::optional<int> currentStencilFunc;
+            std::optional<int> currentStencilRef;
+            std::optional<int> currentStencilFuncMask;
+            std::optional<int> currentStencilFail;
+            std::optional<int> currentStencilZFail;
+            std::optional<int> currentStencilZPass;
+            std::optional<int> currentStencilClear;
 
-        void setTest(bool stencilTest);
+            std::function<void(int)> enable;
+            std::function<void(int)> disable;
 
-        void setMask(int stencilMask);
+            void setFunctions(std::function<void(int)> enable, std::function<void(int)> disable);
 
-        void setFunc(int stencilFunc, int stencilRef, int stencilMask);
+            void setTest(bool stencilTest);
 
-        void setOp(int stencilFail, int stencilZFail, int stencilZPass);
+            void setMask(int stencilMask);
 
-        void setLocked(bool lock);
+            void setFunc(int stencilFunc, int stencilRef, int stencilMask);
 
-        void setClear(int stencil);
+            void setOp(int stencilFail, int stencilZFail, int stencilZPass);
 
-        void reset();
-    };
+            void setLocked(bool lock);
 
-    struct GLState {
+            void setClear(int stencil);
 
-        ColorBuffer colorBuffer = ColorBuffer();
-        DepthBuffer depthBuffer = DepthBuffer();
-        StencilBuffer stencilBuffer = StencilBuffer();
+            void reset();
+        };
 
-        std::unordered_map<int, bool> enabledCapabilities;
+        struct GLState {
 
-        std::unordered_map<int, unsigned int> currentBoundFramebuffers;
+            ColorBuffer colorBuffer;
+            DepthBuffer depthBuffer;
+            StencilBuffer stencilBuffer;
 
-        std::optional<int> currentProgram;
+            std::unordered_map<int, bool> enabledCapabilities;
 
-        bool currentBlendingEnabled = false;
-        std::optional<int> currentBlending;
-        std::optional<int> currentBlendEquation;
-        std::optional<int> currentBlendSrc;
-        std::optional<int> currentBlendDst;
-        std::optional<int> currentBlendEquationAlpha;
-        std::optional<int> currentBlendSrcAlpha;
-        std::optional<int> currentBlendDstAlpha;
-        std::optional<bool> currentPremultipledAlpha = false;
+            std::unordered_map<int, unsigned int> currentBoundFramebuffers;
 
-        std::optional<bool> currentFlipSided;
-        std::optional<int> currentCullFace;
+            std::optional<int> currentProgram;
 
-        std::optional<float> currentLineWidth;
+            bool currentBlendingEnabled = false;
+            std::optional<int> currentBlending;
+            std::optional<int> currentBlendEquation;
+            std::optional<int> currentBlendSrc;
+            std::optional<int> currentBlendDst;
+            std::optional<int> currentBlendEquationAlpha;
+            std::optional<int> currentBlendSrcAlpha;
+            std::optional<int> currentBlendDstAlpha;
+            std::optional<bool> currentPremultipledAlpha = false;
 
-        std::optional<float> currentPolygonOffsetFactor;
-        std::optional<float> currentPolygonOffsetUnits;
+            std::optional<bool> currentFlipSided;
+            std::optional<int> currentCullFace;
 
-        const int maxTextures;
+            std::optional<float> currentLineWidth;
 
-        bool lineWidthAvailable = false;
-        unsigned int version = 0;
+            std::optional<float> currentPolygonOffsetFactor;
+            std::optional<float> currentPolygonOffsetUnits;
 
-        std::optional<int> currentTextureSlot;
-        std::unordered_map<int, BoundTexture> currentBoundTextures;
+            const int maxTextures;
 
-        std::unordered_map<int, int> emptyTextures;
+            bool lineWidthAvailable = false;
+            unsigned int version = 0;
 
-        Vector4 currentScissor;
-        Vector4 currentViewport;
+            std::optional<int> currentTextureSlot;
+            std::unordered_map<int, BoundTexture> currentBoundTextures;
 
-        const Canvas& canvas;
+            std::unordered_map<int, int> emptyTextures;
 
-        explicit GLState(const Canvas& canvas);
+            Vector4 currentScissor;
+            Vector4 currentViewport;
 
-        void enable(int id);
+            GLState();
 
-        void disable(int id);
+            void enable(int id);
 
-        bool bindFramebuffer(int target, unsigned int framebuffer);
+            void disable(int id);
 
-        bool useProgram(unsigned int program, bool force);
+            bool bindFramebuffer(int target, unsigned int framebuffer);
 
-        void setBlending(
-                int blending,
-                std::optional<int> blendEquation = std::nullopt,
-                std::optional<int> blendSrc = std::nullopt,
-                std::optional<int> blendDst = std::nullopt,
-                std::optional<int> blendEquationAlpha = std::nullopt,
-                std::optional<int> blendSrcAlpha = std::nullopt,
-                std::optional<int> blendDstAlpha = std::nullopt,
-                std::optional<bool> premultipliedAlpha = std::nullopt);
+            bool useProgram(unsigned int program, bool force);
 
+            void setBlending(
+                    int blending,
+                    std::optional<int> blendEquation = std::nullopt,
+                    std::optional<int> blendSrc = std::nullopt,
+                    std::optional<int> blendDst = std::nullopt,
+                    std::optional<int> blendEquationAlpha = std::nullopt,
+                    std::optional<int> blendSrcAlpha = std::nullopt,
+                    std::optional<int> blendDstAlpha = std::nullopt,
+                    std::optional<bool> premultipliedAlpha = std::nullopt);
 
-        void setMaterial(const Material* material, bool frontFaceCW);
 
-        void setFlipSided(bool flipSided);
+            void setMaterial(const Material* material, bool frontFaceCW);
 
-        void setCullFace(int cullFace);
+            void setFlipSided(bool flipSided);
 
-        void setLineWidth(float width);
+            void setCullFace(int cullFace);
 
-        void setPolygonOffset(bool polygonOffset, std::optional<float> factor = std::nullopt, std::optional<float> units = std::nullopt);
+            void setLineWidth(float width);
 
-        void setScissorTest(bool scissorTest);
+            void setPolygonOffset(bool polygonOffset, std::optional<float> factor = std::nullopt, std::optional<float> units = std::nullopt);
 
-        // texture
+            void setScissorTest(bool scissorTest);
 
-        void activeTexture(std::optional<unsigned int> glSlot = std::nullopt);
+            // texture
 
-        void bindTexture(int glType, std::optional<int> glTexture);
+            void activeTexture(std::optional<unsigned int> glSlot = std::nullopt);
 
-        void unbindTexture();
+            void bindTexture(int glType, std::optional<int> glTexture);
 
-        void texImage2D(unsigned int target, int level, int internalFormat, int width, int height, unsigned int format, unsigned int type, const void* pixels);
+            void unbindTexture();
 
-        void texImage3D(unsigned int target, int level, int internalFormat, int width, int height, int depth, unsigned int format, unsigned int type, const void* pixels);
+            void texImage2D(unsigned int target, int level, int internalFormat, int width, int height, unsigned int format, unsigned int type, const void* pixels);
 
-        //
+            void texImage3D(unsigned int target, int level, int internalFormat, int width, int height, int depth, unsigned int format, unsigned int type, const void* pixels);
 
-        void scissor(const Vector4& scissor);
+            //
 
-        void viewport(const Vector4& viewport);
+            void scissor(const Vector4& scissor);
 
-        //
+            void viewport(const Vector4& viewport);
 
-        void reset();
-    };
+            //
+
+            void reset(int width, int height);
+        };
+
+    }
 
 }// namespace threepp::gl
 
