@@ -138,16 +138,16 @@ struct Reflector::Impl {
             renderTarget->texture->encoding = _renderer->outputEncoding;
             reflector_.visible = false;
             const auto currentRenderTarget = _renderer->getRenderTarget();
-            const auto currentShadowAutoUpdate = _renderer->shadowMap.autoUpdate;
+            const auto currentShadowAutoUpdate = _renderer->shadowMap().autoUpdate;
 
-            _renderer->shadowMap.autoUpdate = false;// Avoid re-computing shadows
+            _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
 
             _renderer->setRenderTarget(renderTarget);
-            _renderer->state.depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
+            _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
             _renderer->render(scene, virtualCamera.get());
-            _renderer->shadowMap.autoUpdate = currentShadowAutoUpdate;
+            _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
 
             reflector_.visible = true;

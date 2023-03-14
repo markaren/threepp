@@ -8,7 +8,7 @@ int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap().enabled = true;
     renderer.toneMapping = ACESFilmicToneMapping;
 
     auto scene = Scene::create();

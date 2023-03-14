@@ -7,7 +7,7 @@ int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap().enabled = true;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);

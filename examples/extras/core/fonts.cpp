@@ -10,8 +10,8 @@ int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(8));
     GLRenderer renderer(canvas);
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = PCFSoftShadowMap;
+    renderer.shadowMap().enabled = true;
+    renderer.shadowMap().type = PCFSoftShadowMap;
 
     auto scene = Scene::create();
     scene->background = Color::black;

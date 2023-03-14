@@ -3,53 +3,62 @@
 #ifndef THREEPP_GLCLIPPING_HPP
 #define THREEPP_GLCLIPPING_HPP
 
-#include "GLProperties.hpp"
-
-#include "threepp/cameras/Camera.hpp"
 #include "threepp/math/Plane.hpp"
 
 #include "threepp/core/Uniform.hpp"
 
-namespace threepp::gl {
+#include <optional>
 
-    struct GLClipping {
+namespace threepp {
 
-        std::optional<std::vector<float>> globalState;
+    class Camera;
+    class Material;
 
-        int numGlobalPlanes = 0;
-        bool localClippingEnabled = false;
-        bool renderingShadows = false;
+    namespace gl {
 
-        Plane plane;
-        Matrix3 viewNormalMatrix;
+        class GLProperties;
 
-        Uniform uniform;
+        struct GLClipping {
 
-        int numPlanes = 0;
-        int numIntersection = 0;
+            std::optional<std::vector<float>> globalState;
 
-        explicit GLClipping(GLProperties& properties);
+            int numGlobalPlanes = 0;
+            bool localClippingEnabled = false;
+            bool renderingShadows = false;
 
-        bool init(const std::vector<Plane>& planes, bool enableLocalClipping, Camera* camera);
+            Plane plane;
+            Matrix3 viewNormalMatrix;
 
-        void beginShadows();
+            Uniform uniform;
 
-        void endShadows();
+            int numPlanes = 0;
+            int numIntersection = 0;
 
-        void setState(Material* material, Camera* camera, bool useCache);
+            explicit GLClipping(GLProperties& properties);
 
-        void resetGlobalState();
+            bool init(const std::vector<Plane>& planes, bool enableLocalClipping, Camera* camera);
 
-        void projectPlanes();
+            void beginShadows();
 
-        std::vector<float> projectPlanes(
-                const std::vector<Plane>& planes, Camera* camera,
-                int dstOffset, bool skipTransform = false);
+            void endShadows();
 
-    private:
-        GLProperties& properties;
-    };
+            void setState(Material* material, Camera* camera, bool useCache);
 
-}// namespace threepp::gl
+            void resetGlobalState();
+
+            void projectPlanes();
+
+            std::vector<float> projectPlanes(const std::vector<Plane>& planes, Camera* camera, int dstOffset, bool skipTransform = false);
+
+            ~GLClipping();
+
+        private:
+            struct Impl;
+            std::unique_ptr<Impl> pimpl_;
+        };
+
+    }// namespace gl
+
+}// namespace threepp
 
 #endif//THREEPP_GLCLIPPING_HPP

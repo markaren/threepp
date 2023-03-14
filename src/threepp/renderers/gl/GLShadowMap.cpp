@@ -1,11 +1,18 @@
 
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 
+#include "threepp/renderers/gl/GLCapabilities.hpp"
+
+#include "threepp/scenes/Scene.hpp"
+
+#include "threepp/objects/Line.hpp"
+#include "threepp/objects/Mesh.hpp"
+
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshDistanceMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
-#include "threepp/objects/Line.hpp"
-#include "threepp/objects/Mesh.hpp"
+
+#include "threepp/objects/Points.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
@@ -213,6 +220,7 @@ struct GLShadowMap::Impl {
     }
 
     void renderObject(GLRenderer& _renderer, Object3D* object, Camera* camera, Camera* shadowCamera, Light* light) {
+
         if (!object->visible) return;
 
         bool visible = object->layers.test(camera->layers);
@@ -270,7 +278,7 @@ struct GLShadowMap::Impl {
         auto activeCubeFace = _renderer.getActiveCubeFace();
         auto activeMipmapLevel = _renderer.getActiveMipmapLevel();
 
-        auto& _state = _renderer.state;
+        auto& _state = _renderer.state();
 
         // Set GL state for depth map.
         _state.setBlending(NoBlending);
