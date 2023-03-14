@@ -8,6 +8,7 @@
 #include <optional>
 #include <utility>
 #include <functional>
+#include <unordered_map>
 
 namespace threepp {
 
