@@ -3,9 +3,8 @@
 #ifndef THREEPP_GLBUFFERRENDERER_HPP
 #define THREEPP_GLBUFFERRENDERER_HPP
 
-#include "GLAttributes.hpp"
-#include "GLCapabilities.hpp"
-#include "GLInfo.hpp"
+#include "threepp/renderers/gl/Buffer.hpp"
+#include "threepp/renderers/gl/GLInfo.hpp"
 
 namespace threepp::gl {
 

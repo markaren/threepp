@@ -3,15 +3,13 @@
 #ifndef THREEPP_GLTEXTURES_HPP
 #define THREEPP_GLTEXTURES_HPP
 
-#include "GLCapabilities.hpp"
-#include "GLInfo.hpp"
-#include "GLProperties.hpp"
-#include "GLState.hpp"
+#include "threepp/renderers/gl/GLInfo.hpp"
+#include "threepp/renderers/gl/GLProperties.hpp"
+#include "threepp/renderers/gl/GLState.hpp"
 
 #include "GLUniforms.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
-
 
 #include <memory>
 #include <unordered_map>
@@ -20,15 +18,12 @@ namespace threepp::gl {
 
     struct GLTextures {
 
-        const int maxTextures = GLCapabilities::instance().maxTextures;
-        const int maxCubemapSize = GLCapabilities::instance().maxCubemapSize;
-        const int maxTextureSize = GLCapabilities::instance().maxTextureSize;
-        const int maxSamples = GLCapabilities::instance().maxSamples;
+        const int maxTextures;
+        const int maxCubemapSize;
+        const int maxTextureSize;
+        const int maxSamples;
 
-        GLTextures(
-                GLState& state,
-                GLProperties& properties,
-                GLInfo& info);
+        GLTextures(GLState& state, GLProperties& properties, GLInfo& info);
 
         void generateMipmap(unsigned int target, const Texture& texture, unsigned int width, unsigned int height);
 
@@ -93,9 +88,9 @@ namespace threepp::gl {
             GLTextures* scope_;
         };
 
+        GLInfo& info;
         GLState& state;
         GLProperties& properties;
-        GLInfo& info;
 
         std::shared_ptr<TextureEventListener> onTextureDispose_;
         std::shared_ptr<RenderTargetEventListener> onRenderTargetDispose_;

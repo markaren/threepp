@@ -6,9 +6,9 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
-#include "threepp/scenes/Scene.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/scenes/Scene.hpp"
 
 #include <sstream>
 
@@ -26,6 +26,7 @@ namespace {
 
 ProgramParameters::ProgramParameters(
         const GLRenderer& renderer,
+        const GLClipping& clipping,
         const GLLights::LightState& lights,
         size_t numShadows,
         Object3D* object,
@@ -33,7 +34,6 @@ ProgramParameters::ProgramParameters(
         Material* material,
         const std::unordered_map<std::string, std::string>& shaderIDs) {
 
-    auto& clipping = renderer.clipping();
     auto& shadowMap = renderer.shadowMap();
 
     auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
@@ -168,8 +168,8 @@ ProgramParameters::ProgramParameters(
     numPointLightShadows = lights.pointShadowMap.size();
     numSpotLightShadows = lights.spotShadowMap.size();
 
-    numClippingPlanes = renderer.clipping().numPlanes;
-    numClipIntersection = renderer.clipping().numIntersection;
+    numClippingPlanes = clipping.numPlanes;
+    numClipIntersection = clipping.numIntersection;
 
     dithering = material->dithering;
 

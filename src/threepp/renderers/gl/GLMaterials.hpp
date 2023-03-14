@@ -28,6 +28,6 @@ namespace threepp::gl {
     };
 
 
-}// namespace threepp
+}// namespace threepp::gl
 
 #endif//THREEPP_GLMATERIAL_HPP

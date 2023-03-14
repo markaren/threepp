@@ -83,7 +83,6 @@ namespace threepp::gl {
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
-
     };
 
 }// namespace threepp::gl

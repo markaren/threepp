@@ -14,7 +14,7 @@ struct GLClipping::Impl {
     GLClipping& scope;
     GLProperties& properties;
 
-    Impl(GLClipping& scope, GLProperties& properties): scope(scope), properties(properties){}
+    Impl(GLClipping& scope, GLProperties& properties): scope(scope), properties(properties) {}
 
 
     bool init(const std::vector<Plane>& planes, bool enableLocalClipping, Camera* camera) {
@@ -147,7 +147,6 @@ struct GLClipping::Impl {
 
         return dstArray;
     }
-
 };
 
 GLClipping::GLClipping(GLProperties& properties)

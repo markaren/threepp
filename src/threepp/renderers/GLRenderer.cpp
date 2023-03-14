@@ -21,6 +21,7 @@
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
+#include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 #include "threepp/renderers/gl/GLRenderStates.hpp"
@@ -554,7 +555,7 @@ struct GLRenderer::Impl {
 
         auto lightsStateVersion = lights.state.version;
 
-        auto parameters = gl::GLPrograms::getParameters(scope, material, lights.state, shadowsArray.size(), scene, object);
+        auto parameters = gl::GLPrograms::getParameters(scope, clipping, material, lights.state, shadowsArray.size(), scene, object);
         auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
 
         auto& programs = materialProperties->programs;
@@ -1071,16 +1072,6 @@ GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
 const gl::GLInfo& threepp::GLRenderer::info() {
 
     return pimpl_->_info;
-}
-
-gl::GLClipping& threepp::GLRenderer::clipping() {
-
-    return pimpl_->clipping;
-}
-
-const gl::GLClipping& threepp::GLRenderer::clipping() const {
-
-    return pimpl_->clipping;
 }
 
 gl::GLShadowMap& threepp::GLRenderer::shadowMap() {

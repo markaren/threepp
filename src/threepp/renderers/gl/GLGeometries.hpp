@@ -13,8 +13,8 @@ namespace threepp {
 
     namespace gl {
 
-        class GLAttributes;
         class GLInfo;
+        class GLAttributes;
         class GLBindingStates;
 
         struct GLGeometries {

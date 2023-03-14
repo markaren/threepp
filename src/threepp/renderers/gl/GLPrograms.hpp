@@ -46,6 +46,7 @@ namespace threepp {
 
             static ProgramParameters getParameters(
                     const GLRenderer& renderer,
+                    const GLClipping& clipping,
                     Material* material,
                     const GLLights::LightState& lights,
                     size_t numShadows,
