@@ -1,5 +1,6 @@
 
 #include "threepp/objects/Sprite.hpp"
+
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 #include "threepp/core/Raycaster.hpp"
@@ -72,6 +73,7 @@ Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
 }
 
 void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+
     if (!raycaster.camera) {
 
         throw std::runtime_error("THREE.Sprite: 'Raycaster.camera' needs to be set in order to raycast against sprites.");

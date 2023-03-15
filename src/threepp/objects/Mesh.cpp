@@ -4,6 +4,8 @@
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
+#include "threepp/materials/MeshBasicMaterial.hpp"
+
 #include <algorithm>
 
 
@@ -96,6 +98,16 @@ namespace {
     }
 
 }// namespace
+
+
+Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
+    : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
+      materials_{material ? std::move(material) : MeshBasicMaterial::create()} {
+}
+
+Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
+    : geometry_(std::move(geometry)), materials_{std::move(materials)} {
+}
 
 std::vector<Material*> Mesh::materials() {
 

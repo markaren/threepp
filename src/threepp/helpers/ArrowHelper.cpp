@@ -1,7 +1,9 @@
 
 #include "threepp/helpers/ArrowHelper.hpp"
+
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 
 #include <cmath>
 

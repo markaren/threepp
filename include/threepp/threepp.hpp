@@ -21,10 +21,10 @@
 #include "threepp/core/Raycaster.hpp"
 
 #include "threepp/objects/Group.hpp"
-#include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
-#include "threepp/objects/Sprite.hpp"
+#include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/objects/Sprite.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 

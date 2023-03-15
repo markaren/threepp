@@ -13,6 +13,8 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
 
+#include "threepp/materials/RawShaderMaterial.hpp"
+
 #include "threepp/math/Frustum.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
@@ -26,6 +28,8 @@
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 #include "threepp/renderers/gl/GLRenderStates.hpp"
 
+#include "threepp/materials/MeshToonMaterial.hpp"
+#include "threepp/materials/ShadowMaterial.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
 

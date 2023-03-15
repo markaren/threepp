@@ -248,6 +248,10 @@ set(sources
         "threepp/geometries/WireframeGeometry.cpp"
 
         "threepp/helpers/ArrowHelper.cpp"
+        "threepp/helpers/AxesHelper.cpp"
+        "threepp/helpers/GridHelper.cpp"
+        "threepp/helpers/PointLightHelper.cpp"
+        "threepp/helpers/SpotLightHelper.cpp"
 
         "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/MTLLoader.cpp"
@@ -284,6 +288,7 @@ set(sources
 
         "threepp/objects/Line.cpp"
         "threepp/objects/LineSegments.cpp"
+        "threepp/objects/LOD.cpp"
         "threepp/objects/InstancedMesh.cpp"
         "threepp/objects/Mesh.cpp"
         "threepp/objects/Points.cpp"

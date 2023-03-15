@@ -6,10 +6,7 @@
 #include "AxesHelper.hpp"
 #include "Box3Helper.hpp"
 #include "CameraHelper.hpp"
-#include "DirectionalLightHelper.hpp"
 #include "GridHelper.hpp"
 #include "PlaneHelper.hpp"
-#include "PointLightHelper.hpp"
-#include "SpotLightHelper.hpp"
 
 #endif//THREEPP_HELPERS_HPP
