@@ -316,7 +316,6 @@ set(sources
 
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/ThreadPool.cpp"
-        "threepp/utils/URLFetcher.cpp"
 
         "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"
@@ -351,6 +350,10 @@ if (nlohmann_json_FOUND)
     list(APPEND sources "threepp/loaders/FontLoader.cpp" "threepp/extras/core/Font.cpp")
 endif()
 
+if (CURL_FOUND)
+    list(APPEND sources "threepp/utils/URLFetcher.cpp")
+endif()
+
 include("${CMAKE_SOURCE_DIR}/cmake/shaders.cmake")
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
@@ -359,10 +362,13 @@ target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
-        glfw::glfw
-        CURL::libcurl)
+        glfw::glfw)
 if (nlohmann_json_FOUND)
     target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
+endif()
+if (CURL_FOUND)
+    target_link_libraries(threepp PRIVATE CURL::libcurl)
+    target_compile_definitions(threepp PUBLIC "THREEPP_WITH_CURL")
 endif()
 if(UNIX)
     target_link_libraries(threepp PRIVATE pthread)
