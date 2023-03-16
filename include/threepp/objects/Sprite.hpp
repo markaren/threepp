@@ -4,7 +4,6 @@
 #define THREEPP_SPRITE_HPP
 
 #include "threepp/core/BufferGeometry.hpp"
-#include "threepp/core/InterleavedBuffer.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 

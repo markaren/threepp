@@ -3,16 +3,18 @@
 #ifndef THREEPP_RAYCASTER_HPP
 #define THREEPP_RAYCASTER_HPP
 
-#include "threepp/cameras/Camera.hpp"
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Layers.hpp"
 #include "threepp/math/Ray.hpp"
+#include "threepp/math/Vector2.hpp"
 
 #include <limits>
+#include <memory>
 #include <vector>
 
 namespace threepp {
 
+    class Camera;
     class Object3D;
 
     struct Intersection {

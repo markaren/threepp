@@ -3,6 +3,11 @@
 
 #include "threepp/renderers/gl/GLProperties.hpp"
 
+#include "threepp/materials/MeshDepthMaterial.hpp"
+#include "threepp/materials/MeshDistanceMaterial.hpp"
+#include "threepp/materials/MeshMatcapMaterial.hpp"
+#include "threepp/materials/MeshToonMaterial.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/materials.hpp"
 
 using namespace threepp;

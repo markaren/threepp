@@ -2,6 +2,7 @@
 #include "threepp/loaders/MTLLoader.hpp"
 
 #include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/utils/StringUtils.hpp"
 

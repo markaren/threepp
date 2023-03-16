@@ -1,5 +1,7 @@
 
-#include <threepp/threepp.hpp>
+#include "threepp/geometries/TorusKnotGeometry.hpp"
+#include "threepp/helpers/PointLightHelper.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 

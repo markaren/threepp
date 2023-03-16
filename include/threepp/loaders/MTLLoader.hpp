@@ -2,7 +2,6 @@
 #ifndef THREEPP_MTLLOADER_HPP
 #define THREEPP_MTLLOADER_HPP
 
-#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -11,11 +10,13 @@
 #include <variant>
 
 #include "threepp/constants.hpp"
-#include "threepp/materials/Material.hpp"
 #include "threepp/math/Vector2.hpp"
+#include "threepp/textures/Texture.hpp"
 
 
 namespace threepp {
+
+    class Material;
 
     struct MaterialOptions {
 

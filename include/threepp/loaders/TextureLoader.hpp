@@ -2,19 +2,18 @@
 #ifndef THREEPP_TEXTURELOADER_HPP
 #define THREEPP_TEXTURELOADER_HPP
 
-#include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <filesystem>
 #include <memory>
-#include <unordered_map>
 
 namespace threepp {
 
     class TextureLoader {
 
     public:
-        bool useCache = true;
+
+        explicit TextureLoader(bool useCache = true);
 
         std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY = true);
         std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, bool flipY = true);
@@ -22,9 +21,11 @@ namespace threepp {
 
         void clearCache();
 
+        ~TextureLoader();
+
     private:
-        ImageLoader imageLoader_;
-        std::unordered_map<std::string, std::weak_ptr<Texture>> cache_;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
     };
 
 }// namespace threepp
