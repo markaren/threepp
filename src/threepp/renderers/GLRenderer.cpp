@@ -523,7 +523,7 @@ struct GLRenderer::Impl {
 
         if (object->onBeforeRender) {
 
-            object->onBeforeRender.value()((void*) this, scene, camera, geometry, material, group);
+            object->onBeforeRender.value()(&scope, scene, camera, geometry, material, group);
         }
 
         object->modelViewMatrix.multiplyMatrices(camera->matrixWorldInverse, *object->matrixWorld);
@@ -533,7 +533,7 @@ struct GLRenderer::Impl {
 
         if (object->onAfterRender) {
 
-            object->onAfterRender.value()(this, scene, camera, geometry, material, group);
+            object->onAfterRender.value()(&scope, scene, camera, geometry, material, group);
         }
     }
 
