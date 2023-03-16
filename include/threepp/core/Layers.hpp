@@ -8,51 +8,25 @@ namespace threepp {
     class Layers {
 
     public:
-        Layers(): mask_(1 | 0) {}
+        Layers();
 
-        void set(unsigned int channel) {
+        void set(unsigned int channel);
 
-            this->mask_ = 1 << channel | 0;
-        }
+        void enable(unsigned int channel);
 
-        void enable(unsigned int channel) {
+        void enableAll();
 
-            this->mask_ |= 1 << channel | 0;
-        }
+        void toggle(unsigned int channel);
 
-        void enableAll() {
+        void disable(unsigned int channel);
 
-            this->mask_ = 0xffffffff | 0;
-        }
+        void disableAll();
 
-        void toggle(unsigned int channel) {
+        [[nodiscard]] bool test(const Layers& layers) const;
 
-            this->mask_ ^= 1 << channel | 0;
-        }
+        [[nodiscard]] bool isEnabled(unsigned int channel) const;
 
-        void disable(unsigned int channel) {
-
-            this->mask_ &= ~(1 << channel | 0);
-        }
-
-        void disableAll() {
-
-            this->mask_ = 0;
-        }
-
-        [[nodiscard]] bool test(const Layers& layers) const {
-
-            return (this->mask_ & layers.mask_) != 0;
-        }
-
-        [[nodiscard]] bool isEnabled(unsigned int channel) const {
-
-            return (mask_ & (1 << channel | 0)) != 0;
-        }
-
-        [[nodiscard]] unsigned int mask() const {
-            return mask_;
-        }
+        [[nodiscard]] unsigned int mask() const;
 
     private:
         unsigned int mask_;

@@ -4,7 +4,6 @@
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "GLCapabilities.hpp"
-#include "threepp/math/MathUtils.hpp"
 
 #include <cmath>
 #include <iostream>

@@ -25,10 +25,7 @@ namespace threepp {
     public:
         bool autoUpdate = true;
 
-        [[nodiscard]] std::string type() const override {
-
-            return "LOD";
-        }
+        [[nodiscard]] std::string type() const override;
 
         LOD& addLevel(const std::shared_ptr<Object3D>& object, float distance = 0);
 

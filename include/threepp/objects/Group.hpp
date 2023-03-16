@@ -10,24 +10,14 @@ namespace threepp {
 
     public:
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "Group";
-        }
+        std::shared_ptr<Object3D> clone(bool recursive = true) override;
 
-        std::shared_ptr<Object3D> clone(bool recursive = true) override {
-            auto clone = create();
-            clone->copy(*this, recursive);
-
-            return clone;
-        }
-
-        static std::shared_ptr<Group> create() {
-            return std::shared_ptr<Group>(new Group());
-        }
+        static std::shared_ptr<Group> create();
 
     protected:
-        Group() = default;
+        Group();
     };
 
 }// namespace threepp

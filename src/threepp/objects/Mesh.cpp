@@ -269,3 +269,53 @@ std::shared_ptr<Object3D> Mesh::clone(bool recursive) {
 
     return clone;
 }
+
+std::string Mesh::type() const {
+
+    return "Mesh";
+}
+
+BufferGeometry* Mesh::geometry() {
+
+    return geometry_.get();
+}
+
+const BufferGeometry* Mesh::geometry() const {
+
+    return geometry_.get();
+}
+
+void Mesh::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+
+    geometry_ = geometry;
+}
+
+Material* Mesh::material() {
+
+    return materials_.front().get();
+}
+
+void Mesh::setMaterial(const std::shared_ptr<Material>& material) {
+
+    setMaterials({material});
+}
+
+void Mesh::setMaterials(const std::vector<std::shared_ptr<Material>>& materials) {
+
+    materials_ = materials;
+}
+
+size_t Mesh::numMaterials() const {
+
+    return materials_.size();
+}
+
+std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
+
+    return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
+}
+
+std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials) {
+
+    return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(materials)));
+}

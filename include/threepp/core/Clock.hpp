@@ -3,68 +3,28 @@
 #ifndef THREEPP_CLOCK_HPP
 #define THREEPP_CLOCK_HPP
 
-#include <chrono>
+#include <memory>
 
 namespace threepp {
 
     class Clock {
 
     public:
-        explicit Clock(bool autoStart = true): autoStart_(autoStart) {}
+        explicit Clock(bool autoStart = true);
 
-        void start() {
+        void start();
 
-            startTime_ = std::chrono::system_clock::now();
+        void stop();
 
-            oldTime_ = startTime_;
-            elapsedTime_ = 0;
-            running_ = true;
-        }
+        float getElapsedTime();
 
-        void stop() {
+        float getDelta();
 
-            getElapsedTime();
-            running_ = false;
-            autoStart_ = false;
-        }
-
-        float getElapsedTime() {
-
-            getDelta();
-            return elapsedTime_;
-        }
-
-        float getDelta() {
-
-            float diff = 0;
-
-            if (autoStart_ && !running_) {
-
-                start();
-                return 0;
-            }
-
-            if (running_) {
-
-                const auto newTime = std::chrono::system_clock::now();
-
-                diff = std::chrono::duration_cast<std::chrono::microseconds>(newTime - oldTime_).count() / 1000000.0f;
-                oldTime_ = newTime;
-
-                elapsedTime_ += diff;
-            }
-
-            return diff;
-        }
+        ~Clock();
 
     private:
-        bool autoStart_;
-        bool running_ = false;
-
-        float elapsedTime_ = 0;
-
-        std::chrono::time_point<std::chrono::system_clock> startTime_;
-        std::chrono::time_point<std::chrono::system_clock> oldTime_;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
     };
 
 }// namespace threepp

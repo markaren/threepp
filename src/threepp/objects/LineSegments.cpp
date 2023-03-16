@@ -5,6 +5,14 @@
 
 using namespace threepp;
 
+LineSegments::LineSegments(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
+    : Line(geometry, material) {}
+
+std::string LineSegments::type() const {
+
+    return "LineSegments";
+}
+
 void LineSegments::computeLineDistances() {
 
     Vector3 _start;
@@ -32,4 +40,16 @@ void LineSegments::computeLineDistances() {
 
         std::cerr << "THREE.LineSegments.computeLineDistances(): Computation only possible with non-indexed BufferGeometry." << std::endl;
     }
+}
+
+std::shared_ptr<Object3D> LineSegments::clone(bool recursive) {
+    auto clone = create();
+    clone->copy(*this, recursive);
+
+    return clone;
+}
+
+std::shared_ptr<LineSegments> LineSegments::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {
+
+    return std::shared_ptr<LineSegments>(new LineSegments(geometry, (material)));
 }

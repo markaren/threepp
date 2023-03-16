@@ -14,7 +14,6 @@ namespace threepp {
     public:
         Vector2 center{0.5f, 0.5f};
 
-        std::shared_ptr<BufferGeometry> _geometry;
         std::shared_ptr<SpriteMaterial> material;
 
         [[nodiscard]] std::string type() const override {
@@ -25,6 +24,7 @@ namespace threepp {
         void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         BufferGeometry* geometry() override {
+
             return _geometry.get();
         }
 
@@ -34,9 +34,10 @@ namespace threepp {
         }
 
     private:
+        std::shared_ptr<BufferGeometry> _geometry;
+
         explicit Sprite(const std::shared_ptr<SpriteMaterial>& material);
 
-        friend class GLRenderer;
     };
 
 }// namespace threepp

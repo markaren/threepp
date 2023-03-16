@@ -183,3 +183,13 @@ Sky::Sky(): Mesh(BoxGeometry::create(1, 1, 1), ShaderMaterial::create()) {
     m->side = BackSide;
     m->depthWrite = false;
 }
+
+std::string Sky::type() const {
+
+    return "Sky";
+}
+
+std::shared_ptr<Sky> Sky::create() {
+
+    return std::shared_ptr<Sky>(new Sky());
+}

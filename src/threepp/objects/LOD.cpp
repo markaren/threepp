@@ -5,6 +5,10 @@
 
 using namespace threepp;
 
+std::string LOD::type() const {
+
+    return "LOD";
+}
 
 LOD& LOD::addLevel(const std::shared_ptr<Object3D>& object, float distance) {
 

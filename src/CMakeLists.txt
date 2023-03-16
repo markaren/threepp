@@ -220,7 +220,9 @@ set(sources
         "threepp/controls/OrbitControls.cpp"
 
         "threepp/core/BufferGeometry.cpp"
+        "threepp/core/Clock.cpp"
         "threepp/core/EventDispatcher.cpp"
+        "threepp/core/Layers.cpp"
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
 
@@ -297,7 +299,9 @@ set(sources
         "threepp/lights/SpotLight.cpp"
         "threepp/lights/SpotLightShadow.cpp"
 
+        "threepp/objects/Group.cpp"
         "threepp/objects/Line.cpp"
+        "threepp/objects/LineLoop.cpp"
         "threepp/objects/LineSegments.cpp"
         "threepp/objects/LOD.cpp"
         "threepp/objects/InstancedMesh.cpp"

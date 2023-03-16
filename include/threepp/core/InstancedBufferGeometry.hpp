@@ -5,7 +5,7 @@
 
 #include "BufferGeometry.hpp"
 
-#include "../math/infinity.hpp"
+#include "threepp//math/infinity.hpp"
 
 namespace threepp {
 

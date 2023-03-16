@@ -9,12 +9,10 @@
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include "threepp/materials/Material.hpp"
-
-#include "misc.hpp"
 #include "threepp/core/EventDispatcher.hpp"
 #include "threepp/core/Layers.hpp"
-#include "threepp/math/MathUtils.hpp"
+
+#include "misc.hpp"
 
 #include <functional>
 #include <memory>
@@ -22,6 +20,7 @@
 
 namespace threepp {
 
+    class Material;
     class Raycaster;
     struct Intersection;
 
@@ -38,7 +37,7 @@ namespace threepp {
 
         unsigned int id{_object3Did++};
 
-        const std::string uuid{math::generateUUID()};
+        const std::string uuid;
 
         std::string name;
 

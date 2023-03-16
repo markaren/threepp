@@ -29,15 +29,9 @@ namespace threepp {
             std::optional<bool> fog;
         };
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "Water";
-        }
-
-        static std::shared_ptr<Water> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options()) {
-
-            return std::shared_ptr<Water>(new Water(geometry, std::move(options)));
-        }
+        static std::shared_ptr<Water> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options());
 
         ~Water() override;
 

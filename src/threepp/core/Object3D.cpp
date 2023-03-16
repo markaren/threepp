@@ -3,6 +3,8 @@
 
 #include "threepp/cameras/Camera.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Raycaster.hpp"
 
@@ -11,7 +13,8 @@
 using namespace threepp;
 
 Object3D::Object3D()
-    : matrix(std::make_shared<Matrix4>()),
+    : uuid(math::generateUUID()),
+      matrix(std::make_shared<Matrix4>()),
       matrixWorld(std::make_shared<Matrix4>()) {
 
     rotation._onChange([this] {

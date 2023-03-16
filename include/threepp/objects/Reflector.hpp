@@ -22,10 +22,7 @@ namespace threepp {
             std::optional<Shader> shader;
         };
 
-        [[nodiscard]] std::string type() const override {
-
-            return "Reflector";
-        }
+        [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options()) {
 

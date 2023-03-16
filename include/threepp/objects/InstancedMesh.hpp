@@ -18,10 +18,7 @@ namespace threepp {
         std::unique_ptr<FloatBufferAttribute> instanceMatrix;
         std::unique_ptr<FloatBufferAttribute> instanceColor = nullptr;
 
-        [[nodiscard]] std::string type() const override {
-
-            return "InstancedMesh";
-        }
+        [[nodiscard]] std::string type() const override;
 
         void getColorAt(size_t index, Color& color) const;
 
@@ -38,18 +35,11 @@ namespace threepp {
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
-                unsigned int count) {
-
-            return std::shared_ptr<InstancedMesh>(new InstancedMesh(std::move(geometry), std::move(material), count));
-        }
+                unsigned int count);
 
 
     protected:
-        InstancedMesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, unsigned int count)
-            : Mesh(std::move(geometry), std::move(material)), count(static_cast<int>(count)), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
-
-            this->frustumCulled = false;
-        }
+        InstancedMesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, unsigned int count);
     };
 
 }// namespace threepp

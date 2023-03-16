@@ -276,4 +276,14 @@ private:
 Water::Water(const std::shared_ptr<BufferGeometry>& geometry, Water::Options options)
     : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {}
 
+std::string threepp::Water::type() const {
+
+    return "Water";
+}
+
+std::shared_ptr<Water> threepp::Water::create(const std::shared_ptr<BufferGeometry>& geometry, Water::Options options) {
+
+    return std::shared_ptr<Water>(new Water(geometry, std::move(options)));
+}
+
 threepp::Water::~Water() = default;

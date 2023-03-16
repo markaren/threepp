@@ -4,6 +4,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 
+#include "threepp/math/Plane.hpp"
 #include "threepp/math/Triangle.hpp"
 
 using namespace threepp;
@@ -11,8 +12,7 @@ using namespace threepp;
 namespace {
 
     Vector3 _vector;
-
-
+    
     Vector3 _v0;
     Vector3 _v1;
     Vector3 _v2;

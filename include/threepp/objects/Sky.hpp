@@ -24,14 +24,9 @@ namespace threepp {
 
     public:
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "Sky";
-        }
-
-        static std::shared_ptr<Sky> create() {
-            return std::shared_ptr<Sky>(new Sky());
-        }
+        static std::shared_ptr<Sky> create();
 
     private:
         Sky();

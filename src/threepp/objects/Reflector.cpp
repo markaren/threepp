@@ -184,4 +184,9 @@ private:
 Reflector::Reflector(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options)
     : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {}
 
+std::string threepp::Reflector::type() const {
+
+    return "Reflector";
+}
+
 threepp::Reflector::~Reflector() = default;

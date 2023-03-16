@@ -5,10 +5,10 @@
 
 #include "threepp/lights/lights.hpp"
 
+#include "threepp/core/Uniform.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include <array>
 #include <unordered_map>
 #include <vector>
 

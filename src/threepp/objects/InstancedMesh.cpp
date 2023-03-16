@@ -16,6 +16,18 @@ namespace {
 
 }// namespace
 
+
+InstancedMesh::InstancedMesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, unsigned int count)
+    : Mesh(std::move(geometry), std::move(material)), count(static_cast<int>(count)), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
+
+    this->frustumCulled = false;
+}
+
+std::string InstancedMesh::type() const {
+
+    return "InstancedMesh";
+}
+
 void InstancedMesh::getColorAt(size_t index, Color& color) const {
 
     color.fromArray(this->instanceColor->array(), index * 3);
@@ -81,4 +93,9 @@ void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& int
 
         _instanceIntersects.clear();
     }
+}
+
+std::shared_ptr<InstancedMesh> InstancedMesh::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, unsigned int count) {
+
+    return std::shared_ptr<InstancedMesh>(new InstancedMesh(std::move(geometry), std::move(material), count));
 }

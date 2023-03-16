@@ -5,6 +5,8 @@
 
 #include "threepp/scenes/Scene.hpp"
 
+#include "threepp/core/Uniform.hpp"
+
 #include <optional>
 #include <unordered_map>
 

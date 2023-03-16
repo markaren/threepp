@@ -4,6 +4,7 @@
 #include "threepp/renderers/gl/GLProperties.hpp"
 
 #include "threepp/cameras/Camera.hpp"
+#include "threepp/materials/Material.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;

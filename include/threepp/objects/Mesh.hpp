@@ -13,47 +13,23 @@ namespace threepp {
     class Mesh: public Object3D {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "Mesh";
-        }
+        BufferGeometry* geometry() override;
 
-        BufferGeometry* geometry() override {
+        [[nodiscard]] const BufferGeometry* geometry() const;
 
-            return geometry_.get();
-        }
+        void setGeometry(const std::shared_ptr<BufferGeometry>& geometry);
 
-        [[nodiscard]] const BufferGeometry* geometry() const {
-
-            return geometry_.get();
-        }
-
-        void setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
-
-            geometry_ = geometry;
-        }
-
-        Material* material() override {
-
-            return materials_.front().get();
-        }
+        Material* material() override;
 
         [[nodiscard]] std::vector<Material*> materials() override;
 
-        void setMaterial(const std::shared_ptr<Material>& material) {
+        void setMaterial(const std::shared_ptr<Material>& material);
 
-            setMaterials({material});
-        }
+        void setMaterials(const std::vector<std::shared_ptr<Material>>& materials);
 
-        void setMaterials(const std::vector<std::shared_ptr<Material>>& materials) {
-
-            materials_ = materials;
-        }
-
-        [[nodiscard]] size_t numMaterials() const {
-
-            return materials_.size();
-        }
+        [[nodiscard]] size_t numMaterials() const;
 
         void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
@@ -61,17 +37,11 @@ namespace threepp {
 
         static std::shared_ptr<Mesh> create(
                 std::shared_ptr<BufferGeometry> geometry = nullptr,
-                std::shared_ptr<Material> material = nullptr) {
-
-            return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
-        }
+                std::shared_ptr<Material> material = nullptr);
 
         static std::shared_ptr<Mesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
-                std::vector<std::shared_ptr<Material>> materials) {
-
-            return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(materials)));
-        }
+                std::vector<std::shared_ptr<Material>> materials);
 
         ~Mesh() override = default;
 
@@ -80,7 +50,6 @@ namespace threepp {
         std::vector<std::shared_ptr<Material>> materials_;
 
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
-
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
     };
 
