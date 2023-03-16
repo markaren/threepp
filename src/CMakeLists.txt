@@ -228,6 +228,11 @@ set(sources
         "threepp/extras/core/Path.cpp"
         "threepp/extras/core/ShapePath.cpp"
         "threepp/extras/curves/CatmullRomCurve3.cpp"
+        "threepp/extras/curves/EllipseCurve.cpp"
+        "threepp/extras/curves/LineCurve.cpp"
+        "threepp/extras/curves/LineCurve3.cpp"
+        "threepp/extras/curves/QuadraticBezierCurve.cpp"
+        "threepp/extras/curves/QuadraticBezierCurve3.cpp"
         "threepp/extras/curves/SplineCurve.cpp"
 
         "threepp/geometries/BoxGeometry.cpp"

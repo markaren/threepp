@@ -4,9 +4,6 @@
 #define THREEPP_QUADRATICBEZIERCURVE3_HPP
 
 #include "threepp/extras/core/Curve.hpp"
-#include "threepp/extras/core/Interpolations.hpp"
-
-#include <memory>
 
 namespace threepp {
 
@@ -17,16 +14,9 @@ namespace threepp {
         Vector3 v1;
         Vector3 v2;
 
-        explicit QuadraticBezierCurve(const Vector3& v0 = {}, const Vector3& v1 = {}, const Vector3& v2 = {})
-            : v0(v0), v1(v1), v2(v2) {}
+        explicit QuadraticBezierCurve(const Vector3& v0 = {}, const Vector3& v1 = {}, const Vector3& v2 = {});
 
-        void getPoint(float t, Vector3& point) override {
-
-            point.set(
-                    interpolants::QuadraticBezier(t, v0.x, v1.x, v2.x),
-                    interpolants::QuadraticBezier(t, v0.y, v1.y, v2.y),
-                    interpolants::QuadraticBezier(t, v0.z, v1.z, v2.z));
-        }
+        void getPoint(float t, Vector3& point) override;
     };
 
 }// namespace threepp
