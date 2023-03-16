@@ -7,14 +7,19 @@
       "features": ["gl-api-41"]
     },
     "glfw3",
-    "stb",
-    "nlohmann-json"
+    "stb"
   ],
   "features": {
     "curl": {
-      "description": "Enable URLFetcher in library",
+      "description": "Enable URLFetcher in library.",
       "dependencies": [
         "curl"
+      ]
+    },
+    "json": {
+      "description": "Enable JSON support in library. Required to use Fonts.",
+      "dependencies":[
+        "nlohmann-json"
       ]
     },
     "bullet": {
