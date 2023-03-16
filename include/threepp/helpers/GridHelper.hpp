@@ -19,10 +19,7 @@ namespace threepp {
                 unsigned int size = 10,
                 unsigned int divisions = 10,
                 const Color& color1 = 0x444444,
-                const Color& color2 = 0x888888) {
-
-            return std::shared_ptr<GridHelper>(new GridHelper(size, divisions, color1, color2));
-        }
+                const Color& color2 = 0x888888);
 
     protected:
         GridHelper(unsigned int size, unsigned int divisions, const Color& color1, const Color& color2);

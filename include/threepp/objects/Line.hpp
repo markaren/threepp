@@ -16,41 +16,21 @@ namespace threepp {
     class Line: public Object3D {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "Line";
-        }
+        BufferGeometry* geometry() override;
 
-        BufferGeometry* geometry() override {
+        Material* material() override;
 
-            return geometry_.get();
-        }
-
-        Material* material() override {
-
-            return material_.get();
-        }
-
-        std::vector<Material*> materials() override {
-
-            return {material_.get()};
-        }
+        std::vector<Material*> materials() override;
 
         virtual void computeLineDistances();
 
         void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
-        std::shared_ptr<Object3D> clone(bool recursive = true) override {
-            auto clone = create(geometry_, material_);
-            clone->copy(*this, recursive);
+        std::shared_ptr<Object3D> clone(bool recursive = true) override;
 
-            return clone;
-        }
-
-        static std::shared_ptr<Line> create(const std::shared_ptr<BufferGeometry>& geometry = nullptr, const std::shared_ptr<Material>& material = nullptr) {
-
-            return std::shared_ptr<Line>(new Line(geometry, (material)));
-        }
+        static std::shared_ptr<Line> create(const std::shared_ptr<BufferGeometry>& geometry = nullptr, const std::shared_ptr<Material>& material = nullptr);
 
     protected:
         std::shared_ptr<BufferGeometry> geometry_;

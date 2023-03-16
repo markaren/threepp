@@ -256,7 +256,11 @@ set(sources
 
         "threepp/helpers/ArrowHelper.cpp"
         "threepp/helpers/AxesHelper.cpp"
+        "threepp/helpers/Box3Helper.cpp"
+        "threepp/helpers/CameraHelper.cpp"
+        "threepp/helpers/DirectionalLightHelper.cpp"
         "threepp/helpers/GridHelper.cpp"
+        "threepp/helpers/PlaneHelper.cpp"
         "threepp/helpers/PointLightHelper.cpp"
         "threepp/helpers/SpotLightHelper.cpp"
 

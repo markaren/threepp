@@ -5,8 +5,6 @@
 #include "ArrowHelper.hpp"
 #include "AxesHelper.hpp"
 #include "Box3Helper.hpp"
-#include "CameraHelper.hpp"
 #include "GridHelper.hpp"
-#include "PlaneHelper.hpp"
 
 #endif//THREEPP_HELPERS_HPP

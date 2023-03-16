@@ -18,10 +18,7 @@ namespace threepp {
 
         ~SpotLightHelper() override;
 
-        static std::shared_ptr<SpotLightHelper> create(const std::shared_ptr<SpotLight>& light, std::optional<unsigned int> color = std::nullopt) {
-
-            return std::shared_ptr<SpotLightHelper>(new SpotLightHelper(light, color));
-        }
+        static std::shared_ptr<SpotLightHelper> create(const std::shared_ptr<SpotLight>& light, std::optional<unsigned int> color = std::nullopt);
 
     protected:
         std::shared_ptr<SpotLight> light;

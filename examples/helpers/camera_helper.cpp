@@ -1,4 +1,5 @@
 
+#include "threepp/helpers/CameraHelper.hpp"
 #include <threepp/threepp.hpp>
 
 using namespace threepp;
@@ -58,6 +59,5 @@ int main() {
         renderer.render(scene, camera2);
 
         camera->position.z = 5 * std::sin(math::TWO_PI * 0.1f * t);
-
     });
 }

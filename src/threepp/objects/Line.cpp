@@ -21,6 +21,38 @@ Line::Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> m
     : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
       material_(material ? std::move(material) : LineBasicMaterial::create()) {}
 
+std::string Line::type() const {
+
+    return "Line";
+}
+
+BufferGeometry* Line::geometry() {
+
+    return geometry_.get();
+}
+
+Material* Line::material() {
+
+    return material_.get();
+}
+
+std::vector<Material*> Line::materials() {
+
+    return {material_.get()};
+}
+
+std::shared_ptr<Object3D> Line::clone(bool recursive) {
+    auto clone = create(geometry_, material_);
+    clone->copy(*this, recursive);
+
+    return clone;
+}
+
+std::shared_ptr<Line> Line::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {
+
+    return std::shared_ptr<Line>(new Line(geometry, (material)));
+}
+
 void Line::computeLineDistances() {
 
     Vector3 _start;

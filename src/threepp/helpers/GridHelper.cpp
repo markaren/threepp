@@ -49,6 +49,11 @@ GridHelper::GridHelper(unsigned int size, unsigned int divisions, const Color& c
     geometry_ = geometry;
 }
 
+std::shared_ptr<GridHelper> GridHelper::create(unsigned int size, unsigned int divisions, const Color& color1, const Color& color2) {
+
+    return std::shared_ptr<GridHelper>(new GridHelper(size, divisions, color1, color2));
+}
+
 GridHelper::~GridHelper() {
 
     this->geometry_->dispose();

@@ -25,6 +25,10 @@ PointLightHelper::PointLightHelper(std::shared_ptr<PointLight> light, float sphe
     update();
 }
 
+std::shared_ptr<PointLightHelper> PointLightHelper::create(const std::shared_ptr<PointLight>& light, float sphereSize, std::optional<unsigned int> color) {
+
+    return std::shared_ptr<PointLightHelper>(new PointLightHelper(light, sphereSize, color));
+}
 
 void PointLightHelper::update() {
 

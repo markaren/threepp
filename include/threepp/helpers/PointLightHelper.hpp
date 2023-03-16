@@ -14,10 +14,7 @@ namespace threepp {
     public:
         void update();
 
-        static std::shared_ptr<PointLightHelper> create(const std::shared_ptr<PointLight>& light, float sphereSize, std::optional<unsigned int> color = std::nullopt) {
-
-            return std::shared_ptr<PointLightHelper>(new PointLightHelper(light, sphereSize, color));
-        }
+        static std::shared_ptr<PointLightHelper> create(const std::shared_ptr<PointLight>& light, float sphereSize, std::optional<unsigned int> color = std::nullopt);
 
     protected:
         std::optional<Color> color;
