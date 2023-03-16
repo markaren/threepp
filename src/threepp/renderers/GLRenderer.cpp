@@ -1,7 +1,17 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "threepp/cameras/Camera.hpp"
+#include "threepp/renderers/gl/GLAttributes.hpp"
+#include "threepp/renderers/gl/GLBackground.hpp"
+#include "threepp/renderers/gl/GLBindingStates.hpp"
+#include "threepp/renderers/gl/GLBufferRenderer.hpp"
+#include "threepp/renderers/gl/GLGeometries.hpp"
+#include "threepp/renderers/gl/GLMaterials.hpp"
+#include "threepp/renderers/gl/GLObjects.hpp"
+#include "threepp/renderers/gl/GLPrograms.hpp"
+#include "threepp/renderers/gl/GLRenderLists.hpp"
+#include "threepp/renderers/gl/GLRenderStates.hpp"
+#include "threepp/renderers/gl/GLTextures.hpp"
 
 #include "threepp/core/InstancedBufferGeometry.hpp"
 #include "threepp/objects/Group.hpp"
@@ -13,28 +23,14 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
 
-#include "threepp/materials/RawShaderMaterial.hpp"
-
-#include "threepp/math/Frustum.hpp"
-
-#include "threepp/renderers/gl/GLAttributes.hpp"
-#include "threepp/renderers/gl/GLBackground.hpp"
-#include "threepp/renderers/gl/GLBindingStates.hpp"
-#include "threepp/renderers/gl/GLBufferRenderer.hpp"
-#include "threepp/renderers/gl/GLGeometries.hpp"
-#include "threepp/renderers/gl/GLMaterials.hpp"
-#include "threepp/renderers/gl/GLObjects.hpp"
-#include "threepp/renderers/gl/GLPrograms.hpp"
-#include "threepp/renderers/gl/GLRenderLists.hpp"
-#include "threepp/renderers/gl/GLRenderStates.hpp"
-
 #include "threepp/materials/MeshToonMaterial.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/materials/ShadowMaterial.hpp"
-#include "threepp/renderers/gl/GLState.hpp"
-#include "threepp/renderers/gl/GLTextures.hpp"
-
 
 #include <glad/glad.h>
+
+#include <cmath>
+
 
 using namespace threepp;
 

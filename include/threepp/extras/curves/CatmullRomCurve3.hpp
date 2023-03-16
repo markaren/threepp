@@ -4,25 +4,10 @@
 #define THREEPP_CATMULLROMCURVE3_HPP
 
 #include <memory>
-#include <utility>
 
 #include "threepp/extras/core/Curve.hpp"
 
 namespace threepp {
-
-    class CubicPoly {
-
-    public:
-        float c0{}, c1{}, c2{}, c3{};
-
-        void init(float x0, float x1, float t0, float t1);
-
-        void initCatmullRom(float x0, float x1, float x2, float x3, float tension);
-
-        void initNonuniformCatmullRom(float x0, float x1, float x2, float x3, float dt0, float dt1, float dt2);
-
-        [[nodiscard]] float calc(float t) const;
-    };
 
 
     /**
@@ -47,14 +32,15 @@ namespace threepp {
         CurveType curveType;
         float tension;
 
-        explicit CatmullRomCurve3(std::vector<Vector3> points = {}, bool closed = false, CurveType type = centripetal, float tension = 0.5f)
-            : points(std::move(points)), closed(closed), curveType(type), tension(tension) {}
+        explicit CatmullRomCurve3(std::vector<Vector3> points = {}, bool closed = false, CurveType type = centripetal, float tension = 0.5f);
 
         void getPoint(float t, Vector3& point) override;
 
+        ~CatmullRomCurve3();
+
     private:
-        Vector3 tmp;
-        CubicPoly px, py, pz;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
     };
 
 

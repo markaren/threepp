@@ -1,6 +1,8 @@
 
 #include "threepp/geometries/ExtrudeGeometry.hpp"
+
 #include "threepp/extras/ShapeUtils.hpp"
+#include "threepp/extras/core/Shape.hpp"
 
 #include <functional>
 
@@ -604,4 +606,17 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<Shape*>& shapes, const Extrud
     this->setAttribute("uv", FloatBufferAttribute::create(uvArray, 2));
 
     this->computeVertexNormals();
+}
+
+std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(Shape& shape, const ExtrudeGeometry::Options& options) {
+
+    return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry({&shape}, options));
+}
+
+std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(const std::vector<std::shared_ptr<Shape>>& shape, const ExtrudeGeometry::Options& options) {
+
+    std::vector<Shape*> ptrs(shape.size());
+    std::transform(shape.begin(), shape.end(), ptrs.begin(), [&](auto& s) { return s.get(); });
+
+    return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry(ptrs, options));
 }

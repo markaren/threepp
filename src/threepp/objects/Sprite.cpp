@@ -8,6 +8,8 @@
 
 #include "threepp/math/Triangle.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 namespace {

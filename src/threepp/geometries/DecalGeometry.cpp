@@ -1,6 +1,8 @@
 
 #include "threepp/geometries/DecalGeometry.hpp"
 
+#include "threepp/objects/Mesh.hpp"
+
 using namespace threepp;
 
 namespace {

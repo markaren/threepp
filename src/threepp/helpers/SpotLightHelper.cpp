@@ -4,6 +4,8 @@
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/objects/LineSegments.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 

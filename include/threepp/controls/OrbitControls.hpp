@@ -3,13 +3,13 @@
 #define THREEPP_ORBITCONTROLS_HPP
 
 #include "threepp/Canvas.hpp"
-#include "threepp/cameras/OrthographicCamera.hpp"
-#include "threepp/cameras/PerspectiveCamera.hpp"
-#include "threepp/core/EventDispatcher.hpp"
-#include "threepp/math/MathUtils.hpp"
-#include "threepp/math/Quaternion.hpp"
+
+#include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
-#include <threepp/math/Spherical.hpp>
+#include "threepp/math/Spherical.hpp"
+
+#include "threepp/input/KeyListener.hpp"
+#include "threepp/input/MouseListener.hpp"
 
 #include <limits>
 #include <memory>

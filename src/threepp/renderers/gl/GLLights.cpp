@@ -2,6 +2,7 @@
 #include "threepp/renderers/gl/GLLights.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 
 using namespace threepp;

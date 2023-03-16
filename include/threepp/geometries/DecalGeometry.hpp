@@ -4,9 +4,11 @@
 #define THREEPP_DECALGEOMETRY_HPP
 
 #include "threepp/core/BufferGeometry.hpp"
-#include "threepp/objects/Mesh.hpp"
 
 namespace threepp {
+
+    class Mesh;
+    class Euler;
 
     class DecalGeometry: public BufferGeometry {
 

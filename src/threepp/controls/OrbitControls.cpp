@@ -1,6 +1,11 @@
 
 #include "threepp/controls/OrbitControls.hpp"
 
+#include "threepp/Canvas.hpp"
+#include "threepp/cameras/PerspectiveCamera.hpp"
+#include "threepp/cameras/OrthographicCamera.hpp"
+
+
 #include <cmath>
 #include <iostream>
 #include <utility>
@@ -21,6 +26,7 @@ namespace {
     const int MIDDLE_BUTTON = 2;
 
 }// namespace
+
 
 OrbitControls::OrbitControls(std::shared_ptr<Camera> camera, Canvas& canvas)
     : camera(std::move(camera)), canvas(canvas),
@@ -244,6 +250,7 @@ void OrbitControls::dollyIn(float dollyScale) {
         this->enableZoom = false;
     }
 }
+
 void OrbitControls::dollyOut(float dollyScale) {
 
     if (camera->as<PerspectiveCamera>()) {
