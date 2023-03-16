@@ -114,10 +114,12 @@ std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, 
     return pimpl_->load(path, flipY);
 }
 
+#ifdef THREEPP_WITH_CURL
 std::shared_ptr<Texture> TextureLoader::loadFromUrl(const std::string& url, bool flipY) {
 
     return pimpl_->loadFromUrl(url, flipY);
 }
+#endif
 
 void TextureLoader::clearCache() {
 

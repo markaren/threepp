@@ -27,7 +27,11 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
+#ifdef THREEPP_WITH_CURL
     boxMaterial->map = loader.loadFromUrl("https://raw.githubusercontent.com/mrdoob/three.js/r129/examples/textures/crate.gif");
+#else
+    boxMaterial->map = loader.load("data/textures/crate.gif");
+#endif
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
     scene->add(box);
