@@ -128,6 +128,7 @@ namespace threepp {
 
             ProgramParameters(
                     const GLRenderer& renderer,
+                    const GLClipping& clipping,
                     const GLLights::LightState& lights,
                     size_t numShadows,
                     Object3D* object,

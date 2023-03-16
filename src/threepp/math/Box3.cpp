@@ -2,8 +2,9 @@
 #include "threepp/math/Box3.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Object3D.hpp"
 
-#include "threepp/math/infinity.hpp"
+#include "threepp/math/Triangle.hpp"
 
 using namespace threepp;
 

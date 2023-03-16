@@ -1,7 +1,10 @@
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
+#include <cmath>
+
 using namespace threepp;
+
 
 PerspectiveCamera::PerspectiveCamera(float fov, float aspect, float near, float far)
     : Camera(near, far), fov(fov), aspect(aspect) {

@@ -3,8 +3,10 @@
 
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "GLCapabilities.hpp"
 #include "threepp/math/MathUtils.hpp"
 
+#include <cmath>
 #include <iostream>
 
 using namespace threepp;
@@ -75,9 +77,12 @@ gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl:
     : state(state),
       properties(properties),
       info(info),
+      maxTextures(GLCapabilities::instance().maxTextures),
+      maxCubemapSize(GLCapabilities::instance().maxCubemapSize),
+      maxTextureSize(GLCapabilities::instance().maxTextureSize),
+      maxSamples(GLCapabilities::instance().maxSamples),
       onTextureDispose_(std::make_shared<TextureEventListener>(this)),
-      onRenderTargetDispose_(std::make_shared<RenderTargetEventListener>(this)) {
-}
+      onRenderTargetDispose_(std::make_shared<RenderTargetEventListener>(this)) {}
 
 void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuint width, GLuint height) {
 

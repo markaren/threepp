@@ -4,7 +4,6 @@
 
 #include <filesystem>
 #include <optional>
-#include <string>
 
 #include <threepp/textures/Image.hpp>
 

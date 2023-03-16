@@ -4,12 +4,12 @@
 #define THREEPP_INSTANCEDMESH_HPP
 
 #include "Mesh.hpp"
-#include "threepp/core/Raycaster.hpp"
 
-#include <optional>
+#include <memory>
 
 namespace threepp {
 
+    class Raycaster;
 
     class InstancedMesh: public Mesh {
 

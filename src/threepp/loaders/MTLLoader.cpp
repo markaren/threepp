@@ -2,6 +2,7 @@
 #include "threepp/loaders/MTLLoader.hpp"
 
 #include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/materials/Material.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
@@ -11,6 +12,12 @@
 using namespace threepp;
 
 namespace {
+
+    struct TexParams {
+        Vector2 scale;
+        Vector2 offset;
+        std::string url;
+    };
 
     bool getMapForType(const MeshPhongMaterial& mat, const std::string& mapType) {
 

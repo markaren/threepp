@@ -1,5 +1,7 @@
 
-#include <threepp/threepp.hpp>
+#include "threepp/geometries/TorusKnotGeometry.hpp"
+#include "threepp/helpers/PointLightHelper.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 
@@ -7,7 +9,7 @@ int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap().enabled = true;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);

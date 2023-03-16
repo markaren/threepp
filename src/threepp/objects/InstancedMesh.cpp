@@ -1,6 +1,8 @@
 
 #include "threepp/objects/InstancedMesh.hpp"
 
+#include "threepp/core/Raycaster.hpp"
+
 using namespace threepp;
 
 namespace {

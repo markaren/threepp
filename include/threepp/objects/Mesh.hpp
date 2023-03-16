@@ -6,7 +6,6 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
-#include "threepp/materials/MeshBasicMaterial.hpp"
 
 
 namespace threepp {
@@ -14,7 +13,6 @@ namespace threepp {
     class Mesh: public Object3D {
 
     public:
-
         [[nodiscard]] std::string type() const override {
 
             return "Mesh";
@@ -78,18 +76,12 @@ namespace threepp {
         ~Mesh() override = default;
 
     protected:
-
         std::shared_ptr<BufferGeometry> geometry_;
         std::vector<std::shared_ptr<Material>> materials_;
 
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-            : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-              materials_{material ? std::move(material) : MeshBasicMaterial::create()} {
-        }
+        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
 
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
-            : geometry_(std::move(geometry)), materials_{std::move(materials)} {
-        }
+        Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
     };
 
 }// namespace threepp

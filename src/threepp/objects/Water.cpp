@@ -231,18 +231,18 @@ struct Water::Impl {
             auto _renderer = static_cast<GLRenderer*>(renderer);
 
             const auto currentRenderTarget = _renderer->getRenderTarget();
-            const auto currentShadowAutoUpdate = _renderer->shadowMap.autoUpdate;
+            const auto currentShadowAutoUpdate = _renderer->shadowMap().autoUpdate;
             water_.visible = false;
 
-            _renderer->shadowMap.autoUpdate = false;// Avoid re-computing shadows
+            _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
 
             _renderer->setRenderTarget(renderTarget);
-            _renderer->state.depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
+            _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
             _renderer->render(scene, mirrorCamera.get());
             water_.visible = true;
-            _renderer->shadowMap.autoUpdate = currentShadowAutoUpdate;
+            _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
         });
 

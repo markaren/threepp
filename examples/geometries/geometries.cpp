@@ -1,4 +1,5 @@
 
+#include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;

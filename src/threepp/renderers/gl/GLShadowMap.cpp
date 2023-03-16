@@ -1,14 +1,29 @@
 
-#include "threepp/renderers/gl/GLShadowMap.hpp"
+#include "threepp/constants.hpp"
+
+#include "threepp/math/Frustum.hpp"
+
+#include "threepp/scenes/Scene.hpp"
+
+#include "threepp/objects/Line.hpp"
+#include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Points.hpp"
 
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshDistanceMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
-#include "threepp/objects/Line.hpp"
-#include "threepp/objects/Mesh.hpp"
+
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/lights/PointLightShadow.hpp"
+
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include "threepp/renderers/gl/GLCapabilities.hpp"
+#include "threepp/renderers/gl/GLObjects.hpp"
+#include "threepp/renderers/gl/GLShadowMap.hpp"
+
+#include <cmath>
 #include <iostream>
 
 using namespace threepp;
@@ -213,6 +228,7 @@ struct GLShadowMap::Impl {
     }
 
     void renderObject(GLRenderer& _renderer, Object3D* object, Camera* camera, Camera* shadowCamera, Light* light) {
+
         if (!object->visible) return;
 
         bool visible = object->layers.test(camera->layers);
@@ -270,7 +286,7 @@ struct GLShadowMap::Impl {
         auto activeCubeFace = _renderer.getActiveCubeFace();
         auto activeMipmapLevel = _renderer.getActiveMipmapLevel();
 
-        auto& _state = _renderer.state;
+        auto& _state = _renderer.state();
 
         // Set GL state for depth map.
         _state.setBlending(NoBlending);
@@ -306,14 +322,14 @@ struct GLShadowMap::Impl {
 
                 if (_shadowMapSize.x > _maxTextureSize) {
 
-                    _viewportSize.x = std::floor((float) _maxTextureSize / shadowFrameExtents.x);
+                    _viewportSize.x = std::floor(static_cast<float>(_maxTextureSize) / shadowFrameExtents.x);
                     _shadowMapSize.x = _viewportSize.x * shadowFrameExtents.x;
                     shadow->mapSize.x = _viewportSize.x;
                 }
 
                 if (_shadowMapSize.y > _maxTextureSize) {
 
-                    _viewportSize.y = std::floor((float) _maxTextureSize / shadowFrameExtents.y);
+                    _viewportSize.y = std::floor(static_cast<float>(_maxTextureSize) / shadowFrameExtents.y);
                     _shadowMapSize.y = _viewportSize.y * shadowFrameExtents.y;
                     shadow->mapSize.y = _viewportSize.y;
                 }

@@ -1,4 +1,5 @@
 
+#include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/threepp.hpp"
 
 #include <string>

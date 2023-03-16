@@ -5,6 +5,7 @@
 
 #include "threepp/math/Vector2.hpp"
 
+#include <ostream>
 #include <vector>
 
 namespace threepp {

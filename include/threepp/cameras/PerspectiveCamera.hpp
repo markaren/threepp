@@ -7,8 +7,7 @@
 
 #include "threepp/math/MathUtils.hpp"
 
-#include <algorithm>
-#include <cmath>
+#include <memory>
 
 namespace threepp {
 

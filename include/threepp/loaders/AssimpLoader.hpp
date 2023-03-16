@@ -2,8 +2,8 @@
 #ifndef THREEPP_ASSIMPLOADER_HPP
 #define THREEPP_ASSIMPLOADER_HPP
 
-#include "threepp/loaders/AssimpLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"

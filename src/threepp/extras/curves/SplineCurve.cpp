@@ -3,8 +3,16 @@
 
 #include "threepp/extras/core/Interpolations.hpp"
 
+#include <cmath>
+#include <utility>
 
-void threepp::SplineCurve::getPoint(float t, threepp::Vector2& point) {
+using namespace threepp;
+
+SplineCurve::SplineCurve(std::vector<Vector2> points)
+    : points(std::move(points)) {}
+
+
+void SplineCurve::getPoint(float t, Vector2& point) {
 
     const auto p = static_cast<float>(points.size() - 1) * t;
 

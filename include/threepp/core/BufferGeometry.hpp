@@ -3,20 +3,15 @@
 #ifndef THREEPP_BUFFERGEOMETRY_HPP
 #define THREEPP_BUFFERGEOMETRY_HPP
 
-#include "threepp/core/BufferAttribute.hpp"
-#include "threepp/core/misc.hpp"
 #include "threepp/math/Box3.hpp"
-#include "threepp/math/MathUtils.hpp"
-#include "threepp/math/Matrix3.hpp"
-#include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Sphere.hpp"
 
-#include <limits>
-#include <memory>
+#include "threepp/core/EventDispatcher.hpp"
+
+#include "threepp/core/BufferAttribute.hpp"
+
 #include <optional>
 #include <unordered_map>
-#include <utility>
-#include <vector>
 
 namespace threepp {
 
@@ -25,7 +20,7 @@ namespace threepp {
     public:
         const unsigned int id = ++_id;
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid;
 
         std::string name;
 
@@ -34,9 +29,9 @@ namespace threepp {
         std::optional<Box3> boundingBox;
         std::optional<Sphere> boundingSphere;
 
-        DrawRange drawRange = DrawRange{0, std::numeric_limits<int>::max() / 2};
+        DrawRange drawRange{0, std::numeric_limits<int>::max() / 2};
 
-        BufferGeometry() = default;
+        BufferGeometry();
 
         [[nodiscard]] virtual std::string type() const {
 

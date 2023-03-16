@@ -3,6 +3,8 @@
 
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/materials/Material.hpp"
+
 #include <cstdint>
 #include <iostream>
 
@@ -288,8 +290,7 @@ void gl::StencilBuffer::reset() {
     currentStencilClear = std::nullopt;
 }
 
-gl::GLState::GLState(const Canvas& canvas)
-    : canvas(canvas), maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)) {
+gl::GLState::GLState(): maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)) {
 
     GLint scissorParam[4];
     GLint viewportParam[4];
@@ -739,7 +740,7 @@ void gl::GLState::viewport(const Vector4& viewport) {
     }
 }
 
-void gl::GLState::reset() {
+void gl::GLState::reset(int width, int height) {
 
     // reset state
 
@@ -783,10 +784,8 @@ void gl::GLState::reset() {
 
     glLineWidth(1);
 
-    auto windowSize = canvas.getSize();
-
-    glScissor(0, 0, windowSize.width, windowSize.height);
-    glViewport(0, 0, windowSize.width, windowSize.height);
+    glScissor(0, 0, width, height);
+    glViewport(0, 0, width, height);
 
     // reset internals
 
@@ -817,8 +816,8 @@ void gl::GLState::reset() {
     currentPolygonOffsetFactor = std::nullopt;
     currentPolygonOffsetUnits = std::nullopt;
 
-    currentScissor.set(0, 0, (float) windowSize.width, (float) windowSize.height);
-    currentViewport.set(0, 0, (float) windowSize.width, (float) windowSize.height);
+    currentScissor.set(0, 0, width, height);
+    currentViewport.set(0, 0, width, height);
 
     colorBuffer.reset();
     depthBuffer.reset();

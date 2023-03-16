@@ -58,7 +58,6 @@ namespace threepp::gl {
                         {"direction", Vector3()},
                         {"skyColor", Color()},
                         {"groundColor", Color()}};
-
             }
 
             lights[light.id] = std::make_unique<LightUniforms>(uniforms);

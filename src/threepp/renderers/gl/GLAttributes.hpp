@@ -5,14 +5,11 @@
 
 #include "threepp/core/BufferAttribute.hpp"
 
-namespace threepp::gl {
+#include "threepp/renderers/gl/Buffer.hpp"
 
-    struct Buffer {
-        unsigned int buffer{};
-        int type{};
-        int bytesPerElement{};
-        unsigned int version{};
-    };
+#include <unordered_map>
+
+namespace threepp::gl {
 
     struct GLAttributes {
 

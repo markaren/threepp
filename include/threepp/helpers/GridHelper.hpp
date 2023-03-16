@@ -3,14 +3,18 @@
 #ifndef THREEPP_GRIDHELPER_HPP
 #define THREEPP_GRIDHELPER_HPP
 
-#include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/objects/LineSegments.hpp"
+
+#include <memory>
 
 namespace threepp {
 
     class GridHelper: public LineSegments {
 
     public:
+
+        ~GridHelper() override;
+
         static std::shared_ptr<GridHelper> create(
                 unsigned int size = 10,
                 unsigned int divisions = 10,
@@ -21,48 +25,7 @@ namespace threepp {
         }
 
     protected:
-        GridHelper(unsigned int size, unsigned int divisions, const Color& color1, const Color& color2)
-            : LineSegments(nullptr, nullptr) {
-
-            const auto center = divisions / 2;
-            const auto step = static_cast<float>(size) / static_cast<float>(divisions);
-            const auto halfSize = static_cast<float>(size) / 2;
-
-            std::vector<float> vertices;
-            std::vector<float> colors((divisions + 1) * 12);
-
-            int j = 0;
-            float k = -halfSize;
-            for (int i = 0; i <= divisions; i++) {
-
-                vertices.insert(vertices.end(), {-halfSize, 0, k, halfSize, 0, k});
-                vertices.insert(vertices.end(), {k, 0, -halfSize, k, 0, halfSize});
-
-                auto& color = (i == center ? color1 : color2);
-
-                color.toArray(colors, j);
-                j += 3;
-                color.toArray(colors, j);
-                j += 3;
-                color.toArray(colors, j);
-                j += 3;
-                color.toArray(colors, j);
-                j += 3;
-
-                k += step;
-            }
-
-            auto geometry = BufferGeometry::create();
-            geometry->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
-            geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
-
-            auto material = LineBasicMaterial::create();
-            material->vertexColors = true;
-            material->toneMapped = false;
-
-            material_ = material;
-            geometry_ = geometry;
-        }
+        GridHelper(unsigned int size, unsigned int divisions, const Color& color1, const Color& color2);
     };
 
 }// namespace threepp

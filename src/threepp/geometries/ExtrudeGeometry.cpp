@@ -1,12 +1,14 @@
 
 #include "threepp/geometries/ExtrudeGeometry.hpp"
+
 #include "threepp/extras/ShapeUtils.hpp"
+#include "threepp/extras/core/Shape.hpp"
+
+#include <functional>
 
 using namespace threepp;
 
 namespace {
-
-
 
     std::vector<Vector2> generateTopUV(const std::vector<float>& vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC) {
 
@@ -22,7 +24,6 @@ namespace {
                 Vector2(b_x, b_y),
                 Vector2(c_x, c_y)};
     }
-
 
     std::vector<Vector2> generateSideWallUV(const std::vector<float>& vertices, unsigned int indexA, unsigned int indexB, unsigned int indexC, unsigned int indexD) {
 
@@ -605,4 +606,17 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<Shape*>& shapes, const Extrud
     this->setAttribute("uv", FloatBufferAttribute::create(uvArray, 2));
 
     this->computeVertexNormals();
+}
+
+std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(Shape& shape, const ExtrudeGeometry::Options& options) {
+
+    return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry({&shape}, options));
+}
+
+std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(const std::vector<std::shared_ptr<Shape>>& shape, const ExtrudeGeometry::Options& options) {
+
+    std::vector<Shape*> ptrs(shape.size());
+    std::transform(shape.begin(), shape.end(), ptrs.begin(), [&](auto& s) { return s.get(); });
+
+    return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry(ptrs, options));
 }

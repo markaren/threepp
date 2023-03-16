@@ -2,6 +2,8 @@
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/extras/ShapeUtils.hpp"
 
+#include <functional>
+
 using namespace threepp;
 
 

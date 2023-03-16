@@ -1,6 +1,9 @@
 
-#include "threepp/threepp.hpp"
+#include "threepp/geometries/TorusKnotGeometry.hpp"
+#include "threepp/helpers/DirectionalLightHelper.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Sky.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 
@@ -8,7 +11,7 @@ int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
-    renderer.shadowMap.enabled = true;
+    renderer.shadowMap().enabled = true;
     renderer.toneMapping = ACESFilmicToneMapping;
 
     auto scene = Scene::create();
@@ -73,5 +76,4 @@ int main() {
 
         renderer.render(scene, camera);
     });
-
 }

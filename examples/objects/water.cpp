@@ -1,5 +1,6 @@
 
 #include "threepp/objects/Water.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Sky.hpp"
 #include "threepp/threepp.hpp"
 

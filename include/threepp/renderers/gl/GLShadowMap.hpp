@@ -3,8 +3,6 @@
 #ifndef THREEPP_GLSHADOWMAP_HPP
 #define THREEPP_GLSHADOWMAP_HPP
 
-#include "GLObjects.hpp"
-
 #include <vector>
 #include <memory>
 
@@ -16,6 +14,8 @@ namespace threepp {
     class Camera;
 
     namespace gl {
+
+        class GLObjects;
 
         struct GLShadowMap {
 

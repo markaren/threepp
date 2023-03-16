@@ -2,6 +2,8 @@
 #include "threepp/Canvas.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 
+#include "threepp/core/Clock.hpp"
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
@@ -9,7 +11,6 @@
 #include <iostream>
 #include <optional>
 #include <queue>
-#include <unordered_map>
 
 using namespace threepp;
 

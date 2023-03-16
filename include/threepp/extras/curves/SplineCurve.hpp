@@ -5,8 +5,6 @@
 
 #include "threepp/extras/core/Curve.hpp"
 
-#include <memory>
-
 namespace threepp {
 
     class SplineCurve: public Curve2 {
@@ -14,8 +12,7 @@ namespace threepp {
     public:
         std::vector<Vector2> points;
 
-        explicit SplineCurve(std::vector<Vector2> points = {})
-            : points(std::move(points)) {}
+        explicit SplineCurve(std::vector<Vector2> points = {});
 
         void getPoint(float t, Vector2& point) override;
     };

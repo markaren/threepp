@@ -4,6 +4,8 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 namespace threepp {
 
     class RingGeometry: public BufferGeometry {
