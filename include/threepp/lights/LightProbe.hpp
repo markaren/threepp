@@ -11,7 +11,7 @@
 
 namespace threepp {
 
-    class LightProbe: Light {
+    class LightProbe: public Light {
 
     public:
         SphericalHarmonis3 sh;
