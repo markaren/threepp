@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/gl/GLLights.hpp"
 
+#include "threepp/lights/LightProbe.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
