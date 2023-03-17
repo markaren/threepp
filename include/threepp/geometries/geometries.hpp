@@ -8,6 +8,7 @@
 #include "threepp/geometries/ConeGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
+#include "threepp/geometries/IcosahedronGeometry.hpp"
 #include "threepp/geometries/RingGeometry.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"

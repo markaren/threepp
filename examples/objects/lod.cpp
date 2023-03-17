@@ -23,8 +23,8 @@ int main() {
 
     float radius = 0.5;
     for (int z = 0; z <= 5; z++) {
-        int detail = 16 - (z*2);
-        auto obj = Mesh::create(SphereGeometry::create(radius, detail, detail), material);
+        int detail = 6-z;
+        auto obj = Mesh::create(IcosahedronGeometry::create(radius, detail), material);
         lod->addLevel(obj, static_cast<float>(z));
     }
 
