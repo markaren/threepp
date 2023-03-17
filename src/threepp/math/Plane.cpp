@@ -3,6 +3,7 @@
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Line3.hpp"
 #include "threepp/math/Sphere.hpp"
+#include "threepp/math/Matrix3.hpp"
 
 using namespace threepp;
 

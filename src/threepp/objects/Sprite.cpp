@@ -77,6 +77,21 @@ Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
     _geometry->setAttribute("uv", std::make_unique<InterleavedBufferAttribute>(interleavedBuffer, 3, 0, false));
 }
 
+std::string Sprite::type() const {
+
+    return "Sprite";
+}
+
+BufferGeometry* Sprite::geometry() {
+
+    return _geometry.get();
+}
+
+std::shared_ptr<Sprite> Sprite::create(const std::shared_ptr<SpriteMaterial>& material) {
+
+    return std::shared_ptr<Sprite>(new Sprite(material));
+}
+
 void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     if (!raycaster.camera) {

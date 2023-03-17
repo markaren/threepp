@@ -55,9 +55,7 @@ namespace threepp {
 
         void setFromCamera(const Vector2& coords, Camera* camera);
 
-        void setFromCamera(const Vector2& coords, const std::shared_ptr<Camera>& camera) {
-            setFromCamera(coords, camera.get());
-        }
+        void setFromCamera(const Vector2& coords, const std::shared_ptr<Camera>& camera);
 
         std::vector<Intersection> intersectObject(Object3D* object, bool recursive = false);
 

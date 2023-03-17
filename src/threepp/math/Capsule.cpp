@@ -1,6 +1,9 @@
 
 #include "threepp/math/Capsule.hpp"
 
+#include "threepp/math/Box3.hpp"
+#include "threepp/math/Line3.hpp"
+
 #include <cmath>
 
 using namespace threepp;

@@ -22,10 +22,7 @@ namespace threepp {
                                                    float length = 1,
                                                    int color = 0xffff00,
                                                    std::optional<float> headLength = std::nullopt,
-                                                   std::optional<float> headWidth = std::nullopt) {
-
-            return std::shared_ptr<ArrowHelper>(new ArrowHelper(dir, origin, length, color, headLength, headWidth));
-        }
+                                                   std::optional<float> headWidth = std::nullopt);
 
     protected:
         ArrowHelper(

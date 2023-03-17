@@ -5,7 +5,6 @@
 #include "threepp/core/Uniform.hpp"
 
 #include <string>
-#include <unordered_map>
 
 namespace threepp {
 

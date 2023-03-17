@@ -29,6 +29,30 @@ namespace {
 
     std::array<Vector3, 8> _points;
 
+
+    bool satForAxes(const std::vector<float>& axes, const Vector3& v0, const Vector3& v1, const Vector3& v2, const Vector3& extents) {
+
+        for (unsigned i = 0, j = axes.size() - 3; i <= j; i += 3) {
+
+            _testAxis.fromArray(axes, i);
+            // project the aabb onto the separating axis
+            const float r = extents.x * std::abs(_testAxis.x) + extents.y * std::abs(_testAxis.y) + extents.z * std::abs(_testAxis.z);
+            // project all 3 vertices of the triangle onto the seperating axis
+            const float p0 = v0.dot(_testAxis);
+            const float p1 = v1.dot(_testAxis);
+            const float p2 = v2.dot(_testAxis);
+            // actual test, basically see if either of the most extreme of the triangle points intersects r
+            if (std::max(-std::max(p0, std::max(p1, p2)), std::min(p0, std::min(p1, p2))) > r) {
+
+                // points of the projected triangle are outside the projected half-length of the aabb
+                // the axis is separating and we can exit
+                return false;
+            }
+        }
+
+        return true;
+    }
+
 }// namespace
 
 Box3::Box3()
@@ -366,29 +390,6 @@ Box3& Box3::translate(const Vector3& offset) {
     this->max_.add(offset);
 
     return *this;
-}
-
-bool Box3::satForAxes(const std::vector<float>& axes, const Vector3& v0, const Vector3& v1, const Vector3& v2, const Vector3& extents) {
-
-    for (size_t i = 0, j = axes.size() - 3; i <= j; i += 3) {
-
-        _testAxis.fromArray(axes, static_cast<unsigned int>(i));
-        // project the aabb onto the seperating axis
-        const float r = extents.x * std::abs(_testAxis.x) + extents.y * std::abs(_testAxis.y) + extents.z * std::abs(_testAxis.z);
-        // project all 3 vertices of the triangle onto the seperating axis
-        const float p0 = v0.dot(_testAxis);
-        const float p1 = v1.dot(_testAxis);
-        const float p2 = v2.dot(_testAxis);
-        // actual test, basically see if either of the most extreme of the triangle points intersects r
-        if (std::max(-std::max(p0, std::max(p1, p2)), std::min(p0, std::min(p1, p2))) > r) {
-
-            // points of the projected triangle are outside the projected half-length of the aabb
-            // the axis is seperating and we can exit
-            return false;
-        }
-    }
-
-    return true;
 }
 
 bool Box3::equals(const Box3& box) const {

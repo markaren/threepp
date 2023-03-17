@@ -149,8 +149,6 @@ namespace threepp {
     private:
         Vector3 min_;
         Vector3 max_;
-
-        static bool satForAxes(const std::vector<float>& axes, const Vector3& v0, const Vector3& v1, const Vector3& v2, const Vector3& extents);
     };
 
 }// namespace threepp

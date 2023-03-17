@@ -3,13 +3,14 @@
 #ifndef THREEPP_CAPSULE_HPP
 #define THREEPP_CAPSULE_HPP
 
-#include "threepp/math/Box3.hpp"
-#include "threepp/math/Line3.hpp"
 #include "threepp/math/Vector3.hpp"
 
 #include <utility>
 
 namespace threepp {
+
+    class Box3;
+    class Line3;
 
     class Capsule {
 

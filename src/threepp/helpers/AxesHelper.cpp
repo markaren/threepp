@@ -23,6 +23,11 @@ AxesHelper::AxesHelper(float size): LineSegments(BufferGeometry::create(), LineB
     material_->vertexColors = true;
 }
 
+std::shared_ptr<AxesHelper> AxesHelper::create(float size) {
+
+    return std::shared_ptr<AxesHelper>(new AxesHelper(size));
+}
+
 AxesHelper::~AxesHelper() {
 
     this->geometry_->dispose();

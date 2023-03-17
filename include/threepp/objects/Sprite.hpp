@@ -16,22 +16,13 @@ namespace threepp {
 
         std::shared_ptr<SpriteMaterial> material;
 
-        [[nodiscard]] std::string type() const override {
-
-            return "Sprite";
-        }
+        [[nodiscard]] std::string type() const override;
 
         void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
-        BufferGeometry* geometry() override {
+        BufferGeometry* geometry() override;
 
-            return _geometry.get();
-        }
-
-        static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial>& material = SpriteMaterial::create()) {
-
-            return std::shared_ptr<Sprite>(new Sprite(material));
-        }
+        static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial>& material = SpriteMaterial::create());
 
     private:
         std::shared_ptr<BufferGeometry> _geometry;

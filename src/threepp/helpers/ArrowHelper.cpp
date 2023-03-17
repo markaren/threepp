@@ -94,3 +94,8 @@ void ArrowHelper::setColor(int color) {
     this->line->material()->as<MaterialWithColor>()->color.setHex(color);
     this->cone->material()->as<MaterialWithColor>()->color.setHex(color);
 }
+
+std::shared_ptr<ArrowHelper> ArrowHelper::create(Vector3 dir, Vector3 origin, float length, int color, std::optional<float> headLength, std::optional<float> headWidth) {
+
+    return std::shared_ptr<ArrowHelper>(new ArrowHelper(dir, origin, length, color, headLength, headWidth));
+}

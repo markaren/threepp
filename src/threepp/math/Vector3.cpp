@@ -1,11 +1,11 @@
 
 #include "threepp/math/Vector3.hpp"
 
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Spherical.hpp"
-#include "threepp/math/MathUtils.hpp"
 
 #include "threepp/cameras/Camera.hpp"
 
@@ -15,14 +15,17 @@
 
 using namespace threepp;
 
-const Vector3 Vector3::X = Vector3{1, 0, 0};
-const Vector3 Vector3::Y = Vector3{0, 1, 0};
-const Vector3 Vector3::Z = Vector3{0, 0, 1};
+const Vector3 Vector3::X{1, 0, 0};
+const Vector3 Vector3::Y{0, 1, 0};
+const Vector3 Vector3::Z{0, 0, 1};
 
-const Vector3 Vector3::ONES = Vector3{1, 1, 1};
-const Vector3 Vector3::ZEROS = Vector3{0, 0, 0};
+const Vector3 Vector3::ONES{1, 1, 1};
+const Vector3 Vector3::ZEROS{0, 0, 0};
 
-Vector3::Vector3(float x, float y, float z): x(x), y(y), z(z) {}
+Vector3::Vector3(): Vector3(0, 0, 0) {}
+
+Vector3::Vector3(float x, float y, float z)
+    : x(x), y(y), z(z) {}
 
 Vector3& Vector3::set(float x, float y, float z) {
 
@@ -528,6 +531,15 @@ bool Vector3::equals(const Vector3& v) const {
     return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z));
 }
 
+bool Vector3::operator!=(const Vector3& other) const {
+
+    return !equals(other);
+}
+bool Vector3::operator==(const Vector3& other) const {
+
+    return equals(other);
+}
+
 bool Vector3::isNan() const {
 
     return std::isnan(x) || std::isnan(y) || std::isnan(z);
@@ -536,4 +548,83 @@ bool Vector3::isNan() const {
 Vector3& Vector3::makeNan() {
 
     return set(NAN, NAN, NAN);
+}
+
+Vector3& Vector3::operator/=(float s) {
+
+    return divideScalar(s);
+}
+
+Vector3 Vector3::operator/(float s) const {
+
+    return clone().divideScalar(s);
+}
+
+Vector3& Vector3::operator/=(const Vector3& other) {
+
+    return divide(other);
+}
+
+Vector3 Vector3::operator/(const Vector3& other) const {
+
+    return clone().divide(other);
+}
+
+Vector3& Vector3::operator*=(float s) {
+
+    return multiplyScalar(s);
+}
+
+Vector3 Vector3::operator*(float s) const {
+
+    return clone().multiplyScalar(s);
+}
+
+Vector3& Vector3::operator*=(const Vector3& other) {
+
+    return multiply(other);
+}
+
+Vector3 Vector3::operator*(const Vector3& other) const {
+
+    return clone().multiply(other);
+}
+
+Vector3& Vector3::operator-=(float s) {
+
+    return subScalar(s);
+}
+
+Vector3 Vector3::operator-(float s) const {
+
+    return clone().subScalar(s);
+}
+
+Vector3& Vector3::operator-=(const Vector3& other) {
+
+    return sub(other);
+}
+
+Vector3 Vector3::operator-(const Vector3& other) const {
+
+    return clone().sub(other);
+}
+Vector3& Vector3::operator+=(float s) {
+
+    return addScalar(s);
+}
+
+Vector3 Vector3::operator+(float s) const {
+
+    return clone().addScalar(s);
+}
+
+Vector3& Vector3::operator+=(const Vector3& other) {
+
+    return add(other);
+}
+
+Vector3 Vector3::operator+(const Vector3& other) const {
+
+    return clone().add(other);
 }

@@ -4,6 +4,7 @@
 
 #include "threepp/math/Spherical.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Vector3.hpp"
 
 using namespace threepp;
 

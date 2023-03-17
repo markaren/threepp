@@ -3,7 +3,6 @@
 #ifndef THREEPP_PLANE_HPP
 #define THREEPP_PLANE_HPP
 
-#include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Vector3.hpp"
 
 namespace threepp {
@@ -11,6 +10,7 @@ namespace threepp {
     class Sphere;
     class Line3;
     class Box3;
+    class Matrix3;
 
     class Plane {
 

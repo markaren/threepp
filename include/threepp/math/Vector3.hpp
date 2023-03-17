@@ -18,12 +18,11 @@ namespace threepp {
     class Vector3 {
 
     public:
-        float x{0.f};
-        float y{0.f};
-        float z{0.f};
+        float x;
+        float y;
+        float z;
 
-        Vector3() = default;
-
+        Vector3();
         Vector3(float x, float y, float z);
 
         Vector3& set(float x, float y, float z);
@@ -144,93 +143,41 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Vector3& v) const;
 
-        bool operator==(const Vector3& other) const {
-            return equals(other);
-        }
+        bool operator==(const Vector3& other) const;
 
-        bool operator!=(const Vector3& other) const {
-            return !equals(other);
-        }
+        bool operator!=(const Vector3& other) const;
 
-        Vector3 operator+(const Vector3& other) const {
+        Vector3 operator+(const Vector3& other) const;
 
-            return clone().add(other);
-        }
+        Vector3& operator+=(const Vector3& other);
 
-        Vector3& operator+=(const Vector3& other) {
+        Vector3 operator+(float s) const;
 
-            return add(other);
-        }
+        Vector3& operator+=(float s);
 
-        Vector3 operator+(float s) const {
+        Vector3 operator-(const Vector3& other) const;
 
-            return clone().addScalar(s);
-        }
+        Vector3& operator-=(const Vector3& other);
 
-        Vector3& operator+=(float s) {
+        Vector3 operator-(float s) const;
 
-            return addScalar(s);
-        }
+        Vector3& operator-=(float s);
 
-        Vector3 operator-(const Vector3& other) const {
+        Vector3 operator*(const Vector3& other) const;
 
-            return clone().sub(other);
-        }
+        Vector3& operator*=(const Vector3& other);
 
-        Vector3& operator-=(const Vector3& other) {
+        Vector3 operator*(float s) const;
 
-            return sub(other);
-        }
+        Vector3& operator*=(float s);
 
-        Vector3 operator-(float s) const {
+        Vector3 operator/(const Vector3& other) const;
 
-            return clone().subScalar(s);
-        }
+        Vector3& operator/=(const Vector3& other);
 
-        Vector3& operator-=(float s) {
+        Vector3 operator/(float s) const;
 
-            return subScalar(s);
-        }
-
-        Vector3 operator*(const Vector3& other) const {
-
-            return clone().multiply(other);
-        }
-
-        Vector3& operator*=(const Vector3& other) {
-
-            return multiply(other);
-        }
-
-        Vector3 operator*(float s) const {
-
-            return clone().multiplyScalar(s);
-        }
-
-        Vector3& operator*=(float s) {
-
-            return multiplyScalar(s);
-        }
-
-        Vector3 operator/(const Vector3& other) const {
-
-            return clone().divide(other);
-        }
-
-        Vector3& operator/=(const Vector3& other) {
-
-            return divide(other);
-        }
-
-        Vector3 operator/(float s) const {
-
-            return clone().divideScalar(s);
-        }
-
-        Vector3& operator/=(float s) {
-
-            return divideScalar(s);
-        }
+        Vector3& operator/=(float s);
 
         Vector3& makeNan();
 
