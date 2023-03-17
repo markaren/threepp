@@ -8,7 +8,14 @@
 using namespace threepp;
 
 
-Texture::Texture(): uuid(math::generateUUID()) {}
+Texture::Texture(std::optional<Image> image)
+    : uuid(math::generateUUID()),
+      image(std::move(image)) {}
+
+std::shared_ptr<Texture> Texture::create(std::optional<Image> image) {
+
+    return std::shared_ptr<Texture>(new Texture(std::move(image)));
+}
 
 void Texture::updateMatrix() {
 
@@ -21,7 +28,6 @@ void Texture::dispose() {
         disposed_ = true;
         this->dispatchEvent("dispose", this);
     }
-
 }
 
 void Texture::transformUv(Vector2& uv) const {

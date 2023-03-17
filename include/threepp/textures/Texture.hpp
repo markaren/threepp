@@ -65,8 +65,6 @@ namespace threepp {
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding = LinearEncoding;
 
-        Texture();
-
         Texture(const Texture&) = delete;
         Texture operator=(const Texture&) = delete;
 
@@ -88,16 +86,13 @@ namespace threepp {
 
         ~Texture() override;
 
-        static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt) {
-
-            return std::shared_ptr<Texture>(new Texture(std::move(image)));
-        }
+        static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt);
 
     protected:
-        explicit Texture(std::optional<Image> image = std::nullopt)
-            : image(std::move(image)) {}
+        explicit Texture(std::optional<Image> image = std::nullopt);
 
     private:
+
         bool disposed_ = false;
         unsigned int version_ = 0;
 
