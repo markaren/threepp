@@ -1,6 +1,8 @@
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include <cmath>
 
 using namespace threepp;

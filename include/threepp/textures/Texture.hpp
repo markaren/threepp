@@ -9,7 +9,6 @@
 
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Vector2.hpp"
-#include "threepp/math/MathUtils.hpp"
 
 #include "threepp/textures/Image.hpp"
 
@@ -27,7 +26,7 @@ namespace threepp {
 
         unsigned int id = textureId++;
 
-        std::string uuid = math::generateUUID();
+        std::string uuid;
 
         std::string name;
 
@@ -65,6 +64,8 @@ namespace threepp {
         // Also changing the encoding after already used by a Material will not automatically make the Material
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
         int encoding = LinearEncoding;
+
+        Texture();
 
         Texture(const Texture&) = delete;
         Texture operator=(const Texture&) = delete;

@@ -3,10 +3,11 @@
 #ifndef THREEPP_MATERIAL_HPP
 #define THREEPP_MATERIAL_HPP
 
-#include <threepp/constants.hpp>
-#include <threepp/core/EventDispatcher.hpp>
-#include <threepp/core/Uniform.hpp>
-#include <threepp/math/Plane.hpp>
+#include "threepp/constants.hpp"
+#include "threepp/core/EventDispatcher.hpp"
+#include "threepp/core/Uniform.hpp"
+#include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Plane.hpp"
 
 #include <optional>
 

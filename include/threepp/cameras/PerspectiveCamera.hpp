@@ -5,8 +5,6 @@
 
 #include "threepp/cameras/Camera.hpp"
 
-#include "threepp/math/MathUtils.hpp"
-
 #include <memory>
 
 namespace threepp {

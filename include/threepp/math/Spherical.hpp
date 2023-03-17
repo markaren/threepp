@@ -5,8 +5,6 @@
 
 #include "threepp/math/Vector3.hpp"
 
-#include "threepp/math/MathUtils.hpp"
-
 namespace threepp {
 
     class Spherical {

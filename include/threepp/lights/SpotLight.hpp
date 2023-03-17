@@ -6,6 +6,7 @@
 #include "threepp/lights/Light.hpp"
 #include "threepp/lights/SpotLightShadow.hpp"
 #include "threepp/lights/light_interfaces.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 namespace threepp {
 

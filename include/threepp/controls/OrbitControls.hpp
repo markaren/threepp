@@ -11,6 +11,8 @@
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/input/MouseListener.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include <limits>
 #include <memory>
 

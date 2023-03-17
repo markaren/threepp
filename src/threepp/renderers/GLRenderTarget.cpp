@@ -1,8 +1,17 @@
 
 #include "threepp/renderers/GLRenderTarget.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 using namespace threepp;
 
+
+GLRenderTarget::GLRenderTarget(): uuid(math::generateUUID()) {}
+
+std::shared_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const GLRenderTarget::Options& options) {
+
+    return std::shared_ptr<GLRenderTarget>(new GLRenderTarget(width, height, options));
+}
 
 GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GLRenderTarget::Options& options)
     : width(width), height(height),

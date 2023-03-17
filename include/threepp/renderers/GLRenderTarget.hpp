@@ -35,7 +35,7 @@ namespace threepp {
             std::shared_ptr<DepthTexture> depthTexture;
         };
 
-        const std::string uuid = math::generateUUID();
+        const std::string uuid;
 
         unsigned int width;
         unsigned int height;
@@ -52,6 +52,8 @@ namespace threepp {
         bool stencilBuffer;
         std::shared_ptr<DepthTexture> depthTexture;
 
+        GLRenderTarget();
+
         void setTexture(const std::shared_ptr<Texture>& tex);
 
         void setSize(unsigned int width, unsigned int height, unsigned int depth = 1);
@@ -60,10 +62,7 @@ namespace threepp {
 
         void dispose();
 
-        static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options) {
-
-            return std::shared_ptr<GLRenderTarget>(new GLRenderTarget(width, height, options));
-        }
+        static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
     protected:
         GLRenderTarget(unsigned int width, unsigned int height, const Options& options);

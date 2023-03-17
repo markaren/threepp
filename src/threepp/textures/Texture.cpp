@@ -1,9 +1,14 @@
 
 #include "threepp/textures/Texture.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include <cmath>
 
 using namespace threepp;
+
+
+Texture::Texture(): uuid(math::generateUUID()) {}
 
 void Texture::updateMatrix() {
 

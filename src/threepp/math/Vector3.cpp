@@ -5,6 +5,7 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Quaternion.hpp"
 #include "threepp/math/Spherical.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 #include "threepp/cameras/Camera.hpp"
 

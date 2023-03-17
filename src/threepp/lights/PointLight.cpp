@@ -3,6 +3,8 @@
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 using namespace threepp;
 
 float PointLight::getPower() const {

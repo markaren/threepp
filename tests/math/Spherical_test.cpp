@@ -3,6 +3,7 @@
 #include <catch2/catch.hpp>
 
 #include "threepp/math/Spherical.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 using namespace threepp;
 

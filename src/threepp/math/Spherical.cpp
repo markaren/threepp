@@ -1,6 +1,8 @@
 
 #include "threepp/math/Spherical.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include <algorithm>
 #include <cmath>
 
