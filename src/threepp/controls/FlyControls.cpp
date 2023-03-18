@@ -1,11 +1,9 @@
 
 #include "threepp/controls/FlyControls.hpp"
 
-#include "threepp/cameras/Camera.hpp"
+#include "threepp/Canvas.hpp"
+#include "threepp/core/Object3D.hpp"
 #include "threepp/math/Spherical.hpp"
-#include "threepp/math/Vector2.hpp"
-
-#include <cmath>
 
 using namespace threepp;
 
@@ -13,252 +11,308 @@ namespace {
 
     const float EPS = 0.000001f;
 
-    Quaternion tmpQuaternion;
-
-    enum class STATE {
-        NONE,
-        ROTATE,
-        DOLLY,
-        PAN,
-        TOUCH_ROTATE,
-        TOUCH_PAN,
-        TOUCH_DOLLY_PAN,
-        TOUCH_DOLLY_ROTATE
-    };
-
     struct MoveState {
 
-        bool up = false;
-        bool down = false;
-        bool left = false;
-        bool right = false;
-        bool forward = false;
-        bool back = false;
-        bool pitchUp = false;
-        bool pitchDown = false;
-        bool yawLeft = false;
-        bool yawRight = false;
-        bool rollLeft = false;
-        bool rollRight = false;
-
+        int up = 0;
+        int down = 0;
+        int left = 0;
+        int right = 0;
+        int forward = 0;
+        int back = 0;
+        float pitchUp = 0;
+        float pitchDown = 0;
+        float yawLeft = 0;
+        float yawRight = 0;
+        float rollLeft = 0;
+        float rollRight = 0;
     };
 
 }// namespace
 
 struct FlyControls::Impl {
 
-    Canvas& canvas;
-    FlyControls& scope;
-    Camera* object;
+    Impl(FlyControls& scope, Canvas& canvas, Object3D* object)
+        : canvas(canvas), scope(scope), object(object),
+          keyUp(scope), keydown(scope),
+          mouseDown(scope), mouseMove(scope), mouseUp(scope) {
 
-    STATE state = STATE::NONE;
+        canvas.addKeyListener(&keydown);
+        canvas.addKeyListener(&keyUp);
 
-    // current position in spherical coordinates
-    Spherical spherical;
-    Spherical sphericalDelta;
+        canvas.addMouseListener(&mouseDown);
+        canvas.addMouseListener(&mouseMove);
+        canvas.addMouseListener(&mouseUp);
+    }
 
-    float scale = 1;
-    Vector3 panOffset;
-    bool zoomChanged = false;
+    void update(float delta) {
 
-    Vector2 rotateStart;
-    Vector2 rotateEnd;
-    Vector2 rotateDelta;
+        const auto moveMult = delta * scope.movementSpeed;
+        const auto rotMult = delta * scope.rollSpeed;
 
-    Vector2 panStart;
-    Vector2 panEnd;
-    Vector2 panDelta;
+        object->translateX(moveVector.x * moveMult);
+        object->translateY(moveVector.y * moveMult);
+        object->translateZ(moveVector.z * moveMult);
 
-    Vector2 dollyStart;
-    Vector2 dollyEnd;
-    Vector2 dollyDelta;
+        tmpQuaternion.set(rotationVector.x * rotMult, rotationVector.y * rotMult, rotationVector.z * rotMult, 1).normalize();
+        object->quaternion.multiply(tmpQuaternion);
 
-    bool mouseStatus = false;
+        if (
+                lastPosition.distanceToSquared(object->position) > EPS ||
+                8 * (1 - lastQuaternion.dot(object->quaternion)) > EPS) {
 
-    MoveState moveState;
-
-    Vector3 moveVector;
-    Vector3 rotationVector;
-
-    Impl(FlyControls& scope, Canvas& canvas): canvas(canvas), scope(scope) {}
-
-    bool update() {
-
-        Vector3 offset;
-
-        // so camera.up is the orbit axis
-        Quaternion quat = Quaternion().setFromUnitVectors(object->up, Vector3(0, 1, 0));
-        Quaternion quatInverse = quat.clone().invert();
-
-        Vector3 lastPosition;
-        Quaternion lastQuaternion;
-
-
-        auto& position = object->position;
-
-        offset.copy(position).sub(scope.target);
-
-        // rotate offset to "y-axis-is-up" space
-        offset.applyQuaternion(quat);
-
-        // angle from z-axis around y-axis
-        spherical.setFromVector3(offset);
-
-        if (scope.autoRotate && state == STATE::NONE) {
-
-            rotateLeft(getAutoRotationAngle());
-        }
-
-        if (scope.enableDamping) {
-
-            spherical.theta += sphericalDelta.theta * scope.dampingFactor;
-            spherical.phi += sphericalDelta.phi * scope.dampingFactor;
-
-        } else {
-
-            spherical.theta += sphericalDelta.theta;
-            spherical.phi += sphericalDelta.phi;
-        }
-
-        // restrict theta to be between desired limits
-
-        float min = scope.minAzimuthAngle;
-        float max = scope.maxAzimuthAngle;
-
-        if (std::isfinite(min) && std::isfinite(max)) {
-
-            if (min < -math::PI) min += math::TWO_PI;
-            else if (min > math::PI)
-                min -= math::TWO_PI;
-
-            if (max < -math::PI) max += math::TWO_PI;
-            else if (max > math::PI)
-                max -= math::TWO_PI;
-
-            if (min <= max) {
-
-                spherical.theta = std::max(min, std::min(max, spherical.theta));
-
-            } else {
-
-                spherical.theta = (spherical.theta > (min + max) / 2) ? std::max(min, spherical.theta) : std::min(max, spherical.theta);
-            }
-        }
-
-        // restrict phi to be between desired limits
-        spherical.phi = std::max(scope.minPolarAngle, std::min(scope.maxPolarAngle, spherical.phi));
-
-        spherical.makeSafe();
-
-
-        spherical.radius *= scale;
-
-        // restrict radius to be between desired limits
-        spherical.radius = std::max(scope.minDistance, std::min(scope.maxDistance, spherical.radius));
-
-        // move target to panned location
-
-        if (scope.enableDamping == true) {
-
-            scope.target.addScaledVector(panOffset, scope.dampingFactor);
-
-        } else {
-
-            scope.target.add(panOffset);
-        }
-
-        offset.setFromSpherical(spherical);
-
-        // rotate offset back to "camera-up-vector-is-up" space
-        offset.applyQuaternion(quatInverse);
-
-        position.copy(scope.target).add(offset);
-
-        object->lookAt(scope.target);
-
-        if (scope.enableDamping == true) {
-
-            sphericalDelta.theta *= (1 - scope.dampingFactor);
-            sphericalDelta.phi *= (1 - scope.dampingFactor);
-
-            panOffset.multiplyScalar(1 - scope.dampingFactor);
-
-        } else {
-
-            sphericalDelta.set(0, 0, 0);
-
-            panOffset.set(0, 0, 0);
-        }
-
-        scale = 1;
-
-        // update condition is:
-        // min(camera displacement, camera rotation in radians)^2 > EPS
-        // using small-angle approximation cos(x/2) = 1 - x^2 / 8
-
-        if (zoomChanged ||
-            lastPosition.distanceToSquared(object->position) > EPS ||
-            8 * (1 - lastQuaternion.dot(object->quaternion)) > EPS) {
-
-//            scope.dispatchEvent(_changeEvent);
-
-            lastPosition.copy(object->position);
             lastQuaternion.copy(object->quaternion);
-            zoomChanged = false;
-
-            return true;
+            lastPosition.copy(object->position);
         }
-
-        return false;
     }
 
     void updateMovementVector() {
 
-        bool forward = (moveState.forward || (scope.autoForward && !moveState.back));
+        int forward = (moveState.forward || (scope.autoForward && !moveState.back));
 
-        moveVector.x = static_cast<float>( - moveState.left + moveState.right );
-        moveVector.y = static_cast<float>( - moveState.down + moveState.up );
-        moveVector.z = static_cast<float>( - forward + moveState.back );
-
-        //console.log( 'move:', [ this.moveVector.x, this.moveVector.y, this.moveVector.z ] );
-
+        moveVector.x = static_cast<float>(-moveState.left + moveState.right);
+        moveVector.y = static_cast<float>(-moveState.down + moveState.up);
+        moveVector.z = static_cast<float>(-forward + moveState.back);
     }
 
-    [[nodiscard]] float getAutoRotationAngle() const {
+    void updateRotationVector() {
 
-        return 2 * math::PI / 60 / 60 * scope.autoRotateSpeed;
+        rotationVector.x = (-moveState.pitchDown + moveState.pitchUp);
+        rotationVector.y = (-moveState.yawRight + moveState.yawLeft);
+        rotationVector.z = (-moveState.rollRight + moveState.rollLeft);
     }
 
-    [[nodiscard]] float getZoomScale() const {
+    ~Impl() {
 
-        return std::pow(0.95f, scope.zoomSpeed);
+        canvas.removeKeyListener(&keydown);
+        canvas.removeKeyListener(&keyUp);
+
+        canvas.removeMouseListener(&mouseDown);
+        canvas.removeMouseListener(&mouseMove);
+        canvas.removeMouseListener(&mouseUp);
     }
 
-    void rotateLeft(float angle) {
+    struct KeyDownListener: KeyListener {
 
-        sphericalDelta.theta -= angle;
-    }
+        FlyControls& scope;
 
-    void rotateUp(float angle) {
+        explicit KeyDownListener(FlyControls& scope): scope(scope) {}
 
-        sphericalDelta.phi -= angle;
-    }
+        void onKeyPressed(KeyEvent evt) override {
+
+            if (evt.mods == 4) {// altKey
+
+                return;
+            }
+
+            switch (evt.key) {
+                case 87:
+                    scope.pimpl_->moveState.forward = 1;// w
+                    break;
+                case 83:
+                    scope.pimpl_->moveState.back = 1;// s
+                    break;
+                case 65:
+                    scope.pimpl_->moveState.left = 1;// a
+                    break;
+                case 68:
+                    scope.pimpl_->moveState.right = 1;// d
+                    break;
+                case 82:
+                    scope.pimpl_->moveState.up = 1;// r
+                    break;
+                case 70:
+                    scope.pimpl_->moveState.down = 1;// f
+                    break;
+                case 265:
+                    scope.pimpl_->moveState.pitchUp = 1;// arrowup
+                    break;
+                case 264:
+                    scope.pimpl_->moveState.pitchDown = 1;// arrowdown
+                    break;
+                case 263:
+                    scope.pimpl_->moveState.yawLeft = 1;// arrowleft
+                    break;
+                case 262:
+                    scope.pimpl_->moveState.yawRight = 1;// arrowright
+                    break;
+                case 81:
+                    scope.pimpl_->moveState.rollLeft = 1;// q
+                    break;
+                case 69:
+                    scope.pimpl_->moveState.rollRight = 1;// e
+                    break;
+            }
+
+            scope.pimpl_->updateMovementVector();
+            scope.pimpl_->updateRotationVector();
+        }
+    };
+
+    struct KeyUpListener: KeyListener {
+
+        FlyControls& scope;
+
+        explicit KeyUpListener(FlyControls& scope): scope(scope) {}
+
+        void onKeyReleased(KeyEvent evt) override {
+
+            switch (evt.key) {
+                case 87:
+                    scope.pimpl_->moveState.forward = 0;// w
+                    break;
+                case 83:
+                    scope.pimpl_->moveState.back = 0;// s
+                    break;
+                case 65:
+                    scope.pimpl_->moveState.left = 0;// a
+                    break;
+                case 68:
+                    scope.pimpl_->moveState.right = 0;// d
+                    break;
+                case 82:
+                    scope.pimpl_->moveState.up = 0;// r
+                    break;
+                case 70:
+                    scope.pimpl_->moveState.down = 0;// f
+                    break;
+                case 265:
+                    scope.pimpl_->moveState.pitchUp = 0;// arrowup
+                    break;
+                case 264:
+                    scope.pimpl_->moveState.pitchDown = 0;// arrowdown
+                    break;
+                case 263:
+                    scope.pimpl_->moveState.yawLeft = 0;// arrowleft
+                    break;
+                case 262:
+                    scope.pimpl_->moveState.yawRight = 0;// arrowright
+                    break;
+                case 81:
+                    scope.pimpl_->moveState.rollLeft = 0;// q
+                    break;
+                case 69:
+                    scope.pimpl_->moveState.rollRight = 0;// e
+                    break;
+            }
+
+            scope.pimpl_->updateMovementVector();
+            scope.pimpl_->updateRotationVector();
+        }
+    };
+
+    struct MouseDownListener: MouseListener {
+
+        FlyControls& scope;
+
+        explicit MouseDownListener(FlyControls& scope): scope(scope) {}
+
+        void onMouseDown(int button, const Vector2& pos) override {
+
+            if (scope.dragToLook) {
+
+                scope.pimpl_->mouseStatus++;
+
+            } else {
+
+                switch (button) {
+
+                    case 0:
+                        scope.pimpl_->moveState.forward = 1;
+                        break;
+                    case 1:
+                        scope.pimpl_->moveState.back = 1;
+                        break;
+                }
+
+                scope.pimpl_->updateMovementVector();
+            }
+        }
+    };
+
+    struct MouseMoveListener: MouseListener {
+
+        FlyControls& scope;
+
+        explicit MouseMoveListener(FlyControls& scope): scope(scope) {}
+
+        void onMouseMove(const Vector2& pos) override {
+
+            if (!scope.dragToLook || scope.pimpl_->mouseStatus > 0) {
+
+                const float halfWidth = static_cast<float>(scope.pimpl_->canvas.getSize().width) / 2;
+                const float halfHeight = static_cast<float>(scope.pimpl_->canvas.getSize().height) / 2;
+
+                scope.pimpl_->moveState.yawLeft = -((pos.x) - halfWidth) / halfWidth;
+                scope.pimpl_->moveState.pitchDown = ((pos.y) - halfHeight) / halfHeight;
+
+                scope.pimpl_->updateRotationVector();
+            }
+        }
+    };
+
+    struct MouseUpListener: MouseListener {
+
+        FlyControls& scope;
+
+        explicit MouseUpListener(FlyControls& scope): scope(scope) {}
+
+        void onMouseUp(int button, const Vector2& pos) override {
+
+            if (scope.dragToLook) {
+
+                scope.pimpl_->mouseStatus--;
+
+                scope.pimpl_->moveState.yawLeft = scope.pimpl_->moveState.pitchDown = 0;
+
+            } else {
+
+                switch (button) {
+
+                    case 0:
+                        scope.pimpl_->moveState.forward = 0;
+                        break;
+                    case 1:
+                        scope.pimpl_->moveState.back = 0;
+                        break;
+                }
+
+                scope.pimpl_->updateMovementVector();
+            }
+
+            scope.pimpl_->updateRotationVector();
+        }
+    };
+
+private:
+    Canvas& canvas;
+    FlyControls& scope;
+    Object3D* object;
+
+    Quaternion lastQuaternion;
+    Vector3 lastPosition;
+
+    Quaternion tmpQuaternion;
+
+    int mouseStatus = 0;
+
+    MoveState moveState;
+    Vector3 moveVector;
+    Vector3 rotationVector;
+
+    KeyUpListener keydown;
+    KeyDownListener keyUp;
+
+    MouseDownListener mouseDown;
+    MouseMoveListener mouseMove;
+    MouseUpListener mouseUp;
 };
 
-threepp::FlyControls::FlyControls(Camera* camera, Canvas& canvas)
-    : pimpl_(std::make_unique<Impl>(*this, canvas)) {}
+FlyControls::FlyControls(Object3D& object, Canvas& canvas)
+    : pimpl_(std::make_unique<Impl>(*this, canvas, &object)) {}
 
 void threepp::FlyControls::update(float delta) {
-}
 
-float threepp::FlyControls::getPolarAngle() {
-
-    return pimpl_->spherical.phi;
-}
-
-float threepp::FlyControls::getAzimuthalAngle() {
-
-    return pimpl_->spherical.theta;
+    pimpl_->update(delta);
 }
 
 threepp::FlyControls::~FlyControls() = default;
