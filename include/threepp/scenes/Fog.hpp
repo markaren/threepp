@@ -14,14 +14,9 @@ namespace threepp {
         float near;
         float far;
 
-        template<class T>
-        explicit Fog(T color, float near = 1, float far = 1000)
-            : color(color), near(near), far(far) {}
+        explicit Fog(const Color& color, float near = 1, float far = 1000);
 
-        bool operator==(const Fog& f) const {
-
-            return f.color == this->color && f.near == this->near && f.far == this->far;
-        }
+        bool operator==(const Fog& f) const;
     };
 
 }// namespace threepp

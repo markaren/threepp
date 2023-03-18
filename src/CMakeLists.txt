@@ -305,6 +305,10 @@ set(sources
         "threepp/lights/SpotLight.cpp"
         "threepp/lights/SpotLightShadow.cpp"
 
+        "threepp/scenes/Scene.cpp"
+        "threepp/scenes/Fog.cpp"
+        "threepp/scenes/FogExp2.cpp"
+
         "threepp/objects/Group.cpp"
         "threepp/objects/Line.cpp"
         "threepp/objects/LineLoop.cpp"
