@@ -16,7 +16,7 @@ however much remains to be done..
 * Raycasting [Mesh, Line, Points]
 * 2D Textures, 3D text, Sprites, RenderTarget
 * Transparency, Shadows
-* OrbitControls
+* OrbitControls, FlyControls
 * Water and Sky shader
 * Loaders [Binary STL, OBJ/MTL]
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)

@@ -6,6 +6,7 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
+        "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
 
         "threepp/core/BufferAttribute.hpp"
@@ -219,6 +220,7 @@ set(sources
         "threepp/cameras/PerspectiveCamera.cpp"
         "threepp/cameras/OrthographicCamera.cpp"
 
+        "threepp/controls/FlyControls.cpp"
         "threepp/controls/OrbitControls.cpp"
 
         "threepp/core/BufferGeometry.cpp"
