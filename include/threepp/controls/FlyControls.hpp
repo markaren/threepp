@@ -1,3 +1,4 @@
+// https://github.com/mrdoob/three.js/blob/r129/examples/jsm/controls/FlyControls.js
 
 #ifndef THREEPP_FLYCONTROLS_HPP
 #define THREEPP_FLYCONTROLS_HPP
@@ -18,7 +19,7 @@ namespace threepp {
         bool dragToLook = false;
         bool autoForward = false;
 
-        FlyControls(Object3D& camera, Canvas& canvas);
+        FlyControls(Object3D& object, Canvas& canvas);
 
         void update(float delta);
 
