@@ -17,6 +17,16 @@
 
 namespace threepp {
 
+    inline agx::Vec3 toVec3(const Vector3& v) {
+
+        return {v.x, v.y, v.z};
+    }
+
+    inline agx::Quat toQuat(const Quaternion& q) {
+
+        return {q.x(), q.y(), q.z(), q.w()};
+    }
+
     namespace detail {
 
         agxCollide::Geometry* getGeometry(BufferGeometry& geometry) {
@@ -35,6 +45,11 @@ namespace threepp {
 
                 auto g = dynamic_cast<PlaneGeometry*>(&geometry);
                 return new agxCollide::Geometry(new agxCollide::Box(g->width, 0.1f, g->height));
+
+            } else if (geometry.type() == "CapsuleGeometry") {
+
+                auto g = dynamic_cast<CapsuleGeometry*>(&geometry);
+                return new agxCollide::Geometry(new agxCollide::Capsule(g->radius, g->length));
 
             }
 
@@ -69,7 +84,7 @@ namespace threepp {
 
                 } else if (mesh.is<Mesh>()) {
 
-//                    handleMesh(&mesh, mass, std::move(geometry));
+                    handleMesh(&mesh, mass, geometry);
                 }
             }
         }
@@ -85,6 +100,50 @@ namespace threepp {
         float t = 0;
         agx::AutoInit init;
         agxSDK::SimulationRef sim = new agxSDK::Simulation();
+
+        std::unordered_map<Object3D*, agx::RigidBody*> meshMap;
+
+
+        void handleMesh(Mesh* mesh, float mass, agxCollide::Geometry* geometry) {
+
+            const auto& position = mesh->position;
+            const auto& quaternion = mesh->quaternion;
+
+            auto rb = new agx::RigidBody();
+            if (mass == 0) {
+                rb->setMotionControl(agx::RigidBody::STATIC);
+            } else {
+                rb->getMassProperties()->setMass(mass);
+            }
+            rb->setPosition(toVec3(position));
+            rb->setRotation(toQuat(quaternion));
+            rb->add(geometry);
+
+            meshMap[mesh] = rb;
+
+            mesh->addEventListener("remove", onMeshRemovedListener);
+        }
+
+        struct MeshRemovedListener: EventListener {
+
+            explicit MeshRemovedListener(AgxPhysics* scope): scope(scope) {}
+
+            void onEvent(Event& event) override {
+                if (event.type == "remove") {
+                    auto m = static_cast<Mesh*>(event.target);
+                    if (scope->meshMap.count(m)) {
+                        auto rb = scope->meshMap.at(m);
+                        scope->sim->remove(rb);
+                        scope->meshMap.erase(m);
+                    }
+                }
+            }
+
+        private:
+            AgxPhysics* scope;
+        };
+
+        std::shared_ptr<MeshRemovedListener> onMeshRemovedListener = std::make_unique<MeshRemovedListener>(this);
     };
 
 }// namespace threepp

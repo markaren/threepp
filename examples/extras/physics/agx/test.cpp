@@ -1,73 +1,44 @@
-#include <agxSDK/Simulation.h>
-#include <agx/RigidBody.h>
 
-int main()
-{
-    try
-    {
-        // Where AGX is placed/installed:
-        // For example "c:\\Program Files\\Algoryx\\AGX-2.33.0.0\\";
-        const char* path = getenv("AGX_DIR");
-        std::string pathToAGX;
 
-        if (path)
-            std::string pathToAGX = path;
-        else
-            std::cerr << "*** Environment variable AGX_DIR is not set. This might lead to problems during runtime" << std::endl;
+#include "threepp/threepp.hpp"
 
-        // Probably where the license file is
-        agxIO::Environment::instance()->getFilePath(
-                                              agxIO::Environment::RESOURCE_PATH).pushbackPath(pathToAGX);
+#include "threepp/extras/physics/AgxPhysics.hpp"
 
-        // Text files for plugins
-        agxIO::Environment::instance()->getFilePath(
-                                              agxIO::Environment::RESOURCE_PATH).addFilePath(pathToAGX);
+using namespace threepp;
 
-        // binary plugin files
-        agxIO::Environment::instance()->getFilePath(
-                                              agxIO::Environment::RUNTIME_PATH).addFilePath(pathToAGX + "/bin/x64/plugins");
+int main() {
 
-        // resource files
-        agxIO::Environment::instance()->getFilePath(
-                                              agxIO::Environment::RESOURCE_PATH).addFilePath(pathToAGX + "/data");
+    Canvas canvas;
+    GLRenderer renderer(canvas);
 
-        // AutoInit will call agx::init() which must be called before
-        // using the AGX API creating resources such as bodies, geometries etc.
-        std::cout << "*** Initializing AGX Dynamics..." << std::endl;
-        agx::AutoInit init;
-        {
-            std::cout << "*** Creating a simulation" << std::endl;
+    auto scene = Scene::create();
+    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
+    camera->position.z = 5;
 
-            // Create a Simulation which holds the DynamicsSystem and Space.
-            agxSDK::SimulationRef sim = new agxSDK::Simulation;
+    OrbitControls controls{camera, canvas};
 
-            std::cout << "*** Creating a RigidBody" << std::endl;
+    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.5f));
+    scene->add(light);
 
-            // Create a rigid body (no geometry) with default mass etc.
-            agx::RigidBodyRef body = new agx::RigidBody;
+    const auto boxGeometry = BoxGeometry::create();
+    const auto boxMaterial = MeshLambertMaterial::create();
+    boxMaterial->color.setHex(0xff0000);
+    auto box = Mesh::create(boxGeometry, boxMaterial);
+    box->position.x = -1;
+    scene->add(box);
 
-            // Add the body to the simulation.
-            sim->add(body);
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+    });
 
-            // Set the time step to 1/100 (0.01 s or 100hz):
-            sim->setTimeStep(1.0 / 60);
+    AgxPhysics agx;
+    agx.addMesh(*box, 1);
 
-            // Simulate for some time
-            std::cout << "*** Simulating" << std::endl;
+    canvas.animate([&](float dt) {
+        agx.step(dt);
 
-            while (sim->getTimeStamp() < 0.5)
-            {
-                sim->stepForward();     // Take one time step.
-                std::cout << "   " << sim->getTimeStamp() << ": \t" << body->getPosition() << std::endl;
-            }
-        }
-        // The destructor for AutoInit will call agx::shutdown() automatically.
-        // Unloads plugins, destroys threads etc.
-        std::cout << "*** Un-initializing AGX Dynamics..." << std::endl;
-    }
-    catch(const std::exception& e)
-    {
-        std::cerr << "*** Caught an exception: " << e.what() << std::endl;
-    }
-    return 0;
+        renderer.render(scene, camera);
+    });
 }
