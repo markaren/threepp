@@ -5,13 +5,12 @@
 
 #include "threepp/math/Vector3.hpp"
 
+#include <memory>
 #include <vector>
-
 
 namespace threepp {
 
     struct Face;
-
 
     // A vertex as a double linked list node.
 
@@ -20,7 +19,7 @@ namespace threepp {
         Vector3 point;
         VertexNode* prev = nullptr;
         VertexNode* next = nullptr;
-        std::shared_ptr<Face> face = nullptr;
+        Face* face = nullptr;
 
         explicit VertexNode(const Vector3& point): point(point) {}
     };
@@ -32,9 +31,9 @@ namespace threepp {
         VertexNode* head = nullptr;
         VertexNode* tail = nullptr;
 
-        VertexNode* first() const;
+        [[nodiscard]] VertexNode* first() const;
 
-        VertexNode* last() const;
+        [[nodiscard]] VertexNode* last() const;
 
         VertexList& clear();
 
@@ -75,7 +74,7 @@ namespace threepp {
 
         float constant = 0;
         VertexNode* outside = nullptr;
-        int mark = 0;
+        int mark;
         std::shared_ptr<HalfEdge> edge = nullptr;
 
         static std::shared_ptr<Face> create(VertexNode* a, VertexNode* b, VertexNode* c);
@@ -90,15 +89,15 @@ namespace threepp {
         Face();
     };
 
-    struct HalfEdge {
+    struct HalfEdge: std::enable_shared_from_this<HalfEdge> {
 
         VertexNode* vertex;
         std::shared_ptr<HalfEdge> prev = nullptr;
         std::shared_ptr<HalfEdge> next = nullptr;
-        HalfEdge* twin = nullptr;
-        std::shared_ptr<Face> face = nullptr;
+        std::shared_ptr<HalfEdge> twin = nullptr;
+        Face* face = nullptr;
 
-        HalfEdge(VertexNode* vertex, std::shared_ptr<Face> face);
+        HalfEdge(VertexNode* vertex, Face* face);
 
         [[nodiscard]] VertexNode* head() const;
 
@@ -116,17 +115,82 @@ namespace threepp {
     public:
         float tolerance = -1;
 
-        ConvexHull();
+        std::vector<std::shared_ptr<Face>> faces;// the generated faces of the convex hull
 
         ConvexHull& setFromPoints(const std::vector<Vector3>& points);
+
+        bool containsPoint(const Vector3& point);
 
         ConvexHull& makeEmpty();
 
     private:
-        std::vector<Face> faces;   // the generated faces of the convex hull
-        std::vector<Face> newFaces;// this array holds the faces that are generated within a single iteration
+        std::vector<std::shared_ptr<Face>> newFaces;// this array holds the faces that are generated within a single iteration
 
-        std::vector<float> vertices;// vertices of the hull (internal representation of given geometry data)
+        VertexList assigned;
+        VertexList unassigned;
+
+        std::vector<VertexNode> vertices;// vertices of the hull (internal representation of given geometry data)
+
+
+        // Adds a vertex to the 'assigned' list of vertices and assigns it to the given face
+
+        ConvexHull& addVertexToFace(VertexNode* vertex, Face* face);
+
+        // Removes a vertex from the 'assigned' list of vertices and from the given face
+
+        ConvexHull& removeVertexFromFace(VertexNode* vertex, Face* face);
+
+        // Removes all the visible vertices that a given face is able to see which are stored in the 'assigned' vertex list
+
+        VertexNode* removeAllVerticesFromFace(Face* face);
+
+        // Removes all the visible vertices that 'face' is able to see
+
+        ConvexHull& deleteFaceVertices(Face* face, Face* absorbingFace);
+
+        // Reassigns as many vertices as possible from the unassigned list to the new faces
+
+        ConvexHull& resolveUnassignedPoints(std::vector<std::shared_ptr<Face>>& newFaces);
+
+        // Computes the extremes of a simplex which will be the initial hull
+
+        std::pair<std::vector<VertexNode*>, std::vector<VertexNode*>> computeExtremes();
+
+        // Computes the initial simplex assigning to its faces all the points
+        // that are candidates to form part of the hull
+
+        ConvexHull& computeInitialHull();
+
+        // Removes inactive faces
+
+        ConvexHull& reindexFaces();
+
+        // Finds the next vertex to create faces with the current hull
+
+        VertexNode* nextVertexToAdd();
+
+        // Computes a chain of half edges in CCW order called the 'horizon'.
+        // For an edge to be part of the horizon it must join a face that can see
+        // 'eyePoint' and a face that cannot see 'eyePoint'.
+
+        ConvexHull& computeHorizon(const Vector3& eyePoint, HalfEdge* crossEdge, Face* face, std::vector<std::shared_ptr<HalfEdge>>& horizon);
+
+        // Creates a face with the vertices 'eyeVertex.point', 'horizonEdge.tail' and 'horizonEdge.head' in CCW order
+
+        std::shared_ptr<HalfEdge> addAdjoiningFace(VertexNode* eyeVertex, const std::shared_ptr<HalfEdge>& horizonEdge);
+
+        //  Adds 'horizon.length' faces to the hull, each face will be linked with the
+        //  horizon opposite face and the face on the left/right
+
+        ConvexHull& addNewFaces(VertexNode* eyeVertex, std::vector<std::shared_ptr<HalfEdge>>& horizon);
+
+        // Adds a vertex to the hull
+
+        ConvexHull& addVertexToHull(VertexNode* eyeVertex);
+
+        ConvexHull& cleanup();
+
+        ConvexHull& compute();
     };
 
 }// namespace threepp

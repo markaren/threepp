@@ -10,38 +10,41 @@ ConvexGeometry::ConvexGeometry(const std::vector<Vector3>& points) {
 
     // buffers
 
-    std::vector<float> vertices(points.size()*3);
-    std::vector<float> normals(points.size()*3);
+    std::vector<float> vertices;
+    std::vector<float> normals;
 
-    const convexHull = new ConvexHull().setFromPoints( points );
+    auto convexHull = ConvexHull();
+    convexHull.setFromPoints(points);
 
     // generate vertices and normals
 
-    const faces = convexHull.faces;
+    const auto& faces = convexHull.faces;
 
-    for ( let i = 0; i < faces.length; i ++ ) {
+    for (const auto& face : faces) {
 
-        const face = faces[ i ];
-        let edge = face.edge;
+        auto edge = face->edge;
 
         // we move along a doubly-connected edge list to access all face points (see HalfEdge docs)
 
         do {
 
-            const point = edge.head().point;
+            const auto point = edge->head()->point;
 
-            vertices.push( point.x, point.y, point.z );
-            normals.push( face.normal.x, face.normal.y, face.normal.z );
+            vertices.insert(vertices.end(), {point.x, point.y, point.z});
+            normals.insert(normals.end(), {face->normal.x, face->normal.y, face->normal.z});
 
-            edge = edge.next;
+            edge = edge->next;
 
-        } while ( edge !== face.edge );
-
+        } while (edge != face->edge);
     }
 
     // build geometry
 
-    this.setAttribute( 'position', new Float32BufferAttribute( vertices, 3 ) );
-    this.setAttribute( 'normal', new Float32BufferAttribute( normals, 3 ) );
+    this->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
+    this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+}
 
+std::shared_ptr<ConvexGeometry> ConvexGeometry::create(const std::vector<Vector3>& points) {
+
+    return std::shared_ptr<ConvexGeometry>(new ConvexGeometry(points));
 }

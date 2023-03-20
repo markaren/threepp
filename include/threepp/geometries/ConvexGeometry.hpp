@@ -13,7 +13,7 @@ namespace threepp {
     class ConvexGeometry: public BufferGeometry {
 
     public:
-        std::shared_ptr<ConvexGeometry> create(const std::vector<Vector3>& points);
+        static std::shared_ptr<ConvexGeometry> create(const std::vector<Vector3>& points);
 
     private:
         explicit ConvexGeometry(const std::vector<Vector3>& points);
