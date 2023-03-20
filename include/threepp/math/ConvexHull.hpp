@@ -79,7 +79,7 @@ namespace threepp {
 
         static std::shared_ptr<Face> create(VertexNode* a, VertexNode* b, VertexNode* c);
 
-        [[nodiscard]] std::shared_ptr<HalfEdge> getEdge(unsigned int i);
+        [[nodiscard]] std::shared_ptr<HalfEdge> getEdge(int i);
 
         void compute();
 
@@ -105,9 +105,7 @@ namespace threepp {
 
         [[nodiscard]] float length() const;
 
-        [[nodiscard]] float lengthSquared() const;
-
-        HalfEdge& setTwin(const std::shared_ptr<HalfEdge>& edge);
+        void setTwin(const std::shared_ptr<HalfEdge>& edge);
     };
 
     class ConvexHull {
@@ -173,7 +171,7 @@ namespace threepp {
         // For an edge to be part of the horizon it must join a face that can see
         // 'eyePoint' and a face that cannot see 'eyePoint'.
 
-        ConvexHull& computeHorizon(const Vector3& eyePoint, HalfEdge* crossEdge, Face* face, std::vector<std::shared_ptr<HalfEdge>>& horizon);
+        ConvexHull& computeHorizon(const Vector3& eyePoint, std::shared_ptr<HalfEdge>& crossEdge, Face* face, std::vector<std::shared_ptr<HalfEdge>>& horizon);
 
         // Creates a face with the vertices 'eyeVertex.point', 'horizonEdge.tail' and 'horizonEdge.head' in CCW order
 

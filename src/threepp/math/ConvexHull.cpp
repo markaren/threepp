@@ -372,7 +372,7 @@ ConvexHull& ConvexHull::computeInitialHull() {
 
         // set the twin edge
 
-        for (unsigned i = 0; i < 3; i++) {
+        for (int i = 0; i < 3; i++) {
 
             const auto j = (i + 1) % 3;
 
@@ -396,7 +396,7 @@ ConvexHull& ConvexHull::computeInitialHull() {
 
         // set the twin edge
 
-        for (unsigned i = 0; i < 3; i++) {
+        for (int i = 0; i < 3; i++) {
 
             const auto j = (i + 1) % 3;
 
@@ -500,7 +500,7 @@ VertexNode* ConvexHull::nextVertexToAdd() {
     return nullptr;
 }
 
-ConvexHull& ConvexHull::computeHorizon(const Vector3& eyePoint, HalfEdge* crossEdge, Face* face, std::vector<std::shared_ptr<HalfEdge>>& horizon) {
+ConvexHull& ConvexHull::computeHorizon(const Vector3& eyePoint, std::shared_ptr<HalfEdge>& crossEdge, Face* face, std::vector<std::shared_ptr<HalfEdge>>& horizon) {
 
     // moves face's vertices to the 'unassigned' vertex list
 
@@ -513,7 +513,7 @@ ConvexHull& ConvexHull::computeHorizon(const Vector3& eyePoint, HalfEdge* crossE
     if (crossEdge == nullptr) {
 
         edge = face->getEdge(0);
-        crossEdge = face->getEdge(0).get();
+        crossEdge = edge;
 
     } else {
 
@@ -534,7 +534,7 @@ ConvexHull& ConvexHull::computeHorizon(const Vector3& eyePoint, HalfEdge* crossE
 
                 // the opposite face can see the vertex, so proceed with next edge
 
-                this->computeHorizon(eyePoint, twinEdge.get(), oppositeFace, horizon);
+                this->computeHorizon(eyePoint, twinEdge, oppositeFace, horizon);
 
             } else {
 
@@ -546,7 +546,7 @@ ConvexHull& ConvexHull::computeHorizon(const Vector3& eyePoint, HalfEdge* crossE
 
         edge = edge->next;
 
-    } while (edge.get() != crossEdge);
+    } while (edge != crossEdge);
 
     return *this;
 }
@@ -611,7 +611,8 @@ ConvexHull& ConvexHull::addVertexToHull(VertexNode* eyeVertex) {
 
     this->removeVertexFromFace(eyeVertex, eyeVertex->face);
 
-    this->computeHorizon(eyeVertex->point, nullptr, eyeVertex->face, horizon);
+    std::shared_ptr<HalfEdge> dummy;
+    this->computeHorizon(eyeVertex->point, dummy, eyeVertex->face, horizon);
 
     this->addNewFaces(eyeVertex, horizon);
 
@@ -685,25 +686,6 @@ VertexList& VertexList::insertBefore(VertexNode* target, VertexNode* vertex) {
     }
 
     target->prev = vertex;
-
-    return *this;
-}
-
-VertexList& VertexList::insertAfter(VertexNode* target, VertexNode* vertex) {
-
-    vertex->prev = target;
-    vertex->next = target->next;
-
-    if (vertex->next == nullptr) {
-
-        this->tail = vertex;
-
-    } else {
-
-        vertex->next->prev = vertex;
-    }
-
-    target->next = vertex;
 
     return *this;
 }
@@ -828,7 +810,7 @@ std::shared_ptr<Face> Face::create(VertexNode* a, VertexNode* b, VertexNode* c) 
     return face;
 }
 
-std::shared_ptr<HalfEdge> Face::getEdge(unsigned int i) {
+std::shared_ptr<HalfEdge> Face::getEdge(int i) {
 
     while (i > 0) {
 
@@ -870,10 +852,12 @@ VertexNode* HalfEdge::head() const {
 
     return this->vertex;
 }
+
 VertexNode* HalfEdge::tail() const {
 
     return this->prev ? this->prev->vertex : nullptr;
 }
+
 float HalfEdge::length() const {
 
     const auto head = this->head();
@@ -886,23 +870,9 @@ float HalfEdge::length() const {
 
     return -1;
 }
-float HalfEdge::lengthSquared() const {
 
-    const auto head = this->head();
-    const auto tail = this->tail();
-
-    if (tail != nullptr) {
-
-        return tail->point.distanceToSquared(head->point);
-    }
-
-    return -1;
-}
-
-HalfEdge& HalfEdge::setTwin(const std::shared_ptr<HalfEdge>& edge) {
+void HalfEdge::setTwin(const std::shared_ptr<HalfEdge>& edge) {
 
     this->twin = edge;
     edge->twin = shared_from_this();
-
-    return *this;
 }
