@@ -30,7 +30,6 @@ set(publicHeaders
         "threepp/cameras/OrthographicCamera.hpp"
         "threepp/cameras/CameraView.hpp"
 
-        "threepp/extras/bullet/BulletWrapper.hpp"
         "threepp/extras/ShapeUtils.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
@@ -47,6 +46,8 @@ set(publicHeaders
         "threepp/extras/curves/SplineCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve3.hpp"
+        "threepp/extras/physics/AgxPhysics.hpp"
+        "threepp/extras/physics/BulletPhysics.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
 
         "threepp/input/KeyListener.hpp"

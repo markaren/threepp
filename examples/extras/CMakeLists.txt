@@ -9,3 +9,5 @@ if (nlohmann_json_FOUND)
     add_executable(fonts core/fonts.cpp)
     target_link_libraries(fonts PUBLIC threepp)
 endif()
+
+add_subdirectory(physics/agx)
