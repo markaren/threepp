@@ -1,41 +1,55 @@
 
 #include "threepp/geometries/ConvexGeometry.hpp"
 
-#include "threepp/math/ConvexHull.hpp"
+#include "threepp/extras/quickhull.hpp"
+
+#include <array>
 
 using namespace threepp;
 
 
-ConvexGeometry::ConvexGeometry(const std::vector<Vector3>& points) {
+ConvexGeometry::ConvexGeometry(const std::vector<Vector3>& _points) {
+
+    using F = float;
+    constexpr std::size_t dim = 3;
+    using Points = std::vector<std::array<F, dim>>;
+    const auto eps = std::numeric_limits<float>::epsilon();
+
+    Points points;
+    points.reserve(_points.size());
+    for (const auto& p : _points) {
+        points.emplace_back(std::array<F, dim>{p.x, p.y, p.z});
+    }
+
+    quick_hull<typename Points::const_iterator> qh{dim, eps};
+    qh.add_points(std::cbegin(points), std::cend(points));
+
+    auto initial_simplex = qh.get_affine_basis();
+    if (initial_simplex.size() < dim + 1) {
+        throw std::runtime_error("[ConvexHull] degenerated input set");
+    }
+
+    qh.create_initial_simplex(std::cbegin(initial_simplex), std::prev(std::cend(initial_simplex)));
+    qh.create_convex_hull();
+    if (!qh.check()) {
+        throw std::runtime_error("[ConvexHull] resulted structure is not convex (generally due to precision errors)");
+    }
 
     // buffers
 
     std::vector<float> vertices;
     std::vector<float> normals;
 
-    auto convexHull = ConvexHull();
-    convexHull.setFromPoints(points);
+    for (const auto& f : qh.facets_) {
+        auto& n = f.normal_;
+        normals.emplace_back(n[0]);
+        normals.emplace_back(n[1]);
+        normals.emplace_back(n[2]);
 
-    // generate vertices and normals
-
-    const auto& faces = convexHull.faces;
-
-    for (const auto& face : faces) {
-
-        auto edge = face->edge;
-
-        // we move along a doubly-connected edge list to access all face points (see HalfEdge docs)
-
-        do {
-
-            const auto point = edge->head()->point;
-
-            vertices.insert(vertices.end(), {point.x, point.y, point.z});
-            normals.insert(normals.end(), {face->normal.x, face->normal.y, face->normal.z});
-
-            edge = edge->next;
-
-        } while (edge != face->edge);
+        auto& verts = f.vertices_;
+        for (auto& it : verts) {
+            vertices.insert(vertices.end(), it->begin(), it->end());
+        }
     }
 
     // build geometry

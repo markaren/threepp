@@ -1,5 +1,5 @@
-#include "threepp/threepp.hpp"
 #include "threepp/geometries/ConvexGeometry.hpp"
+#include "threepp/threepp.hpp"
 
 using namespace threepp;
 
@@ -15,7 +15,7 @@ namespace {
         return res;
     }
 
-}
+}// namespace
 
 int main() {
 
@@ -30,18 +30,21 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     std::vector<Vector3> pts;
-    pts.emplace_back(1,1,1);
-    pts.emplace_back(-1,-1,-1);
-    pts.emplace_back(1,-1,1);
-    pts.emplace_back(-1,1,-1);
-    pts.emplace_back(1,1,-1);
-    pts.emplace_back(-1,1,1);
+    pts.reserve(10);
+    for (auto i = 0; i < 10; i++) {
+        pts.emplace_back(math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f));
+    }
 
     auto pointsGeometry = BufferGeometry::create();
     pointsGeometry->setAttribute("position", FloatBufferAttribute::create(flatten(pts), 3));
 
-    auto convex = ConvexGeometry::create(pts);
-    scene->add(Mesh::create(convex));
+    auto convexGeometry = ConvexGeometry::create(pts);
+    auto convexMaterial = MeshBasicMaterial::create();
+    convexMaterial->color = Color::gray;
+    convexMaterial->transparent = true;
+    convexMaterial->side = FrontSide;
+    convexMaterial->opacity = 0.8f;
+    scene->add(Mesh::create(convexGeometry, convexMaterial));
 
 
     auto points = Points::create(pointsGeometry);
@@ -55,7 +58,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         renderer.render(scene, camera);
     });
 }

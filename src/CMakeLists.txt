@@ -112,7 +112,6 @@ set(publicHeaders
         "threepp/math/Box3.hpp"
         "threepp/math/Capsule.hpp"
         "threepp/math/Color.hpp"
-        "threepp/math/ConvexHull.hpp"
         "threepp/math/Cylindrical.hpp"
         "threepp/math/Euler.hpp"
         "threepp/math/float_view.hpp"
@@ -188,6 +187,7 @@ endforeach ()
 set(privateHeaders
 
         "threepp/extras/earcut.hpp"
+        "threepp/extras/quickhull.hpp"
 
         "threepp/renderers/gl/Buffer.hpp"
         "threepp/renderers/gl/GLAttributes.hpp"
@@ -285,7 +285,6 @@ set(sources
         "threepp/math/Box3.cpp"
         "threepp/math/Capsule.cpp"
         "threepp/math/Color.cpp"
-        "threepp/math/ConvexHull.cpp"
         "threepp/math/Cylindrical.cpp"
         "threepp/math/Euler.cpp"
         "threepp/math/Frustum.cpp"
