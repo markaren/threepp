@@ -233,6 +233,7 @@ set(sources
         "threepp/core/Raycaster.cpp"
 
         "threepp/extras/ShapeUtils.cpp"
+        "threepp/extras/core/Curve.cpp"
         "threepp/extras/core/Path.cpp"
         "threepp/extras/core/ShapePath.cpp"
         "threepp/extras/curves/CatmullRomCurve3.cpp"

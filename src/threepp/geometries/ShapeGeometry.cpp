@@ -96,3 +96,21 @@ ShapeGeometry::ShapeGeometry(const std::vector<Shape*>& shapes, unsigned int cur
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::shared_ptr<ShapeGeometry> ShapeGeometry::create(Shape& shape, unsigned int curveSegments) {
+
+    return std::shared_ptr<ShapeGeometry>(new ShapeGeometry({&shape}, curveSegments));
+}
+
+std::shared_ptr<ShapeGeometry> ShapeGeometry::create(const std::vector<std::shared_ptr<Shape>>& shapes, unsigned int curveSegments) {
+
+    std::vector<Shape*> ptrs(shapes.size());
+    std::transform(shapes.begin(), shapes.end(), ptrs.begin(), [&](auto& shape) { return shape.get(); });
+
+    return std::shared_ptr<ShapeGeometry>(new ShapeGeometry(ptrs, curveSegments));
+}
+
+std::shared_ptr<ShapeGeometry> ShapeGeometry::create(const std::vector<Shape*>& shapes, unsigned int curveSegments) {
+
+    return std::shared_ptr<ShapeGeometry>(new ShapeGeometry(shapes, curveSegments));
+}
