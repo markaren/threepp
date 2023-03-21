@@ -2,6 +2,8 @@
 #include "threepp/extras/core/ShapePath.hpp"
 #include "threepp/extras/ShapeUtils.hpp"
 
+#include <array>
+
 using namespace threepp;
 
 namespace {

@@ -5,6 +5,8 @@
 #include "threepp/objects/Sky.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 int main() {

@@ -1,6 +1,7 @@
 
 #include "threepp/geometries/TubeGeometry.hpp"
 
+#include <cmath>
 #include <functional>
 #include <list>
 

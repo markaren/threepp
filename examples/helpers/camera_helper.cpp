@@ -2,6 +2,8 @@
 #include "threepp/helpers/CameraHelper.hpp"
 #include <threepp/threepp.hpp>
 
+#include <cmath>
+
 using namespace threepp;
 
 int main() {

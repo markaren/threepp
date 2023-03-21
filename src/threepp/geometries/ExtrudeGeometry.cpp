@@ -4,6 +4,7 @@
 #include "threepp/extras/ShapeUtils.hpp"
 #include "threepp/extras/core/Shape.hpp"
 
+#include <cmath>
 #include <functional>
 
 using namespace threepp;
