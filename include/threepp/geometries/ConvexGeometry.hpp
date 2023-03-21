@@ -13,9 +13,15 @@ namespace threepp {
     class ConvexGeometry: public BufferGeometry {
 
     public:
+
+        [[nodiscard]] bool containsPoint(const Vector3& v, float tolerance = -1) const;
+
         static std::shared_ptr<ConvexGeometry> create(const std::vector<Vector3>& points);
 
     private:
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
+
         explicit ConvexGeometry(const std::vector<Vector3>& points);
     };
 
