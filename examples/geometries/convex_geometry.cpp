@@ -29,9 +29,10 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
+    int numPoints = 100;
     std::vector<Vector3> pts;
-    pts.reserve(10);
-    for (auto i = 0; i < 10; i++) {
+    pts.reserve(numPoints);
+    for (unsigned i = 0; i < numPoints; i++) {
         pts.emplace_back(math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f));
     }
 
@@ -45,7 +46,6 @@ int main() {
     convexMaterial->side = FrontSide;
     convexMaterial->opacity = 0.8f;
     scene->add(Mesh::create(convexGeometry, convexMaterial));
-
 
     auto points = Points::create(pointsGeometry);
     points->material()->as<PointsMaterial>()->color = Color::red;
