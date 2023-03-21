@@ -11,6 +11,9 @@ target_link_libraries(tube_geometry PUBLIC threepp)
 add_executable(shape_geometry shape_geometry.cpp)
 target_link_libraries(shape_geometry PUBLIC threepp)
 
+add_executable(convex_geometry convex_geometry.cpp)
+target_link_libraries(convex_geometry PUBLIC threepp)
+
 if (imgui_FOUND)
    add_executable(box_geometry box_geometry.cpp)
    target_link_libraries(box_geometry PUBLIC threepp imgui::imgui)
