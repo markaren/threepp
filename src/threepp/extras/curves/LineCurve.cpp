@@ -3,9 +3,6 @@
 
 using namespace threepp;
 
-template class threepp::LineCurveT<Vector2>;
-template class threepp::LineCurveT<Vector3>;
-
 template <class T>
 LineCurveT<T>::LineCurveT(const T& v1, const T& v2)
     : v1(v1), v2(v2) {}
@@ -35,3 +32,6 @@ void LineCurveT<T>::getTangent(float t, T& tangent) {
 
     tangent.copy(this->v2).sub(this->v1).normalize();
 }
+
+template class threepp::LineCurveT<Vector2>;
+template class threepp::LineCurveT<Vector3>;
