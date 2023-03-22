@@ -2,6 +2,8 @@
 #include "threepp/objects/LOD.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 int main() {

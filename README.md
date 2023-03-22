@@ -33,7 +33,7 @@ Because fun.
 
 ### How to build
 
-`threepp` is designed to be used in conjunction with `vcpkg`.
+`threepp` is easiest built in conjunction with [vcpkg](https://vcpkg.io/en/index.html).
 
 #### vcpkg (using manifest mode)
 
@@ -83,8 +83,8 @@ int main() {
     auto group = Group::create();
 
     {
-        const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
+        auto boxGeometry = BoxGeometry::create();
+        auto boxMaterial = MeshPhongMaterial::create();
         boxMaterial->color = Color::red;
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = -1;
@@ -92,8 +92,8 @@ int main() {
     }
 
     {
-        const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
+        auto boxGeometry = BoxGeometry::create();
+        auto boxMaterial = MeshPhongMaterial::create();
         boxMaterial->color = Color::green;
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = 1;
@@ -102,8 +102,8 @@ int main() {
 
     scene->add(group);
 
-    const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshLambertMaterial::create();
+    auto planeGeometry = PlaneGeometry::create(5, 5);
+    auto planeMaterial = MeshLambertMaterial::create();
     planeMaterial->color = Color::gray;
     planeMaterial->side = DoubleSide;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
@@ -129,7 +129,7 @@ int main() {
 ## Consuming threepp using a custom vcpkg-registry
 
 See [here](tests/threepp_vcpkg_test) for an example of how `threepp` may be consumed 
-as a library a separate project using vcpkg.
+as a library in a separate project using `vcpkg`.
 
 ### Screenshots
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)

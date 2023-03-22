@@ -3,6 +3,8 @@
 #include "threepp/helpers/SpotLightHelper.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 int main() {

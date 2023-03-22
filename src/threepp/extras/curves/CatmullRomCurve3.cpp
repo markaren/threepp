@@ -1,6 +1,7 @@
 
 #include "threepp/extras/curves/CatmullRomCurve3.hpp"
 
+#include <cmath>
 #include <utility>
 
 using namespace threepp;

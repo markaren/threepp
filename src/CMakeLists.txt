@@ -58,6 +58,7 @@ set(publicHeaders
         "threepp/geometries/CapsuleGeometry.hpp"
         "threepp/geometries/CircleGeometry.hpp"
         "threepp/geometries/ConeGeometry.hpp"
+        "threepp/geometries/ConvexGeometry.hpp"
         "threepp/geometries/CylinderGeometry.hpp"
         "threepp/geometries/DecalGeometry.hpp"
         "threepp/geometries/EdgesGeometry.hpp"
@@ -187,6 +188,7 @@ endforeach ()
 set(privateHeaders
 
         "threepp/extras/earcut.hpp"
+        "threepp/extras/quickhull.hpp"
 
         "threepp/renderers/gl/Buffer.hpp"
         "threepp/renderers/gl/GLAttributes.hpp"
@@ -232,6 +234,7 @@ set(sources
         "threepp/core/Raycaster.cpp"
 
         "threepp/extras/ShapeUtils.cpp"
+        "threepp/extras/core/Curve.cpp"
         "threepp/extras/core/Path.cpp"
         "threepp/extras/core/ShapePath.cpp"
         "threepp/extras/curves/CatmullRomCurve3.cpp"
@@ -247,6 +250,7 @@ set(sources
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CapsuleGeometry.cpp"
         "threepp/geometries/CircleGeometry.cpp"
+        "threepp/geometries/ConvexGeometry.cpp"
         "threepp/geometries/CylinderGeometry.cpp"
         "threepp/geometries/DecalGeometry.cpp"
         "threepp/geometries/EdgesGeometry.cpp"

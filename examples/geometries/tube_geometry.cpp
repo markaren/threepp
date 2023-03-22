@@ -1,6 +1,8 @@
 
 #include "threepp/threepp.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 namespace {

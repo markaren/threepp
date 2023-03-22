@@ -11,8 +11,6 @@
 
 #include <memory>
 
-#include <memory>
-
 namespace threepp {
 
     template<class T>
