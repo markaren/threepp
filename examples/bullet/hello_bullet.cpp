@@ -109,7 +109,7 @@ int main() {
         renderer.setSize(size);
     });
 
-    BulletWrapper bullet(Vector3::Y * -9.81f);
+    BulletWrapper bullet(Vector3::Y() * -9.81f);
 
     bullet.addRigidbody(RbWrapper::create(box->geometry(), 2), *box);
     bullet.addRigidbody(RbWrapper::create(sphere->geometry(), 2), *sphere);
