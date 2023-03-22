@@ -3,6 +3,7 @@
 
 #include "threepp/extras/ShapeUtils.hpp"
 #include "threepp/extras/core/Shape.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 #include <cmath>
 #include <functional>

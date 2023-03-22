@@ -8,8 +8,6 @@
 
 using namespace threepp;
 
-template class threepp::Curve<Vector2>;
-template class threepp::Curve<Vector3>;
 
 template<class T>
 void Curve<T>::getPointAt(float u, T& target) {
@@ -296,3 +294,6 @@ Curve3::FrenetFrames Curve3::computeFrenetFrames(unsigned int segments, bool clo
             normals,
             binormals};
 }
+
+template class threepp::Curve<Vector2>;
+template class threepp::Curve<Vector3>;
