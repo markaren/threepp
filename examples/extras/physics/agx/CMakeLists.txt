@@ -22,10 +22,10 @@ if (AGX_DIR)
     message(${AGX_LIBRARY_DIR})
 
 
-    add_executable(test_agx test.cpp)
-    target_include_directories(test_agx PUBLIC ${AGX_INCLUDE_DIRS})
-    target_link_directories(test_agx PUBLIC ${AGX_LIBRARY_DIR})
-    target_link_libraries(test_agx PUBLIC threepp ${AGX_LIBRARIES})
+    add_executable(agx_test agx_test.cpp)
+    target_include_directories(agx_test PUBLIC ${AGX_INCLUDE_DIRS})
+    target_link_directories(agx_test PUBLIC ${AGX_LIBRARY_DIR})
+    target_link_libraries(agx_test PUBLIC threepp ${AGX_LIBRARIES})
 
 else()
 

@@ -6,14 +6,15 @@
 #include <agx/RigidBody.h>
 #include <agxCollide/Geometry.h>
 #include <agxCollide/ShapePrimitives.h>
-#include <agxSDK/Simulation.h>
+#include <agxCollide/Trimesh.h>
 #include <agxIO/ReaderWriter.h>
+#include <agxSDK/Simulation.h>
 
 #include <optional>
 
-#include "threepp/objects/Mesh.hpp"
-#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/geometries/geometries.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/objects/Mesh.hpp"
 
 
 namespace threepp {
@@ -40,18 +41,38 @@ namespace threepp {
             } else if (geometry.type() == "BoxGeometry") {
 
                 auto g = dynamic_cast<BoxGeometry*>(&geometry);
-                return new agxCollide::Geometry(new agxCollide::Box(g->width/2, g->height/2, g->depth/2));
+                return new agxCollide::Geometry(new agxCollide::Box(g->width / 2, g->height / 2, g->depth / 2));
 
             } else if (geometry.type() == "PlaneGeometry") {
 
                 auto g = dynamic_cast<PlaneGeometry*>(&geometry);
-                return new agxCollide::Geometry(new agxCollide::Box(g->width/2, 0.05f, g->height/2));
+                return new agxCollide::Geometry(new agxCollide::Box(g->width / 2, 0.05f, g->height / 2));
 
             } else if (geometry.type() == "CapsuleGeometry") {
 
                 auto g = dynamic_cast<CapsuleGeometry*>(&geometry);
                 return new agxCollide::Geometry(new agxCollide::Capsule(g->radius, g->length));
 
+            } else {
+
+                if (geometry.hasIndex() && geometry.hasAttribute("position")) {
+
+                    const auto index = geometry.getIndex()->array();
+                    const auto& array = geometry.getAttribute<float>("position")->array();
+
+                    agx::Vec3Vector v;
+                    v.reserve(array.size()/3);
+                    for (unsigned i = 0, j = 0; i < array.size(); i += 3) {
+                        v.push_back({array[j++], array[j++], array[j++]});
+                    }
+                    agx::UInt32Vector indices;
+                    indices.reserve(index.size());
+                    for (auto i : index) {
+                        indices.push_back(i);
+                    }
+                    auto trimesh = new agxCollide::Trimesh(&v, &indices, geometry.name.c_str());
+                    return new agxCollide::Geometry(trimesh);
+                }
             }
 
             return nullptr;
@@ -106,13 +127,13 @@ namespace threepp {
 
     public:
         AgxPhysics() {
-            setGravity({0,-9.81,0});
+            setGravity({0, -9.81, 0});
         };
 
         explicit AgxPhysics(float timeStep) {
 
             sim->setTimeStep(timeStep);
-            setGravity({0,-9.81,0});
+            setGravity({0, -9.81, 0});
         }
 
         void setGravity(const Vector3& g) {
@@ -123,7 +144,7 @@ namespace threepp {
         void addMesh(Mesh& mesh, float mass = 0) {
 
             auto g = mesh.geometry();
-            if (!g) return ;
+            if (!g) return;
 
             auto geometry = detail::getGeometry(*g);
 
@@ -146,8 +167,8 @@ namespace threepp {
 
             auto& body = meshMap.at(&mesh);
 
-            body->setAngularVelocity({0,0,0});
-            body->setVelocity({0,0,0});
+            body->setAngularVelocity({0, 0, 0});
+            body->setVelocity({0, 0, 0});
 
             body->setPosition(toVec3(position));
         }
@@ -159,8 +180,8 @@ namespace threepp {
             auto& bodies = instancedMeshMap.at(&mesh);
             auto& body = bodies[index];
 
-            body->setAngularVelocity({0,0,0});
-            body->setVelocity({0,0,0});
+            body->setAngularVelocity({0, 0, 0});
+            body->setVelocity({0, 0, 0});
 
             body->setPosition(toVec3(position));
         }
@@ -238,7 +259,7 @@ namespace threepp {
                 std::vector<double> slice{array.begin() + index, array.begin() + index + 16};
 
                 auto rb = detail::createRigidBody(mass, geometry);
-//                rb->setPosition({slice[13], slice[14], slice[15]});
+                //                rb->setPosition({slice[13], slice[14], slice[15]});
                 rb->setLocalTransform(agx::AffineMatrix4x4().set(slice.data()));
                 sim->add(rb);
 

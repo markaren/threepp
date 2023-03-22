@@ -70,9 +70,13 @@ int main() {
     boxes->instanceMatrix->setUsage(DynamicDrawUsage);
     initPositions(*boxes);
 
+    auto obj = Mesh::create(TorusGeometry::create());
+    obj->position.y = 20;
+
     scene->add(sphere);
     scene->add(plane);
     scene->add(boxes);
+    scene->add(obj);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -84,6 +88,7 @@ int main() {
     agx.addMesh(*sphere, 1);
     agx.addMesh(*plane, 0);
     agx.addMesh(*boxes, 10);
+    agx.addMesh(*obj, 100);
 
     agx.saveScene("test");
 
