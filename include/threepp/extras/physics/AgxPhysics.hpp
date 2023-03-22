@@ -62,11 +62,19 @@ namespace threepp {
     class AgxPhysics {
 
     public:
-        AgxPhysics() = default;
+        AgxPhysics() {
+            setGravity({0,-9.81,0});
+        };
 
         explicit AgxPhysics(float timeStep) {
 
             sim->setTimeStep(timeStep);
+            setGravity({0,-9.81,0});
+        }
+
+        void setGravity(const Vector3& g) {
+
+            sim->setUniformGravity(toVec3(g));
         }
 
         void addMesh(Mesh& mesh, float mass = 0) {
@@ -90,9 +98,22 @@ namespace threepp {
         }
 
         void step(float dt) {
+
             t += dt;
             while (sim->getTimeStamp() + sim->getTimeStep() < t) {
+
                 sim->stepForward();
+
+                for (auto& [mesh, rb] : meshMap) {
+
+                    if (rb->getMassProperties()->getMass() == 0) continue;
+
+                    auto position = rb->getPosition();
+                    auto quaternion = rb->getRotation();
+
+                    mesh->position.set(position.x(), position.y(), position.z());
+                    mesh->quaternion.set(quaternion.x(), quaternion.y(), quaternion.z(), quaternion.w());
+                }
             }
         }
 
@@ -101,7 +122,7 @@ namespace threepp {
         agx::AutoInit init;
         agxSDK::SimulationRef sim = new agxSDK::Simulation();
 
-        std::unordered_map<Object3D*, agx::RigidBody*> meshMap;
+        std::unordered_map<Object3D*, agx::RigidBodyRef> meshMap;
 
 
         void handleMesh(Mesh* mesh, float mass, agxCollide::Geometry* geometry) {
@@ -109,7 +130,7 @@ namespace threepp {
             const auto& position = mesh->position;
             const auto& quaternion = mesh->quaternion;
 
-            auto rb = new agx::RigidBody();
+            agx::RigidBodyRef rb = new agx::RigidBody();
             if (mass == 0) {
                 rb->setMotionControl(agx::RigidBody::STATIC);
             } else {
@@ -118,6 +139,7 @@ namespace threepp {
             rb->setPosition(toVec3(position));
             rb->setRotation(toQuat(quaternion));
             rb->add(geometry);
+            sim->add(rb);
 
             meshMap[mesh] = rb;
 
