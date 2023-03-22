@@ -34,7 +34,7 @@ namespace threepp {
             return "SphereGeometry";
         }
 
-        static std::shared_ptr<SphereGeometry> create(const Params& params = Params()) {
+        static std::shared_ptr<SphereGeometry> create(const Params& params) {
 
             return std::shared_ptr<SphereGeometry>(new SphereGeometry(params));
         }
