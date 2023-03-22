@@ -175,7 +175,7 @@ int main() {
             n.transformDirection(*mesh->matrixWorld);
             n.multiplyScalar(10);
             n.add(i.point);
-            mouseHelper.lookAt(position.setFromMatrixPosition(mouseHelper), n, Vector3::Z);
+            mouseHelper.lookAt(position.setFromMatrixPosition(mouseHelper), n, Vector3::Z());
             orientation.setFromRotationMatrix(mouseHelper);
 
             line->position.copy(position);
@@ -183,7 +183,7 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES * math::randomInRange(0.4f, 1.f);
+                Vector3 scale = Vector3::ONES() * math::randomInRange(0.4f, 1.f);
 
                 auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();

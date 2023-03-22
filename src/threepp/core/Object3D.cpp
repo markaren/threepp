@@ -98,17 +98,17 @@ Object3D& Object3D::rotateOnWorldAxis(const Vector3& axis, float angle) {
 
 Object3D& Object3D::rotateX(float angle) {
 
-    return this->rotateOnAxis(Vector3::X, angle);
+    return this->rotateOnAxis(Vector3::X(), angle);
 }
 
 Object3D& Object3D::rotateY(float angle) {
 
-    return this->rotateOnAxis(Vector3::Y, angle);
+    return this->rotateOnAxis(Vector3::Y(), angle);
 }
 
 Object3D& Object3D::rotateZ(float angle) {
 
-    return this->rotateOnAxis(Vector3::Z, angle);
+    return this->rotateOnAxis(Vector3::Z(), angle);
 }
 
 Object3D& Object3D::translateOnAxis(const Vector3& axis, float distance) {
@@ -127,17 +127,17 @@ Object3D& Object3D::translateOnAxis(const Vector3& axis, float distance) {
 
 Object3D& Object3D::translateX(float distance) {
 
-    return this->translateOnAxis(Vector3::X, distance);
+    return this->translateOnAxis(Vector3::X(), distance);
 }
 
 Object3D& Object3D::translateY(float distance) {
 
-    return this->translateOnAxis(Vector3::Y, distance);
+    return this->translateOnAxis(Vector3::Y(), distance);
 }
 
 Object3D& Object3D::translateZ(float distance) {
 
-    return this->translateOnAxis(Vector3::Z, distance);
+    return this->translateOnAxis(Vector3::Z(), distance);
 }
 
 void Object3D::localToWorld(Vector3& vector) const {
