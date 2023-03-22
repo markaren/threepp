@@ -2,6 +2,8 @@
 #include "threepp/extras/core/Path.hpp"
 
 #include "threepp/extras/curves/CubicBezierCurve.hpp"
+#include "threepp/extras/curves/EllipseCurve.hpp"
+#include "threepp/extras/curves/LineCurve.hpp"
 #include "threepp/extras/curves/QuadraticBezierCurve.hpp"
 #include "threepp/extras/curves/SplineCurve.hpp"
 
