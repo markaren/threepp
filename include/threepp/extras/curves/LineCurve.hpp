@@ -7,20 +7,24 @@
 
 namespace threepp {
 
-    class LineCurve: public Curve2 {
+    template <class T>
+    class LineCurveT: public Curve<T> {
 
     public:
-        Vector2 v1;
-        Vector2 v2;
+        T v1;
+        T v2;
 
-        LineCurve(const Vector2& v1, const Vector2& v2);
+        LineCurveT(const T& v1, const T& v2);
 
-        void getPoint(float t, Vector2& point) override;
+        void getPoint(float t, T& point) override;
 
-        void getPointAt(float u, Vector2& target) override;
+        void getPointAt(float u, T& target) override;
 
-        void getTangent(float t, Vector2& tangent) override;
+        void getTangent(float t, T& tangent) override;
     };
+
+    typedef LineCurveT<Vector2> LineCurve;
+    typedef LineCurveT<Vector3> LineCurve3;
 
 }// namespace threepp
 

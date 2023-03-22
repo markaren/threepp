@@ -5,6 +5,8 @@
 
 #include "threepp/extras/core/Path.hpp"
 
+#include <vector>
+
 namespace threepp {
 
     struct ShapePoints {
@@ -16,32 +18,16 @@ namespace threepp {
     class Shape: public Path {
 
     public:
-        std::string uuid{math::generateUUID()};
+        std::string uuid;
 
         std::vector<std::shared_ptr<Path>> holes;
 
-        explicit Shape(const std::optional<std::vector<Vector2>>& points = {}): Path(points) {}
+        explicit Shape(const std::optional<std::vector<Vector2>>& points = {});
 
-        std::vector<std::vector<Vector2>> getPointsHoles(unsigned int divisions) {
-
-            std::vector<std::vector<Vector2>> holesPts;
-
-            for (const auto& hole : this->holes) {
-
-                auto points = hole->getPoints(divisions);
-                holesPts.emplace_back(points);
-            }
-
-            return holesPts;
-        }
+        std::vector<std::vector<Vector2>> getPointsHoles(unsigned int divisions);
 
         // get points of shape and holes (keypoints based on segments parameter)
-        ShapePoints extractPoints(unsigned int divisions) {
-
-            return ShapePoints{
-                    this->getPoints(divisions),
-                    this->getPointsHoles(divisions)};
-        }
+        ShapePoints extractPoints(unsigned int divisions);
     };
 
 }// namespace threepp
