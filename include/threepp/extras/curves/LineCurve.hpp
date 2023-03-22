@@ -26,6 +26,9 @@ namespace threepp {
     typedef LineCurveT<Vector2> LineCurve;
     typedef LineCurveT<Vector3> LineCurve3;
 
+    extern template class threepp::LineCurveT<Vector2>;
+    extern template class threepp::LineCurveT<Vector3>;
+
 }// namespace threepp
 
 #endif//THREEPP_LINECURVE_HPP

@@ -108,6 +108,9 @@ namespace threepp {
         FrenetFrames computeFrenetFrames(unsigned int segments, bool closed);
     };
 
+    extern template class threepp::Curve<Vector2>;
+    extern template class threepp::Curve<Vector3>;
+
 }// namespace threepp
 
 #endif//THREEPP_CURVE_HPP
