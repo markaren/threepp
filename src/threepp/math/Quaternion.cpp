@@ -434,3 +434,13 @@ Quaternion& Quaternion::_onChange(std::function<void()> callback) {
 
     return *this;
 }
+
+bool Quaternion::operator==(const Quaternion& other) const {
+
+    return equals(other);
+}
+
+bool Quaternion::operator!=(const Quaternion& other) const {
+
+    return !equals(other);
+}

@@ -770,3 +770,13 @@ bool Matrix4::equals(const Matrix4& matrix) const {
 
     return true;
 }
+
+bool Matrix4::operator==(const Matrix4& matrix) const {
+
+    return equals(matrix);
+}
+
+bool Matrix4::operator!=(const Matrix4& matrix) const {
+
+    return !equals(matrix);
+}

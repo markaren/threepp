@@ -270,3 +270,8 @@ bool Matrix3::equals(const Matrix3& matrix) const {
 
     return true;
 }
+
+bool Matrix3::operator==(const Matrix3& matrix) const {
+
+    return equals(matrix);
+}

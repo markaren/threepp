@@ -189,4 +189,9 @@ std::string threepp::Reflector::type() const {
     return "Reflector";
 }
 
+std::shared_ptr<Reflector> threepp::Reflector::create(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options) {
+
+    return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));
+}
+
 threepp::Reflector::~Reflector() = default;

@@ -31,17 +31,11 @@ namespace threepp {
 
         static bool isFrontFacing(const Vector3& a, const Vector3& b, const Vector3& c, const Vector3& direction);
 
-        [[nodiscard]] const Vector3& a() const {
-            return a_;
-        }
+        [[nodiscard]] const Vector3& a() const;
 
-        [[nodiscard]] const Vector3& b() const {
-            return b_;
-        }
+        [[nodiscard]] const Vector3& b() const;
 
-        [[nodiscard]] const Vector3& c() const {
-            return c_;
-        }
+        [[nodiscard]] const Vector3& c() const;
 
         Triangle& set(const Vector3& a, const Vector3& b, const Vector3& c);
 

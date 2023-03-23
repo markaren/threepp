@@ -16,6 +16,19 @@ namespace {
 
 Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c): a_(a), b_(b), c_(c) {}
 
+const Vector3& Triangle::a() const {
+
+    return a_;
+}
+const Vector3& Triangle::b() const {
+
+    return b_;
+}
+const Vector3& Triangle::c() const {
+
+    return c_;
+}
+
 void Triangle::getNormal(const Vector3& a, const Vector3& b, const Vector3& c, Vector3& target) {
 
     target.subVectors(c, b);

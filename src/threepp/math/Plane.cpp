@@ -186,4 +186,9 @@ Plane& Plane::translate(const Vector3& offset) {
 bool Plane::equals(const Plane& plane) const {
 
     return plane.normal.equals(this->normal) && (plane.constant == this->constant);
+}
+
+bool Plane::operator==(const Plane& plane) const {
+
+    return equals(plane);
 };

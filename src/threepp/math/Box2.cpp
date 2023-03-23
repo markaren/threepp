@@ -9,7 +9,16 @@ Box2::Box2()
     : min_(+Infinity<float>, +Infinity<float>),
       max_(-Infinity<float>, -Infinity<float>) {}
 
-Box2::Box2(const Vector2& min, const Vector2& max): min_(min), max_(max) {}
+Box2::Box2(const Vector2& min, const Vector2& max)
+    : min_(min), max_(max) {}
+
+const Vector2& Box2::getMin() const {
+    return min_;
+}
+
+const Vector2& Box2::getMax() const {
+    return max_;
+}
 
 Box2& Box2::set(const Vector2& min, const Vector2& max) {
 

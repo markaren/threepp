@@ -18,8 +18,6 @@ namespace threepp {
                 0.f, 1.f, 0.f,
                 0.f, 0.f, 1.f};
 
-        Matrix3() = default;
-
         float& operator[](unsigned int index);
 
         Matrix3& set(float n11, float n12, float n13, float n21, float n22, float n23, float n31, float n32, float n33);
@@ -76,9 +74,7 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Matrix3& matrix) const;
 
-        bool operator==(const Matrix3& matrix) const {
-            return equals(matrix);
-        }
+        bool operator==(const Matrix3& matrix) const;
 
         template<class ArrayLike>
         Matrix3& fromArray(ArrayLike& array, unsigned int offset = 0) {

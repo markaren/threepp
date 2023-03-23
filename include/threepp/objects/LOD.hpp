@@ -33,10 +33,7 @@ namespace threepp {
 
         void update(Camera* camera);
 
-        static std::shared_ptr<LOD> create() {
-
-            return std::shared_ptr<LOD>(new LOD());
-        }
+        static std::shared_ptr<LOD> create();
 
     protected:
         LOD() = default;
@@ -44,7 +41,6 @@ namespace threepp {
     private:
         size_t _currentLevel = 0;
         std::vector<Level> levels;
-
     };
 
 }// namespace threepp

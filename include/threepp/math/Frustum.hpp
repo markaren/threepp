@@ -35,10 +35,7 @@ namespace threepp {
 
         [[nodiscard]] bool containsPoint(const Vector3& point) const;
 
-        [[nodiscard]] const std::array<Plane, 6>& planes() const {
-
-            return planes_;
-        }
+        [[nodiscard]] const std::array<Plane, 6>& planes() const;
 
     private:
         std::array<Plane, 6> planes_;

@@ -1,6 +1,4 @@
-/*
- * https://github.com/mrdoob/three.js/blob/r129/src/math/Vector4.js
- */
+// https://github.com/mrdoob/three.js/blob/r129/src/math/Vector4.js
 
 #ifndef THREEPP_VECTOR4_HPP
 #define THREEPP_VECTOR4_HPP
@@ -76,9 +74,9 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Vector4& v) const;
 
-        bool operator==(const Vector4& other) const {
-            return equals(other);
-        }
+        bool operator==(const Vector4& other) const;
+
+        bool operator!=(const Vector4& other) const;
 
         template<class ArrayLike>
         Vector4& fromArray(const ArrayLike& array, unsigned int offset = 0) {

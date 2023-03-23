@@ -96,15 +96,9 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Matrix4& matrix) const;
 
-        bool operator==(const Matrix4& matrix) const {
+        bool operator==(const Matrix4& matrix) const;
 
-            return equals(matrix);
-        }
-
-        bool operator!=(const Matrix4& matrix) const {
-
-            return !equals(matrix);
-        }
+        bool operator!=(const Matrix4& matrix) const;
 
         template<class ArrayLike>
         Matrix4& fromArray(const ArrayLike& array, size_t offset = 0) {

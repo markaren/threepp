@@ -10,7 +10,6 @@ namespace threepp {
     class LineSegments: public Line {
 
     public:
-
         [[nodiscard]] std::string type() const override;
 
         void computeLineDistances() override;

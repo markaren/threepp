@@ -1,6 +1,4 @@
-/*
- * https://github.com/mrdoob/three.js/blob/r129/src/math/Vector3.js
- */
+// https://github.com/mrdoob/three.js/blob/r129/src/math/Vector3.js
 
 #ifndef THREEPP_VECTOR3_HPP
 #define THREEPP_VECTOR3_HPP

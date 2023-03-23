@@ -60,9 +60,7 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Plane& plane) const;
 
-        bool operator==(const Plane& plane) const {
-            return equals(plane);
-        }
+        bool operator==(const Plane& plane) const;
     };
 
 }// namespace threepp

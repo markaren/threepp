@@ -20,17 +20,11 @@ namespace threepp {
     public:
         Box3();
 
-        Box3(Vector3 min, Vector3 max);
+        Box3(const Vector3& min, const Vector3& max);
 
-        [[nodiscard]] const Vector3& min() const {
+        [[nodiscard]] const Vector3& min() const;
 
-            return min_;
-        }
-
-        [[nodiscard]] const Vector3& max() const {
-
-            return max_;
-        }
+        [[nodiscard]] const Vector3& max() const;
 
         Box3& set(const Vector3& min, const Vector3& max);
 

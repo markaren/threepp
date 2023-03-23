@@ -59,7 +59,18 @@ Box3::Box3()
     : min_(Vector3(+Infinity<float>, +Infinity<float>, +Infinity<float>)),
       max_(Vector3(-Infinity<float>, -Infinity<float>, -Infinity<float>)) {}
 
-Box3::Box3(Vector3 min, Vector3 max): min_(min), max_(max) {}
+Box3::Box3(const Vector3& min, const Vector3& max)
+    : min_(min), max_(max) {}
+
+const Vector3& Box3::min() const {
+
+    return min_;
+}
+
+const Vector3& Box3::max() const {
+
+    return max_;
+}
 
 Box3& Box3::set(const Vector3& min, const Vector3& max) {
 
