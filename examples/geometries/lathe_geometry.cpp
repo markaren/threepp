@@ -16,12 +16,10 @@ namespace {
 
     std::shared_ptr<Mesh> createLathe() {
         auto geometry = LatheGeometry::create(generateLathePoints());
-        auto material = MeshNormalMaterial::create();
-        material->side = DoubleSide;
+        auto material = MeshNormalMaterial::create({{"side", DoubleSide}});
         auto mesh = Mesh::create(geometry, material);
 
         auto line = LineSegments::create(WireframeGeometry::create(*geometry));
-        line->material()->as<LineBasicMaterial>()->alphaTest = false;
         mesh->add(line);
 
         return mesh;
@@ -34,7 +32,6 @@ namespace {
         auto mesh = Mesh::create(geometry, material);
 
         auto line = LineSegments::create(WireframeGeometry::create(*geometry));
-        line->material()->as<LineBasicMaterial>()->alphaTest = false;
         mesh->add(line);
 
         return mesh;

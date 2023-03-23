@@ -28,9 +28,7 @@ int main() {
 
     auto geometry = ShapeGeometry::create(heartShape);
     geometry->center();
-    auto material = MeshBasicMaterial::create();
-    material->color = 0x00ff00;
-    material->side = DoubleSide;
+    auto material = MeshBasicMaterial::create({{"color", 0x00ff00}, {"side", DoubleSide}});
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 

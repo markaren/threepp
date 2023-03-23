@@ -30,12 +30,12 @@ namespace {
         return decalMaterial;
     }
 
-    class MyMouseListener : public MouseListener {
+    class MyMouseListener: public MouseListener {
 
     public:
         Vector2 mouse{-Infinity<float>, -Infinity<float>};
 
-        explicit MyMouseListener(Canvas &canvas) : canvas(canvas) {}
+        explicit MyMouseListener(Canvas& canvas): canvas(canvas) {}
 
         bool mouseClick() {
             if (mouseDown) {
@@ -46,22 +46,22 @@ namespace {
             }
         }
 
-        void onMouseDown(int button, const Vector2 &pos) override {
-            if (button == 0) { // left mousebutton
+        void onMouseDown(int button, const Vector2& pos) override {
+            if (button == 0) {// left mousebutton
                 mouseDown = true;
             }
         }
 
-        void onMouseMove(const Vector2 &pos) override {
+        void onMouseMove(const Vector2& pos) override {
             updateMousePos(pos);
         }
 
     private:
-        Canvas &canvas;
+        Canvas& canvas;
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
-            auto &size = canvas.getSize();
+            auto& size = canvas.getSize();
             mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
             mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
         }
@@ -75,11 +75,11 @@ namespace {
         bool clear = false;
         bool mouseHover = false;
 
-        explicit MyGui(const Canvas &canvas) : imgui_context(canvas.window_ptr()) {}
+        explicit MyGui(const Canvas& canvas): imgui_context(canvas.window_ptr()) {}
 
         void onRender() override {
 
-            ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+            ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
             ImGui::SetNextWindowSize({100, 0}, 0);
 
             ImGui::Begin("Options");
@@ -88,7 +88,6 @@ namespace {
             mouseHover = ImGui::IsWindowHovered();
 
             ImGui::End();
-
         }
     };
 #endif
@@ -107,18 +106,19 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    TextureLoader texLoader;
+    TextureLoader tl;
     AssimpLoader loader;
     std::filesystem::path folder = "data/models/gltf/LeePerrySmith";
     auto model = loader.load(folder / "LeePerrySmith.glb");
     Mesh* mesh = nullptr;
-    model->traverseType<Mesh>([&](Mesh& _){
+    model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
-        auto mat = MeshPhongMaterial::create();
-        mat->map = texLoader.load(folder / "Map-COL.jpg", false);
-        mat->specularMap = texLoader.load(folder / "Map-SPEC.jpg", false);
-        mat->normalMap = texLoader.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
-        mat->shininess = 25;
+        auto mat = MeshPhongMaterial::create({{
+                {"map", tl.load(folder / "Map-COL.jpg", false)},
+                {"specularMap", tl.load(folder / "Map-SPEC.jpg", false)},
+                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false)},
+                {"shininess", 25.f},
+        }});
         mesh->setMaterial(mat);
     });
     scene->add(model);
@@ -168,7 +168,7 @@ int main() {
 
         if (!intersects.empty()) {
 
-            auto &i = intersects.front();
+            auto& i = intersects.front();
             Vector3 n = i.face->normal;
 
             mouseHelper.setPosition(i.point);
@@ -209,6 +209,5 @@ int main() {
         ui.render();
 
 #endif
-
     });
 }

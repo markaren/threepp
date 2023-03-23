@@ -282,6 +282,16 @@ set(sources
         "threepp/loaders/STLLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
 
+        "threepp/materials/LineBasicMaterial.cpp"
+        "threepp/materials/Material.cpp"
+        "threepp/materials/MeshBasicMaterial.cpp"
+        "threepp/materials/MeshLambertMaterial.cpp"
+        "threepp/materials/MeshNormalMaterial.cpp"
+        "threepp/materials/MeshPhongMaterial.cpp"
+        "threepp/materials/MeshStandardMaterial.cpp"
+        "threepp/materials/PointsMaterial.cpp"
+        "threepp/materials/SpriteMaterial.cpp"
+
         "threepp/math/Box2.cpp"
         "threepp/math/Box3.cpp"
         "threepp/math/Capsule.cpp"

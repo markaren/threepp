@@ -21,8 +21,7 @@ int main() {
 
     {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color.setHex(0xff0000);
+        const auto boxMaterial = MeshPhongMaterial::create({{"color", 0xff0000}});
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = -1;
         group->add(box);
@@ -30,8 +29,7 @@ int main() {
 
     {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color.setHex(0x00ff00);
+        const auto boxMaterial = MeshPhongMaterial::create({{"color", 0x00ff00}});
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = 1;
         group->add(box);
@@ -40,9 +38,7 @@ int main() {
     scene->add(group);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshPhongMaterial::create();
-    planeMaterial->color.setHex(Color::gray);
-    planeMaterial->side = DoubleSide;
+    const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", DoubleSide}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.y = -1;
     plane->rotateX(math::degToRad(90));

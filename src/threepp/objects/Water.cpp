@@ -4,6 +4,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Shader.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/UniformsLib.hpp"

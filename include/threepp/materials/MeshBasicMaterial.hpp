@@ -27,53 +27,16 @@ namespace threepp {
           public MaterialWithCombine {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "MeshBasicMaterial";
-        }
+        std::shared_ptr<Material> clone() const override;
 
-        std::shared_ptr<Material> clone() const override {
-            auto m = create();
-            copyInto(m.get());
-
-            m->color.copy(color);
-
-            m->map = map;
-
-            m->lightMap = lightMap;
-            m->lightMapIntensity = lightMapIntensity;
-
-            m->aoMap = aoMap;
-            m->aoMapIntensity = aoMapIntensity;
-
-            m->specularMap = specularMap;
-
-            m->alphaMap = alphaMap;
-
-            m->envMap = envMap;
-            m->combine = combine;
-            m->reflectivity = reflectivity;
-            m->refractionRatio = refractionRatio;
-
-            m->wireframe = wireframe;
-            m->wireframeLinewidth = wireframeLinewidth;
-
-            return m;
-        }
-
-        static std::shared_ptr<MeshBasicMaterial> create() {
-
-            return std::shared_ptr<MeshBasicMaterial>(new MeshBasicMaterial());
-        }
+        static std::shared_ptr<MeshBasicMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
     protected:
-        MeshBasicMaterial()
-            : MaterialWithColor(0xffffff),
-              MaterialWithAoMap(1),
-              MaterialWithLightMap(1),
-              MaterialWithCombine(MultiplyOperation),
-              MaterialWithReflectivity(1, 0.98f),
-              MaterialWithWireframe(false, 1) {}
+        MeshBasicMaterial();
+
+        bool setValue(const std::string& key, const MaterialValue& value) override;
     };
 
 }// namespace threepp

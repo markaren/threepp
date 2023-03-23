@@ -3,6 +3,7 @@
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Reflector.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"

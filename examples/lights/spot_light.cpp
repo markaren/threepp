@@ -48,9 +48,7 @@ int main() {
     scene->add(mesh);
 
     const auto planeGeometry = PlaneGeometry::create(150, 150);
-    const auto planeMaterial = MeshPhongMaterial::create();
-    planeMaterial->color.setHex(Color::gray);
-    planeMaterial->side = DoubleSide;
+    const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", DoubleSide}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setY(-1);
     plane->rotateX(math::degToRad(-90));

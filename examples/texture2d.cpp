@@ -16,11 +16,10 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    TextureLoader loader{};
+    TextureLoader loader;
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
-    const auto sphereMaterial = MeshBasicMaterial::create();
-    sphereMaterial->map = loader.load("data/textures/checker.png");
+    const auto sphereMaterial = MeshBasicMaterial::create({{"map", loader.load("data/textures/checker.png")}});
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(1);
     scene->add(sphere);
@@ -37,9 +36,8 @@ int main() {
     scene->add(box);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->side = DoubleSide;
-    planeMaterial->map = loader.load("data/textures/brick_bump.jpg");
+    const auto planeMaterial = MeshBasicMaterial::create({{"side", DoubleSide},
+                                                          {"map", loader.load("data/textures/brick_bump.jpg")}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
     scene->add(plane);

@@ -24,8 +24,7 @@ namespace {
     std::shared_ptr<Mesh> createMesh(const CylinderGeometry::Params& params) {
 
         auto geometry = CylinderGeometry::create(params);
-        auto material = MeshBasicMaterial::create();
-        material->side = DoubleSide;
+        auto material = MeshBasicMaterial::create({{"side", DoubleSide}});
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
