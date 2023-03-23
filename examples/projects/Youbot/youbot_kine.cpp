@@ -119,15 +119,15 @@ int main() {
     auto ikSolver = CCDSolver(1, 0.001f, 0.00001f);
     auto kine = KineBuilder()
                         .addLink(Vector3(1.67, 1.3, 0))
-                        .addRevoluteJoint(Vector3::Y * -1, {-180.f, 180.f})
+                        .addRevoluteJoint(Vector3::Y() * -1, {-180.f, 180.f})
                         .addLink(Vector3(0.33, 1.15, 0))
-                        .addRevoluteJoint(Vector3::Z * -1, {-90.f, 90.f})
+                        .addRevoluteJoint(Vector3::Z() * -1, {-90.f, 90.f})
                         .addLink(Vector3(0, 1.6, 0))
-                        .addRevoluteJoint(Vector3::Z * -1, {-90.f, 90.f})
+                        .addRevoluteJoint(Vector3::Z() * -1, {-90.f, 90.f})
                         .addLink(Vector3(0, 1.3, 0))
-                        .addRevoluteJoint(Vector3::Z * -1, {-90.f, 90.f})
+                        .addRevoluteJoint(Vector3::Z() * -1, {-90.f, 90.f})
                         .addLink(Vector3(0, 0.85, 0))
-                        .addRevoluteJoint(Vector3::Y * -1, {-180.f, 180.f})
+                        .addRevoluteJoint(Vector3::Y() * -1, {-180.f, 180.f})
                         .addLink(Vector3(0, 1.225, 0))
                         .build();
 
