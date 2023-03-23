@@ -72,13 +72,34 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
         wireframe = std::get<bool>(value);
         return true;
 
+    } else if (key == "wireframeLinewidth") {
+
+        wireframeLinewidth = std::get<float>(value);
+        return true;
+
     } else if (key == "map") {
 
         map = std::get<std::shared_ptr<Texture>>(value);
         return true;
+
     } else if (key == "alphaMap") {
 
         alphaMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "specularMap") {
+
+        specularMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "aoMap") {
+
+        aoMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "lightMap") {
+
+        lightMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
     }
 

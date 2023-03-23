@@ -63,6 +63,7 @@ bool PointsMaterial::setValue(const std::string& key, const MaterialValue& value
 
         map = std::get<std::shared_ptr<Texture>>(value);
         return true;
+
     } else if (key == "alphaMap") {
 
         alphaMap = std::get<std::shared_ptr<Texture>>(value);

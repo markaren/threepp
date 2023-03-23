@@ -15,13 +15,11 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto material = MeshBasicMaterial::create();
-    material->wireframe = true;
-
     auto lod = LOD::create();
     scene->add(lod);
 
     float radius = 0.5;
+    auto material = MeshBasicMaterial::create({{"wireframe", true}});
     for (int z = 0; z <= 5; z++) {
         int detail = 6-z;
         auto obj = Mesh::create(IcosahedronGeometry::create(radius, detail), material);

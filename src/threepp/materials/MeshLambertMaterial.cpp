@@ -72,14 +72,59 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
         return true;
 
+    } else if (key == "emissive") {
+
+        if (std::holds_alternative<int>(value)) {
+            emissive = std::get<int>(value);
+        } else {
+            emissive.copy(std::get<Color>(value));
+        }
+
+        return true;
+
     } else if (key == "map") {
 
         map = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
+    } else if (key == "aoMap") {
+
+        aoMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "aoMapIntensity") {
+
+        aoMapIntensity = std::get<float>(value);
+        return true;
+
     } else if (key == "alphaMap") {
 
         alphaMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "specularMap") {
+
+        specularMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "lightMap") {
+
+        lightMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "lightMapIntensity") {
+
+        lightMapIntensity = std::get<float>(value);
+        return true;
+
+    } else if (key == "wireframe") {
+
+        wireframe = std::get<bool>(value);
+        return true;
+
+    } else if (key == "wireframeLinewidth") {
+
+        wireframeLinewidth = std::get<float>(value);
         return true;
     }
 

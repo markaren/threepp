@@ -97,6 +97,11 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
         wireframe = std::get<bool>(value);
         return true;
 
+    } else if (key == "wireframeLinewidth") {
+
+        wireframeLinewidth = std::get<float>(value);
+        return true;
+
     } else if (key == "flatShading") {
 
         flatShading = std::get<bool>(value);
@@ -120,6 +125,31 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
     } else if (key == "alphaMap") {
 
         alphaMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "specularMap") {
+
+        specularMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "displacementMap") {
+
+        displacementMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "displacementBias") {
+
+        displacementBias = std::get<float>(value);
+        return true;
+
+    } else if (key == "displacementScale") {
+
+        displacementScale = std::get<float>(value);
+        return true;
+
+    } else if (key == "shininess") {
+
+        shininess = std::get<float>(value);
         return true;
     }
 
