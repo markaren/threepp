@@ -112,14 +112,44 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
         map = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
+    } else if (key == "aoMap") {
+
+        aoMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "aoMapIntensity") {
+
+        aoMapIntensity = std::get<float>(value);
+        return true;
+
     } else if (key == "bumpMap") {
 
         bumpMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
+    } else if (key == "bumpScale") {
+
+        bumpScale = std::get<float>(value);
+        return true;
+
+    } else if (key == "lightMap") {
+
+        lightMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "lightMapIntensity") {
+
+        lightMapIntensity = std::get<float>(value);
+        return true;
+
     } else if (key == "normalMap") {
 
         normalMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "normalMapType") {
+
+        normalMapType = std::get<int>(value);
         return true;
 
     } else if (key == "alphaMap") {
@@ -150,6 +180,26 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
     } else if (key == "shininess") {
 
         shininess = std::get<float>(value);
+        return true;
+
+    } else if (key == "envMap") {
+
+        envMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "combine") {
+
+        combine = std::get<int>(value);
+        return true;
+
+    } else if (key == "reflectivity") {
+
+        reflectivity = std::get<float>(value);
+        return true;
+
+    } else if (key == "refractionRatio") {
+
+        refractionRatio = std::get<float>(value);
         return true;
     }
 

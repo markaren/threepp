@@ -288,6 +288,7 @@ set(sources
         "threepp/materials/MeshLambertMaterial.cpp"
         "threepp/materials/MeshNormalMaterial.cpp"
         "threepp/materials/MeshPhongMaterial.cpp"
+        "threepp/materials/MeshStandardMaterial.cpp"
         "threepp/materials/PointsMaterial.cpp"
         "threepp/materials/SpriteMaterial.cpp"
 

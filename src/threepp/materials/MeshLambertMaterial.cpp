@@ -126,6 +126,26 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
         wireframeLinewidth = std::get<float>(value);
         return true;
+
+    } else if (key == "envMap") {
+
+        envMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "combine") {
+
+        combine = std::get<int>(value);
+        return true;
+
+    } else if (key == "reflectivity") {
+
+        reflectivity = std::get<float>(value);
+        return true;
+
+    } else if (key == "refractionRatio") {
+
+        refractionRatio = std::get<float>(value);
+        return true;
     }
 
     return false;

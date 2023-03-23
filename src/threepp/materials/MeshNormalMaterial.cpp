@@ -70,6 +70,11 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
         normalMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
+    } else if (key == "normalMapType") {
+
+        normalMapType = std::get<int>(value);
+        return true;
+
     } else if (key == "displacementMap") {
 
         displacementMap = std::get<std::shared_ptr<Texture>>(value);
