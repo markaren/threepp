@@ -188,6 +188,8 @@ set(privateHeaders
         "threepp/extras/earcut.hpp"
         "threepp/extras/quickhull.hpp"
 
+        "threepp/materials/MeshDistanceMaterial.hpp"
+
         "threepp/renderers/gl/Buffer.hpp"
         "threepp/renderers/gl/GLAttributes.hpp"
         "threepp/renderers/gl/GLBackground.hpp"

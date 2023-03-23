@@ -23,6 +23,7 @@ namespace threepp {
         }
 
         std::shared_ptr<Material> clone() const override {
+
             auto m = create();
             copyInto(m.get());
 
