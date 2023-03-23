@@ -81,7 +81,7 @@ namespace threepp {
             return os;
         }
 
-        enum ColorName : std::uint32_t {
+        enum ColorName : int {
             aliceblue = 0xF0F8FF,
             antiquewhite = 0xFAEBD7,
             aqua = 0x00FFFF,

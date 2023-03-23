@@ -21,7 +21,7 @@ int main() {
     sphereMesh->position.z = -8;
     scene->add(sphereMesh);
 
-    auto sphereMaterialWireframe = MeshBasicMaterial::create();
+    auto sphereMaterialWireframe = MeshBasicMaterial::create({{"color", Color::black}, {"wireframe", true}});
     sphereMaterialWireframe->wireframe = true;
     sphereMaterialWireframe->color = Color::black;
     auto sphereMeshWireframe = Mesh::create(sphereGeometry, sphereMaterialWireframe);
