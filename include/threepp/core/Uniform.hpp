@@ -4,7 +4,7 @@
 #define THREEPP_UNIFORM_HPP
 
 #include <optional>
-#include <utility>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -27,30 +27,20 @@ namespace threepp {
     public:
         std::optional<bool> needsUpdate;
 
-        explicit Uniform(std::optional<UniformValue> value = std::nullopt, std::optional<bool> needsUpdate = std::nullopt)
-            : value_(std::move(value)), needsUpdate(needsUpdate) {}
+        explicit Uniform(std::optional<UniformValue> value = std::nullopt, std::optional<bool> needsUpdate = std::nullopt);
 
-        [[nodiscard]] bool hasValue() const {
-            return value_.has_value();
-        }
+        [[nodiscard]] bool hasValue() const;
 
-        UniformValue& value() {
-            return *value_;
-        }
+        UniformValue& value();
 
         template<class T>
         [[nodiscard]] T& value() {
+
             if (!value_.has_value()) value_ = T();
             return std::get<T>(*value_);
         }
 
-        void setValue(UniformValue value) {
-            this->value_ = std::move(value);
-        }
-
-        void setValue(std::reference_wrapper<UniformValue> value) {
-            this->value_ = value.get();
-        }
+        void setValue(UniformValue value);
 
     private:
         std::optional<UniformValue> value_;

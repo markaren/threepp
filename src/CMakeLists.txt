@@ -232,6 +232,7 @@ set(sources
         "threepp/core/Layers.cpp"
         "threepp/core/Object3D.cpp"
         "threepp/core/Raycaster.cpp"
+        "threepp/core/Uniform.cpp"
 
         "threepp/extras/ShapeUtils.cpp"
         "threepp/extras/core/Curve.cpp"
