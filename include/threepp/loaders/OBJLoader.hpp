@@ -3,25 +3,32 @@
 #define THREEPP_OBJLOADER_HPP
 
 #include <filesystem>
-#include <unordered_map>
+#include <memory>
 
-#include "threepp/loaders/MTLLoader.hpp"
 #include "threepp/objects/Group.hpp"
 
 namespace threepp {
+
+    class MaterialCreator;
 
     class OBJLoader {
 
     public:
         bool useCache = true;
-        std::optional<MaterialCreator> materials;
+
+        OBJLoader();
 
         std::shared_ptr<Group> load(const std::filesystem::path& path, bool tryLoadMtl = true);
 
+        OBJLoader& setMaterials(const std::shared_ptr<MaterialCreator>& materials);
+
         void clearCache();
 
+        ~OBJLoader();
+
     private:
-        std::unordered_map<std::string, std::weak_ptr<Group>> cache_;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
     };
 
 }// namespace threepp

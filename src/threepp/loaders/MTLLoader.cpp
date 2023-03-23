@@ -91,7 +91,7 @@ namespace {
 
 }// namespace
 
-MaterialCreator MTLLoader::load(const std::filesystem::path& path) {
+std::shared_ptr<MaterialCreator> MTLLoader::load(const std::filesystem::path& path) {
 
     std::ifstream in(path);
 
@@ -134,8 +134,9 @@ MaterialCreator MTLLoader::load(const std::filesystem::path& path) {
         }
     }
 
-    MaterialCreator materialCreator(resourcePath_ ? *resourcePath_ : path.parent_path(), materialOptions);
-    materialCreator.setMaterials(materialsInfo);
+    auto materialCreator = std::make_shared<MaterialCreator> (resourcePath_ ? *resourcePath_ : path.parent_path(), materialOptions);
+    materialCreator->setMaterials(materialsInfo);
+
     return materialCreator;
 }
 
