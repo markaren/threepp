@@ -19,7 +19,6 @@ namespace threepp {
                               public MaterialWithDefines {
 
     public:
-
         [[nodiscard]] std::string type() const override {
 
             return "MeshMatcapMaterial";

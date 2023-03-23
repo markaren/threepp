@@ -67,8 +67,7 @@ int main() {
         }
     }
 
-    auto points = Points::create(pointsGeometry);
-    points->material()->as<PointsMaterial>()->vertexColors = true;
+    auto points = Points::create(pointsGeometry, PointsMaterial::create({{"vertexColors", true}}));
     convex->add(points);
 
     auto lineMaterial = LineBasicMaterial::create();

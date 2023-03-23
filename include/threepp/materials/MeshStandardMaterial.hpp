@@ -88,9 +88,12 @@ namespace threepp {
             return m;
         }
 
-        static std::shared_ptr<MeshStandardMaterial> create() {
+        static std::shared_ptr<MeshStandardMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {}) {
 
-            return std::shared_ptr<MeshStandardMaterial>(new MeshStandardMaterial());
+            auto m = std::shared_ptr<MeshStandardMaterial>(new MeshStandardMaterial());
+            m->setValues(values);
+
+            return m;
         }
 
     protected:
@@ -111,6 +114,32 @@ namespace threepp {
               MaterialWithFlatShading(false) {
 
             defines["STANDARD"] = "";
+        }
+
+        bool setValue(const std::string& key, const MaterialValue& value) override {
+
+            if (key == "color") {
+
+                if (std::holds_alternative<int>(value)) {
+                    color = std::get<int>(value);
+                } else {
+                    color.copy(std::get<Color>(value));
+                }
+
+                return true;
+
+            } else if (key == "wireframe") {
+
+                wireframe = std::get<bool>(value);
+                return true;
+
+            } else if (key == "flatShading") {
+
+                flatShading = std::get<bool>(value);
+                return true;
+            }
+
+            return false;
         }
     };
 

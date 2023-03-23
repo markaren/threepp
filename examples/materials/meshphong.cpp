@@ -14,14 +14,14 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = AmbientLight::create(Color(0xffffff).multiplyScalar(0.5f));
+    auto light = HemisphereLight::create();
     scene->add(light);
 
     auto group = Group::create();
 
     {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
+        const auto boxMaterial = MeshPhongMaterial::create({{"color", Color::red}});
         boxMaterial->color.setHex(0xff0000);
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = -1;
@@ -30,14 +30,18 @@ int main() {
 
     {
         const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color.setHex(0x00ff00);
+        const auto boxMaterial = MeshPhongMaterial::create({{"color", Color::green}});
         auto box = Mesh::create(boxGeometry, boxMaterial);
         box->position.x = 1;
         group->add(box);
     }
 
     scene->add(group);
+
+    auto group2 = group->clone(true);
+    group2->position.z = -2;
+    group2->rotateY(math::degToRad(180));
+    group->add(group2);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();

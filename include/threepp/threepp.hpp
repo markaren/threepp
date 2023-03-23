@@ -15,6 +15,8 @@
 
 #include "threepp/materials/materials.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include "threepp/helpers/helpers.hpp"
 
 #include "threepp/core/Object3D.hpp"
