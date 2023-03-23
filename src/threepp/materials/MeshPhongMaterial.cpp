@@ -100,7 +100,26 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
     } else if (key == "flatShading") {
 
         flatShading = std::get<bool>(value);
+        return true;
 
+    } else if (key == "map") {
+
+        map = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "bumpMap") {
+
+        bumpMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "normalMap") {
+
+        normalMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "alphaMap") {
+
+        alphaMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
     }
 

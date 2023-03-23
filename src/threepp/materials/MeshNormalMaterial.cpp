@@ -60,6 +60,10 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
         flatShading = std::get<bool>(value);
 
         return true;
+    } else if (key == "normalMap") {
+
+        normalMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
     }
 
     return false;

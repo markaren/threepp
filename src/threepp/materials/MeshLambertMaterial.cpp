@@ -71,6 +71,16 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
         }
 
         return true;
+
+    } else if (key == "map") {
+
+        map = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
+    } else if (key == "alphaMap") {
+
+        alphaMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
     }
 
     return false;

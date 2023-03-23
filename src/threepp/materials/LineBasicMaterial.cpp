@@ -44,6 +44,10 @@ bool LineBasicMaterial::setValue(const std::string& key, const MaterialValue& va
         }
 
         return true;
+    } else if (key == "linewidth") {
+
+        linewidth = std::get<float>(value);
+        return true;
     }
 
     return false;

@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Color, std::string> MaterialValue;
+    typedef std::variant<bool, int, float, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
