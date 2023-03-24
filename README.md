@@ -132,6 +132,7 @@ See [here](tests/threepp_vcpkg_test) for an example of how `threepp` may be cons
 as a library in a separate project using `vcpkg`.
 
 ### Screenshots
+![Fonts](doc/screenshots/fonts.png)
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
 ![Shadows](doc/screenshots/Shadows.PNG)
 ![Crane](doc/screenshots/crane.png)
