@@ -1,8 +1,10 @@
+#include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
 
 auto createHeartShape() {
+
     float x = 0, y = 0;
 
     auto heartShape = Shape();
@@ -18,6 +20,7 @@ auto createHeartShape() {
 }
 
 auto createFish() {
+
     float x = 0, y = 0;
 
     auto fishShape = Shape();
@@ -43,7 +46,7 @@ auto createSmiley() {
 
     auto smileyEye2Path = std::make_shared<Path>();
     smileyEye2Path->moveTo(65, 20)
-            .absarc( 55, 20, 10, 0, math::PI * 2, true );
+            .absarc(55, 20, 10, 0, math::PI * 2, true);
 
     auto smileyMouthPath = std::make_shared<Path>();
     smileyMouthPath->moveTo(20, 40)
@@ -59,14 +62,27 @@ auto createSmiley() {
     return smileyShape;
 }
 
-std::shared_ptr<Mesh> createMesh(Shape shape) {
-    auto geometry = ShapeGeometry::create(shape);
-    geometry->center();
+std::shared_ptr<Mesh> createMesh(Shape shape, float scale = 1) {
+    auto shapeGeometry = ShapeGeometry::create(shape);
+    shapeGeometry->center();
+    shapeGeometry->scale(scale, scale, scale);
     auto material = MeshBasicMaterial::create({{"color", 0x00ff00}, {"side", DoubleSide}});
-    auto mesh = Mesh::create(geometry, material);
-    mesh->add(LineSegments::create(WireframeGeometry::create(*geometry)));
 
-    return mesh;
+    auto shapeMesh = Mesh::create(shapeGeometry, material);
+    shapeMesh->add(LineSegments::create(WireframeGeometry::create(*shapeGeometry)));
+
+    ExtrudeGeometry::Options opts;
+    opts.depth = 3;
+    auto extrudeGeometry = ExtrudeGeometry::create(shape, opts);
+    extrudeGeometry->center();
+    extrudeGeometry->scale(scale, scale, scale);
+    auto extrudeMesh = Mesh::create(extrudeGeometry, material);
+    extrudeMesh->add(LineSegments::create(WireframeGeometry::create(*extrudeMesh->geometry())));
+    extrudeMesh->position.z = 10;
+
+    shapeMesh->add(extrudeMesh);
+
+    return shapeMesh;
 }
 
 int main() {
@@ -77,19 +93,19 @@ int main() {
     auto scene = Scene::create();
     scene->background = Color::blue;
     auto camera = PerspectiveCamera::create(65, canvas.getAspect(), 0.1f, 1000);
-    camera->position.set(0, 5, -40);
+    camera->position.set(0, 5, 40);
 
     OrbitControls controls{camera, canvas};
 
     auto group = Group::create();
+    group->rotateX(-math::PI);
+    group->position.y = 5;
 
     auto heart = createMesh(createHeartShape());
     heart->position.x = 15;
-    auto fish = createMesh(createFish());
-    fish->scale *= 0.2f;
+    auto fish = createMesh(createFish(), 0.2f);
     fish->position.x = -15;
-    auto smiley = createMesh(createSmiley());
-    smiley->scale *= 0.2f;
+    auto smiley = createMesh(createSmiley(), 0.2f);
     smiley->position.y = 15;
 
     group->add(heart);
@@ -106,7 +122,6 @@ int main() {
 
     canvas.animate([&](float dt) {
         group->rotation.y += 0.8f * dt;
-        group->rotation.x += 0.5f * dt;
 
         renderer.render(scene, camera);
     });
