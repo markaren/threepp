@@ -18,7 +18,7 @@ namespace threepp {
                 float aStartAngle = 0, float aEndAngle = math::TWO_PI,
                 bool aClockwise = false, float aRotation = 0);
 
-        void getPoint(float t, Vector2& target) override;
+        void getPoint(float t, Vector2& target) const override;
 
     private:
         float aX;

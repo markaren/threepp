@@ -44,52 +44,52 @@ namespace threepp {
     class Curve {
 
     public:
-        bool needsUpdate{false};
+
         int arcLengthDivisions{200};
 
         // Virtual base class method to overwrite and implement in subclasses
         //	- t [0 .. 1]
-        virtual void getPoint(float t, T& target) = 0;
+        virtual void getPoint(float t, T& target) const = 0;
 
-        virtual void getPointAt(float u, T& target);
+        virtual void getPointAt(float u, T& target) const;
 
         // Get sequence of points using getPoint( t )
 
-        virtual std::vector<T> getPoints(unsigned int divisions = 5);
+        virtual std::vector<T> getPoints(unsigned int divisions = 5) const;
 
         // Get sequence of points using getPointAt( u )
 
-        virtual std::vector<T> getSpacedPoints(unsigned int divisions = 5);
+        virtual std::vector<T> getSpacedPoints(unsigned int divisions = 5) const;
 
         // Get total curve arc length
-        virtual float getLength();
+        virtual float getLength() const;
 
         // Get list of cumulative segment lengths
 
-        std::vector<float> getLengths();
+        std::vector<float> getLengths() const;
 
-        std::vector<float> getLengths(int divisions);
+        std::vector<float> getLengths(int divisions) const;
 
         virtual void updateArcLengths();
 
         // Given u ( 0 .. 1 ), get a t to find p. This gives you points which are equidistant
 
-        float getUtoTmapping(float u, std::optional<float> distance = std::nullopt);
+        float getUtoTmapping(float u, std::optional<float> distance = std::nullopt) const;
 
         // Returns a unit vector tangent at t
         // In case any sub curve does not implement its tangent derivation,
         // 2 points a small delta apart will be used to find its gradient
         // which seems to give a reasonable approximation
 
-        virtual void getTangent(float t, T& tangent);
+        virtual void getTangent(float t, T& tangent) const;
 
-        void getTangentAt(float u, T& optionalTarget);
+        void getTangentAt(float u, T& optionalTarget) const;
 
         virtual ~Curve() = default;
 
-
     protected:
-        std::vector<float> cacheArcLengths;
+        mutable bool needsUpdate{false};
+        mutable std::vector<float> cacheArcLengths;
     };
 
 

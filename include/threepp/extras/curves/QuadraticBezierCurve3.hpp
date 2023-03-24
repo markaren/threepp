@@ -16,7 +16,7 @@ namespace threepp {
 
         explicit QuadraticBezierCurve(const Vector3& v0 = {}, const Vector3& v1 = {}, const Vector3& v2 = {});
 
-        void getPoint(float t, Vector3& point) override;
+        void getPoint(float t, Vector3& point) const override;
     };
 
 }// namespace threepp

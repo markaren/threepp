@@ -32,7 +32,7 @@ void CurvePath<T>::closePath() {
 }
 
 template<class T>
-void CurvePath<T>::getPoint(float t, T& target) {
+void CurvePath<T>::getPoint(float t, T& target) const {
 
     auto d = t * this->getLength();
     auto curveLengths = this->getCurveLengths();
@@ -62,7 +62,7 @@ void CurvePath<T>::getPoint(float t, T& target) {
 }
 
 template<class T>
-float CurvePath<T>::getLength() {
+float CurvePath<T>::getLength() const {
 
     auto lens = this->getCurveLengths();
     return lens.back();
@@ -77,7 +77,7 @@ void CurvePath<T>::updateArcLengths() {
 }
 
 template<class T>
-std::vector<float> CurvePath<T>::getCurveLengths() {
+std::vector<float> CurvePath<T>::getCurveLengths() const {
 
     // We use cache values if curves and cache array are same length
 
@@ -89,13 +89,13 @@ std::vector<float> CurvePath<T>::getCurveLengths() {
     // Get length of sub-curve
     // Push sums into cached array
 
-    std::vector<float> lengths;
+    std::vector<float> lengths(curves.size());
     float sums = 0;
 
     for (unsigned i = 0, l = this->curves.size(); i < l; i++) {
 
         sums += this->curves[i]->getLength();
-        lengths.emplace_back(sums);
+        lengths[i] = sums;
     }
 
     this->cacheLengths = lengths;
@@ -104,9 +104,10 @@ std::vector<float> CurvePath<T>::getCurveLengths() {
 }
 
 template<class T>
-std::vector<T> CurvePath<T>::getSpacedPoints(unsigned int divisions) {
+std::vector<T> CurvePath<T>::getSpacedPoints(unsigned int divisions) const {
 
     std::vector<T> points;
+    points.reserve(divisions+1);
 
     for (unsigned i = 0; i <= divisions; i++) {
 
@@ -123,7 +124,7 @@ std::vector<T> CurvePath<T>::getSpacedPoints(unsigned int divisions) {
 }
 
 template<class T>
-std::vector<T> CurvePath<T>::getPoints(unsigned int divisions) {
+std::vector<T> CurvePath<T>::getPoints(unsigned int divisions) const {
 
     std::vector<T> points;
     T last;

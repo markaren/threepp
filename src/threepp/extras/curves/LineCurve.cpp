@@ -8,7 +8,7 @@ LineCurveT<T>::LineCurveT(const T& v1, const T& v2)
     : v1(v1), v2(v2) {}
 
 template <class T>
-void LineCurveT<T>::getPoint(float t, T& point) {
+void LineCurveT<T>::getPoint(float t, T& point) const {
 
     if (t == 1) {
 
@@ -22,13 +22,13 @@ void LineCurveT<T>::getPoint(float t, T& point) {
 }
 
 template <class T>
-void LineCurveT<T>::getPointAt(float u, T& target) {
+void LineCurveT<T>::getPointAt(float u, T& target) const {
 
     getPoint(u, target);
 }
 
 template <class T>
-void LineCurveT<T>::getTangent(float t, T& tangent) {
+void LineCurveT<T>::getTangent(float t, T& tangent) const {
 
     tangent.copy(this->v2).sub(this->v1).normalize();
 }

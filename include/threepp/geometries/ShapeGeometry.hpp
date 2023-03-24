@@ -11,14 +11,14 @@ namespace threepp {
     class ShapeGeometry: public BufferGeometry {
 
     public:
-        static std::shared_ptr<ShapeGeometry> create(Shape& shape, unsigned int curveSegments = 12);
+        static std::shared_ptr<ShapeGeometry> create(const Shape& shape, unsigned int curveSegments = 12);
 
         static std::shared_ptr<ShapeGeometry> create(const std::vector<std::shared_ptr<Shape>>& shapes, unsigned int curveSegments = 12);
 
-        static std::shared_ptr<ShapeGeometry> create(const std::vector<Shape*>& shapes, unsigned int curveSegments = 12);
+        static std::shared_ptr<ShapeGeometry> create(const std::vector<const Shape*>& shapes, unsigned int curveSegments = 12);
 
     protected:
-        ShapeGeometry(const std::vector<Shape*>& shapes, unsigned int curveSegments);
+        ShapeGeometry(const std::vector<const Shape*>& shapes, unsigned int curveSegments);
     };
 
 }// namespace threepp
