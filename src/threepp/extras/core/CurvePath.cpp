@@ -107,7 +107,7 @@ template<class T>
 std::vector<T> CurvePath<T>::getSpacedPoints(unsigned int divisions) const {
 
     std::vector<T> points;
-    points.reserve(divisions+1);
+    points.reserve(divisions + 1);
 
     for (unsigned i = 0; i <= divisions; i++) {
 

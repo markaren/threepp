@@ -44,7 +44,6 @@ namespace threepp {
     class Curve {
 
     public:
-
         int arcLengthDivisions{200};
 
         // Virtual base class method to overwrite and implement in subclasses

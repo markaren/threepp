@@ -36,11 +36,10 @@ namespace threepp {
         // THREE.Curve, getLength() depends on getPoint() but in THREE.CurvePath
         // getPoint() depends on getLength
 
-        [[nodiscard]] float getLength() const override;
+        float getLength() const override;
 
         // cacheLengths must be recalculated.
         void updateArcLengths() override;
-
 
         // Compute lengths and cache them
         // We cannot overwrite getLengths() because UtoT mapping uses it.

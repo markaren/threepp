@@ -19,7 +19,7 @@ void Curve<T>::getPointAt(float u, T& target) const {
 template<class T>
 std::vector<T> Curve<T>::getPoints(unsigned int divisions) const {
 
-    std::vector<T> points(divisions+1);
+    std::vector<T> points(divisions + 1);
 
     for (unsigned d = 0; d <= divisions; d++) {
         T& point = points[d];
@@ -32,7 +32,7 @@ std::vector<T> Curve<T>::getPoints(unsigned int divisions) const {
 template<class T>
 std::vector<T> Curve<T>::getSpacedPoints(unsigned int divisions) const {
 
-    std::vector<T> points(divisions+1);
+    std::vector<T> points(divisions + 1);
 
     for (unsigned d = 0; d <= divisions; d++) {
 
