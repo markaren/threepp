@@ -15,103 +15,126 @@ namespace threepp {
         float_view(float value = 0)
             : value_(value) {}
 
-        float operator()() const {
+        inline float operator()() const {
 
             return value_;
         }
 
-        float_view& operator=(float v) {
+        inline float_view& operator=(float v) {
+
             this->value_ = v;
             if (f_) f_.value()();
+
             return *this;
         }
 
-        float operator*(float f) const {
+        inline float operator*(float f) const {
+
             return value_ * f;
         }
 
-        float operator*(const float_view& f) const {
+        inline float operator*(const float_view& f) const {
+
             return value_ * f.value_;
         }
 
-        float_view& operator*=(float f) {
+        inline float_view& operator*=(float f) {
+
             value_ *= f;
             if (f_) f_.value()();
+
             return *this;
         }
 
-        float operator/(float f) const {
+        inline float operator/(float f) const {
+
             return value_ / f;
         }
 
-        float_view& operator/=(float f) {
+        inline float_view& operator/=(float f) {
+
             value_ /= f;
             if (f_) f_.value()();
+
             return *this;
         }
 
-        float operator+(float f) const {
+        inline float operator+(float f) const {
+
             return value_ + f;
         }
 
-        float operator+(const float_view& f) const {
+        inline float operator+(const float_view& f) const {
+
             return value_ + f.value_;
         }
 
-        float_view& operator+=(float f) {
+        inline float_view& operator+=(float f) {
+
             value_ += f;
             if (f_) f_.value()();
+
             return *this;
         }
 
-        float operator-(float f) const {
+        inline float operator-(float f) const {
+
             return value_ - f;
         }
 
-        float operator-(const float_view& f) const {
+        inline float operator-(const float_view& f) const {
+
             return value_ - f.value_;
         }
 
-        float_view& operator-=(float f) {
+        inline float_view& operator-=(float f) {
+
             value_ -= f;
             if (f_) f_.value()();
+
             return *this;
         }
 
-        float_view& operator++() {
+        inline float_view& operator++() {
+
             value_++;
             if (f_) f_.value()();
+
             return *this;
         }
 
-        float_view& operator--() {
+        inline float_view& operator--() {
+
             value_--;
             if (f_) f_.value()();
+
             return *this;
         }
 
-        bool operator==(float other) const {
+        inline bool operator==(float other) const {
 
             return value_ == other;
         }
 
-        bool operator!=(float other) const {
+        inline bool operator!=(float other) const {
 
             return value_ != other;
         }
 
-        bool operator==(const float_view& other) const {
+        inline bool operator==(const float_view& other) const {
 
             return value_ == other.value_;
         }
 
-        bool operator!=(const float_view& other) const {
+        inline bool operator!=(const float_view& other) const {
 
             return value_ != other.value_;
         }
 
-        float_view& clamp(float min, float max) {
+        inline constexpr float_view& clamp(float min, float max) {
+
             value_ = std::max(min, std::min(max, value_));
+
             return *this;
         }
 
