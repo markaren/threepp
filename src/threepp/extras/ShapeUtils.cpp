@@ -52,7 +52,8 @@ std::vector<std::vector<unsigned int>> shapeutils::triangulateShape(std::vector<
     using Point = std::array<Coord, 2>;
 
     std::vector<Point> vertices;
-    std::vector<Point> holes_;
+    std::vector<std::vector<Point>> holes_;
+
 
     removeDupEndPts(contour);
     for (const auto& p : contour) {
@@ -61,14 +62,17 @@ std::vector<std::vector<unsigned int>> shapeutils::triangulateShape(std::vector<
 
     for (auto& points : holes) {
         removeDupEndPts(points);
+        holes_.emplace_back();
         for (auto& p : points) {
-            holes_.emplace_back(std::array<float, 2>{p.x, p.y});
+            holes_.back().emplace_back(std::array<float, 2>{p.x, p.y});
         }
     }
 
     std::vector<std::vector<Point>> polygon;
     polygon.emplace_back(vertices);
-    polygon.emplace_back(holes_);
+    for (const auto& hole : holes_) {
+        polygon.emplace_back(hole);
+    }
     const auto triangles = mapbox::earcut<N>(polygon);
 
     //
