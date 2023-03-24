@@ -1,3 +1,4 @@
+#include "threepp/geometries/EdgesGeometry.hpp"
 #include "threepp/geometries/ExtrudeGeometry.hpp"
 #include "threepp/threepp.hpp"
 
@@ -66,18 +67,23 @@ std::shared_ptr<Mesh> createMesh(Shape shape, float scale = 1) {
     auto shapeGeometry = ShapeGeometry::create(shape);
     shapeGeometry->center();
     shapeGeometry->scale(scale, scale, scale);
-    auto material = MeshBasicMaterial::create({{"color", 0x00ff00}, {"side", DoubleSide}});
 
-    auto shapeMesh = Mesh::create(shapeGeometry, material);
-    shapeMesh->add(LineSegments::create(WireframeGeometry::create(*shapeGeometry)));
+    auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create({{"color", Color::orange},
+                                                                            {"side", DoubleSide}}));
+    auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
+    wireframe->position.z = -5;
+    shapeMesh->add(wireframe);
+
+    auto edges = LineSegments::create(EdgesGeometry::create(*shapeGeometry));
+    edges->position.z = -10;
+    shapeMesh->add(edges);
 
     ExtrudeGeometry::Options opts;
     opts.depth = 3;
     auto extrudeGeometry = ExtrudeGeometry::create(shape, opts);
     extrudeGeometry->center();
     extrudeGeometry->scale(scale, scale, scale);
-    auto extrudeMesh = Mesh::create(extrudeGeometry, material);
-    extrudeMesh->add(LineSegments::create(WireframeGeometry::create(*extrudeMesh->geometry())));
+    auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create({{"color", Color::orange}, {"flatShading", true}}));
     extrudeMesh->position.z = 10;
 
     shapeMesh->add(extrudeMesh);
@@ -93,13 +99,20 @@ int main() {
     auto scene = Scene::create();
     scene->background = Color::blue;
     auto camera = PerspectiveCamera::create(65, canvas.getAspect(), 0.1f, 1000);
-    camera->position.set(0, 5, 40);
+    camera->position.set(0, 0, 60);
+
+    auto light1 = DirectionalLight::create(0xffffff, 0.7f);
+    light1->position.set(0, 0, 100);
+    scene->add(light1);
+
+    auto light2 = HemisphereLight::create();
+    light2->intensity = 0.2f;
+    scene->add(light2);
 
     OrbitControls controls{camera, canvas};
 
     auto group = Group::create();
     group->rotateX(-math::PI);
-    group->position.y = 5;
 
     auto heart = createMesh(createHeartShape());
     heart->position.x = 15;
