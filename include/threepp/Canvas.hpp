@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <variant>
 
 
 namespace threepp {
@@ -25,8 +26,11 @@ namespace threepp {
 
     public:
         struct Parameters;
+        typedef std::variant<int, Vector2, std::string> ParameterValue;
 
         explicit Canvas(const Parameters& params = Parameters());
+
+        explicit Canvas(const std::unordered_map<std::string, ParameterValue>& values);
 
         [[nodiscard]] const WindowSize& getSize() const;
 
@@ -65,11 +69,9 @@ namespace threepp {
     public:
         struct Parameters {
 
-            Parameters()
-                : size_{640, 480},
-                  antialiasing_{0},
-                  title_{"threepp"},
-                  vsync_(true) {}
+            Parameters();
+
+            Parameters(const std::unordered_map<std::string, ParameterValue>& values);
 
             Parameters& title(std::string value);
 
@@ -82,10 +84,10 @@ namespace threepp {
             Parameters& vsync(bool flag);
 
         private:
-            WindowSize size_;
-            int antialiasing_;
-            std::string title_;
-            bool vsync_;
+            WindowSize size_{640, 480};
+            int antialiasing_{0};
+            std::string title_{"threpp"};
+            bool vsync_{true};
 
             friend struct Canvas::Impl;
         };

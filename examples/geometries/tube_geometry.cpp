@@ -26,7 +26,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas({{"name", "TubeGeometry"}, {"antialiasing", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

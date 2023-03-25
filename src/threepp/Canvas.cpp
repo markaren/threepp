@@ -302,7 +302,11 @@ struct Canvas::Impl {
 Canvas::Canvas(const Canvas::Parameters& params)
     : pimpl_(new Impl(params)) {}
 
+Canvas::Canvas(const std::unordered_map<std::string, ParameterValue>& values): Canvas(Parameters(values)) {}
+
+
 int threepp::Canvas::getFPS() const {
+
     return pimpl_->fps_;
 }
 
@@ -362,6 +366,7 @@ bool Canvas::removeMouseListener(const MouseListener* listener) {
 }
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
+
     pimpl_->invokeLater(f, t);
 }
 
@@ -404,4 +409,19 @@ Canvas::Parameters& Canvas::Parameters::vsync(bool flag) {
     this->vsync_ = flag;
 
     return *this;
+}
+
+Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterValue>& values) {
+
+    for (const auto& [key, value] : values) {
+
+        if (key == "antialiasing") {
+            antialiasing(std::get<int>(value));
+        } else if (key == "name" || key == "title") {
+            title(std::get<std::string>(value));
+        } else if (key == "size") {
+            auto _size = std::get<Vector2>(value);
+            size(static_cast<int>(_size.x), static_cast<int>(_size.y));
+        }
+    }
 }

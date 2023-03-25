@@ -36,7 +36,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas({{"name", "PlaneGeometry"}, {"antialias", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
