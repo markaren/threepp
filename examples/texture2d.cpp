@@ -1,5 +1,6 @@
 
 #include "threepp/objects/Reflector.hpp"
+#include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -35,9 +36,22 @@ int main() {
     box->position.setX(-1);
     scene->add(box);
 
-    const auto planeGeometry = PlaneGeometry::create(5, 5);
+    std::vector<unsigned char> data(64 * 64 * 64);
+    int i = 0;
+    for (unsigned z = 0; z < 64; z++) {
+        for (unsigned y = 0; y < 64; y++) {
+            for (unsigned x = 0; x < 64; x++) {
+                data[i] = i % 256;
+                ++i;
+            }
+        }
+    }
+
+    auto texture = std::make_shared<DataTexture3D>(data, 64, 64, 64);
+//loader.load("data/textures/brick_bump.jpg")
+            const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create({{"side", DoubleSide},
-                                                          {"map", loader.load("data/textures/brick_bump.jpg")}});
+                                                          {"map", texture}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
     scene->add(plane);

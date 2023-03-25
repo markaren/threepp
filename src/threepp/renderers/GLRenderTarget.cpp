@@ -33,7 +33,7 @@ GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GL
 
 void GLRenderTarget::setTexture(const std::shared_ptr<Texture>& tex) {
 
-    texture->image = Image{width, height, depth};
+    texture->image = Image{nullptr, width, height, depth};
 
     this->texture = tex;
 }

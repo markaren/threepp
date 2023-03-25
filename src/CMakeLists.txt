@@ -115,6 +115,7 @@ set(publicHeaders
         "threepp/math/Euler.hpp"
         "threepp/math/float_view.hpp"
         "threepp/math/Frustum.hpp"
+        "threepp/math/ImprovedNoise.hpp"
         "threepp/math/Line3.hpp"
         "threepp/math/MathUtils.hpp"
         "threepp/math/Matrix3.hpp"
@@ -302,6 +303,7 @@ set(sources
         "threepp/math/Cylindrical.cpp"
         "threepp/math/Euler.cpp"
         "threepp/math/Frustum.cpp"
+        "threepp/math/ImprovedNoise.cpp"
         "threepp/math/Line3.cpp"
         "threepp/math/MathUtils.cpp"
         "threepp/math/Matrix3.cpp"
@@ -340,6 +342,7 @@ set(sources
         "threepp/objects/Water.cpp"
 
         "threepp/textures/Texture.cpp"
+        "threepp/textures/DataTexture3D.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/ThreadPool.cpp"
