@@ -302,7 +302,8 @@ struct Canvas::Impl {
 Canvas::Canvas(const Canvas::Parameters& params)
     : pimpl_(new Impl(params)) {}
 
-Canvas::Canvas(const std::unordered_map<std::string, ParameterValue>& values): Canvas(Parameters(values)) {}
+Canvas::Canvas(const std::unordered_map<std::string, ParameterValue>& values)
+    : Canvas(Canvas::Parameters(values)) {}
 
 
 int threepp::Canvas::getFPS() const {
@@ -377,6 +378,8 @@ void* Canvas::window_ptr() const {
 
 Canvas::~Canvas() = default;
 
+
+Canvas::Parameters::Parameters() = default;
 
 Canvas::Parameters& Canvas::Parameters::title(std::string value) {
 
