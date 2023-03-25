@@ -34,9 +34,9 @@ namespace threepp {
 
         explicit CatmullRomCurve3(std::vector<Vector3> points = {}, bool closed = false, CurveType type = centripetal, float tension = 0.5f);
 
-        void getPoint(float t, Vector3& point) override;
+        void getPoint(float t, Vector3& point) const override;
 
-        ~CatmullRomCurve3();
+        ~CatmullRomCurve3() override;
 
     private:
         struct Impl;

@@ -30,7 +30,7 @@ namespace threepp {
         [[nodiscard]] std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW = false, bool noHoles = false) const;
 
     private:
-        Path* currentPath;
+        std::shared_ptr<Path> currentPath;
         std::vector<std::shared_ptr<Path>> subPaths;
     };
 

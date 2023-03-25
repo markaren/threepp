@@ -16,11 +16,11 @@ namespace threepp {
 
         LineCurveT(const T& v1, const T& v2);
 
-        void getPoint(float t, T& point) override;
+        void getPoint(float t, T& point) const override;
 
-        void getPointAt(float u, T& target) override;
+        void getPointAt(float u, T& target) const override;
 
-        void getTangent(float t, T& tangent) override;
+        void getTangent(float t, T& tangent) const override;
     };
 
     typedef LineCurveT<Vector2> LineCurve;

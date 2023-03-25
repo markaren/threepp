@@ -24,10 +24,10 @@ namespace threepp {
 
         explicit Shape(const std::optional<std::vector<Vector2>>& points = {});
 
-        std::vector<std::vector<Vector2>> getPointsHoles(unsigned int divisions);
+        std::vector<std::vector<Vector2>> getPointsHoles(unsigned int divisions) const;
 
         // get points of shape and holes (keypoints based on segments parameter)
-        ShapePoints extractPoints(unsigned int divisions);
+        [[nodiscard]] ShapePoints extractPoints(unsigned int divisions) const;
     };
 
 }// namespace threepp

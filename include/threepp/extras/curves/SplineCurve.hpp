@@ -14,7 +14,7 @@ namespace threepp {
 
         explicit SplineCurve(std::vector<Vector2> points = {});
 
-        void getPoint(float t, Vector2& point) override;
+        void getPoint(float t, Vector2& point) const override;
     };
 
 }// namespace threepp

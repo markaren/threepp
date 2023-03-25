@@ -63,7 +63,7 @@ auto createSmiley() {
     return smileyShape;
 }
 
-std::shared_ptr<Mesh> createMesh(Shape shape, float scale = 1) {
+std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
     auto shapeGeometry = ShapeGeometry::create(shape);
     shapeGeometry->center();
     shapeGeometry->scale(scale, scale, scale);

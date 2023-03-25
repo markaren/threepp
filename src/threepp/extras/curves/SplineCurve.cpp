@@ -12,7 +12,7 @@ SplineCurve::SplineCurve(std::vector<Vector2> points)
     : points(std::move(points)) {}
 
 
-void SplineCurve::getPoint(float t, Vector2& point) {
+void SplineCurve::getPoint(float t, Vector2& point) const {
 
     const auto p = static_cast<float>(points.size() - 1) * t;
 

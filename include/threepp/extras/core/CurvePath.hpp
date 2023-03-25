@@ -30,29 +30,28 @@ namespace threepp {
         // 3. Get t for the curve
         // 4. Return curve.getPointAt(t')
 
-        void getPoint(float t, T& target) override;
+        void getPoint(float t, T& target) const override;
 
         // We cannot use the default THREE.Curve getPoint() with getLength() because in
         // THREE.Curve, getLength() depends on getPoint() but in THREE.CurvePath
         // getPoint() depends on getLength
 
-        float getLength() override;
+        float getLength() const override;
 
         // cacheLengths must be recalculated.
         void updateArcLengths() override;
 
-
         // Compute lengths and cache them
         // We cannot overwrite getLengths() because UtoT mapping uses it.
 
-        std::vector<float> getCurveLengths();
+        std::vector<float> getCurveLengths() const;
 
-        std::vector<T> getSpacedPoints(unsigned int divisions = 40) override;
+        std::vector<T> getSpacedPoints(unsigned int divisions = 40) const override;
 
-        std::vector<T> getPoints(unsigned int divisions = 12) override;
+        std::vector<T> getPoints(unsigned int divisions = 12) const override;
 
     private:
-        std::optional<std::vector<float>> cacheLengths;
+        mutable std::optional<std::vector<float>> cacheLengths;
     };
 
 

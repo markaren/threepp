@@ -7,13 +7,13 @@ using namespace threepp;
 
 namespace {
 
-    struct CustomSineCurve: public Curve3 {
+    struct CustomSineCurve: Curve3 {
 
         float scale;
 
         explicit CustomSineCurve(float scale): scale(scale) {}
 
-        void getPoint(float t, Vector3& target) override {
+        void getPoint(float t, Vector3& target) const override {
             float tx = t * 3 - 1.5f;
             float ty = std::sin(math::PI * 2 * t);
             float tz = 0;
