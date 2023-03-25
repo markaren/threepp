@@ -8,7 +8,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Fonts", {{"antialiasing", 4}});
+    Canvas canvas("Fonts", {{"antialiasing", 8}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = PCFSoftShadowMap;
@@ -45,8 +45,9 @@ int main() {
     mesh->castShadow = true;
     scene->add(mesh);
 
-    auto lineMaterial = LineBasicMaterial::create();
+    auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
     lineMaterial->color = Color::black;
+    lineMaterial->linewidth = 20000;
     auto edges = LineSegments::create(EdgesGeometry::create(*extrude, 10), lineMaterial);
     mesh->add(edges);
 
