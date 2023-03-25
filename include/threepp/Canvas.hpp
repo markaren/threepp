@@ -19,6 +19,7 @@ namespace threepp {
         int height;
 
         [[nodiscard]] float getAspect() const {
+
             return static_cast<float>(width) / static_cast<float>(height);
         }
     };
@@ -27,11 +28,13 @@ namespace threepp {
 
     public:
         struct Parameters;
-        typedef std::variant<int, Vector2, std::string> ParameterValue;
+        typedef std::variant<bool, int, WindowSize> ParameterValue;
 
         explicit Canvas(const Parameters& params = Parameters());
 
-        explicit Canvas(const std::unordered_map<std::string, ParameterValue>& values);
+        explicit Canvas(const std::string& name);
+
+        Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values);
 
         [[nodiscard]] const WindowSize& getSize() const;
 
@@ -72,7 +75,7 @@ namespace threepp {
 
             Parameters();
 
-            Parameters(const std::unordered_map<std::string, ParameterValue>& values);
+            explicit Parameters(const std::unordered_map<std::string, ParameterValue>& values);
 
             Parameters& title(std::string value);
 

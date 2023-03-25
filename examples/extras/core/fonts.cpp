@@ -8,7 +8,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas({{"name", "Fonts"}, {"antialiasing", 4}});
+    Canvas canvas("Fonts", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = PCFSoftShadowMap;
