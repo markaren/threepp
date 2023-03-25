@@ -376,8 +376,8 @@ struct GLRenderer::Impl {
         } else if (object->is<Line>()) {
 
             float lineWidth = 1;
-            if (isWireframeMaterial) {
-                lineWidth = wireframeMaterial->wireframeLinewidth;
+            if (auto lw = material->as<MaterialWithLineWidth>()) {
+                lineWidth = lw->linewidth;
             }
 
             state.setLineWidth(lineWidth * static_cast<float>(scope.getTargetPixelRatio()));
