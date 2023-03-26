@@ -6,7 +6,7 @@
 
 namespace {
 
-    auto vertexSource() {
+    std::string vertexSource() {
 
         return R"(
                #version 330 core
@@ -18,7 +18,7 @@ namespace {
                attribute vec4 color;
                varying vec3 vPosition;
                varying vec4 vColor;
-               void main(){
+               void main() {
                    vPosition = position;
                    vColor = color;
                    gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
@@ -27,18 +27,19 @@ namespace {
 
     std::string fragmentSource() {
 
-        return "#version 330 core\n\n"
-               "#define varying in\n"
-               "out highp vec4 pc_fragColor;\n"
-               "#define gl_FragColor pc_fragColor\n"
-               "uniform float time;\n"
-               "varying vec3 vPosition;\n"
-               "varying vec4 vColor;\n\n"
-               "void main()\t{\n"
-               "\tvec4 color = vec4( vColor );\n"
-               "\tcolor.r += sin( vPosition.x * 10.0 + time ) * 0.5;\n"
-               "\tgl_FragColor = color;\n"
-               "}";
+        return R"(
+                #version 330 core
+                #define varying in
+                out highp vec4 pc_fragColor;
+                #define gl_FragColor pc_fragColor
+                uniform float time;
+                varying vec3 vPosition;
+                varying vec4 vColor;
+                void main() {
+                   vec4 color = vec4( vColor );
+                   color.r += sin( vPosition.x * 10.0 + time ) * 0.5;
+                   gl_FragColor = color;
+                })";
     }
 
 }// namespace
@@ -47,9 +48,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters()
-                          .title("Raw Shader demo")
-                          .antialiasing(8));
+    Canvas canvas("Raw Shader demo", {{"antialiasing", 4}});
 
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
