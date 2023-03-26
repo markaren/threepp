@@ -6,22 +6,23 @@
 
 namespace {
 
-    std::string vertexSource() {
+    auto vertexSource() {
 
-        return "#version 330 core\n\n"
-               "#define attribute in\n"
-               "#define varying out\n"
-               "uniform mat4 modelViewMatrix; // optional\n"
-               "uniform mat4 projectionMatrix; // optional\n"
-               "attribute vec3 position;\n"
-               "attribute vec4 color;\n"
-               "varying vec3 vPosition;\n"
-               "varying vec4 vColor;\n\n"
-               "void main()\t{\n"
-               "\tvPosition = position;\n"
-               "\tvColor = color;\n"
-               "\tgl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );\n"
-               "}";
+        return R"(
+               #version 330 core
+               #define attribute in
+               #define varying out
+               uniform mat4 modelViewMatrix; // optional
+               uniform mat4 projectionMatrix; // optional
+               attribute vec3 position;
+               attribute vec4 color;
+               varying vec3 vPosition;
+               varying vec4 vColor;
+               void main(){
+                   vPosition = position;
+                   vColor = color;
+                   gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+               })";
     }
 
     std::string fragmentSource() {
