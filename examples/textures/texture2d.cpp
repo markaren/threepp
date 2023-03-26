@@ -1,6 +1,5 @@
 
 #include "threepp/objects/Reflector.hpp"
-#include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -17,10 +16,10 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    TextureLoader loader;
+    TextureLoader tl;
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
-    const auto sphereMaterial = MeshBasicMaterial::create({{"map", loader.load("data/textures/checker.png")}});
+    const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load("data/textures/checker.png")}});
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(1);
     scene->add(sphere);
@@ -30,28 +29,15 @@ int main() {
 #ifdef THREEPP_WITH_CURL
     boxMaterial->map = loader.loadFromUrl("https://raw.githubusercontent.com/mrdoob/three.js/r129/examples/textures/crate.gif");
 #else
-    boxMaterial->map = loader.load("data/textures/crate.gif");
+    boxMaterial->map = tl.load("data/textures/crate.gif");
 #endif
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
     scene->add(box);
 
-    std::vector<unsigned char> data(64 * 64 * 64);
-    int i = 0;
-    for (unsigned z = 0; z < 64; z++) {
-        for (unsigned y = 0; y < 64; y++) {
-            for (unsigned x = 0; x < 64; x++) {
-                data[i] = i % 256;
-                ++i;
-            }
-        }
-    }
-
-    auto texture = std::make_shared<DataTexture3D>(data, 64, 64, 64);
-//loader.load("data/textures/brick_bump.jpg")
-            const auto planeGeometry = PlaneGeometry::create(5, 5);
+    const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create({{"side", DoubleSide},
-                                                          {"map", texture}});
+                                                          {"map", tl.load("data/textures/brick_bump.jpg")}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
     scene->add(plane);

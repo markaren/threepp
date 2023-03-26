@@ -151,7 +151,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         if (!mipmaps.empty()) {
 
-            for (unsigned i = 0; i < mipmaps.size(); ++i) {
+            for (int i = 0; i < mipmaps.size(); ++i) {
 
                 const auto& mipmap = mipmaps[i];
                 state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());

@@ -79,9 +79,15 @@ namespace {
                     return [&](const UniformValue& value, GLTextures*) { setValueM4(value); };
 
                 case 0x8b5e: // SAMPLER_2D
+                case 0x8d66: // SAMPLER_EXTERNAL_OES
+                case 0x8dca: // INT_SAMPLER_2D
+                case 0x8dd2: // UNSIGNED_INT_SAMPLER_2D
+                case 0x8b62: // SAMPLER_2D_SHADOW
                     return [&](const UniformValue& value, GLTextures* textures) { setValueT1(value, textures); };
 
                 case 0x8b5f: // SAMPLER_3D
+                case 0x8dcb: // INT_SAMPLER_3D
+                case 0x8dd3: // UNSIGNED_INT_SAMPLER_3D
                     return [&](const UniformValue& value, GLTextures* textures) { setValueT3D1(value, textures); };
 
                 case 0x1404: // INT, BOOL
