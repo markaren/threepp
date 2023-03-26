@@ -1,8 +1,10 @@
 
 #include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/math/ImprovedNoise.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/threepp.hpp"
-#include "threepp/math/ImprovedNoise.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 
@@ -24,8 +26,8 @@ auto createMaterial(Texture* texture) {
             {"threshold", Uniform(0.25f)},
             {"opacity", Uniform(0.25f)},
             {"range", Uniform(0.1f)},
-            {"steps", Uniform(100.f)},
-            {"frame", Uniform(1.f)}};
+            {"steps", Uniform(100)},
+            {"frame", Uniform(1)}};
 
     m->uniforms = std::make_shared<UniformMap>(uniforms);
 
@@ -34,10 +36,10 @@ auto createMaterial(Texture* texture) {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(8));
+    Canvas canvas("DataTexture3D", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color::aliceblue);
+    renderer.setClearColor(Color::blue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
@@ -48,15 +50,15 @@ int main() {
     int i = 0;
     int size = 128;
     float scale = 0.05f;
-    math::ImprovedNoise perlin;
     Vector3 vector;
-    std::vector<unsigned char> data(size* size* size);
+    math::ImprovedNoise perlin;
+    std::vector<unsigned char> data(size * size * size);
     for (unsigned z = 0; z < size; z++) {
         for (unsigned y = 0; y < size; y++) {
             for (unsigned x = 0; x < size; x++) {
 
-                auto d = 1.f - vector.set( x, y, z ).subScalar( size / 2 ).divideScalar( size ).length();
-                data[i] = ( 128 + 128 * perlin.noise( x * scale / 1.5, y * scale, z * scale / 1.5 ) ) * d * d;
+                auto d = 1.f - vector.set(x, y, z).subScalar(size / 2).divideScalar(size).length();
+                data[i] = (128 + 128 * perlin.noise(x * scale / 1.5f, y * scale, z * scale / 1.5f)) * d * d;
                 ++i;
             }
         }
@@ -80,10 +82,13 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
 
+    canvas.animate([&](float t, float dt) {
         material->uniforms->at("cameraPos").value<Vector3>().copy(camera->position);
-        material->uniforms->at("frame").value<float>()++;
+        material->uniforms->at("frame").value<int>()++;
+
+        int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t)) + 50;
+        material->uniforms->at("steps").value<int>() = std::max(1, step);
 
         renderer.render(scene, camera);
     });
@@ -136,8 +141,8 @@ std::string fragmentSource() {
         uniform float threshold;
         uniform float range;
         uniform float opacity;
-        uniform float steps;
-        uniform float frame;
+        uniform int steps;
+        uniform int frame;
 
         uint wang_hash(uint seed)
         {

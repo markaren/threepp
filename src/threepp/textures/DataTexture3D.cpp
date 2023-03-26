@@ -15,7 +15,12 @@ DataTexture3D::DataTexture3D(std::vector<unsigned char> data, unsigned int width
     //
     // See #14839
 
-    this->image = Image{ std::make_shared<unsigned char>(*data.data()), width, height, depth };
+    auto tmp = static_cast<unsigned char*>(malloc(sizeof (unsigned char) * data.size()));
+    for (unsigned i = 0; i < data.size(); i++) {
+        tmp[i] = data[i];
+    }
+
+    this->image = Image{ std::shared_ptr<unsigned char>(tmp, free), width, height, depth };
 
     this->magFilter = NearestFilter;
     this->minFilter = NearestFilter;
