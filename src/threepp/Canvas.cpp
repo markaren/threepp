@@ -3,6 +3,7 @@
 #include "threepp/loaders/ImageLoader.hpp"
 
 #include "threepp/core/Clock.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -302,7 +303,15 @@ struct Canvas::Impl {
 Canvas::Canvas(const Canvas::Parameters& params)
     : pimpl_(new Impl(params)) {}
 
+Canvas::Canvas(const std::string& name)
+    : Canvas(Canvas::Parameters().title(name)) {}
+
+Canvas::Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values)
+    : Canvas(Canvas::Parameters(values).title(name)) {}
+
+
 int threepp::Canvas::getFPS() const {
+
     return pimpl_->fps_;
 }
 
@@ -362,6 +371,7 @@ bool Canvas::removeMouseListener(const MouseListener* listener) {
 }
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
+
     pimpl_->invokeLater(f, t);
 }
 
@@ -372,6 +382,8 @@ void* Canvas::window_ptr() const {
 
 Canvas::~Canvas() = default;
 
+
+Canvas::Parameters::Parameters() = default;
 
 Canvas::Parameters& Canvas::Parameters::title(std::string value) {
 
@@ -404,4 +416,41 @@ Canvas::Parameters& Canvas::Parameters::vsync(bool flag) {
     this->vsync_ = flag;
 
     return *this;
+}
+
+Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterValue>& values) {
+
+    std::vector<std::string> unused;
+    for (const auto& [key, value] : values) {
+
+        bool used = false;
+
+        if (key == "antialiasing") {
+
+            antialiasing(std::get<int>(value));
+            used = true;
+
+        } else if (key == "vsync") {
+
+            vsync(std::get<bool>(value));
+            used = true;
+
+        } else if (key == "size") {
+
+            auto _size = std::get<WindowSize>(value);
+            size(_size);
+            used = true;
+        }
+
+        if (!used) {
+            unused.emplace_back(key);
+        }
+    }
+
+    if (!unused.empty()) {
+
+        std::cerr << "Unused Canvas parameters: [" << utils::join(unused, ',') << "]" << std::endl;
+
+    }
+
 }

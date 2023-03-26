@@ -10,7 +10,7 @@ struct MyGui: public imgui_context {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas &canvas, const MeshBasicMaterial& m) : imgui_context(canvas.window_ptr()) {
+    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m): imgui_context(canvas.window_ptr()) {
         colorBuf_[0] = m.color.r;
         colorBuf_[1] = m.color.g;
         colorBuf_[2] = m.color.b;
@@ -19,7 +19,7 @@ struct MyGui: public imgui_context {
 
     void onRender() override {
 
-        ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("Plane transform");
         ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
@@ -28,7 +28,6 @@ struct MyGui: public imgui_context {
         colorChanged = ImGui::IsItemEdited();
 
         ImGui::End();
-
     }
 
     const Vector3& position() {
@@ -46,20 +45,18 @@ struct MyGui: public imgui_context {
     }
 
 private:
-
     Vector3 pos_;
     Euler euler_;
 
     std::array<float, 3> posBuf_{};
     std::array<float, 3> eulerBuf_{};
-    std::array<float, 4> colorBuf_{0,0,0,1};
-
+    std::array<float, 4> colorBuf_{0, 0, 0, 1};
 };
 #endif
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("threepp demo");
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
@@ -70,7 +67,7 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->color.setRGB(1,0,0);
+    boxMaterial->color.setRGB(1, 0, 0);
     boxMaterial->transparent = true;
     boxMaterial->opacity = 0.1f;
     auto box = Mesh::create(boxGeometry, boxMaterial);
@@ -99,22 +96,22 @@ int main() {
     plane->position.setZ(-2);
     scene->add(plane);
 
-    canvas.onWindowResize([&](WindowSize size){
-      camera->aspect = size.getAspect();
-      camera->updateProjectionMatrix();
-      renderer.setSize(size);
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
     });
 
     renderer.enableTextRendering();
     auto& handle = renderer.textHandle();
-    handle.setPosition(canvas.getSize().width-130, 0);
+    handle.setPosition(canvas.getSize().width - 130, 0);
     handle.color = Color::red;
 
 #ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
 #endif
     canvas.animate([&](float dt) {
-        box->rotation.y +=  0.5f * dt;
+        box->rotation.y += 0.5f * dt;
         handle.setText("Delta=" + std::to_string(dt));
 
         renderer.render(scene, camera);
@@ -133,7 +130,5 @@ int main() {
         }
 
 #endif
-
     });
-
 }
