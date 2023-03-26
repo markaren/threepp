@@ -7,9 +7,7 @@ namespace {
 
     auto createWireframe(const BufferGeometry& geometry) {
 
-        auto material = LineBasicMaterial::create({
-                {"color", Color::black}
-        });
+        auto material = LineBasicMaterial::create({{"color", Color::black}});
         return LineSegments::create(WireframeGeometry::create(geometry), material);
     }
 
@@ -21,7 +19,6 @@ namespace {
         mesh.children[0]->removeFromParent();
         mesh.add(createWireframe(*g));
     }
-
 
     auto createMesh(const BoxGeometry::Params& params) {
 
@@ -38,7 +35,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("BoxGeometry", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
