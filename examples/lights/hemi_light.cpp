@@ -1,5 +1,6 @@
 
-#include <threepp/threepp.hpp>
+#include "threepp/threepp.hpp"
+#include "threepp/helpers/HemisphereLightHelper.hpp"
 
 using namespace threepp;
 
@@ -14,8 +15,12 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = HemisphereLight::create(0xffffbb, 0x080820);
+    auto light = HemisphereLight::create(0xffffbb, 0x082820);
+    light->position.y = 2;
     scene->add(light);
+
+    auto helper = HemisphereLightHelper::create(*light, 0.5f);
+    scene->add(helper);
 
     auto group = Group::create();
 
