@@ -60,29 +60,37 @@ namespace {
 
             switch (activeInfo.type) {
 
-                case 0x1406:
+                case 0x1406: // FLOAT
                     return [&](const UniformValue& value, GLTextures*) { setValueV1f(value); };
 
-                case 0x8b50:
+                case 0x8b50: // _VEC2
                     return [&](const UniformValue& value, GLTextures*) { setValueV2f(value); };
 
-                case 0x8b51:
+                case 0x8b51: // _VEC3
                     return [&](const UniformValue& value, GLTextures*) { setValueV3f(value); };
 
-                case 0x8b52:
+                case 0x8b52: // _VEC4
                     return [&](const UniformValue& value, GLTextures*) { setValueV4f(value); };
 
-                case 0x8b5b:
+                case 0x8b5b: // _MAT3
                     return [&](const UniformValue& value, GLTextures*) { setValueM3(value); };
 
-                case 0x8b5c:
+                case 0x8b5c: // _MAT4
                     return [&](const UniformValue& value, GLTextures*) { setValueM4(value); };
 
-                case 0x8b5e:
-                case 0x8d66:
+                case 0x8b5e: // SAMPLER_2D
+                case 0x8d66: // SAMPLER_EXTERNAL_OES
+                case 0x8dca: // INT_SAMPLER_2D
+                case 0x8dd2: // UNSIGNED_INT_SAMPLER_2D
+                case 0x8b62: // SAMPLER_2D_SHADOW
                     return [&](const UniformValue& value, GLTextures* textures) { setValueT1(value, textures); };
 
-                case 0x1404:
+                case 0x8b5f: // SAMPLER_3D
+                case 0x8dcb: // INT_SAMPLER_3D
+                case 0x8dd3: // UNSIGNED_INT_SAMPLER_3D
+                    return [&](const UniformValue& value, GLTextures* textures) { setValueT3D1(value, textures); };
+
+                case 0x1404: // INT, BOOL
                 case 0x8b56:
                     return [&](const UniformValue& value, GLTextures*) { setValueV1i(value); };
 
@@ -99,6 +107,13 @@ namespace {
             glUniform1i(addr, unit);
             auto tex = std::get<Texture*>(value);
             textures->setTexture2D(*tex, unit);
+        }
+
+        void setValueT3D1(const UniformValue& value, GLTextures* textures) const {
+            const auto unit = textures->allocateTextureUnit();
+            glUniform1i(addr, unit);
+            auto tex = std::get<Texture*>(value);
+            textures->setTexture3D(*tex, unit);
         }
 
         void setValueV1i(const UniformValue& value) const {
