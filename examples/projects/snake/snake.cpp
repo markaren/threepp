@@ -24,7 +24,6 @@ int main() {
 
             game.update(dt);
             scene->update();
-
         }
         renderer.render(scene.get(), &scene->camera());
     });

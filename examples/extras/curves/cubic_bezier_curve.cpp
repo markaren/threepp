@@ -36,7 +36,6 @@ int main() {
         geometry->setFromPoints(curve2Points);
         const auto curveObject = Line::create(geometry, material);
         scene->add(curveObject);
-
     }
 
     //3D
@@ -53,7 +52,6 @@ int main() {
 
         const auto curveObject = Line::create(geometry, material);
         scene->add(curveObject);
-
     }
 
     Matrix4 tmp;

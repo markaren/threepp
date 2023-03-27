@@ -22,9 +22,8 @@ namespace kine {
 
     protected:
         float eps_{0.001f};
-
     };
 
-}
+}// namespace kine
 
 #endif//THREEPP_IKSOLVER_HPP

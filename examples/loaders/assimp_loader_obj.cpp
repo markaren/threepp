@@ -1,6 +1,6 @@
 
-#include <threepp/threepp.hpp>
 #include <threepp/loaders/AssimpLoader.hpp>
+#include <threepp/threepp.hpp>
 
 using namespace threepp;
 
@@ -36,7 +36,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         objModel->rotation.y += 1 * dt;
 
         renderer.render(scene, camera);

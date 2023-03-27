@@ -16,7 +16,6 @@ namespace threepp {
                               public MaterialWithFlatShading {
 
     public:
-
         [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<MeshNormalMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});

@@ -14,7 +14,7 @@ namespace {
         return count;
     }
 
-}
+}// namespace
 
 struct UrlFetcher::Impl {
 
@@ -39,7 +39,6 @@ struct UrlFetcher::Impl {
 
 private:
     CURL* curl;
-
 };
 
 threepp::utils::UrlFetcher::UrlFetcher()

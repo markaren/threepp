@@ -41,7 +41,7 @@ int main() {
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    MouseMoveListener l([&](auto &pos) {
+    MouseMoveListener l([&](auto& pos) {
         auto size = canvas.getSize();
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
@@ -56,7 +56,7 @@ int main() {
         raycaster.setFromCamera(mouse, camera.get());
         auto intersects = raycaster.intersectObject(sprites.get(), true);
         if (!intersects.empty()) {
-            auto &i = intersects.front();
+            auto& i = intersects.front();
             helper->position.copy(i.point);
             helper->visible = true;
         }

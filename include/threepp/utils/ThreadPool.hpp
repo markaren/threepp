@@ -2,8 +2,8 @@
 #ifndef THREEPP_THREADPOOL_HPP
 #define THREEPP_THREADPOOL_HPP
 
-#include <memory>
 #include <functional>
+#include <memory>
 
 namespace threepp::utils {
 

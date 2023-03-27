@@ -11,11 +11,9 @@ namespace kine {
     class KineComponent {
 
     public:
-
         [[nodiscard]] virtual threepp::Matrix4 getTransformation() const = 0;
-
     };
 
-}
+}// namespace kine
 
 #endif//THREEPP_KINECOMPONENT_HPP

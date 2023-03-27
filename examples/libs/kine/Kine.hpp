@@ -20,12 +20,11 @@ namespace kine {
             : components_(std::move(components)) {
 
             for (const auto& c : components_) {
-                auto joint = dynamic_cast<KineJoint *>(c.get());
+                auto joint = dynamic_cast<KineJoint*>(c.get());
                 if (joint) {
                     joints_.emplace_back(joint);
                 }
             }
-
         }
 
         [[nodiscard]] size_t numDof() const {
@@ -33,12 +32,12 @@ namespace kine {
             return joints_.size();
         }
 
-        [[nodiscard]] threepp::Matrix4 calculateEndEffectorTransformation(const std::vector<float> &values) const {
+        [[nodiscard]] threepp::Matrix4 calculateEndEffectorTransformation(const std::vector<float>& values) const {
 
             threepp::Matrix4 result;
             for (unsigned i = 0, j = 0; i < components_.size(); ++i) {
-                auto &c = components_[i];
-                if (dynamic_cast<KineJoint *>(c.get())) {
+                auto& c = components_[i];
+                if (dynamic_cast<KineJoint*>(c.get())) {
                     result.multiply(joints_[j]->getTransformation(values[j++]));
                 } else {
                     result.multiply(c->getTransformation());
@@ -47,7 +46,7 @@ namespace kine {
             return result;
         }
 
-        [[nodiscard]] const std::vector<KineJoint *> &joints() const {
+        [[nodiscard]] const std::vector<KineJoint*>& joints() const {
             return joints_;
         }
 
@@ -85,28 +84,28 @@ namespace kine {
         }
 
     private:
-        std::vector<KineJoint *> joints_;
+        std::vector<KineJoint*> joints_;
         std::vector<std::shared_ptr<KineComponent>> components_;
     };
 
     class KineBuilder {
 
     public:
-        KineBuilder &addRevoluteJoint(const threepp::Vector3 &axis, const KineLimit &limit) {
+        KineBuilder& addRevoluteJoint(const threepp::Vector3& axis, const KineLimit& limit) {
             components_.emplace_back(std::make_unique<RevoluteJoint>(axis, limit));
             ++nDOF;
 
             return *this;
         }
 
-        KineBuilder &addPrismaticJoint(const threepp::Vector3 &axis, const KineLimit &limit) {
+        KineBuilder& addPrismaticJoint(const threepp::Vector3& axis, const KineLimit& limit) {
             components_.emplace_back(std::make_unique<PrismaticJoint>(axis, limit));
             ++nDOF;
 
             return *this;
         }
 
-        KineBuilder &addLink(const threepp::Vector3 &axis) {
+        KineBuilder& addLink(const threepp::Vector3& axis) {
             components_.emplace_back(std::make_unique<KineLink>(axis));
 
             return *this;

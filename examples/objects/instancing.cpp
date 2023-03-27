@@ -22,7 +22,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = HemisphereLight::create(0xffffff, 0x888888);
-    light->position.set(0,1,0);
+    light->position.set(0, 1, 0);
     scene->add(light);
 
     auto material = MeshPhongMaterial::create();
@@ -53,7 +53,7 @@ int main() {
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    MouseMoveListener l([&](auto& pos){
+    MouseMoveListener l([&](auto& pos) {
         auto size = canvas.getSize();
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
@@ -66,7 +66,6 @@ int main() {
     Raycaster raycaster;
     std::unordered_map<int, bool> map;
     canvas.animate([&](float dt) {
-
         raycaster.setFromCamera(mouse, camera);
         auto intersects = raycaster.intersectObject(mesh.get());
 

@@ -5,10 +5,10 @@
 
 #include "threepp/math/Vector4.hpp"
 
-#include <optional>
-#include <utility>
 #include <functional>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 
 namespace threepp {
 
@@ -197,8 +197,8 @@ namespace threepp {
             void reset(int width, int height);
         };
 
-    }
+    }// namespace gl
 
-}// namespace threepp::gl
+}// namespace threepp
 
 #endif//THREEPP_GLSTATE_HPP

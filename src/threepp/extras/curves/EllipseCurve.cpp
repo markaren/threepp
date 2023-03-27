@@ -6,10 +6,10 @@
 using namespace threepp;
 
 EllipseCurve::EllipseCurve(float aX, float aY, float xRadius, float yRadius, float aStartAngle, float aEndAngle, bool aClockwise, float aRotation)
-        : aX(aX), aY(aY),
-          xRadius(xRadius), yRadius(yRadius),
-          aStartAngle(aStartAngle), aEndAngle(aEndAngle),
-          aClockwise(aClockwise), aRotation(aRotation) {}
+    : aX(aX), aY(aY),
+      xRadius(xRadius), yRadius(yRadius),
+      aStartAngle(aStartAngle), aEndAngle(aEndAngle),
+      aClockwise(aClockwise), aRotation(aRotation) {}
 
 void EllipseCurve::getPoint(float t, Vector2& target) const {
 

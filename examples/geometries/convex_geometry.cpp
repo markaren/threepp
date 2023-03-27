@@ -82,7 +82,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         convex->rotation.y += 0.2f * dt;
 
         renderer.render(scene, camera);

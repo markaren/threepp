@@ -3,8 +3,8 @@
 #ifndef THREEPP_GLSHADOWMAP_HPP
 #define THREEPP_GLSHADOWMAP_HPP
 
-#include <vector>
 #include <memory>
+#include <vector>
 
 namespace threepp {
 
@@ -35,7 +35,6 @@ namespace threepp {
         private:
             struct Impl;
             std::unique_ptr<Impl> pimpl_;
-
         };
 
     }// namespace gl

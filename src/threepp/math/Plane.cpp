@@ -2,8 +2,8 @@
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Line3.hpp"
-#include "threepp/math/Sphere.hpp"
 #include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Sphere.hpp"
 
 using namespace threepp;
 

@@ -156,5 +156,4 @@ int main() {
             crane->update(dt);
         }
     });
-
 }

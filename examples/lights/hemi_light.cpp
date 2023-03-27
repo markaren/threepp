@@ -45,15 +45,14 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-      camera->aspect = size.getAspect();
-      camera->updateProjectionMatrix();
-      renderer.setSize(size);
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
     });
 
     canvas.animate([&](float dt) {
-      group->rotation.y += 0.5f * dt;
+        group->rotation.y += 0.5f * dt;
 
-      renderer.render(scene, camera);
+        renderer.render(scene, camera);
     });
-
 }

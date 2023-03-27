@@ -18,11 +18,11 @@ int main() {
 
     auto curve = CatmullRomCurve3();
     curve.points.insert(curve.points.end(),
-                         {Vector3(-10, 0, 10),
-                          Vector3(-5, 5, 5),
-                          Vector3(0, 0, 0),
-                          Vector3(5, -5, 5),
-                          Vector3(10, 0, 10)});
+                        {Vector3(-10, 0, 10),
+                         Vector3(-5, 5, 5),
+                         Vector3(0, 0, 0),
+                         Vector3(5, -5, 5),
+                         Vector3(10, 0, 10)});
 
 
     const auto points = curve.getPoints(50);
