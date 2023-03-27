@@ -77,5 +77,14 @@ GLRenderTarget& GLRenderTarget::copy(const GLRenderTarget& source) {
 
 void GLRenderTarget::dispose() {
 
-    this->dispatchEvent("dispose", this);
+    if (!disposed) {
+
+        disposed = true;
+        this->dispatchEvent("dispose", this);
+    }
+}
+
+GLRenderTarget::~GLRenderTarget() {
+
+    dispose();
 }

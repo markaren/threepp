@@ -64,7 +64,10 @@ namespace threepp {
 
         static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
+        ~GLRenderTarget() override;
+
     protected:
+        bool disposed = false;
         GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
     };
 
