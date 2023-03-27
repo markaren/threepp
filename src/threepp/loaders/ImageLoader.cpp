@@ -29,7 +29,7 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
     image.pixels = stbi_load(imagePath.string().c_str(), &image.width, &image.height, nullptr, channels);
 
     return Image{
-            std::shared_ptr<unsigned char>(image.pixels),
+            std::shared_ptr<unsigned char>(image.pixels, free),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
             flipY};
@@ -42,7 +42,7 @@ std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, i
     image.pixels = stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &image.width, &image.height, nullptr, channels);
 
     return Image{
-            std::shared_ptr<unsigned char>(image.pixels),
+            std::shared_ptr<unsigned char>(image.pixels, free),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
             flipY};
