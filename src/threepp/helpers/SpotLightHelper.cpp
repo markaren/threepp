@@ -48,7 +48,7 @@ SpotLightHelper::SpotLightHelper(std::shared_ptr<SpotLight> light, std::optional
     this->update();
 }
 
-std::shared_ptr<SpotLightHelper> SpotLightHelper::create(const std::shared_ptr<SpotLight>& light, std::optional<unsigned int> color) {
+std::shared_ptr<SpotLightHelper> SpotLightHelper::create(const std::shared_ptr<SpotLight>& light, std::optional<Color> color) {
 
     return std::shared_ptr<SpotLightHelper>(new SpotLightHelper(light, color));
 }
