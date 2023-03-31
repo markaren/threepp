@@ -36,7 +36,9 @@ void threepp::TextHandle::render() {
 }
 
 void threepp::TextHandle::setViewport(int width, int height) {
-    gltViewport(width, height);
+    if (width > 0 && height > 0) {
+        gltViewport(width, height);
+    }
 }
 
 void threepp::TextHandle::terminate() {
