@@ -1,4 +1,4 @@
-set(publicHeaderDir ${CMAKE_SOURCE_DIR}/include)
+set(publicHeaderDir ${PROJECT_SOURCE_DIR}/include)
 
 set(publicHeaders
 
@@ -368,7 +368,7 @@ if (CURL_FOUND)
     list(APPEND sources "threepp/utils/URLFetcher.cpp")
 endif()
 
-include("${CMAKE_SOURCE_DIR}/cmake/shaders.cmake")
+include("${PROJECT_SOURCE_DIR}/cmake/shaders.cmake")
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
 add_library(threepp::threepp ALIAS threepp)
