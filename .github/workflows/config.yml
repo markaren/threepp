@@ -21,7 +21,7 @@ jobs:
 
     - name: Install prerequisites
       run: |
-        sudo apt install -y \
+        sudo apt-get update && apt-get install -y \
         libxinerama-dev \
         libxcursor-dev \
         xorg-dev \
