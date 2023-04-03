@@ -8,6 +8,28 @@
 
 using namespace threepp;
 
+namespace {
+    
+    inline int getValue(TextHandle::HorizontalAlignment alignment) {
+        switch (alignment) {
+            case TextHandle::HorizontalAlignment::LEFT: return 0;
+            case TextHandle::HorizontalAlignment::CENTER: return 1;
+            case TextHandle::HorizontalAlignment::RIGHT: return 2;
+            default: return 0;
+        }
+    }
+
+    inline int getValue(TextHandle::VerticalAlignment alignment) {
+        switch (alignment) {
+            case TextHandle::VerticalAlignment::TOP: return 0;
+            case TextHandle::VerticalAlignment::CENTER: return 1;
+            case TextHandle::VerticalAlignment::BOTTOM: return 2;
+            default: return 0;
+        }
+    }
+    
+}
+
 struct TextHandle::Impl {
 
     GLTtext* text = gltCreateText();
@@ -32,7 +54,7 @@ void TextHandle::setText(const std::string& str) {
 
 void TextHandle::render() {
     gltColor(color.r, color.g, color.b, alpha);
-    gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, horizontalAlignment, verticalAlignment);
+    gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, getValue(horizontalAlignment), getValue(verticalAlignment));
 }
 
 void TextHandle::setViewport(int width, int height) {
@@ -49,6 +71,7 @@ void TextHandle::beginDraw(bool blendingEnabled) {
     if (!blendingEnabled) {
         glEnable(GL_BLEND);
     }
+    glDisable(GL_DEPTH_TEST);
     gltBeginDraw();
 }
 
@@ -57,6 +80,7 @@ void TextHandle::endDraw(bool blendingEnabled) {
     if (!blendingEnabled) {
         glDisable(GL_BLEND);
     }
+    glEnable(GL_DEPTH_TEST);
 }
 
 TextHandle::~TextHandle() = default;

@@ -13,10 +13,16 @@ namespace threepp {
     class TextHandle {
 
     public:
-        enum Alignment : int {
-            LEFT = 0,
-            CENTER = 1,
-            RIGHT = 2
+        enum class HorizontalAlignment {
+            LEFT,
+            CENTER,
+            RIGHT
+        };
+
+        enum class VerticalAlignment {
+            TOP,
+            CENTER,
+            BOTTOM
         };
 
         int x = 0;
@@ -25,8 +31,8 @@ namespace threepp {
 
         Color color;
         float alpha = 1;
-        Alignment horizontalAlignment{0};
-        Alignment verticalAlignment{0};
+        HorizontalAlignment horizontalAlignment{HorizontalAlignment::LEFT};
+        VerticalAlignment verticalAlignment{VerticalAlignment::TOP};
 
         explicit TextHandle(const std::string& str);
 
