@@ -1,7 +1,6 @@
 
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
-#include <iostream>
 
 using namespace threepp;
 
@@ -32,11 +31,13 @@ int main() {
     auto scene = Scene::create();
     auto orthoScene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(70, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 10;
 
     auto orthoCamera = OrthographicCamera::create(-size.width / 2, size.width / 2, size.height / 2, -size.height / 2, 1, 10);
-    orthoCamera->position.z = 5;
+    orthoCamera->position.z = 10;
+
+    OrbitControls controls{camera, canvas};
 
     unsigned int textureSize = 128;
     std::vector<unsigned char> data(textureSize * textureSize * 3);
@@ -46,13 +47,12 @@ int main() {
     texture->magFilter = NearestFilter;
 
     auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
+    spriteMaterial->map->offset.set(0.5, 0.5);
     auto sprite = Sprite::create(spriteMaterial);
     sprite->scale.set(textureSize, textureSize, 1);
     orthoScene->add(sprite);
 
     updateSpritePosition(*sprite, size, textureSize);
-
-    OrbitControls controls{camera, canvas};
 
     TextureLoader tl;
 
