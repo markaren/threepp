@@ -146,6 +146,8 @@ set(publicHeaders
         "threepp/objects/Reflector.hpp"
         "threepp/objects/Water.hpp"
 
+        "threepp/textures/DataTexture.hpp"
+        "threepp/textures/DataTexture3D.hpp"
         "threepp/textures/DepthTexture.hpp"
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
@@ -351,6 +353,7 @@ set(sources
         "threepp/objects/Water.cpp"
 
         "threepp/textures/Texture.cpp"
+        "threepp/textures/DataTexture.cpp"
         "threepp/textures/DataTexture3D.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"

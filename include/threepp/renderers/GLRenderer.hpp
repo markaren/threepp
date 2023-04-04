@@ -145,6 +145,8 @@ namespace threepp {
 
         void setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
 
+        void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
+
         void enableTextRendering();
 
         TextHandle& textHandle(const std::string& str = "");
