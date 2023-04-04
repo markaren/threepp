@@ -92,6 +92,19 @@ namespace {
     };
 #endif
 
+    void addLights(Scene& scene) {
+
+        auto light = AmbientLight::create(0x443333, 0.8f);
+        scene.add(light);
+
+        auto light2 = DirectionalLight::create(0xffddcc, 1.f);
+        light2->position.set(1, 0.75, 0.5);
+        scene.add(light2);
+
+        auto light3 = DirectionalLight::create(0xccccff, 1.f);
+        light3->position.set(-1, 0.75, -0.5);
+        scene.add(light3);
+    }
 
 }// namespace
 
@@ -103,6 +116,8 @@ int main() {
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.set(0, 1, 10);
+
+    addLights(*scene);
 
     OrbitControls controls{camera, canvas};
 
@@ -122,17 +137,6 @@ int main() {
         mesh->setMaterial(mat);
     });
     scene->add(model);
-
-    auto light = AmbientLight::create(0x443333, 0.8f);
-    scene->add(light);
-
-    auto light2 = DirectionalLight::create(0xffddcc, 1.f);
-    light2->position.set(1, 0.75, 0.5);
-    scene->add(light2);
-
-    auto light3 = DirectionalLight::create(0xccccff, 1.f);
-    light3->position.set(-1, 0.75, -0.5);
-    scene->add(light3);
 
     auto lineGeometry = BufferGeometry::create();
     lineGeometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 1}, 3));
@@ -161,6 +165,7 @@ int main() {
 
     Raycaster raycaster;
     canvas.animate([&](float dt) {
+
         raycaster.setFromCamera(mouseListener.mouse, camera);
         auto intersects = raycaster.intersectObject(mesh, false);
 
@@ -183,7 +188,7 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES() * math::randomInRange(0.4f, 1.f);
+                Vector3 scale = Vector3::ONES() * math::randomInRange(0.6f, 1.2f);
 
                 auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();
