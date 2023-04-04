@@ -2,6 +2,7 @@
 #include "threepp/renderers/gl/GLLights.hpp"
 
 #include "threepp/lights/LightProbe.hpp"
+#include "threepp/lights/LightShadow.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -14,6 +14,9 @@
 #include "threepp/renderers/gl/GLTextures.hpp"
 
 #include "threepp/core/InstancedBufferGeometry.hpp"
+
+#include "threepp/cameras/OrthographicCamera.hpp"
+
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/LOD.hpp"
@@ -26,6 +29,8 @@
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/materials/ShadowMaterial.hpp"
+
+#include "threepp/math/Frustum.hpp"
 
 #include <glad/glad.h>
 

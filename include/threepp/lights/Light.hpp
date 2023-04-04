@@ -18,16 +18,12 @@ namespace threepp {
 
         Light(const Light&) = delete;
 
-        [[nodiscard]] virtual std::string type() const {
+        [[nodiscard]] std::string type() const override;
 
-            return "Light";
-        }
-
-        virtual void dispose(){};
+        virtual void dispose();;
 
     protected:
-        Light(const Color& color, std::optional<float> intensity)
-            : color(color), intensity(intensity.value_or(1)) {}
+        Light(const Color& color, std::optional<float> intensity);
     };
 
 }// namespace threepp

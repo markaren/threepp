@@ -27,3 +27,8 @@ void SpotLightShadow::updateMatrices(Light* _light) {
 
     LightShadow::updateMatrices(_light);
 }
+
+std::shared_ptr<SpotLightShadow> SpotLightShadow::create() {
+
+    return std::shared_ptr<SpotLightShadow>(new SpotLightShadow());
+}

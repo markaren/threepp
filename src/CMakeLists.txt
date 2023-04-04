@@ -324,6 +324,10 @@ set(sources
         "threepp/math/Vector4.cpp"
         "threepp/math/Quaternion.cpp"
 
+        "threepp/lights/AmbientLight.cpp"
+        "threepp/lights/DirectionalLight.cpp"
+        "threepp/lights/HemisphereLight.cpp"
+        "threepp/lights/Light.cpp"
         "threepp/lights/PointLight.cpp"
         "threepp/lights/PointLightShadow.cpp"
         "threepp/lights/SpotLight.cpp"

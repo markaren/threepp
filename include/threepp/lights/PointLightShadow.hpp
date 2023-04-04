@@ -14,10 +14,7 @@ namespace threepp {
     public:
         void updateMatrices(PointLight* light, size_t viewportIndex = 0);
 
-        static std::shared_ptr<PointLightShadow> create() {
-
-            return std::shared_ptr<PointLightShadow>(new PointLightShadow());
-        }
+        static std::shared_ptr<PointLightShadow> create();
 
     protected:
         std::vector<Vector3> _cubeDirections;

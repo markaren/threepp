@@ -71,3 +71,8 @@ void OrthographicCamera::updateProjectionMatrix() {
 
     this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
 }
+
+std::shared_ptr<OrthographicCamera> OrthographicCamera::create(int left, int right, int top, int bottom, float near, float far) {
+
+    return std::make_shared<OrthographicCamera>(left, right, top, bottom, near, far);
+}

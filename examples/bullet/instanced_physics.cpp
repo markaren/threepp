@@ -1,7 +1,8 @@
 
 #include "threepp/threepp.hpp"
-
 #include "threepp/extras/physics/BulletPhysics.hpp"
+
+#include "threepp/lights/LightShadow.hpp"
 
 #include <sstream>
 

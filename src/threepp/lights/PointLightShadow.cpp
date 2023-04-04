@@ -73,3 +73,8 @@ void PointLightShadow::updateMatrices(PointLight* light, size_t viewportIndex) {
     _projScreenMatrix.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
     this->_frustum.setFromProjectionMatrix(_projScreenMatrix);
 }
+
+std::shared_ptr<PointLightShadow> PointLightShadow::create() {
+
+    return std::shared_ptr<PointLightShadow>(new PointLightShadow());
+}

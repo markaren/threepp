@@ -1,6 +1,7 @@
 
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/helpers/PointLightHelper.hpp"
+#include "threepp/lights/LightShadow.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -21,7 +22,7 @@ int main() {
 
     auto light1 = PointLight::create(Color::yellow);
     light1->castShadow = true;
-    light1->shadow->bias = -0.005;
+    light1->shadow->bias = -0.005f;
     light1->distance = 8;
     light1->position.y = 4;
     scene->add(light1);
