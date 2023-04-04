@@ -9,9 +9,55 @@
 
 using namespace threepp;
 
+namespace {
+
+    auto createSky(const Vector3& lightPosition) {
+
+        auto sky = Sky::create();
+        sky->scale.setScalar(1000);
+        auto& skyUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+        skyUniforms->at("turbidity").value<float>() = 10;
+        skyUniforms->at("rayleigh").value<float>() = 1;
+        skyUniforms->at("mieCoefficient").value<float>() = 0.005f;
+        skyUniforms->at("mieDirectionalG").value<float>() = 0.8f;
+        skyUniforms->at("sunPosition").value<Vector3>().copy(lightPosition);
+
+        return sky;
+    }
+
+    auto createPlane() {
+
+        const auto planeGeometry = PlaneGeometry::create(100, 100);
+        const auto planeMaterial = MeshLambertMaterial::create();
+        planeMaterial->color = Color::gray;
+        planeMaterial->side = DoubleSide;
+        auto plane = Mesh::create(planeGeometry, planeMaterial);
+        plane->rotateX(math::degToRad(90));
+        plane->receiveShadow = true;
+
+        return plane;
+    }
+
+    auto createTorusKnot() {
+
+        const auto geometry = TorusKnotGeometry::create(0.75f, 0.2f, 128, 64);
+        const auto material = MeshStandardMaterial::create();
+        material->roughness = 0.1;
+        material->metalness = 0.1;
+        material->color = 0xff0000;
+        material->emissive = 0x000000;
+        auto mesh = Mesh::create(geometry, material);
+        mesh->castShadow = true;
+        mesh->position.y = 2;
+
+        return mesh;
+    }
+
+}// namespace
+
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("DirectionalLight", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
     renderer.toneMapping = ACESFilmicToneMapping;
@@ -25,13 +71,7 @@ int main() {
     light->castShadow = true;
     scene->add(light);
 
-    auto sky = Sky::create();
-    sky->scale.setScalar(1000);
-    sky->material()->as<ShaderMaterial>()->uniforms->at("turbidity").value<float>() = 10;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("rayleigh").value<float>() = 1;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("mieCoefficient").value<float>() = 0.005f;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("mieDirectionalG").value<float>() = 0.8f;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
+    auto sky = createSky(light->position);
     scene->add(sky);
 
     OrbitControls controls{camera, canvas};
@@ -39,24 +79,10 @@ int main() {
     auto helper = DirectionalLightHelper::create(light);
     scene->add(helper);
 
-    const auto geometry = TorusKnotGeometry::create(0.75f, 0.2f, 128, 64);
-    const auto material = MeshStandardMaterial::create();
-    material->roughness = 0.1;
-    material->metalness = 0.1;
-    material->color = 0xff0000;
-    material->emissive = 0x000000;
-    auto mesh = Mesh::create(geometry, material);
-    mesh->castShadow = true;
-    mesh->position.y = 2;
-    scene->add(mesh);
+    auto torusKnot = createTorusKnot();
+    scene->add(torusKnot);
 
-    const auto planeGeometry = PlaneGeometry::create(100, 100);
-    const auto planeMaterial = MeshLambertMaterial::create();
-    planeMaterial->color = Color::gray;
-    planeMaterial->side = DoubleSide;
-    auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->rotateX(math::degToRad(90));
-    plane->receiveShadow = true;
+    auto plane = createPlane();
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -66,7 +92,7 @@ int main() {
     });
 
     canvas.animate([&](float t, float dt) {
-        mesh->rotation.y -= 0.5f * dt;
+        torusKnot->rotation.y -= 0.5f * dt;
 
         light->position.x = 100 * std::sin(t);
         light->position.z = 100 * std::cos(t);
