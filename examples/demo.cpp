@@ -54,6 +54,49 @@ private:
 };
 #endif
 
+auto createBox() {
+
+    const auto boxGeometry = BoxGeometry::create();
+    const auto boxMaterial = MeshBasicMaterial::create();
+    boxMaterial->color.setRGB(1, 0, 0);
+    boxMaterial->transparent = true;
+    boxMaterial->opacity = 0.1f;
+    auto box = Mesh::create(boxGeometry, boxMaterial);
+
+    auto wiredBox = LineSegments::create(WireframeGeometry::create(*boxGeometry));
+    wiredBox->material()->as<LineBasicMaterial>()->depthTest = false;
+    wiredBox->material()->as<LineBasicMaterial>()->color = Color::gray;
+    box->add(wiredBox);
+
+    return box;
+}
+
+auto createSphere() {
+
+    const auto sphereGeometry = SphereGeometry::create(0.5f);
+    const auto sphereMaterial = MeshBasicMaterial::create();
+    sphereMaterial->color.setHex(0x00ff00);
+    sphereMaterial->wireframe = true;
+    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
+    sphere->position.setX(-1);
+
+    return sphere;
+}
+
+auto createPlane() {
+
+    const auto planeGeometry = PlaneGeometry::create(5, 5);
+    const auto planeMaterial = MeshBasicMaterial::create();
+    planeMaterial->color.setHex(Color::yellow);
+    planeMaterial->transparent = true;
+    planeMaterial->opacity = 0.5f;
+    planeMaterial->side = DoubleSide;
+    auto plane = Mesh::create(planeGeometry, planeMaterial);
+    plane->position.setZ(-2);
+
+    return plane;
+}
+
 int main() {
 
     Canvas canvas("threepp demo");
@@ -65,47 +108,27 @@ int main() {
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
-    const auto boxGeometry = BoxGeometry::create();
-    const auto boxMaterial = MeshBasicMaterial::create();
-    boxMaterial->color.setRGB(1, 0, 0);
-    boxMaterial->transparent = true;
-    boxMaterial->opacity = 0.1f;
-    auto box = Mesh::create(boxGeometry, boxMaterial);
+    auto box = createBox();
     scene->add(box);
 
-    auto wiredBox = LineSegments::create(WireframeGeometry::create(*boxGeometry));
-    wiredBox->material()->as<LineBasicMaterial>()->depthTest = false;
-    wiredBox->material()->as<LineBasicMaterial>()->color = Color::gray;
-    box->add(wiredBox);
-
-    const auto sphereGeometry = SphereGeometry::create(0.5f);
-    const auto sphereMaterial = MeshBasicMaterial::create();
-    sphereMaterial->color.setHex(0x00ff00);
-    sphereMaterial->wireframe = true;
-    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
-    sphere->position.setX(-1);
+    auto sphere = createSphere();
     box->add(sphere);
 
-    const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->color.setHex(Color::yellow);
-    planeMaterial->transparent = true;
-    planeMaterial->opacity = 0.5f;
-    planeMaterial->side = DoubleSide;
-    auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.setZ(-2);
+    auto plane = createPlane();
+    auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
-
-    canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
-        renderer.setSize(size);
-    });
 
     renderer.enableTextRendering();
     auto& handle = renderer.textHandle();
     handle.setPosition(canvas.getSize().width - 130, 0);
     handle.color = Color::red;
+
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.getAspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+        handle.setPosition(canvas.getSize().width - 130, 0);
+    });
 
 #ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
@@ -123,7 +146,7 @@ int main() {
         plane->rotation.copy(ui.rotation());
 
         if (ui.colorChanged) {
-            auto& c = ui.color();
+            const auto& c = ui.color();
             planeMaterial->color.fromArray(c);
             planeMaterial->opacity = c[3];
             planeMaterial->transparent = c[3] != 1;
