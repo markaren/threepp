@@ -8,31 +8,56 @@
 
 using namespace threepp;
 
+
 std::string vertexSource();
 std::string fragmentSource();
 
-auto createMaterial(Texture* texture) {
+namespace {
 
-    auto m = RawShaderMaterial::create();
-    m->vertexShader = vertexSource();
-    m->fragmentShader = fragmentSource();
-    m->side = BackSide;
-    m->transparent = true;
+    auto createMaterial(Texture* texture) {
 
-    UniformMap uniforms{
-            {"base", Uniform(Color(0x798aa0))},
-            {"map", Uniform(texture)},
-            {"cameraPos", Uniform(Vector3())},
-            {"threshold", Uniform(0.25f)},
-            {"opacity", Uniform(0.25f)},
-            {"range", Uniform(0.1f)},
-            {"steps", Uniform(100)},
-            {"frame", Uniform(1)}};
+        auto m = RawShaderMaterial::create();
+        m->vertexShader = vertexSource();
+        m->fragmentShader = fragmentSource();
+        m->side = BackSide;
+        m->transparent = true;
 
-    m->uniforms = std::make_shared<UniformMap>(uniforms);
+        UniformMap uniforms{
+                {"base", Uniform(Color(0x798aa0))},
+                {"map", Uniform(texture)},
+                {"cameraPos", Uniform(Vector3())},
+                {"threshold", Uniform(0.25f)},
+                {"opacity", Uniform(0.25f)},
+                {"range", Uniform(0.1f)},
+                {"steps", Uniform(100)},
+                {"frame", Uniform(1)}};
 
-    return m;
-}
+        m->uniforms = std::make_shared<UniformMap>(uniforms);
+
+        return m;
+    }
+
+    auto createTextureData(unsigned int size) {
+
+        int i = 0;
+        float scale = 0.05f;
+        Vector3 vector;
+        math::ImprovedNoise perlin;
+        std::vector<unsigned char> data(size * size * size);
+        for (unsigned z = 0; z < size; z++) {
+            for (unsigned y = 0; y < size; y++) {
+                for (unsigned x = 0; x < size; x++) {
+
+                    auto d = 1.f - vector.set(x, y, z).subScalar(size / 2).divideScalar(size).length();
+                    data[i] = (128 + 128 * perlin.noise(x * scale / 1.5f, y * scale, z * scale / 1.5f)) * d * d;
+                    ++i;
+                }
+            }
+        }
+
+        return data;
+    }
+}// namespace
 
 int main() {
 
@@ -47,23 +72,8 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    int i = 0;
-    int size = 128;
-    float scale = 0.05f;
-    Vector3 vector;
-    math::ImprovedNoise perlin;
-    std::vector<unsigned char> data(size * size * size);
-    for (unsigned z = 0; z < size; z++) {
-        for (unsigned y = 0; y < size; y++) {
-            for (unsigned x = 0; x < size; x++) {
-
-                auto d = 1.f - vector.set(x, y, z).subScalar(size / 2).divideScalar(size).length();
-                data[i] = (128 + 128 * perlin.noise(x * scale / 1.5f, y * scale, z * scale / 1.5f)) * d * d;
-                ++i;
-            }
-        }
-    }
-
+    unsigned int size = 128;
+    auto data = createTextureData(size);
     auto texture = std::make_shared<DataTexture3D>(data, size, size, size);
     texture->format = RedFormat;
     texture->minFilter = LinearFilter;
@@ -87,7 +97,7 @@ int main() {
         material->uniforms->at("cameraPos").value<Vector3>().copy(camera->position);
         material->uniforms->at("frame").value<int>()++;
 
-        int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t)) + 50;
+        int step = static_cast<int>(std::floor(50 * std::sin(math::TWO_PI * 0.1f * t)) + 50);
         material->uniforms->at("steps").value<int>() = std::max(1, step);
 
         renderer.render(scene, camera);
