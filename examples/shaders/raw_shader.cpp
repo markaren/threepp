@@ -58,11 +58,10 @@ int main() {
     camera->position.z = 2;
 
     int triangles = 1000;
-
-    auto geometry = BufferGeometry::create();
-
     std::vector<float> positions;
+    positions.reserve(triangles*3);
     std::vector<float> colors;
+    colors.reserve(triangles*4);
 
     for (int i = 0; i < triangles; i++) {
         positions.emplace_back(math::random() - .5f);
@@ -75,6 +74,7 @@ int main() {
         colors.emplace_back(math::random());
     }
 
+    auto geometry = BufferGeometry::create();
     geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
     geometry->setAttribute("color", FloatBufferAttribute::create(colors, 4));
 
