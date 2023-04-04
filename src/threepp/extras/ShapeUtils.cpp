@@ -38,7 +38,7 @@ void shapeutils::removeDupEndPts(std::vector<Vector2>& points) {
 
 void shapeutils::addContour(std::vector<float>& vertices, const std::vector<Vector2>& contour) {
 
-    for (auto& i : contour) {
+    for (const auto& i : contour) {
 
         vertices.emplace_back(i.x);
         vertices.emplace_back(i.y);
@@ -51,11 +51,13 @@ std::vector<std::vector<unsigned int>> shapeutils::triangulateShape(std::vector<
     using N = unsigned int;
     using Point = std::array<Coord, 2>;
 
-    std::vector<Point> vertices;
-    std::vector<std::vector<Point>> holes_;
-
-
     removeDupEndPts(contour);
+
+    std::vector<Point> vertices;
+    vertices.reserve(contour.size()*2);
+    std::vector<std::vector<Point>> holes_;
+    holes_.reserve(holes.size());
+
     for (const auto& p : contour) {
         vertices.emplace_back(std::array<float, 2>{p.x, p.y});
     }
@@ -63,7 +65,7 @@ std::vector<std::vector<unsigned int>> shapeutils::triangulateShape(std::vector<
     for (auto& points : holes) {
         removeDupEndPts(points);
         holes_.emplace_back();
-        for (auto& p : points) {
+        for (const auto& p : points) {
             holes_.back().emplace_back(std::array<float, 2>{p.x, p.y});
         }
     }
@@ -77,10 +79,11 @@ std::vector<std::vector<unsigned int>> shapeutils::triangulateShape(std::vector<
 
     //
 
-    std::vector<std::vector<unsigned int>> faces;
-    for (unsigned i = 0; i < triangles.size(); i += 3) {
-
-        faces.insert(faces.end(), {triangles.begin() + i, triangles.begin() + i + 3});
+    std::vector<std::vector<unsigned int>> faces(triangles.size()/3);
+    for (unsigned i = 0, j = 0; i < triangles.size(); i += 3, j++) {
+        faces[j].emplace_back(triangles[i]);
+        faces[j].emplace_back(triangles[i+1]);
+        faces[j].emplace_back(triangles[i+2]);
     }
 
     return faces;
