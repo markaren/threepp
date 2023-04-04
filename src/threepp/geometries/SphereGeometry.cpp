@@ -97,3 +97,22 @@ SphereGeometry::SphereGeometry(const Params& params)
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::string SphereGeometry::type() const {
+
+    return "SphereGeometry";
+}
+
+std::shared_ptr<SphereGeometry> SphereGeometry::create(const SphereGeometry::Params& params) {
+
+    return std::shared_ptr<SphereGeometry>(new SphereGeometry(params));
+}
+
+std::shared_ptr<SphereGeometry> SphereGeometry::create(float radius, unsigned int widthSegments, unsigned int heightSegments, float phiStart, float phiLength, float thetaStart, float thetaLength) {
+
+    return create(Params{radius, widthSegments, heightSegments, phiStart, phiLength, thetaStart, thetaLength});
+}
+
+SphereGeometry::Params::Params(float radius, unsigned int widthSegments, unsigned int heightSegments, float phiStart, float phiLength, float thetaStart, float thetaLength)
+    : radius(radius), widthSegments(widthSegments), heightSegments(heightSegments),
+      phiStart(phiStart), phiLength(phiLength), thetaStart(thetaStart), thetaLength(thetaLength) {}

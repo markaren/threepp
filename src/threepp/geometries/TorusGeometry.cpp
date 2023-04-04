@@ -81,3 +81,13 @@ TorusGeometry::TorusGeometry(float radius, float tube, unsigned int radialSegmen
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::string TorusGeometry::type() const {
+
+    return "TorusGeometry";
+}
+
+std::shared_ptr<TorusGeometry> TorusGeometry::create(float radius, float tube, unsigned int radialSegments, unsigned int tubularSegments, float arc) {
+
+    return std::shared_ptr<TorusGeometry>(new TorusGeometry(radius, tube, radialSegments, tubularSegments, arc));
+}

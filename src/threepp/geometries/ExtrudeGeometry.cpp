@@ -622,3 +622,13 @@ std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(const std::vector<std::
 
     return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry(ptrs, options));
 }
+
+std::string ExtrudeGeometry::type() const {
+
+    return "ExtrudeGeometry";
+}
+
+ExtrudeGeometry::Options::Options()
+    : curveSegments(12), steps(1), depth(1),
+      bevelEnabled(true), bevelThickness(0.2f), bevelSize(bevelThickness - 0.1f),
+      bevelOffset(0), bevelSegments(3), extrudePath(nullptr) {}

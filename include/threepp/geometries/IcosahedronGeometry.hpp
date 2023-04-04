@@ -18,9 +18,8 @@ namespace threepp {
 
     private:
         IcosahedronGeometry(float radius, unsigned int detail);
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_ICOSAHEDRONGEOMETRY_HPP

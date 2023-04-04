@@ -64,3 +64,21 @@ PlaneGeometry::PlaneGeometry(const Params& params)
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::string PlaneGeometry::type() const {
+
+    return "PlaneGeometry";
+}
+
+std::shared_ptr<PlaneGeometry> PlaneGeometry::create(const PlaneGeometry::Params& params) {
+
+    return std::shared_ptr<PlaneGeometry>(new PlaneGeometry(params));
+}
+
+std::shared_ptr<PlaneGeometry> PlaneGeometry::create(float width, float height, unsigned int widthSegments, unsigned int heightSegments) {
+
+    return create(Params(width, height, widthSegments, heightSegments));
+}
+
+PlaneGeometry::Params::Params(float width, float height, unsigned int widthSegments, unsigned int heightSegments)
+        : width(width), height(height), widthSegments(widthSegments), heightSegments(heightSegments) {}

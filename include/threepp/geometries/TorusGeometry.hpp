@@ -12,20 +12,14 @@ namespace threepp {
     class TorusGeometry: public BufferGeometry {
 
     public:
-        [[nodiscard]] std::string type() const override {
-
-            return "TorusGeometry";
-        }
+        [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<TorusGeometry> create(
                 float radius = 1,
                 float tube = 0.4f,
                 unsigned int radialSegments = 20,
                 unsigned int tubularSegments = 64,
-                float arc = math::TWO_PI) {
-
-            return std::shared_ptr<TorusGeometry>(new TorusGeometry(radius, tube, radialSegments, tubularSegments, arc));
-        }
+                float arc = math::TWO_PI);
 
     protected:
         TorusGeometry(float radius, float tube, unsigned int radialSegments, unsigned int tubularSegments, float arc);

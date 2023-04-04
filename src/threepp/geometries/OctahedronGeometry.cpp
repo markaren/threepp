@@ -25,3 +25,8 @@ std::string OctahedronGeometry::type() const {
 
     return "OctahedronGeometry";
 }
+
+std::shared_ptr<OctahedronGeometry> OctahedronGeometry::create(float radius, unsigned int detail) {
+
+    return std::shared_ptr<OctahedronGeometry>(new OctahedronGeometry(radius, detail));
+}

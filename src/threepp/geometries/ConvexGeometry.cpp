@@ -89,7 +89,12 @@ std::shared_ptr<ConvexGeometry> ConvexGeometry::create(const std::vector<Vector3
     return std::shared_ptr<ConvexGeometry>(new ConvexGeometry(points));
 }
 
-bool threepp::ConvexGeometry::containsPoint(const Vector3& v, float tolerance) const {
+bool ConvexGeometry::containsPoint(const Vector3& v, float tolerance) const {
 
     return pimpl_->containsPoint(v, tolerance);
+}
+
+std::string ConvexGeometry::type() const {
+
+    return "ConvexGeometry";
 }

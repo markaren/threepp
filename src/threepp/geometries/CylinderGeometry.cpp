@@ -229,3 +229,23 @@ CylinderGeometry::CylinderGeometry(const Params& params)
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::string CylinderGeometry::type() const {
+
+    return "CylinderGeometry";
+}
+
+std::shared_ptr<CylinderGeometry> CylinderGeometry::create(const CylinderGeometry::Params& params) {
+
+    return std::shared_ptr<CylinderGeometry>(new CylinderGeometry(params));
+}
+
+std::shared_ptr<CylinderGeometry> CylinderGeometry::create(float radiusTop, float radiusBottom, float height, unsigned int radialSegments, unsigned int heightSegments, bool openEnded, float thetaStart, float thetaLength) {
+
+    return create(Params(radiusTop, radiusBottom, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
+}
+
+CylinderGeometry::Params::Params(float radiusTop, float radiusBottom, float height, unsigned int radialSegments, unsigned int heightSegments, bool openEnded, float thetaStart, float thetaLength)
+    : radiusTop(radiusTop), radiusBottom(radiusBottom), height(height),
+      radialSegments(radialSegments), heightSegments(heightSegments),
+      openEnded(openEnded), thetaStart(thetaStart), thetaLength(thetaLength) {}

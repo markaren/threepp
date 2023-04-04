@@ -129,3 +129,13 @@ TorusKnotGeometry::TorusKnotGeometry(float radius, float tube, unsigned int tubu
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::string TorusKnotGeometry::type() const {
+
+    return "TorusKnotGeometry";
+}
+
+std::shared_ptr<TorusKnotGeometry> TorusKnotGeometry::create(float radius, float tube, unsigned int tubularSegments, unsigned int radialSegments, unsigned int p, unsigned int q) {
+
+    return std::shared_ptr<TorusKnotGeometry>(new TorusKnotGeometry(radius, tube, tubularSegments, radialSegments, p, q));
+}

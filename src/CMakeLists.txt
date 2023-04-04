@@ -255,6 +255,7 @@ set(sources
         "threepp/geometries/BoxGeometry.cpp"
         "threepp/geometries/CapsuleGeometry.cpp"
         "threepp/geometries/CircleGeometry.cpp"
+        "threepp/geometries/ConeGeometry.cpp"
         "threepp/geometries/ConvexGeometry.cpp"
         "threepp/geometries/CylinderGeometry.cpp"
         "threepp/geometries/DecalGeometry.cpp"

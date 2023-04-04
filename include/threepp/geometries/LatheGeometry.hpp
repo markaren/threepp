@@ -12,10 +12,7 @@ namespace threepp {
     class LatheGeometry: public BufferGeometry {
 
     public:
-        [[nodiscard]] std::string type() const override {
-
-            return "LatheGeometry";
-        }
+        [[nodiscard]] std::string type() const override;
 
         template<class ArrayLike>
         static std::shared_ptr<LatheGeometry> create(const ArrayLike& points, unsigned int segments = 24, float phiStart = 0, float phiLength = math::TWO_PI) {

@@ -87,3 +87,21 @@ RingGeometry::RingGeometry(const Params& params) {
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::string RingGeometry::type() const {
+
+    return "RingGeometry";
+}
+
+std::shared_ptr<RingGeometry> RingGeometry::create(const RingGeometry::Params& params) {
+
+    return std::shared_ptr<RingGeometry>(new RingGeometry(params));
+}
+
+std::shared_ptr<RingGeometry> RingGeometry::create(float innerRadius, float outerRadius, unsigned int thetaSegments, unsigned int phiSegments, float thetaStart, float thetaLength) {
+
+    return create(Params(innerRadius, outerRadius, thetaSegments, phiSegments, thetaStart, thetaLength));
+}
+
+RingGeometry::Params::Params(float innerRadius, float outerRadius, unsigned int thetaSegments, unsigned int phiSegments, float thetaStart, float thetaLength)
+        : innerRadius(innerRadius), outerRadius(outerRadius), thetaSegments(thetaSegments), phiSegments(phiSegments), thetaStart(thetaStart), thetaLength(thetaLength) {}

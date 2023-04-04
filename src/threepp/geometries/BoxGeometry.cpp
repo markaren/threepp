@@ -136,3 +136,21 @@ BoxGeometry::BoxGeometry(const Params& params)
     this->setAttribute("normal", FloatBufferAttribute::create(h.normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(h.uvs, 2));
 }
+
+std::string BoxGeometry::type() const {
+
+    return "BoxGeometry";
+}
+std::shared_ptr<BoxGeometry> BoxGeometry::create(const BoxGeometry::Params& params) {
+
+    return std::shared_ptr<BoxGeometry>(new BoxGeometry(params));
+}
+
+std::shared_ptr<BoxGeometry> BoxGeometry::create(float width, float height, float depth, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments) {
+
+    return create(Params(width, height, depth, widthSegments, heightSegments, depthSegments));
+}
+
+BoxGeometry::Params::Params(float width, float height, float depth, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments)
+    : width(width), height(height), depth(depth),
+      widthSegments(widthSegments), heightSegments(heightSegments), depthSegments(depthSegments) {}
