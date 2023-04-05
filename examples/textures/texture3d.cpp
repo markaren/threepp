@@ -57,6 +57,7 @@ namespace {
 
         return data;
     }
+
 }// namespace
 
 int main() {
@@ -74,7 +75,7 @@ int main() {
 
     unsigned int size = 128;
     auto data = createTextureData(size);
-    auto texture = std::make_shared<DataTexture3D>(data, size, size, size);
+    auto texture = DataTexture3D::create(data, size, size, size);
     texture->format = RedFormat;
     texture->minFilter = LinearFilter;
     texture->magFilter = LinearFilter;

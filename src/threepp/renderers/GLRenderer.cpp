@@ -31,6 +31,7 @@
 #include "threepp/materials/ShadowMaterial.hpp"
 
 #include "threepp/math/Frustum.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
 #include <glad/glad.h>
 
@@ -996,6 +997,27 @@ struct GLRenderer::Impl {
         state.setScissorTest(_currentScissorTest.value_or(false));
     }
 
+    void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
+
+        const auto levelScale = std::pow(2, -level);
+        const auto width = static_cast<int>(texture.image->width * levelScale);
+        const auto height = static_cast<int>(texture.image->height * levelScale);
+
+        auto glFormat = gl::convert(texture.format);
+
+        // Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1120100
+
+        if (glFormat == GL_RGB) glFormat = GL_RGB8;
+        if (glFormat == GL_RGBA) glFormat = GL_RGBA8;
+
+
+        textures.setTexture2D(texture, 0);
+
+        glCopyTexImage2D(GL_TEXTURE_2D, level, glFormat, static_cast<int>(position.x), static_cast<int>(position.y), width, height, 0);
+
+        state.unbindTexture();
+    }
+
     void setViewport(int x, int y, int width, int height) {
 
         _viewport.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
@@ -1241,6 +1263,11 @@ void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry
 void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     pimpl_->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
+}
+
+void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
+
+    pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
 void GLRenderer::enableTextRendering() {
