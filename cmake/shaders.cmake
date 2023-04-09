@@ -6,7 +6,7 @@ set(THREEPP_SHADER_INCLUDES)
 set(THREEPP_SHADERCHUNK_CODE)
 set(THREEPP_SHADERLIB_CODE)
 
-file(GLOB files "${CMAKE_SOURCE_DIR}/data/shaders/ShaderChunk/*.glsl")
+file(GLOB files "${PROJECT_SOURCE_DIR}/data/shaders/ShaderChunk/*.glsl")
 foreach(shaderFile ${files})
     get_filename_component(fileName ${shaderFile} NAME_WLE)
     set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk/${fileName}.hpp")
@@ -31,7 +31,7 @@ const char* ${fileName}=R\"(${text})\";\n\n\
 
 endforeach()
 
-file(GLOB files "${CMAKE_SOURCE_DIR}/data/shaders/ShaderLib/*.glsl")
+file(GLOB files "${PROJECT_SOURCE_DIR}/data/shaders/ShaderLib/*.glsl")
 foreach(shaderFile ${files})
     get_filename_component(fileName ${shaderFile} NAME_WLE)
     set(header_file "${generatedSourcesDir}/threepp/renderers/shaders/ShaderLib/${fileName}.hpp")
