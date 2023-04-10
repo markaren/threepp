@@ -34,6 +34,8 @@ struct Canvas::Impl {
     WindowSize size_;
     Vector2 lastMousePos_;
 
+    bool manualWindowResizeState = false;
+
     std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
     std::vector<KeyListener*> keyListeners;
@@ -99,8 +101,10 @@ struct Canvas::Impl {
         return size_;
     }
 
-    void setSize(WindowSize size) const {
+    void setSize(WindowSize size, bool internal) {
+        if (internal) manualWindowResizeState = true;
         glfwSetWindowSize(window, size.width, size.height);
+        if (internal) manualWindowResizeState = false;
     }
 
     // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
@@ -226,7 +230,9 @@ struct Canvas::Impl {
     static void window_size_callback(GLFWwindow* w, int width, int height) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         p->size_ = {width, height};
-        if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
+        if (!p->manualWindowResizeState && p->resizeListener) {
+            p->resizeListener.value().operator()(p->size_);
+        }
     }
 
     static void error_callback(int error, const char* description) {
@@ -340,9 +346,9 @@ float Canvas::getAspect() const {
     return getSize().getAspect();
 }
 
-void Canvas::setSize(WindowSize size) {
+void Canvas::setSize(WindowSize size, bool internal) {
 
-    pimpl_->setSize(size);
+    pimpl_->setSize(size, internal);
 }
 
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
@@ -450,7 +456,5 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
     if (!unused.empty()) {
 
         std::cerr << "Unused Canvas parameters: [" << utils::join(unused, ',') << "]" << std::endl;
-
     }
-
 }

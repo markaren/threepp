@@ -42,7 +42,7 @@ namespace threepp {
 
         [[nodiscard]] int getFPS() const;
 
-        void setSize(WindowSize size);
+        void setSize(WindowSize size, bool internal = false);
 
         void onWindowResize(std::function<void(WindowSize)> f);
 

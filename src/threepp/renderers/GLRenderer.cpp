@@ -1134,7 +1134,7 @@ void GLRenderer::setSize(WindowSize size) {
     int canvasWidth = pimpl_->_size.width * pimpl_->_pixelRatio;
     int canvasHeight = pimpl_->_size.height * pimpl_->_pixelRatio;
 
-    pimpl_->canvas_.setSize({canvasWidth, canvasHeight});
+    pimpl_->canvas_.setSize({canvasWidth, canvasHeight}, true);
 
     this->setViewport(0, 0, size.width, size.height);
 }
