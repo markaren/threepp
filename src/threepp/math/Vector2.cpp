@@ -4,6 +4,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace threepp;
@@ -261,6 +262,19 @@ float Vector2::angle() const {
     const auto angle = std::atan2(-this->y, -this->x) + math::PI;
 
     return angle;
+}
+
+float Vector2::angleTo(const Vector2& v) const {
+
+    const auto denominator = std::sqrt(this->lengthSq() * v.lengthSq());
+
+    if (denominator == 0) return math::PI / 2;
+
+    const auto theta = this->dot(v) / denominator;
+
+    // clamp, to handle numerical problems
+
+    return std::acos(std::clamp(theta, -1.f, 1.f));
 }
 
 float Vector2::distanceTo(const Vector2& v) const {
