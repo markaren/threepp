@@ -104,7 +104,6 @@ struct Canvas::Impl {
     void setSize(WindowSize size, bool internal) {
         if (internal) manualWindowResizeState = true;
         glfwSetWindowSize(window, size.width, size.height);
-        if (internal) manualWindowResizeState = false;
     }
 
     // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
@@ -233,6 +232,7 @@ struct Canvas::Impl {
         if (!p->manualWindowResizeState && p->resizeListener) {
             p->resizeListener.value().operator()(p->size_);
         }
+        p->manualWindowResizeState = false;
     }
 
     static void error_callback(int error, const char* description) {
