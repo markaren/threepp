@@ -34,6 +34,8 @@ struct Canvas::Impl {
     WindowSize size_;
     Vector2 lastMousePos_;
 
+    bool toSetGlfwWindowSize = true;
+
     std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
     std::vector<KeyListener*> keyListeners;
@@ -100,7 +102,9 @@ struct Canvas::Impl {
     }
 
     void setSize(WindowSize size) const {
-        glfwSetWindowSize(window, size.width, size.height);
+        if (toSetGlfwWindowSize) {
+            glfwSetWindowSize(window, size.width, size.height);
+        }
     }
 
     // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
@@ -225,8 +229,21 @@ struct Canvas::Impl {
 
     static void window_size_callback(GLFWwindow* w, int width, int height) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        // handling user window resize event
+        // any handlers that calls canvas.setSize() will
+        // not call glfwSetWindowSize(), because it will cause
+        // this function to be called again
+        // this is to fix window resize bug in ubuntu
+        p->toSetGlfwWindowSize = false;
+
         p->size_ = {width, height};
         if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
+
+        // end of handling user window resize event
+        // reset back to normal
+        // calling canvas.setSize() will call glfwSetWindowSize()
+        p->toSetGlfwWindowSize = true;
     }
 
     static void error_callback(int error, const char* description) {
@@ -450,7 +467,5 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
     if (!unused.empty()) {
 
         std::cerr << "Unused Canvas parameters: [" << utils::join(unused, ',') << "]" << std::endl;
-
     }
-
 }
