@@ -9,8 +9,6 @@
 
 namespace threepp {
 
-    class Raycaster;
-
     class InstancedMesh: public Mesh {
 
     public:
