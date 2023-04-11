@@ -4,8 +4,8 @@
 #define THREEPP_GLINFO_HPP
 
 #include <memory>
-#include <vector>
 #include <ostream>
+#include <vector>
 
 namespace threepp::gl {
 
@@ -46,7 +46,8 @@ namespace threepp::gl {
         void reset();
 
         friend std::ostream& operator<<(std::ostream& os, const GLInfo& m) {
-            os << m.memory << "\n" << m.render;
+            os << m.memory << "\n"
+               << m.render;
             return os;
         }
     };

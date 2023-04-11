@@ -12,7 +12,6 @@ namespace threepp {
     class GridHelper: public LineSegments {
 
     public:
-
         ~GridHelper() override;
 
         static std::shared_ptr<GridHelper> create(

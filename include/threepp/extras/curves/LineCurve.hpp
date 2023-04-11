@@ -7,7 +7,7 @@
 
 namespace threepp {
 
-    template <class T>
+    template<class T>
     class LineCurveT: public Curve<T> {
 
     public:

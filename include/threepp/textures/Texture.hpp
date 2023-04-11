@@ -92,7 +92,6 @@ namespace threepp {
         explicit Texture(std::optional<Image> image = std::nullopt);
 
     private:
-
         bool disposed_ = false;
         unsigned int version_ = 0;
 

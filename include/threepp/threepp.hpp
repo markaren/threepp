@@ -28,8 +28,8 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
 
-#include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/cameras/PerspectiveCamera.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 

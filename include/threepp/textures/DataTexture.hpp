@@ -9,7 +9,6 @@ namespace threepp {
     class DataTexture: public Texture {
 
     public:
-
         static std::shared_ptr<DataTexture> create(const std::vector<unsigned char>& data, unsigned int width = 1, unsigned int height = 1);
 
     private:

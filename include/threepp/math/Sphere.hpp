@@ -52,7 +52,7 @@ namespace threepp {
 
         Sphere& union_(const Sphere& sphere);
 
-        [[nodiscard]] bool equals( const Sphere& sphere ) const;
+        [[nodiscard]] bool equals(const Sphere& sphere) const;
 
         [[nodiscard]] Sphere clone() const;
     };

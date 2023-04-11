@@ -73,6 +73,6 @@ namespace threepp::interpolants {
                CubicBezierP3(t, p3);
     }
 
-}// namespace threepp
+}// namespace threepp::interpolants
 
 #endif//THREEPP_INTERPOLATIONS_HPP
