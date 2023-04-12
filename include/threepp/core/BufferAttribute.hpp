@@ -394,6 +394,11 @@ namespace threepp {
             return clone;
         }
 
+        static std::unique_ptr<TypedBufferAttribute<T>> create(std::initializer_list<T>&& array, int itemSize, bool normalized = false) {
+
+            return create(array.begin(), array.end(), itemSize, normalized);
+        }
+
         template<class ArrayLike>
         static std::unique_ptr<TypedBufferAttribute<T>> create(const ArrayLike& array, int itemSize, bool normalized = false) {
 

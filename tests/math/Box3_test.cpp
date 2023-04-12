@@ -62,8 +62,8 @@ TEST_CASE("setFromArray") {
 TEST_CASE("setFromBufferAttribute") {
 
     Box3 a(zero3, one3);
-    auto bigger = FloatBufferAttribute::create(std::vector<float>{-2, -2, -2, 2, 2, 2, 1.5f, 1.5f, 1.5f, 0, 0, 0}, 3);
-    auto smaller = FloatBufferAttribute::create(std::vector<float>{-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0, 0, 0}, 3);
+    auto bigger = FloatBufferAttribute::create({-2, -2, -2, 2, 2, 2, 1.5f, 1.5f, 1.5f, 0, 0, 0}, 3);
+    auto smaller = FloatBufferAttribute::create({-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f, 0, 0, 0}, 3);
 
     Vector3 newMin(-2, -2, -2);
     Vector3 newMax(2, 2, 2);

@@ -32,7 +32,7 @@ DirectionalLightHelper::DirectionalLightHelper(std::shared_ptr<DirectionalLight>
     this->add(this->lightPlane);
 
     geometry = BufferGeometry::create();
-    geometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 1}, 3));
+    geometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
 
     this->targetLine = Line::create(geometry, material);
     this->targetLine->frustumCulled = false;

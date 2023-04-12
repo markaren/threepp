@@ -95,7 +95,7 @@ struct GLShadowMap::Impl {
           _maxTextureSize(GLCapabilities::instance().maxTextureSize) {
 
         auto fullScreenTri = BufferGeometry::create();
-        fullScreenTri->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{-1, -1, 0.5, 3, -1, 0.5, -1, 3, 0.5}, 3));
+        fullScreenTri->setAttribute("position", FloatBufferAttribute::create({-1, -1, 0.5, 3, -1, 0.5, -1, 3, 0.5}, 3));
 
         fullScreenMesh = Mesh::create(fullScreenTri, shadowMaterialVertical);
     }
