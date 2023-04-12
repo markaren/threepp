@@ -90,7 +90,7 @@ namespace threepp {
         private:
             WindowSize size_{640, 480};
             int antialiasing_{0};
-            std::string title_{"threpp"};
+            std::string title_{"threepp"};
             bool vsync_{true};
 
             friend struct Canvas::Impl;
