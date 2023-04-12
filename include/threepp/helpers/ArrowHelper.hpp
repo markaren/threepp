@@ -17,12 +17,13 @@ namespace threepp {
 
         void setColor(const Color& color);
 
-        static std::shared_ptr<ArrowHelper> create(Vector3 dir = Vector3(0, 0, 1),
-                                                   Vector3 origin = Vector3(0, 0, 0),
-                                                   float length = 1,
-                                                   const Color& color = 0xffff00,
-                                                   std::optional<float> headLength = std::nullopt,
-                                                   std::optional<float> headWidth = std::nullopt);
+        static std::shared_ptr<ArrowHelper> create(
+                Vector3 dir = Vector3(0, 0, 1),
+                Vector3 origin = Vector3(0, 0, 0),
+                float length = 1,
+                const Color& color = 0xffff00,
+                std::optional<float> headLength = std::nullopt,
+                std::optional<float> headWidth = std::nullopt);
 
     protected:
         ArrowHelper(

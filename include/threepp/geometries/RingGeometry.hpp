@@ -19,7 +19,12 @@ namespace threepp {
             float thetaStart;
             float thetaLength;
 
-            explicit Params(float innerRadius = 0.5f, float outerRadius = 1, unsigned int thetaSegments = 16, unsigned int phiSegments = 1, float thetaStart = 0, float thetaLength = math::TWO_PI);
+            explicit Params(float innerRadius = 0.5f,
+                            float outerRadius = 1,
+                            unsigned int thetaSegments = 16,
+                            unsigned int phiSegments = 1,
+                            float thetaStart = 0,
+                            float thetaLength = math::TWO_PI);
         };
 
         [[nodiscard]] std::string type() const override;

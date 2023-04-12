@@ -20,7 +20,10 @@ namespace threepp {
             unsigned int radialSegments;
             bool closed;
 
-            explicit Params(unsigned int tubularSegments = 64, float radius = 1, unsigned int radialSegments = 32, bool closed = false);
+            explicit Params(unsigned int tubularSegments = 64,
+                            float radius = 1,
+                            unsigned int radialSegments = 32,
+                            bool closed = false);
         };
 
         const float radius;

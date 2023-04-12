@@ -22,10 +22,7 @@ namespace threepp {
 
         void dispose();
 
-        static std::shared_ptr<HemisphereLightHelper> create(HemisphereLight& light, float size, const std::optional<Color>& color = std::nullopt) {
-
-            return std::shared_ptr<HemisphereLightHelper>(new HemisphereLightHelper(light, size, color));
-        }
+        static std::shared_ptr<HemisphereLightHelper> create(HemisphereLight& light, float size, const std::optional<Color>& color = std::nullopt);
 
         ~HemisphereLightHelper() override;
 

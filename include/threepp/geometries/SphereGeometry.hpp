@@ -23,7 +23,13 @@ namespace threepp {
             float thetaStart;
             float thetaLength;
 
-            explicit Params(float radius = 1, unsigned int widthSegments = 16, unsigned int heightSegments = 12, float phiStart = 0, float phiLength = math::TWO_PI, float thetaStart = 0, float thetaLength = math::PI);
+            explicit Params(float radius = 1,
+                            unsigned int widthSegments = 16,
+                            unsigned int heightSegments = 12,
+                            float phiStart = 0,
+                            float phiLength = math::TWO_PI,
+                            float thetaStart = 0,
+                            float thetaLength = math::PI);
         };
 
         const float radius;

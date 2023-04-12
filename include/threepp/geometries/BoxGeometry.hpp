@@ -20,7 +20,12 @@ namespace threepp {
             unsigned int heightSegments;
             unsigned int depthSegments;
 
-            explicit Params(float width = 1, float height = 1, float depth = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1, unsigned int depthSegments = 1);
+            explicit Params(float width = 1,
+                            float height = 1,
+                            float depth = 1,
+                            unsigned int widthSegments = 1,
+                            unsigned int heightSegments = 1,
+                            unsigned int depthSegments = 1);
         };
 
         const float width;

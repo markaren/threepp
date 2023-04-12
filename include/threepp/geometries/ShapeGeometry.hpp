@@ -11,7 +11,7 @@ namespace threepp {
     class ShapeGeometry: public BufferGeometry {
 
     public:
-        std::string type() const override;
+        [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<ShapeGeometry> create(const Shape& shape, unsigned int curveSegments = 12);
 

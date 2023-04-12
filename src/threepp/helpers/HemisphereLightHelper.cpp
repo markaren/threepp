@@ -105,4 +105,9 @@ void threepp::HemisphereLightHelper::dispose() {
     pimpl_->dispose();
 }
 
+std::shared_ptr<HemisphereLightHelper> threepp::HemisphereLightHelper::create(HemisphereLight& light, float size, const std::optional<Color>& color) {
+
+    return std::shared_ptr<HemisphereLightHelper>(new HemisphereLightHelper(light, size, color));
+}
+
 threepp::HemisphereLightHelper::~HemisphereLightHelper() = default;
