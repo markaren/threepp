@@ -3,6 +3,14 @@
 
 using namespace threepp;
 
+auto createBox(const Vector3& pos, const Color& color) {
+    const auto boxGeometry = BoxGeometry::create();
+    const auto boxMaterial = MeshPhongMaterial::create({{"color", color}});
+    auto box = Mesh::create(boxGeometry, boxMaterial);
+    box->position.copy(pos);
+    return box;
+}
+
 int main() {
 
     Canvas canvas;
@@ -18,24 +26,8 @@ int main() {
     scene->add(light);
 
     auto group = Group::create();
-
-    {
-        const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create({{"color", Color::red}});
-        boxMaterial->color.setHex(0xff0000);
-        auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.x = -1;
-        group->add(box);
-    }
-
-    {
-        const auto boxGeometry = BoxGeometry::create();
-        const auto boxMaterial = MeshPhongMaterial::create({{"color", Color::green}});
-        auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.x = 1;
-        group->add(box);
-    }
-
+    group->add(createBox({-1,0,0}, 0xff0000));
+    group->add(createBox({1,0,0}, 0x00ff00));
     scene->add(group);
 
     auto group2 = group->clone(true);
