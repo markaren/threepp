@@ -13,7 +13,7 @@ int main() {
     renderer.setClearColor(Color::aliceblue);
 
     int amount = 10;
-    int count = std::pow(amount, 3);
+    int count = static_cast<int>(std::pow(amount, 3));
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10000);
@@ -26,7 +26,7 @@ int main() {
     scene->add(light);
 
     auto material = MeshPhongMaterial::create();
-    auto geometry = SphereGeometry::create(0.5f, 16, 12);
+    auto geometry = IcosahedronGeometry::create(0.5f, 2);
     auto mesh = InstancedMesh::create(geometry, material, count);
 
     Matrix4 matrix;

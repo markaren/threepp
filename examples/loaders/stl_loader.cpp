@@ -17,13 +17,10 @@ int main() {
 
     STLLoader loader;
     auto geometry = loader.load("data/models/stl/pr2_head_pan.stl");
-    auto material = MeshPhongMaterial::create();
-    material->flatShading = true;
-    material->color = Color::brown;
+    auto material = MeshPhongMaterial::create({{"flatShading", true}, {"color", Color::brown}});
     auto mesh = Mesh::create(geometry, material);
     mesh->scale *= 2;
-    mesh->rotateX(-math::PI / 2);
-    mesh->rotateZ(math::PI / 2);
+    mesh->rotateX(-math::PI / 2).rotateZ(math::PI / 2);
     scene->add(mesh);
 
     auto wireframeMaterial = LineBasicMaterial::create();
