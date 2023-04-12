@@ -72,7 +72,7 @@ namespace threepp {
 
         float refractionRatio;
 
-        MaterialWithReflectivityRatio(float refractionRatio): refractionRatio(refractionRatio) {}
+        explicit MaterialWithReflectivityRatio(float refractionRatio): refractionRatio(refractionRatio) {}
     };
 
     struct MaterialWithReflectivity: virtual Material, public MaterialWithReflectivityRatio {

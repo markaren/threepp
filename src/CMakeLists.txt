@@ -301,6 +301,8 @@ set(sources
         "threepp/materials/MeshPhongMaterial.cpp"
         "threepp/materials/MeshStandardMaterial.cpp"
         "threepp/materials/PointsMaterial.cpp"
+        "threepp/materials/RawShaderMaterial.cpp"
+        "threepp/materials/ShaderMaterial.cpp"
         "threepp/materials/SpriteMaterial.cpp"
 
         "threepp/math/Box2.cpp"

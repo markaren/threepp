@@ -1,4 +1,6 @@
 
+#include "threepp/renderers/gl/GLShadowMap.hpp"
+
 #include "threepp/constants.hpp"
 
 #include "threepp/math/Frustum.hpp"
@@ -21,7 +23,8 @@
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
-#include "threepp/renderers/gl/GLShadowMap.hpp"
+
+#include "threepp/renderers/shaders/ShaderChunk.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -408,7 +411,7 @@ struct GLShadowMap::Impl {
 };
 
 GLShadowMap::GLShadowMap(GLObjects& objects)
-    : pimpl_(std::make_unique<Impl>(this, objects)) {}
+    : type(PCFShadowMap), pimpl_(std::make_unique<Impl>(this, objects)) {}
 
 
 void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {

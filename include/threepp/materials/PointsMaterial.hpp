@@ -6,8 +6,6 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/interfaces.hpp"
 
-#include "threepp/textures/Texture.hpp"
-
 namespace threepp {
 
     class PointsMaterial: public virtual Material,

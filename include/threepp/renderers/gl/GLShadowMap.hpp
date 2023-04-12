@@ -24,7 +24,7 @@ namespace threepp {
             bool autoUpdate = true;
             bool needsUpdate = false;
 
-            int type = PCFShadowMap;
+            int type;
 
             explicit GLShadowMap(GLObjects& objects);
 
