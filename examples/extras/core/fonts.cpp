@@ -1,6 +1,7 @@
 #include "threepp/extras/core/Font.hpp"
 #include "threepp/geometries/EdgesGeometry.hpp"
 #include "threepp/geometries/ExtrudeGeometry.hpp"
+#include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/threepp.hpp"
 
@@ -22,6 +23,9 @@ int main() {
     light->position.set(10, 5, 10);
     light->lookAt(Vector3::ZEROS());
     light->castShadow = true;
+    auto shadowCamera = light->shadow->camera->as<OrthographicCamera>();
+    shadowCamera->left = shadowCamera->bottom = -20;
+    shadowCamera->right = shadowCamera->top = 20;
     scene->add(light);
 
     auto pointLight = PointLight::create();
