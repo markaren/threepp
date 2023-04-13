@@ -6,15 +6,14 @@
 using namespace threepp;
 
 
-GLRenderTarget::GLRenderTarget(): uuid(math::generateUUID()) {}
-
 std::shared_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const GLRenderTarget::Options& options) {
 
     return std::shared_ptr<GLRenderTarget>(new GLRenderTarget(width, height, options));
 }
 
 GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GLRenderTarget::Options& options)
-    : width(width), height(height),
+    : uuid(math::generateUUID()),
+      width(width), height(height),
       scissor(0.f, 0.f, (float) width, (float) height),
       viewport(0.f, 0.f, (float) width, (float) height),
       depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),

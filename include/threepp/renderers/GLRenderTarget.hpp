@@ -52,7 +52,9 @@ namespace threepp {
         bool stencilBuffer;
         std::shared_ptr<DepthTexture> depthTexture;
 
-        GLRenderTarget();
+        GLRenderTarget(const GLRenderTarget&) = delete;
+        GLRenderTarget(const GLRenderTarget&&) = delete;
+        GLRenderTarget operator=(const GLRenderTarget&) = delete;
 
         void setTexture(const std::shared_ptr<Texture>& tex);
 
