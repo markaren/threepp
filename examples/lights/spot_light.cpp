@@ -28,7 +28,7 @@ int main() {
 
     scene->add(AmbientLight::create(0xffffff, 0.1f));
 
-    auto helper = SpotLightHelper::create(light);
+    auto helper = SpotLightHelper::create(*light);
     scene->add(helper);
 
     auto target = Object3D::create();
@@ -43,7 +43,7 @@ int main() {
     material->emissive = 0x000000;
     auto mesh = Mesh::create(geometry, material);
     mesh->castShadow = true;
-    mesh->position.y = 2;
+    mesh->position.y = 4;
     mesh->scale *= 2;
     scene->add(mesh);
 
@@ -66,6 +66,9 @@ int main() {
 
         target->position.x = 5 * std::sin(t);
         target->position.z = 5 * std::cos(t);
+
+//        light->position.y += 0.05f * std::cos(t);
+//        light->updateMatrixWorld();
 
         helper->update();
 

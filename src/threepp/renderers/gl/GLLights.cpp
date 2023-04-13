@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/gl/GLLights.hpp"
 
+#include "threepp/renderers/GLRenderTarget.hpp"
+
 #include "threepp/lights/LightProbe.hpp"
 #include "threepp/lights/LightShadow.hpp"
 
@@ -20,6 +22,7 @@ namespace {
 
     template<class T>
     void ensureCapacity(T& container, size_t capacity) {
+
         while (container.size() < capacity) {
             container.emplace_back();
         }

@@ -6,7 +6,7 @@ message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" OFF)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
-option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 # ==============================================================================
 # Global internal configuration
@@ -17,9 +17,6 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
-
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_BINARY_DIR})
-list(APPEND CMAKE_PREFIX_PATH ${CMAKE_CURRENT_BINARY_DIR})
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 

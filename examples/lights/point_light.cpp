@@ -27,23 +27,23 @@ int main() {
     light1->position.y = 4;
     scene->add(light1);
 
-    auto lightHelper1 = PointLightHelper::create(light1, 0.25f);
+    auto lightHelper1 = PointLightHelper::create(*light1, 0.25f);
     scene->add(lightHelper1);
 
     auto light2 = PointLight::create(Color::white);
     light2->castShadow = true;
-    light2->shadow->bias = -0.005;
+    light2->shadow->bias = -0.005f;
     light2->distance = 8;
     light2->position.y = 4;
     scene->add(light2);
 
-    auto lightHelper2 = PointLightHelper::create(light2, 0.25f);
+    auto lightHelper2 = PointLightHelper::create(*light2, 0.25f);
     scene->add(lightHelper2);
 
     const auto geometry = TorusKnotGeometry::create(0.75f, 0.2f, 128, 64);
     const auto material = MeshStandardMaterial::create();
-    material->roughness = 0.1;
-    material->metalness = 0.1;
+    material->roughness = 0.1f;
+    material->metalness = 0.1f;
     material->color = 0xff0000;
     material->emissive = 0x000000;
     auto mesh = Mesh::create(geometry, material);

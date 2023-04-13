@@ -1,4 +1,4 @@
-//
+// https://github.com/mrdoob/three.js/blob/r129/src/lights/DirectionalLightShadow.js
 
 #ifndef THREEPP_DIRECTIONALLIGHTSHADOW_HPP
 #define THREEPP_DIRECTIONALLIGHTSHADOW_HPP
@@ -19,7 +19,7 @@ namespace threepp {
 
     protected:
         DirectionalLightShadow()
-            : LightShadow(OrthographicCamera::create(-20, 20, 20, -20, 0.5f, 500)) {}
+            : LightShadow(OrthographicCamera::create(-5, 5, 5, -5, 0.5f, 500)) {}
     };
 
 }// namespace threepp

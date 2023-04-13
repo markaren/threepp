@@ -42,8 +42,8 @@ namespace {
 
         const auto geometry = TorusKnotGeometry::create(0.75f, 0.2f, 128, 64);
         const auto material = MeshStandardMaterial::create();
-        material->roughness = 0.1;
-        material->metalness = 0.1;
+        material->roughness = 0.1f;
+        material->metalness = 0.1f;
         material->color = 0xff0000;
         material->emissive = 0x000000;
         auto mesh = Mesh::create(geometry, material);
@@ -60,6 +60,7 @@ int main() {
     Canvas canvas("DirectionalLight", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
+    renderer.shadowMap().type = PCFSoftShadowMap;
     renderer.toneMapping = ACESFilmicToneMapping;
 
     auto scene = Scene::create();
@@ -76,7 +77,7 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto helper = DirectionalLightHelper::create(light);
+    auto helper = DirectionalLightHelper::create(*light);
     scene->add(helper);
 
     auto torusKnot = createTorusKnot();

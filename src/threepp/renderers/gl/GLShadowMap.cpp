@@ -2,9 +2,7 @@
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 
 #include "threepp/constants.hpp"
-
 #include "threepp/math/Frustum.hpp"
-
 #include "threepp/scenes/Scene.hpp"
 
 #include "threepp/objects/Line.hpp"
@@ -18,13 +16,14 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/PointLightShadow.hpp"
 
+#include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
+#include "threepp/renderers/shaders/ShaderChunk.hpp"
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 
-#include "threepp/renderers/shaders/ShaderChunk.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -226,7 +225,7 @@ struct GLShadowMap::Impl {
                 distanceMaterial->nearDistance = shadowCameraNear;
                 distanceMaterial->farDistance = shadowCameraFar;
             }
-         }
+        }
 
         return result;
     }
