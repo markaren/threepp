@@ -38,7 +38,6 @@ void SpotLight::dispose() {
     this->shadow->dispose();
 }
 
-
 std::shared_ptr<SpotLight> SpotLight::create(const Color& color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay) {
 
     return std::shared_ptr<SpotLight>(new SpotLight(color, intensity, distance, angle, penumbra, decay));

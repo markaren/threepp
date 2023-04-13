@@ -76,7 +76,7 @@ struct GLShadowMap::Impl {
     GLShadowMap* scope;
     GLObjects& _objects;
 
-    Frustum _frustum;
+    const Frustum* _frustum;
 
     Vector2 _shadowMapSize;
     Vector2 _viewportSize;
@@ -160,9 +160,10 @@ struct GLShadowMap::Impl {
     }
 
     Material* getDepthMaterial(GLRenderer& _renderer, Object3D* object, BufferGeometry* geometry, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar) {
-        Material* result = nullptr;
 
-        if (light->is<PointLight>()) {
+        Material* result;
+
+        if (light->type() == "PointLight") {
 
             result = getDistanceMaterialVariant(false);
 
@@ -219,13 +220,13 @@ struct GLShadowMap::Impl {
             resultWithLineWidth->linewidth = materialWithLineWidth->linewidth;
         }
 
-        auto distanceMaterial = result->as<MeshDistanceMaterial>();
-        if (light->is<PointLight>() && distanceMaterial) {
-
-            distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
-            distanceMaterial->nearDistance = shadowCameraNear;
-            distanceMaterial->farDistance = shadowCameraFar;
-        }
+        if (light->type() == "PointLight") {
+            if (auto distanceMaterial = material->as<MeshDistanceMaterial>()) {
+                distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
+                distanceMaterial->nearDistance = shadowCameraNear;
+                distanceMaterial->farDistance = shadowCameraFar;
+            }
+         }
 
         return result;
     }
@@ -238,7 +239,7 @@ struct GLShadowMap::Impl {
 
         if (visible && (object->is<Mesh>() || object->is<Line>() || object->is<Points>())) {
 
-            if ((object->castShadow || (object->receiveShadow && scope->type == VSMShadowMap)) && (!object->frustumCulled || _frustum.intersectsObject(*object))) {
+            if ((object->castShadow || (object->receiveShadow && scope->type == VSMShadowMap)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
 
                 object->modelViewMatrix.multiplyMatrices(shadowCamera->matrixWorldInverse, *object->matrixWorld);
 
@@ -389,7 +390,7 @@ struct GLShadowMap::Impl {
                     shadow->updateMatrices(light);
                 }
 
-                _frustum = shadow->getFrustum();
+                _frustum = &shadow->getFrustum();
 
                 renderObject(_renderer, scene, camera, shadow->camera.get(), light);
             }

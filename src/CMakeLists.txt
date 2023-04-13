@@ -332,6 +332,7 @@ set(sources
         "threepp/lights/DirectionalLight.cpp"
         "threepp/lights/HemisphereLight.cpp"
         "threepp/lights/Light.cpp"
+        "threepp/lights/LightShadow.cpp"
         "threepp/lights/PointLight.cpp"
         "threepp/lights/PointLightShadow.cpp"
         "threepp/lights/SpotLight.cpp"
