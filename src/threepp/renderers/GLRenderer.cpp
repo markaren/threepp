@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include "threepp/renderers/GLRenderTarget.hpp"
+
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
 #include "threepp/renderers/gl/GLBindingStates.hpp"
@@ -12,10 +14,12 @@
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 #include "threepp/renderers/gl/GLRenderStates.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
-
-#include "threepp/core/InstancedBufferGeometry.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/core/InstancedBufferGeometry.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/math/Frustum.hpp"
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -25,13 +29,6 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
-
-#include "threepp/materials/MeshToonMaterial.hpp"
-#include "threepp/materials/RawShaderMaterial.hpp"
-#include "threepp/materials/ShadowMaterial.hpp"
-
-#include "threepp/math/Frustum.hpp"
-#include "threepp/renderers/gl/GLUtils.hpp"
 
 #include <glad/glad.h>
 
@@ -1088,8 +1085,10 @@ struct GLRenderer::Impl {
     friend struct gl::GLShadowMap;
 };
 
+
 GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
     : pimpl_(std::make_unique<Impl>(*this, canvas, parameters)) {}
+
 
 const gl::GLInfo& threepp::GLRenderer::info() {
 

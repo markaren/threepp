@@ -6,21 +6,24 @@
 
 using namespace threepp;
 
-auto createSphere() {
-    auto sphereGeometry = SphereGeometry::create(1, 10, 10);
-    auto sphereMaterial = MeshBasicMaterial::create();
-    auto sphereMesh = Mesh::create(sphereGeometry, sphereMaterial);
-    sphereMesh->position.z = -8;
+namespace {
 
+    auto createSphere() {
+        auto sphereGeometry = SphereGeometry::create(1, 10, 10);
+        auto sphereMaterial = MeshBasicMaterial::create();
+        auto sphereMesh = Mesh::create(sphereGeometry, sphereMaterial);
+        sphereMesh->position.z = -8;
 
-    auto sphereMaterialWireframe = MeshBasicMaterial::create({{"color", Color::black}, {"wireframe", true}});
-    sphereMaterialWireframe->wireframe = true;
-    sphereMaterialWireframe->color = Color::black;
-    auto sphereMeshWireframe = Mesh::create(sphereGeometry, sphereMaterialWireframe);
-    sphereMesh->add(sphereMeshWireframe);
+        auto sphereMaterialWireframe = MeshBasicMaterial::create({{"color", Color::black}, {"wireframe", true}});
+        sphereMaterialWireframe->wireframe = true;
+        sphereMaterialWireframe->color = Color::black;
+        auto sphereMeshWireframe = Mesh::create(sphereGeometry, sphereMaterialWireframe);
+        sphereMesh->add(sphereMeshWireframe);
 
-    return sphereMesh;
-}
+        return sphereMesh;
+    }
+
+}// namespace
 
 int main() {
 
@@ -41,7 +44,7 @@ int main() {
     controls.target = sphere->position;
     controls.update();
 
-    auto helper = CameraHelper::create(camera);
+    auto helper = CameraHelper::create(*camera);
     scene->add(helper);
 
     canvas.onWindowResize([&](WindowSize size) {

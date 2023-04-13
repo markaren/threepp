@@ -5,6 +5,7 @@
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "threepp/textures/DataTexture3D.hpp"
+#include "threepp/textures/DepthTexture.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -45,7 +46,7 @@ namespace {
 
     GLint getInternalFormat(GLuint glFormat, GLuint glType) {
 
-        auto internalFormat = glFormat;
+        GLint internalFormat = glFormat;
 
         if (glFormat == GL_RED) {
 

@@ -5,7 +5,6 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
-#include "threepp/textures/DepthTexture.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include "threepp/math/Vector4.hpp"
@@ -13,6 +12,8 @@
 #include <optional>
 
 namespace threepp {
+
+    class DepthTexture;
 
     class GLRenderTarget: public EventDispatcher {
 

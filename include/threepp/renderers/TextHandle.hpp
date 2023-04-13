@@ -4,7 +4,6 @@
 
 #include "threepp/math/Color.hpp"
 
-
 #include <memory>
 #include <string>
 

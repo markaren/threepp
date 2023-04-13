@@ -12,7 +12,7 @@
 
 namespace threepp {
 
-    class InterleavedBufferAttribute: public TypedBufferAttribute<float> {
+    class InterleavedBufferAttribute: public FloatBufferAttribute {
 
     public:
         unsigned int offset;
@@ -22,10 +22,12 @@ namespace threepp {
             : data(std::move(data)), offset(offset), TypedBufferAttribute<float>({}, itemSize, normalized) {}
 
         [[nodiscard]] std::vector<float>& array() override {
+
             return data->array();
         }
 
         [[nodiscard]] int count() const override {
+
             return data->count();
         }
     };

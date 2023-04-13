@@ -9,7 +9,6 @@
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include <optional>
 #include <unordered_map>
 
 namespace threepp::shaders {

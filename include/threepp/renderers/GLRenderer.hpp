@@ -12,8 +12,6 @@
 #include "threepp/constants.hpp"
 #include "threepp/core/misc.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
-
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
@@ -30,6 +28,8 @@ namespace threepp {
     class BufferGeometry;
     class Object3D;
     class Material;
+    class Texture;
+    class GLRenderTarget;
 
     class GLRenderer {
 
@@ -79,7 +79,7 @@ namespace threepp {
 
         gl::GLShadowMap& shadowMap();
 
-        const gl::GLShadowMap& shadowMap() const;
+        [[nodiscard]] const gl::GLShadowMap& shadowMap() const;
 
         gl::GLState& state();
 

@@ -11,11 +11,10 @@ namespace threepp {
     class InstancedBufferAttribute: public TypedBufferAttribute<T> {
 
     protected:
+        int meshPerAttribute;
+
         InstancedBufferAttribute(std::vector<T> array, int itemSize, bool normalized, int meshPerAttribute = 1)
             : TypedBufferAttribute<T>(array, itemSize, normalized), meshPerAttribute(meshPerAttribute) {}
-
-    private:
-        int meshPerAttribute;
     };
 
 }// namespace threepp
