@@ -6,6 +6,28 @@
 
 using namespace threepp;
 
+namespace {
+
+    struct FPSCounter {
+
+        int fps = 0;
+
+        void update(float currentTime) {
+            nbFrames++;
+            if (currentTime - lastTime >= 1) {
+                fps = nbFrames;
+                nbFrames = 0;
+                lastTime += 1;
+            }
+        }
+
+    private:
+        int nbFrames = 0;
+        float lastTime = 0;
+    };
+
+}// namespace
+
 int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(4).vsync(false));
@@ -22,7 +44,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto light = HemisphereLight::create(0xffffff, 0x888888);
-    light->position.set(0,1,0);
+    light->position.set(0, 1, 0);
     scene->add(light);
 
     auto material = MeshPhongMaterial::create();
@@ -53,7 +75,7 @@ int main() {
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    MouseMoveListener l([&](auto& pos){
+    MouseMoveListener l([&](auto& pos) {
         auto size = canvas.getSize();
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
@@ -63,9 +85,11 @@ int main() {
     renderer.enableTextRendering();
     auto& handle = renderer.textHandle();
 
+    FPSCounter counter;
+
     Raycaster raycaster;
     std::unordered_map<int, bool> map;
-    canvas.animate([&](float dt) {
+    canvas.animate([&](float t, float dt) {
 
         raycaster.setFromCamera(mouse, camera);
         auto intersects = raycaster.intersectObject(mesh.get());
@@ -79,7 +103,8 @@ int main() {
             }
         }
 
-        handle.setText("FPS: " + std::to_string(canvas.getFPS()));
+        counter.update(t);
+        handle.setText("FPS: " + std::to_string(counter.fps));
 
         renderer.render(scene, camera);
     });

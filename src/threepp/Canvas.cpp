@@ -29,8 +29,6 @@ struct Canvas::Impl {
 
     GLFWwindow* window;
 
-    int fps_ = -1;
-
     WindowSize size_;
     Vector2 lastMousePos_;
 
@@ -103,17 +101,6 @@ struct Canvas::Impl {
         glfwSetWindowSize(window, size.width, size.height);
     }
 
-    // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
-    inline void measureFPS(double& lastTime, int& nbFrames) {
-        double currentTime = glfwGetTime();
-        nbFrames++;
-        if (currentTime - lastTime >= 1.0) {
-            fps_ = nbFrames;
-            nbFrames = 0;
-            lastTime += 1.0;
-        }
-    }
-
     inline void handleTasks() {
         while (!tasks_.empty()) {
             auto& task = tasks_.top();
@@ -131,8 +118,6 @@ struct Canvas::Impl {
         int nbFrames = 0;
         while (!glfwWindowShouldClose(window)) {
 
-            measureFPS(lastTime, nbFrames);
-
             handleTasks();
 
             f();
@@ -149,8 +134,6 @@ struct Canvas::Impl {
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
 
-            measureFPS(lastTime, nbFrames);
-
             handleTasks();
 
             f(clock.getDelta());
@@ -166,8 +149,6 @@ struct Canvas::Impl {
         int nbFrames = 0;
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
-
-            measureFPS(lastTime, nbFrames);
 
             handleTasks();
 
@@ -309,11 +290,6 @@ Canvas::Canvas(const std::string& name)
 Canvas::Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values)
     : Canvas(Canvas::Parameters(values).title(name)) {}
 
-
-int threepp::Canvas::getFPS() const {
-
-    return pimpl_->fps_;
-}
 
 void Canvas::animate(const std::function<void()>& f) {
 

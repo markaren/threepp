@@ -40,8 +40,6 @@ namespace threepp {
 
         [[nodiscard]] float getAspect() const;
 
-        [[nodiscard]] int getFPS() const;
-
         void setSize(WindowSize size);
 
         void onWindowResize(std::function<void(WindowSize)> f);
