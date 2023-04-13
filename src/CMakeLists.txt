@@ -28,7 +28,6 @@ set(publicHeaders
         "threepp/cameras/Camera.hpp"
         "threepp/cameras/PerspectiveCamera.hpp"
         "threepp/cameras/OrthographicCamera.hpp"
-        "threepp/cameras/CameraView.hpp"
 
         "threepp/extras/bullet/BulletWrapper.hpp"
         "threepp/extras/ShapeUtils.hpp"
@@ -225,6 +224,7 @@ set(sources
 
         "threepp/Canvas.cpp"
 
+        "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
         "threepp/cameras/OrthographicCamera.cpp"
 

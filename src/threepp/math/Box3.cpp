@@ -407,3 +407,8 @@ bool Box3::equals(const Box3& box) const {
 
     return box.min_.equals(this->min_) && box.max_.equals(this->max_);
 }
+
+bool Box3::operator==(const Box3& other) const {
+
+    return equals(other);
+}

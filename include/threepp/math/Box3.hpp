@@ -129,16 +129,12 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Box3& box) const;
 
-        bool operator==(const Box3& other) const {
-
-            return equals(other);
-        }
+        bool operator==(const Box3& other) const;
 
         friend std::ostream& operator<<(std::ostream& os, const Box3& v) {
             os << "Box3(min=" << v.min_ << ", max=" << v.max_ << ")";
             return os;
         }
-
 
     private:
         Vector3 min_;

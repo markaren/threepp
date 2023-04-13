@@ -32,16 +32,9 @@ namespace threepp {
 
         explicit Euler(float x = 0, float y = 0, float z = 0, RotationOrders order = default_order);
 
-        [[nodiscard]] RotationOrders getOrder() const {
+        [[nodiscard]] RotationOrders getOrder() const;
 
-            return order_;
-        }
-
-        void setOrder(RotationOrders value) {
-
-            this->order_ = value;
-            onChangeCallback_();
-        }
+        void setOrder(RotationOrders value);
 
         Euler& set(float x, float y, float z, const std::optional<RotationOrders>& order = std::nullopt);
 
