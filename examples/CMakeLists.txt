@@ -8,7 +8,6 @@ if (imgui_FOUND)
 endif()
 
 add_subdirectory(geometries)
-add_subdirectory(materials)
 add_subdirectory(shaders)
 add_subdirectory(objects)
 add_subdirectory(lights)
