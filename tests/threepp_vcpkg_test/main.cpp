@@ -4,9 +4,23 @@
 
 using namespace threepp;
 
+namespace {
+
+    auto createBox(const Vector3& pos, const Color& color) {
+        auto geometry = BoxGeometry::create();
+        auto material = MeshBasicMaterial::create();
+        material->color.copy(color);
+        auto mesh = Mesh::create(geometry, material);
+        mesh->position.copy(pos);
+
+        return mesh;
+    }
+
+}// namespace
+
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("threepp demo");
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
@@ -18,31 +32,14 @@ int main() {
     auto scene = Scene::create();
 
     auto group = Group::create();
+    group->add(createBox({-1, 0, 0}, Color::green));
+    group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
-
-    {
-        auto geometry = BoxGeometry::create();
-        auto material = MeshBasicMaterial::create();
-        material->color = Color::green;
-        auto mesh = Mesh::create(geometry, material);
-        mesh->position.x = -1;
-        group->add(mesh);
-    }
-
-    {
-        auto geometry = BoxGeometry::create();
-        auto material = MeshBasicMaterial::create();
-        material->color = Color::blue;
-        auto mesh = Mesh::create(geometry, material);
-        mesh->position.x = 1;
-        group->add(mesh);
-    }
 
     renderer.enableTextRendering();
     auto& textHandle = renderer.textHandle("Hello World");
     textHandle.setPosition(0, canvas.getSize().height - 30);
     textHandle.scale = 2;
-
 
     std::array<float, 3> posBuf{};
     imgui_functional_context ui(canvas.window_ptr(), [&] {
