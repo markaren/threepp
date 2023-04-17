@@ -21,7 +21,6 @@ namespace threepp {
         [[nodiscard]] std::string type() const override;
 
         virtual void dispose();
-        ;
 
     protected:
         Light(const Color& color, std::optional<float> intensity);
