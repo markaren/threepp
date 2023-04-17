@@ -1,4 +1,5 @@
 
+#include "threepp/helpers/BoxHelper.hpp"
 #include "threepp/helpers/PlaneHelper.hpp"
 #include "threepp/threepp.hpp"
 
@@ -22,6 +23,9 @@ int main() {
     arrow->position.setX(0.5f);
     scene->add(arrow);
 
+    const auto boxHelper = BoxHelper::create(*arrow);
+    scene->add(boxHelper);
+
     const auto axes = AxesHelper::create(1);
     axes->position.setX(-0.5f);
     scene->add(axes);
@@ -30,9 +34,9 @@ int main() {
     scene->add(grid);
 
     Box3 box({-1, -1, -1}, {1, 1, 1});
-    const auto boxHelper = Box3Helper::create(box);
-    boxHelper->position.setY(1);
-    scene->add(boxHelper);
+    const auto box3Helper = Box3Helper::create(box);
+    box3Helper->position.setY(1);
+    scene->add(box3Helper);
 
     Plane plane(Vector3(0.5, 1, 0.5), 1);
     const auto planeHelper = PlaneHelper::create(plane);
@@ -50,6 +54,8 @@ int main() {
 
         float sineWave = 0.5f * std::sin(math::TWO_PI * 0.1f * t) + 1;
         box.setFromCenterAndSize({0, 0, 0}, Vector3(1, 1, 1).multiplyScalar(sineWave));
+
+        boxHelper->update();
 
         renderer.render(scene, camera);
     });
