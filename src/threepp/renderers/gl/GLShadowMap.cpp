@@ -18,8 +18,8 @@
 
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
-#include "threepp/renderers/shaders/ShaderLib.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"

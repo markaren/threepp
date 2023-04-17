@@ -54,7 +54,7 @@ std::vector<std::vector<unsigned int>> shapeutils::triangulateShape(std::vector<
     removeDupEndPts(contour);
 
     std::vector<Point> vertices;
-    vertices.reserve(contour.size()*2);
+    vertices.reserve(contour.size() * 2);
     std::vector<std::vector<Point>> holes_;
     holes_.reserve(holes.size());
 
@@ -79,11 +79,11 @@ std::vector<std::vector<unsigned int>> shapeutils::triangulateShape(std::vector<
 
     //
 
-    std::vector<std::vector<unsigned int>> faces(triangles.size()/3);
+    std::vector<std::vector<unsigned int>> faces(triangles.size() / 3);
     for (unsigned i = 0, j = 0; i < triangles.size(); i += 3, j++) {
         faces[j].emplace_back(triangles[i]);
-        faces[j].emplace_back(triangles[i+1]);
-        faces[j].emplace_back(triangles[i+2]);
+        faces[j].emplace_back(triangles[i + 1]);
+        faces[j].emplace_back(triangles[i + 2]);
     }
 
     return faces;

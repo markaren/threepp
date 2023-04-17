@@ -12,7 +12,7 @@ using namespace threepp;
 namespace {
 
     Vector3 _vector;
-    
+
     Vector3 _v0;
     Vector3 _v1;
     Vector3 _v2;

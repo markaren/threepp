@@ -2,8 +2,8 @@
 #include "threepp/math/Ray.hpp"
 
 #include "threepp/math/Box3.hpp"
-#include "threepp/math/Sphere.hpp"
 #include "threepp/math/Plane.hpp"
+#include "threepp/math/Sphere.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -22,7 +22,7 @@ namespace {
     Vector3 _edge2;
     Vector3 _normal;
 
-}
+}// namespace
 
 Ray::Ray(const Vector3& origin, const Vector3& direction): origin(origin), direction(direction) {}
 

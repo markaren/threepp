@@ -134,7 +134,7 @@ std::shared_ptr<MaterialCreator> MTLLoader::load(const std::filesystem::path& pa
         }
     }
 
-    auto materialCreator = std::make_shared<MaterialCreator> (resourcePath_ ? *resourcePath_ : path.parent_path(), materialOptions);
+    auto materialCreator = std::make_shared<MaterialCreator>(resourcePath_ ? *resourcePath_ : path.parent_path(), materialOptions);
     materialCreator->setMaterials(materialsInfo);
 
     return materialCreator;

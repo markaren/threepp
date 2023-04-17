@@ -6,7 +6,7 @@
 using namespace threepp;
 
 Uniform::Uniform(std::optional<UniformValue> value, std::optional<bool> needsUpdate)
-        : value_(std::move(value)), needsUpdate(needsUpdate) {}
+    : value_(std::move(value)), needsUpdate(needsUpdate) {}
 
 bool Uniform::hasValue() const {
 

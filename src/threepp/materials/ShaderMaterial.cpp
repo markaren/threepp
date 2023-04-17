@@ -6,13 +6,13 @@
 using namespace threepp;
 
 ShaderMaterial::ShaderMaterial()
-        : MaterialWithLights(false),
-          MaterialWithClipping(false),
-          MaterialWithWireframe(false, 1),
-          MaterialWithLineWidth(1),
-          uniforms(std::make_shared<UniformMap>()),
-          vertexShader(shaders::ShaderChunk::instance().default_vertex()),
-          fragmentShader(shaders::ShaderChunk::instance().default_fragment()) {
+    : MaterialWithLights(false),
+      MaterialWithClipping(false),
+      MaterialWithWireframe(false, 1),
+      MaterialWithLineWidth(1),
+      uniforms(std::make_shared<UniformMap>()),
+      vertexShader(shaders::ShaderChunk::instance().default_vertex()),
+      fragmentShader(shaders::ShaderChunk::instance().default_fragment()) {
 
     this->fog = false;
     this->lights = false;

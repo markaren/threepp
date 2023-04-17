@@ -9,26 +9,34 @@
 using namespace threepp;
 
 namespace {
-    
+
     inline int getValue(TextHandle::HorizontalAlignment alignment) {
         switch (alignment) {
-            case TextHandle::HorizontalAlignment::LEFT: return 0;
-            case TextHandle::HorizontalAlignment::CENTER: return 1;
-            case TextHandle::HorizontalAlignment::RIGHT: return 2;
-            default: return 0;
+            case TextHandle::HorizontalAlignment::LEFT:
+                return 0;
+            case TextHandle::HorizontalAlignment::CENTER:
+                return 1;
+            case TextHandle::HorizontalAlignment::RIGHT:
+                return 2;
+            default:
+                return 0;
         }
     }
 
     inline int getValue(TextHandle::VerticalAlignment alignment) {
         switch (alignment) {
-            case TextHandle::VerticalAlignment::TOP: return 0;
-            case TextHandle::VerticalAlignment::CENTER: return 1;
-            case TextHandle::VerticalAlignment::BOTTOM: return 2;
-            default: return 0;
+            case TextHandle::VerticalAlignment::TOP:
+                return 0;
+            case TextHandle::VerticalAlignment::CENTER:
+                return 1;
+            case TextHandle::VerticalAlignment::BOTTOM:
+                return 2;
+            default:
+                return 0;
         }
     }
-    
-}
+
+}// namespace
 
 struct TextHandle::Impl {
 

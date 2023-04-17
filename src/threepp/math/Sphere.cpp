@@ -2,8 +2,8 @@
 #include "threepp/math/Sphere.hpp"
 
 #include "threepp/math/Box3.hpp"
-#include "threepp/math/Plane.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Plane.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -179,12 +179,10 @@ Sphere& Sphere::union_(const Sphere& sphere) {
 
 bool Sphere::equals(const Sphere& sphere) const {
 
-    return sphere.center.equals( this->center ) && ( sphere.radius == this->radius );
-
+    return sphere.center.equals(this->center) && (sphere.radius == this->radius);
 }
 
 Sphere Sphere::clone() const {
 
-    return Sphere().copy( *this );
-
+    return Sphere().copy(*this);
 }

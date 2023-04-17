@@ -5,7 +5,7 @@ using namespace threepp;
 
 
 LineLoop::LineLoop(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
-        : Line(geometry, material) {}
+    : Line(geometry, material) {}
 
 std::string LineLoop::type() const {
 

@@ -58,7 +58,7 @@ void OrthographicCamera::updateProjectionMatrix() {
 
     if (this->view && this->view->enabled) {
 
-        const auto scaleW = static_cast<float>(this->right - this->left) /static_cast<float>(this->view->fullWidth) / this->zoom;
+        const auto scaleW = static_cast<float>(this->right - this->left) / static_cast<float>(this->view->fullWidth) / this->zoom;
         const auto scaleH = static_cast<float>(this->top - this->bottom) / static_cast<float>(this->view->fullHeight) / this->zoom;
 
         left += scaleW * static_cast<float>(this->view->offsetX);

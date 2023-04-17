@@ -104,4 +104,4 @@ std::shared_ptr<RingGeometry> RingGeometry::create(float innerRadius, float oute
 }
 
 RingGeometry::Params::Params(float innerRadius, float outerRadius, unsigned int thetaSegments, unsigned int phiSegments, float thetaStart, float thetaLength)
-        : innerRadius(innerRadius), outerRadius(outerRadius), thetaSegments(thetaSegments), phiSegments(phiSegments), thetaStart(thetaStart), thetaLength(thetaLength) {}
+    : innerRadius(innerRadius), outerRadius(outerRadius), thetaSegments(thetaSegments), phiSegments(phiSegments), thetaStart(thetaStart), thetaLength(thetaLength) {}

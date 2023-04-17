@@ -30,9 +30,9 @@ namespace threepp {
             m->referencePosition.copy(referencePosition);
             m->nearDistance = nearDistance;
             m->farDistance = farDistance;
-            
+
             m->map = map;
-            
+
             m->alphaMap = alphaMap;
 
             m->displacementMap = displacementMap;

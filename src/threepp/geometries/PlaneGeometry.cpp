@@ -81,4 +81,4 @@ std::shared_ptr<PlaneGeometry> PlaneGeometry::create(float width, float height, 
 }
 
 PlaneGeometry::Params::Params(float width, float height, unsigned int widthSegments, unsigned int heightSegments)
-        : width(width), height(height), widthSegments(widthSegments), heightSegments(heightSegments) {}
+    : width(width), height(height), widthSegments(widthSegments), heightSegments(heightSegments) {}

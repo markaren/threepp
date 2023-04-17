@@ -426,7 +426,5 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
     if (!unused.empty()) {
 
         std::cerr << "Unused Canvas parameters: [" << utils::join(unused, ',') << "]" << std::endl;
-
     }
-
 }
