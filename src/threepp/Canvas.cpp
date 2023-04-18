@@ -114,8 +114,7 @@ struct Canvas::Impl {
     }
 
     void animate(const std::function<void()>& f) {
-        double lastTime = glfwGetTime();
-        int nbFrames = 0;
+
         while (!glfwWindowShouldClose(window)) {
 
             handleTasks();
@@ -129,8 +128,6 @@ struct Canvas::Impl {
 
     void animate(const std::function<void(float)>& f) {
 
-        double lastTime = glfwGetTime();
-        int nbFrames = 0;
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
 
@@ -145,8 +142,6 @@ struct Canvas::Impl {
 
     void animate(const std::function<void(float, float)>& f) {
 
-        double lastTime = glfwGetTime();
-        int nbFrames = 0;
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
 
