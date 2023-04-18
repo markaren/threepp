@@ -4,6 +4,8 @@
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 PolarGridHelper::PolarGridHelper(float radius, unsigned int sectors, unsigned int rings, unsigned int divisions, const Color& color1, const Color& color2)
