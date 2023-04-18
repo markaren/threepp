@@ -7,8 +7,8 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
+#include "threepp/utils/RegexUtil.hpp"
 #include "threepp/utils/StringUtils.hpp"
-#include "threepp/utils/regex_util.hpp"
 
 #include <cmath>
 #include <iostream>

@@ -217,7 +217,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLUtils.hpp"
         "threepp/renderers/gl/UniformUtils.hpp"
 
-        "threepp/utils/regex_util.hpp"
+        "threepp/utils/RegexUtil.hpp"
         "threepp/utils/StringUtils.hpp"
 
         )
