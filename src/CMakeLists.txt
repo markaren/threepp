@@ -84,6 +84,7 @@ set(publicHeaders
         "threepp/helpers/HemisphereLightHelper.hpp"
         "threepp/helpers/PlaneHelper.hpp"
         "threepp/helpers/PointLightHelper.hpp"
+        "threepp/helpers/PolarGridHelper.hpp"
         "threepp/helpers/SpotLightHelper.hpp"
 
         "threepp/loaders/loaders.hpp"
@@ -287,6 +288,7 @@ set(sources
         "threepp/helpers/HemisphereLightHelper.cpp"
         "threepp/helpers/PlaneHelper.cpp"
         "threepp/helpers/PointLightHelper.cpp"
+        "threepp/helpers/PolarGridHelper.cpp"
         "threepp/helpers/SpotLightHelper.cpp"
 
         "threepp/loaders/ImageLoader.cpp"

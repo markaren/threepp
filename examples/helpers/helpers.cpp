@@ -1,6 +1,7 @@
 
 #include "threepp/helpers/BoxHelper.hpp"
 #include "threepp/helpers/PlaneHelper.hpp"
+#include "threepp/helpers/PolarGridHelper.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -41,6 +42,12 @@ int main() {
     Plane plane(Vector3(0.5, 1, 0.5), 1);
     const auto planeHelper = PlaneHelper::create(plane);
     scene->add(planeHelper);
+
+    PolarGridHelper::Options polarOpts;
+    polarOpts.radius = 5;
+    polarOpts.color2 = Color::lightblue;
+    auto polar = PolarGridHelper::create(polarOpts);
+    scene->add(polar);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
