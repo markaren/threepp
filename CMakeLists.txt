@@ -6,7 +6,7 @@ message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" OFF)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
-option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 # ==============================================================================
 # Global internal configuration
