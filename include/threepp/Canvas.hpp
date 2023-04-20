@@ -5,8 +5,10 @@
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/input/MouseListener.hpp"
 
+#include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -28,7 +30,7 @@ namespace threepp {
 
     public:
         struct Parameters;
-        typedef std::variant<bool, int, WindowSize> ParameterValue;
+        typedef std::variant<bool, int, std::string, WindowSize> ParameterValue;
 
         explicit Canvas(const Parameters& params = Parameters());
 
@@ -85,11 +87,14 @@ namespace threepp {
 
             Parameters& vsync(bool flag);
 
+            Parameters& favicon(const std::filesystem::path& path);
+
         private:
             WindowSize size_{640, 480};
             int antialiasing_{0};
             std::string title_{"threepp"};
             bool vsync_{true};
+            std::optional<std::filesystem::path> favicon_;
 
             friend struct Canvas::Impl;
         };
