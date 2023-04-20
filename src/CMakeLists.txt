@@ -403,7 +403,7 @@ if (CURL_FOUND)
     list(APPEND sources "threepp/utils/URLFetcher.cpp")
 endif()
 
-include("${PROJECT_SOURCE_DIR}/cmake/shaders.cmake")
+include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
 add_library(threepp::threepp ALIAS threepp)

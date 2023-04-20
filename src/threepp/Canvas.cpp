@@ -5,6 +5,8 @@
 #include "threepp/core/Clock.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#include "threepp/favicon.hpp"
+
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
@@ -62,7 +64,7 @@ struct Canvas::Impl {
         {
 
             ImageLoader imageLoader;
-            auto favicon = imageLoader.load("favicon.png", 4);
+            auto favicon = imageLoader.load(faviconSource(), 4);
             if (favicon) {
                 GLFWimage images[1];
                 images[0] = {static_cast<int>(favicon->width),
