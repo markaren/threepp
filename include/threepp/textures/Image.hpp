@@ -13,13 +13,13 @@ namespace threepp {
     public:
         unsigned int width;
         unsigned int height;
-        unsigned int depth = 0;
+        unsigned int depth;
 
-        Image(unsigned int width, unsigned int height, std::shared_ptr<unsigned char> data, bool flipped = true)
-            : width(width), height(height), data_(std::move(data)), flipped_(flipped){};
+        Image(std::shared_ptr<unsigned char> data, unsigned int width, unsigned int height, bool flipped = true)
+            : data_(std::move(data)), width(width), height(height), depth(0), flipped_(flipped){};
 
-        Image(unsigned int width, unsigned int height, unsigned int depth)
-            : width(width), height(height), depth(depth), flipped_(false){};
+        Image(std::shared_ptr<unsigned char> data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
+            : data_(std::move(data)), width(width), height(height), depth(depth), flipped_(flipped){};
 
         [[nodiscard]] bool flipped() const {
 

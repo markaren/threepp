@@ -221,3 +221,13 @@ bool Vector4::equals(const Vector4& v) const {
 
     return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z) && (v.w == this->w));
 }
+
+bool Vector4::operator==(const Vector4& other) const {
+
+    return equals(other);
+}
+
+bool Vector4::operator!=(const Vector4& other) const {
+
+    return !equals(other);
+}

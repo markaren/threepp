@@ -14,7 +14,7 @@ namespace {
 
         explicit CustomSineCurve(float scale): scale(scale) {}
 
-        void getPoint(float t, Vector3& target) override {
+        void getPoint(float t, Vector3& target) const override {
             float tx = t * 3 - 1.5f;
             float ty = std::sin(math::TWO_PI * t);
             float tz = 0;
@@ -109,7 +109,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("Geometries", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

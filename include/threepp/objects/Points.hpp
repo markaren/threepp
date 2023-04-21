@@ -33,7 +33,6 @@ namespace threepp {
         std::shared_ptr<Material> material_;
 
         Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
-
     };
 
 }// namespace threepp

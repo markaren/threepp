@@ -20,26 +20,23 @@ namespace threepp {
             unsigned int heightSegments;
             unsigned int depthSegments;
 
-            explicit Params(float width = 1, float height = 1, float depth = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1, unsigned int depthSegments = 1)
-                : width(width), height(height), depth(depth), widthSegments(widthSegments), heightSegments(heightSegments), depthSegments(depthSegments) {}
+            explicit Params(float width = 1,
+                            float height = 1,
+                            float depth = 1,
+                            unsigned int widthSegments = 1,
+                            unsigned int heightSegments = 1,
+                            unsigned int depthSegments = 1);
         };
 
         const float width;
         const float height;
         const float depth;
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "BoxGeometry";
-        }
+        static std::shared_ptr<BoxGeometry> create(const Params& params);
 
-        static std::shared_ptr<BoxGeometry> create(const Params& params) {
-            return std::shared_ptr<BoxGeometry>(new BoxGeometry(params));
-        }
-
-        static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1, unsigned int depthSegments = 1) {
-            return create(Params(width, height, depth, widthSegments, heightSegments, depthSegments));
-        }
+        static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1, unsigned int depthSegments = 1);
 
     protected:
         explicit BoxGeometry(const Params& params);

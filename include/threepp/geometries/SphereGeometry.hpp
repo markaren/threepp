@@ -23,21 +23,20 @@ namespace threepp {
             float thetaStart;
             float thetaLength;
 
-            explicit Params(float radius = 1, unsigned int widthSegments = 16, unsigned int heightSegments = 12, float phiStart = 0, float phiLength = math::TWO_PI, float thetaStart = 0, float thetaLength = math::PI)
-                : radius(radius), widthSegments(widthSegments), heightSegments(heightSegments), phiStart(phiStart), phiLength(phiLength), thetaStart(thetaStart), thetaLength(thetaLength) {}
+            explicit Params(float radius = 1,
+                            unsigned int widthSegments = 16,
+                            unsigned int heightSegments = 12,
+                            float phiStart = 0,
+                            float phiLength = math::TWO_PI,
+                            float thetaStart = 0,
+                            float thetaLength = math::PI);
         };
 
         const float radius;
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "SphereGeometry";
-        }
-
-        static std::shared_ptr<SphereGeometry> create(const Params& params) {
-
-            return std::shared_ptr<SphereGeometry>(new SphereGeometry(params));
-        }
+        static std::shared_ptr<SphereGeometry> create(const Params& params);
 
         static std::shared_ptr<SphereGeometry> create(
                 float radius = 1,
@@ -46,10 +45,7 @@ namespace threepp {
                 float phiStart = 0,
                 float phiLength = math::TWO_PI,
                 float thetaStart = 0,
-                float thetaLength = math::PI) {
-
-            return create(Params{radius, widthSegments, heightSegments, phiStart, phiLength, thetaStart, thetaLength});
-        }
+                float thetaLength = math::PI);
 
     protected:
         explicit SphereGeometry(const Params& params);

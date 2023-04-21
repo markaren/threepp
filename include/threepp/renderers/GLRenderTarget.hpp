@@ -5,7 +5,6 @@
 
 #include "threepp/core/EventDispatcher.hpp"
 
-#include "threepp/textures/DepthTexture.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include "threepp/math/Vector4.hpp"
@@ -13,6 +12,8 @@
 #include <optional>
 
 namespace threepp {
+
+    class DepthTexture;
 
     class GLRenderTarget: public EventDispatcher {
 
@@ -52,7 +53,9 @@ namespace threepp {
         bool stencilBuffer;
         std::shared_ptr<DepthTexture> depthTexture;
 
-        GLRenderTarget();
+        GLRenderTarget(const GLRenderTarget&) = delete;
+        GLRenderTarget(const GLRenderTarget&&) = delete;
+        GLRenderTarget operator=(const GLRenderTarget&) = delete;
 
         void setTexture(const std::shared_ptr<Texture>& tex);
 
@@ -64,7 +67,10 @@ namespace threepp {
 
         static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
+        ~GLRenderTarget() override;
+
     protected:
+        bool disposed = false;
         GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
     };
 

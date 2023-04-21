@@ -16,46 +16,16 @@ namespace threepp {
                               public MaterialWithFlatShading {
 
     public:
-        static std::shared_ptr<MeshNormalMaterial> create() {
+        [[nodiscard]] std::string type() const override;
 
-            return std::shared_ptr<MeshNormalMaterial>(new MeshNormalMaterial());
-        }
+        static std::shared_ptr<MeshNormalMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
-        std::shared_ptr<Material> clone() const override {
-            auto m = create();
-            copyInto(m.get());
-
-            m->normalMap = normalMap;
-            m->normalMapType = normalMapType;
-            m->normalScale.copy(normalScale);
-
-            m->displacementMap = displacementMap;
-            m->displacementScale = displacementScale;
-            m->displacementBias = displacementBias;
-
-            m->wireframe = wireframe;
-            m->wireframeLinewidth = wireframeLinewidth;
-
-            m->flatShading = flatShading;
-
-            return m;
-        }
-
-
-        [[nodiscard]] std::string type() const override {
-
-            return "MeshNormalMaterial";
-        }
+        std::shared_ptr<Material> clone() const override;
 
     protected:
-        MeshNormalMaterial(): MaterialWithFlatShading(false),
-                              MaterialWithWireframe(false, 1),
-                              MaterialWithDisplacementMap(1, 0),
-                              MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
-                              MaterialWithBumpMap(1) {
+        MeshNormalMaterial();
 
-            this->fog = false;
-        }
+        bool setValue(const std::string& key, const MaterialValue& value) override;
     };
 
 }// namespace threepp

@@ -108,6 +108,11 @@ Color& Color::multiply(const Color& color) {
     return *this;
 }
 
+Color& Color::operator*=(const Color& color) {
+
+    return multiply(color);
+}
+
 Color& Color::multiplyScalar(float s) {
 
     this->r *= s;
@@ -115,6 +120,11 @@ Color& Color::multiplyScalar(float s) {
     this->b *= s;
 
     return *this;
+}
+
+Color& Color::operator*=(float s) {
+
+    return multiplyScalar(s);
 }
 
 Color& Color::lerp(const Color& color, float alpha) {
@@ -147,4 +157,14 @@ Color& Color::randomize() {
 bool Color::equals(const Color& c) const {
 
     return (c.r == this->r) && (c.g == this->g) && (c.b == this->b);
+}
+
+bool Color::operator==(const Color& c) const {
+
+    return equals(c);
+}
+
+bool Color::operator!=(const Color& c) const {
+
+    return !equals(c);
 }

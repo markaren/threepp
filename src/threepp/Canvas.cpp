@@ -3,6 +3,9 @@
 #include "threepp/loaders/ImageLoader.hpp"
 
 #include "threepp/core/Clock.hpp"
+#include "threepp/utils/StringUtils.hpp"
+
+#include "threepp/favicon.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -22,13 +25,29 @@ namespace {
         bool operator()(const task& l, const task& r) const { return l.second > r.second; }
     };
 
+    void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
+
+        ImageLoader imageLoader;
+        std::optional<Image> favicon;
+        if (customIcon) {
+            favicon = imageLoader.load(*customIcon, 4);
+        } else {
+            favicon = imageLoader.load(faviconSource(), 4);
+        }
+        if (favicon) {
+            GLFWimage images[1];
+            images[0] = {static_cast<int>(favicon->width),
+                         static_cast<int>(favicon->height),
+                         favicon->getData()};
+            glfwSetWindowIcon(window, 1, images);
+        }
+    }
+
 }// namespace
 
 struct Canvas::Impl {
 
     GLFWwindow* window;
-
-    int fps_ = -1;
 
     WindowSize size_;
     Vector2 lastMousePos_;
@@ -60,18 +79,7 @@ struct Canvas::Impl {
             exit(EXIT_FAILURE);
         }
 
-        {
-
-            ImageLoader imageLoader;
-            auto favicon = imageLoader.load("favicon.png", 4);
-            if (favicon) {
-                GLFWimage images[1];
-                images[0] = {static_cast<int>(favicon->width),
-                             static_cast<int>(favicon->height),
-                             favicon->getData()};
-                glfwSetWindowIcon(window, 1, images);
-            }
-        }
+        setWindowIcon(window, params.favicon_);
 
         glfwSetWindowUserPointer(window, this);
 
@@ -102,17 +110,6 @@ struct Canvas::Impl {
         glfwSetWindowSize(window, size.width, size.height);
     }
 
-    // http://www.opengl-tutorial.org/miscellaneous/an-fps-counter/
-    inline void measureFPS(double& lastTime, int& nbFrames) {
-        double currentTime = glfwGetTime();
-        nbFrames++;
-        if (currentTime - lastTime >= 1.0) {
-            fps_ = nbFrames;
-            nbFrames = 0;
-            lastTime += 1.0;
-        }
-    }
-
     inline void handleTasks() {
         while (!tasks_.empty()) {
             auto& task = tasks_.top();
@@ -126,11 +123,8 @@ struct Canvas::Impl {
     }
 
     void animate(const std::function<void()>& f) {
-        double lastTime = glfwGetTime();
-        int nbFrames = 0;
-        while (!glfwWindowShouldClose(window)) {
 
-            measureFPS(lastTime, nbFrames);
+        while (!glfwWindowShouldClose(window)) {
 
             handleTasks();
 
@@ -143,12 +137,8 @@ struct Canvas::Impl {
 
     void animate(const std::function<void(float)>& f) {
 
-        double lastTime = glfwGetTime();
-        int nbFrames = 0;
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
-
-            measureFPS(lastTime, nbFrames);
 
             handleTasks();
 
@@ -161,12 +151,8 @@ struct Canvas::Impl {
 
     void animate(const std::function<void(float, float)>& f) {
 
-        double lastTime = glfwGetTime();
-        int nbFrames = 0;
         Clock clock;
         while (!glfwWindowShouldClose(window)) {
-
-            measureFPS(lastTime, nbFrames);
 
             handleTasks();
 
@@ -302,9 +288,12 @@ struct Canvas::Impl {
 Canvas::Canvas(const Canvas::Parameters& params)
     : pimpl_(new Impl(params)) {}
 
-int threepp::Canvas::getFPS() const {
-    return pimpl_->fps_;
-}
+Canvas::Canvas(const std::string& name)
+    : Canvas(Canvas::Parameters().title(name)) {}
+
+Canvas::Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values)
+    : Canvas(Canvas::Parameters(values).title(name)) {}
+
 
 void Canvas::animate(const std::function<void()>& f) {
 
@@ -362,6 +351,7 @@ bool Canvas::removeMouseListener(const MouseListener* listener) {
 }
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
+
     pimpl_->invokeLater(f, t);
 }
 
@@ -371,6 +361,49 @@ void* Canvas::window_ptr() const {
 }
 
 Canvas::~Canvas() = default;
+
+
+Canvas::Parameters::Parameters() = default;
+
+Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterValue>& values) {
+
+    std::vector<std::string> unused;
+    for (const auto& [key, value] : values) {
+
+        bool used = false;
+
+        if (key == "antialiasing") {
+
+            antialiasing(std::get<int>(value));
+            used = true;
+
+        } else if (key == "vsync") {
+
+            vsync(std::get<bool>(value));
+            used = true;
+
+        } else if (key == "size") {
+
+            auto _size = std::get<WindowSize>(value);
+            size(_size);
+            used = true;
+        } else if (key == "favicon") {
+
+            auto path = std::get<std::string>(value);
+            favicon(path);
+            used = true;
+        }
+
+        if (!used) {
+            unused.emplace_back(key);
+        }
+    }
+
+    if (!unused.empty()) {
+
+        std::cerr << "Unused Canvas parameters: [" << utils::join(unused, ',') << "]" << std::endl;
+    }
+}
 
 
 Canvas::Parameters& Canvas::Parameters::title(std::string value) {
@@ -402,6 +435,17 @@ Canvas::Parameters& Canvas::Parameters::antialiasing(int antialiasing) {
 Canvas::Parameters& Canvas::Parameters::vsync(bool flag) {
 
     this->vsync_ = flag;
+
+    return *this;
+}
+
+Canvas::Parameters& threepp::Canvas::Parameters::favicon(const std::filesystem::path& path) {
+
+    if (std::filesystem::exists(path)) {
+        favicon_ = path;
+    } else {
+        std::cerr << "Invalid favicon path: " << std::filesystem::absolute(path) << std::endl;
+    }
 
     return *this;
 }

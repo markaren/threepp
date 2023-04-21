@@ -4,10 +4,12 @@
 #define THREEPP_DIRECTIONALLIGHTHELPER_HPP
 
 #include "threepp/core/Object3D.hpp"
-#include "threepp/lights/DirectionalLight.hpp"
-#include "threepp/objects/Line.hpp"
+#include "threepp/math/Color.hpp"
 
 namespace threepp {
+
+    class Line;
+    class DirectionalLight;
 
     class DirectionalLightHelper: public Object3D {
 
@@ -15,19 +17,18 @@ namespace threepp {
         void update();
 
         static std::shared_ptr<DirectionalLightHelper> create(
-                const std::shared_ptr<DirectionalLight>& light,
+                DirectionalLight& light,
                 float size = 1,
                 std::optional<Color> color = std::nullopt);
 
-    protected:
-        float size;
+    private:
         std::optional<Color> color;
 
-        std::shared_ptr<DirectionalLight> light;
+        DirectionalLight& light;
         std::shared_ptr<Line> lightPlane;
         std::shared_ptr<Line> targetLine;
 
-        DirectionalLightHelper(std::shared_ptr<DirectionalLight> light, float size, std::optional<Color> color);
+        DirectionalLightHelper(DirectionalLight& light, float size, std::optional<Color> color);
     };
 
 }// namespace threepp

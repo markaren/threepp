@@ -3,8 +3,8 @@
 #ifndef THREEPP_GLSHADOWMAP_HPP
 #define THREEPP_GLSHADOWMAP_HPP
 
-#include <vector>
 #include <memory>
+#include <vector>
 
 namespace threepp {
 
@@ -24,7 +24,7 @@ namespace threepp {
             bool autoUpdate = true;
             bool needsUpdate = false;
 
-            int type = PCFShadowMap;
+            int type;
 
             explicit GLShadowMap(GLObjects& objects);
 
@@ -35,7 +35,6 @@ namespace threepp {
         private:
             struct Impl;
             std::unique_ptr<Impl> pimpl_;
-
         };
 
     }// namespace gl

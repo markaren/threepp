@@ -10,19 +10,19 @@ using namespace threepp;
 
 
 template<class T>
-void Curve<T>::getPointAt(float u, T& target) {
+void Curve<T>::getPointAt(float u, T& target) const {
 
     const auto t = this->getUtoTmapping(u);
     return this->getPoint(t, target);
 }
 
 template<class T>
-std::vector<T> Curve<T>::getPoints(unsigned int divisions) {
+std::vector<T> Curve<T>::getPoints(unsigned int divisions) const {
 
-    std::vector<T> points;
+    std::vector<T> points(divisions + 1);
 
     for (unsigned d = 0; d <= divisions; d++) {
-        T& point = points.emplace_back();
+        T& point = points[d];
         this->getPoint(static_cast<float>(d) / static_cast<float>(divisions), point);
     }
 
@@ -30,13 +30,13 @@ std::vector<T> Curve<T>::getPoints(unsigned int divisions) {
 }
 
 template<class T>
-std::vector<T> Curve<T>::getSpacedPoints(unsigned int divisions) {
+std::vector<T> Curve<T>::getSpacedPoints(unsigned int divisions) const {
 
-    std::vector<T> points;
+    std::vector<T> points(divisions + 1);
 
     for (unsigned d = 0; d <= divisions; d++) {
 
-        T& point = points.emplace_back();
+        T& point = points[d];
         this->getPointAt(static_cast<float>(d) / static_cast<float>(divisions), point);
     }
 
@@ -44,20 +44,20 @@ std::vector<T> Curve<T>::getSpacedPoints(unsigned int divisions) {
 }
 
 template<class T>
-float Curve<T>::getLength() {
+float Curve<T>::getLength() const {
 
     const auto lengths = this->getLengths();
-    return lengths[lengths.size() - 1];
+    return lengths.back();
 }
 
 template<class T>
-std::vector<float> Curve<T>::getLengths() {
+std::vector<float> Curve<T>::getLengths() const {
 
     return getLengths(this->arcLengthDivisions);
 }
 
 template<class T>
-std::vector<float> Curve<T>::getLengths(int divisions) {
+std::vector<float> Curve<T>::getLengths(int divisions) const {
 
     if ((this->cacheArcLengths.size() == divisions + 1) && !this->needsUpdate) {
 
@@ -94,11 +94,11 @@ void Curve<T>::updateArcLengths() {
 }
 
 template<class T>
-float Curve<T>::getUtoTmapping(float u, std::optional<float> distance) {
+float Curve<T>::getUtoTmapping(float u, std::optional<float> distance) const {
 
     const auto arcLengths = this->getLengths();
 
-    auto il = arcLengths.size();
+    const auto il = arcLengths.size();
 
     float targetArcLength;// The targeted u distance value to get
 
@@ -165,7 +165,7 @@ float Curve<T>::getUtoTmapping(float u, std::optional<float> distance) {
 }
 
 template<class T>
-void Curve<T>::getTangent(float t, T& tangent) {
+void Curve<T>::getTangent(float t, T& tangent) const {
 
     const float delta = 0.0001f;
     float t1 = t - delta;
@@ -184,7 +184,7 @@ void Curve<T>::getTangent(float t, T& tangent) {
 }
 
 template<class T>
-void Curve<T>::getTangentAt(float u, T& optionalTarget) {
+void Curve<T>::getTangentAt(float u, T& optionalTarget) const {
 
     const float t = this->getUtoTmapping(u);
     this->getTangent(t, optionalTarget);

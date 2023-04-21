@@ -18,7 +18,7 @@ namespace threepp {
 
         explicit CubicBezierCurve3(const Vector3& v0 = {}, const Vector3& v1 = {}, const Vector3& v2 = {}, const Vector3& v3 = {});
 
-        void getPoint(float t, Vector3& point) override;
+        void getPoint(float t, Vector3& point) const override;
     };
 
 }// namespace threepp

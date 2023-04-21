@@ -3,12 +3,15 @@
 #ifndef THREEPP_SPOTLIGHTHELPER_HPP
 #define THREEPP_SPOTLIGHTHELPER_HPP
 
-#include <utility>
+#include "threepp/core/Object3D.hpp"
+#include "threepp/math/Color.hpp"
 
-#include "threepp/lights/SpotLight.hpp"
+#include <memory>
+#include <optional>
 
 namespace threepp {
 
+    class SpotLight;
     class LineSegments;
 
     class SpotLightHelper: public Object3D {
@@ -18,15 +21,15 @@ namespace threepp {
 
         ~SpotLightHelper() override;
 
-        static std::shared_ptr<SpotLightHelper> create(const std::shared_ptr<SpotLight>& light, std::optional<unsigned int> color = std::nullopt);
+        static std::shared_ptr<SpotLightHelper> create(SpotLight& light, std::optional<Color> color = std::nullopt);
 
-    protected:
-        std::shared_ptr<SpotLight> light;
+    private:
+        SpotLight& light;
         std::optional<Color> color;
 
         std::shared_ptr<LineSegments> cone;
 
-        SpotLightHelper(std::shared_ptr<SpotLight> light, std::optional<Color> color);
+        SpotLightHelper(SpotLight& light, std::optional<Color> color);
     };
 
 }// namespace threepp

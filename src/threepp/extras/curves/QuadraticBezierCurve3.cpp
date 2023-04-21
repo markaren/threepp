@@ -5,10 +5,10 @@
 
 using namespace threepp;
 
-QuadraticBezierCurve::QuadraticBezierCurve(const Vector3& v0, const Vector3& v1, const Vector3& v2)
+QuadraticBezierCurve3::QuadraticBezierCurve3(const Vector3& v0, const Vector3& v1, const Vector3& v2)
     : v0(v0), v1(v1), v2(v2) {}
 
-void QuadraticBezierCurve::getPoint(float t, Vector3& point) {
+void QuadraticBezierCurve3::getPoint(float t, Vector3& point) const {
 
     point.set(
             interpolants::QuadraticBezier(t, v0.x, v1.x, v2.x),

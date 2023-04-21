@@ -6,6 +6,14 @@
 
 using namespace threepp;
 
+namespace {
+
+    Vector3 _lightPositionWorld;
+    Vector3 _lookTarget;
+    Matrix4 _projScreenMatrix;
+
+}// namespace
+
 PointLightShadow::PointLightShadow()
     : LightShadow(PerspectiveCamera::create(90, 1, 0.5f, 500)),
       _cubeDirections({Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1),
@@ -45,7 +53,7 @@ PointLightShadow::PointLightShadow()
 
 void PointLightShadow::updateMatrices(PointLight* light, size_t viewportIndex) {
 
-    auto camera = this->camera;
+    auto& camera = this->camera;
     auto& shadowMatrix = this->matrix;
 
     auto far = (light->distance > 0) ? light->distance : camera->far;
@@ -56,11 +64,9 @@ void PointLightShadow::updateMatrices(PointLight* light, size_t viewportIndex) {
         camera->updateProjectionMatrix();
     }
 
-    Vector3 _lightPositionWorld{};
     _lightPositionWorld.setFromMatrixPosition(*light->matrixWorld);
     camera->position.copy(_lightPositionWorld);
 
-    Vector3 _lookTarget{};
     _lookTarget.copy(camera->position);
     _lookTarget.add(this->_cubeDirections[viewportIndex]);
     camera->up.copy(this->_cubeUps[viewportIndex]);
@@ -69,7 +75,11 @@ void PointLightShadow::updateMatrices(PointLight* light, size_t viewportIndex) {
 
     shadowMatrix.makeTranslation(-_lightPositionWorld.x, -_lightPositionWorld.y, -_lightPositionWorld.z);
 
-    Matrix4 _projScreenMatrix{};
     _projScreenMatrix.multiplyMatrices(camera->projectionMatrix, camera->matrixWorldInverse);
     this->_frustum.setFromProjectionMatrix(_projScreenMatrix);
+}
+
+std::shared_ptr<PointLightShadow> PointLightShadow::create() {
+
+    return std::shared_ptr<PointLightShadow>(new PointLightShadow());
 }

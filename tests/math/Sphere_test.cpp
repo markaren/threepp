@@ -3,10 +3,10 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch.hpp>
 
-#include "threepp/core/BufferAttribute.hpp"
-#include "threepp/math/Sphere.hpp"
-#include "threepp/math/Plane.hpp"
+#include "threepp/math/Box3.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Plane.hpp"
+#include "threepp/math/Sphere.hpp"
 
 using namespace threepp;
 

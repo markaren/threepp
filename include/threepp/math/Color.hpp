@@ -40,15 +40,11 @@ namespace threepp {
 
         Color& multiply(const Color& color);
 
-        Color& operator*=(const Color& color) {
-            return multiply(color);
-        }
+        Color& operator*=(const Color& color);
 
         Color& multiplyScalar(float s);
 
-        Color& operator*=(float s) {
-            return multiplyScalar(s);
-        }
+        Color& operator*=(float s);
 
         Color& lerp(const Color& color, float alpha);
 
@@ -57,6 +53,10 @@ namespace threepp {
         Color& randomize();
 
         [[nodiscard]] bool equals(const Color& c) const;
+
+        bool operator==(const Color& c) const;
+
+        bool operator!=(const Color& c) const;
 
         template<class ArrayLike>
         Color& fromArray(const ArrayLike& array, size_t offset = 0) {
@@ -81,12 +81,7 @@ namespace threepp {
             return os;
         }
 
-        bool operator==(const Color& c) const {
-
-            return equals(c);
-        }
-
-        enum ColorName : std::uint32_t {
+        enum ColorName : int {
             aliceblue = 0xF0F8FF,
             antiquewhite = 0xFAEBD7,
             aqua = 0x00FFFF,

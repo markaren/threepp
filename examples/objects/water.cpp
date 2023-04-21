@@ -62,11 +62,12 @@ int main() {
 
     auto sky = Sky::create();
     sky->scale.setScalar(10000);
-    sky->material()->as<ShaderMaterial>()->uniforms->at("turbidity").value<float>() = 10;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("rayleigh").value<float>() = 1;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("mieCoefficient").value<float>() = 0.005;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("mieDirectionalG").value<float>() = 0.8;
-    sky->material()->as<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
+    auto shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+    shaderUniforms->at("turbidity").value<float>() = 10;
+    shaderUniforms->at("rayleigh").value<float>() = 1;
+    shaderUniforms->at("mieCoefficient").value<float>() = 0.005;
+    shaderUniforms->at("mieDirectionalG").value<float>() = 0.8;
+    shaderUniforms->at("sunPosition").value<Vector3>().copy(light->position);
     scene->add(sky);
 
     canvas.onWindowResize([&](WindowSize size) {

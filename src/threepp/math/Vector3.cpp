@@ -621,5 +621,3 @@ Vector3 Vector3::operator+(const Vector3& other) const {
 
     return clone().add(other);
 }
-
-

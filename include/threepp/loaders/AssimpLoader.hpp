@@ -19,7 +19,7 @@ namespace threepp {
     class AssimpLoader {
 
     public:
-        std::shared_ptr<Group> load(const std::filesystem::path& path, bool basicMaterial = false) {
+        std::shared_ptr<Group> load(const std::filesystem::path& path) {
 
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
@@ -28,7 +28,7 @@ namespace threepp {
             }
 
             auto group = Group::create();
-            parseNodes(path, aiScene, aiScene->mRootNode, *group, basicMaterial);
+            parseNodes(path, aiScene, aiScene->mRootNode, *group);
 
             return group;
         }
@@ -37,7 +37,7 @@ namespace threepp {
         TextureLoader texLoader_;
         Assimp::Importer importer_;
 
-        void parseNodes(const std::filesystem::path& path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent, bool basicMaterial) {
+        void parseNodes(const std::filesystem::path& path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 
             auto group = Group::create();
             group->name = aiNode->mName.C_Str();
@@ -84,12 +84,7 @@ namespace threepp {
                     }
                 }
 
-                std::shared_ptr<Material> material;
-                if (basicMaterial) {
-                    material = MeshBasicMaterial::create();
-                } else {
-                    material = MeshPhongMaterial::create();
-                }
+                auto material = MeshPhongMaterial::create();
 
                 geometry->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
                 if (!normals.empty()) {
@@ -123,57 +118,54 @@ namespace threepp {
                         }
                     }
 
-                    if (!basicMaterial) {
+                    auto m = material->as<MeshPhongMaterial>();
 
-                        auto m = material->as<MeshPhongMaterial>();
-
-                        if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
-                            if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
-                                auto texPath = path.parent_path() / p.C_Str();
-                                auto tex = texLoader_.load(texPath);
-                                //                        tex->encoding = sRGBEncoding;
-                                m->emissiveMap = tex;
-                            }
-                        } else {
-                            C_STRUCT aiColor4D emissive;
-                            if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_EMISSIVE, &emissive)) {
-                                m->emissive.setRGB(emissive.r, emissive.g, emissive.b);
-                            }
+                    if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
+                        if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
+                            auto texPath = path.parent_path() / p.C_Str();
+                            auto tex = texLoader_.load(texPath);
+                            //                        tex->encoding = sRGBEncoding;
+                            m->emissiveMap = tex;
                         }
-
-                        if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
-                            if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
-                                auto texPath = path.parent_path() / p.C_Str();
-                                auto tex = texLoader_.load(texPath);
-                                //                        tex->encoding = sRGBEncoding;
-                                m->specularMap = tex;
-                            }
-                        } else {
-                            C_STRUCT aiColor4D specular;
-                            if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
-                                m->specular.setRGB(specular.r, specular.g, specular.b);
-                            }
-                        }
-
-                        float shininess;
-                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_SHININESS, &shininess)) {
-                            m->shininess = shininess;
-                        }
-
-                        float emmisiveIntensity;
-                        if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity)) {
-                            m->emissiveIntensity = emmisiveIntensity;
+                    } else {
+                        C_STRUCT aiColor4D emissive;
+                        if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_EMISSIVE, &emissive)) {
+                            m->emissive.setRGB(emissive.r, emissive.g, emissive.b);
                         }
                     }
 
-                    //                    C_STRUCT aiColor4D ambient;
-                    //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
-                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
-                    //                    }
-                    //
-                    //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
-                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
-                    //                    }
+                    if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
+                        if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
+                            auto texPath = path.parent_path() / p.C_Str();
+                            auto tex = texLoader_.load(texPath);
+                            //                        tex->encoding = sRGBEncoding;
+                            m->specularMap = tex;
+                        }
+                    } else {
+                        C_STRUCT aiColor4D specular;
+                        if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
+                            m->specular.setRGB(specular.r, specular.g, specular.b);
+                        }
+                    }
+
+                    float shininess;
+                    if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_SHININESS, &shininess)) {
+                        m->shininess = shininess;
+                    }
+
+                    float emmisiveIntensity;
+                    if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity)) {
+                        m->emissiveIntensity = emmisiveIntensity;
+                    }
+
+//                    C_STRUCT aiColor4D ambient;
+//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
+//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
+//                    }
+//
+//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
+//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
+//                    }
 
                     float opacity;
                     if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity)) {
@@ -198,7 +190,7 @@ namespace threepp {
             parent.add(group);
 
             for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
-                parseNodes(path, aiScene, aiNode->mChildren[i], *group, basicMaterial);
+                parseNodes(path, aiScene, aiNode->mChildren[i], *group);
             }
         }
     };

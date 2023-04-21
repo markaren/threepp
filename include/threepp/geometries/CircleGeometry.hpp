@@ -22,24 +22,15 @@ namespace threepp {
                 : radius(radius), segments(segments), thetaStart(thetaStart), thetaLength(thetaLength) {}
         };
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "CircleGeometry";
-        }
-
-        static std::shared_ptr<CircleGeometry> create(const Params& params) {
-
-            return std::shared_ptr<CircleGeometry>(new CircleGeometry(params));
-        }
+        static std::shared_ptr<CircleGeometry> create(const Params& params);
 
         static std::shared_ptr<CircleGeometry> create(
                 float radius = 1,
                 unsigned int segments = 16,
                 float thetaStart = 0,
-                float thetaLength = math::TWO_PI) {
-
-            return create(Params(radius, segments, thetaStart, thetaLength));
-        }
+                float thetaLength = math::TWO_PI);
 
     protected:
         explicit CircleGeometry(const Params& params);

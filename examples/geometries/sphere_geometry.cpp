@@ -24,8 +24,7 @@ namespace {
     std::shared_ptr<Mesh> createMesh(const SphereGeometry::Params& params) {
 
         auto geometry = SphereGeometry::create(params);
-        auto material = MeshBasicMaterial::create();
-        material->side = DoubleSide;
+        auto material = MeshBasicMaterial::create({{"side", DoubleSide}});
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
@@ -37,7 +36,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("SphereGeometry", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

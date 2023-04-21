@@ -99,8 +99,8 @@ namespace {
 
 ShapePath& ShapePath::moveTo(float x, float y) {
 
-    this->currentPath = new Path();
-    this->subPaths.emplace_back(this->currentPath);
+    this->currentPath = std::make_shared<Path>();
+    this->currentPath = this->subPaths.emplace_back(this->currentPath);
     this->currentPath->moveTo(x, y);
 
     return *this;

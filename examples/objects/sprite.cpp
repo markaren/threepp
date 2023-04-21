@@ -5,7 +5,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(8)};
+    Canvas canvas{"Sprite", {{"antialiasing", 4}, {"favicon", "data/textures/three.png"}}};
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
@@ -17,7 +17,7 @@ int main() {
 
     TextureLoader loader;
     auto material = SpriteMaterial::create();
-    material->map = loader.load("favicon.png");
+    material->map = loader.load("data/textures/three.png");
     material->map->offset.set(0.5, 0.5);
 
     auto sprites = Group::create();

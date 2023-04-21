@@ -1,13 +1,14 @@
 
 #include "threepp/helpers/PointLightHelper.hpp"
 
+#include "threepp/lights/PointLight.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 
 using namespace threepp;
 
 
-PointLightHelper::PointLightHelper(std::shared_ptr<PointLight> light, float sphereSize, std::optional<Color> color)
-    : Mesh(nullptr, nullptr), light(std::move(light)), color(color) {
+PointLightHelper::PointLightHelper(PointLight& light, float sphereSize, std::optional<Color> color)
+    : Mesh(nullptr, nullptr), light(light), color(color) {
 
     geometry_ = SphereGeometry::create(sphereSize, 4, 2);
 
@@ -17,15 +18,15 @@ PointLightHelper::PointLightHelper(std::shared_ptr<PointLight> light, float sphe
     material->toneMapped = false;
     this->materials_[0] = std::move(material);
 
-    this->light->updateMatrixWorld();
+    this->light.updateMatrixWorld();
 
-    this->matrix = this->light->matrixWorld;
+    this->matrix = this->light.matrixWorld;
     this->matrixAutoUpdate = false;
 
     update();
 }
 
-std::shared_ptr<PointLightHelper> PointLightHelper::create(const std::shared_ptr<PointLight>& light, float sphereSize, std::optional<unsigned int> color) {
+std::shared_ptr<PointLightHelper> PointLightHelper::create(PointLight& light, float sphereSize, std::optional<Color> color) {
 
     return std::shared_ptr<PointLightHelper>(new PointLightHelper(light, sphereSize, color));
 }
@@ -38,6 +39,6 @@ void PointLightHelper::update() {
 
     } else {
 
-        this->material()->as<MaterialWithColor>()->color.copy(this->light->color);
+        this->material()->as<MaterialWithColor>()->color.copy(this->light.color);
     }
 }

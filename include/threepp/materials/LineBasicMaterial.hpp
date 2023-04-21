@@ -12,31 +12,16 @@ namespace threepp {
                              public MaterialWithLineWidth {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "LineBasicMaterial";
-        }
+        std::shared_ptr<Material> clone() const override;
 
-        std::shared_ptr<Material> clone() const override {
-            auto m = create();
-            copyInto(m.get());
-
-            m->color.copy(color);
-
-            m->linewidth = linewidth;
-
-            return m;
-        }
-
-        static std::shared_ptr<LineBasicMaterial> create() {
-
-            return std::shared_ptr<LineBasicMaterial>(new LineBasicMaterial());
-        }
+        static std::shared_ptr<LineBasicMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
     protected:
-        LineBasicMaterial()
-            : MaterialWithColor(0xffffff),
-              MaterialWithLineWidth(1) {}
+        LineBasicMaterial();
+
+        bool setValue(const std::string& key, const MaterialValue& value) override;
     };
 
 }// namespace threepp

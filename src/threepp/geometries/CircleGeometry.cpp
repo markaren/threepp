@@ -64,3 +64,18 @@ CircleGeometry::CircleGeometry(const Params& params) {
     this->setAttribute("normal", FloatBufferAttribute ::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute ::create(uvs, 2));
 }
+
+std::string CircleGeometry::type() const {
+
+    return "CircleGeometry";
+}
+
+std::shared_ptr<CircleGeometry> CircleGeometry::create(const CircleGeometry::Params& params) {
+
+    return std::shared_ptr<CircleGeometry>(new CircleGeometry(params));
+}
+
+std::shared_ptr<CircleGeometry> CircleGeometry::create(float radius, unsigned int segments, float thetaStart, float thetaLength) {
+
+    return create(Params(radius, segments, thetaStart, thetaLength));
+}

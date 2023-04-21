@@ -2,8 +2,8 @@
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Line3.hpp"
-#include "threepp/math/Sphere.hpp"
 #include "threepp/math/Matrix3.hpp"
+#include "threepp/math/Sphere.hpp"
 
 using namespace threepp;
 
@@ -186,4 +186,9 @@ Plane& Plane::translate(const Vector3& offset) {
 bool Plane::equals(const Plane& plane) const {
 
     return plane.normal.equals(this->normal) && (plane.constant == this->constant);
+}
+
+bool Plane::operator==(const Plane& plane) const {
+
+    return equals(plane);
 };

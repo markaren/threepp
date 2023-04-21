@@ -58,7 +58,7 @@ void OrthographicCamera::updateProjectionMatrix() {
 
     if (this->view && this->view->enabled) {
 
-        const auto scaleW = static_cast<float>(this->right - this->left) /static_cast<float>(this->view->fullWidth) / this->zoom;
+        const auto scaleW = static_cast<float>(this->right - this->left) / static_cast<float>(this->view->fullWidth) / this->zoom;
         const auto scaleH = static_cast<float>(this->top - this->bottom) / static_cast<float>(this->view->fullHeight) / this->zoom;
 
         left += scaleW * static_cast<float>(this->view->offsetX);
@@ -70,4 +70,9 @@ void OrthographicCamera::updateProjectionMatrix() {
     this->projectionMatrix.makeOrthographic((float) left, (float) right, (float) top, (float) bottom, this->near, this->far);
 
     this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
+}
+
+std::shared_ptr<OrthographicCamera> OrthographicCamera::create(int left, int right, int top, int bottom, float near, float far) {
+
+    return std::make_shared<OrthographicCamera>(left, right, top, bottom, near, far);
 }

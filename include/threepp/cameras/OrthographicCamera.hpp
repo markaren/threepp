@@ -25,10 +25,7 @@ namespace threepp {
 
         void updateProjectionMatrix() override;
 
-        static std::shared_ptr<OrthographicCamera> create(int left = -1, int right = 1, int top = 1, int bottom = -1, float near = 0.1f, float far = 2000) {
-
-            return std::make_shared<OrthographicCamera>(left, right, top, bottom, near, far);
-        }
+        static std::shared_ptr<OrthographicCamera> create(int left = -1, int right = 1, int top = 1, int bottom = -1, float near = 0.1f, float far = 2000);
     };
 
 }// namespace threepp

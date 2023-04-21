@@ -1,6 +1,7 @@
 #include "threepp/extras/core/Font.hpp"
 #include "threepp/geometries/EdgesGeometry.hpp"
 #include "threepp/geometries/ExtrudeGeometry.hpp"
+#include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/threepp.hpp"
 
@@ -8,7 +9,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(8));
+    Canvas canvas("Fonts", {{"antialiasing", 8}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = PCFSoftShadowMap;
@@ -22,6 +23,9 @@ int main() {
     light->position.set(10, 5, 10);
     light->lookAt(Vector3::ZEROS());
     light->castShadow = true;
+    auto shadowCamera = light->shadow->camera->as<OrthographicCamera>();
+    shadowCamera->left = shadowCamera->bottom = -20;
+    shadowCamera->right = shadowCamera->top = 20;
     scene->add(light);
 
     auto pointLight = PointLight::create();
@@ -45,8 +49,9 @@ int main() {
     mesh->castShadow = true;
     scene->add(mesh);
 
-    auto lineMaterial = LineBasicMaterial::create();
+    auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
     lineMaterial->color = Color::black;
+    lineMaterial->linewidth = 20000;
     auto edges = LineSegments::create(EdgesGeometry::create(*extrude, 10), lineMaterial);
     mesh->add(edges);
 

@@ -28,7 +28,6 @@ namespace threepp {
         std::shared_ptr<BufferGeometry> _geometry;
 
         explicit Sprite(const std::shared_ptr<SpriteMaterial>& material);
-
     };
 
 }// namespace threepp

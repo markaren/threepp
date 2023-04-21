@@ -67,15 +67,9 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Quaternion& v) const;
 
-        bool operator==(const Quaternion& other) const {
+        bool operator==(const Quaternion& other) const;
 
-            return equals(other);
-        }
-
-        bool operator!=(const Quaternion& other) const {
-
-            return !equals(other);
-        }
+        bool operator!=(const Quaternion& other) const;
 
         Quaternion& _onChange(std::function<void()> callback);
 

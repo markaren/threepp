@@ -74,13 +74,14 @@ void Line::computeLineDistances() {
             lineDistances[i] += _start.distanceTo(_end);
         }
 
-        geometry_->setAttribute("lineDistance", TypedBufferAttribute<float>::create(lineDistances, 1));
+        geometry_->setAttribute("lineDistance", FloatBufferAttribute::create(lineDistances, 1));
 
     } else {
 
         std::cerr << "THREE.Line.computeLineDistances(): Computation only possible with non-indexed BufferGeometry." << std::endl;
     }
 }
+
 void Line::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     auto geometry = this->geometry();

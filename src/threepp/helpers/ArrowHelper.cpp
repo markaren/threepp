@@ -18,7 +18,7 @@ namespace {
 
 }// namespace
 
-ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, int color, std::optional<float> headLength_, std::optional<float> headWidth_) {
+ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, const Color& color, std::optional<float> headLength_, std::optional<float> headWidth_) {
 
     float headLength = headLength_.value_or(length * 0.2f);
     float headWidth = headWidth_.value_or(headLength * 0.2f);
@@ -26,7 +26,7 @@ ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, int color, s
     if (!_lineGeometry) {
 
         _lineGeometry = std::make_shared<BufferGeometry>();
-        _lineGeometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 1, 0}, 3));
+        _lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 1, 0}, 3));
 
         _coneGeometry = CylinderGeometry::create(0, 0.5f, 1, 5, 1);
         _coneGeometry->translate(0, -0.5f, 0);
@@ -35,7 +35,7 @@ ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, int color, s
     this->position.copy(origin);
 
     auto lineMaterial = LineBasicMaterial::create();
-    lineMaterial->color.setHex(color);
+    lineMaterial->color.copy(color);
     lineMaterial->toneMapped = false;
 
     this->line = Line::create(_lineGeometry, lineMaterial);
@@ -43,7 +43,7 @@ ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, int color, s
     this->add(this->line);
 
     auto coneMaterial = MeshBasicMaterial::create();
-    coneMaterial->color.setHex(color);
+    coneMaterial->color.copy(color);
     coneMaterial->toneMapped = false;
 
     this->cone = Mesh::create(_coneGeometry, coneMaterial);
@@ -89,13 +89,13 @@ void ArrowHelper::setLength(float length, std::optional<float> headLength_, std:
     this->cone->updateMatrix();
 }
 
-void ArrowHelper::setColor(int color) {
+void ArrowHelper::setColor(const Color& color) {
 
-    this->line->material()->as<MaterialWithColor>()->color.setHex(color);
-    this->cone->material()->as<MaterialWithColor>()->color.setHex(color);
+    this->line->material()->as<MaterialWithColor>()->color.copy(color);
+    this->cone->material()->as<MaterialWithColor>()->color.copy(color);
 }
 
-std::shared_ptr<ArrowHelper> ArrowHelper::create(Vector3 dir, Vector3 origin, float length, int color, std::optional<float> headLength, std::optional<float> headWidth) {
+std::shared_ptr<ArrowHelper> ArrowHelper::create(Vector3 dir, Vector3 origin, float length, const Color& color, std::optional<float> headLength, std::optional<float> headWidth) {
 
     return std::shared_ptr<ArrowHelper>(new ArrowHelper(dir, origin, length, color, headLength, headWidth));
 }

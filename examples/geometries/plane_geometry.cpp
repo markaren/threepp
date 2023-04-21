@@ -5,12 +5,10 @@ using namespace threepp;
 
 namespace {
 
-    std::shared_ptr<LineSegments> createWireframe(const BufferGeometry& geometry) {
+    auto createWireframe(const BufferGeometry& geometry) {
 
-        auto line = LineSegments::create(WireframeGeometry::create(geometry));
-        line->material()->as<LineBasicMaterial>()->alphaTest = false;
-        line->material()->as<LineBasicMaterial>()->color = Color::black;
-        return line;
+        auto material = LineBasicMaterial::create({{"color", Color::black}});
+        return LineSegments::create(WireframeGeometry::create(geometry), material);
     }
 
     void updateGroupGeometry(Mesh& mesh, const PlaneGeometry::Params& params) {
@@ -22,8 +20,7 @@ namespace {
         mesh.add(createWireframe(*g));
     }
 
-
-    std::shared_ptr<Mesh> createMesh(const PlaneGeometry::Params& params) {
+    auto createMesh(const PlaneGeometry::Params& params) {
 
         auto geometry = PlaneGeometry::create(params);
         auto material = MeshBasicMaterial::create();
@@ -39,7 +36,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("PlaneGeometry", {{"antialias", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

@@ -17,8 +17,10 @@ namespace threepp {
             unsigned int widthSegments;
             unsigned int heightSegments;
 
-            explicit Params(float width = 1, float height = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1)
-                : width(width), height(height), widthSegments(widthSegments), heightSegments(heightSegments) {}
+            explicit Params(float width = 1,
+                            float height = 1,
+                            unsigned int widthSegments = 1,
+                            unsigned int heightSegments = 1);
         };
 
         const float width;
@@ -26,27 +28,18 @@ namespace threepp {
 
         PlaneGeometry(const PlaneGeometry&) = delete;
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "PlaneGeometry";
-        }
-
-        static std::shared_ptr<PlaneGeometry> create(const Params& params) {
-
-            return std::shared_ptr<PlaneGeometry>(new PlaneGeometry(params));
-        }
+        static std::shared_ptr<PlaneGeometry> create(const Params& params);
 
         static std::shared_ptr<PlaneGeometry> create(
                 float width = 1,
                 float height = 1,
                 unsigned int widthSegments = 1,
-                unsigned int heightSegments = 1) {
-
-            return create(Params(width, height, widthSegments, heightSegments));
-        }
+                unsigned int heightSegments = 1);
 
     protected:
-        PlaneGeometry(const Params& params);
+        explicit PlaneGeometry(const Params& params);
     };
 
 }// namespace threepp

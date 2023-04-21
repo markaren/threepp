@@ -1,7 +1,10 @@
 
 #include "threepp/renderers/gl/GLLights.hpp"
 
+#include "threepp/renderers/GLRenderTarget.hpp"
+
 #include "threepp/lights/LightProbe.hpp"
+#include "threepp/lights/LightShadow.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +22,7 @@ namespace {
 
     template<class T>
     void ensureCapacity(T& container, size_t capacity) {
+
         while (container.size() < capacity) {
             container.emplace_back();
         }
@@ -31,7 +35,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
     float r = 0, g = 0, b = 0;
 
-    for (int i = 0; i < 9; i++) state.probe[i].set(0, 0, 0);
+    for (unsigned i = 0; i < 9; i++) state.probe[i].set(0, 0, 0);
 
     int directionalLength = 0;
     int pointLength = 0;
@@ -49,22 +53,22 @@ void GLLights::setup(std::vector<Light*>& lights) {
         auto& color = light->color;
         auto intensity = light->intensity;
 
-        if (light->as<AmbientLight>()) {
+        if (light->is<AmbientLight>()) {
 
             r += color.r * intensity;
             g += color.g * intensity;
             b += color.b * intensity;
 
-        } else if (light->is<LightProbe>()) {
+        } else if (light->type() == "LightProbe") {
 
-            const auto l = light->as<LightProbe>();
+            auto l = light->as<LightProbe>();
 
-            for (int j = 0; j < 9; ++j) {
+            for (unsigned j = 0; j < 9; ++j) {
 
                 state.probe[j].addScaledVector(l->sh.getCoefficients()[j], intensity);
             }
 
-        } else if (light->is<DirectionalLight>()) {
+        } else if (auto directionalLight = light->as<DirectionalLight>()) {
 
             auto uniforms = cache_.get(*light);
 
@@ -72,8 +76,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             if (light->castShadow) {
 
-                auto l = light->as<DirectionalLight>();
-                auto shadow = l->shadow;
+                auto& shadow = directionalLight->shadow;
 
                 auto shadowUniforms = shadowCache_.get(*light);
 
@@ -97,23 +100,22 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             ++directionalLength;
 
-        } else if (light->is<SpotLight>()) {
+        } else if (auto spotLight = light->as<SpotLight>()) {
 
-            auto l = light->as<SpotLight>();
             auto uniforms = cache_.get(*light);
 
-            std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(*l->matrixWorld);
+            std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(*spotLight->matrixWorld);
 
-            std::get<Color>(uniforms->at("color")).copy(color).multiplyScalar(l->intensity);
-            std::get<float>(uniforms->at("distance")) = l->distance;
+            std::get<Color>(uniforms->at("color")).copy(color).multiplyScalar(spotLight->intensity);
+            std::get<float>(uniforms->at("distance")) = spotLight->distance;
 
-            std::get<float>(uniforms->at("coneCos")) = std::cos(l->angle);
-            std::get<float>(uniforms->at("penumbraCos")) = std::cos(l->angle * (1 - l->penumbra));
-            std::get<float>(uniforms->at("decay")) = l->decay;
+            std::get<float>(uniforms->at("coneCos")) = std::cos(spotLight->angle);
+            std::get<float>(uniforms->at("penumbraCos")) = std::cos(spotLight->angle * (1 - spotLight->penumbra));
+            std::get<float>(uniforms->at("decay")) = spotLight->decay;
 
             if (light->castShadow) {
 
-                auto shadow = l->shadow;
+                auto& shadow = spotLight->shadow;
                 auto shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms->at("shadowBias") = shadow->bias;
@@ -136,19 +138,17 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             ++spotLength;
 
-        } else if (light->is<PointLight>()) {
-
-            auto l = light->as<PointLight>();
+        } else if (auto pointLight = light->as<PointLight>()) {
 
             auto uniforms = cache_.get(*light);
 
-            std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(l->intensity);
-            uniforms->at("distance") = l->distance;
-            uniforms->at("decay") = l->decay;
+            std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(pointLight->intensity);
+            uniforms->at("distance") = pointLight->distance;
+            uniforms->at("decay") = pointLight->decay;
 
             if (light->castShadow) {
 
-                auto shadow = l->shadow;
+                auto& shadow = pointLight->shadow;
                 LightUniforms* shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms->at("shadowBias") = shadow->bias;
@@ -173,13 +173,12 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             ++pointLength;
 
-        } else if (light->as<HemisphereLight>()) {
+        } else if (auto hemisphereLight = light->as<HemisphereLight>()) {
 
-            auto l = dynamic_cast<HemisphereLight*>(light);
             auto uniforms = cache_.get(*light);
 
-            std::get<Color>(uniforms->at("skyColor")).copy(l->color).multiplyScalar(intensity);
-            std::get<Color>(uniforms->at("groundColor")).copy(l->groundColor).multiplyScalar(intensity);
+            std::get<Color>(uniforms->at("skyColor")).copy(hemisphereLight->color).multiplyScalar(intensity);
+            std::get<Color>(uniforms->at("groundColor")).copy(hemisphereLight->groundColor).multiplyScalar(intensity);
 
             ensureCapacity(state.hemi, hemiLength + 1);
             state.hemi[hemiLength] = uniforms;

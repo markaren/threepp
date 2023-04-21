@@ -7,13 +7,13 @@ using namespace threepp;
 
 namespace {
 
-    struct CustomSineCurve : public Curve3 {
+    struct CustomSineCurve: Curve3 {
 
         float scale;
 
-        explicit CustomSineCurve(float scale) : scale(scale) {}
+        explicit CustomSineCurve(float scale): scale(scale) {}
 
-        void getPoint(float t, Vector3 &target) override {
+        void getPoint(float t, Vector3& target) const override {
             float tx = t * 3 - 1.5f;
             float ty = std::sin(math::PI * 2 * t);
             float tz = 0;
@@ -26,7 +26,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("TubeGeometry", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
@@ -38,16 +38,15 @@ int main() {
     auto curve = std::make_shared<CustomSineCurve>(10.f);
 
     const auto geometry = TubeGeometry::create(curve);
-    const auto material = MeshBasicMaterial::create();
-    material->color.setHex(0xff0000);
-    material->side = DoubleSide;
+    const auto material = MeshBasicMaterial::create({{"color", 0xff0000},
+                                                     {"side", DoubleSide}});
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
-    auto line = LineSegments::create(WireframeGeometry::create(*geometry));
-    line->material()->as<LineBasicMaterial>()->depthTest = false;
-    line->material()->as<LineBasicMaterial>()->opacity = 0.5;
-    line->material()->as<LineBasicMaterial>()->transparent = true;
+    auto lineMaterial = LineBasicMaterial::create({{"depthTest", false},
+                                                   {"opacity", 0.5f},
+                                                   {"transparent", true}});
+    auto line = LineSegments::create(WireframeGeometry::create(*geometry), lineMaterial);
     mesh->add(line);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -57,7 +56,6 @@ int main() {
     });
 
     canvas.animate([&](float dt) {
-
         mesh->rotation.y += 1 * dt;
 
         renderer.render(scene, camera);

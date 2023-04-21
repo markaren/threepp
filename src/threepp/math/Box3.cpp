@@ -12,7 +12,7 @@ using namespace threepp;
 namespace {
 
     Vector3 _vector;
-    
+
     Vector3 _v0;
     Vector3 _v1;
     Vector3 _v2;
@@ -59,7 +59,18 @@ Box3::Box3()
     : min_(Vector3(+Infinity<float>, +Infinity<float>, +Infinity<float>)),
       max_(Vector3(-Infinity<float>, -Infinity<float>, -Infinity<float>)) {}
 
-Box3::Box3(Vector3 min, Vector3 max): min_(min), max_(max) {}
+Box3::Box3(const Vector3& min, const Vector3& max)
+    : min_(min), max_(max) {}
+
+const Vector3& Box3::min() const {
+
+    return min_;
+}
+
+const Vector3& Box3::max() const {
+
+    return max_;
+}
 
 Box3& Box3::set(const Vector3& min, const Vector3& max) {
 
@@ -395,4 +406,9 @@ Box3& Box3::translate(const Vector3& offset) {
 bool Box3::equals(const Box3& box) const {
 
     return box.min_.equals(this->min_) && box.max_.equals(this->max_);
+}
+
+bool Box3::operator==(const Box3& other) const {
+
+    return equals(other);
 }

@@ -3,7 +3,7 @@
 #ifndef THREEPP_DEPTHTEXTURE_HPP
 #define THREEPP_DEPTHTEXTURE_HPP
 
-#include "Texture.hpp"
+#include "threepp/textures/Texture.hpp"
 
 namespace threepp {
 

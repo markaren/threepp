@@ -15,31 +15,21 @@ namespace threepp {
             unsigned int capSegments;
             unsigned int radialSegments;
 
-            explicit Params(float radius = 0.5f, float length = 1, unsigned int capSegments = 8, unsigned int radialSegments = 16)
-                : radius(radius), length(length), capSegments(capSegments), radialSegments(radialSegments) {}
+            explicit Params(float radius = 0.5f, float length = 1, unsigned int capSegments = 8, unsigned int radialSegments = 16);
         };
 
         const float radius;
         const float length;
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "CapsuleGeometry";
-        }
-
-        static std::shared_ptr<CapsuleGeometry> create(const Params& params) {
-
-            return std::shared_ptr<CapsuleGeometry>(new CapsuleGeometry(params));
-        }
+        static std::shared_ptr<CapsuleGeometry> create(const Params& params);
 
         static std::shared_ptr<CapsuleGeometry> create(
                 float radius = 0.5f,
                 float length = 1,
                 unsigned int capSegments = 8,
-                unsigned int radialSegments = 16) {
-
-            return create(Params(radius, length, capSegments, radialSegments));
-        }
+                unsigned int radialSegments = 16);
 
     protected:
         explicit CapsuleGeometry(const Params& params);

@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
+#include "threepp/renderers/GLRenderTarget.hpp"
+
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
 #include "threepp/renderers/gl/GLBindingStates.hpp"
@@ -12,8 +14,13 @@
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 #include "threepp/renderers/gl/GLRenderStates.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/core/InstancedBufferGeometry.hpp"
+#include "threepp/materials/RawShaderMaterial.hpp"
+#include "threepp/math/Frustum.hpp"
+
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/LOD.hpp"
@@ -22,10 +29,6 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
-
-#include "threepp/materials/MeshToonMaterial.hpp"
-#include "threepp/materials/RawShaderMaterial.hpp"
-#include "threepp/materials/ShadowMaterial.hpp"
 
 #include <glad/glad.h>
 
@@ -376,8 +379,8 @@ struct GLRenderer::Impl {
         } else if (object->is<Line>()) {
 
             float lineWidth = 1;
-            if (isWireframeMaterial) {
-                lineWidth = wireframeMaterial->wireframeLinewidth;
+            if (auto lw = material->as<MaterialWithLineWidth>()) {
+                lineWidth = lw->linewidth;
             }
 
             state.setLineWidth(lineWidth * static_cast<float>(scope.getTargetPixelRatio()));
@@ -427,7 +430,7 @@ struct GLRenderer::Impl {
 
         if (visible) {
 
-            if (object->as<Group>()) {
+            if (object->is<Group>()) {
 
                 groupOrder = object->renderOrder;
 
@@ -658,12 +661,12 @@ struct GLRenderer::Impl {
         //            if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
         //
 
-        bool isMeshBasicMaterial = material->is<MeshBasicMaterial>();
-        bool isMeshLambertMaterial = material->is<MeshLambertMaterial>();
-        bool isMeshToonMaterial = material->is<MeshToonMaterial>();
-        bool isMeshPhongMaterial = material->is<MeshPhongMaterial>();
-        bool isMeshStandardMaterial = material->is<MeshStandardMaterial>();
-        bool isShadowMaterial = material->is<ShadowMaterial>();
+        bool isMeshBasicMaterial = material->type() == "MeshBasicMaterial";
+        bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
+        bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
+        bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
+        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial";
+        bool isShadowMaterial = material->type() == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool isEnvMap = material->is<MaterialWithEnvMap>() && material->as<MaterialWithEnvMap>()->envMap;
 
@@ -697,7 +700,7 @@ struct GLRenderer::Impl {
         //
 
         bool needsProgramChange = false;
-        bool isInstancedMesh = object->as<InstancedMesh>();
+        bool isInstancedMesh = object->type() == "InstancedMesh";
 
         if (material->version == materialProperties->version) {
 
@@ -906,16 +909,16 @@ struct GLRenderer::Impl {
     }
 
     bool materialNeedsLights(Material* material) {
-        bool isMeshLambertMaterial = material->is<MeshLambertMaterial>();
-        bool isMeshToonMaterial = material->is<MeshToonMaterial>();
-        bool isMeshPhongMaterial = material->is<MeshPhongMaterial>();
-        bool isMeshStandardMaterial = material->is<MeshStandardMaterial>();
-        bool isShadowMaterial = material->is<ShadowMaterial>();
+        bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
+        bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
+        bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
+        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial";
+        bool isShadowMaterial = material->type() == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool lights = false;
 
-        if (material->is<MaterialWithLights>()) {
-            lights = material->as<MaterialWithLights>()->lights;
+        if (auto materialWithLights = material->as<MaterialWithLights>()) {
+            lights = materialWithLights->lights;
         }
 
         return isMeshLambertMaterial || isMeshToonMaterial || isMeshPhongMaterial ||
@@ -991,6 +994,27 @@ struct GLRenderer::Impl {
         state.setScissorTest(_currentScissorTest.value_or(false));
     }
 
+    void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
+
+        const auto levelScale = std::pow(2, -level);
+        const auto width = static_cast<int>(texture.image->width * levelScale);
+        const auto height = static_cast<int>(texture.image->height * levelScale);
+
+        auto glFormat = gl::convert(texture.format);
+
+        // Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1120100
+
+        if (glFormat == GL_RGB) glFormat = GL_RGB8;
+        if (glFormat == GL_RGBA) glFormat = GL_RGBA8;
+
+
+        textures.setTexture2D(texture, 0);
+
+        glCopyTexImage2D(GL_TEXTURE_2D, level, glFormat, static_cast<int>(position.x), static_cast<int>(position.y), width, height, 0);
+
+        state.unbindTexture();
+    }
+
     void setViewport(int x, int y, int width, int height) {
 
         _viewport.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
@@ -1061,8 +1085,10 @@ struct GLRenderer::Impl {
     friend struct gl::GLShadowMap;
 };
 
+
 GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
     : pimpl_(std::make_unique<Impl>(*this, canvas, parameters)) {}
+
 
 const gl::GLInfo& threepp::GLRenderer::info() {
 
@@ -1236,6 +1262,11 @@ void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry
 void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     pimpl_->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
+}
+
+void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
+
+    pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
 void GLRenderer::enableTextRendering() {

@@ -3,7 +3,6 @@
 #define THREEPP_LIGHT_INTERFACES_HPP
 
 
-
 namespace threepp {
 
     class LightShadow;

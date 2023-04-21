@@ -1,27 +1,27 @@
 
 #include "threepp/helpers/DirectionalLightHelper.hpp"
 
+#include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
-
-#include <utility>
+#include "threepp/objects/Line.hpp"
 
 using namespace threepp;
 
-DirectionalLightHelper::DirectionalLightHelper(std::shared_ptr<DirectionalLight> light, float size, std::optional<Color> color)
-    : light(std::move(light)), size(size), color(color) {
+DirectionalLightHelper::DirectionalLightHelper(DirectionalLight& light, float size, std::optional<Color> color)
+    : light(light), color(color) {
 
-    this->light->updateMatrixWorld();
+    this->light.updateMatrixWorld();
 
-    this->matrix = this->light->matrixWorld;
+    this->matrix = this->light.matrixWorld;
     this->matrixAutoUpdate = false;
 
     auto geometry = BufferGeometry::create();
     geometry->setAttribute("position", FloatBufferAttribute::create(
-                                               std::vector<float>{-size, size, 0,
-                                                                  size, size, 0,
-                                                                  size, -size, 0,
-                                                                  -size, -size, 0,
-                                                                  -size, size, 0},
+                                               {-size, size, 0,
+                                                size, size, 0,
+                                                size, -size, 0,
+                                                -size, -size, 0,
+                                                -size, size, 0},
                                                3));
 
     auto material = LineBasicMaterial::create();
@@ -32,7 +32,7 @@ DirectionalLightHelper::DirectionalLightHelper(std::shared_ptr<DirectionalLight>
     this->add(this->lightPlane);
 
     geometry = BufferGeometry::create();
-    geometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 1}, 3));
+    geometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
 
     this->targetLine = Line::create(geometry, material);
     this->targetLine->frustumCulled = false;
@@ -47,8 +47,8 @@ void DirectionalLightHelper::update() {
     static Vector3 _v2;
     static Vector3 _v3;
 
-    _v1.setFromMatrixPosition(*this->light->matrixWorld);
-    _v2.setFromMatrixPosition(*this->light->target->matrixWorld);
+    _v1.setFromMatrixPosition(*this->light.matrixWorld);
+    _v2.setFromMatrixPosition(*this->light.target->matrixWorld);
     _v3.subVectors(_v2, _v1);
 
     this->lightPlane->lookAt(_v2);
@@ -60,15 +60,15 @@ void DirectionalLightHelper::update() {
 
     } else {
 
-        this->lightPlane->material()->as<MaterialWithColor>()->color.copy(this->light->color);
-        this->targetLine->material()->as<MaterialWithColor>()->color.copy(this->light->color);
+        this->lightPlane->material()->as<MaterialWithColor>()->color.copy(this->light.color);
+        this->targetLine->material()->as<MaterialWithColor>()->color.copy(this->light.color);
     }
 
     this->targetLine->lookAt(_v2);
     this->targetLine->scale.z = _v3.length();
 }
 
-std::shared_ptr<DirectionalLightHelper> DirectionalLightHelper::create(const std::shared_ptr<DirectionalLight>& light, float size, std::optional<Color> color) {
+std::shared_ptr<DirectionalLightHelper> DirectionalLightHelper::create(DirectionalLight& light, float size, std::optional<Color> color) {
 
     return std::shared_ptr<DirectionalLightHelper>(new DirectionalLightHelper(light, size, color));
 }

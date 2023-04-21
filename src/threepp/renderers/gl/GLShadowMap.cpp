@@ -1,8 +1,8 @@
 
+#include "threepp/renderers/gl/GLShadowMap.hpp"
+
 #include "threepp/constants.hpp"
-
 #include "threepp/math/Frustum.hpp"
-
 #include "threepp/scenes/Scene.hpp"
 
 #include "threepp/objects/Line.hpp"
@@ -16,12 +16,14 @@
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/PointLightShadow.hpp"
 
+#include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/shaders/ShaderChunk.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
-#include "threepp/renderers/gl/GLShadowMap.hpp"
+
 
 #include <cmath>
 #include <iostream>
@@ -73,7 +75,7 @@ struct GLShadowMap::Impl {
     GLShadowMap* scope;
     GLObjects& _objects;
 
-    Frustum _frustum;
+    const Frustum* _frustum;
 
     Vector2 _shadowMapSize;
     Vector2 _viewportSize;
@@ -95,7 +97,7 @@ struct GLShadowMap::Impl {
           _maxTextureSize(GLCapabilities::instance().maxTextureSize) {
 
         auto fullScreenTri = BufferGeometry::create();
-        fullScreenTri->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{-1, -1, 0.5, 3, -1, 0.5, -1, 3, 0.5}, 3));
+        fullScreenTri->setAttribute("position", FloatBufferAttribute::create({-1, -1, 0.5, 3, -1, 0.5, -1, 3, 0.5}, 3));
 
         fullScreenMesh = Mesh::create(fullScreenTri, shadowMaterialVertical);
     }
@@ -157,9 +159,10 @@ struct GLShadowMap::Impl {
     }
 
     Material* getDepthMaterial(GLRenderer& _renderer, Object3D* object, BufferGeometry* geometry, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar) {
-        Material* result = nullptr;
 
-        if (light->is<PointLight>()) {
+        Material* result;
+
+        if (light->type() == "PointLight") {
 
             result = getDistanceMaterialVariant(false);
 
@@ -216,12 +219,12 @@ struct GLShadowMap::Impl {
             resultWithLineWidth->linewidth = materialWithLineWidth->linewidth;
         }
 
-        auto distanceMaterial = result->as<MeshDistanceMaterial>();
-        if (light->is<PointLight>() && distanceMaterial) {
-
-            distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
-            distanceMaterial->nearDistance = shadowCameraNear;
-            distanceMaterial->farDistance = shadowCameraFar;
+        if (light->type() == "PointLight") {
+            if (auto distanceMaterial = material->as<MeshDistanceMaterial>()) {
+                distanceMaterial->referencePosition.setFromMatrixPosition(*light->matrixWorld);
+                distanceMaterial->nearDistance = shadowCameraNear;
+                distanceMaterial->farDistance = shadowCameraFar;
+            }
         }
 
         return result;
@@ -235,7 +238,7 @@ struct GLShadowMap::Impl {
 
         if (visible && (object->is<Mesh>() || object->is<Line>() || object->is<Points>())) {
 
-            if ((object->castShadow || (object->receiveShadow && scope->type == VSMShadowMap)) && (!object->frustumCulled || _frustum.intersectsObject(*object))) {
+            if ((object->castShadow || (object->receiveShadow && scope->type == VSMShadowMap)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
 
                 object->modelViewMatrix.multiplyMatrices(shadowCamera->matrixWorldInverse, *object->matrixWorld);
 
@@ -386,7 +389,7 @@ struct GLShadowMap::Impl {
                     shadow->updateMatrices(light);
                 }
 
-                _frustum = shadow->getFrustum();
+                _frustum = &shadow->getFrustum();
 
                 renderObject(_renderer, scene, camera, shadow->camera.get(), light);
             }
@@ -408,7 +411,7 @@ struct GLShadowMap::Impl {
 };
 
 GLShadowMap::GLShadowMap(GLObjects& objects)
-    : pimpl_(std::make_unique<Impl>(this, objects)) {}
+    : type(PCFShadowMap), pimpl_(std::make_unique<Impl>(this, objects)) {}
 
 
 void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {

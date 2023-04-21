@@ -8,36 +8,38 @@ namespace {
 
     std::string vertexSource() {
 
-        return "#version 330 core\n\n"
-               "#define attribute in\n"
-               "#define varying out\n"
-               "uniform mat4 modelViewMatrix; // optional\n"
-               "uniform mat4 projectionMatrix; // optional\n"
-               "attribute vec3 position;\n"
-               "attribute vec4 color;\n"
-               "varying vec3 vPosition;\n"
-               "varying vec4 vColor;\n\n"
-               "void main()\t{\n"
-               "\tvPosition = position;\n"
-               "\tvColor = color;\n"
-               "\tgl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );\n"
-               "}";
+        return R"(
+               #version 330 core
+               #define attribute in
+               #define varying out
+               uniform mat4 modelViewMatrix; // optional
+               uniform mat4 projectionMatrix; // optional
+               attribute vec3 position;
+               attribute vec4 color;
+               varying vec3 vPosition;
+               varying vec4 vColor;
+               void main() {
+                   vPosition = position;
+                   vColor = color;
+                   gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+               })";
     }
 
     std::string fragmentSource() {
 
-        return "#version 330 core\n\n"
-               "#define varying in\n"
-               "out highp vec4 pc_fragColor;\n"
-               "#define gl_FragColor pc_fragColor\n"
-               "uniform float time;\n"
-               "varying vec3 vPosition;\n"
-               "varying vec4 vColor;\n\n"
-               "void main()\t{\n"
-               "\tvec4 color = vec4( vColor );\n"
-               "\tcolor.r += sin( vPosition.x * 10.0 + time ) * 0.5;\n"
-               "\tgl_FragColor = color;\n"
-               "}";
+        return R"(
+                #version 330 core
+                #define varying in
+                out highp vec4 pc_fragColor;
+                #define gl_FragColor pc_fragColor
+                uniform float time;
+                varying vec3 vPosition;
+                varying vec4 vColor;
+                void main() {
+                   vec4 color = vec4( vColor );
+                   color.r += sin( vPosition.x * 10.0 + time ) * 0.5;
+                   gl_FragColor = color;
+                })";
     }
 
 }// namespace
@@ -46,9 +48,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters()
-                          .title("Raw Shader demo")
-                          .antialiasing(8));
+    Canvas canvas("Raw Shader demo", {{"antialiasing", 4}});
 
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
@@ -58,11 +58,10 @@ int main() {
     camera->position.z = 2;
 
     int triangles = 1000;
-
-    auto geometry = BufferGeometry::create();
-
     std::vector<float> positions;
+    positions.reserve(triangles*3);
     std::vector<float> colors;
+    colors.reserve(triangles*4);
 
     for (int i = 0; i < triangles; i++) {
         positions.emplace_back(math::random() - .5f);
@@ -75,6 +74,7 @@ int main() {
         colors.emplace_back(math::random());
     }
 
+    auto geometry = BufferGeometry::create();
     geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
     geometry->setAttribute("color", FloatBufferAttribute::create(colors, 4));
 

@@ -17,39 +17,16 @@ namespace threepp {
                           public MaterialWithSize {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "SpriteMaterial";
-        }
+        std::shared_ptr<Material> clone() const override;
 
-        std::shared_ptr<Material> clone() const override {
-            auto m = create();
-            copyInto(m.get());
-
-            m->color.copy(color);
-
-            m->map = map;
-
-            m->alphaMap = alphaMap;
-
-            m->rotation = rotation;
-
-            m->sizeAttenuation = sizeAttenuation;
-
-            return m;
-        }
-
-        static std::shared_ptr<SpriteMaterial> create() {
-
-            return std::shared_ptr<SpriteMaterial>(new SpriteMaterial());
-        }
+        static std::shared_ptr<SpriteMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
     protected:
-        SpriteMaterial()
-            : MaterialWithColor(0xffffff),
-              MaterialWithSize(0, true) {
-            transparent = true;
-        }
+        SpriteMaterial();
+
+        bool setValue(const std::string& key, const MaterialValue& value) override;
     };
 
 }// namespace threepp

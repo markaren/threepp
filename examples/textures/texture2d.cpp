@@ -16,11 +16,10 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    TextureLoader loader{};
+    TextureLoader tl;
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
-    const auto sphereMaterial = MeshBasicMaterial::create();
-    sphereMaterial->map = loader.load("data/textures/checker.png");
+    const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load("data/textures/checker.png")}});
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(1);
     scene->add(sphere);
@@ -28,18 +27,17 @@ int main() {
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
 #ifdef THREEPP_WITH_CURL
-    boxMaterial->map = loader.loadFromUrl("https://raw.githubusercontent.com/mrdoob/three.js/r129/examples/textures/crate.gif");
+    boxMaterial->map = tl.loadFromUrl("https://raw.githubusercontent.com/mrdoob/three.js/r129/examples/textures/crate.gif");
 #else
-    boxMaterial->map = loader.load("data/textures/crate.gif");
+    boxMaterial->map = tl.load("data/textures/crate.gif");
 #endif
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
     scene->add(box);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshBasicMaterial::create();
-    planeMaterial->side = DoubleSide;
-    planeMaterial->map = loader.load("data/textures/brick_bump.jpg");
+    const auto planeMaterial = MeshBasicMaterial::create({{"side", DoubleSide},
+                                                          {"map", tl.load("data/textures/brick_bump.jpg")}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
     scene->add(plane);

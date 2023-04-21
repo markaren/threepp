@@ -4,7 +4,6 @@
 #define THREEPP_SPOTLIGHT_HPP
 
 #include "threepp/lights/Light.hpp"
-#include "threepp/lights/SpotLightShadow.hpp"
 #include "threepp/lights/light_interfaces.hpp"
 #include "threepp/math/MathUtils.hpp"
 
@@ -18,29 +17,18 @@ namespace threepp {
         float penumbra;
         float decay;
 
+        [[nodiscard]] std::string type() const override;
+
         float getPower();
 
         void setPower(float power);
 
         void dispose() override;
 
-        [[nodiscard]] std::string type() const override {
-
-            return "SpotLight";
-        }
-
-        static std::shared_ptr<SpotLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt, float distance = 0, float angle = math::PI / 3, float penumbra = 0, float decay = 1) {
-
-            return std::shared_ptr<SpotLight>(new SpotLight(color, intensity, distance, angle, penumbra, decay));
-        }
+        static std::shared_ptr<SpotLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt, float distance = 0, float angle = math::PI / 3, float penumbra = 0, float decay = 1);
 
     protected:
-        SpotLight(const Color& color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay)
-            : Light(color, intensity), LightWithShadow(SpotLightShadow::create()), distance(distance), angle(angle), penumbra(penumbra), decay(decay) {
-
-            this->position.copy(Object3D::defaultUp);
-            this->updateMatrix();
-        }
+        SpotLight(const Color& color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay);
     };
 
 }// namespace threepp

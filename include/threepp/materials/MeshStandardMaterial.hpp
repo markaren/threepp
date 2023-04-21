@@ -28,90 +28,16 @@ namespace threepp {
                                 public MaterialWithDefines {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "MeshStandardMaterial";
-        }
+        [[nodiscard]] std::shared_ptr<Material> clone() const override;
 
-        [[nodiscard]] std::shared_ptr<Material> clone() const override {
-
-            auto m = create();
-            copyInto(m.get());
-
-            m->defines["STANDARD"] = "";
-
-            m->color.copy(color);
-            m->roughness = roughness;
-            m->metalness = metalness;
-
-            m->map = map;
-
-            m->lightMap = lightMap;
-            m->lightMapIntensity = lightMapIntensity;
-
-            m->aoMap = aoMap;
-            m->aoMapIntensity = aoMapIntensity;
-
-            m->emissive.copy(emissive);
-            m->emissiveMap = emissiveMap;
-            m->emissiveIntensity = emissiveIntensity;
-
-            m->bumpMap = bumpMap;
-            m->bumpScale = bumpScale;
-
-            m->normalMap = normalMap;
-            m->normalMapType = normalMapType;
-            m->normalScale.copy(normalScale);
-
-            m->displacementMap = displacementMap;
-            m->displacementScale = displacementScale;
-            m->displacementBias = displacementBias;
-
-            m->roughnessMap = roughnessMap;
-
-            m->metalnessMap = metalnessMap;
-
-            m->alphaMap = alphaMap;
-
-            m->envMap = envMap;
-            m->envMapIntensity = envMapIntensity;
-
-            m->refractionRatio = refractionRatio;
-
-            m->wireframe = wireframe;
-            m->wireframeLinewidth = wireframeLinewidth;
-
-            m->flatShading = flatShading;
-
-            m->vertexTangents = vertexTangents;
-
-            return m;
-        }
-
-        static std::shared_ptr<MeshStandardMaterial> create() {
-
-            return std::shared_ptr<MeshStandardMaterial>(new MeshStandardMaterial());
-        }
+        static std::shared_ptr<MeshStandardMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
     protected:
-        MeshStandardMaterial()
-            : MaterialWithColor(0xffffff),
-              MaterialWithWireframe(false, 1),
-              MaterialWithRoughness(1),
-              MaterialWithMetalness(0),
-              MaterialWithLightMap(1),
-              MaterialWithAoMap(1),
-              MaterialWithEmissive(0x000000, 1),
-              MaterialWithBumpMap(1),
-              MaterialWithEnvMap(1.f),
-              MaterialWithDisplacementMap(1, 0),
-              MaterialWithReflectivityRatio(0.98),
-              MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
-              MaterialWithVertexTangents(false),
-              MaterialWithFlatShading(false) {
+        MeshStandardMaterial();
 
-            defines["STANDARD"] = "";
-        }
+        bool setValue(const std::string& key, const MaterialValue& value) override;
     };
 
 }// namespace threepp

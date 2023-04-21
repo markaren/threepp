@@ -20,17 +20,11 @@ namespace threepp {
     public:
         Box3();
 
-        Box3(Vector3 min, Vector3 max);
+        Box3(const Vector3& min, const Vector3& max);
 
-        [[nodiscard]] const Vector3& min() const {
+        [[nodiscard]] const Vector3& min() const;
 
-            return min_;
-        }
-
-        [[nodiscard]] const Vector3& max() const {
-
-            return max_;
-        }
+        [[nodiscard]] const Vector3& max() const;
 
         Box3& set(const Vector3& min, const Vector3& max);
 
@@ -135,16 +129,12 @@ namespace threepp {
 
         [[nodiscard]] bool equals(const Box3& box) const;
 
-        bool operator==(const Box3& other) const {
-
-            return equals(other);
-        }
+        bool operator==(const Box3& other) const;
 
         friend std::ostream& operator<<(std::ostream& os, const Box3& v) {
             os << "Box3(min=" << v.min_ << ", max=" << v.max_ << ")";
             return os;
         }
-
 
     private:
         Vector3 min_;

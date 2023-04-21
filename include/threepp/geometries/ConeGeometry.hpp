@@ -21,19 +21,18 @@ namespace threepp {
             float thetaStart;
             float thetaLength;
 
-            explicit Params(float radius = 1, float height = 1, unsigned int radialSegments = 16, unsigned int heightSegments = 1, bool openEnded = false, float thetaStart = 0, float thetaLength = math::TWO_PI)
-                : radius(radius), height(height), radialSegments(radialSegments), heightSegments(heightSegments), openEnded(openEnded), thetaStart(thetaStart), thetaLength(thetaLength) {}
+            explicit Params(float radius = 1,
+                            float height = 1,
+                            unsigned int radialSegments = 16,
+                            unsigned int heightSegments = 1,
+                            bool openEnded = false,
+                            float thetaStart = 0,
+                            float thetaLength = math::TWO_PI);
         };
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "ConeGeometry";
-        }
-
-        static std::shared_ptr<ConeGeometry> create(const Params& params) {
-
-            return std::shared_ptr<ConeGeometry>(new ConeGeometry(params));
-        }
+        static std::shared_ptr<ConeGeometry> create(const Params& params);
 
         static std::shared_ptr<ConeGeometry> create(
                 float radius = 1,
@@ -42,14 +41,10 @@ namespace threepp {
                 unsigned int heightSegments = 1,
                 bool openEnded = false,
                 float thetaStart = 0,
-                float thetaLength = math::PI * 2) {
-
-            return create(Params(radius, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
-        }
+                float thetaLength = math::PI * 2);
 
     protected:
-        explicit ConeGeometry(const Params& params)
-            : CylinderGeometry(CylinderGeometry::Params(0, params.radius, params.height, params.radialSegments, params.heightSegments, params.openEnded, params.thetaStart, params.thetaLength)) {}
+        explicit ConeGeometry(const Params& params);
     };
 
 }// namespace threepp

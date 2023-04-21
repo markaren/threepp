@@ -109,7 +109,6 @@ std::vector<std::shared_ptr<Shape>> Font::generateShapes(const std::string& text
 
         auto pathShapes = path.toShapes();
         shapes.insert(shapes.end(), pathShapes.begin(), pathShapes.end());
-
     }
 
     return shapes;

@@ -124,3 +124,8 @@ bool Frustum::containsPoint(const Vector3& point) const {
 
     return true;
 }
+
+const std::array<Plane, 6>& Frustum::planes() const {
+
+    return planes_;
+}

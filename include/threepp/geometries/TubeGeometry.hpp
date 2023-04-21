@@ -20,35 +20,27 @@ namespace threepp {
             unsigned int radialSegments;
             bool closed;
 
-            explicit Params(unsigned int tubularSegments = 64, float radius = 1, unsigned int radialSegments = 32, bool closed = false)
-                : tubularSegments(tubularSegments), radius(radius), radialSegments(radialSegments), closed(closed) {}
+            explicit Params(unsigned int tubularSegments = 64,
+                            float radius = 1,
+                            unsigned int radialSegments = 32,
+                            bool closed = false);
         };
 
         const float radius;
         const std::shared_ptr<Curve3> path;
 
-
-        [[nodiscard]] std::string type() const override {
-
-            return "TubeGeometry";
-        }
+        [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<TubeGeometry> create(
                 const std::shared_ptr<Curve3>& path,
-                const Params& params) {
-
-            return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, params));
-        }
+                const Params& params);
 
         static std::shared_ptr<TubeGeometry> create(
                 const std::shared_ptr<Curve3>& path,
                 unsigned int tubularSegments = 64,
                 float radius = 1,
                 unsigned int radialSegments = 16,
-                bool closed = false) {
-
-            return create(path, Params(tubularSegments, radius, radialSegments, closed));
-        }
+                bool closed = false);
 
     private:
         Curve3::FrenetFrames frames;

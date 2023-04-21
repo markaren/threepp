@@ -58,7 +58,7 @@ namespace {
 
             // we use this multidimensional array as a data structure for creating the subdivision
 
-            std::vector<std::vector<Vector3>> v(cols+1);
+            std::vector<std::vector<Vector3>> v(cols + 1);
 
             // construct all of the vertices for this subdivision
 
@@ -70,7 +70,7 @@ namespace {
                 auto bj = b.clone().lerp(c, static_cast<float>(i) / static_cast<float>(cols));
 
                 const auto rows = cols - i;
-                vi.resize(rows+1);
+                vi.resize(rows + 1);
 
                 for (unsigned j = 0; j <= rows; j++) {
 

@@ -12,7 +12,6 @@ namespace threepp {
     class TextureLoader {
 
     public:
-
         explicit TextureLoader(bool useCache = true);
 
         std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY = true);

@@ -12,24 +12,12 @@ namespace threepp {
     public:
         Color groundColor;
 
-        [[nodiscard]] virtual std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "HemisphereLight";
-        }
-
-        static std::shared_ptr<HemisphereLight> create(const Color& skyColor = 0xffffff, const Color& groundColor = 0xffffff, std::optional<float> intensity = std::nullopt) {
-
-            return std::shared_ptr<HemisphereLight>(new HemisphereLight(skyColor, groundColor, intensity));
-        }
+        static std::shared_ptr<HemisphereLight> create(const Color& skyColor = 0xffffff, const Color& groundColor = 0xffffff, std::optional<float> intensity = std::nullopt);
 
     protected:
-        HemisphereLight(const Color& skyColor, const Color& groundColor, std::optional<float> intensity)
-            : Light(skyColor, intensity),
-              groundColor(groundColor) {
-
-            position.copy(Object3D::defaultUp);
-            updateMatrix();
-        }
+        HemisphereLight(const Color& skyColor, const Color& groundColor, std::optional<float> intensity);
     };
 
 }// namespace threepp

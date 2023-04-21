@@ -33,8 +33,8 @@ namespace threepp {
             std::unique_ptr<Impl> pimpl_;
         };
 
-    }
+    }// namespace gl
 
-}// namespace threepp::gl
+}// namespace threepp
 
 #endif//THREEPP_GLOBJECTS_HPP

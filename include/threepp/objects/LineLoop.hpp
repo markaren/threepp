@@ -10,7 +10,6 @@ namespace threepp {
     class LineLoop: public Line {
 
     public:
-
         [[nodiscard]] std::string type() const override;
 
         std::shared_ptr<Object3D> clone(bool recursive = true) override;

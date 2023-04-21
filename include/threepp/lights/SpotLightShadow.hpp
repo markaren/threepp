@@ -15,10 +15,7 @@ namespace threepp {
 
         void updateMatrices(Light* light) override;
 
-        static std::shared_ptr<SpotLightShadow> create() {
-
-            return std::shared_ptr<SpotLightShadow>(new SpotLightShadow());
-        }
+        static std::shared_ptr<SpotLightShadow> create();
 
     protected:
         SpotLightShadow();

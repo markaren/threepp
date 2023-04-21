@@ -7,7 +7,7 @@
 
 using namespace threepp;
 
-Line3::Line3(Vector3 start, Vector3 end)
+Line3::Line3(const Vector3& start, const Vector3& end)
     : start_(start), end_(end) {}
 
 const Vector3& Line3::start() const {

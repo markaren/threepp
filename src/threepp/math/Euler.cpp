@@ -14,6 +14,17 @@ using namespace threepp;
 Euler::Euler(float x, float y, float z, Euler::RotationOrders order)
     : x(x), y(y), z(z), order_() {}
 
+
+Euler::RotationOrders Euler::getOrder() const {
+
+    return order_;
+}
+void Euler::setOrder(Euler::RotationOrders value) {
+
+    this->order_ = value;
+    onChangeCallback_();
+}
+
 Euler& Euler::set(float x, float y, float z, const std::optional<RotationOrders>& order) {
 
     this->x.value_ = x;

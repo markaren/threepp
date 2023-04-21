@@ -15,6 +15,8 @@
 
 #include "threepp/materials/materials.hpp"
 
+#include "threepp/math/MathUtils.hpp"
+
 #include "threepp/helpers/helpers.hpp"
 
 #include "threepp/core/Object3D.hpp"
@@ -26,6 +28,7 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
 
+#include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"

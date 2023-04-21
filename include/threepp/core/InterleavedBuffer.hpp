@@ -9,10 +9,11 @@
 
 namespace threepp {
 
-    class InterleavedBuffer: public TypedBufferAttribute<float> {
+    class InterleavedBuffer: public FloatBufferAttribute {
 
     public:
         [[nodiscard]] int stride() const {
+
             return stride_;
         }
 
@@ -22,11 +23,13 @@ namespace threepp {
         }
 
     protected:
+        int stride_;
+
         InterleavedBuffer(const std::vector<float>& array, int stride)
             : TypedBufferAttribute<float>(array, static_cast<int>(array.size() / stride)),
               stride_(stride) {}
 
-        int stride_;
+
     };
 
 }// namespace threepp

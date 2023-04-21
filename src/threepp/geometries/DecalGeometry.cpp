@@ -295,3 +295,13 @@ DecalGeometry::DecalGeometry(
     setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::shared_ptr<DecalGeometry> DecalGeometry::create(const Mesh& mesh, const Vector3& position, const Euler& orientation, const Vector3& size) {
+
+    return std::shared_ptr<DecalGeometry>(new DecalGeometry(mesh, position, orientation, size));
+}
+
+std::string DecalGeometry::type() const {
+
+    return "DecalGeometry";
+}

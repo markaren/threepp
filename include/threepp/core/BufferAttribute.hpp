@@ -122,7 +122,7 @@ namespace threepp {
 
         TypedBufferAttribute<T>& copyColorsArray(const std::vector<Color>& colors) {
 
-            int offset = 0;
+            unsigned int offset = 0;
 
             for (const auto& color : colors) {
 
@@ -136,7 +136,7 @@ namespace threepp {
 
         TypedBufferAttribute<T>& copyVector2sArray(const std::vector<Vector2>& vectors) {
 
-            int offset = 0;
+            unsigned int offset = 0;
 
             for (const auto& vector : vectors) {
 
@@ -149,7 +149,7 @@ namespace threepp {
 
         TypedBufferAttribute<T>& copyVector3sArray(const std::vector<Vector3>& vectors) {
 
-            int offset = 0;
+            unsigned int offset = 0;
 
             for (const auto& vector : vectors) {
 
@@ -163,7 +163,7 @@ namespace threepp {
 
         TypedBufferAttribute<T>& copyVector4sArray(std::vector<Vector4>& vectors) {
 
-            int offset = 0;
+            unsigned int offset = 0;
 
             for (const auto& vector : vectors) {
 
@@ -180,7 +180,7 @@ namespace threepp {
 
             if (this->itemSize_ == 2) {
 
-                for (size_t i = 0, l = this->count_; i < l; i++) {
+                for (unsigned i = 0, l = this->count_; i < l; i++) {
 
                     setFromBufferAttribute(_vector2, i);
                     _vector2.applyMatrix3(m);
@@ -190,7 +190,7 @@ namespace threepp {
 
             } else if (this->itemSize_ == 3) {
 
-                for (size_t i = 0, l = this->count_; i < l; i++) {
+                for (unsigned i = 0, l = this->count_; i < l; i++) {
 
                     setFromBufferAttribute(_vector, i);
                     _vector.applyMatrix3(m);
@@ -204,7 +204,7 @@ namespace threepp {
 
         TypedBufferAttribute<T>& applyMatrix4(const Matrix4& m) {
 
-            for (int i = 0, l = this->count_; i < l; i++) {
+            for (unsigned i = 0, l = this->count_; i < l; i++) {
 
                 _vector.x = this->getX(i);
                 _vector.y = this->getY(i);
@@ -220,7 +220,7 @@ namespace threepp {
 
         TypedBufferAttribute<T>& applyNormalMatrix(const Matrix3& m) {
 
-            for (int i = 0, l = this->count_; i < l; i++) {
+            for (unsigned i = 0, l = this->count_; i < l; i++) {
 
                 _vector.x = this->getX(i);
                 _vector.y = this->getY(i);
@@ -236,7 +236,7 @@ namespace threepp {
 
         TypedBufferAttribute<T>& transformDirection(const Matrix4& m) {
 
-            for (int i = 0, l = this->count_; i < l; i++) {
+            for (unsigned i = 0, l = this->count_; i < l; i++) {
 
                 _vector.x = this->getX(i);
                 _vector.y = this->getY(i);
@@ -362,7 +362,7 @@ namespace threepp {
             auto maxY = -Infinity<float>;
             auto maxZ = -Infinity<float>;
 
-            for (int i = 0, l = count(); i < l; i++) {
+            for (unsigned i = 0, l = count(); i < l; i++) {
 
                 const auto x = getX(i);
                 const auto y = getY(i);
@@ -392,6 +392,11 @@ namespace threepp {
             clone->copy(*this);
 
             return clone;
+        }
+
+        static std::unique_ptr<TypedBufferAttribute<T>> create(std::initializer_list<T>&& array, int itemSize, bool normalized = false) {
+
+            return create(array.begin(), array.end(), itemSize, normalized);
         }
 
         template<class ArrayLike>

@@ -13,8 +13,9 @@ namespace threepp {
     class ConvexGeometry: public BufferGeometry {
 
     public:
-
         [[nodiscard]] bool containsPoint(const Vector3& v, float tolerance = -1) const;
+
+        [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<ConvexGeometry> create(const std::vector<Vector3>& points);
 

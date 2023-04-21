@@ -111,3 +111,8 @@ void PerspectiveCamera::updateProjectionMatrix() {
 
     this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
 }
+
+std::shared_ptr<PerspectiveCamera> PerspectiveCamera::create(float fov, float aspect, float near, float far) {
+
+    return std::make_shared<PerspectiveCamera>(fov, aspect, near, far);
+}

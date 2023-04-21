@@ -129,3 +129,22 @@ TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
     this->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
     this->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
 }
+
+std::string TubeGeometry::type() const {
+
+    return "TubeGeometry";
+}
+
+std::shared_ptr<TubeGeometry> TubeGeometry::create(const std::shared_ptr<Curve3>& path, const TubeGeometry::Params& params) {
+
+    return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, params));
+}
+
+std::shared_ptr<TubeGeometry> TubeGeometry::create(const std::shared_ptr<Curve3>& path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed) {
+
+    return create(path, Params(tubularSegments, radius, radialSegments, closed));
+}
+
+TubeGeometry::Params::Params(unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed)
+    : tubularSegments(tubularSegments), radius(radius),
+      radialSegments(radialSegments), closed(closed) {}

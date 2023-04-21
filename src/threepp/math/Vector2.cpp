@@ -4,6 +4,7 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace threepp;
@@ -263,6 +264,19 @@ float Vector2::angle() const {
     return angle;
 }
 
+float Vector2::angleTo(const Vector2& v) const {
+
+    const auto denominator = std::sqrt(this->lengthSq() * v.lengthSq());
+
+    if (denominator == 0) return math::PI / 2;
+
+    const auto theta = this->dot(v) / denominator;
+
+    // clamp, to handle numerical problems
+
+    return std::acos(std::clamp(theta, -1.f, 1.f));
+}
+
 float Vector2::distanceTo(const Vector2& v) const {
 
     return std::sqrt(this->distanceToSquared(v));
@@ -300,16 +314,6 @@ Vector2& Vector2::lerpVectors(const Vector2& v1, const Vector2& v2, float alpha)
     return *this;
 }
 
-Vector2 Vector2::clone() const {
-
-    return Vector2{x, y};
-}
-
-bool Vector2::equals(const Vector2& v) const {
-
-    return ((v.x == this->x) && (v.y == this->y));
-}
-
 bool Vector2::isNan() const {
 
     return std::isnan(x) || std::isnan(y);
@@ -318,4 +322,44 @@ bool Vector2::isNan() const {
 Vector2& Vector2::makeNan() {
 
     return set(NAN, NAN);
+}
+
+Vector2 Vector2::clone() const {
+
+    return {x, y};
+}
+
+bool Vector2::equals(const Vector2& v) const {
+
+    return ((v.x == this->x) && (v.y == this->y));
+}
+
+bool Vector2::operator==(const Vector2& other) const {
+
+    return equals(other);
+}
+
+bool Vector2::operator!=(const Vector2& other) const {
+
+    return !equals(other);
+}
+
+Vector2 Vector2::operator+(const Vector2& other) const {
+
+    return clone().add(other);
+}
+
+Vector2& Vector2::operator+=(const Vector2& other) {
+
+    return add(other);
+}
+
+Vector2 Vector2::operator-(const Vector2& other) const {
+
+    return clone().sub(other);
+}
+
+Vector2& Vector2::operator-=(const Vector2& other) {
+
+    return sub(other);
 }

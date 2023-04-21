@@ -5,7 +5,7 @@ int main() {
 
     SnakeGame game(10);
 
-    Canvas canvas(Canvas::Parameters().title("Snake"));
+    Canvas canvas("Snake");
     GLRenderer renderer(canvas);
 
     auto scene = std::make_shared<SnakeScene>(game);
@@ -17,7 +17,7 @@ int main() {
     });
 
     renderer.enableTextRendering();
-    auto& handle = renderer.textHandle("Press \"r\" to reset");
+    renderer.textHandle("Press \"r\" to reset");
 
     canvas.animate([&](float dt) {
         if (game.isRunning()) {

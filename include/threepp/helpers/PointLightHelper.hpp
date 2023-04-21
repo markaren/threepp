@@ -4,23 +4,27 @@
 #define THREEPP_POINTLIGHTHELPER_HPP
 
 #include "threepp/geometries/SphereGeometry.hpp"
-#include "threepp/lights/PointLight.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <memory>
+#include <optional>
+
 namespace threepp {
+
+    class PointLight;
 
     class PointLightHelper: public Mesh {
 
     public:
         void update();
 
-        static std::shared_ptr<PointLightHelper> create(const std::shared_ptr<PointLight>& light, float sphereSize, std::optional<unsigned int> color = std::nullopt);
+        static std::shared_ptr<PointLightHelper> create(PointLight& light, float sphereSize, std::optional<Color> color = std::nullopt);
 
-    protected:
+    private:
         std::optional<Color> color;
-        std::shared_ptr<PointLight> light;
+        PointLight& light;
 
-        PointLightHelper(std::shared_ptr<PointLight> light, float sphereSize, std::optional<Color> color);
+        PointLightHelper(PointLight& light, float sphereSize, std::optional<Color> color);
     };
 
 }// namespace threepp

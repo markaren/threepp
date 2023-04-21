@@ -10,15 +10,9 @@ namespace threepp {
     class WireframeGeometry: public BufferGeometry {
 
     public:
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "WireframeGeometry";
-        }
-
-        static std::shared_ptr<WireframeGeometry> create(const BufferGeometry& geometry) {
-
-            return std::shared_ptr<WireframeGeometry>(new WireframeGeometry(geometry));
-        }
+        static std::shared_ptr<WireframeGeometry> create(const BufferGeometry& geometry);
 
     protected:
         explicit WireframeGeometry(const BufferGeometry& geometry);

@@ -7,7 +7,7 @@ using namespace threepp;
 
 
 GridHelper::GridHelper(unsigned int size, unsigned int divisions, const Color& color1, const Color& color2)
-        : LineSegments(nullptr, nullptr) {
+    : LineSegments(nullptr, nullptr) {
 
     const auto center = divisions / 2;
     const auto step = static_cast<float>(size) / static_cast<float>(divisions);

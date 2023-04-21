@@ -22,23 +22,23 @@ namespace threepp {
             float thetaStart;
             float thetaLength;
 
-            explicit Params(float radiusTop = 1, float radiusBottom = 1, float height = 1, unsigned int radialSegments = 16, unsigned int heightSegments = 1, bool openEnded = false, float thetaStart = 0, float thetaLength = math::TWO_PI)
-                : radiusTop(radiusTop), radiusBottom(radiusBottom), height(height), radialSegments(radialSegments), heightSegments(heightSegments), openEnded(openEnded), thetaStart(thetaStart), thetaLength(thetaLength) {}
+            explicit Params(float radiusTop = 1,
+                            float radiusBottom = 1,
+                            float height = 1,
+                            unsigned int radialSegments = 16,
+                            unsigned int heightSegments = 1,
+                            bool openEnded = false,
+                            float thetaStart = 0,
+                            float thetaLength = math::TWO_PI);
         };
 
         const float radiusTop;
         const float radiusBottom;
         const float height;
 
-        [[nodiscard]] std::string type() const override {
+        [[nodiscard]] std::string type() const override;
 
-            return "CylinderGeometry";
-        }
-
-        static std::shared_ptr<CylinderGeometry> create(const Params& params) {
-
-            return std::shared_ptr<CylinderGeometry>(new CylinderGeometry(params));
-        }
+        static std::shared_ptr<CylinderGeometry> create(const Params& params);
 
         static std::shared_ptr<CylinderGeometry> create(
                 float radiusTop = 1,
@@ -48,13 +48,10 @@ namespace threepp {
                 unsigned int heightSegments = 1,
                 bool openEnded = false,
                 float thetaStart = 0,
-                float thetaLength = math::TWO_PI) {
-
-            return create(Params(radiusTop, radiusBottom, height, radialSegments, heightSegments, openEnded, thetaStart, thetaLength));
-        }
+                float thetaLength = math::TWO_PI);
 
     protected:
-        CylinderGeometry(const Params& params);
+        explicit CylinderGeometry(const Params& params);
     };
 
 }// namespace threepp

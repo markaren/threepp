@@ -3,6 +3,7 @@
 #ifndef THREEPP_MESHMATCAPMATERIAL_HPP
 #define THREEPP_MESHMATCAPMATERIAL_HPP
 
+#include "interfaces.hpp"
 #include "Material.hpp"
 
 namespace threepp {
@@ -19,7 +20,6 @@ namespace threepp {
                               public MaterialWithDefines {
 
     public:
-
         [[nodiscard]] std::string type() const override {
 
             return "MeshMatcapMaterial";

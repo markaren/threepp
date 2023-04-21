@@ -46,11 +46,10 @@ namespace threepp {
 
         MaterialsInfo convert(const MaterialsInfo& mi);
 
-        MaterialCreator& preload() {
+        void preload() {
             for (auto& [mn, _] : materialsInfo) {
                 create(mn);
             }
-            return *this;
         }
 
         void setMaterials(const MaterialsInfo& mi) {
@@ -97,7 +96,7 @@ namespace threepp {
             resourcePath_ = resourcePath;
         }
 
-        MaterialCreator load(const std::filesystem::path& path);
+        std::shared_ptr<MaterialCreator> load(const std::filesystem::path& path);
 
     private:
         std::optional<std::filesystem::path> path_;

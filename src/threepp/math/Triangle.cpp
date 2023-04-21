@@ -12,9 +12,22 @@ namespace {
     Vector3 _v2{};
     Vector3 _v3{};
 
-}
+}// namespace
 
 Triangle::Triangle(Vector3 a, Vector3 b, Vector3 c): a_(a), b_(b), c_(c) {}
+
+const Vector3& Triangle::a() const {
+
+    return a_;
+}
+const Vector3& Triangle::b() const {
+
+    return b_;
+}
+const Vector3& Triangle::c() const {
+
+    return c_;
+}
 
 void Triangle::getNormal(const Vector3& a, const Vector3& b, const Vector3& c, Vector3& target) {
 
@@ -231,9 +244,13 @@ void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) {
 }
 const Vector3& Triangle::operator[](char c) const {
     switch (c) {
-        case 'a': return a_;
-        case 'b': return b_;
-        case 'c': return c_;
-        default: throw std::runtime_error("[Triangle] invalid key: " + std::to_string(c));
+        case 'a':
+            return a_;
+        case 'b':
+            return b_;
+        case 'c':
+            return c_;
+        default:
+            throw std::runtime_error("[Triangle] invalid key: " + std::to_string(c));
     }
 }

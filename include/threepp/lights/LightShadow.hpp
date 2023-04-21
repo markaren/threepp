@@ -11,9 +11,9 @@
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
-
 namespace threepp {
+
+    class GLRenderTarget;
 
     class LightShadow {
 
@@ -29,84 +29,32 @@ namespace threepp {
         std::shared_ptr<GLRenderTarget> map;
         std::shared_ptr<GLRenderTarget> mapPass;
 
-        Matrix4 matrix{};
+        Matrix4 matrix;
 
         bool autoUpdate = true;
         bool needsUpdate = false;
 
-        [[nodiscard]] size_t getViewportCount() const {
+        [[nodiscard]] size_t getViewportCount() const;
 
-            return this->_viewports.size();
-        }
+        [[nodiscard]] const Frustum& getFrustum() const;
 
-        Frustum& getFrustum() {
+        virtual void updateMatrices(Light* light);
 
-            return this->_frustum;
-        }
+        Vector4& getViewport(size_t viewportIndex);
 
-        virtual void updateMatrices(Light* light) {
+        Vector2& getFrameExtents();
 
-            auto shadowCamera = this->camera;
-            auto& shadowMatrix = this->matrix;
-
-            Vector3 _lightPositionWorld{};
-            _lightPositionWorld.setFromMatrixPosition(*light->matrixWorld);
-            shadowCamera->position.copy(_lightPositionWorld);
-
-            Vector3 _lookTarget{};
-            auto lightWithTarget = dynamic_cast<LightWithTarget*>(light);
-            _lookTarget.setFromMatrixPosition(*lightWithTarget->target->matrixWorld);
-            shadowCamera->lookAt(_lookTarget);
-            shadowCamera->updateMatrixWorld();
-
-            Matrix4 _projScreenMatrix{};
-            _projScreenMatrix.multiplyMatrices(shadowCamera->projectionMatrix, shadowCamera->matrixWorldInverse);
-            this->_frustum.setFromProjectionMatrix(_projScreenMatrix);
-
-            shadowMatrix.set(
-                    0.5f, 0.0f, 0.0f, 0.5f,
-                    0.0f, 0.5f, 0.0f, 0.5f,
-                    0.0f, 0.0f, 0.5f, 0.5f,
-                    0.0f, 0.0f, 0.0f, 1.0f);
-
-            shadowMatrix.multiply(shadowCamera->projectionMatrix);
-            shadowMatrix.multiply(shadowCamera->matrixWorldInverse);
-        }
-
-        Vector4& getViewport(size_t viewportIndex) {
-
-            return this->_viewports[viewportIndex];
-        }
-
-        Vector2& getFrameExtents() {
-
-            return this->_frameExtents;
-        }
-
-        void dispose() {
-
-            if (this->map) {
-
-                this->map->dispose();
-            }
-
-            if (this->mapPass) {
-
-                this->mapPass->dispose();
-            }
-        }
+        void dispose();
 
         virtual ~LightShadow() = default;
 
     protected:
-        explicit LightShadow(std::shared_ptr<Camera> camera)
-            : camera(std::move(camera)) {}
-
-    protected:
-        Frustum _frustum{};
+        Frustum _frustum;
         Vector2 _frameExtents{1, 1};
 
         std::vector<Vector4> _viewports{Vector4(0, 0, 1, 1)};
+
+        explicit LightShadow(std::shared_ptr<Camera> camera);
     };
 
 }// namespace threepp

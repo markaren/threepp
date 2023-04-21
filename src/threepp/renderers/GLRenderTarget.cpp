@@ -6,15 +6,14 @@
 using namespace threepp;
 
 
-GLRenderTarget::GLRenderTarget(): uuid(math::generateUUID()) {}
-
 std::shared_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const GLRenderTarget::Options& options) {
 
     return std::shared_ptr<GLRenderTarget>(new GLRenderTarget(width, height, options));
 }
 
 GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GLRenderTarget::Options& options)
-    : width(width), height(height),
+    : uuid(math::generateUUID()),
+      width(width), height(height),
       scissor(0.f, 0.f, (float) width, (float) height),
       viewport(0.f, 0.f, (float) width, (float) height),
       depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
@@ -33,7 +32,7 @@ GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GL
 
 void GLRenderTarget::setTexture(const std::shared_ptr<Texture>& tex) {
 
-    texture->image = Image{width, height, depth};
+    texture->image = Image{nullptr, width, height, depth};
 
     this->texture = tex;
 }
@@ -77,5 +76,14 @@ GLRenderTarget& GLRenderTarget::copy(const GLRenderTarget& source) {
 
 void GLRenderTarget::dispose() {
 
-    this->dispatchEvent("dispose", this);
+    if (!disposed) {
+
+        disposed = true;
+        this->dispatchEvent("dispose", this);
+    }
+}
+
+GLRenderTarget::~GLRenderTarget() {
+
+    dispose();
 }

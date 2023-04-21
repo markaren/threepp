@@ -10,6 +10,11 @@ std::string LOD::type() const {
     return "LOD";
 }
 
+std::shared_ptr<LOD> LOD::create() {
+
+    return std::shared_ptr<LOD>(new LOD());
+}
+
 LOD& LOD::addLevel(const std::shared_ptr<Object3D>& object, float distance) {
 
     distance = std::abs(distance);

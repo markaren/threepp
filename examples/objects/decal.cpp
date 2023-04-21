@@ -30,12 +30,12 @@ namespace {
         return decalMaterial;
     }
 
-    class MyMouseListener : public MouseListener {
+    class MyMouseListener: public MouseListener {
 
     public:
         Vector2 mouse{-Infinity<float>, -Infinity<float>};
 
-        explicit MyMouseListener(Canvas &canvas) : canvas(canvas) {}
+        explicit MyMouseListener(Canvas& canvas): canvas(canvas) {}
 
         bool mouseClick() {
             if (mouseDown) {
@@ -46,22 +46,22 @@ namespace {
             }
         }
 
-        void onMouseDown(int button, const Vector2 &pos) override {
-            if (button == 0) { // left mousebutton
+        void onMouseDown(int button, const Vector2& pos) override {
+            if (button == 0) {// left mousebutton
                 mouseDown = true;
             }
         }
 
-        void onMouseMove(const Vector2 &pos) override {
+        void onMouseMove(const Vector2& pos) override {
             updateMousePos(pos);
         }
 
     private:
-        Canvas &canvas;
+        Canvas& canvas;
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
-            auto &size = canvas.getSize();
+            auto& size = canvas.getSize();
             mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
             mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
         }
@@ -75,11 +75,11 @@ namespace {
         bool clear = false;
         bool mouseHover = false;
 
-        explicit MyGui(const Canvas &canvas) : imgui_context(canvas.window_ptr()) {}
+        explicit MyGui(const Canvas& canvas): imgui_context(canvas.window_ptr()) {}
 
         void onRender() override {
 
-            ImGui::SetNextWindowPos({0, 0}, 0, {0,0});
+            ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
             ImGui::SetNextWindowSize({100, 0}, 0);
 
             ImGui::Begin("Options");
@@ -88,11 +88,23 @@ namespace {
             mouseHover = ImGui::IsWindowHovered();
 
             ImGui::End();
-
         }
     };
 #endif
 
+    void addLights(Scene& scene) {
+
+        auto light = AmbientLight::create(0x443333, 0.8f);
+        scene.add(light);
+
+        auto light2 = DirectionalLight::create(0xffddcc, 1.f);
+        light2->position.set(1, 0.75, 0.5);
+        scene.add(light2);
+
+        auto light3 = DirectionalLight::create(0xccccff, 1.f);
+        light3->position.set(-1, 0.75, -0.5);
+        scene.add(light3);
+    }
 
 }// namespace
 
@@ -105,37 +117,29 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.set(0, 1, 10);
 
+    addLights(*scene);
+
     OrbitControls controls{camera, canvas};
 
-    TextureLoader texLoader;
+    TextureLoader tl;
     AssimpLoader loader;
     std::filesystem::path folder = "data/models/gltf/LeePerrySmith";
     auto model = loader.load(folder / "LeePerrySmith.glb");
     Mesh* mesh = nullptr;
-    model->traverseType<Mesh>([&](Mesh& _){
+    model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
-        auto mat = MeshPhongMaterial::create();
-        mat->map = texLoader.load(folder / "Map-COL.jpg", false);
-        mat->specularMap = texLoader.load(folder / "Map-SPEC.jpg", false);
-        mat->normalMap = texLoader.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false);
-        mat->shininess = 25;
+        auto mat = MeshPhongMaterial::create({{
+                {"map", tl.load(folder / "Map-COL.jpg", false)},
+                {"specularMap", tl.load(folder / "Map-SPEC.jpg", false)},
+                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false)},
+                {"shininess", 25.f},
+        }});
         mesh->setMaterial(mat);
     });
     scene->add(model);
 
-    auto light = AmbientLight::create(0x443333, 0.8f);
-    scene->add(light);
-
-    auto light2 = DirectionalLight::create(0xffddcc, 1.f);
-    light2->position.set(1, 0.75, 0.5);
-    scene->add(light2);
-
-    auto light3 = DirectionalLight::create(0xccccff, 1.f);
-    light3->position.set(-1, 0.75, -0.5);
-    scene->add(light3);
-
     auto lineGeometry = BufferGeometry::create();
-    lineGeometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>{0, 0, 0, 0, 0, 1}, 3));
+    lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 0, 1}, 3));
     auto line = Line::create(lineGeometry);
     scene->add(line);
 
@@ -161,6 +165,7 @@ int main() {
 
     Raycaster raycaster;
     canvas.animate([&](float dt) {
+
         raycaster.setFromCamera(mouseListener.mouse, camera);
         auto intersects = raycaster.intersectObject(mesh, false);
 
@@ -168,7 +173,7 @@ int main() {
 
         if (!intersects.empty()) {
 
-            auto &i = intersects.front();
+            auto& i = intersects.front();
             Vector3 n = i.face->normal;
 
             mouseHelper.setPosition(i.point);
@@ -183,7 +188,7 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES() * math::randomInRange(0.4f, 1.f);
+                Vector3 scale = Vector3::ONES() * math::randomInRange(0.6f, 1.2f);
 
                 auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();
@@ -209,6 +214,5 @@ int main() {
         ui.render();
 
 #endif
-
     });
 }

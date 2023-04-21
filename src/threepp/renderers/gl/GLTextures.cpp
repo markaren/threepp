@@ -1,9 +1,11 @@
 
 #include "threepp/renderers/gl/GLTextures.hpp"
 
+#include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
-#include "GLCapabilities.hpp"
+#include "threepp/textures/DataTexture3D.hpp"
+#include "threepp/textures/DepthTexture.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -44,7 +46,7 @@ namespace {
 
     GLint getInternalFormat(GLuint glFormat, GLuint glType) {
 
-        auto internalFormat = glFormat;
+        GLint internalFormat = glFormat;
 
         if (glFormat == GL_RED) {
 
@@ -99,7 +101,7 @@ void gl::GLTextures::setTextureParameters(GLuint textureType, Texture& texture) 
 
     if (textureType == GL_TEXTURE_3D || textureType == GL_TEXTURE_2D_ARRAY) {
 
-        //            glTexParameteri( textureType, GL_TEXTURE_WRAP_R, wrappingToGL[ texture.wrapR ] );
+        glTexParameteri(textureType, GL_TEXTURE_WRAP_R, wrappingToGL[dynamic_cast<DataTexture3D*>(&texture)->wrapR]);
     }
 
     glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);
@@ -111,6 +113,11 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
     if (!texture.image) return;
 
     GLint textureType = GL_TEXTURE_2D;
+
+    auto dataTexture3D = dynamic_cast<DataTexture3D*>(&texture);
+    if (dataTexture3D) {
+        textureType = GL_TEXTURE_3D;
+    }
 
     initTexture(textureProperties, texture);
 
@@ -128,29 +135,37 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     setTextureParameters(textureType, texture);
 
-    auto& mipmaps = texture.mipmaps;
+    const auto& mipmaps = texture.mipmaps;
 
-    // regular Texture (image, video, canvas)
+    if (dataTexture3D) {
 
-    // use manually created mipmaps if available
-    // if there are no manual mipmaps
-    // set 0 level mipmap and then use GL to generate other mipmap levels
-
-    if (!mipmaps.empty()) {
-
-        for (int i = 0; i < mipmaps.size(); ++i) {
-
-            const auto& mipmap = mipmaps[i];
-            state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());
-        }
-
-        texture.generateMipmaps = false;
-        textureProperties->maxMipLevel = static_cast<int>(mipmaps.size()) - 1;
+        state.texImage3D(GL_TEXTURE_3D, 0, glInternalFormat, image.width, image.height, image.depth, glFormat, glType, image.getData());
+        textureProperties->maxMipLevel = 0;
 
     } else {
 
-        state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
-        textureProperties->maxMipLevel = 0;
+        // regular Texture (image, video, canvas)
+
+        // use manually created mipmaps if available
+        // if there are no manual mipmaps
+        // set 0 level mipmap and then use GL to generate other mipmap levels
+
+        if (!mipmaps.empty()) {
+
+            for (int i = 0; i < mipmaps.size(); ++i) {
+
+                const auto& mipmap = mipmaps[i];
+                state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());
+            }
+
+            texture.generateMipmaps = false;
+            textureProperties->maxMipLevel = static_cast<int>(mipmaps.size()) - 1;
+
+        } else {
+
+            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
+            textureProperties->maxMipLevel = 0;
+        }
     }
 
     if (textureNeedsGenerateMipmaps(texture)) {

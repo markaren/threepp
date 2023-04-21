@@ -1,6 +1,4 @@
-/*
- * https://github.com/mrdoob/three.js/blob/r129/src/math/Vector2.js
- */
+// https://github.com/mrdoob/three.js/blob/r129/src/math/Vector2.js
 
 #ifndef THREEPP_VECTOR2_HPP
 #define THREEPP_VECTOR2_HPP
@@ -106,6 +104,8 @@ namespace threepp {
 
         [[nodiscard]] float angle() const;
 
+        [[nodiscard]] float angleTo(const Vector2& v) const;
+
         [[nodiscard]] float distanceTo(const Vector2& v) const;
 
         [[nodiscard]] float distanceToSquared(const Vector2& v) const;
@@ -120,36 +120,23 @@ namespace threepp {
 
         [[nodiscard]] bool isNan() const;
 
+        Vector2& makeNan();
+
         [[nodiscard]] Vector2 clone() const;
 
         [[nodiscard]] bool equals(const Vector2& v) const;
 
-        bool operator==(const Vector2& other) const {
+        bool operator==(const Vector2& other) const;
 
-            return equals(other);
-        }
+        bool operator!=(const Vector2& other) const;
 
-        Vector2 operator+(const Vector2& other) const {
+        Vector2 operator+(const Vector2& other) const;
 
-            return clone().add(other);
-        }
+        Vector2& operator+=(const Vector2& other);
 
-        Vector2& operator+=(const Vector2& other) {
+        Vector2 operator-(const Vector2& other) const;
 
-            return add(other);
-        }
-
-        Vector2 operator-(const Vector2& other) const {
-
-            return clone().sub(other);
-        }
-
-        Vector2& operator-=(const Vector2& other) {
-
-            return sub(other);
-        }
-
-        Vector2& makeNan();
+        Vector2& operator-=(const Vector2& other);
 
         template<class ArrayLike>
         Vector2& fromArray(const ArrayLike& array, unsigned int offset = 0) {
