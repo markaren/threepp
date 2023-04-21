@@ -20,7 +20,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("threepp demo");
+    Canvas canvas("threepp demo", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
