@@ -1,6 +1,7 @@
 
-
 #include "threepp/threepp.hpp"
+
+#include <agx/Hinge.h>
 
 #include "threepp/extras/physics/AgxPhysics.hpp"
 
@@ -85,10 +86,13 @@ int main() {
     });
 
     AgxPhysics agx;
-    agx.addMesh(*sphere, 1);
+    auto sphereBody = agx.addMesh(*sphere, 1);
     agx.addMesh(*plane, 0);
-    agx.addMesh(*boxes, 10);
     agx.addMesh(*obj, 100);
+    agx.addInstancedMesh(*boxes, 10);
+
+    auto c = createConstraint<agx::Hinge>({0, 0, 1}, sphereBody.get(), nullptr);
+    agx.addConstraint(c);
 
     agx.saveScene("test");
 

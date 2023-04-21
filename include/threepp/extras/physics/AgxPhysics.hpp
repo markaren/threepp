@@ -2,7 +2,6 @@
 #ifndef THREEPP_AGXPHYSICS_HPP
 #define THREEPP_AGXPHYSICS_HPP
 
-
 #include <agx/RigidBody.h>
 #include <agxCollide/Geometry.h>
 #include <agxCollide/ShapePrimitives.h>
@@ -10,12 +9,11 @@
 #include <agxIO/ReaderWriter.h>
 #include <agxSDK/Simulation.h>
 
-#include <optional>
-
 #include "threepp/geometries/geometries.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <optional>
 
 namespace threepp {
 
@@ -27,6 +25,23 @@ namespace threepp {
     inline agx::Quat toQuat(const Quaternion& q) {
 
         return {q.x(), q.y(), q.z(), q.w()};
+    }
+
+
+    template<typename Constraint>
+    Constraint* createConstraint(const agx::Vec3& pos, const agx::Vec3& axis, agx::RigidBody* rb1, agx::RigidBody* rb2) {
+
+        auto f1 = new agx::Frame();
+        auto f2 = new agx::Frame();
+        agx::Constraint::calculateFramesFromBody(pos, axis, rb1, f1, rb2, f2);
+        return new Constraint(rb1, f1, rb2, f2);
+    }
+
+
+    template<typename Constraint>
+    agx::ref_ptr<Constraint> createConstraint(const agx::Vec3& axis, agx::RigidBody* rb1, agx::RigidBody* rb2) {
+
+        return createConstraint<Constraint>(agx::Vec3(), axis, rb1, rb2);
     }
 
     namespace detail {
@@ -61,7 +76,7 @@ namespace threepp {
                     const auto& array = geometry.getAttribute<float>("position")->array();
 
                     agx::Vec3Vector v;
-                    v.reserve(array.size()/3);
+                    v.reserve(array.size() / 3);
                     for (unsigned i = 0, j = 0; i < array.size(); i += 3) {
                         v.push_back({array[j++], array[j++], array[j++]});
                     }
@@ -99,24 +114,24 @@ namespace threepp {
             auto yy = y * y2, yz = y * z2, zz = z * z2;
             auto wx = w * x2, wy = w * y2, wz = w * z2;
 
-            array[index + 0] = (1 - (yy + zz));
-            array[index + 1] = (xy + wz);
-            array[index + 2] = (xz - wy);
+            array[index + 0] = static_cast<float>(1 - (yy + zz));
+            array[index + 1] = static_cast<float>(xy + wz);
+            array[index + 2] = static_cast<float>(xz - wy);
             array[index + 3] = 0;
 
-            array[index + 4] = (xy - wz);
-            array[index + 5] = (1 - (xx + zz));
-            array[index + 6] = (yz + wx);
+            array[index + 4] = static_cast<float>(xy - wz);
+            array[index + 5] = static_cast<float>(1 - (xx + zz));
+            array[index + 6] = static_cast<float>(yz + wx);
             array[index + 7] = 0;
 
-            array[index + 8] = (xz + wy);
-            array[index + 9] = (yz - wx);
-            array[index + 10] = (1 - (xx + yy));
+            array[index + 8] = static_cast<float>(xz + wy);
+            array[index + 9] = static_cast<float>(yz - wx);
+            array[index + 10] = static_cast<float>(1 - (xx + yy));
             array[index + 11] = 0;
 
-            array[index + 12] = position.x();
-            array[index + 13] = position.y();
-            array[index + 14] = position.z();
+            array[index + 12] = static_cast<float>(position.x());
+            array[index + 13] = static_cast<float>(position.y());
+            array[index + 14] = static_cast<float>(position.z());
             array[index + 15] = 1;
         }
 
@@ -141,7 +156,23 @@ namespace threepp {
             sim->setUniformGravity(toVec3(g));
         }
 
-        void addMesh(Mesh& mesh, float mass = 0) {
+        agx::RigidBodyRef addMesh(Mesh& mesh, float mass = 0) {
+
+            auto g = mesh.geometry();
+            if (!g) return nullptr;
+
+            auto geometry = detail::getGeometry(*g);
+
+            if (geometry) {
+
+                handleMesh(&mesh, mass, geometry);
+                return meshMap.at(&mesh);
+            }
+
+            return nullptr;
+        }
+
+        void addInstancedMesh(InstancedMesh& mesh, float mass = 0) {
 
             auto g = mesh.geometry();
             if (!g) return;
@@ -150,15 +181,13 @@ namespace threepp {
 
             if (geometry) {
 
-                if (mesh.is<InstancedMesh>()) {
-
-                    handleInstancedMesh(mesh.as<InstancedMesh>(), mass, geometry);
-
-                } else if (mesh.is<Mesh>()) {
-
-                    handleMesh(&mesh, mass, geometry);
-                }
+                handleInstancedMesh(mesh.as<InstancedMesh>(), mass, geometry);
             }
+        }
+
+        void addConstraint(agx::Constraint* c) {
+
+            sim->add(c);
         }
 
         void setMeshPosition(Mesh& mesh, const Vector3& position, unsigned int index = 0) {
@@ -259,7 +288,6 @@ namespace threepp {
                 std::vector<double> slice{array.begin() + index, array.begin() + index + 16};
 
                 auto rb = detail::createRigidBody(mass, geometry);
-                //                rb->setPosition({slice[13], slice[14], slice[15]});
                 rb->setLocalTransform(agx::AffineMatrix4x4().set(slice.data()));
                 sim->add(rb);
 
