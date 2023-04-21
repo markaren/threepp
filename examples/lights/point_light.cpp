@@ -8,9 +8,39 @@
 
 using namespace threepp;
 
+namespace {
+
+    auto createTorusKnot() {
+        const auto geometry = TorusKnotGeometry::create(0.75f, 0.2f, 128, 64);
+        const auto material = MeshStandardMaterial::create();
+        material->roughness = 0.1f;
+        material->metalness = 0.1f;
+        material->color = 0xff0000;
+        material->emissive = 0x000000;
+        auto knot = Mesh::create(geometry, material);
+        knot->castShadow = true;
+        knot->position.y = 1;
+
+        return knot;
+    }
+
+    auto createPlane() {
+        const auto planeGeometry = PlaneGeometry::create(105, 105);
+        const auto planeMaterial = MeshPhongMaterial::create();
+        planeMaterial->color.setHex(Color::white);
+        planeMaterial->side = DoubleSide;
+        auto plane = Mesh::create(planeGeometry, planeMaterial);
+        plane->receiveShadow = true;
+        plane->rotateX(math::degToRad(-90));
+
+        return plane;
+    }
+
+}// namespace
+
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("PointLight", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
 
@@ -40,24 +70,10 @@ int main() {
     auto lightHelper2 = PointLightHelper::create(*light2, 0.25f);
     scene->add(lightHelper2);
 
-    const auto geometry = TorusKnotGeometry::create(0.75f, 0.2f, 128, 64);
-    const auto material = MeshStandardMaterial::create();
-    material->roughness = 0.1f;
-    material->metalness = 0.1f;
-    material->color = 0xff0000;
-    material->emissive = 0x000000;
-    auto mesh = Mesh::create(geometry, material);
-    mesh->castShadow = true;
-    mesh->position.y = 1;
-    scene->add(mesh);
+    auto knot = createTorusKnot();
+    scene->add(knot);
 
-    const auto planeGeometry = PlaneGeometry::create(105, 105);
-    const auto planeMaterial = MeshPhongMaterial::create();
-    planeMaterial->color.setHex(Color::white);
-    planeMaterial->side = DoubleSide;
-    auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->receiveShadow = true;
-    plane->rotateX(math::degToRad(-90));
+    auto plane = createPlane();
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -67,7 +83,7 @@ int main() {
     });
 
     canvas.animate([&](float t, float dt) {
-        mesh->rotation.y += 0.5f * dt;
+        knot->rotation.y += 0.5f * dt;
 
         light1->position.x = 2 * std::sin(t);
         light1->position.z = 7 * std::cos(t);
