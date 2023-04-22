@@ -10,6 +10,6 @@ if (nlohmann_json_FOUND)
     target_link_libraries(fonts PUBLIC threepp)
 endif ()
 
-if (MSVC OR UNIX)
+if (MSVC OR UNIX AND imgui_FOUND)
     add_subdirectory(physics/agx)
 endif ()

@@ -25,7 +25,7 @@ if (AGX_DIR)
     add_executable(agx_test agx_test.cpp)
     target_include_directories(agx_test PUBLIC ${AGX_INCLUDE_DIRS})
     target_link_directories(agx_test PUBLIC ${AGX_LIBRARY_DIR})
-    target_link_libraries(agx_test PUBLIC threepp ${AGX_LIBRARIES})
+    target_link_libraries(agx_test PUBLIC threepp ${AGX_LIBRARIES} imgui::imgui)
 
 else()
 

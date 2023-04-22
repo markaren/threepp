@@ -44,7 +44,6 @@ set(publicHeaders
         "threepp/extras/curves/SplineCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve3.hpp"
-        "threepp/extras/physics/AgxPhysics.hpp"
         "threepp/extras/physics/BulletPhysics.hpp"
         "threepp/extras/imgui/imgui_context.hpp"
 
