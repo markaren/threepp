@@ -104,21 +104,19 @@ namespace threepp {
                 auto attachment = c->getAttachment(agx::UInt(0));
                 auto pos = attachment->get(agx::Attachment::ANCHOR_POS);
                 auto frame = attachment->getFrame();
-//                auto pos = frame->getTranslate();
-                auto rot = frame->getRotate();
+                auto rot = frame->getLocalRotate();
                 auto arrow = ArrowHelper::create();
-                arrow->rotateX(-math::PI/2);
+
                 arrow->setLength(1, 0.2f, 0.2f);
                 arrow->visible = showConstraints;
                 arrow->setColor(Color::orange);
                 arrow->position.set(pos.x(), pos.y(), pos.z());
                 arrow->quaternion.set(rot.x(), rot.y(), rot.z(), rot.w());
-
+                arrow->rotateX(math::PI/2);
                 constraints_[c] = arrow;
                 Object3D::add(arrow);
             }
         }
-
 
         void makeVisual(agxWire::Wire* w, const std::shared_ptr<Material>& material = nullptr) {
 

@@ -23,10 +23,10 @@ if (AGX_DIR)
     target_link_directories(agx_test PUBLIC ${AGX_LIBRARY_DIR})
     target_link_libraries(agx_test PUBLIC threepp ${AGX_LIBRARIES} imgui::imgui)
 
-    add_executable(twisted_cable twisted_cable.cpp)
-    target_include_directories(twisted_cable PUBLIC ${AGX_INCLUDE_DIRS})
-    target_link_directories(twisted_cable PUBLIC ${AGX_LIBRARY_DIR})
-    target_link_libraries(twisted_cable PUBLIC threepp ${AGX_LIBRARIES} imgui::imgui)
+    add_executable(drum_pulley drum_pulley.cpp)
+    target_include_directories(drum_pulley PUBLIC ${AGX_INCLUDE_DIRS})
+    target_link_directories(drum_pulley PUBLIC ${AGX_LIBRARY_DIR})
+    target_link_libraries(drum_pulley PUBLIC threepp ${AGX_LIBRARIES} imgui::imgui)
 
 else()
 
