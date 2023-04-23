@@ -35,6 +35,22 @@ namespace threepp {
         return createConstraint<Constraint>(agx::Vec3(), axis, rb1, rb2);
     }
 
+    namespace detail {
+
+        std::shared_ptr<Material> defaultWireMaterial() {
+            auto m = MeshBasicMaterial::create();
+            m->color = Color::whitesmoke;
+            return m;
+        }
+
+        std::shared_ptr<Material> defaultGeometryMaterial() {
+            auto m = MeshPhongMaterial::create();
+            m->color = Color::gray;
+            return m;
+        }
+
+    }// namespace detail
+
     class Wire: public Mesh {
 
     public:
@@ -67,7 +83,7 @@ namespace threepp {
     public:
         bool showConstraints = false;
 
-        void makeVisual(agxSDK::Assembly* assembly, const std::shared_ptr<Material>& material = MeshBasicMaterial::create()) {
+        void makeVisual(agxSDK::Assembly* assembly, const std::shared_ptr<Material>& material = nullptr) {
 
             for (auto& g : assembly->getGeometries()) {
                 makeVisual(g, material);
@@ -85,12 +101,18 @@ namespace threepp {
         void makeVisual(agx::Constraint* c) {
 
             if (c->is<agx::Hinge>()) {
-                auto pos = c->getAttachment(agx::UInt(0))->get(agx::Attachment::Transformed::ANCHOR_POS);
+                auto attachment = c->getAttachment(agx::UInt(0));
+                auto pos = attachment->get(agx::Attachment::ANCHOR_POS);
+                auto frame = attachment->getFrame();
+//                auto pos = frame->getTranslate();
+                auto rot = frame->getRotate();
                 auto arrow = ArrowHelper::create();
+                arrow->rotateX(-math::PI/2);
                 arrow->setLength(1, 0.2f, 0.2f);
                 arrow->visible = showConstraints;
                 arrow->setColor(Color::orange);
                 arrow->position.set(pos.x(), pos.y(), pos.z());
+                arrow->quaternion.set(rot.x(), rot.y(), rot.z(), rot.w());
 
                 constraints_[c] = arrow;
                 Object3D::add(arrow);
@@ -98,35 +120,29 @@ namespace threepp {
         }
 
 
-        void makeVisual(agxWire::Wire* w, const std::shared_ptr<Material>& material = MeshBasicMaterial::create()) {
+        void makeVisual(agxWire::Wire* w, const std::shared_ptr<Material>& material = nullptr) {
 
-            auto wire = std::make_shared<Wire>(material);
+            auto wire = std::make_shared<Wire>(material ? material : detail::defaultWireMaterial());
             wires_[w] = wire;
             Object3D::add(wire);
         }
 
-        void makeVisual(agxCable::Cable* cable, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
-
-            for (const auto& g : cable->getGeometries()) {
-                makeVisual(g, material);
-            }
-        }
-
-        void makeVisual(agxCollide::Geometry* geometry, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
+        void makeVisual(agxCollide::Geometry* geometry, const std::shared_ptr<Material> material = nullptr) {
             auto shape = geometry->getShape();
-            auto mesh = getMeshFromShape(shape, material);
+            auto mesh = getMeshFromShape(shape, material ? material : detail::defaultGeometryMaterial());
             mesh->matrixAutoUpdate = false;
             updateVisualisationObject(*mesh, geometry->getTransform());
             geometries_[geometry] = mesh;
             Object3D::add(mesh);
         }
 
-        void makeVisual(agx::RigidBody* rb, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
+        void makeVisual(agx::RigidBody* rb, const std::shared_ptr<Material> material = nullptr) {
             auto group = Group::create();
             auto geometries = rb->getGeometries();
             for (const auto& geometry : geometries) {
                 const auto shape = geometry->getShape();
-                auto mesh = getMeshFromShape(shape, material);
+                auto mesh = getMeshFromShape(shape, material ? material : detail::defaultGeometryMaterial());
+                updateVisualisationObject(*mesh, geometry->getLocalTransform());
                 mesh->matrixAutoUpdate = false;
                 group->add(mesh);
             }
@@ -144,7 +160,6 @@ namespace threepp {
             for (auto& [w, o] : wires_) {
                 o->update(w);
             }
-
         }
 
         static std::shared_ptr<AgxVisualisation> create(agxSDK::Simulation& sim) {
