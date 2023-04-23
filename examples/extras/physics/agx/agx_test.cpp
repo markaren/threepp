@@ -18,7 +18,7 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    auto light = HemisphereLight::create();
+    auto light = DirectionalLight::create();
     scene->add(light);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -61,9 +61,9 @@ int main() {
     auto agxVisualisation = AgxVisualisation::create(*sim);
     agxVisualisation->makeVisual(boxBody, MeshPhongMaterial::create({{"color", Color::gray}}));
     agxVisualisation->makeVisual(sphereBody, MeshPhongMaterial::create({{"color", Color::green}}));
+    agxVisualisation->makeVisual(planeGeometry, MeshPhongMaterial::create({{"color", Color::gray}}));
     agxVisualisation->makeVisual(hinge);
     agxVisualisation->makeVisual(wire);
-    agxVisualisation->makeVisual(planeGeometry, MeshPhongMaterial::create({{"color", Color::gray}}));
     scene->add(agxVisualisation);
 
 
@@ -72,7 +72,6 @@ int main() {
         ImGui::SetNextWindowSize({200, 0}, 0);
         ImGui::Begin("agx_test");
         ImGui::Checkbox("showConstraints", &agxVisualisation->showConstraints);
-        ImGui::Checkbox("showContacts", &agxVisualisation->showContacts);
         controls.enabled = !ImGui::IsWindowHovered();
         ImGui::End();
     });

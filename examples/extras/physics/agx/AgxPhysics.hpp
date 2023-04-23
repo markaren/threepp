@@ -107,7 +107,7 @@ namespace threepp {
 
         void makeVisual(agxCable::Cable* cable, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
 
-            for (auto& g : cable->getGeometries()) {
+            for (const auto& g : cable->getGeometries()) {
                 makeVisual(g, material);
             }
         }
@@ -124,8 +124,8 @@ namespace threepp {
         void makeVisual(agx::RigidBody* rb, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
             auto group = Group::create();
             auto geometries = rb->getGeometries();
-            for (auto& geometry : geometries) {
-                auto shape = geometry->getShape();
+            for (const auto& geometry : geometries) {
+                const auto shape = geometry->getShape();
                 auto mesh = getMeshFromShape(shape, material);
                 mesh->matrixAutoUpdate = false;
                 group->add(mesh);
@@ -158,7 +158,6 @@ namespace threepp {
         std::unordered_map<agxCollide::Geometry*, std::shared_ptr<Object3D>> geometries_;
         std::unordered_map<agx::Constraint*, std::shared_ptr<Object3D>> constraints_;
         std::unordered_map<agxWire::Wire*, std::shared_ptr<Wire>> wires_;
-
 
         explicit AgxVisualisation(agxSDK::Simulation& sim): sim_(sim) {}
 
