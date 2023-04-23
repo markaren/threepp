@@ -1,0 +1,255 @@
+
+#ifndef THREEPP_AGXPHYSICS_HPP
+#define THREEPP_AGXPHYSICS_HPP
+
+#include "threepp/extras/curves/CatmullRomCurve3.hpp"
+#include "threepp/threepp.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
+
+#include <agx/Hinge.h>
+#include <agx/RigidBody.h>
+#include <agxCable/Cable.h>
+#include <agxCollide/Geometry.h>
+#include <agxCollide/ShapePrimitives.h>
+#include <agxCollide/Trimesh.h>
+#include <agxIO/ReaderWriter.h>
+#include <agxSDK/Assembly.h>
+#include <agxSDK/Simulation.h>
+#include <agxWire/Wire.h>
+
+namespace threepp {
+
+    template<typename Constraint>
+    agx::ref_ptr<Constraint> createConstraint(const agx::Vec3& pos, const agx::Vec3& axis, agx::RigidBody* rb1, agx::RigidBody* rb2 = nullptr) {
+
+        auto f1 = new agx::Frame();
+        auto f2 = new agx::Frame();
+        agx::Constraint::calculateFramesFromBody(pos, axis, rb1, f1, rb2, f2);
+        return new Constraint(rb1, f1, rb2, f2);
+    }
+
+
+    template<typename Constraint>
+    agx::ref_ptr<Constraint> createConstraint(const agx::Vec3& axis, agx::RigidBody* rb1, agx::RigidBody* rb2 = nullptr) {
+
+        return createConstraint<Constraint>(agx::Vec3(), axis, rb1, rb2);
+    }
+
+    class Wire: public Mesh {
+
+    public:
+        explicit Wire(const std::shared_ptr<Material>& material): Mesh(BufferGeometry::create(), material) {}
+
+        void update(agxWire::Wire* w) {
+
+            std::vector<Vector3> points;
+            auto it = w->getRenderBeginIterator();
+            const auto end = w->getRenderEndIterator();
+            while (it != end) {
+                auto node = *it;
+                auto& pos = node->getWorldPosition();
+                points.emplace_back(
+                        static_cast<float>(pos.x()),
+                        static_cast<float>(pos.y()),
+                        static_cast<float>(pos.z()));
+                it++;
+            }
+
+            auto path = std::make_shared<CatmullRomCurve3>(points);
+            auto tube = TubeGeometry::create(path, 64, w->getRadius(), 32);
+
+            setGeometry(tube);
+        }
+    };
+
+    class AgxVisualisation: public Object3D {
+
+    public:
+        bool showConstraints = false;
+        bool showContacts = false;
+
+
+        void makeVisual(agxSDK::Assembly* assembly, const std::shared_ptr<Material>& material = MeshBasicMaterial::create()) {
+
+            for (auto& g : assembly->getGeometries()) {
+                makeVisual(g, material);
+            }
+
+            for (auto& rb : assembly->getRigidBodies()) {
+                makeVisual(rb, material);
+            }
+
+            for (auto& c : assembly->getConstraints()) {
+                makeVisual(c);
+            }
+        }
+
+        void makeVisual(agx::Constraint* c) {
+
+            if (c->is<agx::Hinge>()) {
+                auto pos = c->getAttachment(agx::UInt(0))->get(agx::Attachment::Transformed::ANCHOR_POS);
+                auto arrow = ArrowHelper::create();
+                arrow->setLength(1, 0.2f, 0.2f);
+                arrow->visible = showConstraints;
+                arrow->setColor(Color::orange);
+                arrow->position.set(pos.x(), pos.y(), pos.z());
+
+                constraints_[c] = arrow;
+                Object3D::add(arrow);
+            }
+        }
+
+
+        void makeVisual(agxWire::Wire* w, const std::shared_ptr<Material>& material = MeshBasicMaterial::create()) {
+
+            auto wire = std::make_shared<Wire>(material);
+            wires_[w] = wire;
+            Object3D::add(wire);
+        }
+
+        void makeVisual(agxCable::Cable* cable, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
+
+            for (auto& g : cable->getGeometries()) {
+                makeVisual(g, material);
+            }
+        }
+
+        void makeVisual(agxCollide::Geometry* geometry, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
+            auto shape = geometry->getShape();
+            auto mesh = getMeshFromShape(shape, material);
+            mesh->matrixAutoUpdate = false;
+            updateVisualisationObject(*mesh, geometry->getTransform());
+            geometries_[geometry] = mesh;
+            Object3D::add(mesh);
+        }
+
+        void makeVisual(agx::RigidBody* rb, const std::shared_ptr<Material> material = MeshBasicMaterial::create()) {
+            auto group = Group::create();
+            auto geometries = rb->getGeometries();
+            for (auto& geometry : geometries) {
+                auto shape = geometry->getShape();
+                auto mesh = getMeshFromShape(shape, material);
+                mesh->matrixAutoUpdate = false;
+                group->add(mesh);
+            }
+            bodies_[rb] = group;
+            Object3D::add(group);
+        }
+
+        void updateVisuals() {
+            for (auto& [g, o] : bodies_) {
+                updateVisualisationObject(*o, g->getTransform());
+            }
+            for (auto& [c, o] : constraints_) {
+                o->visible = showConstraints;
+            }
+            for (auto& [w, o] : wires_) {
+                o->update(w);
+            }
+
+            if (showContacts) {
+
+                std::vector<agxCollide::ContactPoint> enabledPoints;
+                const auto& contacts = sim_.getSpace()->getGeometryContacts();
+                for (const auto& contact : contacts) {
+                    if (!contact->enabled()) continue;
+
+                    const auto& points = contact->points();
+                    for (const auto& p : points) {
+                        if (!p.enabled()) continue;
+
+                        enabledPoints.emplace_back(p);
+                    }
+                }
+
+                if (enabledPoints.empty()) {
+                    if (contacts_) {
+                        contacts_->visible = false;
+                    }
+                    return;
+                }
+
+                if (contacts_) {
+                    if (enabledPoints.size() != contacts_->count) {
+                        contacts_->removeFromParent();
+                        contacts_ = nullptr;
+                    } else {
+                        contacts_->visible = true;
+                    }
+                }
+
+                if (!contacts_) {
+                    contacts_ = InstancedMesh::create(contactGeometry_, contactMaterial_, enabledPoints.size());
+                    Object3D::add(contacts_);
+                }
+
+                Matrix4 m;
+                for (unsigned i = 0; i < enabledPoints.size(); ++i) {
+                    const auto& p = enabledPoints[i]->getPoint();
+                    m.setPosition(p.x(), p.y(), p.z());
+                    contacts_->setMatrixAt(i, m);
+                }
+
+            } else {
+                if (contacts_) {
+                    contacts_->visible = false;
+                }
+            }
+        }
+
+        static std::shared_ptr<AgxVisualisation> create(agxSDK::Simulation& sim) {
+
+            return std::shared_ptr<AgxVisualisation>(new AgxVisualisation(sim));
+        }
+
+    private:
+        agxSDK::Simulation& sim_;
+        std::unordered_map<agx::RigidBody*, std::shared_ptr<Object3D>> bodies_;
+        std::unordered_map<agxCollide::Geometry*, std::shared_ptr<Object3D>> geometries_;
+        std::unordered_map<agx::Constraint*, std::shared_ptr<Object3D>> constraints_;
+        std::unordered_map<agxWire::Wire*, std::shared_ptr<Wire>> wires_;
+        std::shared_ptr<InstancedMesh> contacts_ = nullptr;
+        std::shared_ptr<BufferGeometry> contactGeometry_;
+        std::shared_ptr<Material> contactMaterial_;
+
+        explicit AgxVisualisation(agxSDK::Simulation& sim): sim_(sim) {
+
+//            auto cone = ConeGeometry::create(0.1, 0.2);
+//            cone->applyMatrix4(Matrix4().makeTranslation(0, 0.8f, 0));
+//            auto cylinder = CylinderGeometry::create(0.08f, 0.08f, 0.8f);
+//            contactGeometry_ = mergeBufferGeometries({cone, cylinder});
+            contactGeometry_ = SphereGeometry::create(0.05f);
+            contactMaterial_ = MeshBasicMaterial::create({{"color", Color::orange}});
+        }
+
+        static void updateVisualisationObject(Object3D& o, const agx::AffineMatrix4x4& transform) {
+            auto pos = transform.getTranslate();
+            auto rot = transform.getRotate();
+            o.position.set(pos.x(), pos.y(), pos.z());
+            o.quaternion.set(rot.x(), rot.y(), rot.z(), rot.w());
+            o.updateMatrix();
+        }
+
+        static std::shared_ptr<Mesh> getMeshFromShape(agxCollide::Shape* shape, const std::shared_ptr<Material>& material = MeshBasicMaterial::create()) {
+            if (auto box = shape->asSafe<agxCollide::Box>()) {
+                auto extents = box->getHalfExtents() * 2;
+                return Mesh::create(BoxGeometry::create(extents.x(), extents.y(), extents.z()), material);
+            } else if (auto sphere = shape->asSafe<agxCollide::Sphere>()) {
+                return Mesh::create(SphereGeometry::create(sphere->getRadius()), material);
+            } else if (auto cylinder = shape->asSafe<agxCollide::Cylinder>()) {
+                float radius = cylinder->getRadius();
+                float height = cylinder->getHeight();
+                return Mesh::create(CylinderGeometry::create(radius, radius, height), material);
+            } else if (auto capsule = shape->asSafe<agxCollide::Capsule>()) {
+                float radius = capsule->getRadius();
+                float height = capsule->getHeight();
+                return Mesh::create(CapsuleGeometry::create(radius, height), material);
+            } else {
+                return nullptr;
+            }
+        }
+    };
+
+}// namespace threepp
+
+#endif//THREEPP_AGXPHYSICS_HPP
