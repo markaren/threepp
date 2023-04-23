@@ -85,17 +85,22 @@ namespace threepp {
 
         void makeVisual(agxSDK::Assembly* assembly, const std::shared_ptr<Material>& material = nullptr) {
 
-            for (auto& g : assembly->getGeometries()) {
+            for (const auto& g : assembly->getGeometries()) {
                 makeVisual(g, material);
             }
 
-            for (auto& rb : assembly->getRigidBodies()) {
+            for (const auto& rb : assembly->getRigidBodies()) {
                 makeVisual(rb, material);
             }
 
-            for (auto& c : assembly->getConstraints()) {
+            for (const auto& c : assembly->getConstraints()) {
                 makeVisual(c);
             }
+
+            for (const auto& a : assembly->getAssemblies()) {
+                makeVisual(a, material);
+            }
+
         }
 
         void makeVisual(agx::Constraint* c) {
