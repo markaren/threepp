@@ -184,9 +184,10 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
     return mergedGeometry;
 }
 
-std::shared_ptr<BufferGeometry> mergeBufferGeometries(const std::vector<std::shared_ptr<BufferGeometry>>& geometries, bool useGroups) {
+std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector<std::shared_ptr<BufferGeometry>>& geometries, bool useGroups) {
     std::vector<BufferGeometry*> arr;
-    for (auto& g : geometries) {
+    arr.reserve(geometries.size());
+    for (const auto& g : geometries) {
         arr.emplace_back(g.get());
     }
     return mergeBufferGeometries(arr, useGroups);
