@@ -66,8 +66,6 @@ namespace threepp {
 
     public:
         bool showConstraints = false;
-        bool showContacts = false;
-
 
         void makeVisual(agxSDK::Assembly* assembly, const std::shared_ptr<Material>& material = MeshBasicMaterial::create()) {
 
@@ -147,54 +145,6 @@ namespace threepp {
                 o->update(w);
             }
 
-            if (showContacts) {
-
-                std::vector<agxCollide::ContactPoint> enabledPoints;
-                const auto& contacts = sim_.getSpace()->getGeometryContacts();
-                for (const auto& contact : contacts) {
-                    if (!contact->enabled()) continue;
-
-                    const auto& points = contact->points();
-                    for (const auto& p : points) {
-                        if (!p.enabled()) continue;
-
-                        enabledPoints.emplace_back(p);
-                    }
-                }
-
-                if (enabledPoints.empty()) {
-                    if (contacts_) {
-                        contacts_->visible = false;
-                    }
-                    return;
-                }
-
-                if (contacts_) {
-                    if (enabledPoints.size() != contacts_->count) {
-                        contacts_->removeFromParent();
-                        contacts_ = nullptr;
-                    } else {
-                        contacts_->visible = true;
-                    }
-                }
-
-                if (!contacts_) {
-                    contacts_ = InstancedMesh::create(contactGeometry_, contactMaterial_, enabledPoints.size());
-                    Object3D::add(contacts_);
-                }
-
-                Matrix4 m;
-                for (unsigned i = 0; i < enabledPoints.size(); ++i) {
-                    const auto& p = enabledPoints[i]->getPoint();
-                    m.setPosition(p.x(), p.y(), p.z());
-                    contacts_->setMatrixAt(i, m);
-                }
-
-            } else {
-                if (contacts_) {
-                    contacts_->visible = false;
-                }
-            }
         }
 
         static std::shared_ptr<AgxVisualisation> create(agxSDK::Simulation& sim) {
@@ -208,19 +158,9 @@ namespace threepp {
         std::unordered_map<agxCollide::Geometry*, std::shared_ptr<Object3D>> geometries_;
         std::unordered_map<agx::Constraint*, std::shared_ptr<Object3D>> constraints_;
         std::unordered_map<agxWire::Wire*, std::shared_ptr<Wire>> wires_;
-        std::shared_ptr<InstancedMesh> contacts_ = nullptr;
-        std::shared_ptr<BufferGeometry> contactGeometry_;
-        std::shared_ptr<Material> contactMaterial_;
 
-        explicit AgxVisualisation(agxSDK::Simulation& sim): sim_(sim) {
 
-//            auto cone = ConeGeometry::create(0.1, 0.2);
-//            cone->applyMatrix4(Matrix4().makeTranslation(0, 0.8f, 0));
-//            auto cylinder = CylinderGeometry::create(0.08f, 0.08f, 0.8f);
-//            contactGeometry_ = mergeBufferGeometries({cone, cylinder});
-            contactGeometry_ = SphereGeometry::create(0.05f);
-            contactMaterial_ = MeshBasicMaterial::create({{"color", Color::orange}});
-        }
+        explicit AgxVisualisation(agxSDK::Simulation& sim): sim_(sim) {}
 
         static void updateVisualisationObject(Object3D& o, const agx::AffineMatrix4x4& transform) {
             auto pos = transform.getTranslate();
