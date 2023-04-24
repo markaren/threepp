@@ -17,10 +17,10 @@ namespace {
 
         void onKeyPressed(KeyEvent evt) override {
 
-            if (evt.key == 266) {// PG_UP
+            if (evt.key == 266 || evt.key == 329) {// PG_UP
                 drum->setSpeed(speed);
-            } else if (evt.key == 267) {//PG_DOWN
-                drum->setSpeed(speed);
+            } else if (evt.key == 267 || evt.key == 323) {//PG_DOWN
+                drum->setSpeed(-speed);
             }
         }
 
