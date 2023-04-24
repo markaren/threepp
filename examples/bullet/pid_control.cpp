@@ -151,8 +151,10 @@ int main() {
 
 #endif
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
 
+        float dt = clock.getDelta();
         bullet.step(dt);
 
         float out = pid.regulate(opt.targetAngle * math::DEG2RAD, c.getHingeAngle(), dt);
@@ -169,7 +171,7 @@ int main() {
             if (i % 2 == 0) {
 
                 errors.emplace_back(pid.error());
-                time.emplace_back(t);
+                time.emplace_back(clock.elapsedTime);
 
                 while (time.back() - time.front() > plotLen) {
                     errors.erase(errors.begin(), errors.begin() + 1);

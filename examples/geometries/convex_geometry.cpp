@@ -81,7 +81,10 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
 
         convex->rotation.y += 0.2f * dt;
 

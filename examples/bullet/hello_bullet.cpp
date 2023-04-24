@@ -143,12 +143,13 @@ int main() {
     renderer.enableTextRendering();
     auto& handle = renderer.textHandle();
 
-    float t = 0;
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
         bullet.step(dt);
 
         renderer.render(scene, camera);
-        t += dt;
 
         std::stringstream ss;
         ss << renderer.info();

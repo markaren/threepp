@@ -51,7 +51,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         renderer.render(scene, camera);
 
         if (youbot) youbot->update(dt);

@@ -65,7 +65,7 @@ int main() {
 
     Raycaster raycaster;
     raycaster.params.lineThreshold = 0.1f;
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
         raycaster.setFromCamera(mouse, camera);
 
         sphere->visible = false;

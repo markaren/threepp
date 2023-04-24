@@ -71,7 +71,11 @@ int main() {
         ImGui::End();
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         mesh->rotation.y += 0.8f * dt;
         mesh->rotation.x += 0.5f * dt;
 

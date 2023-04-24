@@ -19,7 +19,11 @@ int main() {
     renderer.enableTextRendering();
     renderer.textHandle("Press \"r\" to reset");
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         if (game.isRunning()) {
 
             game.update(dt);
