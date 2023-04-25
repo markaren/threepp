@@ -87,6 +87,7 @@ set(publicHeaders
         "threepp/helpers/PolarGridHelper.hpp"
         "threepp/helpers/SpotLightHelper.hpp"
 
+        "threepp/loaders/CubeTextureLoader.hpp"
         "threepp/loaders/loaders.hpp"
         "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/MTLLoader.hpp"
@@ -146,7 +147,8 @@ set(publicHeaders
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
         "threepp/objects/Water.hpp"
-
+ 
+        "threepp/textures/CubeTexture.hpp"
         "threepp/textures/DataTexture.hpp"
         "threepp/textures/DataTexture3D.hpp"
         "threepp/textures/DepthTexture.hpp"
@@ -291,6 +293,7 @@ set(sources
         "threepp/helpers/PolarGridHelper.cpp"
         "threepp/helpers/SpotLightHelper.cpp"
 
+        "threepp/loaders/CubeTextureLoader.cpp"
         "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/MTLLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
