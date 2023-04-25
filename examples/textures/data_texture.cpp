@@ -83,8 +83,12 @@ int main() {
         updateSpritePosition(*sprite, size, textureSize);
     });
 
+    Clock clock;
     Vector2 vector;
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;
 

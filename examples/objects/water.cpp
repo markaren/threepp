@@ -76,7 +76,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float t = clock.getElapsedTime();
+
         sphere->position.y = std::sin(t) * 20 + 5;
         sphere->rotation.x = t * 0.05f;
         sphere->rotation.z = t * 0.051f;

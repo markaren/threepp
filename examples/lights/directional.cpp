@@ -92,11 +92,15 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         torusKnot->rotation.y -= 0.5f * dt;
 
-        light->position.x = 100 * std::sin(t);
-        light->position.z = 100 * std::cos(t);
+        light->position.x = 100 * std::sin(clock.elapsedTime);
+        light->position.z = 100 * std::cos(clock.elapsedTime);
 
         sky->material()->as<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
 

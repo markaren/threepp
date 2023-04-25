@@ -50,7 +50,10 @@ int main() {
     auto points = Points::create(geometry, material);
     scene->add(points);
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float t = clock.getElapsedTime();
 
         points->rotation.x = t * 0.25f;
         points->rotation.y = t * 0.5f;

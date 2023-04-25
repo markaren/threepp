@@ -66,7 +66,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         lathe->rotation.y += 0.8f * dt;
         lathe->rotation.x += 0.5f * dt;
 

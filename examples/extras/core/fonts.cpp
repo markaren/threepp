@@ -69,7 +69,8 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
+
         renderer.render(scene, camera);
     });
 }

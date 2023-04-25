@@ -133,7 +133,11 @@ int main() {
 #ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
 #endif
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         box->rotation.y += 0.5f * dt;
         handle.setText("Delta=" + std::to_string(dt));
 

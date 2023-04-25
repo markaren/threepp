@@ -94,7 +94,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float t = clock.getElapsedTime();
+
         mesh->rotation.y = t * 0.5f;
         material->uniforms->at("time").setValue(t * 5);
 
