@@ -56,7 +56,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;
 

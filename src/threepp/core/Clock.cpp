@@ -8,64 +8,62 @@ using namespace threepp;
 
 struct Clock::Impl {
 
-    bool autoStart_;
-    bool running_ = false;
-
-    float elapsedTime_ = 0;
-
+    Clock& scope;
     std::chrono::time_point<std::chrono::system_clock> startTime_;
     std::chrono::time_point<std::chrono::system_clock> oldTime_;
 
-    explicit Impl(bool autoStart): autoStart_(autoStart) {}
-
+    explicit Impl(Clock& scope): scope(scope) {}
 
     void start() {
 
         startTime_ = std::chrono::system_clock::now();
 
         oldTime_ = startTime_;
-        elapsedTime_ = 0;
-        running_ = true;
+        scope.elapsedTime = 0;
+        scope.running = true;
     }
 
     void stop() {
 
         getElapsedTime();
-        running_ = false;
-        autoStart_ = false;
+        scope.running = false;
+        scope.autoStart = false;
     }
 
     float getElapsedTime() {
 
         getDelta();
-        return elapsedTime_;
+        return scope.elapsedTime;
     }
 
     float getDelta() {
 
         float diff = 0;
 
-        if (autoStart_ && !running_) {
+        if (scope.autoStart && !scope.running) {
 
             start();
             return 0;
         }
 
-        if (running_) {
+        if (scope.running) {
 
             const auto newTime = std::chrono::system_clock::now();
 
             diff = std::chrono::duration_cast<std::chrono::microseconds>(newTime - oldTime_).count() / 1000000.0f;
             oldTime_ = newTime;
 
-            elapsedTime_ += diff;
+            scope.elapsedTime += diff;
         }
 
         return diff;
     }
 };
 
-Clock::Clock(bool autoStart): pimpl_(std::make_unique<Impl>(autoStart)) {}
+Clock::Clock(bool autoStart)
+    : autoStart(autoStart),
+      pimpl_(std::make_unique<Impl>(*this)) {}
+
 
 void Clock::start() {
 
@@ -87,4 +85,4 @@ float Clock::getDelta() {
     return pimpl_->getDelta();
 }
 
-threepp::Clock::~Clock() = default;
+Clock::~Clock() = default;

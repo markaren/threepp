@@ -39,7 +39,11 @@ int main() {
         material->uniforms->at("iResolution").value<Vector2>().set(size.width, size.height);
     });
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float t = clock.getElapsedTime();
+
         mesh->rotation.y = t;
         material->uniforms->at("iTime").setValue(t);
 

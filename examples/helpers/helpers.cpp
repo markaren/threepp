@@ -55,11 +55,15 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         arrow->rotation.z += 0.5f * dt;
         axes->rotation.y += 0.5f * dt;
 
-        float sineWave = 0.5f * std::sin(math::TWO_PI * 0.1f * t) + 1;
+        float sineWave = 0.5f * std::sin(math::TWO_PI * 0.1f * clock.elapsedTime) + 1;
         box.setFromCenterAndSize({0, 0, 0}, Vector3(1, 1, 1).multiplyScalar(sineWave));
 
         boxHelper->update();

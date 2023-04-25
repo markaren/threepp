@@ -55,7 +55,8 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
         auto size = canvas.getSize();
 
         renderer.clear();
@@ -70,6 +71,6 @@ int main() {
         renderer.setViewport({0, 0, size.width / 2, size.height});
         renderer.render(scene, camera2);
 
-        camera->position.z = 4 * std::sin(math::TWO_PI * 0.1f * t);
+        camera->position.z = 4 * std::sin(math::TWO_PI * 0.1f * clock.getElapsedTime());
     });
 }
