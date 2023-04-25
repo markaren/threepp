@@ -14,6 +14,7 @@ namespace threepp {
     public:
         std::optional<Image> load(const std::filesystem::path& imagePath, int channels = 4, bool flipY = true);
         std::optional<Image> load(const std::vector<unsigned char>& data, int channels = 4, bool flipY = true);
+        std::optional<Image> loadFromMemory(const unsigned char* data, int nSize, int& channels, bool flipy = true);
     };
 
 }// namespace threepp
