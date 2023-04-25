@@ -31,6 +31,8 @@ namespace threepp {
         std::string name;
 
         std::optional<Image> image;
+        std::vector<std::shared_ptr<Texture>> images;
+        
         std::vector<Image> mipmaps;
 
         std::optional<int> mapping = Texture::DEFAULT_MAPPING;
