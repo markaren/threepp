@@ -16,6 +16,7 @@ namespace threepp {
 
         std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY = true);
         std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, bool flipY = true);
+        std::shared_ptr<Texture> loadFromMemory(const std::string name, const unsigned char* pData, int nSize, bool flipY = true);
 
 #ifdef THREEPP_WITH_CURL
         std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY = true);
