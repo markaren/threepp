@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <memory>
 
-#include "threepp/extras/core/ShapePath.hpp"
+#include "threepp/objects/Group.hpp"
 
 namespace threepp {
 
@@ -17,17 +17,9 @@ namespace threepp {
         // Accepted units: 'mm', 'cm', 'in', 'pt', 'pc', 'px'
         std::string defaultUnit = "px";
 
-//        SVGLoader();
+        std::shared_ptr<Group> load(const std::filesystem::path& path);
 
-        std::vector<ShapePath> load(const std::filesystem::path& path);
-
-        std::vector<ShapePath> parse(std::string text);
-
-//        ~SVGLoader();
-
-    private:
-//        struct Impl;
-//        std::unique_ptr<Impl> pimpl_;
+        std::shared_ptr<Group> parse(std::string text);
 
     };
 

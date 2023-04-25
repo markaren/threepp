@@ -104,20 +104,20 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
-    camera->position.z = 5;
+    camera->position.z = 50;
 
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
-    auto box = createBox();
-    scene->add(box);
-
-    auto sphere = createSphere();
-    box->add(sphere);
-
-    auto plane = createPlane();
-    auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
-    scene->add(plane);
+//    auto box = createBox();
+//    scene->add(box);
+//
+//    auto sphere = createSphere();
+//    box->add(sphere);
+//
+//    auto plane = createPlane();
+//    auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
+//    scene->add(plane);
 
     renderer.enableTextRendering();
     auto& handle = renderer.textHandle();
@@ -125,16 +125,8 @@ int main() {
     handle.color = Color::red;
 
     SVGLoader loader;
-    auto paths = loader.load("data/models/svg/tiger.svg");
-    auto group = Group::create();
-    scene->add(group);
-    for (const auto& path : paths) {
-        auto material = MeshBasicMaterial::create(
-                {{"color", path.color},
-                 {"side", DoubleSide},
-                 {"depthWrite", false}});
-
-    }
+    auto svg = loader.load("data/models/svg/tiger.svg");
+    scene->add(svg);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -143,31 +135,33 @@ int main() {
         handle.setPosition(canvas.getSize().width - 130, 0);
     });
 
-#ifdef HAS_IMGUI
-    MyGui ui(canvas, *planeMaterial);
-#endif
+    OrbitControls controls{camera, canvas};
+
+//#ifdef HAS_IMGUI
+//    MyGui ui(canvas, *planeMaterial);
+//#endif
     Clock clock;
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
-        box->rotation.y += 0.5f * dt;
+//        box->rotation.y += 0.5f * dt;
         handle.setText("Delta=" + std::to_string(dt));
 
         renderer.render(scene, camera);
 
-#ifdef HAS_IMGUI
-        ui.render();
-
-        plane->position.copy(ui.position());
-        plane->rotation.copy(ui.rotation());
-
-        if (ui.colorChanged) {
-            const auto& c = ui.color();
-            planeMaterial->color.fromArray(c);
-            planeMaterial->opacity = c[3];
-            planeMaterial->transparent = c[3] != 1;
-        }
-
-#endif
+//#ifdef HAS_IMGUI
+//        ui.render();
+//
+//        plane->position.copy(ui.position());
+//        plane->rotation.copy(ui.rotation());
+//
+//        if (ui.colorChanged) {
+//            const auto& c = ui.color();
+//            planeMaterial->color.fromArray(c);
+//            planeMaterial->opacity = c[3];
+//            planeMaterial->transparent = c[3] != 1;
+//        }
+//
+//#endif
     });
 }
