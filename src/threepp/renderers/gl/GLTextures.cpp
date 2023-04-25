@@ -305,6 +305,7 @@ void gl::GLTextures::setTexture3D(Texture& texture, GLuint slot) {
 
 void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
 
+    if (texture.images.size() != 6) return;
     auto textureProperties = properties.textureProperties.get(texture.uuid);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
@@ -318,7 +319,25 @@ void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
 }
 
 void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Texture& texture, GLuint slot) {
-    // TODO
+    initTexture(textureProperties, texture);
+    state.activeTexture(GL_TEXTURE0 + slot);
+    state.bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties->glTexture);
+
+    GLuint glFormat = convert(texture.format);
+    GLuint glType = convert(texture.type);
+    auto glInternalFormat = getInternalFormat(glFormat, glType);
+    setTextureParameters(GL_TEXTURE_CUBE_MAP, texture); 
+
+
+    for (int i = 0; i < 6; i++) {            
+        auto& cubTexture = texture.images[i];
+        auto& image = cubTexture->image;
+        state.texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image->width, image->height, glFormat, glType, image->getData());
+    } 
+
+    textureProperties->version = texture.version();
+    if (texture.onUpdate) 
+        texture.onUpdate.value()(texture);
 }
 
 void gl::GLTextures::setupFrameBufferTexture(
