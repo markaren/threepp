@@ -71,7 +71,8 @@ namespace threepp {
         [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& getAttributes() const;
 
         void setAttribute(const std::string& name, std::unique_ptr<BufferAttribute> attribute);
-
+        void deleteAttribute(const std::string& name);
+        
         [[nodiscard]] bool hasAttribute(const std::string& name) const;
 
         void addGroup(int start, int count, unsigned int materialIndex = 0);
