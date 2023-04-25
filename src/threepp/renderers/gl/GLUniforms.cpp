@@ -89,6 +89,12 @@ namespace {
                 case 0x8dcb:// INT_SAMPLER_3D
                 case 0x8dd3:// UNSIGNED_INT_SAMPLER_3D
                     return [&](const UniformValue& value, GLTextures* textures) { setValueT3D1(value, textures); };
+               
+                case 0x8b60: // SAMPLER_CUBE
+                case 0x8dcc: // INT_SAMPLER_CUBE
+                case 0x8dd4: // UNSIGNED_INT_SAMPLER_CUBE
+                case 0x8dc5: // SAMPLER_CUBE_SHADOW
+                    return [&](const UniformValue& value, GLTextures* textures) { setValueT6(value, textures); };
 
                 case 0x1404:// INT, BOOL
                 case 0x8b56:
@@ -114,6 +120,13 @@ namespace {
             glUniform1i(addr, unit);
             auto tex = std::get<Texture*>(value);
             textures->setTexture3D(*tex, unit);
+        }
+        
+        void setValueT6(const UniformValue& value, GLTextures* textures) const {
+            const auto unit = textures->allocateTextureUnit();
+            glUniform1i(addr, unit);
+            auto tex = std::get<Texture*>(value);
+            textures->setTextureCube(*tex, unit);
         }
 
         void setValueV1i(const UniformValue& value) const {
