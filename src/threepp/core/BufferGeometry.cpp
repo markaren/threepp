@@ -79,6 +79,11 @@ void BufferGeometry::setAttribute(const std::string& name, std::unique_ptr<Buffe
     attributes_[name] = std::move(attribute);
 }
 
+void BufferGeometry::deleteAttribute(const std::string& name)
+{
+    attributes_.erase(name);
+}
+
 bool BufferGeometry::hasAttribute(const std::string& name) const {
 
     return attributes_.count(name);
