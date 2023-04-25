@@ -36,7 +36,32 @@ namespace threepp {
     private:
         TextureLoader texLoader_;
         Assimp::Importer importer_;
+        std::shared_ptr<Texture> LoadTexture(const aiScene* aiScene, const std::filesystem::path& path,  const char *name)
+        {
+            std::shared_ptr<Texture> tex;
+            if (name[0] == '*')
+            {
+                // embedded texture
+                auto embed = aiScene->GetEmbeddedTexture(name);
+                if (embed->mHeight == 0)
+                {
+                    tex = texLoader_.loadFromMemory((std::string)embed->mFilename.C_Str(),
+                        (const unsigned char*)embed->pcData, embed->mWidth);
+                }
+                else
+                {
+                    tex = texLoader_.loadFromMemory((std::string)embed->mFilename.C_Str(),
+                        (const unsigned char*)embed->pcData, embed->mWidth * embed->mHeight);
+                }
+            }
+            else
+            {
+                auto texPath = path.parent_path() / name;
+                tex = texLoader_.load(texPath); 
+            }
 
+            return tex;
+        }
         void parseNodes(const std::filesystem::path& path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 
             auto group = Group::create();
@@ -106,9 +131,10 @@ namespace threepp {
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
-                            auto texPath = path.parent_path() / p.C_Str();
-                            auto tex = texLoader_.load(texPath);
+                            // auto texPath = path.parent_path() / p.C_Str();
+                            //auto tex = texLoader_.load(texPath);
                             //                        tex->encoding = sRGBEncoding;
+                            auto tex = LoadTexture(aiScene, path, p.C_Str());
                             std::dynamic_pointer_cast<MaterialWithMap>(material)->map = tex;
                         }
                     } else {
@@ -122,9 +148,10 @@ namespace threepp {
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
-                            auto texPath = path.parent_path() / p.C_Str();
-                            auto tex = texLoader_.load(texPath);
+                            //auto texPath = path.parent_path() / p.C_Str();
+                            //auto tex = texLoader_.load(texPath);
                             //                        tex->encoding = sRGBEncoding;
+                            auto tex = LoadTexture(aiScene, path, p.C_Str());
                             m->emissiveMap = tex;
                         }
                     } else {
@@ -136,9 +163,10 @@ namespace threepp {
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
-                            auto texPath = path.parent_path() / p.C_Str();
-                            auto tex = texLoader_.load(texPath);
+                            // auto texPath = path.parent_path() / p.C_Str();
+                            // auto tex = texLoader_.load(texPath);
                             //                        tex->encoding = sRGBEncoding;
+                            auto tex = LoadTexture(aiScene, path, p.C_Str());
                             m->specularMap = tex;
                         }
                     } else {
