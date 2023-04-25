@@ -38,17 +38,18 @@ namespace threepp::gl {
 
         friend std::ostream& operator<<(std::ostream& os, const GLCapabilities& v) {
             os << "GLCapabilities(\n"
-               << "maxAnisotropy: " << v.maxAnisotropy << "\n"
-               << "maxTextures: " << v.maxTextures << "\n"
-               << "maxVertexTextures: " << v.maxVertexTextures << "\n"
-               << "maxTextureSize: " << v.maxTextureSize << "\n"
-               << "maxCubemapSize: " << v.maxCubemapSize << "\n"
-               << "maxAttributes: " << v.maxAttributes << "\n"
-               << "maxVertexUniforms: " << v.maxVertexUniforms << "\n"
-               << "maxVaryings: " << v.maxVaryings << "\n"
-               << "maxFragmentUniforms: " << v.maxFragmentUniforms << "\n"
-               << "vertexTextures: " << (v.vertexTextures ? "true" : "false") << "\n"
-               << "maxSamples: " << v.maxSamples << "\n";
+               << " maxAnisotropy: " << v.maxAnisotropy << "\n"
+               << " maxTextures: " << v.maxTextures << "\n"
+               << " maxVertexTextures: " << v.maxVertexTextures << "\n"
+               << " maxTextureSize: " << v.maxTextureSize << "\n"
+               << " maxCubemapSize: " << v.maxCubemapSize << "\n"
+               << " maxAttributes: " << v.maxAttributes << "\n"
+               << " maxVertexUniforms: " << v.maxVertexUniforms << "\n"
+               << " maxVaryings: " << v.maxVaryings << "\n"
+               << " maxFragmentUniforms: " << v.maxFragmentUniforms << "\n"
+               << " vertexTextures: " << (v.vertexTextures ? "true" : "false") << "\n"
+               << " maxSamples: " << v.maxSamples << "\n"
+               << ")";
             return os;
         }
 
