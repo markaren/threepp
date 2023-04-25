@@ -35,6 +35,19 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
             flipY};
 }
 
+std::optional<Image> ImageLoader::loadFromMemory(const unsigned char* data, int nSize, int& channels, bool flipy) {
+    int nChannel;
+    ImageStruct image{};
+    stbi_set_flip_vertically_on_load(flipy);
+    image.pixels = stbi_load_from_memory(data, nSize, &image.width, &image.height, &nChannel, 0);
+    channels = nChannel;
+    return Image{
+            std::shared_ptr<unsigned char>(image.pixels, free),
+            static_cast<unsigned int>(image.width),
+            static_cast<unsigned int>(image.height),
+            flipy};
+}
+
 std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, int channels, bool flipY) {
 
     ImageStruct image{};
