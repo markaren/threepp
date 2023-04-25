@@ -395,12 +395,19 @@ set(sources
 
         )
 
+set(optional_link_libraries)
 if (nlohmann_json_FOUND)
     list(APPEND sources "threepp/loaders/FontLoader.cpp" "threepp/extras/core/Font.cpp")
+    list(APPEND optional_link_libraries nlohmann_json::nlohmann_json)
 endif()
 
 if (CURL_FOUND)
     list(APPEND sources "threepp/utils/URLFetcher.cpp")
+    list(APPEND optional_link_libraries CURL::libcurl)
+endif()
+
+if(UNIX)
+    list(APPEND optional_link_libraries pthread)
 endif()
 
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
@@ -411,17 +418,13 @@ target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
-        glfw::glfw)
-if (nlohmann_json_FOUND)
-    target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
-endif()
+        glfw::glfw
+        ${optional_link_libraries})
+
 if (CURL_FOUND)
-    target_link_libraries(threepp PRIVATE CURL::libcurl)
     target_compile_definitions(threepp PUBLIC "THREEPP_WITH_CURL")
 endif()
-if(UNIX)
-    target_link_libraries(threepp PRIVATE pthread)
-endif()
+
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
