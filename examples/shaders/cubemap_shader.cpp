@@ -88,12 +88,12 @@ int main() {
 
         std::list<std::filesystem::path> urls = 
         {
-            "data/textures/cubemap/colloseum/right.png",
-            "data/textures/cubemap/colloseum/left.png",
-            "data/textures/cubemap/colloseum/top.png",
-            "data/textures/cubemap/colloseum/bottom.png",
-            "data/textures/cubemap/colloseum/front.png",
-            "data/textures/cubemap/colloseum/back.png"
+            "../data/textures/cubemap/colloseum/right.png",
+            "../data/textures/cubemap/colloseum/left.png",
+            "../data/textures/cubemap/colloseum/top.png",
+            "../data/textures/cubemap/colloseum/bottom.png",
+            "../data/textures/cubemap/colloseum/front.png",
+            "../data/textures/cubemap/colloseum/back.png"
         };
         CubeTextureLoader loader;
         auto cubeTexture = loader.load(urls);
