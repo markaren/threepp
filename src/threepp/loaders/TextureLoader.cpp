@@ -60,6 +60,27 @@ struct TextureLoader::Impl {
 
         return texture;
     }
+    
+    std::shared_ptr<Texture> loadFromMemory(const std::string name, const unsigned char* pData, int nSize, bool flipY) {
+        if (useCache_ && cache_.count(name)) {
+            auto cached = cache_[name];
+            if (!cached.expired()) {
+                auto tex = cached.lock();
+                return tex;
+            } else {
+                cache_.erase(name);
+            }
+        }
+        int nChannel = 4;
+        auto image = imageLoader_.loadFromMemory(pData, nSize, nChannel, flipY);
+        auto texture = Texture::create(image);
+        texture->name = name;
+        texture->format = (nChannel == 3) ? RGBFormat : RGBAFormat;
+        texture->needsUpdate();
+
+        if (useCache_) cache_[name] = texture;
+        return texture;
+    }
 
 
     std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY) {
