@@ -47,19 +47,18 @@ namespace {
 
     struct ControllableOptions {
 
-        PID& pid;
         float targetAngle;
         float maxMotorVelocity;
 
-        ControllableOptions(PID& pid, float targetAngle, float maxMotorVelocity)
-            : targetAngle(targetAngle), maxMotorVelocity(maxMotorVelocity), pid(pid) {}
+        ControllableOptions(float targetAngle, float maxMotorVelocity)
+            : targetAngle(targetAngle), maxMotorVelocity(maxMotorVelocity) {}
     };
 
 
     struct MyUI: imgui_context {
 
-        explicit MyUI(const Canvas& canvas, ControllableOptions& opt)
-            : imgui_context(canvas.window_ptr()), opt(opt) {}
+        explicit MyUI(const Canvas& canvas, PID& pid, ControllableOptions& opt)
+            : imgui_context(canvas.window_ptr()), pid_(pid), opt_(opt) {}
 
         void onRender() override {
 
@@ -68,26 +67,27 @@ namespace {
             ImGui::Begin("PID control");
 
             ImGui::Text("Motor settings");
-            ImGui::SliderFloat("theta", &opt.targetAngle, -179, 179);
-            ImGui::SliderFloat("maxSpeed", &opt.maxMotorVelocity, 0.1f, 20);
+            ImGui::SliderFloat("theta", &opt_.targetAngle, -179, 179);
+            ImGui::SliderFloat("maxSpeed", &opt_.maxMotorVelocity, 0.1f, 20);
 
             ImGui::Text("PID params");
-            ImGui::SliderFloat("kp", &opt.pid.params().kp, 0.1f, 10);
-            ImGui::SliderFloat("ti", &opt.pid.params().ti, 0, 1);
-            ImGui::SliderFloat("td", &opt.pid.params().td, 0, 1);
+            ImGui::SliderFloat("kp", &pid_.params().kp, 0.1f, 10);
+            ImGui::SliderFloat("ti", &pid_.params().ti, 0, 1);
+            ImGui::SliderFloat("td", &pid_.params().td, 0, 1);
 
             ImGui::PlotLines("Error", errors.data(), static_cast<int>(errors.size()));
 
             ImGui::End();
 
-            errors.emplace_back(opt.pid.error());
+            errors.emplace_back(pid_.error());
             if (errors.size() > 100) {
                 errors.erase(errors.begin(), errors.begin() + 1);
             }
         }
 
     private:
-        ControllableOptions& opt;
+        PID& pid_;
+        ControllableOptions& opt_;
         std::vector<float> errors;
     };
 
@@ -116,7 +116,7 @@ int main() {
     });
 
     BulletPhysics bullet;
-    bullet.addMesh(*controllable, 10, true);
+    bullet.addMesh(*controllable, 100, true);
     auto rb = bullet.get(*controllable);
     btHingeConstraint c(*rb->body, {}, {0, 0, 1});
     c.enableAngularMotor(true, 0, 1.f);
@@ -125,8 +125,8 @@ int main() {
     PID pid(1, 0.001f, 0.1f);
     pid.setWindupGuard(0.1f);
 
-    ControllableOptions opt(pid, 0, 5);
-    MyUI ui(canvas, opt);
+    ControllableOptions opt(0, 5);
+    MyUI ui(canvas, pid, opt);
 
 #ifdef HAS_MATPLOTLIB
 
