@@ -1,4 +1,5 @@
 
+#include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -123,6 +124,18 @@ int main() {
     handle.setPosition(canvas.getSize().width - 130, 0);
     handle.color = Color::red;
 
+    SVGLoader loader;
+    auto paths = loader.load("data/models/svg/tiger.svg");
+    auto group = Group::create();
+    scene->add(group);
+    for (const auto& path : paths) {
+        auto material = MeshBasicMaterial::create(
+                {{"color", path.color},
+                 {"side", DoubleSide},
+                 {"depthWrite", false}});
+
+    }
+
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
@@ -135,7 +148,6 @@ int main() {
 #endif
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
