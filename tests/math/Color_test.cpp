@@ -64,3 +64,10 @@ TEST_CASE("getHexString") {
     auto res = c.getHexString();
     CHECK( res == "ff6347");
 }
+
+TEST_CASE("getStyle") {
+
+    Color c = Color::plum;
+    auto res = c.getStyle();
+    CHECK( res == "rgb(221,160,221)");
+}

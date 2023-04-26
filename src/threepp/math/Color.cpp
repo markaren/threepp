@@ -262,3 +262,11 @@ std::string Color::getHexString() const {
 
     return ss.str();
 }
+
+std::string Color::getStyle() const {
+
+    std::stringstream ss;
+    ss << "rgb(" << (static_cast<int>(this->r * 255) | 0) << "," << (static_cast<int>(this->g * 255) | 0) << "," << (static_cast<int>(this->b * 255) | 0) << ")";
+
+    return ss.str();
+}

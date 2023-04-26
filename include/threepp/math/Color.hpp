@@ -66,6 +66,8 @@ namespace threepp {
 
         [[nodiscard]] std::string getHexString() const;
 
+        [[nodiscard]] std::string getStyle() const;
+
         [[nodiscard]] bool equals(const Color& c) const;
 
         bool operator==(const Color& c) const;
