@@ -8,7 +8,22 @@
 
 using namespace threepp;
 
-Color::Color(float r, float g, float b): r(r), g(g), b(b) {}
+namespace {
+
+    float hue2rgb(float p, float q, float t) {
+
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1.f / 6) return p + (q - p) * 6 * t;
+        if (t < 1.f / 2) return q;
+        if (t < 2.f / 3) return p + (q - p) * 6 * (2 / 3 - t);
+        return p;
+    }
+
+}// namespace
+
+Color::Color(float r, float g, float b)
+    : r(r), g(g), b(b) {}
 
 Color::Color(unsigned int hex) {
     setHex(hex);
@@ -50,6 +65,30 @@ Color& Color::setRGB(float r, float g, float b) {
     this->r = r;
     this->g = g;
     this->b = b;
+
+    return *this;
+}
+
+Color& Color::setHSL(float h, float s, float l) {
+
+    // h,s,l ranges are in 0.0 - 1.0
+    h = math::euclideanModulo(h, 1.f);
+    s = std::clamp(s, 0.f, 1.f);
+    l = std::clamp(l, 0.f, 1.f);
+
+    if (s == 0) {
+
+        this->r = this->g = this->b = l;
+
+    } else {
+
+        const auto p = l <= 0.5f ? l * (1 + s) : l + s - (l * s);
+        const auto q = (2 * l) - p;
+
+        this->r = hue2rgb(q, p, h + 1.f / 3);
+        this->g = hue2rgb(q, p, h);
+        this->b = hue2rgb(q, p, h - 1.f / 3);
+    }
 
     return *this;
 }
@@ -167,4 +206,50 @@ bool Color::operator==(const Color& c) const {
 bool Color::operator!=(const Color& c) const {
 
     return !equals(c);
+}
+
+unsigned int Color::getHex() const {
+
+    return static_cast<int>( this->r * 255 ) << 16 ^ static_cast<int>( this->g * 255 ) << 8 ^ static_cast<int>( this->b * 255 ) << 0;
+}
+
+HSL& Color::getHSL(HSL& target) const {
+    // h,s,l ranges are in 0.0 - 1.0
+
+    const float r = this->r, g = this->g, b = this->b;
+
+    const auto max = std::max( r, std::max(g, b) );
+    const auto min = std::min( r, std::min(g, b) );
+
+    float hue, saturation;
+    const auto lightness = ( min + max ) / 2.0f;
+
+    if ( min == max ) {
+
+        hue = 0;
+        saturation = 0;
+
+    } else {
+
+        const auto delta = max - min;
+
+        saturation = lightness <= 0.5f ? delta / ( max + min ) : delta / ( 2 - max - min );
+
+        if (max == r) {
+            hue = ( g - b ) / delta + ( g < b ? 6.f : 0.f );
+        } else if (max == g) {
+            hue = ( b - r ) / delta + 2;
+        } else if (max == b) {
+            hue = ( r - g ) / delta + 4;
+        }
+
+        hue /= 6.f;
+
+    }
+
+    target.h = hue;
+    target.s = saturation;
+    target.l = lightness;
+
+    return target;
 }
