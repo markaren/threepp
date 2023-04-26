@@ -25,7 +25,7 @@ namespace {
     }
 
     //clang-format off
-    std::unordered_map<std::string, int> colorKeywords{
+    std::unordered_map<std::string, int> colorKeywords {
             {"aliceBlue", Color::aliceblue},
             {"antiquewhite", Color::antiquewhite},
             {"aqua", Color::aqua},
@@ -95,17 +95,70 @@ namespace {
             {"honeydew", Color::honeydew},
             {"hotpink", Color::hotpink},
 
-            /**
-            'indianred': 0xCD5C5C, 'indigo': 0x4B0082, 'ivory': 0xFFFFF0, 'khaki': 0xF0E68C, 'lavender': 0xE6E6FA, 'lavenderblush': 0xFFF0F5, 'lawngreen': 0x7CFC00,
-            'lemonchiffon': 0xFFFACD, 'lightblue': 0xADD8E6, 'lightcoral': 0xF08080, 'lightcyan': 0xE0FFFF, 'lightgoldenrodyellow': 0xFAFAD2, 'lightgray': 0xD3D3D3,
-            'lightgreen': 0x90EE90, 'lightgrey': 0xD3D3D3, 'lightpink': 0xFFB6C1, 'lightsalmon': 0xFFA07A, 'lightseagreen': 0x20B2AA, 'lightskyblue': 0x87CEFA,
-            'lightslategray': 0x778899, 'lightslategrey': 0x778899, 'lightsteelblue': 0xB0C4DE, 'lightyellow': 0xFFFFE0, 'lime': 0x00FF00, 'limegreen': 0x32CD32,
-            'linen': 0xFAF0E6, 'magenta': 0xFF00FF, 'maroon': 0x800000, 'mediumaquamarine': 0x66CDAA, 'mediumblue': 0x0000CD, 'mediumorchid': 0xBA55D3,
-            'mediumpurple': 0x9370DB, 'mediumseagreen': 0x3CB371, 'mediumslateblue': 0x7B68EE, 'mediumspringgreen': 0x00FA9A, 'mediumturquoise': 0x48D1CC,
-            'mediumvioletred': 0xC71585, 'midnightblue': 0x191970, 'mintcream': 0xF5FFFA, 'mistyrose': 0xFFE4E1, 'moccasin': 0xFFE4B5, 'navajowhite': 0xFFDEAD,
-            'navy': 0x000080, 'oldlace': 0xFDF5E6, 'olive': 0x808000, 'olivedrab': 0x6B8E23, 'orange': 0xFFA500, 'orangered': 0xFF4500, 'orchid': 0xDA70D6,
-            'palegoldenrod': 0xEEE8AA, 'palegreen': 0x98FB98, 'paleturquoise': 0xAFEEEE, 'palevioletred': 0xDB7093, 'papayawhip': 0xFFEFD5, 'peachpuff': 0xFFDAB9,
-             */
+            {"indianred", Color::indianred},
+            {"indigo", Color::indigo},
+            {"ivory", Color::ivory},
+            {"khaki", Color::khaki},
+            {"lavender", Color::lavender},
+            {"lavenderblush", Color::lavenderblush},
+            {"lawngreen", Color::lawngreen},
+
+            {"lemonchiffon", Color::lemonchiffon},
+            {"lightblue", Color::lightblue},
+            {"ivory", Color::ivory},
+            {"lightcoral", Color::lightcoral},
+            {"lightcyan", Color::lightcyan},
+            {"lightgoldenrodyellow", Color::lightgoldenrodyellow},
+            {"lightgray", Color::lightgray},
+
+            {"lightgreen", Color::lightgreen},
+            {"lightgrey", Color::lightgrey},
+            {"lightpink", Color::lightpink},
+            {"lightsalmon", Color::lightsalmon},
+            {"lightseagreen", Color::lightseagreen},
+            {"lightskyblue", Color::lightskyblue},
+
+            {"lightslategray", Color::lightslategray},
+            {"lightslategrey", Color::lightslategrey},
+            {"lightsteelblue", Color::lightsteelblue},
+            {"lightyellow", Color::lightyellow},
+            {"lime", Color::lime},
+            {"limegreen", Color::limegreen},
+
+            {"linen", Color::linen},
+            {"magenta", Color::magenta},
+            {"maroon", Color::maroon},
+            {"mediumaquamarine", Color::mediumaquamarine},
+            {"mediumblue", Color::mediumblue},
+            {"mediumorchid", Color::mediumorchid},
+
+            {"mediumpurple", Color::mediumpurple},
+            {"mediumseagreen", Color::mediumseagreen},
+            {"mediumslateblue", Color::mediumslateblue},
+            {"mediumspringgreen", Color::mediumspringgreen},
+            {"mediumturquoise", Color::mediumturquoise},
+
+            {"mediumvioletred", Color::mediumvioletred},
+            {"midnightblue", Color::midnightblue},
+            {"mintcream", Color::mintcream},
+            {"mistyrose", Color::mistyrose},
+            {"moccasin", Color::moccasin},
+            {"navajowhite", Color::navajowhite},
+
+            {"navy", Color::navy},
+            {"oldlace", Color::oldlace},
+            {"olive", Color::olive},
+            {"olivedrab", Color::olivedrab},
+            {"orange", Color::orange},
+            {"orangered", Color::orangered},
+            {"orchid", Color::orchid},
+
+            {"palegoldenrod", Color::palegoldenrod},
+            {"palegreen", Color::palegreen},
+            {"paleturquoise", Color::paleturquoise},
+            {"palevioletred", Color::palevioletred},
+            {"papayawhip", Color::papayawhip},
+            {"peachpuff", Color::peachpuff},
 
             {"peru", Color::peru},
             {"pink", Color::pink},
@@ -143,10 +196,8 @@ namespace {
             {"white", Color::white},
             {"whitesmoke", Color::whitesmoke},
             {"yellow", Color::yellow},
-            {"yellowgreen", Color::yellowgreen},
+            {"yellowgreen", Color::yellowgreen}
 
-
-            //TODO missing colors
     };
     //clang-format on
 
