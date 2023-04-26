@@ -3,8 +3,12 @@
 #include "threepp/extras/core/ShapePath.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <iostream>
+
+#define NANOSVG_ALL_COLOR_KEYWORDS
 #define NANOSVG_IMPLEMENTATION
 #include "nanosvg.h"
 
@@ -17,23 +21,23 @@ namespace {
         auto group = Group::create();
         for (auto shape = image->shapes; shape != nullptr; shape = shape->next) {
 
-            auto material = MeshBasicMaterial::create(
-                    {{"color", 0xff0000},
-                     {"side", DoubleSide},
-                     {"depthWrite", false}});
-
-            std::vector<ShapePath> result;
+            ShapePath s;
             for (auto path = shape->paths; path != nullptr; path = path->next) {
 
                 for (unsigned i = 0; i < path->npts - 1; i += 3) {
                     float* p = &path->pts[i * 2];
-                    ShapePath& s = result.emplace_back();
                     s.moveTo(p[0], p[1]);
                     s.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
                 }
-
             }
-            auto geometry = ShapeGeometry::create(result.back().toShapes());
+            auto material = MeshBasicMaterial::create(
+                    {{"color", shape->fill.color},
+                     {"opacity", shape->opacity},
+                     {"transparent", shape->opacity != 1},
+                     {"side", DoubleSide},
+                     {"depthWrite", false}});
+
+            auto geometry = ShapeGeometry::create(s.toShapes());
             auto mesh = Mesh::create(geometry, material);
             group->add(mesh);
         }
