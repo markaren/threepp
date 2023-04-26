@@ -31,11 +31,15 @@ std::string math::generateUUID() {
     for (auto& c : uuid) {
         c = static_cast<char>(std::tolower(c));
     }
+
     return uuid;
 }
 
+float math::euclideanModulo(float n, float m) {
 
-// Linear mapping from range <a1, a2> to range <b1, b2>
+    return  std::fmod((( std::fmod(n, m) + m) + m),  m);
+}
+
 float math::mapLinear(float x, float a1, float a2, float b1, float b2) {
 
     return b1 + (x - a1) * (b2 - b1) / (a2 - a1);
