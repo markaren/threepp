@@ -60,7 +60,28 @@ struct TextureLoader::Impl {
 
         return texture;
     }
+    
+    std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, int nSize, bool flipY)
+    {
+        if (useCache_ && cache_.count(name)) {
+            auto cached = cache_[name];
+            if (!cached.expired()) {
+                auto tex = cached.lock();
+                return tex;
+            } else {
+                cache_.erase(name);
+            }
+        }
+        int nChannel = 4;
+        auto image = imageLoader_.loadFromMemory(data, nSize, nChannel, flipY);
+        auto texture = Texture::create(image);
+        texture->name = name;
+         texture->format = (nChannel == 3)? RGBFormat : RGBAFormat;
+        texture->needsUpdate();
 
+        if (useCache_) cache_[name] = texture;
+        return texture;
+    }
 
     std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY) {
 
@@ -112,6 +133,11 @@ TextureLoader::TextureLoader(bool useCache)
 std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, bool flipY) {
 
     return pimpl_->load(path, flipY);
+}
+
+std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, std::vector<unsigned char> data, int nSize, bool flipY) {
+
+    return pimpl_->loadFromMemory(name, data, nSize, flipY);
 }
 
 #ifdef THREEPP_WITH_CURL
