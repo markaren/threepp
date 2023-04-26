@@ -45,13 +45,17 @@ namespace threepp {
                 auto embed = aiScene->GetEmbeddedTexture(name);
                 if (embed->mHeight == 0)
                 {
+                    std::vector<unsigned char> data(embed->mWidth );
+                    std::copy((unsigned char *)embed->pcData, (unsigned char*)embed->pcData + data.size(), data.begin());
                     tex = texLoader_.loadFromMemory((std::string)embed->mFilename.C_Str(),
-                        (const unsigned char*)embed->pcData, embed->mWidth);
+                        data, embed->mWidth);
                 }
                 else
                 {
+                    std::vector<unsigned char> data(embed->mWidth * embed->mHeight);
+                    std::copy((unsigned char*)embed->pcData, (unsigned char*)embed->pcData + data.size(), data.begin());
                     tex = texLoader_.loadFromMemory((std::string)embed->mFilename.C_Str(),
-                        (const unsigned char*)embed->pcData, embed->mWidth * embed->mHeight);
+                        data, embed->mWidth * embed->mHeight);
                 }
             }
             else
