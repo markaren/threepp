@@ -94,6 +94,39 @@ TEST_CASE("add") {
     CHECK(a.equals(c));
 }
 
+TEST_CASE("addColors") {
+
+    Color a = 0x0000FF;
+    Color b = 0xFF0000;
+    Color c = 0xFF00FF;
+    Color d;
+
+    d.addColors(a, b);
+
+    CHECK(d.equals(c));
+}
+
+TEST_CASE("multiply") {
+
+    Color a( 1, 0, 0.5f );
+    Color b( 0.5f, 1, 0.5f );
+    Color c( 0.5f, 0, 0.25f );
+
+    a.multiply( b );
+    CHECK( a.equals( c ));
+}
+
+TEST_CASE("lerp") {
+
+    Color c;
+    Color c2 ;
+    c.setRGB( 0, 0, 0 );
+    c.lerp( c2, 0.2f );
+    CHECK( c.r == Approx(0.2f));
+    CHECK( c.g == Approx(0.2f));
+    CHECK( c.b == Approx(0.2f));
+}
+
 TEST_CASE("setStyleRGBed") {
 
     Color c;
@@ -164,4 +197,39 @@ TEST_CASE("setStyleHSLRed") {
     CHECK(c.r == 1);
     CHECK(c.g == 0);
     CHECK(c.b == Approx(0).margin(1e-4));
+}
+
+TEST_CASE("setStyleHexSkyBlue") {
+
+    Color c;
+    c.setStyle("#87CEEB");
+    CHECK(c.getHex() == 0x87CEEB);
+}
+
+TEST_CASE("setStyleHexSkyBlueMixed") {
+
+    Color c;
+    c.setStyle("#87cEeB");
+    CHECK(c.getHex() == 0x87CEEB);
+}
+
+TEST_CASE("setStyleHex2Olive") {
+
+    Color c;
+    c.setStyle("#F00");
+    CHECK(c.getHex() == 0xFF0000);
+}
+
+TEST_CASE("setStyleHex2OliveMixed") {
+
+    Color c;
+    c.setStyle("#f00");
+    CHECK(c.getHex() == 0xFF0000);
+}
+
+TEST_CASE("setStyleColorName") {
+
+    Color c;
+    c.setStyle("powderblue");
+    CHECK(c.getHex() == 0xB0E0E6);
 }

@@ -221,6 +221,7 @@ namespace threepp {
             plum = 0xDDA0DD,
             powderblue = 0xB0E0E6,
             purple = 0x800080,
+            rebeccapurple = 0x663399,
             red = 0xFF0000,
             rosybrown = 0xBC8F8F,
             royalblue = 0x4169E1,

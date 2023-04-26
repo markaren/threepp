@@ -60,7 +60,93 @@ namespace {
             {"darkkhaki", Color::darkkhaki},
             {"darkmagenta", Color::darkmagenta},
 
-            //TODO reset
+            {"darkolivegreen", Color::darkolivegreen},
+            {"darkorange", Color::darkorange},
+            {"darkorchid", Color::darkorchid},
+            {"darkred", Color::darkred},
+            {"darksalmon", Color::darksalmon},
+            {"darkseagreen", Color::darkseagreen},
+
+            {"darkslateblue", Color::darkslateblue},
+            {"darkslategray", Color::darkslategray},
+            {"darkslategrey", Color::darkslategrey},
+            {"darkturquoise", Color::darkturquoise},
+            {"darkviolet", Color::darkviolet},
+
+            {"deeppink", Color::deeppink},
+            {"deepskyblue", Color::deepskyblue},
+            {"dimgray", Color::dimgray},
+            {"dimgrey", Color::dimgrey},
+            {"dodgerblue", Color::dodgerblue},
+            {"firebrick", Color::firebrick},
+
+            {"floralwhite", Color::floralwhite},
+            {"forestgreen", Color::forestgreen},
+            {"fuchsia", Color::fuchsia},
+            {"gainsboro", Color::gainsboro},
+            {"ghostwhite", Color::ghostwhite},
+            {"gold", Color::gold},
+
+            {"goldenrod", Color::goldenrod},
+            {"gray", Color::gray},
+            {"green", Color::green},
+            {"greenyellow", Color::greenyellow},
+            {"grey", Color::grey},
+            {"honeydew", Color::honeydew},
+            {"hotpink", Color::hotpink},
+
+            /**
+            'indianred': 0xCD5C5C, 'indigo': 0x4B0082, 'ivory': 0xFFFFF0, 'khaki': 0xF0E68C, 'lavender': 0xE6E6FA, 'lavenderblush': 0xFFF0F5, 'lawngreen': 0x7CFC00,
+            'lemonchiffon': 0xFFFACD, 'lightblue': 0xADD8E6, 'lightcoral': 0xF08080, 'lightcyan': 0xE0FFFF, 'lightgoldenrodyellow': 0xFAFAD2, 'lightgray': 0xD3D3D3,
+            'lightgreen': 0x90EE90, 'lightgrey': 0xD3D3D3, 'lightpink': 0xFFB6C1, 'lightsalmon': 0xFFA07A, 'lightseagreen': 0x20B2AA, 'lightskyblue': 0x87CEFA,
+            'lightslategray': 0x778899, 'lightslategrey': 0x778899, 'lightsteelblue': 0xB0C4DE, 'lightyellow': 0xFFFFE0, 'lime': 0x00FF00, 'limegreen': 0x32CD32,
+            'linen': 0xFAF0E6, 'magenta': 0xFF00FF, 'maroon': 0x800000, 'mediumaquamarine': 0x66CDAA, 'mediumblue': 0x0000CD, 'mediumorchid': 0xBA55D3,
+            'mediumpurple': 0x9370DB, 'mediumseagreen': 0x3CB371, 'mediumslateblue': 0x7B68EE, 'mediumspringgreen': 0x00FA9A, 'mediumturquoise': 0x48D1CC,
+            'mediumvioletred': 0xC71585, 'midnightblue': 0x191970, 'mintcream': 0xF5FFFA, 'mistyrose': 0xFFE4E1, 'moccasin': 0xFFE4B5, 'navajowhite': 0xFFDEAD,
+            'navy': 0x000080, 'oldlace': 0xFDF5E6, 'olive': 0x808000, 'olivedrab': 0x6B8E23, 'orange': 0xFFA500, 'orangered': 0xFF4500, 'orchid': 0xDA70D6,
+            'palegoldenrod': 0xEEE8AA, 'palegreen': 0x98FB98, 'paleturquoise': 0xAFEEEE, 'palevioletred': 0xDB7093, 'papayawhip': 0xFFEFD5, 'peachpuff': 0xFFDAB9,
+             */
+
+            {"peru", Color::peru},
+            {"pink", Color::pink},
+            {"plum", Color::plum},
+            {"powderblue", Color::powderblue},
+            {"purple", Color::purple},
+            {"rebeccapurple", Color::rebeccapurple},
+            {"rosybrown", Color::rosybrown},
+
+            {"royalblue", Color::royalblue},
+            {"saddlebrown", Color::saddlebrown},
+            {"salmon", Color::salmon},
+            {"sandybrown", Color::sandybrown},
+            {"seagreen", Color::seagreen},
+            {"seashell", Color::seashell},
+
+            {"sienna", Color::sienna},
+            {"silver", Color::silver},
+            {"skyblue", Color::skyblue},
+            {"slateblue", Color::slateblue},
+            {"slategray", Color::slategray},
+            {"slategrey", Color::slategrey},
+            {"snow", Color::snow},
+
+            {"springgreen", Color::springgreen},
+            {"steelblue", Color::steelblue},
+            {"tan", Color::tan},
+            {"teal", Color::teal},
+            {"thistle", Color::thistle},
+            {"tomato", Color::tomato},
+            {"turquoise", Color::turquoise},
+
+            {"violet", Color::violet},
+            {"wheat", Color::wheat},
+            {"white", Color::white},
+            {"whitesmoke", Color::whitesmoke},
+            {"yellow", Color::yellow},
+            {"yellowgreen", Color::yellowgreen},
+
+
+            //TODO missing colors
     };
     //clang-format on
 
@@ -316,7 +402,7 @@ std::string Color::getStyle() const {
 Color& Color::setStyle(const std::string& style) {
 
     static std::regex r1(R"(((?:rgb|hsl)a?)\(([^\)]*)\))", std::regex::icase);
-    static std::regex r2("/^\\#([A-Fa-f\\d]+)$/.", std::regex::icase);
+    static std::regex r2("\\#([A-Fa-f\\d]+)$", std::regex::icase);
 
     std::smatch match;
     if (std::regex_match(style, match, r1)) {
