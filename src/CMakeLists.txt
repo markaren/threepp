@@ -93,6 +93,7 @@ set(publicHeaders
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
+        "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
@@ -193,6 +194,8 @@ set(privateHeaders
 
         "threepp/extras/earcut.hpp"
         "threepp/extras/quickhull.hpp"
+
+        "threepp/loaders/nanosvg.h"
 
         "threepp/materials/MeshDistanceMaterial.hpp"
 
@@ -295,6 +298,7 @@ set(sources
         "threepp/loaders/MTLLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
+        "threepp/loaders/SVGLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
 
         "threepp/materials/LineBasicMaterial.cpp"
