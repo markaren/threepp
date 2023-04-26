@@ -35,9 +35,9 @@ std::string math::generateUUID() {
     return uuid;
 }
 
-int math::euclideanModulo(int n, int m) {
+float math::euclideanModulo(float n, float m) {
 
-    return ((n % m) + m) % m;
+    return  std::fmod((( std::fmod(n, m) + m) + m),  m);
 }
 
 float math::mapLinear(float x, float a1, float a2, float b1, float b2) {

@@ -18,7 +18,7 @@ namespace threepp::math {
 
     // compute euclidian modulo of m % n
     // https://en.wikipedia.org/wiki/Modulo_operation
-    int euclideanModulo( int n, int m );
+    float euclideanModulo( float n, float m );
 
     // Linear mapping from range <a1, a2> to range <b1, b2>
     float mapLinear(float x, float a1, float a2, float b1, float b2);

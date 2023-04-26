@@ -64,6 +64,8 @@ namespace threepp {
 
         [[nodiscard]] unsigned int getHex() const;
 
+        [[nodiscard]] std::string getHexString() const;
+
         [[nodiscard]] bool equals(const Color& c) const;
 
         bool operator==(const Color& c) const;
