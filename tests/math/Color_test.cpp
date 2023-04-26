@@ -60,14 +60,108 @@ TEST_CASE("getHex") {
 
 TEST_CASE("getHexString") {
 
-    Color c =  Color::tomato;
+    Color c = Color::tomato;
     auto res = c.getHexString();
-    CHECK( res == "ff6347");
+    CHECK(res == "ff6347");
+}
+
+TEST_CASE("getHSL") {
+
+    Color c = 0x80ffff;
+    HSL hsl = {0, 0, 0};
+    c.getHSL(hsl);
+
+    CHECK(hsl.h == Approx(0.5f));
+    CHECK(hsl.s == Approx(1.0f));
+    CHECK((std::round(hsl.l * 100) / 100) == Approx(0.75));
 }
 
 TEST_CASE("getStyle") {
 
     Color c = Color::plum;
     auto res = c.getStyle();
-    CHECK( res == "rgb(221,160,221)");
+    CHECK(res == "rgb(221,160,221)");
+}
+
+TEST_CASE("add") {
+
+    Color a = 0x0000FF;
+    Color b = 0xFF0000;
+    Color c = 0xFF00FF;
+
+    a.add(b);
+
+    CHECK(a.equals(c));
+}
+
+TEST_CASE("setStyleRGBed") {
+
+    Color c;
+    c.setStyle("rgb(255,0,0)");
+    CHECK(c.r == 1);
+    CHECK(c.g == 0);
+    CHECK(c.b == 0);
+}
+
+TEST_CASE("setStyleRGBAed") {
+
+    Color c;
+    c.setStyle("rgb(255,0,0,0.5)");
+    CHECK(c.r == 1);
+    CHECK(c.g == 0);
+    CHECK(c.b == 0);
+}
+
+TEST_CASE("setStyleRGBedWithSpaces") {
+
+    Color c;
+    c.setStyle("rgb( 255, 0, 0)");
+    CHECK(c.r == 1);
+    CHECK(c.g == 0);
+    CHECK(c.b == 0);
+}
+
+TEST_CASE("setStyleRGBAedWithSpaces") {
+
+    Color c;
+    c.setStyle("rgb( 255, 0, 0, 0.5)");
+    CHECK(c.r == 1);
+    CHECK(c.g == 0);
+    CHECK(c.b == 0);
+}
+
+TEST_CASE("setStyleRGBedPercent") {
+
+    Color c;
+    c.setStyle("rgb(100%,50%,10%)");
+    CHECK(c.r == 1);
+    CHECK(c.g == Approx(0.5f));
+    CHECK(c.b == Approx(0.1f));
+}
+
+TEST_CASE("setStyleRGBedPercentWithSpaces") {
+
+    Color c;
+    c.setStyle("rgb( 100%, 50%, 10%)");
+    CHECK(c.r == 1);
+    CHECK(c.g == Approx(0.5f));
+    CHECK(c.b == Approx(0.1f));
+}
+
+TEST_CASE("setStyleRGBAedPercentWithSpaces") {
+
+    Color c;
+    c.setStyle("rgb( 100%, 50%, 10%, 0.5)");
+    CHECK(c.r == 1);
+    CHECK(c.g == Approx(0.5f));
+    CHECK(c.b == Approx(0.1f));
+}
+
+TEST_CASE("setStyleHSLRed") {
+
+    Color c;
+    c.setStyle("hsl(360,100%,50%)");
+    CHECK(c.r == 1);
+    CHECK(c.g == 0);
+    CHECK(c.b == Approx(0).margin(1e-4));
 }

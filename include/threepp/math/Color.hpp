@@ -70,6 +70,8 @@ namespace threepp {
 
         [[nodiscard]] std::string getStyle() const;
 
+        Color& setColorName(const std::string& style);
+
         [[nodiscard]] bool equals(const Color& c) const;
 
         bool operator==(const Color& c) const;

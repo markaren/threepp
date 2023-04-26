@@ -2,13 +2,13 @@
 #include "threepp/math/Color.hpp"
 
 #include "threepp/math/MathUtils.hpp"
-#include "threepp/utils/RegexUtil.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <iomanip>
-#include <sstream>
+#include <iostream>
 #include <regex>
+#include <sstream>
+#include <unordered_map>
 
 using namespace threepp;
 
@@ -23,6 +23,46 @@ namespace {
         if (t < 2.f / 3) return p + (q - p) * 6 * (2.f / 3 - t);
         return p;
     }
+
+    //clang-format off
+    std::unordered_map<std::string, int> colorKeywords{
+            {"aliceBlue", Color::aliceblue},
+            {"antiquewhite", Color::antiquewhite},
+            {"aqua", Color::aqua},
+            {"aquamarine", Color::aquamarine},
+            {"azure", Color::azure},
+
+            {"beige", Color::beige},
+            {"bisque", Color::bisque},
+            {"black", Color::black},
+            {"blanchedalmond", Color::blanchedalmond},
+            {"blue", Color::blue},
+            {"blueviolet", Color::blueviolet},
+
+            {"brown", Color::brown},
+            {"burlywood", Color::burlywood},
+            {"cadetblue", Color::cadetblue},
+            {"chartreuse", Color::chartreuse},
+            {"chocolate", Color::chocolate},
+            {"coral", Color::coral},
+
+            {"cornflowerblue", Color::cornflowerblue},
+            {"cornsilk", Color::cornsilk},
+            {"crimson", Color::crimson},
+            {"cyan", Color::cyan},
+            {"darkblue", Color::darkblue},
+            {"darkcyan", Color::darkcyan},
+
+            {"darkgoldenrod", Color::darkgoldenrod},
+            {"darkgray", Color::darkgray},
+            {"darkgreen", Color::darkgreen},
+            {"darkgrey", Color::darkgrey},
+            {"darkkhaki", Color::darkkhaki},
+            {"darkmagenta", Color::darkmagenta},
+
+            //TODO reset
+    };
+    //clang-format on
 
 }// namespace
 
@@ -275,13 +315,97 @@ std::string Color::getStyle() const {
 
 Color& Color::setStyle(const std::string& style) {
 
-    static std::regex r1(R"(/^((?:rgb|hsl)a?)\(([^\)]*)\)/)", std::regex::icase);
-    static std::regex r2("/^\\s*(\\d+)\\%\\s*,\\s*(\\d+)\\%\\s*,\\s*(\\d+)\\%\\s*(?:,\\s*(\\d*\\.?\\d+)\\s*)?$/", std::regex::icase);
+    static std::regex r1(R"(((?:rgb|hsl)a?)\(([^\)]*)\))", std::regex::icase);
+    static std::regex r2("/^\\#([A-Fa-f\\d]+)$/.", std::regex::icase);
 
+    std::smatch match;
+    if (std::regex_match(style, match, r1)) {
 
-    if (std::regex_match(style, r1)) {
+        // rgb / hsl
 
-    } else if ()
+        std::string name = match[1];
+        std::string components = match[2];
+
+        if (name == "rgb" || name == "rgba") {
+
+            static std::regex ra(R"(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*(\d*\.?\d+)\s*)?$)", std::regex::icase);
+            static std::regex rb(R"(\s*(\d+)\%\s*,\s*(\d+)\%\s*,\s*(\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$)", std::regex::icase);
+
+            if (std::regex_match(components, match, ra)) {
+
+                // rgb(255,0,0) rgba(255,0,0,0.5)
+                this->r = std::min(255.f, static_cast<float>(std::stoi(match[1]))) / 255;
+                this->g = std::min(255.f, static_cast<float>(std::stoi(match[2]))) / 255;
+                this->b = std::min(255.f, static_cast<float>(std::stoi(match[3]))) / 255;
+
+                return *this;
+
+            } else if (std::regex_match(components, match, rb)) {
+
+                // rgb(100%,0%,0%) rgba(100%,0%,0%,0.5)
+                this->r = std::min(100.f, static_cast<float>(std::stoi(match[1]))) / 100;
+                this->g = std::min(100.f, static_cast<float>(std::stoi(match[2]))) / 100;
+                this->b = std::min(100.f, static_cast<float>(std::stoi(match[3]))) / 100;
+
+                return *this;
+            }
+
+        } else if (name == "hsl" || name == "hsla") {
+
+            static std::regex r(R"(\s*(\d*\.?\d+)\s*,\s*(\d+)\%\s*,\s*(\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$)", std::regex::icase);
+
+            if (std::regex_match(components, match, r)) {
+
+                // hsl(120,50%,50%) hsla(120,50%,50%,0.5)
+                const auto h = std::stof(match[1]) / 360;
+                const auto s = static_cast<float>(std::stoi(match[2])) / 100;
+                const auto l = static_cast<float>(std::stoi(match[3])) / 100;
+
+                return this->setHSL(h, s, l);
+            }
+        }
+
+    } else if (std::regex_match(style, match, r2)) {
+
+        // hex color
+
+        std::string hex = match[1];
+        auto size = hex.length();
+
+        if (size == 3) {
+
+            // #ff0
+            this->r = static_cast<float>(std::stoi(std::string{hex[0]} + std::string{hex[0]}, nullptr, 16)) / 255;
+            this->g = static_cast<float>(std::stoi(std::string{hex[1]} + std::string{hex[1]}, nullptr, 16)) / 255;
+            this->b = static_cast<float>(std::stoi(std::string{hex[2]} + std::string{hex[2]}, nullptr, 16)) / 255;
+
+            return *this;
+
+        } else if (size == 6) {
+
+            // #ff0000
+            this->r = static_cast<float>(std::stoi(std::string{hex[0]} + std::string{hex[1]}, nullptr, 16)) / 255;
+            this->g = static_cast<float>(std::stoi(std::string{hex[2]} + std::string{hex[3]}, nullptr, 16)) / 255;
+            this->b = static_cast<float>(std::stoi(std::string{hex[4]} + std::string{hex[5]}, nullptr, 16)) / 255;
+
+            return *this;
+        }
+    }
+
+    if (style.length() > 0) {
+
+        return setColorName(style);
+    }
 
     return *this;
+}
+
+Color& Color::setColorName(const std::string& style) {
+
+    if (!colorKeywords.count(style)) {
+        std::cerr << "THREE.Color: Unknown color '" + style + "'" << std::endl;
+        return *this;
+    }
+
+    return setHex(colorKeywords.at(style));
 }
