@@ -2,11 +2,13 @@
 #include "threepp/math/Color.hpp"
 
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/utils/RegexUtil.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
+#include <regex>
 
 using namespace threepp;
 
@@ -269,4 +271,17 @@ std::string Color::getStyle() const {
     ss << "rgb(" << (static_cast<int>(this->r * 255) | 0) << "," << (static_cast<int>(this->g * 255) | 0) << "," << (static_cast<int>(this->b * 255) | 0) << ")";
 
     return ss.str();
+}
+
+Color& Color::setStyle(const std::string& style) {
+
+    static std::regex r1(R"(/^((?:rgb|hsl)a?)\(([^\)]*)\)/)", std::regex::icase);
+    static std::regex r2("/^\\s*(\\d+)\\%\\s*,\\s*(\\d+)\\%\\s*,\\s*(\\d+)\\%\\s*(?:,\\s*(\\d*\\.?\\d+)\\s*)?$/", std::regex::icase);
+
+
+    if (std::regex_match(style, r1)) {
+
+    } else if ()
+
+    return *this;
 }

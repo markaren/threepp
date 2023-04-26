@@ -62,6 +62,8 @@ namespace threepp {
 
         Color& randomize();
 
+        Color& setStyle(const std::string& style);
+
         [[nodiscard]] unsigned int getHex() const;
 
         [[nodiscard]] std::string getHexString() const;
