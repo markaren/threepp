@@ -50,7 +50,7 @@ namespace threepp {
         // Set to false to disable panning
         bool enablePan = true;
         float panSpeed = 1.0f;
-        bool screenSpacePanning = false;// if true, pan in screen-space
+        bool screenSpacePanning = true;// if true, pan in screen-space
         float keyPanSpeed = 7.f;        // pixels moved per arrow key push
 
         // Set to true to automatically rotate around the target
