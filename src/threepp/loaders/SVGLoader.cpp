@@ -60,7 +60,8 @@ namespace {
 
             auto geometry = ShapeGeometry::create(s.toShapes(false, noHoles));
             auto mesh = Mesh::create(geometry, material);
-            group->name = shape->id;
+            mesh->name = shape->id;
+
             group->add(mesh);
         }
         return group;
