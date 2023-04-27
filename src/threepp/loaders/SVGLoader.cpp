@@ -25,6 +25,10 @@ namespace {
         auto group = Group::create();
         for (auto shape = image->shapes; shape != nullptr; shape = shape->next) {
 
+            if (!(shape->flags & NSVG_FLAGS_VISIBLE)) continue;
+
+            if (shape->fill.type != NSVG_PAINT_COLOR) continue ;
+
             ShapePath s;
             bool noHoles = false;
             for (auto path = shape->paths; path != nullptr; path = path->next) {
@@ -56,6 +60,7 @@ namespace {
 
             auto geometry = ShapeGeometry::create(s.toShapes(false, noHoles));
             auto mesh = Mesh::create(geometry, material);
+            group->name = shape->id;
             group->add(mesh);
         }
         return group;
