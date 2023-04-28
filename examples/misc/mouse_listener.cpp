@@ -37,12 +37,12 @@ namespace {
 int main() {
 
     Canvas canvas;
+    Clock clock;
 
-    float t = 0;
-    MyListener l{t};
+    MyListener l{clock.elapsedTime};
     canvas.addMouseListener(&l);
 
-    canvas.animate([&](float dt) {
-        t += dt;
+    canvas.animate([&]() {
+        clock.getElapsedTime();
     });
 }

@@ -123,7 +123,7 @@ struct TextureLoader::Impl {
 TextureLoader::TextureLoader(bool useCache)
     : pimpl_(std::make_unique<Impl>(useCache)) {}
 
-[[deprecated("Function 'loadTexture' deprecated. Use 'load'")]] std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
+std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
 
     std::cerr << "[TextureLoader] Function 'loadTexture' deprecated. Use 'load' instead" << std::endl;
 

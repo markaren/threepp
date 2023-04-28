@@ -87,9 +87,10 @@ int main() {
 
     FPSCounter counter;
 
+    Clock clock;
     Raycaster raycaster;
     std::unordered_map<int, bool> map;
-    canvas.animate([&](float t, float dt) {
+    canvas.animate([&]() {
 
         raycaster.setFromCamera(mouse, camera);
         auto intersects = raycaster.intersectObject(mesh.get());
@@ -103,7 +104,7 @@ int main() {
             }
         }
 
-        counter.update(t);
+        counter.update(clock.getElapsedTime());
         handle.setText("FPS: " + std::to_string(counter.fps));
 
         renderer.render(scene, camera);

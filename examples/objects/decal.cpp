@@ -164,7 +164,7 @@ int main() {
     auto decalMat = decalMaterial();
 
     Raycaster raycaster;
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
 
         raycaster.setFromCamera(mouseListener.mouse, camera);
         auto intersects = raycaster.intersectObject(mesh, false);

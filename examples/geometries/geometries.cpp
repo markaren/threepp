@@ -165,7 +165,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         for (auto& m : meshes) {
             m->rotation.y += 1 * dt;
         }

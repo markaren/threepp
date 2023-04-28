@@ -15,6 +15,8 @@ namespace threepp {
         explicit TextureLoader(bool useCache = true);
 
         std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY = true);
+
+        [[deprecated("Function 'loadTexture' deprecated. Use 'load'")]]
         std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, bool flipY = true);
         std::shared_ptr<Texture> loadFromMemory(const std::string& name, std::vector<unsigned char> data, int nSize, bool flipY = true);
 

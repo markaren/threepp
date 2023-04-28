@@ -7,6 +7,12 @@
 
 namespace threepp {
 
+    struct HSL {
+        float h{};
+        float s{};
+        float l{};
+    };
+
     class Color {
 
     public:
@@ -25,6 +31,8 @@ namespace threepp {
         Color& setScalar(float scalar);
 
         Color& setRGB(float r, float g, float b);
+
+        Color& setHSL(float h, float s, float l);
 
         Color& setHex(unsigned int hex);
 
@@ -50,7 +58,19 @@ namespace threepp {
 
         Color& lerpColors(const Color& color1, const Color& color2, float alpha);
 
+        HSL& getHSL(HSL& target) const;
+
         Color& randomize();
+
+        Color& setStyle(const std::string& style);
+
+        [[nodiscard]] unsigned int getHex() const;
+
+        [[nodiscard]] std::string getHexString() const;
+
+        [[nodiscard]] std::string getStyle() const;
+
+        Color& setColorName(const std::string& style);
 
         [[nodiscard]] bool equals(const Color& c) const;
 
@@ -201,6 +221,7 @@ namespace threepp {
             plum = 0xDDA0DD,
             powderblue = 0xB0E0E6,
             purple = 0x800080,
+            rebeccapurple = 0x663399,
             red = 0xFF0000,
             rosybrown = 0xBC8F8F,
             royalblue = 0x4169E1,

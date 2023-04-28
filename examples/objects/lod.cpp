@@ -35,7 +35,7 @@ int main() {
     renderer.enableTextRendering();
     auto& handle = renderer.textHandle();
 
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
 
         handle.setText("LOD level: " + std::to_string(lod->getCurrentLevel()));
 

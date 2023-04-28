@@ -7,5 +7,5 @@ target_link_libraries(cubic_bezier_curve PUBLIC threepp)
 
 if (nlohmann_json_FOUND)
     add_executable(fonts core/fonts.cpp)
-    target_link_libraries(fonts PUBLIC threepp)
+    target_link_libraries(fonts PUBLIC threepp nlohmann_json::nlohmann_json)
 endif()

@@ -30,9 +30,9 @@ namespace {
         ImageLoader imageLoader;
         std::optional<Image> favicon;
         if (customIcon) {
-            favicon = imageLoader.load(*customIcon, 4);
+            favicon = imageLoader.load(*customIcon, 4, false);
         } else {
-            favicon = imageLoader.load(faviconSource(), 4);
+            favicon = imageLoader.load(faviconSource(), 4, false);
         }
         if (favicon) {
             GLFWimage images[1];
