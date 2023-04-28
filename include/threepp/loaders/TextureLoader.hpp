@@ -3,6 +3,7 @@
 #define THREEPP_TEXTURELOADER_HPP
 
 #include "threepp/textures/Texture.hpp"
+#include "threepp/utils/URLFetcher.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -21,9 +22,8 @@ namespace threepp {
 
         std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY = true);
 
-#ifdef THREEPP_WITH_CURL
         std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY = true);
-#endif
+
         void clearCache();
 
         ~TextureLoader();
