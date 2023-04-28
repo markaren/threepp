@@ -410,9 +410,7 @@ target_link_libraries(threepp
         PRIVATE
         glad::glad
         glfw::glfw)
-if (nlohmann_json_FOUND)
-    target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
-endif()
+
 if (CURL_FOUND)
     target_link_libraries(threepp PRIVATE CURL::libcurl)
     target_compile_definitions(threepp PUBLIC "THREEPP_WITH_CURL")

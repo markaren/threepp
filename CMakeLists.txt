@@ -26,7 +26,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG QUIET)
 find_package(CURL CONFIG QUIET)
 find_package(assimp CONFIG QUIET)
 find_package(stb CONFIG QUIET)
