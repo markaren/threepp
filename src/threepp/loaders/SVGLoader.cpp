@@ -30,7 +30,6 @@ namespace {
             if (shape->fill.type != NSVG_PAINT_COLOR) continue ;
 
             ShapePath s;
-            bool noHoles = false;
             for (auto path = shape->paths; path != nullptr; path = path->next) {
 
                 Vector2 start;
@@ -46,10 +45,6 @@ namespace {
                     s.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
                 }
 
-                if (path->closed) {
-                    s.moveTo(start.x, start.y);
-                    noHoles = true;
-                }
             }
             auto material = MeshBasicMaterial::create(
                     {{"color", getColor(shape->fill)},
@@ -58,7 +53,7 @@ namespace {
                      {"side", DoubleSide},
                      {"depthWrite", false}});
 
-            auto geometry = ShapeGeometry::create(s.toShapes(false, noHoles));
+            auto geometry = ShapeGeometry::create(s.toShapes(false, true));
             auto mesh = Mesh::create(geometry, material);
             mesh->name = shape->id;
 
