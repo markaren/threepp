@@ -76,20 +76,22 @@ struct TextureLoader::Impl {
 
         bool isJPEG = checkIsJPEG(url);
 
-        std::vector<unsigned char> stream;
-
         utils::UrlFetcher urlFetcher;
+        std::vector<unsigned char> stream;
         bool res = urlFetcher.fetch(url, stream);
 
         if (res && !stream.empty()) {
-            auto image = imageLoader_.load(stream);
+
+            auto image = imageLoader_.load(stream, flipY);
             auto texture = Texture::create(image);
 
             texture->format = isJPEG ? RGBFormat : RGBAFormat;
             texture->needsUpdate();
+
             if (useCache_) cache_[url] = texture;
 
             return texture;
+
         } else {
 
             std::cerr << "[TextureLoader] Failed loading texture from URL: " << url << std::endl;
