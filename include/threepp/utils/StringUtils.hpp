@@ -3,7 +3,6 @@
 #define THREEPP_STRINGUTILS_HPP
 
 #include <algorithm>
-#include <regex>
 #include <sstream>
 #include <string>
 #include <vector>
