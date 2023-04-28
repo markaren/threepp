@@ -29,16 +29,27 @@ struct TextureLoader::Impl {
 
     explicit Impl(bool useCache): useCache_(useCache) {}
 
+    std::shared_ptr<Texture> checkCache(const std::string& name) {
+
+        std::shared_ptr<Texture> tex;
+
+        if (useCache_ && cache_.count(name)) {
+            auto cached = cache_[name];
+            if (!cached.expired()) {
+                tex = cached.lock();
+            } else {
+                cache_.erase(name);
+            }
+        }
+
+        return tex;
+    }
+
     std::shared_ptr<Texture> load(const std::filesystem::path& path, bool flipY) {
 
-        if (useCache_ && cache_.count(path.string())) {
-            auto cached = cache_[path.string()];
-            if (!cached.expired()) {
-                auto tex = cached.lock();
-                return tex;
-            } else {
-                cache_.erase(path.string());
-            }
+        if (auto cachedTexture = checkCache(path.string())) {
+
+            return cachedTexture;
         }
 
         if (!std::filesystem::exists(path)) {
@@ -63,14 +74,9 @@ struct TextureLoader::Impl {
 
     std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY) {
 
-        if (useCache_ && cache_.count(name)) {
-            auto cached = cache_[name];
-            if (!cached.expired()) {
-                auto tex = cached.lock();
-                return tex;
-            } else {
-                cache_.erase(name);
-            }
+        if (auto cachedTexture = checkCache(name)) {
+
+            return cachedTexture;
         }
 
         bool isJPEG = checkIsJPEG(name);
@@ -90,14 +96,9 @@ struct TextureLoader::Impl {
 
     std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY) {
 
-        if (useCache_ && cache_.count(url)) {
-            auto cached = cache_[url];
-            if (!cached.expired()) {
-                auto tex = cached.lock();
-                return tex;
-            } else {
-                cache_.erase(url);
-            }
+        if (auto cachedTexture = checkCache(url)) {
+
+            return cachedTexture;
         }
 
         bool isJPEG = checkIsJPEG(url);
@@ -108,7 +109,7 @@ struct TextureLoader::Impl {
 
         if (res && !stream.empty()) {
 
-            auto image = imageLoader_.load(stream, flipY);
+            auto image = imageLoader_.load(stream, isJPEG ? 3 : 4, flipY);
             auto texture = Texture::create(image);
 
             texture->format = isJPEG ? RGBFormat : RGBAFormat;
@@ -130,9 +131,8 @@ struct TextureLoader::Impl {
 TextureLoader::TextureLoader(bool useCache)
     : pimpl_(std::make_unique<Impl>(useCache)) {}
 
-std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
 
-    std::cerr << "[TextureLoader] Function 'loadTexture' deprecated. Use 'load' instead" << std::endl;
+std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
 
     return pimpl_->load(path, flipY);
 }
@@ -147,12 +147,10 @@ std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, 
     return pimpl_->loadFromMemory(name, data, flipY);
 }
 
-#ifdef THREEPP_WITH_CURL
 std::shared_ptr<Texture> TextureLoader::loadFromUrl(const std::string& url, bool flipY) {
 
     return pimpl_->loadFromUrl(url, flipY);
 }
-#endif
 
 void TextureLoader::clearCache() {
 
