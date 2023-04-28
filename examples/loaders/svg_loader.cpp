@@ -1,7 +1,76 @@
 #include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/threepp.hpp"
 
+#ifdef HAS_IMGUI
+#include "threepp/extras/imgui/imgui_context.hpp"
+#endif
+
 using namespace threepp;
+
+namespace {
+
+#ifdef HAS_IMGUI
+
+    struct MyUI: public imgui_context {
+
+    public:
+        bool mouseHover = false;
+
+        explicit MyUI(void* ptr): imgui_context(ptr) {}
+
+        [[nodiscard]] bool newSelection() const {
+            return lastSelectedIndex != selectedIndex;
+        }
+
+        [[nodiscard]] std::string selected() const {
+            return names[selectedIndex];
+        }
+
+    protected:
+        void onRender() override {
+
+            lastSelectedIndex = selectedIndex;
+
+            ImGui::SetNextWindowPos({}, 0, {});
+            ImGui::SetNextWindowSize({230, 0}, 0);
+
+            ImGui::Begin("SVGLoader");
+
+            if (ImGui::BeginCombo("SVG file", names[selectedIndex].c_str())) {
+                for (int i = 0; i < names.size(); ++i) {
+                    const bool isSelected = (selectedIndex == i);
+                    if (ImGui::Selectable(names[i].c_str(), isSelected)) {
+                        selectedIndex = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            mouseHover = ImGui::IsWindowHovered();
+
+            ImGui::End();
+        }
+
+    private:
+        int lastSelectedIndex = -1;
+        int selectedIndex = 0;
+        std::vector<std::string> names{"tiger.svg", "threejs.svg", "hexagon.svg"};
+    };
+
+#endif
+
+    auto loadSvg(const std::string& name) {
+        SVGLoader loader;
+        auto svg = loader.load("data/models/svg/" + name);
+        svg->scale.multiplyScalar(0.25f);
+        svg->position.x = -70;
+        svg->position.y = 70;
+        svg->scale.y *= -1;
+
+        return svg;
+    }
+
+}// namespace
 
 int main() {
 
@@ -18,13 +87,7 @@ int main() {
     gridHelper->rotation.x = math::PI / 2;
     scene->add(gridHelper);
 
-    SVGLoader loader;
-    auto svg = loader.load("data/models/svg/tiger.svg");
-    svg->scale.multiplyScalar(0.25f);
-    svg->position.x = -70;
-    svg->position.y = 70;
-    svg->scale.y *= -1;
-    scene->add(svg);
+    std::shared_ptr<Object3D> svg;
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
@@ -34,7 +97,29 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
+#ifdef HAS_IMGUI
+    MyUI ui(canvas.window_ptr());
+#else
+    svg = loadSvg("tiger.svg");
+    scene->add(svg);
+#endif
+
     canvas.animate([&]() {
         renderer.render(scene, camera);
+
+#ifdef HAS_IMGUI
+
+        if (ui.newSelection()) {
+            if (svg) {
+                svg->removeFromParent();
+            }
+
+            svg = loadSvg(ui.selected());
+            scene->add(svg);
+        }
+
+        ui.render();
+        controls.enabled = !ui.mouseHover;
+#endif
     });
 }
