@@ -13,6 +13,7 @@
 #include <assimp/scene.h>
 
 #include <filesystem>
+#include <sstream>
 
 namespace threepp {
 
@@ -36,6 +37,39 @@ namespace threepp {
     private:
         TextureLoader texLoader_;
         Assimp::Importer importer_;
+
+        std::shared_ptr<Texture> loadTexture(const aiScene* aiScene, const std::filesystem::path& path, const std::string& name) {
+
+            std::shared_ptr<Texture> tex;
+
+            if (name[0] == '*') {
+
+                // embedded texture
+                const auto embed = aiScene->GetEmbeddedTexture(name.c_str());
+
+                std::stringstream ss;
+                ss << embed->mFilename.C_Str() << "." << embed->achFormatHint;
+
+                if (embed->mHeight == 0) {
+
+                    std::vector<unsigned char> data(embed->mWidth);
+                    std::copy((unsigned char*) embed->pcData, (unsigned char*) embed->pcData + data.size(), data.begin());
+                    tex = texLoader_.loadFromMemory(ss.str(), data);
+
+                } else {
+
+                    std::vector<unsigned char> data(embed->mWidth * embed->mHeight);
+                    std::copy((unsigned char*) embed->pcData, (unsigned char*) embed->pcData + data.size(), data.begin());
+                    tex = texLoader_.loadFromMemory(ss.str(), data);
+                }
+            } else {
+
+                auto texPath = path.parent_path() / name;
+                tex = texLoader_.load(texPath);
+            }
+
+            return tex;
+        }
 
         void parseNodes(const std::filesystem::path& path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 
@@ -106,9 +140,7 @@ namespace threepp {
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
-                            auto texPath = path.parent_path() / p.C_Str();
-                            auto tex = texLoader_.load(texPath);
-                            //                        tex->encoding = sRGBEncoding;
+                            auto tex = loadTexture(aiScene, path, p.C_Str());
                             std::dynamic_pointer_cast<MaterialWithMap>(material)->map = tex;
                         }
                     } else {
@@ -122,9 +154,7 @@ namespace threepp {
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
-                            auto texPath = path.parent_path() / p.C_Str();
-                            auto tex = texLoader_.load(texPath);
-                            //                        tex->encoding = sRGBEncoding;
+                            auto tex = loadTexture(aiScene, path, p.C_Str());
                             m->emissiveMap = tex;
                         }
                     } else {
@@ -136,9 +166,7 @@ namespace threepp {
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
-                            auto texPath = path.parent_path() / p.C_Str();
-                            auto tex = texLoader_.load(texPath);
-                            //                        tex->encoding = sRGBEncoding;
+                            auto tex = loadTexture(aiScene, path, p.C_Str());
                             m->specularMap = tex;
                         }
                     } else {
@@ -158,14 +186,14 @@ namespace threepp {
                         m->emissiveIntensity = emmisiveIntensity;
                     }
 
-//                    C_STRUCT aiColor4D ambient;
-//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
-//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
-//                    }
-//
-//                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
-//                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
-//                    }
+                    //                    C_STRUCT aiColor4D ambient;
+                    //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
+                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
+                    //                    }
+                    //
+                    //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
+                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
+                    //                    }
 
                     float opacity;
                     if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity)) {
