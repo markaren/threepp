@@ -289,6 +289,11 @@ struct Canvas::Impl {
     }
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+            glfwSetWindowShouldClose(w, GLFW_TRUE);
+            return;
+        }
+
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
         if (p->io.preventKeyboardEvent && (*p->io.preventKeyboardEvent)()) {
