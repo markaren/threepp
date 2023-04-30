@@ -27,7 +27,7 @@ namespace {
 
             if (!(shape->flags & NSVG_FLAGS_VISIBLE)) continue;
 
-            if (shape->fill.type != NSVG_PAINT_COLOR) continue ;
+            if (shape->fill.type != NSVG_PAINT_COLOR) continue;
 
             ShapePath s;
             for (auto path = shape->paths; path != nullptr; path = path->next) {
@@ -42,12 +42,12 @@ namespace {
                         s.moveTo(start.x, start.y);
                         begin = false;
                     }
+                    s.color = getColor(shape->fill);
                     s.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
                 }
-
             }
             auto material = MeshBasicMaterial::create(
-                    {{"color", getColor(shape->fill)},
+                    {{"color", s.color},
                      {"opacity", shape->opacity},
                      {"transparent", shape->opacity != 1},
                      {"side", DoubleSide},

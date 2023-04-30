@@ -59,7 +59,7 @@ namespace {
 
 #endif
 
-    auto loadSvg(const std::string& name) {
+    auto loadSvg(const std::string& name = "tiger.svg") {
         SVGLoader loader;
         auto svg = loader.load("data/models/svg/" + name);
         svg->scale.multiplyScalar(0.25f);
@@ -100,7 +100,7 @@ int main() {
 #ifdef HAS_IMGUI
     MyUI ui(canvas.window_ptr());
 #else
-    svg = loadSvg("tiger.svg");
+    svg = loadSvg();
     scene->add(svg);
 #endif
 
