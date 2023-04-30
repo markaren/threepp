@@ -9,6 +9,9 @@
 
 namespace threepp {
 
+    using MouseCaptureCallback = std::function<bool(void)>;
+    using ScrollCaptureCallback = std::function<bool(void)>;
+
     struct MouseEvent {
 
         const int button;

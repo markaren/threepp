@@ -30,7 +30,6 @@ find_package(nlohmann_json CONFIG QUIET)
 find_package(CURL CONFIG QUIET)
 find_package(assimp CONFIG QUIET)
 find_package(stb CONFIG QUIET)
-find_package(imgui CONFIG QUIET)
 
 if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
     add_library(glfw::glfw ALIAS glfw)

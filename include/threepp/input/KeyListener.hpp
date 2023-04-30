@@ -7,6 +7,8 @@
 
 namespace threepp {
 
+    using KeyboardCaptureCallback = std::function<bool(void)>;
+
     struct KeyEvent {
 
         const int key;

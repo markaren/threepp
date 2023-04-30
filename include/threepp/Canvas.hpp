@@ -50,9 +50,15 @@ namespace threepp {
 
         bool removeKeyListener(const KeyListener* listener);
 
+        void registerKeyboardCapture(KeyboardCaptureCallback* callback);
+
         void addMouseListener(MouseListener* listener);
 
         bool removeMouseListener(const MouseListener* listener);
+
+        void registerMouseCapture(MouseCaptureCallback* callback);
+
+        void registerScrollCapture(ScrollCaptureCallback* callback);
 
         void animate(const std::function<void()>& f);
 

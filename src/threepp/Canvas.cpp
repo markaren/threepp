@@ -5,10 +5,6 @@
 #include "threepp/core/Clock.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
-#ifdef THREEPP_WITH_IMGUI
-  #include "imgui.h"
-#endif
-
 #include "threepp/favicon.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -60,6 +56,12 @@ struct Canvas::Impl {
     std::optional<std::function<void(WindowSize)>> resizeListener;
     std::vector<KeyListener*> keyListeners;
     std::vector<MouseListener*> mouseListeners;
+
+    struct IOContext {
+        MouseCaptureCallback* preventMouseEvent;
+        ScrollCaptureCallback* preventScrollEvent;
+        KeyboardCaptureCallback* preventKeyboardEvent;
+    } io;
 
     explicit Impl(const Canvas::Parameters& params): size_(params.size_) {
         glfwSetErrorCallback(error_callback);
@@ -187,6 +189,10 @@ struct Canvas::Impl {
         return false;
     }
 
+    void registerKeyboardCapture(KeyboardCaptureCallback* callback) {
+        io.preventKeyboardEvent = callback;
+    }
+
     void addMouseListener(MouseListener* listener) {
         auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
         if (find == mouseListeners.end()) {
@@ -201,6 +207,14 @@ struct Canvas::Impl {
             return true;
         }
         return false;
+    }
+
+    void registerMouseCapture(MouseCaptureCallback* callback) {
+        io.preventMouseEvent = callback;
+    }
+
+    void registerScrollCapture(ScrollCaptureCallback* callback) {
+        io.preventScrollEvent = callback;
     }
 
     void invokeLater(const std::function<void()>& f, float t) {
@@ -223,15 +237,12 @@ struct Canvas::Impl {
     }
 
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
-        #ifdef THREEPP_WITH_IMGUI
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.WantCaptureMouse) {
-                // Let imgui capture the mouse events if the user interacts with a GUI element
-                return;
-            }
-        #endif
-
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (p->io.preventScrollEvent && (*p->io.preventScrollEvent)()) {
+            return;
+        }
+
         auto listeners = p->mouseListeners;
         if (listeners.empty()) return;
         Vector2 delta{(float) xoffset, (float) yoffset};
@@ -241,15 +252,11 @@ struct Canvas::Impl {
     }
 
     static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
-        #ifdef THREEPP_WITH_IMGUI
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.WantCaptureMouse) {
-                // Let imgui capture the mouse events if the user interacts with a GUI element
-                return;
-            }
-        #endif
-
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        
+        if (p->io.preventMouseEvent && (*p->io.preventMouseEvent)()) {
+            return;
+        }
 
         auto listeners = p->mouseListeners;
         for (auto l : listeners) {
@@ -268,15 +275,12 @@ struct Canvas::Impl {
     }
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
-        #ifdef THREEPP_WITH_IMGUI
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.WantCaptureMouse) {
-                // Let imgui capture the mouse events if the user interacts with a GUI element
-                return;
-            }
-        #endif
-
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (p->io.preventMouseEvent && (*p->io.preventMouseEvent)()) {
+            return;
+        }
+
         p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
         auto listeners = p->mouseListeners;
         for (auto l : listeners) {
@@ -285,20 +289,12 @@ struct Canvas::Impl {
     }
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-            glfwSetWindowShouldClose(w, GLFW_TRUE);
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (p->io.preventKeyboardEvent && (*p->io.preventKeyboardEvent)()) {
             return;
         }
 
-        #ifdef THREEPP_WITH_IMGUI
-            ImGuiIO& io = ImGui::GetIO();
-            if (io.WantCaptureKeyboard) {
-                // Let imgui capture the keyboard events if the user interacts with a GUI element
-                return;
-            }
-        #endif      
-
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         if (p->keyListeners.empty()) return;
 
         KeyEvent evt{key, scancode, mods};
@@ -376,6 +372,11 @@ bool Canvas::removeKeyListener(const KeyListener* listener) {
     return pimpl_->removeKeyListener(listener);
 }
 
+void Canvas::registerKeyboardCapture(KeyboardCaptureCallback* callback) {
+
+    pimpl_->registerKeyboardCapture(callback);
+}
+
 void Canvas::addMouseListener(MouseListener* listener) {
 
     pimpl_->addMouseListener(listener);
@@ -384,6 +385,16 @@ void Canvas::addMouseListener(MouseListener* listener) {
 bool Canvas::removeMouseListener(const MouseListener* listener) {
 
     return pimpl_->removeMouseListener(listener);
+}
+
+void Canvas::registerMouseCapture(MouseCaptureCallback* callback) {
+
+    pimpl_->registerMouseCapture(callback);
+}
+
+void Canvas::registerScrollCapture(ScrollCaptureCallback* callback) {
+
+    pimpl_->registerScrollCapture(callback);
 }
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
