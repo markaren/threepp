@@ -5,6 +5,10 @@
 #include "threepp/core/Clock.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#ifdef THREEPP_WITH_IMGUI
+  #include "imgui.h"
+#endif
+
 #include "threepp/favicon.hpp"
 
 #define GLFW_INCLUDE_NONE
@@ -219,6 +223,14 @@ struct Canvas::Impl {
     }
 
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
+        #ifdef THREEPP_WITH_IMGUI
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureMouse) {
+                // Let imgui capture the mouse events if the user interacts with a GUI element
+                return;
+            }
+        #endif
+
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         auto listeners = p->mouseListeners;
         if (listeners.empty()) return;
@@ -229,6 +241,14 @@ struct Canvas::Impl {
     }
 
     static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
+        #ifdef THREEPP_WITH_IMGUI
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureMouse) {
+                // Let imgui capture the mouse events if the user interacts with a GUI element
+                return;
+            }
+        #endif
+
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
         auto listeners = p->mouseListeners;
@@ -248,6 +268,14 @@ struct Canvas::Impl {
     }
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
+        #ifdef THREEPP_WITH_IMGUI
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureMouse) {
+                // Let imgui capture the mouse events if the user interacts with a GUI element
+                return;
+            }
+        #endif
+
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
         auto listeners = p->mouseListeners;
@@ -261,6 +289,14 @@ struct Canvas::Impl {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
+
+        #ifdef THREEPP_WITH_IMGUI
+            ImGuiIO& io = ImGui::GetIO();
+            if (io.WantCaptureKeyboard) {
+                // Let imgui capture the keyboard events if the user interacts with a GUI element
+                return;
+            }
+        #endif      
 
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         if (p->keyListeners.empty()) return;
