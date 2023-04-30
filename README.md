@@ -66,6 +66,16 @@ Yay!
 
 using namespace threepp;
 
+auto createBox(const Vector3& pos, const Color& color) {
+    auto geometry = BoxGeometry::create();
+    auto material = MeshPhongMaterial::create();
+    material->color = color;
+    auto box = Mesh::create(geometry, material);
+    box->position.copy(pos);
+    
+    return box;
+}
+
 int main() {
 
     Canvas canvas;
@@ -81,25 +91,8 @@ int main() {
     scene->add(light);
 
     auto group = Group::create();
-
-    {
-        auto boxGeometry = BoxGeometry::create();
-        auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color = Color::red;
-        auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.x = -1;
-        group->add(box);
-    }
-
-    {
-        auto boxGeometry = BoxGeometry::create();
-        auto boxMaterial = MeshPhongMaterial::create();
-        boxMaterial->color = Color::green;
-        auto box = Mesh::create(boxGeometry, boxMaterial);
-        box->position.x = 1;
-        group->add(box);
-    }
-
+    group->add(createBox({-1, 0, 0}, Color::green));
+    group->add(createBox({1, 0, 0}, Color::red));
     scene->add(group);
 
     auto planeGeometry = PlaneGeometry::create(5, 5);
@@ -117,8 +110,11 @@ int main() {
         renderer.setSize(size);
     });
     
-    canvas.animate([&](float dt) {
-        group->rotation.y += 0.5f * dt;
+    Clock clock;
+    canvas.animate([&]() {
+        
+        float dt = clock.getDelta();
+        group->rotation.y += 1.f * dt;
 
         renderer.render(scene, camera);
     });
