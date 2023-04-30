@@ -53,7 +53,7 @@ namespace {
                      {"side", DoubleSide},
                      {"depthWrite", false}});
 
-            auto geometry = ShapeGeometry::create(s.toShapes(false, true));
+            auto geometry = ShapeGeometry::create(s.toShapes(true, false));
             auto mesh = Mesh::create(geometry, material);
             mesh->name = shape->id;
 
