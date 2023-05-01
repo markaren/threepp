@@ -133,6 +133,12 @@ int main() {
 
     MyUI ui(canvas, kine);
 
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
+
     Clock clock;
     canvas.animate([&]() {
 
@@ -143,7 +149,6 @@ int main() {
         if (youbot) {
 
             ui.render();
-            controls.enabled = !ui.mouseHover;
 
             auto endEffectorTransformation = kine.calculateEndEffectorTransformation(ui.values);
             endEffectorHelper->position.setFromMatrixPosition(endEffectorTransformation);
