@@ -49,6 +49,8 @@ struct Canvas::Impl {
 
     GLFWwindow* window;
 
+    IOCapture* ioCapture;
+
     WindowSize size_;
     Vector2 lastMousePos_;
 
@@ -57,13 +59,10 @@ struct Canvas::Impl {
     std::vector<KeyListener*> keyListeners;
     std::vector<MouseListener*> mouseListeners;
 
-    struct IOContext {
-        MouseCaptureCallback* preventMouseEvent;
-        ScrollCaptureCallback* preventScrollEvent;
-        KeyboardCaptureCallback* preventKeyboardEvent;
-    } io;
 
-    explicit Impl(const Canvas::Parameters& params): size_(params.size_) {
+    explicit Impl(const Canvas::Parameters& params)
+        : size_(params.size_), ioCapture(nullptr) {
+
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
@@ -189,8 +188,8 @@ struct Canvas::Impl {
         return false;
     }
 
-    void registerKeyboardCapture(KeyboardCaptureCallback* callback) {
-        io.preventKeyboardEvent = callback;
+    void setIOCapture(IOCapture* callback) {
+        callback = callback;
     }
 
     void addMouseListener(MouseListener* listener) {
@@ -209,13 +208,13 @@ struct Canvas::Impl {
         return false;
     }
 
-    void registerMouseCapture(MouseCaptureCallback* callback) {
-        io.preventMouseEvent = callback;
-    }
-
-    void registerScrollCapture(ScrollCaptureCallback* callback) {
-        io.preventScrollEvent = callback;
-    }
+//    void registerMouseCapture(MouseCaptureCallback* callback) {
+//        io.preventMouseEvent = callback;
+//    }
+//
+//    void registerScrollCapture(ScrollCaptureCallback* callback) {
+//        io.preventScrollEvent = callback;
+//    }
 
     void invokeLater(const std::function<void()>& f, float t) {
         tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
@@ -239,7 +238,7 @@ struct Canvas::Impl {
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->io.preventScrollEvent && (*p->io.preventScrollEvent)()) {
+        if (p->ioCapture && (p->ioCapture->preventScrollEvent)()) {
             return;
         }
 
@@ -254,7 +253,7 @@ struct Canvas::Impl {
     static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         
-        if (p->io.preventMouseEvent && (*p->io.preventMouseEvent)()) {
+        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
             return;
         }
 
@@ -277,7 +276,7 @@ struct Canvas::Impl {
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->io.preventMouseEvent && (*p->io.preventMouseEvent)()) {
+        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
             return;
         }
 
@@ -296,7 +295,7 @@ struct Canvas::Impl {
 
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->io.preventKeyboardEvent && (*p->io.preventKeyboardEvent)()) {
+        if (p->ioCapture && (p->ioCapture->preventKeyboardEvent)()) {
             return;
         }
 
@@ -377,9 +376,9 @@ bool Canvas::removeKeyListener(const KeyListener* listener) {
     return pimpl_->removeKeyListener(listener);
 }
 
-void Canvas::registerKeyboardCapture(KeyboardCaptureCallback* callback) {
+void Canvas::setIOCapture(IOCapture* capture) {
 
-    pimpl_->registerKeyboardCapture(callback);
+    pimpl_->ioCapture = capture;
 }
 
 void Canvas::addMouseListener(MouseListener* listener) {
@@ -390,16 +389,6 @@ void Canvas::addMouseListener(MouseListener* listener) {
 bool Canvas::removeMouseListener(const MouseListener* listener) {
 
     return pimpl_->removeMouseListener(listener);
-}
-
-void Canvas::registerMouseCapture(MouseCaptureCallback* callback) {
-
-    pimpl_->registerMouseCapture(callback);
-}
-
-void Canvas::registerScrollCapture(ScrollCaptureCallback* callback) {
-
-    pimpl_->registerScrollCapture(callback);
 }
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
