@@ -26,6 +26,16 @@ namespace threepp {
         }
     };
 
+    using MouseCaptureCallback = std::function<bool(void)>;
+    using ScrollCaptureCallback = std::function<bool(void)>;
+    using KeyboardCaptureCallback = std::function<bool(void)>;
+
+    struct IOCapture {
+        MouseCaptureCallback preventMouseEvent = [] { return false; };
+        ScrollCaptureCallback preventScrollEvent = [] { return false; };
+        KeyboardCaptureCallback preventKeyboardEvent = [] { return false; };
+    };
+
     class Canvas {
 
     public:
@@ -49,6 +59,8 @@ namespace threepp {
         void addKeyListener(KeyListener* listener);
 
         bool removeKeyListener(const KeyListener* listener);
+
+        void setIOCapture(IOCapture* callback);
 
         void addMouseListener(MouseListener* listener);
 
