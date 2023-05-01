@@ -188,10 +188,6 @@ struct Canvas::Impl {
         return false;
     }
 
-    void setIOCapture(IOCapture* callback) {
-        callback = callback;
-    }
-
     void addMouseListener(MouseListener* listener) {
         auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
         if (find == mouseListeners.end()) {
@@ -207,14 +203,6 @@ struct Canvas::Impl {
         }
         return false;
     }
-
-//    void registerMouseCapture(MouseCaptureCallback* callback) {
-//        io.preventMouseEvent = callback;
-//    }
-//
-//    void registerScrollCapture(ScrollCaptureCallback* callback) {
-//        io.preventScrollEvent = callback;
-//    }
 
     void invokeLater(const std::function<void()>& f, float t) {
         tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
