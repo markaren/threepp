@@ -48,10 +48,11 @@ int main() {
     });
     canvas.addMouseListener(&l);
 
+    Clock clock;
     Raycaster raycaster;
-    canvas.animate([&](float dt) {
+    canvas.animate([&]() {
         helper->visible = false;
-        material->rotation += 1 * dt;
+        material->rotation += 1 * clock.getDelta();
 
         raycaster.setFromCamera(mouse, camera.get());
         auto intersects = raycaster.intersectObject(sprites.get(), true);

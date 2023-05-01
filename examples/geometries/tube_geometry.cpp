@@ -55,8 +55,9 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
-        mesh->rotation.y += 1 * dt;
+    Clock clock;
+    canvas.animate([&]() {
+        mesh->rotation.y += 1 * clock.getDelta();
 
         renderer.render(scene, camera);
     });

@@ -77,7 +77,12 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float t, float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+        float t = clock.elapsedTime;
+
         knot->rotation.y += 0.5f * dt;
 
         target->position.x = 5 * std::sin(t);

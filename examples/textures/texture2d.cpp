@@ -2,6 +2,8 @@
 #include "threepp/objects/Reflector.hpp"
 #include "threepp/threepp.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 int main() {
@@ -26,11 +28,13 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-#ifdef THREEPP_WITH_CURL
+
     boxMaterial->map = tl.loadFromUrl("https://raw.githubusercontent.com/mrdoob/three.js/r129/examples/textures/crate.gif");
-#else
-    boxMaterial->map = tl.load("data/textures/crate.gif");
-#endif
+    if (!boxMaterial->map) {
+        std::cout << "Failed loading crate.gif from url. Using local file.." << std::endl;
+        boxMaterial->map = tl.load("data/textures/crate.gif");
+    }
+
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
     scene->add(box);
@@ -56,7 +60,10 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+        float dt = clock.getDelta();
+
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;
 

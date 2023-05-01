@@ -31,20 +31,21 @@ namespace {
 int main() {
 
     Canvas canvas;
+    Clock clock;
 
-    float t = 0;
-    MyListener l{t};
+    MyListener l{clock.elapsedTime};
     canvas.addKeyListener(&l);
 
     bool finish = false;
-    canvas.animate([&](float dt) {
-        t += dt;
+    canvas.animate([&]() {
 
-        if (t > 2 && t < 4) {
+        clock.getElapsedTime();
+
+        if (clock.elapsedTime > 2 && clock.elapsedTime < 4) {
             if (canvas.removeKeyListener(&l)) {
                 std::cout << "removed listener" << std::endl;
             }
-        } else if (!finish && t > 5) {
+        } else if (!finish && clock.elapsedTime > 5) {
             std::cout << "re-added listener" << std::endl;
             canvas.addKeyListener(&l);
             finish = true;

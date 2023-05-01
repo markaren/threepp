@@ -39,7 +39,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         mesh->rotation.z += 1 * dt;
 
         renderer.render(scene, camera);

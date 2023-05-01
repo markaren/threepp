@@ -126,7 +126,11 @@ int main() {
     scene->add(targetHelper);
 
 #endif
-    canvas.animate([&](float dt) {
+    Clock clock;
+    canvas.animate([&]() {
+
+        float dt = clock.getDelta();
+
         renderer.render(scene, camera);
 
         if (crane) {
