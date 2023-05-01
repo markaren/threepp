@@ -33,6 +33,7 @@ set(publicHeaders
         "threepp/extras/ShapeUtils.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
+        "threepp/extras/core/Font.hpp"
         "threepp/extras/core/Interpolations.hpp"
         "threepp/extras/core/Path.hpp"
         "threepp/extras/core/Shape.hpp"
@@ -155,6 +156,7 @@ set(publicHeaders
         "threepp/textures/Texture.hpp"
 
         "threepp/utils/BufferGeometryUtils.hpp"
+        "threepp/utils/StringUtils.hpp"
         "threepp/utils/ThreadPool.hpp"
         "threepp/utils/URLFetcher.hpp"
 
@@ -221,7 +223,6 @@ set(privateHeaders
         "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/RegexUtil.hpp"
-        "threepp/utils/StringUtils.hpp"
 
         )
 
@@ -247,6 +248,7 @@ set(sources
         "threepp/extras/ShapeUtils.cpp"
         "threepp/extras/core/Curve.cpp"
         "threepp/extras/core/CurvePath.cpp"
+        "threepp/extras/core/Font.cpp"
         "threepp/extras/core/Path.cpp"
         "threepp/extras/core/Shape.cpp"
         "threepp/extras/core/ShapePath.cpp"
@@ -399,14 +401,6 @@ set(sources
 
         )
 
-if (nlohmann_json_FOUND)
-    list(APPEND sources "threepp/loaders/FontLoader.cpp" "threepp/extras/core/Font.cpp")
-endif()
-
-if (CURL_FOUND)
-    list(APPEND sources "threepp/utils/URLFetcher.cpp")
-endif()
-
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
@@ -416,13 +410,6 @@ target_link_libraries(threepp
         PRIVATE
         glad::glad
         glfw::glfw)
-if (nlohmann_json_FOUND)
-    target_link_libraries(threepp PRIVATE nlohmann_json::nlohmann_json)
-endif()
-if (CURL_FOUND)
-    target_link_libraries(threepp PRIVATE CURL::libcurl)
-    target_compile_definitions(threepp PUBLIC "THREEPP_WITH_CURL")
-endif()
 if(UNIX)
     target_link_libraries(threepp PRIVATE pthread)
 endif()

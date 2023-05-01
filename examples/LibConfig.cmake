@@ -1,5 +1,8 @@
 find_package(imgui CONFIG)
 find_package(Bullet CONFIG)
+find_package(CURL CONFIG QUIET)
+find_package(assimp CONFIG QUIET)
+find_package(nlohmann_json CONFIG QUIET)
 
 if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
     add_library(Bullet::Bullet INTERFACE IMPORTED)
