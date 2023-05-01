@@ -156,6 +156,7 @@ int main() {
                 targetHelper->visible = true;
             }
 
+            crane->controllerEnabled = ui.enableController;
             crane->setTargetValues(asAngles(ui.values, Angle::Repr::DEG));
 #endif
 
