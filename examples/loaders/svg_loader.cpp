@@ -14,8 +14,6 @@ namespace {
     struct MyUI: public imgui_context {
 
     public:
-        bool mouseHover = false;
-
         explicit MyUI(void* ptr): imgui_context(ptr) {}
 
         [[nodiscard]] bool newSelection() const {
@@ -45,8 +43,6 @@ namespace {
                 }
                 ImGui::EndCombo();
             }
-
-            mouseHover = ImGui::IsWindowHovered();
 
             ImGui::End();
         }
@@ -99,6 +95,12 @@ int main() {
 
 #ifdef HAS_IMGUI
     MyUI ui(canvas.window_ptr());
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
 #else
     svg = loadSvg();
     scene->add(svg);
@@ -119,7 +121,6 @@ int main() {
         }
 
         ui.render();
-        controls.enabled = !ui.mouseHover;
 #endif
     });
 }
