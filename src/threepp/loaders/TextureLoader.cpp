@@ -2,7 +2,6 @@
 #include "threepp/loaders/TextureLoader.hpp"
 
 #include "threepp/loaders/ImageLoader.hpp"
-#include "threepp/utils/URLFetcher.hpp"
 
 #include <iostream>
 #include <regex>
@@ -94,38 +93,6 @@ struct TextureLoader::Impl {
         return texture;
     }
 
-    std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY) {
-
-        if (auto cachedTexture = checkCache(url)) {
-
-            return cachedTexture;
-        }
-
-        bool isJPEG = checkIsJPEG(url);
-
-        utils::UrlFetcher urlFetcher;
-        std::vector<unsigned char> stream;
-        bool res = urlFetcher.fetch(url, stream);
-
-        if (res && !stream.empty()) {
-
-            auto image = imageLoader_.load(stream, isJPEG ? 3 : 4, flipY);
-            auto texture = Texture::create(image);
-
-            texture->format = isJPEG ? RGBFormat : RGBAFormat;
-            texture->needsUpdate();
-
-            if (useCache_) cache_[url] = texture;
-
-            return texture;
-
-        } else {
-
-            std::cerr << "[TextureLoader] Failed loading texture from URL: " << url << std::endl;
-
-            return nullptr;
-        }
-    }
 };
 
 TextureLoader::TextureLoader(bool useCache)
@@ -145,11 +112,6 @@ std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, 
 std::shared_ptr<Texture> TextureLoader::loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY) {
 
     return pimpl_->loadFromMemory(name, data, flipY);
-}
-
-std::shared_ptr<Texture> TextureLoader::loadFromUrl(const std::string& url, bool flipY) {
-
-    return pimpl_->loadFromUrl(url, flipY);
 }
 
 void TextureLoader::clearCache() {
