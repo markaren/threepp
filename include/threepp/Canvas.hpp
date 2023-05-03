@@ -26,6 +26,16 @@ namespace threepp {
         }
     };
 
+    using MouseCaptureCallback = std::function<bool(void)>;
+    using ScrollCaptureCallback = std::function<bool(void)>;
+    using KeyboardCaptureCallback = std::function<bool(void)>;
+
+    struct IOCapture {
+        MouseCaptureCallback preventMouseEvent = [] { return false; };
+        ScrollCaptureCallback preventScrollEvent = [] { return false; };
+        KeyboardCaptureCallback preventKeyboardEvent = [] { return false; };
+    };
+
     class Canvas {
 
     public:
@@ -50,11 +60,16 @@ namespace threepp {
 
         bool removeKeyListener(const KeyListener* listener);
 
+        void setIOCapture(IOCapture* callback);
+
         void addMouseListener(MouseListener* listener);
 
         bool removeMouseListener(const MouseListener* listener);
 
         void animate(const std::function<void()>& f);
+
+        // returns false if application should quit, true otherwise
+        bool animateOnce(const std::function<void()>& f);
 
         [[deprecated("Use animate with no parameters and create a Clock object if timings are needed")]]
         void animate(const std::function<void(float)>& f);

@@ -134,8 +134,7 @@ int main() {
     MyGui ui(canvas, *planeMaterial);
 #endif
     Clock clock;
-    canvas.animate([&]() {
-
+    auto loop = [&]() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
@@ -157,5 +156,7 @@ int main() {
         }
 
 #endif
-    });
+    };
+
+    while (canvas.animateOnce(loop)) {}
 }

@@ -16,7 +16,6 @@ using namespace kine;
 
 struct MyUI: imgui_context {
 
-    bool mouseHover = false;
     bool jointMode = true;
     bool posMode = false;
     bool enableController = false;
@@ -61,7 +60,6 @@ struct MyUI: imgui_context {
 
         ImGui::Checkbox("controller", &enableController);
 
-        mouseHover = ImGui::IsWindowHovered();
         ImGui::End();
     }
 };
@@ -109,6 +107,12 @@ int main() {
 
 #ifdef HAS_IMGUI
 
+    IOCapture capture {};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
+
     auto ikSolver = std::make_unique<CCDSolver>();
     Kine kine = KineBuilder()
                         .addRevoluteJoint(Vector3::Y(), {-90.f, 90.f})
@@ -137,7 +141,6 @@ int main() {
 
 #ifdef HAS_IMGUI
             ui.render();
-            controls.enabled = !ui.mouseHover;
 
             auto endEffectorPosition = kine.calculateEndEffectorTransformation(inDegrees(crane->getValues()));
             endEffectorHelper->position.setFromMatrixPosition(endEffectorPosition);

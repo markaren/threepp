@@ -49,6 +49,8 @@ struct Canvas::Impl {
 
     GLFWwindow* window;
 
+    IOCapture* ioCapture;
+
     WindowSize size_;
     Vector2 lastMousePos_;
 
@@ -57,7 +59,10 @@ struct Canvas::Impl {
     std::vector<KeyListener*> keyListeners;
     std::vector<MouseListener*> mouseListeners;
 
-    explicit Impl(const Canvas::Parameters& params): size_(params.size_) {
+
+    explicit Impl(const Canvas::Parameters& params)
+        : size_(params.size_), ioCapture(nullptr) {
+
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
@@ -122,17 +127,25 @@ struct Canvas::Impl {
         }
     }
 
+    bool animateOnce(const std::function<void()>& f) {
+
+        if (glfwWindowShouldClose(window)) {
+            return false;
+        }
+
+        handleTasks();
+
+        f();
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+        return true;
+    }
+
     void animate(const std::function<void()>& f) {
 
-        while (!glfwWindowShouldClose(window)) {
-
-            handleTasks();
-
-            f();
-
-            glfwSwapBuffers(window);
-            glfwPollEvents();
-        }
+        while (animateOnce(f)) {}
     }
 
     void animate(const std::function<void(float)>& f) {
@@ -220,6 +233,11 @@ struct Canvas::Impl {
 
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (p->ioCapture && (p->ioCapture->preventScrollEvent)()) {
+            return;
+        }
+
         auto listeners = p->mouseListeners;
         if (listeners.empty()) return;
         Vector2 delta{(float) xoffset, (float) yoffset};
@@ -230,6 +248,10 @@ struct Canvas::Impl {
 
     static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
+            return;
+        }
 
         auto listeners = p->mouseListeners;
         for (auto l : listeners) {
@@ -249,6 +271,11 @@ struct Canvas::Impl {
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
+            return;
+        }
+
         p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
         auto listeners = p->mouseListeners;
         for (auto l : listeners) {
@@ -263,6 +290,11 @@ struct Canvas::Impl {
         }
 
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (p->ioCapture && (p->ioCapture->preventKeyboardEvent)()) {
+            return;
+        }
+
         if (p->keyListeners.empty()) return;
 
         KeyEvent evt{key, scancode, mods};
@@ -298,6 +330,11 @@ Canvas::Canvas(const std::string& name, const std::unordered_map<std::string, Pa
 void Canvas::animate(const std::function<void()>& f) {
 
     pimpl_->animate(f);
+}
+
+bool Canvas::animateOnce(const std::function<void()>& f) {
+
+    return pimpl_->animateOnce(f);
 }
 
 void Canvas::animate(const std::function<void(float)>& f) {
@@ -338,6 +375,11 @@ void Canvas::addKeyListener(KeyListener* listener) {
 bool Canvas::removeKeyListener(const KeyListener* listener) {
 
     return pimpl_->removeKeyListener(listener);
+}
+
+void Canvas::setIOCapture(IOCapture* capture) {
+
+    pimpl_->ioCapture = capture;
 }
 
 void Canvas::addMouseListener(MouseListener* listener) {

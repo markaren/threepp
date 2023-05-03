@@ -155,6 +155,12 @@ int main() {
 #ifdef HAS_IMGUI
     MyGui ui(canvas);
     std::vector<Mesh*> decals;
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
 #endif
 
     Matrix4 mouseHelper;
@@ -202,7 +208,6 @@ int main() {
         renderer.render(scene, camera);
 
 #ifdef HAS_IMGUI
-        controls.enabled = !ui.mouseHover;
 
         if (ui.clear) {
             for (auto decal : decals) {
