@@ -59,8 +59,11 @@ int main() {
     });
 
     agx::AutoInit init;
+    agx::setNumThreads(std::max(static_cast<int>(std::thread::hardware_concurrency()-1), 1));
+
     agxSDK::SimulationRef sim = new agxSDK::Simulation();
     sim->setTimeStep(1.0 / 100);
+
     auto agxVisualisation = AgxVisualisation::create(*sim);
     agxVisualisation->rotateX(-math::PI / 2);
     scene->add(agxVisualisation);
@@ -87,8 +90,11 @@ int main() {
         ImGui::End();
     });
 
+    Clock clock;
+    canvas.animate([&]() {
 
-    canvas.animate([&](float t, float dt) {
+        float t = clock.getElapsedTime();
+
         while ((sim->getTimeStamp() + sim->getTimeStep()) < t) {
             sim->stepForward();
         }
