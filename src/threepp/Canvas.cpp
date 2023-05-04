@@ -127,17 +127,25 @@ struct Canvas::Impl {
         }
     }
 
+    bool animateOnce(const std::function<void()>& f) {
+
+        if (glfwWindowShouldClose(window)) {
+            return false;
+        }
+
+        handleTasks();
+
+        f();
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+        return true;
+    }
+
     void animate(const std::function<void()>& f) {
 
-        while (!glfwWindowShouldClose(window)) {
-
-            handleTasks();
-
-            f();
-
-            glfwSwapBuffers(window);
-            glfwPollEvents();
-        }
+        while (animateOnce(f)) {}
     }
 
     void animate(const std::function<void(float)>& f) {
@@ -240,7 +248,7 @@ struct Canvas::Impl {
 
     static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        
+
         if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
             return;
         }
@@ -322,6 +330,11 @@ Canvas::Canvas(const std::string& name, const std::unordered_map<std::string, Pa
 void Canvas::animate(const std::function<void()>& f) {
 
     pimpl_->animate(f);
+}
+
+bool Canvas::animateOnce(const std::function<void()>& f) {
+
+    return pimpl_->animateOnce(f);
 }
 
 void Canvas::animate(const std::function<void(float)>& f) {

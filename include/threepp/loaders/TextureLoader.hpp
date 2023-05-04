@@ -23,8 +23,6 @@ namespace threepp {
 
         std::shared_ptr<Texture> loadFromMemory(const std::string& name, const std::vector<unsigned char>& data, bool flipY = true);
 
-        std::shared_ptr<Texture> loadFromUrl(const std::string& url, bool flipY = true);
-
         void clearCache();
 
         ~TextureLoader();

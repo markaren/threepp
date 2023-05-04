@@ -68,6 +68,9 @@ namespace threepp {
 
         void animate(const std::function<void()>& f);
 
+        // returns false if application should quit, true otherwise
+        bool animateOnce(const std::function<void()>& f);
+
         [[deprecated("Use animate with no parameters and create a Clock object if timings are needed")]]
         void animate(const std::function<void(float)>& f);
 
