@@ -63,12 +63,12 @@ bool Box2::isEmpty() const {
     return (this->max_.x < this->min_.x) || (this->max_.y < this->min_.y);
 }
 
-void Box2::getCenter(Vector2& target) {
+void Box2::getCenter(Vector2& target) const {
 
     this->isEmpty() ? target.set(0, 0) : target.addVectors(this->min_, this->max_).multiplyScalar(0.5f);
 }
 
-void Box2::getSize(Vector2& target) {
+void Box2::getSize(Vector2& target) const {
 
     this->isEmpty() ? target.set(0, 0) : target.subVectors(this->max_, this->min_);
 }

@@ -31,9 +31,9 @@ namespace threepp {
 
         [[nodiscard]] bool isEmpty() const;
 
-        void getCenter(Vector2& target);
+        void getCenter(Vector2& target) const;
 
-        void getSize(Vector2& target);
+        void getSize(Vector2& target) const;
 
         Box2& expandByPoint(const Vector2& point);
 
