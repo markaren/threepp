@@ -41,6 +41,8 @@ namespace threepp {
 
         std::vector<SVGLoader::Shape> parse(std::string text);
 
+        static std::unique_ptr<threepp::Shape> createShapes(const ShapePath& shapePath);
+
         static std::shared_ptr<BufferGeometry> pointsToStroke(const std::vector<Vector2>& points, const SVGLoader::Style& style, unsigned int arcDivisions = 12, float minDistance = 0.001f);
     };
 

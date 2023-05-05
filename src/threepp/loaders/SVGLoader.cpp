@@ -3,8 +3,10 @@
 #include "threepp/extras/core/ShapePath.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/math/Box2.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
+
 #include <iostream>
 
 #define NANOSVG_ALL_COLOR_KEYWORDS
@@ -21,6 +23,33 @@ namespace {
         return c.setRGB(c.b, c.g, c.r);
     }
 
+    enum class IntersectionLocationType {
+        ORIGIN,
+        DESTINATION,
+        BETWEEN,
+        LEFT,
+        RIGHT,
+        BEHIND,
+        BEYOND
+    };
+
+    struct ClassifyResult {
+        IntersectionLocationType loc = IntersectionLocationType::ORIGIN;
+        float t = 0;
+    } classifyResult;
+
+    struct EdgeIntersection {
+        float x;
+        float y;
+        float t;
+    };
+
+    struct Intersection {
+        std::string identifier;
+        bool isCW;
+        Vector2 point;
+    };
+
     std::string getStrokeLineCap(char c) {
         switch (c) {
             case NSVG_CAP_BUTT:
@@ -33,6 +62,7 @@ namespace {
                 return "butt";
         }
     }
+
 
     std::string getStrokeLineJoin(char c) {
         switch (c) {
@@ -70,7 +100,6 @@ namespace {
             }
 
             ShapePath& s = data.path;
-//            bool begin = true;
             for (auto path = shape->paths; path != nullptr; path = path->next) {
 
                 s.color = getColor(shape->fill);
@@ -78,18 +107,209 @@ namespace {
                 for (unsigned i = 0; i < path->npts - 1; i += 3) {
                     float* p = &path->pts[i * 2];
 
-                    if (i == 0 ) {
+                    if (i == 0) {
                         s.moveTo(p[0], p[1]);
-//                        begin = false;
                     }
 
                     s.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
-
                 }
             }
         }
 
         return shapes;
+    }
+
+    void classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
+
+        const auto ax = edgeEnd.x - edgeStart.x;
+        const auto ay = edgeEnd.y - edgeStart.y;
+        const auto bx = p.x - edgeStart.x;
+        const auto by = p.y - edgeStart.y;
+        const auto sa = ax * by - bx * ay;
+
+        if ((p.x == edgeStart.x) && (p.y == edgeStart.y)) {
+
+            classifyResult.loc = IntersectionLocationType::ORIGIN;
+            classifyResult.t = 0;
+            return;
+        }
+
+        if ((p.x == edgeEnd.x) && (p.y == edgeEnd.y)) {
+
+            classifyResult.loc = IntersectionLocationType::DESTINATION;
+            classifyResult.t = 1;
+            return;
+        }
+
+        if (sa < -std::numeric_limits<float>::epsilon()) {
+
+            classifyResult.loc = IntersectionLocationType::LEFT;
+            return;
+        }
+
+        if (sa > std::numeric_limits<float>::epsilon()) {
+
+            classifyResult.loc = IntersectionLocationType::RIGHT;
+            return;
+        }
+
+        if (((ax * bx) < 0) || ((ay * by) < 0)) {
+
+            classifyResult.loc = IntersectionLocationType::BEHIND;
+            return;
+        }
+
+        if ((std::sqrt(ax * ax + ay * ay)) < (std::sqrt(bx * bx + by * by))) {
+
+            classifyResult.loc = IntersectionLocationType::BEYOND;
+            return;
+        }
+
+        float t;
+
+        if (ax != 0) {
+
+            t = bx / ax;
+
+        } else {
+
+            t = by / ay;
+        }
+
+        classifyResult.loc = IntersectionLocationType::BETWEEN;
+        classifyResult.t = t;
+    }
+
+    std::optional<EdgeIntersection> findEdgeIntersection(const Vector2& a0, const Vector2& a1, const Vector2& b0, const Vector2& b1) {
+        const auto x1 = a0.x;
+        const auto x2 = a1.x;
+        const auto x3 = b0.x;
+        const auto x4 = b1.x;
+        const auto y1 = a0.y;
+        const auto y2 = a1.y;
+        const auto y3 = b0.y;
+        const auto y4 = b1.y;
+        const auto nom1 = (x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3);
+        const auto nom2 = (x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3);
+        const auto denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
+        const auto t1 = nom1 / denom;
+        const auto t2 = nom2 / denom;
+
+        if (((denom == 0) && (nom1 != 0)) || (t1 <= 0) || (t1 >= 1) || (t2 < 0) || (t2 > 1)) {
+
+            //1. lines are parallel or edges don't intersect
+
+            return std::nullopt;
+
+        } else if ((nom1 == 0) && (denom == 0)) {
+
+            //2. lines are colinear
+
+            //check if endpoints of edge2 (b0-b1) lies on edge1 (a0-a1)
+            for (unsigned i = 0; i < 2; i++) {
+
+                classifyPoint(i == 0 ? b0 : b1, a0, a1);
+                //find position of this endpoints relatively to edge1
+                if (classifyResult.loc == IntersectionLocationType::ORIGIN) {
+
+                    const auto& point = (i == 0 ? b0 : b1);
+                    return EdgeIntersection{point.x, point.y, classifyResult.t};
+
+                } else if (classifyResult.loc == IntersectionLocationType::BETWEEN) {
+
+                    const auto x = +((x1 + classifyResult.t * (x2 - x1)));
+                    const auto y = +((y1 + classifyResult.t * (y2 - y1)));
+                    return EdgeIntersection{
+                            x,
+                            y,
+                            classifyResult.t,
+                    };
+                }
+            }
+
+            return std::nullopt;
+
+        } else {
+
+            //3. edges intersect
+
+            for (unsigned i = 0; i < 2; i++) {
+
+                classifyPoint(i == 0 ? b0 : b1, a0, a1);
+
+                if (classifyResult.loc == IntersectionLocationType::ORIGIN) {
+
+                    const auto& point = (i == 0 ? b0 : b1);
+                    return EdgeIntersection{point.x, point.y, classifyResult.t};
+                }
+            }
+
+            const auto x = +((x1 + t1 * (x2 - x1)));
+            const auto y = +((y1 + t1 * (y2 - y1)));
+            return EdgeIntersection{x, y, t1};
+        }
+    }
+
+
+    std::vector<Vector2> getIntersections(const std::vector<Vector2>& path1, const std::vector<Vector2>& path2) {
+
+        std::vector<EdgeIntersection> intersectionsRaw;
+        std::vector<Vector2> intersections;
+
+        for (unsigned index = 1; index < path1.size(); index++) {
+
+            const auto& path1EdgeStart = path1[index - 1];
+            const auto& path1EdgeEnd = path1[index];
+
+            for (unsigned index2 = 1; index2 < path2.size(); index2++) {
+
+                const auto& path2EdgeStart = path2[index2 - 1];
+                const auto& path2EdgeEnd = path2[index2];
+
+                const auto intersection = findEdgeIntersection(path1EdgeStart, path1EdgeEnd, path2EdgeStart, path2EdgeEnd);
+
+                if (intersection && std::find_if(intersectionsRaw.begin(), intersectionsRaw.end(), [&](auto& i) {
+                                        return i.t <= intersection->t + std::numeric_limits<float>::epsilon() &&
+                                               i.t >= intersection->t - std::numeric_limits<float>::epsilon();
+                                    }) != intersectionsRaw.end()) {
+
+                    intersectionsRaw.emplace_back(intersection);
+                    intersections.emplace_back(intersection->x, intersection->y);
+                }
+            }
+        }
+
+        return intersections;
+    }
+
+    std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, paths) {
+
+        Vector2 center;
+        boundingBox.getCenter(center);
+
+        std::vector<Intersection> allIntersections;
+
+        for (const auto& path : paths) {
+
+            // check if the center of the bounding box is in the bounding box of the paths.
+            // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
+            // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
+            if (path.boundingBox.containsPoint(center)) {
+
+                const auto intersections = getIntersections(scanline, path.points);
+
+                for (const auto& p : intersections) {
+
+                    allIntersections.emplace_back({path.identifier, path.isCW, p});
+                }
+            }
+        }
+
+        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
+            return i1.point.x - i2.point.x;
+        });
+
+        return allIntersections;
     }
 
     void removeDuplicatedPoints(std::vector<Vector2>& points, float minDistance) {
@@ -766,6 +986,17 @@ std::vector<SVGLoader::Shape> SVGLoader::parse(std::string text) {
     auto data = loadSVG(image);
     nsvgDelete(image);
     return data;
+}
+
+std::unique_ptr<threepp::Shape> SVGLoader::createShapes(const ShapePath& shapePath) {
+
+    // Param shapePath: a shapepath as returned by the parse function of this class
+    // Returns Shape object
+
+    const auto BIGNUMBER = 999999999;
+
+
+    return nullptr;
 }
 
 std::shared_ptr<BufferGeometry> SVGLoader::pointsToStroke(const std::vector<Vector2>& points, const SVGLoader::Style& style, unsigned int arcDivisions, float minDistance) {
