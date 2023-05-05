@@ -6,20 +6,42 @@
 #include <memory>
 #include <string>
 
-#include "threepp/objects/Group.hpp"
+#include "threepp/extras/core/ShapePath.hpp"
 
 namespace threepp {
+
+    class BufferGeometry;
 
     class SVGLoader {
 
     public:
+        struct Style {
+            std::optional<Color> stroke;
+            float fillOpacity{1};
+            float strokeOpacity{1};
+            float strokeWidth{1};
+            float strokeMiterLimit{4};
+
+            std::string strokeLineJoin;
+            std::string strokeLineCap;
+        };
+
+        struct Shape {
+            Style style;
+            std::string id;
+            ShapePath path;
+        };
+
+
         float defaultDPI = 90;
         // Accepted units: 'mm', 'cm', 'in', 'pt', 'pc', 'px'
         std::string defaultUnit = "px";
 
-        std::shared_ptr<Group> load(const std::filesystem::path& path);
+        std::vector<SVGLoader::Shape> load(const std::filesystem::path& path);
 
-        std::shared_ptr<Group> parse(std::string text);
+        std::vector<SVGLoader::Shape> parse(std::string text);
+
+        static std::shared_ptr<BufferGeometry> pointsToStroke(const std::vector<Vector2>& points, const SVGLoader::Style& style, unsigned int arcDivisions = 12, float minDistance = 0.001f);
     };
 
 }// namespace threepp

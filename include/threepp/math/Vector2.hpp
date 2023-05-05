@@ -118,6 +118,8 @@ namespace threepp {
 
         Vector2& lerpVectors(const Vector2& v1, const Vector2& v2, float alpha);
 
+        Vector2& rotateAround(const Vector2& center, float angle);
+
         [[nodiscard]] bool isNan() const;
 
         Vector2& makeNan();

@@ -56,8 +56,53 @@ namespace {
 #endif
 
     auto loadSvg(const std::string& name = "tiger.svg") {
+
         SVGLoader loader;
-        auto svg = loader.load("data/models/svg/" + name);
+        auto shapes = loader.load("data/models/svg/" + name);
+
+        auto svg = Group::create();
+
+        for (const auto& shape : shapes) {
+
+            auto& path = shape.path;
+
+            auto material = MeshBasicMaterial::create(
+                    {{"color", path.color},
+                     {"opacity", shape.style.fillOpacity},
+                     {"transparent", shape.style.fillOpacity != 1},
+                     {"side", DoubleSide},
+                     {"depthWrite", false}});
+
+            auto geometry = ShapeGeometry::create(path.toShapes(true, false));
+            auto mesh = Mesh::create(geometry, material);
+            mesh->name = shape.id;
+
+            svg->add(mesh);
+
+//            if (shape.style.stroke) {
+//                auto strokeMaterial = MeshBasicMaterial::create(
+//                        {{"color", *shape.style.stroke},
+//                         {"opacity", shape.style.strokeOpacity},
+//                         {"transparent", shape.style.strokeOpacity != 1},
+//                         {"side", DoubleSide},
+////                         {"wireframe", true},
+//                         {"depthWrite", false}});
+//
+//                const auto& subPaths = path.getSubPaths();
+//                for (const auto& subPath : subPaths) {
+//
+//                    auto strokeGeometry = SVGLoader::pointsToStroke(subPath->getPoints(), shape.style);
+//
+//                    if (geometry) {
+//
+//                        auto strokeMesh = Mesh::create(strokeGeometry, strokeMaterial);
+//                        svg->add(strokeMesh);
+//                    }
+//
+//                }
+//            }
+        }
+
         svg->scale.multiplyScalar(0.25f);
         svg->position.x = -70;
         svg->position.y = 70;
