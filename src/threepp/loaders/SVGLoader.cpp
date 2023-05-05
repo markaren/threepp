@@ -273,7 +273,7 @@ namespace {
                                                i.t >= intersection->t - std::numeric_limits<float>::epsilon();
                                     }) != intersectionsRaw.end()) {
 
-                    intersectionsRaw.emplace_back(intersection);
+                    intersectionsRaw.emplace_back(*intersection);
                     intersections.emplace_back(intersection->x, intersection->y);
                 }
             }
@@ -282,35 +282,35 @@ namespace {
         return intersections;
     }
 
-    std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, paths) {
-
-        Vector2 center;
-        boundingBox.getCenter(center);
-
-        std::vector<Intersection> allIntersections;
-
-        for (const auto& path : paths) {
-
-            // check if the center of the bounding box is in the bounding box of the paths.
-            // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
-            // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
-            if (path.boundingBox.containsPoint(center)) {
-
-                const auto intersections = getIntersections(scanline, path.points);
-
-                for (const auto& p : intersections) {
-
-                    allIntersections.emplace_back({path.identifier, path.isCW, p});
-                }
-            }
-        }
-
-        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
-            return i1.point.x - i2.point.x;
-        });
-
-        return allIntersections;
-    }
+//    std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, paths) {
+//
+//        Vector2 center;
+//        boundingBox.getCenter(center);
+//
+//        std::vector<Intersection> allIntersections;
+//
+//        for (const auto& path : paths) {
+//
+//            // check if the center of the bounding box is in the bounding box of the paths.
+//            // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
+//            // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
+//            if (path.boundingBox.containsPoint(center)) {
+//
+//                const auto intersections = getIntersections(scanline, path.points);
+//
+//                for (const auto& p : intersections) {
+//
+//                    allIntersections.emplace_back({path.identifier, path.isCW, p});
+//                }
+//            }
+//        }
+//
+//        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
+//            return i1.point.x - i2.point.x;
+//        });
+//
+//        return allIntersections;
+//    }
 
     void removeDuplicatedPoints(std::vector<Vector2>& points, float minDistance) {
 
