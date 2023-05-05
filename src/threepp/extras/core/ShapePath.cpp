@@ -134,12 +134,9 @@ ShapePath& ShapePath::splineThru(const std::vector<Vector2>& pts) {
     return *this;
 }
 
-std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles) const {
+std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW) const {
 
     if (subPaths.empty()) return {};
-
-    if (noHoles) return toShapesNoHoles(subPaths);
-
 
     bool solid;
     std::shared_ptr<Path> tmpPath;
@@ -240,9 +237,9 @@ std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles
             }
         }
 
-        if (!toChange.empty()) {
+        if (!toChange.empty() && !ambiguous) {
 
-            if (!ambiguous) newShapeHoles = betterShapeHoles;
+            newShapeHoles = betterShapeHoles;
         }
     }
 
@@ -254,7 +251,7 @@ std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW, bool noHoles
         shapes.emplace_back(tmpShape);
         tmpHoles = newShapeHoles[i];
 
-        for (NewShapeHoles& tmpHole : tmpHoles) {
+        for (const NewShapeHoles& tmpHole : tmpHoles) {
 
             tmpShape->holes.emplace_back(tmpHole.h);
         }

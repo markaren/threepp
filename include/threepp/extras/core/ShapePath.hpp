@@ -27,7 +27,7 @@ namespace threepp {
 
         ShapePath& splineThru(const std::vector<Vector2>& pts);
 
-        [[nodiscard]] std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW = false, bool noHoles = false) const;
+        [[nodiscard]] std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW = false) const;
 
         const std::vector<std::shared_ptr<Path>>& getSubPaths() const;
 
