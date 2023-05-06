@@ -80,3 +80,16 @@ Box2& Box2::expandByPoint(const Vector2& point) {
 
     return *this;
 }
+
+bool Box2::containsPoint(const Vector2& point) const {
+    // clang-format off
+    return point.x < this->min_.x || point.x > this->max_.x ||
+                           point.y < this->min_.y || point.y > this->max_.y ? false : true;
+    // clang-format on
+}
+
+bool Box2::containsBox(const Box2& box) const {
+
+    return this->min_.x <= box.min_.x && box.max_.x <= this->max_.x &&
+           this->min_.y <= box.min_.y && box.max_.y <= this->max_.y;
+}
