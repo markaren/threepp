@@ -26,7 +26,7 @@ namespace threepp {
             std::string strokeLineCap;
         };
 
-        struct Shape {
+        struct SVGShape {
             Style style;
             std::string id;
             ShapePath path;
@@ -37,11 +37,11 @@ namespace threepp {
         // Accepted units: 'mm', 'cm', 'in', 'pt', 'pc', 'px'
         std::string defaultUnit = "px";
 
-        std::vector<SVGLoader::Shape> load(const std::filesystem::path& path);
+        std::vector<SVGLoader::SVGShape> load(const std::filesystem::path& path);
 
-        std::vector<SVGLoader::Shape> parse(std::string text);
+        std::vector<SVGLoader::SVGShape> parse(std::string text);
 
-        static std::unique_ptr<threepp::Shape> createShapes(const ShapePath& shapePath);
+        static std::unique_ptr<Shape> createShapes(const SVGShape& shapePath);
 
         static std::shared_ptr<BufferGeometry> pointsToStroke(const std::vector<Vector2>& points, const SVGLoader::Style& style, unsigned int arcDivisions = 12, float minDistance = 0.001f);
     };
