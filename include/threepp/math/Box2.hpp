@@ -37,6 +37,10 @@ namespace threepp {
 
         Box2& expandByPoint(const Vector2& point);
 
+        [[nodiscard]] bool containsPoint(const Vector2& point) const;
+
+        [[nodiscard]] bool containsBox(const Box2& box) const;
+
         friend std::ostream& operator<<(std::ostream& os, const Box2& v) {
             os << "Box2(max=" << v.min_ << ", max=" << v.max_ << ")";
             return os;
