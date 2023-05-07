@@ -71,12 +71,12 @@ namespace {
                          {"transparent", svgShape.style.fillOpacity != 1},
                          {"side", DoubleSide},
                          {"depthWrite", false}});
-                const auto shapes = path.toShapes(true);
-//                for (auto& shape : shapes) {
-                    auto geometry = ShapeGeometry::create(shapes);
+                const auto shapes = SVGLoader::createShapes(path, svgShape.style);
+                for (auto& shape : shapes) {
+                    auto geometry = ShapeGeometry::create(shape);
                     auto mesh = Mesh::create(geometry, material);
                     svg->add(mesh);
-//                }
+                }
 
 
                 if (svgShape.style.stroke) {

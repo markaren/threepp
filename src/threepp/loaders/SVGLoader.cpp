@@ -47,7 +47,6 @@ namespace {
 
     struct Intersection {
         int identifier;
-        bool isCW;
         Vector2 point;
     };
 
@@ -328,7 +327,7 @@ namespace {
 
                 for (const auto& p : intersections) {
 
-                    allIntersections.emplace_back(Intersection{path.identifier, path.isCW, p});
+                    allIntersections.emplace_back(Intersection{path.identifier, p});
                 }
             }
         }
@@ -1120,6 +1119,7 @@ std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVG
     std::vector<SimplePath> simplePaths;
     const auto& subPaths = shapePath.getSubPaths();
     std::transform(subPaths.begin(), subPaths.end(), std::back_inserter(simplePaths), [&](const auto& p) {
+
         const auto& points = p->getPoints();
         auto maxY = -BIGNUMBER;
         auto minY = BIGNUMBER;
@@ -1169,10 +1169,10 @@ std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVG
 
     // simplePaths = simplePaths.filter( sp => sp.points.length > 1 );
     for (auto it = simplePaths.begin(); it != simplePaths.end();) {
-        if (it->points.size() <= 1) {
-            it = simplePaths.erase(it);
-        } else {
+        if (it->points.size() > 1) {
             ++it;
+        } else {
+            it = simplePaths.erase(it);
         }
     }
 
@@ -1200,7 +1200,7 @@ std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVG
 
                 if (h.isHole && h._for == p.identifier) {
 
-                    const auto hole = simplePaths[h.identifier];
+                    const auto& hole = simplePaths[h.identifier];
                     auto path = std::make_shared<Path>();
                     path->curves = hole.curves;
                     shape.holes.emplace_back(path);
