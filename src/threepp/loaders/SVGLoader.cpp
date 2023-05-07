@@ -8,143 +8,28 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include "threepp/utils/StringUtils.hpp"
+
+#include "SVGTypes.hpp"
+
+#include "pugixml.hpp"
+
 #include <iostream>
 
-#define NANOSVG_ALL_COLOR_KEYWORDS
-#define NANOSVG_IMPLEMENTATION
-#include "nanosvg.h"
-
 using namespace threepp;
+using namespace threepp::svg;
 
 namespace {
 
-    Color getColor(NSVGpaint paint) {
+    std::vector<std::string> units{"mm", "cm", "in", "pt", "pc", "px"};
 
-        Color c = paint.color;
-        return c.setRGB(c.b, c.g, c.r);
-    }
-
-    enum class IntersectionLocationType {
-        ORIGIN,
-        DESTINATION,
-        BETWEEN,
-        LEFT,
-        RIGHT,
-        BEHIND,
-        BEYOND
-    };
-
-    struct ClassifyResult {
-        IntersectionLocationType loc = IntersectionLocationType::ORIGIN;
-        float t = 0;
-    } classifyResult;
-
-    struct EdgeIntersection {
-        float x;
-        float y;
-        float t;
-    };
-
-    struct Intersection {
-        int identifier;
-        Vector2 point;
-    };
-
-    struct AHole {
-        int identifier;
-        bool isHole;
-        std::optional<int> _for;
-    };
-
-    struct SimplePath {
-        std::vector<std::shared_ptr<Curve2>> curves;
-        std::vector<Vector2> points;
-        bool isCW;
-        int identifier;
-        Box2 boundingBox;
-    };
-
-    std::string getStrokeLineCap(char c) {
-        switch (c) {
-            case NSVG_CAP_BUTT:
-                return "butt";
-            case NSVG_CAP_ROUND:
-                return "round";
-            case NSVG_CAP_SQUARE:
-                return "square";
-            default:
-                return "butt";
-        }
-    }
-
-    std::string getFillRule(char c) {
-        switch (c) {
-            case NSVG_FILLRULE_NONZERO:
-                return "nonzero";
-            case NSVG_FILLRULE_EVENODD:
-                return "evenodd";
-            default:
-                return "";
-        }
-    }
-
-
-    std::string getStrokeLineJoin(char c) {
-        switch (c) {
-            case NSVG_JOIN_BEVEL:
-                return "bevel";
-            case NSVG_JOIN_MITER:
-                return "miter";
-            case NSVG_JOIN_ROUND:
-                return "round";
-            default:
-                return "miter";
-        }
-    }
-
-    std::vector<SVGLoader::SVGShape> loadSVG(NSVGimage* image) {
-
-        std::vector<SVGLoader::SVGShape> shapes;
-        for (auto shape = image->shapes; shape != nullptr; shape = shape->next) {
-
-            if (!(shape->flags & NSVG_FLAGS_VISIBLE)) continue;
-            if (shape->fill.type == NSVG_PAINT_NONE) continue;
-
-            auto& data = shapes.emplace_back();
-
-            data.id = shape->id;
-            data.style.fillOpacity = shape->opacity;
-            data.style.strokeOpacity = shape->opacity;
-            data.style.strokeWidth = shape->strokeWidth;
-            data.style.strokeLineCap = getStrokeLineCap(shape->strokeLineCap);
-            data.style.strokeLineJoin = getStrokeLineJoin(shape->strokeLineJoin);
-            data.style.fillRule = getFillRule(shape->fillRule);
-            data.style.strokeMiterLimit = shape->miterLimit;
-
-            if (shape->stroke.type != NSVG_PAINT_NONE) {
-                data.style.stroke = getColor(shape->stroke);
-            }
-
-            ShapePath& s = data.paths.emplace_back();
-            s.color = getColor(shape->fill);
-            for (auto path = shape->paths; path != nullptr; path = path->next) {
-
-                for (unsigned i = 0; i < path->npts - 1; i += 3) {
-                    float* p = &path->pts[i * 2];
-
-                    if (i == 0) {
-                        s.moveTo(p[0], p[1]);
-                    }
-
-                    s.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
-
-                }
-
-            }
-        }
-
-        return shapes;
-    }
+    std::unordered_map<std::string, std::unordered_map<std::string, float>> unitConversion{
+            {"mm", {{"mm", 1}, {"cm", 0.1f}, {"in", 1.f / 25.4f}, {"pt", 72.f / 25.4f}, {"pc", 6.f / 25.4f}, {"px", -1}}},
+            {"cm", {{"mm", 10}, {"cm", 1}, {"in", 1.f / 2.54f}, {"pt", 72.f / 2.54f}, {"pc", 6.f / 2.54f}, {"px", -1}}},
+            {"in", {{"mm", 25.4f}, {"cm", 2.54f}, {"in", 1}, {"pt", 72}, {"pc", 6}, {"px", -1}}},
+            {"pt", {{"mm", 25.4f / 72.f}, {"cm", 2.54f / 72.f}, {"in", 1 / 72.f}, {"pt", 1}, {"pc", 6.f / 72.f}, {"px", -1}}},
+            {"pc", {{"mm", 25.4f / 6.f}, {"cm", 2.54f / 6.f}, {"in", 1 / 6.f}, {"pt", 72.f / 6}, {"pc", 1}, {"px", -1}}},
+            {"px", {{"px", 1}}}};
 
     void classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
 
@@ -309,12 +194,12 @@ namespace {
         return intersections;
     }
 
-    std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, const std::vector<SimplePath>& paths) {
+    std::vector<svg::Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, const std::vector<SimplePath>& paths) {
 
         Vector2 center;
         boundingBox.getCenter(center);
 
-        std::vector<Intersection> allIntersections;
+        std::vector<svg::Intersection> allIntersections;
 
         for (const auto& path : paths) {
 
@@ -327,7 +212,7 @@ namespace {
 
                 for (const auto& p : intersections) {
 
-                    allIntersections.emplace_back(Intersection{path.identifier, p});
+                    allIntersections.emplace_back(svg::Intersection{path.identifier, p});
                 }
             }
         }
@@ -357,8 +242,8 @@ namespace {
             return i1.point.x - i2.point.x;
         });
 
-        std::vector<Intersection> baseIntersections;
-        std::vector<Intersection> otherIntersections;
+        std::vector<svg::Intersection> baseIntersections;
+        std::vector<svg::Intersection> otherIntersections;
 
         for (const auto& i : scanlineIntersections) {
             if (i.identifier == simplePath.identifier) {
@@ -1084,26 +969,267 @@ namespace {
     }
 
 
+    float parseFloatWithUnits(const pugi::xml_attribute& string, const std::string& unit, float DPI) {
+
+        std::string theUnit = "px";
+
+        float value;
+
+        if (!utils::isNumber(string.value())) {
+
+            std::string str = string.as_string();
+
+            for (unsigned i = 0, n = units.size(); i < n; i++) {
+
+                const auto u = units[i];
+
+                if (utils::endsWith(string.value(), u)) {
+
+                    theUnit = u;
+                    value = std::atof(str.substr(0, str.size() - u.size()).c_str());
+                    break;
+                } else {
+
+                    throw std::runtime_error("THREE.SVGLoader: unexpected codepath in parseFloatWithUnits");
+                }
+            }
+
+        } else {
+            value = string.as_float();
+        }
+
+        float scale;
+
+        if (theUnit == "px" && unit != "px") {
+
+            // Conversion scale from  pixels to inches, then to default units
+
+            scale = unitConversion["in"][unit] / DPI;
+
+        } else {
+
+            scale = unitConversion[theUnit][unit];
+
+            if (scale < 0) {
+
+                // Conversion scale to pixels
+
+                scale = unitConversion[theUnit]["in"] * DPI;
+            }
+        }
+
+        return scale * value;
+    }
+
+
 }// namespace
 
-std::vector<SVGLoader::SVGShape> SVGLoader::load(const std::filesystem::path& filePath) {
+std::vector<ShapePath> SVGLoader::load(const std::filesystem::path& filePath) {
 
-    struct NSVGimage* image;
-    image = nsvgParseFromFile(filePath.string().c_str(), defaultUnit.c_str(), defaultDPI);
+    pugi::xml_document doc;
+    pugi::xml_parse_result result = doc.load_file(filePath.string().c_str());
+    if (!result) {
+        throw std::runtime_error("Unable to parse modelDescription.xml");
+    }
 
-    auto data = loadSVG(image);
-    nsvgDelete(image);
-    return data;
+
+    return {};
 }
 
-std::vector<SVGLoader::SVGShape> SVGLoader::parse(std::string text) {
+std::vector<ShapePath> SVGLoader::parse(std::string text) {
 
-    struct NSVGimage* image;
-    image = nsvgParse(const_cast<char*>(text.c_str()), defaultUnit.c_str(), defaultDPI);
+    pugi::xml_document doc;
+    pugi::xml_parse_result result = doc.load_string(text.c_str());
+    if (!result) {
+        throw std::runtime_error("Unable to parse modelDescription.xml");
+    }
 
-    auto data = loadSVG(image);
-    nsvgDelete(image);
-    return data;
+    std::vector<Matrix3> transformStack;
+
+    const Matrix3 tempTransform0;
+    const Matrix3 tempTransform1;
+    const Matrix3 tempTransform2;
+    const Matrix3 tempTransform3;
+    const Vector2 tempV2;
+    const Vector3 tempV3;
+
+    Matrix3 currentTransform;
+
+    std::function<Matrix3(pugi::xml_node&)> parseNodeTransform = [&](pugi::xml_node& node) {
+
+        Matrix3 transform;
+        Matrix3 currentTransform = tempTransform0;
+
+        if (std::string(node.name()) == "use" && (node.attribute("x") || node.attribute("y"))) {
+
+            const auto tx = parseFloatWithUnits(node.attribute("x"), defaultUnit, defaultDPI);
+            const auto ty = parseFloatWithUnits(node.attribute("y"), defaultUnit, defaultDPI);
+
+            transform.translate(tx, ty);
+        }
+
+        if (node.attribute("transform")) {
+
+            // TODO
+
+//            const transformsTexts = node.attribute("transform").split(')');
+//
+//            for (int tIndex = transformsTexts.length - 1; tIndex >= 0; tIndex--) {
+//
+//                const transformText = transformsTexts[tIndex].trim();
+//
+//                if (transformText == = '' ) continue;
+//
+//                const openParPos = transformText.indexOf('(');
+//                const closeParPos = transformText.length;
+//
+//                if (openParPos > 0 && openParPos < closeParPos) {
+//
+//                    const transformType = transformText.slice(0, openParPos);
+//
+//                    const auto array = parseFloats(transformText.slice(openParPos + 1));
+//
+//                    currentTransform.identity();
+//
+//                    switch (transformType) {
+//
+//                        case 'translate':
+//
+//                            if (array.length >= 1) {
+//
+//                                const auto tx = array[0];
+//                                float ty = 0;
+//
+//                                if (array.length >= 2) {
+//
+//                                    ty = array[1];
+//                                }
+//
+//                                currentTransform.translate(tx, ty);
+//                            }
+//
+//                            break;
+//
+//                        case 'rotate':
+//
+//                            if (array.length >= 1) {
+//
+//                                float angle = 0;
+//                                float cx = 0;
+//                                float cy = 0;
+//
+//                                // Angle
+//                                angle = array[0] * math::PI / 180;
+//
+//                                if (array.length >= 3) {
+//
+//                                    // Center x, y
+//                                    cx = array[1];
+//                                    cy = array[2];
+//                                }
+//
+//                                // Rotate around center (cx, cy)
+//                                tempTransform1.makeTranslation(-cx, -cy);
+//                                tempTransform2.makeRotation(angle);
+//                                tempTransform3.multiplyMatrices(tempTransform2, tempTransform1);
+//                                tempTransform1.makeTranslation(cx, cy);
+//                                currentTransform.multiplyMatrices(tempTransform1, tempTransform3);
+//                            }
+//
+//                            break;
+//
+//                        case 'scale':
+//
+//                            if (array.length >= 1) {
+//
+//                                const scaleX = array[0];
+//                                let scaleY = scaleX;
+//
+//                                if (array.length >= 2) {
+//
+//                                    scaleY = array[1];
+//                                }
+//
+//                                currentTransform.scale(scaleX, scaleY);
+//                            }
+//
+//                            break;
+//
+//                        case 'skewX':
+//
+//                            if (array.length == = 1) {
+//
+//                                currentTransform.set(
+//                                        1, Math.tan(array[0] * Math.PI / 180), 0,
+//                                        0, 1, 0,
+//                                        0, 0, 1);
+//                            }
+//
+//                            break;
+//
+//                        case 'skewY':
+//
+//                            if (array.length == = 1) {
+//
+//                                currentTransform.set(
+//                                        1, 0, 0,
+//                                        std::tan(array[0] * Math.PI / 180), 1, 0,
+//                                        0, 0, 1);
+//                            }
+//
+//                            break;
+//
+//                        case 'matrix':
+//
+//                            if (array.length == = 6) {
+//
+//                                currentTransform.set(
+//                                        array[0], array[2], array[4],
+//                                        array[1], array[3], array[5],
+//                                        0, 0, 1);
+//                            }
+//
+//                            break;
+//                    }
+//                }
+//
+//                transform.premultiply(currentTransform);
+//            }
+        }
+
+        return transform;
+    };
+
+    std::function<std::optional<Matrix3>(pugi::xml_node)> getNodeTransform = [&](pugi::xml_node node) {
+
+        if (!(node.attribute("transform") || (std::string(node.name()) == "use" && (node.attribute("x") || node.attribute("y"))))) {
+
+            return std::nullopt;
+        }
+
+        auto transform = parseNodeTransform(node);
+
+        if (!transformStack.empty()) {
+
+            transform.premultiply(transformStack[transformStack.size() - 1]);
+        }
+
+        currentTransform.copy(transform);
+        transformStack.emplace_back(transform);
+
+        return transform;
+    };
+
+    auto parseNode = [&](pugi::xml_node node, Style& style) {
+        if (node.type() != pugi::xml_node_type::node_element) return;
+
+        const auto transform = getNodeTransform(node);
+    };
+
+    Style style;
+    parseNode(doc.root(), style);
+
+    return {};
 }
 
 std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVGLoader::Style& style) {
@@ -1119,7 +1245,6 @@ std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVG
     std::vector<SimplePath> simplePaths;
     const auto& subPaths = shapePath.getSubPaths();
     std::transform(subPaths.begin(), subPaths.end(), std::back_inserter(simplePaths), [&](const auto& p) {
-
         const auto& points = p->getPoints();
         auto maxY = -BIGNUMBER;
         auto minY = BIGNUMBER;

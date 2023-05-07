@@ -43,6 +43,12 @@
         }
       ]
     },
+    "pugixml": {
+      "description": "Enable SVGLoader",
+      "dependencies": [
+        "pugixml"
+      ]
+    },
     "matplotlib": {
       "description": "Enable plotting in examples",
       "dependencies": [

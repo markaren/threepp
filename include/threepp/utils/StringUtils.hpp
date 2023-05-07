@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <cctype>
 
 namespace threepp::utils {
 
@@ -94,6 +95,20 @@ namespace threepp::utils {
                        [](unsigned char c) { return std::tolower(c); });
     }
 
+    // https://stackoverflow.com/questions/4654636/how-to-determine-if-a-string-is-a-number-with-c
+    inline bool isNumber(const std::string& s)
+    {
+        std::string::const_iterator it = s.begin();
+        while (it != s.end() && std::isdigit(*it)) ++it;
+        return !s.empty() && it == s.end();
+    }
+
+    // https://stackoverflow.com/questions/874134/find-out-if-string-ends-with-another-string-in-c
+    inline bool endsWith(std::string const & value, std::string const & ending)
+    {
+        if (ending.size() > value.size()) return false;
+        return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
+    }
 
 }// namespace threepp::utils
 

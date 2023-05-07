@@ -15,32 +15,24 @@ namespace threepp {
     class SVGLoader {
 
     public:
+
         struct Style {
-            std::optional<Color> stroke;
-            float fillOpacity{1};
-            float strokeOpacity{1};
-            float strokeWidth{1};
-            float strokeMiterLimit{4};
-
-            std::string strokeLineJoin;
-            std::string strokeLineCap;
-            std::string fillRule;
+            std::string fill = "#000";
+            float fillOpacity = 1;
+            float strokeOpacity = 1;
+            float strokeWidth = 1;
+            std::string strokeLineJoin = "miter";
+            std::string strokeLineCap = "butt";
+            float strokeMiterLimit = 4;
         };
-
-        struct SVGShape {
-            Style style;
-            std::string id;
-            std::vector<ShapePath> paths;
-        };
-
 
         float defaultDPI = 90;
         // Accepted units: 'mm', 'cm', 'in', 'pt', 'pc', 'px'
         std::string defaultUnit = "px";
 
-        std::vector<SVGLoader::SVGShape> load(const std::filesystem::path& path);
+        std::vector<ShapePath> load(const std::filesystem::path& path);
 
-        std::vector<SVGLoader::SVGShape> parse(std::string text);
+        std::vector<ShapePath> parse(std::string text);
 
         static std::vector<Shape> createShapes(const ShapePath& shapePath, const Style& style);
 
