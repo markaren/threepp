@@ -51,6 +51,12 @@ namespace {
         Vector2 point;
     };
 
+    struct AHole {
+        int identifier;
+        bool isHole;
+        std::optional<int> _for;
+    };
+
     struct SimplePath {
         std::vector<std::shared_ptr<Curve2>> curves;
         std::vector<Vector2> points;
@@ -69,6 +75,17 @@ namespace {
                 return "square";
             default:
                 return "butt";
+        }
+    }
+
+    std::string getFillRule(char c) {
+        switch (c) {
+            case NSVG_FILLRULE_NONZERO:
+                return "nonzero";
+            case NSVG_FILLRULE_EVENODD:
+                return "evenodd";
+            default:
+                return "";
         }
     }
 
@@ -102,16 +119,16 @@ namespace {
             data.style.strokeWidth = shape->strokeWidth;
             data.style.strokeLineCap = getStrokeLineCap(shape->strokeLineCap);
             data.style.strokeLineJoin = getStrokeLineJoin(shape->strokeLineJoin);
+            data.style.fillRule = getFillRule(shape->fillRule);
             data.style.strokeMiterLimit = shape->miterLimit;
 
             if (shape->stroke.type != NSVG_PAINT_NONE) {
                 data.style.stroke = getColor(shape->stroke);
             }
 
-            ShapePath& s = data.path;
+            ShapePath& s = data.paths.emplace_back();
+            s.color = getColor(shape->fill);
             for (auto path = shape->paths; path != nullptr; path = path->next) {
-
-                s.color = getColor(shape->fill);
 
                 for (unsigned i = 0; i < path->npts - 1; i += 3) {
                     float* p = &path->pts[i * 2];
@@ -121,7 +138,9 @@ namespace {
                     }
 
                     s.bezierCurveTo(p[2], p[3], p[4], p[5], p[6], p[7]);
+
                 }
+
             }
         }
 
@@ -291,136 +310,125 @@ namespace {
         return intersections;
     }
 
-        std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, const std::vector<SimplePath>& paths) {
+    std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, const std::vector<SimplePath>& paths) {
 
-            Vector2 center;
-            boundingBox.getCenter(center);
+        Vector2 center;
+        boundingBox.getCenter(center);
 
-            std::vector<Intersection> allIntersections;
+        std::vector<Intersection> allIntersections;
 
-            for (const auto& path : paths) {
+        for (const auto& path : paths) {
 
-                // check if the center of the bounding box is in the bounding box of the paths.
-                // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
-                // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
-                if (path.boundingBox.containsPoint(center)) {
+            // check if the center of the bounding box is in the bounding box of the paths.
+            // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
+            // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
+            if (path.boundingBox.containsPoint(center)) {
 
-                    const auto intersections = getIntersections(scanline, path.points);
+                const auto intersections = getIntersections(scanline, path.points);
 
-                    for (const auto& p : intersections) {
+                for (const auto& p : intersections) {
 
-                        allIntersections.emplace_back({path.identifier, path.isCW, p});
-                    }
+                    allIntersections.emplace_back(Intersection{path.identifier, path.isCW, p});
                 }
             }
-
-            std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
-                return i1.point.x - i2.point.x;
-            });
-
-            return allIntersections;
         }
 
-    void isHoleTo(SimplePath& simplePath, const std::vector<SimplePath>& allPaths, float scanlineMinX, float scanlineMaxX, std::string& _fillRule ) {
+        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
+            return i1.point.x - i2.point.x;
+        });
 
-        if ( _fillRule.empty() ) {
+        return allIntersections;
+    }
+
+    AHole isHoleTo(const SimplePath& simplePath, const std::vector<SimplePath>& allPaths, float scanlineMinX, float scanlineMaxX, std::string _fillRule) {
+
+        if (_fillRule.empty()) {
 
             _fillRule = "nonzero";
-
         }
 
         Vector2 centerBoundingBox;
-        simplePath.boundingBox.getCenter( centerBoundingBox );
+        simplePath.boundingBox.getCenter(centerBoundingBox);
 
-        const std::vector<Vector2> scanline{Vector2( scanlineMinX, centerBoundingBox.y ), Vector2( scanlineMaxX, centerBoundingBox.y ) };
+        const std::vector<Vector2> scanline{Vector2(scanlineMinX, centerBoundingBox.y), Vector2(scanlineMaxX, centerBoundingBox.y)};
 
-        auto scanlineIntersections = getScanlineIntersections( scanline, simplePath.boundingBox, allPaths );
+        auto scanlineIntersections = getScanlineIntersections(scanline, simplePath.boundingBox, allPaths);
 
-        std::sort(scanlineIntersections.begin(), scanlineIntersections.end(), [](const auto& i1, const auto& i2 ) {
-
+        std::sort(scanlineIntersections.begin(), scanlineIntersections.end(), [](const auto& i1, const auto& i2) {
             return i1.point.x - i2.point.x;
+        });
 
-        } );
-
-        std::vector<Intersection>  baseIntersections;
-        std::vector<Intersection>  otherIntersections;
+        std::vector<Intersection> baseIntersections;
+        std::vector<Intersection> otherIntersections;
 
         for (const auto& i : scanlineIntersections) {
-            if ( i.identifier == simplePath.identifier ) {
+            if (i.identifier == simplePath.identifier) {
 
-                    baseIntersections.emplace_back( i );
+                baseIntersections.emplace_back(i);
 
             } else {
 
-                    otherIntersections.emplace_back( i );
-
+                otherIntersections.emplace_back(i);
             }
         }
 
-        const auto firstXOfPath = baseIntersections[ 0 ].point.x;
+        const auto firstXOfPath = baseIntersections[0].point.x;
 
         // build up the path hierarchy
         std::vector<int> stack;
         unsigned i = 0;
 
-        while ( i < otherIntersections.size() && otherIntersections[ i ].point.x < firstXOfPath ) {
+        while (i < otherIntersections.size() && otherIntersections[i].point.x < firstXOfPath) {
 
-            if ( stack.size() > 0 && stack[ stack.size() - 1 ] == otherIntersections[ i ].identifier ) {
+            if (!stack.empty() && stack[stack.size() - 1] == otherIntersections[i].identifier) {
 
                 stack.pop_back();
 
             } else {
 
-                stack.emplace_back( otherIntersections[ i ].identifier );
-
+                stack.emplace_back(otherIntersections[i].identifier);
             }
 
-            i ++;
-
+            i++;
         }
 
-        stack.emplace_back( simplePath.identifier );
+        stack.emplace_back(simplePath.identifier);
 
-        if ( _fillRule == "evenodd" ) {
+        if (_fillRule == "evenodd") {
 
             const auto isHole = stack.size() % 2 == 0 ? true : false;
-            const auto isHoleFor = stack[ stack.size() - 2 ];
+            const auto isHoleFor = stack[stack.size() - 2];
 
-            return { identifier: simplePath.identifier, isHole: isHole, for: isHoleFor };
+            return AHole{simplePath.identifier, isHole, isHoleFor};
 
-        } else if ( _fillRule == "nonzero" ) {
+        } else if (_fillRule == "nonzero") {
 
             // check if path is a hole by counting the amount of paths with alternating rotations it has to cross.
             bool isHole = true;
-            let isHoleFor = null;
-            let lastCWValue = null;
+            std::optional<int> isHoleFor;
+            std::optional<bool> lastCWValue;
 
-            for ( unsigned i = 0; i < stack.size(); i ++ ) {
+            for (int identifier : stack) {
 
-                const auto identifier = stack[ i ];
-                if ( isHole ) {
+                if (isHole) {
 
-                    lastCWValue = allPaths[ identifier ].isCW;
+                    lastCWValue = allPaths[identifier].isCW;
                     isHole = false;
                     isHoleFor = identifier;
 
-                } else if ( lastCWValue != allPaths[ identifier ].isCW ) {
+                } else if (lastCWValue != allPaths[identifier].isCW) {
 
-                    lastCWValue = allPaths[ identifier ].isCW;
+                    lastCWValue = allPaths[identifier].isCW;
                     isHole = true;
-
                 }
-
             }
 
-            return { identifier: simplePath.identifier, isHole: isHole, for: isHoleFor };
+            return AHole{simplePath.identifier, isHole, isHoleFor};
 
         } else {
 
             std::cerr << "fill-rule: '" << _fillRule << "' is currently not implemented." << std::endl;
-
         }
-
     }
 
     void removeDuplicatedPoints(std::vector<Vector2>& points, float minDistance) {
@@ -1099,12 +1107,10 @@ std::vector<SVGLoader::SVGShape> SVGLoader::parse(std::string text) {
     return data;
 }
 
-std::unique_ptr<Shape> SVGLoader::createShapes(const SVGShape& shape) {
+std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVGLoader::Style& style) {
 
     // Param shapePath: a shapepath as returned by the parse function of this class
     // Returns Shape object
-
-    const auto& shapePath = shape.path;
 
     const auto BIGNUMBER = 999999999;
 
@@ -1114,7 +1120,6 @@ std::unique_ptr<Shape> SVGLoader::createShapes(const SVGShape& shape) {
     std::vector<SimplePath> simplePaths;
     const auto& subPaths = shapePath.getSubPaths();
     std::transform(subPaths.begin(), subPaths.end(), std::back_inserter(simplePaths), [&](const auto& p) {
-
         const auto& points = p->getPoints();
         auto maxY = -BIGNUMBER;
         auto minY = BIGNUMBER;
@@ -1171,13 +1176,41 @@ std::unique_ptr<Shape> SVGLoader::createShapes(const SVGShape& shape) {
         }
     }
 
-    for ( unsigned identifier = 0; identifier < simplePaths.size(); identifier ++ ) {
+    for (int identifier = 0; identifier < simplePaths.size(); identifier++) {
 
-        simplePaths[ identifier ].identifier = identifier;
-
+        simplePaths[identifier].identifier = identifier;
     }
 
-    return nullptr;
+    std::vector<AHole> isAHole;
+    std::transform(simplePaths.begin(), simplePaths.end(), std::back_inserter(isAHole), [&](const auto& p) {
+        return isHoleTo(p, simplePaths, scanlineMinX, scanlineMaxX, style.fillRule);
+    });
+
+    std::vector<Shape> shapesToReturn;
+    for (const auto& p : simplePaths) {
+
+        const auto amIAHole = isAHole[p.identifier];
+
+        if (!amIAHole.isHole) {
+
+            Shape shape;
+            shape.curves = p.curves;
+
+            for (const auto& h : isAHole) {
+
+                if (h.isHole && h._for == p.identifier) {
+
+                    const auto hole = simplePaths[h.identifier];
+                    auto path = std::make_shared<Path>();
+                    path->curves = hole.curves;
+                    shape.holes.emplace_back(path);
+                }
+            }
+            shapesToReturn.emplace_back(shape);
+        }
+    }
+
+    return shapesToReturn;
 }
 
 std::shared_ptr<BufferGeometry> SVGLoader::pointsToStroke(const std::vector<Vector2>& points, const SVGLoader::Style& style, unsigned int arcDivisions, float minDistance) {

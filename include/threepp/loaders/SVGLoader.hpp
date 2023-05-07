@@ -24,12 +24,13 @@ namespace threepp {
 
             std::string strokeLineJoin;
             std::string strokeLineCap;
+            std::string fillRule;
         };
 
         struct SVGShape {
             Style style;
             std::string id;
-            ShapePath path;
+            std::vector<ShapePath> paths;
         };
 
 
@@ -41,7 +42,7 @@ namespace threepp {
 
         std::vector<SVGLoader::SVGShape> parse(std::string text);
 
-        static std::unique_ptr<Shape> createShapes(const SVGShape& shapePath);
+        static std::vector<Shape> createShapes(const ShapePath& shapePath, const Style& style);
 
         static std::shared_ptr<BufferGeometry> pointsToStroke(const std::vector<Vector2>& points, const SVGLoader::Style& style, unsigned int arcDivisions = 12, float minDistance = 0.001f);
     };
