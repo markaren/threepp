@@ -259,8 +259,3 @@ std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW) const {
 
     return shapes;
 }
-
-const std::vector<std::shared_ptr<Path>>& ShapePath::getSubPaths() const {
-
-    return subPaths;
-}

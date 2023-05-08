@@ -17,26 +17,45 @@ namespace threepp {
     public:
 
         struct Style {
-            std::string fill = "#000";
-            float fillOpacity = 1;
-            float strokeOpacity = 1;
-            float strokeWidth = 1;
-            std::string strokeLineJoin = "miter";
-            std::string strokeLineCap = "butt";
-            float strokeMiterLimit = 4;
+            std::optional<std::string> fill;
+            float fillOpacity;
+            float strokeOpacity;
+            float strokeWidth ;
+            std::string strokeLineJoin;
+            std::string strokeLineCap;
+            float strokeMiterLimit;
+            std::string fillRule;
+            bool visibility;
+            float opacity;
+            std::optional<std::string> stroke;
+        };
+
+        struct SVGData {
+
+            Style style;
+            ShapePath path;
         };
 
         float defaultDPI = 90;
         // Accepted units: 'mm', 'cm', 'in', 'pt', 'pc', 'px'
         std::string defaultUnit = "px";
 
-        std::vector<ShapePath> load(const std::filesystem::path& path);
+        SVGLoader();
 
-        std::vector<ShapePath> parse(std::string text);
+        std::vector<SVGData> load(const std::filesystem::path& path);
 
-        static std::vector<Shape> createShapes(const ShapePath& shapePath, const Style& style);
+        std::vector<SVGData> parse(const std::string& text);
+
+        static std::vector<Shape> createShapes(const SVGData& shapePath);
 
         static std::shared_ptr<BufferGeometry> pointsToStroke(const std::vector<Vector2>& points, const SVGLoader::Style& style, unsigned int arcDivisions = 12, float minDistance = 0.001f);
+
+        ~SVGLoader();
+
+    private:
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
+
     };
 
 }// namespace threepp

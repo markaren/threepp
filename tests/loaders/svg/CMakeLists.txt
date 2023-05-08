@@ -1,0 +1,2 @@
+
+add_test_executable(SVGFunctions_test)

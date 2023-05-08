@@ -411,9 +411,8 @@ target_link_libraries(threepp
         glad::glad
         glfw::glfw)
 if (THREEPP_WITH_SVG_FEATURE)
-    target_link_libraries(threepp
-            PRIVATE
-            pugixml::shared pugixml::pugixml)
+    target_link_libraries(threepp PRIVATE pugixml::shared pugixml::pugixml)
+#    target_include_directories(threepp PRIVATE "${PUGIXML_INCLUDE_DIR}")
 endif ()
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread)

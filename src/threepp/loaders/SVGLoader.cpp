@@ -1,7 +1,6 @@
 
 #include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/extras/ShapeUtils.hpp"
-#include "threepp/extras/core/ShapePath.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/math/Box2.hpp"
@@ -9,11 +8,14 @@
 #include "threepp/objects/Mesh.hpp"
 
 #include "threepp/utils/StringUtils.hpp"
+#include "threepp/utils/RegexUtil.hpp"
 
-#include "SVGTypes.hpp"
+#include "threepp/loaders/svg/SVGFunctions.hpp"
 
 #include "pugixml.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <iostream>
 
 using namespace threepp;
@@ -24,335 +26,12 @@ namespace {
     std::vector<std::string> units{"mm", "cm", "in", "pt", "pc", "px"};
 
     std::unordered_map<std::string, std::unordered_map<std::string, float>> unitConversion{
-            {"mm", {{"mm", 1}, {"cm", 0.1f}, {"in", 1.f / 25.4f}, {"pt", 72.f / 25.4f}, {"pc", 6.f / 25.4f}, {"px", -1}}},
-            {"cm", {{"mm", 10}, {"cm", 1}, {"in", 1.f / 2.54f}, {"pt", 72.f / 2.54f}, {"pc", 6.f / 2.54f}, {"px", -1}}},
-            {"in", {{"mm", 25.4f}, {"cm", 2.54f}, {"in", 1}, {"pt", 72}, {"pc", 6}, {"px", -1}}},
-            {"pt", {{"mm", 25.4f / 72.f}, {"cm", 2.54f / 72.f}, {"in", 1 / 72.f}, {"pt", 1}, {"pc", 6.f / 72.f}, {"px", -1}}},
-            {"pc", {{"mm", 25.4f / 6.f}, {"cm", 2.54f / 6.f}, {"in", 1 / 6.f}, {"pt", 72.f / 6}, {"pc", 1}, {"px", -1}}},
-            {"px", {{"px", 1}}}};
-
-    void classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
-
-        const auto ax = edgeEnd.x - edgeStart.x;
-        const auto ay = edgeEnd.y - edgeStart.y;
-        const auto bx = p.x - edgeStart.x;
-        const auto by = p.y - edgeStart.y;
-        const auto sa = ax * by - bx * ay;
-
-        if ((p.x == edgeStart.x) && (p.y == edgeStart.y)) {
-
-            classifyResult.loc = IntersectionLocationType::ORIGIN;
-            classifyResult.t = 0;
-            return;
-        }
-
-        if ((p.x == edgeEnd.x) && (p.y == edgeEnd.y)) {
-
-            classifyResult.loc = IntersectionLocationType::DESTINATION;
-            classifyResult.t = 1;
-            return;
-        }
-
-        if (sa < -std::numeric_limits<float>::epsilon()) {
-
-            classifyResult.loc = IntersectionLocationType::LEFT;
-            return;
-        }
-
-        if (sa > std::numeric_limits<float>::epsilon()) {
-
-            classifyResult.loc = IntersectionLocationType::RIGHT;
-            return;
-        }
-
-        if (((ax * bx) < 0) || ((ay * by) < 0)) {
-
-            classifyResult.loc = IntersectionLocationType::BEHIND;
-            return;
-        }
-
-        if ((std::sqrt(ax * ax + ay * ay)) < (std::sqrt(bx * bx + by * by))) {
-
-            classifyResult.loc = IntersectionLocationType::BEYOND;
-            return;
-        }
-
-        float t;
-
-        if (ax != 0) {
-
-            t = bx / ax;
-
-        } else {
-
-            t = by / ay;
-        }
-
-        classifyResult.loc = IntersectionLocationType::BETWEEN;
-        classifyResult.t = t;
-    }
-
-    std::optional<EdgeIntersection> findEdgeIntersection(const Vector2& a0, const Vector2& a1, const Vector2& b0, const Vector2& b1) {
-        const auto x1 = a0.x;
-        const auto x2 = a1.x;
-        const auto x3 = b0.x;
-        const auto x4 = b1.x;
-        const auto y1 = a0.y;
-        const auto y2 = a1.y;
-        const auto y3 = b0.y;
-        const auto y4 = b1.y;
-        const auto nom1 = (x4 - x3) * (y1 - y3) - (y4 - y3) * (x1 - x3);
-        const auto nom2 = (x2 - x1) * (y1 - y3) - (y2 - y1) * (x1 - x3);
-        const auto denom = (y4 - y3) * (x2 - x1) - (x4 - x3) * (y2 - y1);
-        const auto t1 = nom1 / denom;
-        const auto t2 = nom2 / denom;
-
-        if (((denom == 0) && (nom1 != 0)) || (t1 <= 0) || (t1 >= 1) || (t2 < 0) || (t2 > 1)) {
-
-            //1. lines are parallel or edges don't intersect
-
-            return std::nullopt;
-
-        } else if ((nom1 == 0) && (denom == 0)) {
-
-            //2. lines are colinear
-
-            //check if endpoints of edge2 (b0-b1) lies on edge1 (a0-a1)
-            for (unsigned i = 0; i < 2; i++) {
-
-                classifyPoint(i == 0 ? b0 : b1, a0, a1);
-                //find position of this endpoints relatively to edge1
-                if (classifyResult.loc == IntersectionLocationType::ORIGIN) {
-
-                    const auto& point = (i == 0 ? b0 : b1);
-                    return EdgeIntersection{point.x, point.y, classifyResult.t};
-
-                } else if (classifyResult.loc == IntersectionLocationType::BETWEEN) {
-
-                    const auto x = +((x1 + classifyResult.t * (x2 - x1)));
-                    const auto y = +((y1 + classifyResult.t * (y2 - y1)));
-                    return EdgeIntersection{
-                            x,
-                            y,
-                            classifyResult.t,
-                    };
-                }
-            }
-
-            return std::nullopt;
-
-        } else {
-
-            //3. edges intersect
-
-            for (unsigned i = 0; i < 2; i++) {
-
-                classifyPoint(i == 0 ? b0 : b1, a0, a1);
-
-                if (classifyResult.loc == IntersectionLocationType::ORIGIN) {
-
-                    const auto& point = (i == 0 ? b0 : b1);
-                    return EdgeIntersection{point.x, point.y, classifyResult.t};
-                }
-            }
-
-            const auto x = +((x1 + t1 * (x2 - x1)));
-            const auto y = +((y1 + t1 * (y2 - y1)));
-            return EdgeIntersection{x, y, t1};
-        }
-    }
-
-
-    std::vector<Vector2> getIntersections(const std::vector<Vector2>& path1, const std::vector<Vector2>& path2) {
-
-        std::vector<EdgeIntersection> intersectionsRaw;
-        std::vector<Vector2> intersections;
-
-        for (unsigned index = 1; index < path1.size(); index++) {
-
-            const auto& path1EdgeStart = path1[index - 1];
-            const auto& path1EdgeEnd = path1[index];
-
-            for (unsigned index2 = 1; index2 < path2.size(); index2++) {
-
-                const auto& path2EdgeStart = path2[index2 - 1];
-                const auto& path2EdgeEnd = path2[index2];
-
-                const auto intersection = findEdgeIntersection(path1EdgeStart, path1EdgeEnd, path2EdgeStart, path2EdgeEnd);
-
-                if (intersection && std::find_if(intersectionsRaw.begin(), intersectionsRaw.end(), [&](auto& i) {
-                                        return i.t <= intersection->t + std::numeric_limits<float>::epsilon() &&
-                                               i.t >= intersection->t - std::numeric_limits<float>::epsilon();
-                                    }) != intersectionsRaw.end()) {
-
-                    intersectionsRaw.emplace_back(*intersection);
-                    intersections.emplace_back(intersection->x, intersection->y);
-                }
-            }
-        }
-
-        return intersections;
-    }
-
-    std::vector<svg::Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, const std::vector<SimplePath>& paths) {
-
-        Vector2 center;
-        boundingBox.getCenter(center);
-
-        std::vector<svg::Intersection> allIntersections;
-
-        for (const auto& path : paths) {
-
-            // check if the center of the bounding box is in the bounding box of the paths.
-            // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
-            // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
-            if (path.boundingBox.containsPoint(center)) {
-
-                const auto intersections = getIntersections(scanline, path.points);
-
-                for (const auto& p : intersections) {
-
-                    allIntersections.emplace_back(svg::Intersection{path.identifier, p});
-                }
-            }
-        }
-
-        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
-            return i1.point.x - i2.point.x;
-        });
-
-        return allIntersections;
-    }
-
-    AHole isHoleTo(const SimplePath& simplePath, const std::vector<SimplePath>& allPaths, float scanlineMinX, float scanlineMaxX, std::string _fillRule) {
-
-        if (_fillRule.empty()) {
-
-            _fillRule = "nonzero";
-        }
-
-        Vector2 centerBoundingBox;
-        simplePath.boundingBox.getCenter(centerBoundingBox);
-
-        const std::vector<Vector2> scanline{Vector2(scanlineMinX, centerBoundingBox.y), Vector2(scanlineMaxX, centerBoundingBox.y)};
-
-        auto scanlineIntersections = getScanlineIntersections(scanline, simplePath.boundingBox, allPaths);
-
-        std::sort(scanlineIntersections.begin(), scanlineIntersections.end(), [](const auto& i1, const auto& i2) {
-            return i1.point.x - i2.point.x;
-        });
-
-        std::vector<svg::Intersection> baseIntersections;
-        std::vector<svg::Intersection> otherIntersections;
-
-        for (const auto& i : scanlineIntersections) {
-            if (i.identifier == simplePath.identifier) {
-
-                baseIntersections.emplace_back(i);
-
-            } else {
-
-                otherIntersections.emplace_back(i);
-            }
-        }
-
-        const auto firstXOfPath = baseIntersections[0].point.x;
-
-        // build up the path hierarchy
-        std::vector<int> stack;
-        unsigned i = 0;
-
-        while (i < otherIntersections.size() && otherIntersections[i].point.x < firstXOfPath) {
-
-            if (!stack.empty() && stack[stack.size() - 1] == otherIntersections[i].identifier) {
-
-                stack.pop_back();
-
-            } else {
-
-                stack.emplace_back(otherIntersections[i].identifier);
-            }
-
-            i++;
-        }
-
-        stack.emplace_back(simplePath.identifier);
-
-        if (_fillRule == "evenodd") {
-
-            const auto isHole = stack.size() % 2 == 0 ? true : false;
-            const auto isHoleFor = stack[stack.size() - 2];
-
-            return AHole{simplePath.identifier, isHole, isHoleFor};
-
-        } else if (_fillRule == "nonzero") {
-
-            // check if path is a hole by counting the amount of paths with alternating rotations it has to cross.
-            bool isHole = true;
-            std::optional<int> isHoleFor;
-            std::optional<bool> lastCWValue;
-
-            for (int identifier : stack) {
-
-                if (isHole) {
-
-                    lastCWValue = allPaths[identifier].isCW;
-                    isHole = false;
-                    isHoleFor = identifier;
-
-                } else if (lastCWValue != allPaths[identifier].isCW) {
-
-                    lastCWValue = allPaths[identifier].isCW;
-                    isHole = true;
-                }
-            }
-
-            return AHole{simplePath.identifier, isHole, isHoleFor};
-
-        } else {
-
-            std::cerr << "fill-rule: '" << _fillRule << "' is currently not implemented." << std::endl;
-        }
-    }
-
-    void removeDuplicatedPoints(std::vector<Vector2>& points, float minDistance) {
-
-        // Creates a new array if necessary with duplicated points removed.
-        // This does not remove duplicated initial and ending points of a closed path.
-
-        bool dupPoints = false;
-        for (unsigned i = 1, n = points.size() - 1; i < n; i++) {
-
-            if (points[i].distanceTo(points[i + 1]) < minDistance) {
-
-                dupPoints = true;
-                break;
-            }
-        }
-
-        if (!dupPoints) return;
-
-        std::vector<Vector2> newPoints;
-        newPoints.emplace_back(points[0]);
-
-        for (unsigned i = 1, n = points.size() - 1; i < n; i++) {
-
-            if (points[i].distanceTo(points[i + 1]) >= minDistance) {
-
-                newPoints.emplace_back(points[i]);
-            }
-        }
-
-        newPoints.emplace_back(points[points.size() - 1]);
-
-        points = newPoints;
-    }
-
-    Vector2& getNormal(const Vector2& p1, const Vector2& p2, Vector2& result) {
-
-        result.subVectors(p2, p1);
-        return result.set(-result.y, result.x).normalize();
-    }
+            {"mm", {{"mm", 1.f}, {"cm", 0.1f}, {"in", 1.f / 25.4f}, {"pt", 72.f / 25.4f}, {"pc", 6.f / 25.4f}, {"px", -1.f}}},
+            {"cm", {{"mm", 10.f}, {"cm", 1.f}, {"in", 1.f / 2.54f}, {"pt", 72.f / 2.54f}, {"pc", 6.f / 2.54f}, {"px", -1.f}}},
+            {"in", {{"mm", 25.4f}, {"cm", 2.54f}, {"in", 1.f}, {"pt", 72.f}, {"pc", 6.f}, {"px", -1.f}}},
+            {"pt", {{"mm", 25.4f / 72.f}, {"cm", 2.54f / 72.f}, {"in", 1.f / 72.f}, {"pt", 1.f}, {"pc", 6.f / 72.f}, {"px", -1.f}}},
+            {"pc", {{"mm", 25.4f / 6.f}, {"cm", 2.54f / 6.f}, {"in", 1.f / 6.f}, {"pt", 72.f / 6.f}, {"pc", 1.f}, {"px", -1.f}}},
+            {"px", {{"px", 1.f}}}};
 
     unsigned int pointsToStrokeWithBuffers(
             std::vector<Vector2> points,
@@ -969,7 +648,79 @@ namespace {
     }
 
 
-    float parseFloatWithUnits(const pugi::xml_attribute& string, const std::string& unit, float DPI) {
+}// namespace
+
+struct SVGLoader::Impl {
+
+    std::vector<SVGLoader::SVGData> paths;
+    std::unordered_map<std::string, std::string> styleSheets;
+
+    std::vector<Matrix3> transformStack;
+
+    const Matrix3 tempTransform0;
+    const Matrix3 tempTransform1;
+    const Matrix3 tempTransform2;
+    const Matrix3 tempTransform3;
+    const Vector2 tempV2;
+    const Vector3 tempV3;
+
+    Matrix3 currentTransform;
+
+    explicit Impl(SVGLoader& scope)
+        : scope(scope) {}
+
+    std::vector<SVGLoader::SVGData> load(const pugi::xml_node& node) {
+
+        paths.clear();
+        styleSheets.clear();
+        transformStack.clear();
+
+        parseNode(node.child("svg"), {"#000",
+                                      1,
+                                      1,
+                                      1,
+                                      "miter",
+                                      "butt", 4});
+
+        return paths;
+    }
+
+    float clamp(float v) {
+
+        return std::max(0.f, std::min(1.f, parseFloatWithUnits(v)));
+    }
+
+    float positive(float v) {
+
+        return std::max(0.f, parseFloatWithUnits(v));
+    }
+
+    float parseFloatWithUnits(float value, const std::string& theUnit = "px") {
+
+        float scale;
+
+        if (theUnit == "px" && scope.defaultUnit != "px") {
+
+            // Conversion scale from  pixels to inches, then to default units
+
+            scale = unitConversion["in"][scope.defaultUnit] / scope.defaultDPI;
+
+        } else {
+
+            scale = unitConversion[theUnit][scope.defaultUnit];
+
+            if (scale < 0) {
+
+                // Conversion scale to pixels
+
+                scale = unitConversion[theUnit]["in"] * scope.defaultDPI;
+            }
+        }
+
+        return scale * value;
+    }
+
+    float parseFloatWithUnits(const pugi::xml_attribute& string) {
 
         std::string theUnit = "px";
 
@@ -995,75 +746,23 @@ namespace {
             }
 
         } else {
+
             value = string.as_float();
         }
 
-        float scale;
-
-        if (theUnit == "px" && unit != "px") {
-
-            // Conversion scale from  pixels to inches, then to default units
-
-            scale = unitConversion["in"][unit] / DPI;
-
-        } else {
-
-            scale = unitConversion[theUnit][unit];
-
-            if (scale < 0) {
-
-                // Conversion scale to pixels
-
-                scale = unitConversion[theUnit]["in"] * DPI;
-            }
-        }
-
-        return scale * value;
+        return parseFloatWithUnits(value, theUnit);
     }
 
 
-}// namespace
-
-std::vector<ShapePath> SVGLoader::load(const std::filesystem::path& filePath) {
-
-    pugi::xml_document doc;
-    pugi::xml_parse_result result = doc.load_file(filePath.string().c_str());
-    if (!result) {
-        throw std::runtime_error("Unable to parse modelDescription.xml");
-    }
-
-
-    return {};
-}
-
-std::vector<ShapePath> SVGLoader::parse(std::string text) {
-
-    pugi::xml_document doc;
-    pugi::xml_parse_result result = doc.load_string(text.c_str());
-    if (!result) {
-        throw std::runtime_error("Unable to parse modelDescription.xml");
-    }
-
-    std::vector<Matrix3> transformStack;
-
-    const Matrix3 tempTransform0;
-    const Matrix3 tempTransform1;
-    const Matrix3 tempTransform2;
-    const Matrix3 tempTransform3;
-    const Vector2 tempV2;
-    const Vector3 tempV3;
-
-    Matrix3 currentTransform;
-
-    std::function<Matrix3(pugi::xml_node&)> parseNodeTransform = [&](pugi::xml_node& node) {
+    Matrix3 parseNodeTransform(const pugi::xml_node& node) {
 
         Matrix3 transform;
         Matrix3 currentTransform = tempTransform0;
 
         if (std::string(node.name()) == "use" && (node.attribute("x") || node.attribute("y"))) {
 
-            const auto tx = parseFloatWithUnits(node.attribute("x"), defaultUnit, defaultDPI);
-            const auto ty = parseFloatWithUnits(node.attribute("y"), defaultUnit, defaultDPI);
+            const auto tx = parseFloatWithUnits(node.attribute("x"));
+            const auto ty = parseFloatWithUnits(node.attribute("y"));
 
             transform.translate(tx, ty);
         }
@@ -1071,136 +770,12 @@ std::vector<ShapePath> SVGLoader::parse(std::string text) {
         if (node.attribute("transform")) {
 
             // TODO
-
-//            const transformsTexts = node.attribute("transform").split(')');
-//
-//            for (int tIndex = transformsTexts.length - 1; tIndex >= 0; tIndex--) {
-//
-//                const transformText = transformsTexts[tIndex].trim();
-//
-//                if (transformText == = '' ) continue;
-//
-//                const openParPos = transformText.indexOf('(');
-//                const closeParPos = transformText.length;
-//
-//                if (openParPos > 0 && openParPos < closeParPos) {
-//
-//                    const transformType = transformText.slice(0, openParPos);
-//
-//                    const auto array = parseFloats(transformText.slice(openParPos + 1));
-//
-//                    currentTransform.identity();
-//
-//                    switch (transformType) {
-//
-//                        case 'translate':
-//
-//                            if (array.length >= 1) {
-//
-//                                const auto tx = array[0];
-//                                float ty = 0;
-//
-//                                if (array.length >= 2) {
-//
-//                                    ty = array[1];
-//                                }
-//
-//                                currentTransform.translate(tx, ty);
-//                            }
-//
-//                            break;
-//
-//                        case 'rotate':
-//
-//                            if (array.length >= 1) {
-//
-//                                float angle = 0;
-//                                float cx = 0;
-//                                float cy = 0;
-//
-//                                // Angle
-//                                angle = array[0] * math::PI / 180;
-//
-//                                if (array.length >= 3) {
-//
-//                                    // Center x, y
-//                                    cx = array[1];
-//                                    cy = array[2];
-//                                }
-//
-//                                // Rotate around center (cx, cy)
-//                                tempTransform1.makeTranslation(-cx, -cy);
-//                                tempTransform2.makeRotation(angle);
-//                                tempTransform3.multiplyMatrices(tempTransform2, tempTransform1);
-//                                tempTransform1.makeTranslation(cx, cy);
-//                                currentTransform.multiplyMatrices(tempTransform1, tempTransform3);
-//                            }
-//
-//                            break;
-//
-//                        case 'scale':
-//
-//                            if (array.length >= 1) {
-//
-//                                const scaleX = array[0];
-//                                let scaleY = scaleX;
-//
-//                                if (array.length >= 2) {
-//
-//                                    scaleY = array[1];
-//                                }
-//
-//                                currentTransform.scale(scaleX, scaleY);
-//                            }
-//
-//                            break;
-//
-//                        case 'skewX':
-//
-//                            if (array.length == = 1) {
-//
-//                                currentTransform.set(
-//                                        1, Math.tan(array[0] * Math.PI / 180), 0,
-//                                        0, 1, 0,
-//                                        0, 0, 1);
-//                            }
-//
-//                            break;
-//
-//                        case 'skewY':
-//
-//                            if (array.length == = 1) {
-//
-//                                currentTransform.set(
-//                                        1, 0, 0,
-//                                        std::tan(array[0] * Math.PI / 180), 1, 0,
-//                                        0, 0, 1);
-//                            }
-//
-//                            break;
-//
-//                        case 'matrix':
-//
-//                            if (array.length == = 6) {
-//
-//                                currentTransform.set(
-//                                        array[0], array[2], array[4],
-//                                        array[1], array[3], array[5],
-//                                        0, 0, 1);
-//                            }
-//
-//                            break;
-//                    }
-//                }
-//
-//                transform.premultiply(currentTransform);
-//            }
         }
 
         return transform;
     };
 
-    std::function<std::optional<Matrix3>(pugi::xml_node)> getNodeTransform = [&](pugi::xml_node node) {
+    std::optional<Matrix3> getNodeTransform(pugi::xml_node node) {
 
         if (!(node.attribute("transform") || (std::string(node.name()) == "use" && (node.attribute("x") || node.attribute("y"))))) {
 
@@ -1218,24 +793,199 @@ std::vector<ShapePath> SVGLoader::parse(std::string text) {
         transformStack.emplace_back(transform);
 
         return transform;
-    };
+    }
 
-    auto parseNode = [&](pugi::xml_node node, Style& style) {
+    Style parseStyle( const pugi::xml_node& node, Style style ) {
+
+        std::unordered_map<std::string, std::string> stylesheetStyles;
+
+        if ( node.attribute( "class" ) ) {
+
+            static std::regex r("\\s");
+
+            auto classSelectors = regexSplit(node.attribute( "class" ).value(), r);
+            for (auto& str : classSelectors) {
+                utils::trimInplace(str);
+            }
+
+        }
+
+//        if ( node.attribute( "id" ) ) {
+//
+//            stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '#' + node.getAttribute( 'id' ) ] );
+//
+//        }
+//
+//        auto addStyle = [&]( const std::string& svgName, const std::string& jsName ) {
+//
+//            if ( node.attribute( svgName.c_str() ) ) style[ jsName ] = adjustFunction( node.getAttribute( svgName ) );
+//            if ( stylesheetStyles[ svgName ] ) style[ jsName ] = adjustFunction( stylesheetStyles[ svgName ] );
+//            if ( node.style && node.style[ svgName ] !== '' ) style[ jsName ] = adjustFunction( node.style[ svgName ] );
+//
+//        }
+//
+        for (const auto& a : node.attributes()) {
+            std::cout << a.name() << std::endl;
+
+            if (std::string(a.name()) == "fill") {
+                style.fill = a.as_string();
+            }
+        }
+
+        if (node.attribute("style")) {
+            auto a = node.attribute("style");
+            std::cout << a.value() << std::endl;
+        }
+
+        if (node.attribute("fill")) {
+            style.fill = node.attribute("fill").as_string();
+        }
+        if (node.attribute("stroke")) {
+            style.stroke = node.attribute("stroke").as_string();
+        }
+        if (node.attribute("strokeLineJoin")) {
+            style.strokeLineJoin = node.attribute("strokeLineJoin").as_string();
+        }
+        if (node.attribute("strokeLineCap")) {
+            style.strokeLineCap = node.attribute("strokeLineCap").as_string();
+        }
+
+        if (node.attribute("fillOpacity")) {
+            style.fillOpacity = clamp(node.attribute("fillOpacity").as_float());
+        }
+        if (node.attribute("opacity")) {
+            style.opacity = clamp(node.attribute("opacity").as_float());
+        }
+        if (node.attribute("strokeWidth")) {
+            style.strokeWidth = positive(node.attribute("strokeWidth").as_float());
+        }
+        if (node.attribute("strokeMiterLimit")) {
+            style.strokeMiterLimit = positive(node.attribute("strokeMiterLimit").as_float());
+        }
+
+        if (node.attribute("visibility")) {
+            style.fillOpacity = node.attribute("visibility").as_float();
+        }
+
+        return style;
+    }
+
+    void parseNode(pugi::xml_node node, Style style) {
+
         if (node.type() != pugi::xml_node_type::node_element) return;
 
         const auto transform = getNodeTransform(node);
-    };
 
-    Style style;
-    parseNode(doc.root(), style);
+        bool traverseChildNodes = true;
 
-    return {};
+        bool set = false;
+        SVGLoader::SVGData data;
+
+        std::string nodeName{node.name()};
+        if (nodeName == "svg") {
+
+        } else if (nodeName == "style") {
+
+        } else if (nodeName == "g") {
+
+            style = parseStyle(node, style);
+
+        } else if (nodeName == "path") {
+
+            style = parseStyle(node, style);
+            if (node.attribute("d")) {
+                data.path = parsePathNode(node);
+                set = true;
+            }
+
+        } else if (nodeName == "rect") {
+
+            style = parseStyle(node, style);
+
+        } else if (nodeName == "polygon") {
+
+            style = parseStyle(node, style);
+
+        } else if (nodeName == "polyline") {
+
+            style = parseStyle(node, style);
+
+        } else if (nodeName == "circle") {
+
+            style = parseStyle(node, style);
+
+        } else if (nodeName == "ellipse") {
+
+            style = parseStyle(node, style);
+
+        } else if (nodeName == "line") {
+
+            style = parseStyle(node, style);
+
+        } else if (nodeName == "defs") {
+
+            traverseChildNodes = false;
+
+        } else if (nodeName == "use") {
+
+            style = parseStyle(node, style);
+
+        }
+
+        if (set) {
+
+            if (style.fill && !style.fill->empty() && *style.fill != "none") {
+
+                data.path.color.setStyle(*style.fill);
+
+            }
+
+            data.style = style;
+            paths.emplace_back(data);
+        }
+
+        if (traverseChildNodes) {
+
+            for (const auto& n : node.children()) {
+
+                parseNode(n, style);
+            }
+        }
+    }
+
+
+private:
+    SVGLoader& scope;
+};
+
+threepp::SVGLoader::SVGLoader()
+    : pimpl_(std::make_unique<Impl>(*this)) {}
+
+std::vector<SVGLoader::SVGData> SVGLoader::load(const std::filesystem::path& filePath) {
+
+    pugi::xml_document doc;
+    pugi::xml_parse_result result = doc.load_file(filePath.string().c_str());
+    if (!result) {
+        throw std::runtime_error("Unable to parse modelDescription.xml");
+    }
+
+    return pimpl_->load(doc);
 }
 
-std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVGLoader::Style& style) {
+std::vector<SVGLoader::SVGData> SVGLoader::parse(const std::string& text) {
 
-    // Param shapePath: a shapepath as returned by the parse function of this class
-    // Returns Shape object
+    pugi::xml_document doc;
+    pugi::xml_parse_result result = doc.load_string(text.c_str());
+    if (!result) {
+        throw std::runtime_error("Unable to parse modelDescription.xml");
+    }
+
+    return pimpl_->load(doc);
+}
+
+std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
+
+    const auto& shapePath = data.path;
 
     const auto BIGNUMBER = 999999999;
 
@@ -1243,7 +993,7 @@ std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVG
     auto scanlineMaxX = -BIGNUMBER;
 
     std::vector<SimplePath> simplePaths;
-    const auto& subPaths = shapePath.getSubPaths();
+    const auto& subPaths = shapePath.subPaths;
     std::transform(subPaths.begin(), subPaths.end(), std::back_inserter(simplePaths), [&](const auto& p) {
         const auto& points = p->getPoints();
         auto maxY = -BIGNUMBER;
@@ -1308,7 +1058,7 @@ std::vector<Shape> SVGLoader::createShapes(const ShapePath& shapePath, const SVG
 
     std::vector<AHole> isAHole;
     std::transform(simplePaths.begin(), simplePaths.end(), std::back_inserter(isAHole), [&](const auto& p) {
-        return isHoleTo(p, simplePaths, scanlineMinX, scanlineMaxX, style.fillRule);
+        return isHoleTo(p, simplePaths, scanlineMinX, scanlineMaxX, data.style.fillRule);
     });
 
     std::vector<Shape> shapesToReturn;
@@ -1356,3 +1106,5 @@ std::shared_ptr<BufferGeometry> SVGLoader::pointsToStroke(const std::vector<Vect
 
     return geometry;
 }
+
+threepp::SVGLoader::~SVGLoader() = default;

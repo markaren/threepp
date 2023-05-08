@@ -12,15 +12,6 @@ namespace threepp {
     class EllipseCurve: public Curve<Vector2> {
 
     public:
-        explicit EllipseCurve(
-                float aX = 0, float aY = 0,
-                float xRadius = 1, float yRadius = 1,
-                float aStartAngle = 0, float aEndAngle = math::TWO_PI,
-                bool aClockwise = false, float aRotation = 0);
-
-        void getPoint(float t, Vector2& target) const override;
-
-    private:
         float aX;
         float aY;
 
@@ -33,6 +24,14 @@ namespace threepp {
         bool aClockwise;
 
         float aRotation;
+
+        explicit EllipseCurve(
+                float aX = 0, float aY = 0,
+                float xRadius = 1, float yRadius = 1,
+                float aStartAngle = 0, float aEndAngle = math::TWO_PI,
+                bool aClockwise = false, float aRotation = 0);
+
+        void getPoint(float t, Vector2& target) const override;
     };
 
 }// namespace threepp

@@ -16,6 +16,8 @@ namespace threepp {
 
     public:
         Color color;
+        std::shared_ptr<Path> currentPath;
+        std::vector<std::shared_ptr<Path>> subPaths;
 
         ShapePath& moveTo(float x, float y);
 
@@ -29,11 +31,6 @@ namespace threepp {
 
         [[nodiscard]] std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW = false) const;
 
-        const std::vector<std::shared_ptr<Path>>& getSubPaths() const;
-
-    private:
-        std::shared_ptr<Path> currentPath;
-        std::vector<std::shared_ptr<Path>> subPaths;
     };
 
 }// namespace threepp

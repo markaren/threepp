@@ -12,6 +12,8 @@ namespace threepp {
     class Path: public CurvePath<Vector2> {
 
     public:
+        Vector2 currentPoint;
+
         explicit Path(const std::optional<std::vector<Vector2>>& points = {});
 
         Path& setFromPoints(const std::vector<Vector2>& points);
@@ -31,10 +33,6 @@ namespace threepp {
         Path& absarc(float aX, float aY, float aRadius, float aStartAngle, float aEndAngle, bool aClockwise = false);
 
         Path& absellipse(float aX, float aY, float xRadius, float yRadius, float aStartAngle, float aEndAngle, bool aClockwise = false, float aRotation = 0);
-
-
-    private:
-        Vector2 currentPoint;
     };
 
 }// namespace threepp
