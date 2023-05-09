@@ -30,7 +30,7 @@ namespace {
             lastSelectedIndex = selectedIndex;
 
             ImGui::SetNextWindowPos({}, 0, {});
-            ImGui::SetNextWindowSize({230, 0}, 0);
+            ImGui::SetNextWindowSize({250, 0}, 0);
 
             ImGui::Begin("SVGLoader");
 
@@ -50,7 +50,9 @@ namespace {
     private:
         int lastSelectedIndex = -1;
         int selectedIndex = 0;
-        std::vector<std::string> names{"tiger.svg", "threejs.svg", "hexagon.svg", "lineJoinsAndCaps.svg"};
+        std::vector<std::string> names{
+                "tiger.svg", "threejs.svg", "OpenBridge_Heading.svg",
+                "hexagon.svg", "lineJoinsAndCaps.svg"};
     };
 
 #endif
@@ -118,6 +120,16 @@ namespace {
         svg->position.x = -70;
         svg->position.y = 70;
         svg->scale.y *= -1;
+
+//        svg->children[0]->visible = false;
+
+//        float z = 0;
+//        for (auto c : svg->children) {
+//            c->position.z = z;
+//            z += 10.f;
+//        }
+
+//        svg->children[3]->rotation.z = math::PI / 2;
 
         return svg;
     }

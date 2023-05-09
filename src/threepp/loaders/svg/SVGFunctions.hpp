@@ -60,9 +60,9 @@ namespace threepp::svg {
         auto newNumber = [&] {
             if (!number.empty()) {
                 if (exponent.empty()) {
-                    result.emplace_back(static_cast<float>(std::atof(number.c_str())));
+                    result.emplace_back(std::stof(number));
                 } else {
-                    result.emplace_back(static_cast<float>(std::atof(number.c_str()) * std::pow(10.f, std::atof(exponent.c_str()))));
+                    result.emplace_back(std::stof(number) * std::pow(10.f, std::stof(exponent)));
                 }
             }
 
@@ -824,10 +824,7 @@ namespace threepp::svg {
 
                     const auto x = +((x1 + classifyResult.t * (x2 - x1)));
                     const auto y = +((y1 + classifyResult.t * (y2 - y1)));
-                    return EdgeIntersection{
-                            x,
-                            y,
-                            classifyResult.t,
+                    return EdgeIntersection{x,y,classifyResult.t,
                     };
                 }
             }
@@ -876,7 +873,7 @@ namespace threepp::svg {
                 if (intersection && std::find_if(intersectionsRaw.begin(), intersectionsRaw.end(), [&](auto& i) {
                                         return i.t <= intersection->t + std::numeric_limits<float>::epsilon() &&
                                                i.t >= intersection->t - std::numeric_limits<float>::epsilon();
-                                    }) != intersectionsRaw.end()) {
+                                    }) == intersectionsRaw.end()) {
 
                     intersectionsRaw.emplace_back(*intersection);
                     intersections.emplace_back(intersection->x, intersection->y);
@@ -911,7 +908,7 @@ namespace threepp::svg {
         }
 
         std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
-            return i1.point.x - i2.point.x;
+            return i1.point.x < i2.point.x;
         });
 
         return allIntersections;
@@ -932,7 +929,7 @@ namespace threepp::svg {
         auto scanlineIntersections = getScanlineIntersections(scanline, simplePath.boundingBox, allPaths);
 
         std::sort(scanlineIntersections.begin(), scanlineIntersections.end(), [](const auto& i1, const auto& i2) {
-            return i1.point.x - i2.point.x;
+            return i1.point.x > i2.point.x;
         });
 
         std::vector<svg::Intersection> baseIntersections;

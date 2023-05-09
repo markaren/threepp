@@ -1,6 +1,3 @@
-//
-// Created by Lars Ivar Hatledal on 07.05.2023.
-//
 
 #ifndef THREEPP_SVGTYPES_HPP
 #define THREEPP_SVGTYPES_HPP
@@ -14,8 +11,6 @@
 #include <memory>
 
 namespace threepp::svg {
-
-
 
     enum class IntersectionLocationType {
         ORIGIN,
@@ -50,7 +45,6 @@ namespace threepp::svg {
     };
 
     struct SimplePath {
-        std::vector<std::shared_ptr<Curve2>> curves;
         std::vector<Vector2> points;
         bool isCW;
         int identifier;

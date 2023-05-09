@@ -8,7 +8,6 @@
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/math/Box2.hpp"
-#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 #include "threepp/utils/RegexUtil.hpp"
@@ -583,7 +582,6 @@ namespace {
 
                             isMiter = true;
                         }
-
                     }
 
                 } else {
@@ -1117,18 +1115,22 @@ struct SVGLoader::Impl {
 
                     if (key == "fill") {
                         style.fill = strValue;
+                    } else if (key == "fill-rule") {
+                        style.fillRule = strValue;
                     } else if (key == "fill-opacity") {
-                        style.fillOpacity = std::stof(strValue);
+                        style.fillOpacity = clamp(std::stof(strValue));
                     } else if (key == "stroke") {
                         style.stroke = strValue;
+                    } else if (key == "stroke-opacity") {
+                        style.strokeOpacity = clamp(std::stof(strValue));
                     } else if (key == "stroke-linejoin") {
                         style.strokeLineJoin = strValue;
                     } else if (key == "stroke-linecap") {
                         style.strokeLineCap = strValue;
                     } else if (key == "stroke-width") {
-                        style.strokeWidth = std::stof(strValue);
+                        style.strokeWidth = positive(std::stof(strValue));
                     } else if (key == "stroke-miter-limit") {
-                        style.strokeMiterLimit = std::stof(strValue);
+                        style.strokeMiterLimit = positive(std::stof(strValue));
                     }
                 }
             }
@@ -1137,27 +1139,33 @@ struct SVGLoader::Impl {
         if (node.attribute("fill")) {
             style.fill = node.attribute("fill").as_string();
         }
+        if (node.attribute("fill-rule")) {
+            style.fillRule = node.attribute("fill-rule").as_string();
+        }
         if (node.attribute("stroke")) {
             style.stroke = node.attribute("stroke").as_string();
         }
-        if (node.attribute("strokeLineJoin")) {
-            style.strokeLineJoin = node.attribute("strokeLineJoin").as_string();
+        if (node.attribute("stroke-line-join")) {
+            style.strokeLineJoin = node.attribute("stroke-line-join").as_string();
         }
-        if (node.attribute("strokeLineCap")) {
-            style.strokeLineCap = node.attribute("strokeLineCap").as_string();
+        if (node.attribute("stroke-line-cap")) {
+            style.strokeLineCap = node.attribute("stroke-line-cap").as_string();
         }
 
-        if (node.attribute("fillOpacity")) {
-            style.fillOpacity = clamp(node.attribute("fillOpacity").as_float());
-        }
         if (node.attribute("opacity")) {
             style.opacity = clamp(node.attribute("opacity").as_float());
         }
-        if (node.attribute("strokeWidth")) {
-            style.strokeWidth = positive(node.attribute("strokeWidth").as_float());
+        if (node.attribute("fill-opacity")) {
+            style.fillOpacity = clamp(node.attribute("fill-opacity").as_float());
         }
-        if (node.attribute("strokeMiterLimit")) {
-            style.strokeMiterLimit = positive(node.attribute("strokeMiterLimit").as_float());
+        if (node.attribute("stroke-opacity")) {
+            style.strokeOpacity = clamp(node.attribute("stroke-opacity").as_float());
+        }
+        if (node.attribute("stroke-width")) {
+            style.strokeWidth = positive(node.attribute("stroke-width").as_float());
+        }
+        if (node.attribute("stroke-miter-limit")) {
+            style.strokeMiterLimit = positive(node.attribute("stroke-miter-limit").as_float());
         }
 
         if (node.attribute("visibility")) {
@@ -1346,7 +1354,9 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
 
     const auto& shapePath = data.path;
 
-    const auto BIGNUMBER = 999999999;
+    const auto BIGNUMBER = 999999999.f;
+
+    int identifier = 0;
 
     auto scanlineMinX = BIGNUMBER;
     auto scanlineMaxX = -BIGNUMBER;
@@ -1355,10 +1365,10 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
     const auto& subPaths = shapePath.subPaths;
     std::transform(subPaths.begin(), subPaths.end(), std::back_inserter(simplePaths), [&](const auto& p) {
         const auto& points = p->getPoints();
-        auto maxY = -BIGNUMBER;
-        auto minY = BIGNUMBER;
-        auto maxX = -BIGNUMBER;
-        auto minX = BIGNUMBER;
+        float maxY = -BIGNUMBER;
+        float minY = BIGNUMBER;
+        float maxX = -BIGNUMBER;
+        float minX = BIGNUMBER;
 
         //points.forEach(p => p.y *= -1);
 
@@ -1398,7 +1408,7 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
             scanlineMinX = minX - 1;
         }
 
-        return SimplePath{p->curves, points, shapeutils::isClockWise(points), -1, Box2({minX, minY}, {maxX, maxY})};
+        return SimplePath{points, shapeutils::isClockWise(points), identifier++, Box2({minX, minY}, {maxX, maxY})};
     });
 
     // simplePaths = simplePaths.filter( sp => sp.points.length > 1 );
@@ -1408,11 +1418,6 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
         } else {
             it = simplePaths.erase(it);
         }
-    }
-
-    for (int identifier = 0; identifier < simplePaths.size(); identifier++) {
-
-        simplePaths[identifier].identifier = identifier;
     }
 
     std::vector<AHole> isAHole;
@@ -1427,17 +1432,14 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
 
         if (!amIAHole.isHole) {
 
-            Shape shape;
-            shape.curves = p.curves;
+            Shape shape(p.points);
 
             for (const auto& h : isAHole) {
 
                 if (h.isHole && h._for == p.identifier) {
 
-                    const auto& hole = simplePaths[h.identifier];
-                    auto path = std::make_shared<Path>();
-                    path->curves = hole.curves;
-                    shape.holes.emplace_back(path);
+                    const auto& path = simplePaths[h.identifier];
+                    shape.holes.emplace_back(std::make_shared<Path>(path.points));
                 }
             }
             shapesToReturn.emplace_back(shape);
