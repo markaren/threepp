@@ -1117,15 +1117,17 @@ struct SVGLoader::Impl {
 
                     if (key == "fill") {
                         style.fill = strValue;
+                    } else if (key == "fill-opacity") {
+                        style.fillOpacity = std::stof(strValue);
                     } else if (key == "stroke") {
                         style.stroke = strValue;
-                    } else if (key == "strokeLineJoin") {
-                        style.strokeLineCap = strValue;
-                    } else if (key == "strokeLineCap") {
+                    } else if (key == "stroke-linejoin") {
+                        style.strokeLineJoin = strValue;
+                    } else if (key == "stroke-linecap") {
                         style.strokeLineCap = strValue;
                     } else if (key == "stroke-width") {
                         style.strokeWidth = std::stof(strValue);
-                    } else if (key == "strokeMiterLimit") {
+                    } else if (key == "stroke-miter-limit") {
                         style.strokeMiterLimit = std::stof(strValue);
                     }
                 }
