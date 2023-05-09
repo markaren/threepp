@@ -1047,6 +1047,23 @@ namespace threepp::svg {
         return result.set(-result.y, result.x).normalize();
     }
 
+    bool isTransformRotated(const Matrix3& m) {
+
+        return m.elements[1] != 0 || m.elements[3] != 0;
+    }
+
+    float getTransformScaleX(const Matrix3& m) {
+
+        const auto& te = m.elements;
+        return std::sqrt(te[0] * te[0] + te[1] * te[1]);
+    }
+
+    float getTransformScaleY(const Matrix3& m) {
+
+        const auto& te = m.elements;
+        return std::sqrt(te[3] * te[3] + te[4] * te[4]);
+    }
+
 }// namespace threepp::svg
 
 #endif//THREEPP_SVGFUNCTIONS_HPP

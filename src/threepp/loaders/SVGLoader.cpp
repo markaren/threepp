@@ -1,14 +1,18 @@
 
 #include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/extras/ShapeUtils.hpp"
+#include "threepp/extras/curves/CubicBezierCurve.hpp"
+#include "threepp/extras/curves/EllipseCurve.hpp"
+#include "threepp/extras/curves/LineCurve.hpp"
+#include "threepp/extras/curves/QuadraticBezierCurve.hpp"
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/math/Box2.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
 
-#include "threepp/utils/StringUtils.hpp"
 #include "threepp/utils/RegexUtil.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include "threepp/loaders/svg/SVGFunctions.hpp"
 
@@ -657,12 +661,12 @@ struct SVGLoader::Impl {
 
     std::vector<Matrix3> transformStack;
 
-    const Matrix3 tempTransform0;
-    const Matrix3 tempTransform1;
-    const Matrix3 tempTransform2;
-    const Matrix3 tempTransform3;
-    const Vector2 tempV2;
-    const Vector3 tempV3;
+    Matrix3 tempTransform0;
+    Matrix3 tempTransform1;
+    Matrix3 tempTransform2;
+    Matrix3 tempTransform3;
+    Vector2 tempV2;
+    Vector3 tempV3;
 
     Matrix3 currentTransform;
 
@@ -675,12 +679,7 @@ struct SVGLoader::Impl {
         styleSheets.clear();
         transformStack.clear();
 
-        parseNode(node.child("svg"), {"#000",
-                                      1,
-                                      1,
-                                      1,
-                                      "miter",
-                                      "butt", 4});
+        parseNode(node.child("svg"), {"#000", 1, 1, 1, "miter", "butt", 4});
 
         return paths;
     }
@@ -720,24 +719,22 @@ struct SVGLoader::Impl {
         return scale * value;
     }
 
-    float parseFloatWithUnits(const pugi::xml_attribute& string) {
+    float parseFloatWithUnits(const std::string& str) {
 
         std::string theUnit = "px";
 
         float value;
 
-        if (!utils::isNumber(string.value())) {
-
-            std::string str = string.as_string();
+        if (!utils::isNumber(str)) {
 
             for (unsigned i = 0, n = units.size(); i < n; i++) {
 
                 const auto u = units[i];
 
-                if (utils::endsWith(string.value(), u)) {
+                if (utils::endsWith(str, u)) {
 
                     theUnit = u;
-                    value = std::atof(str.substr(0, str.size() - u.size()).c_str());
+                    value = std::stof(str.substr(0, str.size() - u.size()));
                     break;
                 } else {
 
@@ -747,7 +744,7 @@ struct SVGLoader::Impl {
 
         } else {
 
-            value = string.as_float();
+            value = std::stof(str);
         }
 
         return parseFloatWithUnits(value, theUnit);
@@ -757,25 +754,131 @@ struct SVGLoader::Impl {
     Matrix3 parseNodeTransform(const pugi::xml_node& node) {
 
         Matrix3 transform;
-        Matrix3 currentTransform = tempTransform0;
+        Matrix3& currentTransform = tempTransform0;
 
         if (std::string(node.name()) == "use" && (node.attribute("x") || node.attribute("y"))) {
 
-            const auto tx = parseFloatWithUnits(node.attribute("x"));
-            const auto ty = parseFloatWithUnits(node.attribute("y"));
+            const auto tx = parseFloatWithUnits(node.attribute("x").value());
+            const auto ty = parseFloatWithUnits(node.attribute("y").value());
 
             transform.translate(tx, ty);
         }
 
         if (node.attribute("transform")) {
 
-            // TODO
+            auto transformsTexts = utils::split(node.attribute("transform").value(), ')');
+
+            for (int tIndex = transformsTexts.size() - 1; tIndex >= 0; tIndex--) {
+
+                const auto transformText = utils::trim(transformsTexts[tIndex]);
+
+                if (transformText.empty()) continue;
+
+                const auto openParPos = transformText.find('(');
+                const auto closeParPos = transformText.size();
+
+                if (openParPos != std::string::npos && openParPos > 0 && openParPos < closeParPos) {
+
+                    const auto transformType = transformText.substr(0, openParPos);
+
+                    const auto array = parseFloats(transformText.substr(openParPos + 1, closeParPos - openParPos - 1));
+
+                    currentTransform.identity();
+
+                    if (transformType == "translate") {
+
+                        if (!array.empty()) {
+
+                            const auto tx = array[0];
+                            auto ty = tx;
+
+                            if (array.size() >= 2) {
+
+                                ty = array[1];
+                            }
+
+                            currentTransform.translate(tx, ty);
+                        }
+                    } else if (transformType == "rotate") {
+
+                        if (!array.empty()) {
+
+                            float angle = 0;
+                            float cx = 0;
+                            float cy = 0;
+
+                            // Angle
+                            angle = -array[0] * math::PI / 180;
+
+                            if (array.size() >= 3) {
+
+                                // Center x, y
+                                cx = array[1];
+                                cy = array[2];
+                            }
+
+                            // Rotate around center (cx, cy)
+                            tempTransform1.identity().translate(-cx, -cy);
+                            tempTransform2.identity().rotate(angle);
+                            tempTransform3.multiplyMatrices(tempTransform2, tempTransform1);
+                            tempTransform1.identity().translate(cx, cy);
+                            currentTransform.multiplyMatrices(tempTransform1, tempTransform3);
+                        }
+
+                    } else if (transformType == "scale") {
+
+                        if (!array.empty()) {
+
+                            const auto scaleX = array[0];
+                            auto scaleY = scaleX;
+
+                            if (array.size() >= 2) {
+
+                                scaleY = array[1];
+                            }
+
+                            currentTransform.scale(scaleX, scaleY);
+                        }
+                    } else if (transformType == "skewX") {
+
+                        if (array.size() == 1) {
+
+                            currentTransform.set(
+                                    1, std::tan(array[0] * math::PI / 180), 0,
+                                    0, 1, 0,
+                                    0, 0, 1);
+                        }
+
+                    } else if (transformType == "skewY") {
+
+                        if (array.size() == 1) {
+
+                            currentTransform.set(
+                                    1, 0, 0,
+                                    std::tan(array[0] * math::PI / 180), 1, 0,
+                                    0, 0, 1);
+                        }
+
+                    } else if (transformType == "matrix") {
+
+                        if (array.size() == 6) {
+
+                            currentTransform.set(
+                                    array[0], array[2], array[4],
+                                    array[1], array[3], array[5],
+                                    0, 0, 1);
+                        }
+                    }
+                }
+
+                transform.premultiply(currentTransform);
+            }
         }
 
         return transform;
     };
 
-    std::optional<Matrix3> getNodeTransform(pugi::xml_node node) {
+    std::optional<Matrix3> getNodeTransform(const pugi::xml_node& node) {
 
         if (!(node.attribute("transform") || (std::string(node.name()) == "use" && (node.attribute("x") || node.attribute("y"))))) {
 
@@ -795,46 +898,224 @@ struct SVGLoader::Impl {
         return transform;
     }
 
-    Style parseStyle( const pugi::xml_node& node, Style style ) {
+    /*
+    * According to https://www.w3.org/TR/SVG/shapes.html#RectElementRXAttribute
+    * rounded corner should be rendered to elliptical arc, but bezier curve does the job well enough
+    */
+    ShapePath parseRectNode(const pugi::xml_node& node) {
+
+        const auto x = parseFloatWithUnits(node.attribute("x").as_float(0));
+        const auto y = parseFloatWithUnits(node.attribute("y").as_float(0));
+        const auto rx = parseFloatWithUnits(node.attribute("rx").as_float(0));
+        const auto ry = parseFloatWithUnits(node.attribute("ry").as_float(0));
+        const auto w = parseFloatWithUnits(node.attribute("width").value());
+        const auto h = parseFloatWithUnits(node.attribute("height").value());
+
+        ShapePath path;
+        path.moveTo(x + 2 * rx, y);
+        path.lineTo(x + w - 2 * rx, y);
+        if (rx != 0 || ry != 0) path.bezierCurveTo(x + w, y, x + w, y, x + w, y + 2 * ry);
+        path.lineTo(x + w, y + h - 2 * ry);
+        if (rx != 0 || ry != 0) path.bezierCurveTo(x + w, y + h, x + w, y + h, x + w - 2 * rx, y + h);
+        path.lineTo(x + 2 * rx, y + h);
+
+        if (rx != 0 || ry != 0) {
+
+            path.bezierCurveTo(x, y + h, x, y + h, x, y + h - 2 * ry);
+        }
+
+        path.lineTo(x, y + 2 * ry);
+
+        if (rx != 0 || ry != 0) {
+
+            path.bezierCurveTo(x, y, x, y, x + 2 * rx, y);
+        }
+
+        return path;
+    }
+
+    ShapePath parsePolygonNode(const pugi::xml_node& node) {
+
+        //                int index = 0;
+
+        //                auto iterator = ( match, a, b ) {
+        //
+        //                    const x = parseFloatWithUnits( a );
+        //                    const y = parseFloatWithUnits( b );
+        //
+        //                    if ( index === 0 ) {
+        //
+        //                        path.moveTo( x, y );
+        //
+        //                    } else {
+        //
+        //                        path.lineTo( x, y );
+        //
+        //                    }
+        //
+        //                    index ++;
+        //
+        //                }
+
+        const static std::regex regex{R"((-?[+\d\.?]+)[,|\s](-?[\d\.?]+))"};
+
+        ShapePath path;
+
+        std::string points = node.attribute("points").value();
+
+        int index = 0;
+        for (auto it = std::sregex_iterator(points.begin(), points.end(), regex); it != std::sregex_iterator(); ++it) {
+            std::smatch m = *it;
+
+            std::string a = m[1].str();
+            std::string b = m[2].str();
+
+            const auto x = parseFloatWithUnits(a);
+            const auto y = parseFloatWithUnits(b);
+
+            if (index == 0) {
+
+                path.moveTo(x, y);
+
+            } else {
+
+                path.lineTo(x, y);
+            }
+
+            ++index;
+        }
+
+        path.currentPath->autoClose = true;
+
+        return path;
+    }
+
+    ShapePath parsePolylineNode(const pugi::xml_node& node) {
+
+        const std::regex regex{R"((-?[\d\.?]+)[,|\s](-?[\d\.?]+))"};
+
+        ShapePath path;
+
+        std::string points = node.attribute("points").value();
+
+        int index = 0;
+        for (auto it = std::sregex_iterator(points.begin(), points.end(), regex); it != std::sregex_iterator(); ++it) {
+            std::smatch m = *it;
+
+            std::string a = m[1].str();
+            std::string b = m[2].str();
+
+            const auto x = parseFloatWithUnits(a);
+            const auto y = parseFloatWithUnits(b);
+
+            if (index == 0) {
+
+                path.moveTo(x, y);
+
+            } else {
+
+                path.lineTo(x, y);
+            }
+
+            ++index;
+        }
+
+        path.currentPath->autoClose = false;
+
+        return path;
+    }
+
+    ShapePath parseCircleNode(const pugi::xml_node& node) {
+
+        const auto x = parseFloatWithUnits(node.attribute("cx").as_float(0));
+        const auto y = parseFloatWithUnits(node.attribute("cy").as_float(0));
+        const auto r = parseFloatWithUnits(node.attribute("x").as_float(0));
+
+        auto subpath = std::make_shared<Path>();
+        subpath->absarc(x, y, r, 0, math::PI * 2);
+
+        ShapePath path;
+        path.subPaths.emplace_back(subpath);
+
+        return path;
+    }
+
+    ShapePath parseEllipseNode(const pugi::xml_node& node) {
+
+        const auto x = parseFloatWithUnits(node.attribute("cx").as_float(0));
+        const auto y = parseFloatWithUnits(node.attribute("cy").as_float(0));
+        const auto rx = parseFloatWithUnits(node.attribute("rx").as_float(0));
+        const auto ry = parseFloatWithUnits(node.attribute("ry").as_float(0));
+
+        auto subpath = std::make_shared<Path>();
+        subpath->absellipse(x, y, rx, ry, 0, math::PI * 2);
+
+        ShapePath path;
+        path.subPaths.emplace_back(subpath);
+
+        return path;
+    }
+
+    ShapePath parseLineNode(const pugi::xml_node& node) {
+
+        const auto x1 = parseFloatWithUnits(node.attribute("x1").as_float(0));
+        const auto y1 = parseFloatWithUnits(node.attribute("y1").as_float(0));
+        const auto x2 = parseFloatWithUnits(node.attribute("x2").as_float(0));
+        const auto y2 = parseFloatWithUnits(node.attribute("y2").as_float(0));
+
+        ShapePath path;
+        path.moveTo(x1, y1);
+        path.lineTo(x2, y2);
+        path.currentPath->autoClose = false;
+
+        return path;
+    }
+
+    Style parseStyle(const pugi::xml_node& node, Style style) {
 
         std::unordered_map<std::string, std::string> stylesheetStyles;
 
-        if ( node.attribute( "class" ) ) {
+        if (node.attribute("class")) {
 
             static std::regex r("\\s");
 
-            auto classSelectors = regexSplit(node.attribute( "class" ).value(), r);
+            auto classSelectors = regexSplit(node.attribute("class").value(), r);
             for (auto& str : classSelectors) {
                 utils::trimInplace(str);
             }
-
         }
 
-//        if ( node.attribute( "id" ) ) {
-//
-//            stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '#' + node.getAttribute( 'id' ) ] );
-//
-//        }
-//
-//        auto addStyle = [&]( const std::string& svgName, const std::string& jsName ) {
-//
-//            if ( node.attribute( svgName.c_str() ) ) style[ jsName ] = adjustFunction( node.getAttribute( svgName ) );
-//            if ( stylesheetStyles[ svgName ] ) style[ jsName ] = adjustFunction( stylesheetStyles[ svgName ] );
-//            if ( node.style && node.style[ svgName ] !== '' ) style[ jsName ] = adjustFunction( node.style[ svgName ] );
-//
-//        }
-//
-        for (const auto& a : node.attributes()) {
-            std::cout << a.name() << std::endl;
-
-            if (std::string(a.name()) == "fill") {
-                style.fill = a.as_string();
-            }
-        }
+        //        if ( node.attribute( "id" ) ) {
+        //
+        //            stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '#' + node.getAttribute( 'id' ) ] );
+        //
+        //        }
 
         if (node.attribute("style")) {
             auto a = node.attribute("style");
-            std::cout << a.value() << std::endl;
+            auto components = utils::split(a.as_string(), ';');
+            for (const auto& c : components) {
+                auto value = utils::split(utils::trim(c), ':');
+                if (value.size() == 2) {
+
+                    auto key = utils::trim(value[0]);
+                    auto strValue = utils::trim(value[1]);
+
+                    if (key == "fill") {
+                        style.fill = strValue;
+                    } else if (key == "stroke") {
+                        style.stroke = strValue;
+                    } else if (key == "strokeLineJoin") {
+                        style.strokeLineCap = strValue;
+                    } else if (key == "strokeLineCap") {
+                        style.strokeLineCap = strValue;
+                    } else if (key == "stroke-width") {
+                        style.strokeWidth = std::stof(strValue);
+                    } else if (key == "strokeMiterLimit") {
+                        style.strokeMiterLimit = std::stof(strValue);
+                    }
+                }
+            }
         }
 
         if (node.attribute("fill")) {
@@ -870,6 +1151,64 @@ struct SVGLoader::Impl {
         return style;
     }
 
+    void transformPath(ShapePath& path, const Matrix3& m) {
+
+        auto transfVec2 = [&](Vector2& v2) {
+            tempV3.set(v2.x, v2.y, 1).applyMatrix3(m);
+
+            v2.set(tempV3.x, tempV3.y);
+        };
+
+        const auto isRotated = isTransformRotated(m);
+
+        const auto& subPaths = path.subPaths;
+
+        for (unsigned i = 0, n = subPaths.size(); i < n; i++) {
+
+            const auto& subPath = subPaths[i];
+            const auto& curves = subPath->curves;
+
+            for (unsigned j = 0; j < curves.size(); j++) {
+
+                const auto& curve = curves[j];
+
+                if (auto lineCurve = std::dynamic_pointer_cast<LineCurve>(curve)) {
+
+                    transfVec2(lineCurve->v1);
+                    transfVec2(lineCurve->v2);
+
+                } else if (auto cubicBezierCurve = std::dynamic_pointer_cast<CubicBezierCurve>(curve)) {
+
+                    transfVec2(cubicBezierCurve->v0);
+                    transfVec2(cubicBezierCurve->v1);
+                    transfVec2(cubicBezierCurve->v2);
+                    transfVec2(cubicBezierCurve->v3);
+
+                } else if (auto quadraticBezierCurve = std::dynamic_pointer_cast<QuadraticBezierCurve>(curve)) {
+
+                    transfVec2(quadraticBezierCurve->v0);
+                    transfVec2(quadraticBezierCurve->v1);
+                    transfVec2(quadraticBezierCurve->v2);
+
+                } else if (auto ellipseCurve = std::dynamic_pointer_cast<EllipseCurve>(curve)) {
+
+                    if (isRotated) {
+
+                        std::cerr << "SVGLoader: Elliptic arc or ellipse rotation or skewing is not implemented." << std::endl;
+                    }
+
+                    tempV2.set(ellipseCurve->aX, ellipseCurve->aY);
+                    transfVec2(tempV2);
+                    ellipseCurve->aX = tempV2.x;
+                    ellipseCurve->aY = tempV2.y;
+
+                    ellipseCurve->xRadius *= getTransformScaleX(m);
+                    ellipseCurve->yRadius *= getTransformScaleY(m);
+                }
+            }
+        }
+    }
+
     void parseNode(pugi::xml_node node, Style style) {
 
         if (node.type() != pugi::xml_node_type::node_element) return;
@@ -879,7 +1218,7 @@ struct SVGLoader::Impl {
         bool traverseChildNodes = true;
 
         bool set = false;
-        SVGLoader::SVGData data;
+        std::optional<ShapePath> path;
 
         std::string nodeName{node.name()};
         if (nodeName == "svg") {
@@ -894,7 +1233,7 @@ struct SVGLoader::Impl {
 
             style = parseStyle(node, style);
             if (node.attribute("d")) {
-                data.path = parsePathNode(node);
+                path = parsePathNode(node);
                 set = true;
             }
 
@@ -905,22 +1244,27 @@ struct SVGLoader::Impl {
         } else if (nodeName == "polygon") {
 
             style = parseStyle(node, style);
+            path = parsePolygonNode(node);
 
         } else if (nodeName == "polyline") {
 
             style = parseStyle(node, style);
+            path = parsePolylineNode(node);
 
         } else if (nodeName == "circle") {
 
             style = parseStyle(node, style);
+            path = parseCircleNode(node);
 
         } else if (nodeName == "ellipse") {
 
             style = parseStyle(node, style);
+            path = parseEllipseNode(node);
 
         } else if (nodeName == "line") {
 
             style = parseStyle(node, style);
+            path = parseLineNode(node);
 
         } else if (nodeName == "defs") {
 
@@ -929,19 +1273,18 @@ struct SVGLoader::Impl {
         } else if (nodeName == "use") {
 
             style = parseStyle(node, style);
-
         }
 
-        if (set) {
+        if (path) {
 
             if (style.fill && !style.fill->empty() && *style.fill != "none") {
 
-                data.path.color.setStyle(*style.fill);
-
+                path->color.setStyle(*style.fill);
             }
 
-            data.style = style;
-            paths.emplace_back(data);
+            transformPath(*path, currentTransform);
+
+            paths.emplace_back(SVGLoader::SVGData{style, *path});
         }
 
         if (traverseChildNodes) {

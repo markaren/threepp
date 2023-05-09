@@ -127,7 +127,7 @@ template<class T>
 std::vector<T> CurvePath<T>::getPoints(unsigned int divisions) const {
 
     std::vector<T> points;
-    T last;
+    std::optional<T> last;
 
     for (unsigned i = 0; i < curves.size(); i++) {
 
@@ -150,7 +150,7 @@ std::vector<T> CurvePath<T>::getPoints(unsigned int divisions) const {
 
             auto& point = pts[j];
 
-            if (!last.isNan() && last.equals(point)) continue;// ensures no consecutive points are duplicates
+            if (last && last.value().equals(point)) continue;// ensures no consecutive points are duplicates
 
             points.emplace_back(point);
             last = point;
