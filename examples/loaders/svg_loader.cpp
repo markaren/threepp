@@ -82,6 +82,7 @@ namespace {
 
                     auto geometry = ShapeGeometry::create(shapes);
                     auto mesh = Mesh::create(geometry, material);
+                    mesh->name = data.style.id;
                     svg->add(mesh);
 
                 } else {
@@ -95,7 +96,8 @@ namespace {
                 }
             }
 
-            if (data.style.stroke && *data.style.stroke != "none") {
+            auto strokeColor = data.style.stroke;
+            if (strokeColor && *strokeColor != "none") {
                 auto strokeMaterial = MeshBasicMaterial::create(
                         {{"color", Color().setStyle(*data.style.stroke)},
                          {"opacity", data.style.strokeOpacity},
@@ -120,16 +122,6 @@ namespace {
         svg->position.x = -70;
         svg->position.y = 70;
         svg->scale.y *= -1;
-
-//        svg->children[0]->visible = false;
-
-//        float z = 0;
-//        for (auto c : svg->children) {
-//            c->position.z = z;
-//            z += 10.f;
-//        }
-
-//        svg->children[3]->rotation.z = math::PI / 2;
 
         return svg;
     }

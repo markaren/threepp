@@ -1097,11 +1097,10 @@ struct SVGLoader::Impl {
             }
         }
 
-        //        if ( node.attribute( "id" ) ) {
-        //
-        //            stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '#' + node.getAttribute( 'id' ) ] );
-        //
-        //        }
+        if (node.attribute("id")) {
+            style.id = node.attribute("id").value();
+            //                    stylesheetStyles = Object.assign( stylesheetStyles, stylesheets[ '#' + node.getAttribute( 'id' ) ] );
+        }
 
         if (node.attribute("style")) {
             auto a = node.attribute("style");
@@ -1233,7 +1232,7 @@ struct SVGLoader::Impl {
         }
     }
 
-    void parseNode(pugi::xml_node node, Style style) {
+    void parseNode(const pugi::xml_node& node, Style style) {
 
         if (node.type() != pugi::xml_node_type::node_element) return;
 
@@ -1241,13 +1240,14 @@ struct SVGLoader::Impl {
 
         bool traverseChildNodes = true;
 
-        bool set = false;
         std::optional<ShapePath> path;
 
         std::string nodeName{node.name()};
         if (nodeName == "svg") {
 
         } else if (nodeName == "style") {
+
+            style = parseStyle(node, style);
 
         } else if (nodeName == "g") {
 
@@ -1258,7 +1258,6 @@ struct SVGLoader::Impl {
             style = parseStyle(node, style);
             if (node.attribute("d")) {
                 path = parsePathNode(node);
-                set = true;
             }
 
         } else if (nodeName == "rect") {

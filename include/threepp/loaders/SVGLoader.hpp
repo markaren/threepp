@@ -17,6 +17,7 @@ namespace threepp {
     public:
 
         struct Style {
+
             std::optional<std::string> fill;
             float fillOpacity;
             float strokeOpacity;
@@ -28,6 +29,7 @@ namespace threepp {
             bool visibility;
             float opacity;
             std::optional<std::string> stroke;
+            std::string id;
         };
 
         struct SVGData {
