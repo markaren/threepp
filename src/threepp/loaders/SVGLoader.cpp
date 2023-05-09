@@ -282,35 +282,35 @@ namespace {
         return intersections;
     }
 
-//    std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, paths) {
-//
-//        Vector2 center;
-//        boundingBox.getCenter(center);
-//
-//        std::vector<Intersection> allIntersections;
-//
-//        for (const auto& path : paths) {
-//
-//            // check if the center of the bounding box is in the bounding box of the paths.
-//            // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
-//            // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
-//            if (path.boundingBox.containsPoint(center)) {
-//
-//                const auto intersections = getIntersections(scanline, path.points);
-//
-//                for (const auto& p : intersections) {
-//
-//                    allIntersections.emplace_back({path.identifier, path.isCW, p});
-//                }
-//            }
-//        }
-//
-//        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
-//            return i1.point.x - i2.point.x;
-//        });
-//
-//        return allIntersections;
-//    }
+    //    std::vector<Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, paths) {
+    //
+    //        Vector2 center;
+    //        boundingBox.getCenter(center);
+    //
+    //        std::vector<Intersection> allIntersections;
+    //
+    //        for (const auto& path : paths) {
+    //
+    //            // check if the center of the bounding box is in the bounding box of the paths.
+    //            // this is a pruning method to limit the search of intersections in paths that can't envelop of the current path.
+    //            // if a path envelops another path. The center of that oter path, has to be inside the bounding box of the enveloping path.
+    //            if (path.boundingBox.containsPoint(center)) {
+    //
+    //                const auto intersections = getIntersections(scanline, path.points);
+    //
+    //                for (const auto& p : intersections) {
+    //
+    //                    allIntersections.emplace_back({path.identifier, path.isCW, p});
+    //                }
+    //            }
+    //        }
+    //
+    //        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
+    //            return i1.point.x - i2.point.x;
+    //        });
+    //
+    //        return allIntersections;
+    //    }
 
     void removeDuplicatedPoints(std::vector<Vector2>& points, float minDistance) {
 
@@ -554,7 +554,6 @@ namespace {
             }
         };
 
-
         auto makeCircularSector = [&](const Vector2& center, const Vector2& p1, const Vector2& p2, float u, float v) {
             // param p1, p2: Points in the circle arc.
             // p1 and p2 are in clockwise direction.
@@ -586,6 +585,71 @@ namespace {
             addVertex(center, u, 0.5f);
         };
 
+
+        auto addCapGeometry = [&](const Vector2& center, const Vector2& p1, const Vector2& p2, bool joinIsOnLeftSide, bool start, float u) {
+            // param center: End point of the path
+            // param p1, p2: Left and right cap points
+
+            if (style.strokeLineCap == "round") {
+
+                if (start) {
+
+                    makeCircularSector(center, p2, p1, u, 0.5f);
+
+                } else {
+
+                    makeCircularSector(center, p1, p2, u, 0.5f);
+                }
+
+            } else if (style.strokeLineCap == "square") {
+                if (start) {
+
+                    tempV2_1.subVectors(p1, center);
+                    tempV2_2.set(tempV2_1.y, -tempV2_1.x);
+
+                    tempV2_3.addVectors(tempV2_1, tempV2_2).add(center);
+                    tempV2_4.subVectors(tempV2_2, tempV2_1).add(center);
+
+                    // Modify already existing vertices
+                    if (joinIsOnLeftSide) {
+
+                        tempV2_3.toArray(vertices, 1 * 3);
+                        tempV2_4.toArray(vertices, 0 * 3);
+                        tempV2_4.toArray(vertices, 3 * 3);
+
+                    } else {
+
+                        tempV2_3.toArray(vertices, 1 * 3);
+                        tempV2_3.toArray(vertices, 3 * 3);
+                        tempV2_4.toArray(vertices, 0 * 3);
+                    }
+
+                } else {
+
+                    tempV2_1.subVectors(p2, center);
+                    tempV2_2.set(tempV2_1.y, -tempV2_1.x);
+
+                    tempV2_3.addVectors(tempV2_1, tempV2_2).add(center);
+                    tempV2_4.subVectors(tempV2_2, tempV2_1).add(center);
+
+                    const auto vl = vertices.size();
+
+                    // Modify already existing vertices
+                    if (joinIsOnLeftSide) {
+
+                        tempV2_3.toArray(vertices, vl - 1 * 3);
+                        tempV2_4.toArray(vertices, vl - 2 * 3);
+                        tempV2_4.toArray(vertices, vl - 4 * 3);
+
+                    } else {
+
+                        tempV2_3.toArray(vertices, vl - 2 * 3);
+                        tempV2_4.toArray(vertices, vl - 1 * 3);
+                        tempV2_4.toArray(vertices, vl - 4 * 3);
+                    }
+                }
+            }
+        };
 
         for (unsigned iPoint = 1; iPoint < numPoints; iPoint++) {
 
@@ -832,8 +896,6 @@ namespace {
 
                             isMiter = true;
                         }
-
-                        break;
                     }
 
                 } else {
@@ -849,72 +911,22 @@ namespace {
 
                 makeSegmentTriangles();
             }
-        }
 
-        auto addCapGeometry = [&](const Vector2& center, const Vector2& p1, const Vector2& p2, bool joinIsOnLeftSide, bool start, float u) {
-            // param center: End point of the path
-            // param p1, p2: Left and right cap points
+            if (!isClosed && iPoint == numPoints - 1) {
 
-            if (style.strokeLineCap == "round") {
-
-                if (start) {
-
-                    makeCircularSector(center, p2, p1, u, 0.5f);
-
-                } else {
-
-                    makeCircularSector(center, p1, p2, u, 0.5f);
-                }
-
-            } else if (style.strokeLineCap == "square") {
-                if (start) {
-
-                    tempV2_1.subVectors(p1, center);
-                    tempV2_2.set(tempV2_1.y, -tempV2_1.x);
-
-                    tempV2_3.addVectors(tempV2_1, tempV2_2).add(center);
-                    tempV2_4.subVectors(tempV2_2, tempV2_1).add(center);
-
-                    // Modify already existing vertices
-                    if (joinIsOnLeftSide) {
-
-                        tempV2_3.toArray(vertices, 1 * 3);
-                        tempV2_4.toArray(vertices, 0 * 3);
-                        tempV2_4.toArray(vertices, 3 * 3);
-
-                    } else {
-
-                        tempV2_3.toArray(vertices, 1 * 3);
-                        tempV2_3.toArray(vertices, 3 * 3);
-                        tempV2_4.toArray(vertices, 0 * 3);
-                    }
-
-                } else {
-
-                    tempV2_1.subVectors(p2, center);
-                    tempV2_2.set(tempV2_1.y, -tempV2_1.x);
-
-                    tempV2_3.addVectors(tempV2_1, tempV2_2).add(center);
-                    tempV2_4.subVectors(tempV2_2, tempV2_1).add(center);
-
-                    const auto vl = vertices.size();
-
-                    // Modify already existing vertices
-                    if (joinIsOnLeftSide) {
-
-                        tempV2_3.toArray(vertices, vl - 1 * 3);
-                        tempV2_4.toArray(vertices, vl - 2 * 3);
-                        tempV2_4.toArray(vertices, vl - 4 * 3);
-
-                    } else {
-
-                        tempV2_3.toArray(vertices, vl - 2 * 3);
-                        tempV2_4.toArray(vertices, vl - 1 * 3);
-                        tempV2_4.toArray(vertices, vl - 4 * 3);
-                    }
-                }
+                // Start line endcap
+                addCapGeometry(points[0], point0L, point0R, joinIsOnLeftSide, true, u0);
             }
-        };
+
+            // Increment loop variables
+
+            u0 = u1;
+
+            previousPoint = currentPoint;
+
+            lastPointL.copy(nextPointL);
+            lastPointR.copy(nextPointR);
+        }
 
         if (!isClosed) {
 
