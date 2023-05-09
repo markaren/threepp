@@ -99,7 +99,6 @@ namespace {
                          {"opacity", data.style.strokeOpacity},
                          {"transparent", data.style.strokeOpacity < 1},
                          {"side", DoubleSide},
-                                                  {"wireframe", true},
                          {"depthWrite", false}});
 
                 for (const auto& subPath : data.path.subPaths) {

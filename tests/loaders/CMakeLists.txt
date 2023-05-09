@@ -4,4 +4,6 @@ if (nlohmann_json_FOUND)
     target_link_libraries(Fontloader_test PRIVATE nlohmann_json::nlohmann_json)
 endif ()
 
-add_subdirectory(svg)
+if (THREEPP_WITH_SVG_FEATURE AND PUGIXML_FOUND)
+    add_subdirectory(svg)
+endif ()
