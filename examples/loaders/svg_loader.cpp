@@ -50,7 +50,7 @@ namespace {
     private:
         int lastSelectedIndex = -1;
         int selectedIndex = 0;
-        std::vector<std::string> names{"tiger.svg", "threejs.svg", "hexagon.svg"};
+        std::vector<std::string> names{"tiger.svg", "threejs.svg", "hexagon.svg", "lineJoinsAndCaps.svg"};
     };
 
 #endif
