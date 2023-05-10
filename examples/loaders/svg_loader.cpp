@@ -171,6 +171,12 @@ int main() {
     scene->add(svg);
 #endif
 
+    Box3 bb;
+    auto box3Helper = Box3Helper::create(bb, Color::black);
+    box3Helper->material()->opacity = 0.4f;
+    box3Helper->material()->transparent = true;
+    scene->add(box3Helper);
+
     canvas.animate([&]() {
         renderer.render(scene, camera);
 
@@ -182,6 +188,7 @@ int main() {
             }
 
             svg = loadSvg(ui.selected());
+            bb.setFromObject(*svg);
             scene->add(svg);
         }
 
