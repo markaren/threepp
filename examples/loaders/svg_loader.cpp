@@ -65,6 +65,7 @@ namespace {
         auto svgData = loader.load("data/models/svg/" + name);
 
         auto svg = Group::create();
+        svg->name = std::filesystem::path(name).stem().string();
 
         for (const auto& data : svgData) {
 
@@ -128,6 +129,21 @@ namespace {
         return svg;
     }
 
+    void rotateAround(Object3D& o, const Vector3& axis, Vector3 point, float angle) {
+
+        Matrix4 rotation;
+        Matrix4 origin;
+        Matrix4 temp;
+
+        origin.setPosition(point);
+
+        rotation.makeRotationAxis(axis, angle);
+        rotation.premultiply(origin).multiply(temp.copy(origin).invert());
+
+        o.applyMatrix4(rotation);
+
+    }
+
 }// namespace
 
 int main() {
@@ -172,11 +188,14 @@ int main() {
 #endif
 
     Box3 bb;
-    auto box3Helper = Box3Helper::create(bb, Color::black);
-    box3Helper->material()->opacity = 0.4f;
+    auto box3Helper = Box3Helper::create(bb, Color::grey);
+    box3Helper->material()->opacity = 0.2f;
     box3Helper->material()->transparent = true;
     scene->add(box3Helper);
 
+    Vector3 center;
+
+    Clock clock;
     canvas.animate([&]() {
         renderer.render(scene, camera);
 
@@ -189,7 +208,29 @@ int main() {
 
             svg = loadSvg(ui.selected());
             bb.setFromObject(*svg);
+
+
+            if (svg->name == "OpenBridge_Heading") {
+                bb.getCenter(center);
+                svg->worldToLocal(center);
+                center.sub({-1.25, -4.375, 0});
+            }
+
             scene->add(svg);
+        }
+
+        float dt = clock.getDelta();
+
+        if (svg->name == "OpenBridge_Heading") {
+
+            auto cog = svg->getObjectByName("COG_2");
+            rotateAround(*cog, {0,0,1}, center, -0.3f*dt);
+
+            auto hdg = svg->getObjectByName("HDG_2");
+            rotateAround(*hdg, {0,0,1}, center, 0.5f*dt);
+
+            auto sp = svg->getObjectByName("Shape");
+            rotateAround(*sp, {0,0,1}, center, 0.1f*dt);
         }
 
         ui.render();
