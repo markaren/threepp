@@ -52,7 +52,9 @@ namespace {
         int selectedIndex = 0;
         std::vector<std::string> names{
                 "tiger.svg", "threejs.svg", "OpenBridge_Heading.svg",
-                "hexagon.svg", "lineJoinsAndCaps.svg"};
+                "hexagon.svg", "lineJoinsAndCaps.svg", "energy.svg",
+                "style-css-inside-defs.svg", "ordering.svg",
+                "styles.svg", "units.svg", "ellipseTransform.svg"};
     };
 
 #endif
@@ -157,6 +159,9 @@ int main() {
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    capture.preventScrollEvent = [] {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);

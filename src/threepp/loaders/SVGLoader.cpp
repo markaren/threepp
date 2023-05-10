@@ -1153,6 +1153,111 @@ struct SVGLoader::Impl {
         return style;
     }
 
+    void transfEllipseGeneric(EllipseCurve& curve, const Matrix3& m) {
+
+        // For math description see:
+        // https://math.stackexchange.com/questions/4544164
+
+        const auto a = curve.xRadius;
+        const auto b = curve.yRadius;
+
+        const auto cosTheta = std::cos(curve.aRotation);
+        const auto sinTheta = std::sin(curve.aRotation);
+
+        auto v1 = Vector3(a * cosTheta, a * sinTheta, 0);
+        auto v2 = Vector3(-b * sinTheta, b * cosTheta, 0);
+
+        const auto f1 = v1.applyMatrix3(m);
+        const auto f2 = v2.applyMatrix3(m);
+
+        const auto mF = tempTransform0.set(
+                f1.x, f2.x, 0,
+                f1.y, f2.y, 0,
+                0, 0, 1);
+
+        const auto mFInv = tempTransform1.copy(mF).invert();
+        auto mFInvT = tempTransform2.copy(mFInv).transpose();
+        const auto mQ = mFInvT.multiply(mFInv);
+        const auto mQe = mQ.elements;
+
+        const auto ed = eigenDecomposition(mQe[0], mQe[1], mQe[4]);
+        const auto rt1sqrt = std::sqrt(ed.rt1);
+        const auto rt2sqrt = std::sqrt(ed.rt2);
+
+        curve.xRadius = 1.f / rt1sqrt;
+        curve.yRadius = 1.f / rt2sqrt;
+        curve.aRotation = std::atan2(ed.sn, ed.cs);
+
+        const auto isFullEllipse =
+                std::fmod((curve.aEndAngle - curve.aStartAngle), (2 * math::PI)) < std::numeric_limits<float>::epsilon();
+
+        // Do not touch angles of a full ellipse because after transformation they
+        // would converge to a sinle value effectively removing the whole curve
+
+        if (!isFullEllipse) {
+
+            auto mDsqrt = tempTransform1.set(
+                    rt1sqrt, 0, 0,
+                    0, rt2sqrt, 0,
+                    0, 0, 1);
+
+            const auto mRT = tempTransform2.set(
+                    ed.cs, ed.sn, 0,
+                    -ed.sn, ed.cs, 0,
+                    0, 0, 1);
+
+            const auto mDRF = mDsqrt.multiply(mRT).multiply(mF);
+
+            auto transformAngle = [&](auto phi) {
+                Vector3 v(std::cos(phi), std::sin(phi), 0);
+                v.applyMatrix3(mDRF);
+
+                return std::atan2(v.y, v.x);
+            };
+
+            curve.aStartAngle = transformAngle(curve.aStartAngle);
+            curve.aEndAngle = transformAngle(curve.aEndAngle);
+
+            if (isTransformFlipped(m)) {
+
+                curve.aClockwise = !curve.aClockwise;
+            }
+        }
+    }
+
+    void transfEllipseNoSkew(EllipseCurve& curve, const Matrix3& m) {
+
+        // Faster shortcut if no skew is applied
+        // (e.g, a euclidean transform of a group containing the ellipse)
+
+        const auto sx = getTransformScaleX(m);
+        const auto sy = getTransformScaleY(m);
+
+        curve.xRadius *= sx;
+        curve.yRadius *= sy;
+
+        // Extract rotation angle from the matrix of form:
+        //
+        //  | cosθ sx   -sinθ sy |
+        //  | sinθ sx    cosθ sy |
+        //
+        // Remembering that tanθ = sinθ / cosθ; and that
+        // `sx`, `sy`, or both might be zero.
+        const auto theta =
+                sx > std::numeric_limits<float>::epsilon()
+                        ? std::atan2(m.elements[1], m.elements[0])
+                        : std::atan2(-m.elements[3], m.elements[4]);
+
+        curve.aRotation += theta;
+
+        if (isTransformFlipped(m)) {
+
+            curve.aStartAngle *= -1;
+            curve.aEndAngle *= -1;
+            curve.aClockwise = !curve.aClockwise;
+        }
+    }
+
     void transformPath(ShapePath& path, const Matrix3& m) {
 
         auto transfVec2 = [&](Vector2& v2) {
@@ -1194,18 +1299,23 @@ struct SVGLoader::Impl {
 
                 } else if (auto ellipseCurve = std::dynamic_pointer_cast<EllipseCurve>(curve)) {
 
-                    if (isRotated) {
-
-                        std::cerr << "SVGLoader: Elliptic arc or ellipse rotation or skewing is not implemented." << std::endl;
-                    }
+                    // Transform ellipse center point
 
                     tempV2.set(ellipseCurve->aX, ellipseCurve->aY);
                     transfVec2(tempV2);
                     ellipseCurve->aX = tempV2.x;
                     ellipseCurve->aY = tempV2.y;
 
-                    ellipseCurve->xRadius *= getTransformScaleX(m);
-                    ellipseCurve->yRadius *= getTransformScaleY(m);
+                    // Transform ellipse shape parameters
+
+                    if (isTransformSkewed(m)) {
+
+                        transfEllipseGeneric(*ellipseCurve, m);
+
+                    } else {
+
+                        transfEllipseNoSkew(*ellipseCurve, m);
+                    }
                 }
             }
         }
@@ -1294,6 +1404,20 @@ struct SVGLoader::Impl {
             for (const auto& n : node.children()) {
 
                 parseNode(n, style);
+            }
+        }
+
+        if (transform) {
+
+            transformStack.pop_back();
+
+            if (!transformStack.empty()) {
+
+                currentTransform.copy(transformStack[transformStack.size() - 1]);
+
+            } else {
+
+                currentTransform.identity();
             }
         }
     }
@@ -1396,10 +1520,9 @@ std::vector<std::shared_ptr<Shape>> SVGLoader::createShapes(const SVGData& data)
         }
     }
 
-    for ( int identifier = 0; identifier < simplePaths.size(); identifier ++ ) {
+    for (int identifier = 0; identifier < simplePaths.size(); identifier++) {
 
-        simplePaths[ identifier ].identifier = identifier;
-
+        simplePaths[identifier].identifier = identifier;
     }
 
     std::vector<std::optional<AHole>> isAHole;

@@ -824,7 +824,10 @@ namespace threepp::svg {
 
                     const auto x = +((x1 + classifyResult.t * (x2 - x1)));
                     const auto y = +((y1 + classifyResult.t * (y2 - y1)));
-                    return EdgeIntersection{x,y,classifyResult.t,
+                    return EdgeIntersection{
+                            x,
+                            y,
+                            classifyResult.t,
                     };
                 }
             }
@@ -1050,6 +1053,12 @@ namespace threepp::svg {
         return m.elements[1] != 0 || m.elements[3] != 0;
     }
 
+    bool isTransformFlipped(const Matrix3& m) {
+
+        const auto& te = m.elements;
+        return te[0] * te[4] - te[1] * te[3] < 0;
+    }
+
     float getTransformScaleX(const Matrix3& m) {
 
         const auto& te = m.elements;
@@ -1060,6 +1069,94 @@ namespace threepp::svg {
 
         const auto& te = m.elements;
         return std::sqrt(te[3] * te[3] + te[4] * te[4]);
+    }
+
+    bool isTransformSkewed(const Matrix3& m) {
+
+        const auto& te = m.elements;
+        const auto basisDot = te[0] * te[3] + te[1] * te[4];
+
+        // Shortcut for trivial rotations and transformations
+        if (basisDot == 0) return false;
+
+        const auto sx = getTransformScaleX(m);
+        const auto sy = getTransformScaleY(m);
+
+        return std::abs(basisDot / (sx * sy)) > std::numeric_limits<float>::epsilon();
+    }
+
+    // Calculates the eigensystem of a real symmetric 2x2 matrix
+    //    [ A  B ]
+    //    [ B  C ]
+    // in the form
+    //    [ A  B ]  =  [ cs  -sn ] [ rt1   0  ] [  cs  sn ]
+    //    [ B  C ]     [ sn   cs ] [  0   rt2 ] [ -sn  cs ]
+    // where rt1 >= rt2.
+    //
+    // Adapted from: https://www.mpi-hd.mpg.de/personalhomes/globes/3x3/index.html
+    // -> Algorithms for real symmetric matrices -> Analytical (2x2 symmetric)
+    EigenDecomposition eigenDecomposition(float A, float B, float C) {
+
+        float rt1{}, rt2{}, cs{}, sn{}, t{};
+        const auto sm = A + C;
+        const auto df = A - C;
+        const auto rt = std::sqrt(df * df + 4 * B * B);
+
+        if (sm > 0) {
+
+            rt1 = 0.5f * (sm + rt);
+            t = 1.f / rt1;
+            rt2 = A * t * C - B * t * B;
+
+        } else if (sm < 0) {
+
+            rt2 = 0.5f * (sm - rt);
+
+        } else {
+
+            // This case needs to be treated separately to avoid div by 0
+
+            rt1 = 0.5f * rt;
+            rt2 = -0.5f * rt;
+        }
+
+        // Calculate eigenvectors
+
+        if (df > 0) {
+
+            cs = df + rt;
+
+        } else {
+
+            cs = df - rt;
+        }
+
+        if (std::abs(cs) > 2 * std::abs(B)) {
+
+            t = -2 * B / cs;
+            sn = 1.f / std::sqrt(1 + t * t);
+            cs = t * sn;
+
+        } else if (std::abs(B) == 0) {
+
+            cs = 1;
+            sn = 0;
+
+        } else {
+
+            t = -0.5f * cs / B;
+            cs = 1.f / std::sqrt(1 + t * t);
+            sn = t * cs;
+        }
+
+        if (df > 0) {
+
+            t = cs;
+            cs = -sn;
+            sn = t;
+        }
+
+        return {rt1, rt2, cs, sn};
     }
 
 }// namespace threepp::svg

@@ -52,6 +52,10 @@ namespace threepp::svg {
         Box2 boundingBox;
     };
 
+    struct EigenDecomposition {
+        float rt1, rt2, cs, sn;
+    };
+
 }
 
 #endif//THREEPP_SVGTYPES_HPP
