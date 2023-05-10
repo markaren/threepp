@@ -75,7 +75,6 @@ namespace {
                         {{"color", data.path.color},
                          {"opacity", data.style.fillOpacity},
                          {"transparent", data.style.fillOpacity < 1},
-                         //                                              {"wireframe", true},
                          {"side", DoubleSide},
                          {"depthWrite", false}});
 

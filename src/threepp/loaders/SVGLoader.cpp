@@ -748,9 +748,6 @@ struct SVGLoader::Impl {
                     theUnit = u;
                     value = std::stof(str.substr(0, str.size() - u.size()));
                     break;
-                } else {
-
-                    throw std::runtime_error("THREE.SVGLoader: unexpected codepath in parseFloatWithUnits");
                 }
             }
 
@@ -916,12 +913,12 @@ struct SVGLoader::Impl {
     */
     ShapePath parseRectNode(const pugi::xml_node& node) {
 
-        const auto x = parseFloatWithUnits(node.attribute("x").as_float(0));
-        const auto y = parseFloatWithUnits(node.attribute("y").as_float(0));
-        const auto rx = parseFloatWithUnits(node.attribute("rx").as_float(0));
-        const auto ry = parseFloatWithUnits(node.attribute("ry").as_float(0));
-        const auto w = parseFloatWithUnits(node.attribute("width").value());
-        const auto h = parseFloatWithUnits(node.attribute("height").value());
+        const auto x = parseFloatWithUnits(node.attribute("x").as_string("0"));
+        const auto y = parseFloatWithUnits(node.attribute("y").as_string("0"));
+        const auto rx = parseFloatWithUnits(node.attribute("rx").as_string("0"));
+        const auto ry = parseFloatWithUnits(node.attribute("ry").as_string("0"));
+        const auto w = parseFloatWithUnits(node.attribute("width").as_string("0"));
+        const auto h = parseFloatWithUnits(node.attribute("height").as_string("0"));
 
         ShapePath path;
         path.moveTo(x + 2 * rx, y);
@@ -1018,9 +1015,9 @@ struct SVGLoader::Impl {
 
     ShapePath parseCircleNode(const pugi::xml_node& node) {
 
-        const auto x = parseFloatWithUnits(node.attribute("cx").as_float(0));
-        const auto y = parseFloatWithUnits(node.attribute("cy").as_float(0));
-        const auto r = parseFloatWithUnits(node.attribute("x").as_float(0));
+        const auto x = parseFloatWithUnits(node.attribute("cx").as_string("0"));
+        const auto y = parseFloatWithUnits(node.attribute("cy").as_string("0"));
+        const auto r = parseFloatWithUnits(node.attribute("x").as_string("0"));
 
         auto subpath = std::make_shared<Path>();
         subpath->absarc(x, y, r, 0, math::PI * 2);
@@ -1033,10 +1030,10 @@ struct SVGLoader::Impl {
 
     ShapePath parseEllipseNode(const pugi::xml_node& node) {
 
-        const auto x = parseFloatWithUnits(node.attribute("cx").as_float(0));
-        const auto y = parseFloatWithUnits(node.attribute("cy").as_float(0));
-        const auto rx = parseFloatWithUnits(node.attribute("rx").as_float(0));
-        const auto ry = parseFloatWithUnits(node.attribute("ry").as_float(0));
+        const auto x = parseFloatWithUnits(node.attribute("cx").as_string("0"));
+        const auto y = parseFloatWithUnits(node.attribute("cy").as_string("0"));
+        const auto rx = parseFloatWithUnits(node.attribute("rx").as_string("0"));
+        const auto ry = parseFloatWithUnits(node.attribute("ry").as_string("0"));
 
         auto subpath = std::make_shared<Path>();
         subpath->absellipse(x, y, rx, ry, 0, math::PI * 2);
@@ -1049,10 +1046,10 @@ struct SVGLoader::Impl {
 
     ShapePath parseLineNode(const pugi::xml_node& node) {
 
-        const auto x1 = parseFloatWithUnits(node.attribute("x1").as_float(0));
-        const auto y1 = parseFloatWithUnits(node.attribute("y1").as_float(0));
-        const auto x2 = parseFloatWithUnits(node.attribute("x2").as_float(0));
-        const auto y2 = parseFloatWithUnits(node.attribute("y2").as_float(0));
+        const auto x1 = parseFloatWithUnits(node.attribute("x1").as_string("0"));
+        const auto y1 = parseFloatWithUnits(node.attribute("y1").as_string("0"));
+        const auto x2 = parseFloatWithUnits(node.attribute("x2").as_string("0"));
+        const auto y2 = parseFloatWithUnits(node.attribute("y2").as_string("0"));
 
         ShapePath path;
         path.moveTo(x1, y1);
@@ -1352,6 +1349,7 @@ struct SVGLoader::Impl {
         } else if (nodeName == "rect") {
 
             style = parseStyle(node, style);
+            path = parseRectNode(node);
 
         } else if (nodeName == "polygon") {
 
