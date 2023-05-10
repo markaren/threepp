@@ -1,10 +1,7 @@
 
 #include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/extras/ShapeUtils.hpp"
-#include "threepp/extras/curves/CubicBezierCurve.hpp"
-#include "threepp/extras/curves/EllipseCurve.hpp"
-#include "threepp/extras/curves/LineCurve.hpp"
-#include "threepp/extras/curves/QuadraticBezierCurve.hpp"
+
 #include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/math/Box2.hpp"
@@ -673,13 +670,6 @@ struct SVGLoader::Impl {
 
     std::vector<Matrix3> transformStack;
 
-    Matrix3 tempTransform0;
-    Matrix3 tempTransform1;
-    Matrix3 tempTransform2;
-    Matrix3 tempTransform3;
-    Vector2 tempV2;
-    Vector3 tempV3;
-
     Matrix3 currentTransform;
 
     explicit Impl(SVGLoader& scope)
@@ -696,17 +686,17 @@ struct SVGLoader::Impl {
         return paths;
     }
 
-    float clamp(float v) {
+    [[nodiscard]] float clamp(float v) const {
 
         return std::max(0.f, std::min(1.f, parseFloatWithUnits(v)));
     }
 
-    float positive(float v) {
+    [[nodiscard]] float positive(float v) const {
 
         return std::max(0.f, parseFloatWithUnits(v));
     }
 
-    float parseFloatWithUnits(float value, const std::string& theUnit = "px") {
+    [[nodiscard]] float parseFloatWithUnits(float value, const std::string& theUnit = "px") const {
 
         float scale;
 
@@ -731,7 +721,7 @@ struct SVGLoader::Impl {
         return scale * value;
     }
 
-    float parseFloatWithUnits(const std::string& str) {
+    [[nodiscard]] float parseFloatWithUnits(const std::string& str) const {
 
         std::string theUnit = "px";
 
@@ -759,11 +749,14 @@ struct SVGLoader::Impl {
         return parseFloatWithUnits(value, theUnit);
     }
 
-
-    Matrix3 parseNodeTransform(const pugi::xml_node& node) {
+    [[nodiscard]] Matrix3 parseNodeTransform(const pugi::xml_node& node) const {
 
         Matrix3 transform;
-        Matrix3& currentTransform = tempTransform0;
+        Matrix3 currentTransform;
+        Matrix3 tempTransform0;
+        Matrix3 tempTransform1;
+        Matrix3 tempTransform2;
+        Matrix3 tempTransform3;
 
         if (std::string(node.name()) == "use" && (node.attribute("x") || node.attribute("y"))) {
 
@@ -911,7 +904,7 @@ struct SVGLoader::Impl {
     * According to https://www.w3.org/TR/SVG/shapes.html#RectElementRXAttribute
     * rounded corner should be rendered to elliptical arc, but bezier curve does the job well enough
     */
-    ShapePath parseRectNode(const pugi::xml_node& node) {
+    [[nodiscard]] ShapePath parseRectNode(const pugi::xml_node& node) const {
 
         const auto x = parseFloatWithUnits(node.attribute("x").as_string("0"));
         const auto y = parseFloatWithUnits(node.attribute("y").as_string("0"));
@@ -943,7 +936,7 @@ struct SVGLoader::Impl {
         return path;
     }
 
-    ShapePath parsePolygonNode(const pugi::xml_node& node) {
+    [[nodiscard]] ShapePath parsePolygonNode(const pugi::xml_node& node) const {
 
         const static std::regex regex{R"((-?[+\d\.?]+)[,|\s](-?[\d\.?]+))"};
 
@@ -953,7 +946,8 @@ struct SVGLoader::Impl {
 
         int index = 0;
         for (auto it = std::sregex_iterator(points.begin(), points.end(), regex); it != std::sregex_iterator(); ++it) {
-            std::smatch m = *it;
+
+            const std::smatch& m = *it;
 
             std::string a = m[1].str();
             std::string b = m[2].str();
@@ -978,7 +972,7 @@ struct SVGLoader::Impl {
         return path;
     }
 
-    ShapePath parsePolylineNode(const pugi::xml_node& node) {
+    [[nodiscard]] ShapePath parsePolylineNode(const pugi::xml_node& node) const {
 
         const std::regex regex{R"((-?[\d\.?]+)[,|\s](-?[\d\.?]+))"};
 
@@ -988,7 +982,8 @@ struct SVGLoader::Impl {
 
         int index = 0;
         for (auto it = std::sregex_iterator(points.begin(), points.end(), regex); it != std::sregex_iterator(); ++it) {
-            std::smatch m = *it;
+
+            const std::smatch& m = *it;
 
             std::string a = m[1].str();
             std::string b = m[2].str();
@@ -1013,7 +1008,7 @@ struct SVGLoader::Impl {
         return path;
     }
 
-    ShapePath parseCircleNode(const pugi::xml_node& node) {
+    [[nodiscard]] ShapePath parseCircleNode(const pugi::xml_node& node) const {
 
         const auto x = parseFloatWithUnits(node.attribute("cx").as_string("0"));
         const auto y = parseFloatWithUnits(node.attribute("cy").as_string("0"));
@@ -1028,7 +1023,7 @@ struct SVGLoader::Impl {
         return path;
     }
 
-    ShapePath parseEllipseNode(const pugi::xml_node& node) {
+    [[nodiscard]] ShapePath parseEllipseNode(const pugi::xml_node& node) const {
 
         const auto x = parseFloatWithUnits(node.attribute("cx").as_string("0"));
         const auto y = parseFloatWithUnits(node.attribute("cy").as_string("0"));
@@ -1044,7 +1039,7 @@ struct SVGLoader::Impl {
         return path;
     }
 
-    ShapePath parseLineNode(const pugi::xml_node& node) {
+    [[nodiscard]] ShapePath parseLineNode(const pugi::xml_node& node) const {
 
         const auto x1 = parseFloatWithUnits(node.attribute("x1").as_string("0"));
         const auto y1 = parseFloatWithUnits(node.attribute("y1").as_string("0"));
@@ -1059,7 +1054,7 @@ struct SVGLoader::Impl {
         return path;
     }
 
-    Style parseStyle(const pugi::xml_node& node, Style style) {
+    [[nodiscard]] Style parseStyle(const pugi::xml_node& node, Style style) const {
 
         std::unordered_map<std::string, std::string> stylesheetStyles;
 
@@ -1152,172 +1147,418 @@ struct SVGLoader::Impl {
         return style;
     }
 
-    void transfEllipseGeneric(EllipseCurve& curve, const Matrix3& m) {
+    static ShapePath parsePathNode(const pugi::xml_node& node) {
 
-        // For math description see:
-        // https://math.stackexchange.com/questions/4544164
+        ShapePath path;
 
-        const auto a = curve.xRadius;
-        const auto b = curve.yRadius;
+        Vector2 point;
+        Vector2 control;
 
-        const auto cosTheta = std::cos(curve.aRotation);
-        const auto sinTheta = std::sin(curve.aRotation);
+        Vector2 firstPoint;
+        bool isFirstPoint = true;
+        bool doSetFirstPoint = false;
 
-        auto v1 = Vector3(a * cosTheta, a * sinTheta, 0);
-        auto v2 = Vector3(-b * sinTheta, b * cosTheta, 0);
+        const std::string d = node.attribute("d").value();
 
-        const auto f1 = v1.applyMatrix3(m);
-        const auto f2 = v2.applyMatrix3(m);
+        std::regex r{"[a-df-z][^a-df-z]*", std::regex::icase};
 
-        const auto mF = tempTransform0.set(
-                f1.x, f2.x, 0,
-                f1.y, f2.y, 0,
-                0, 0, 1);
+        for (std::sregex_iterator i = std::sregex_iterator(d.begin(), d.end(), r);
+             i != std::sregex_iterator(); ++i) {
 
-        const auto mFInv = tempTransform1.copy(mF).invert();
-        auto mFInvT = tempTransform2.copy(mFInv).transpose();
-        const auto mQ = mFInvT.multiply(mFInv);
-        const auto mQe = mQ.elements;
+            const std::smatch& m = *i;
 
-        const auto ed = eigenDecomposition(mQe[0], mQe[1], mQe[4]);
-        const auto rt1sqrt = std::sqrt(ed.rt1);
-        const auto rt2sqrt = std::sqrt(ed.rt2);
+            std::string command = m.str();
 
-        curve.xRadius = 1.f / rt1sqrt;
-        curve.yRadius = 1.f / rt2sqrt;
-        curve.aRotation = std::atan2(ed.sn, ed.cs);
+            const auto type = command[0];
+            const auto data = utils::trim(command.substr(1));
 
-        const auto isFullEllipse =
-                std::fmod((curve.aEndAngle - curve.aStartAngle), (2 * math::PI)) < std::numeric_limits<float>::epsilon();
+            if (isFirstPoint) {
 
-        // Do not touch angles of a full ellipse because after transformation they
-        // would converge to a sinle value effectively removing the whole curve
-
-        if (!isFullEllipse) {
-
-            auto mDsqrt = tempTransform1.set(
-                    rt1sqrt, 0, 0,
-                    0, rt2sqrt, 0,
-                    0, 0, 1);
-
-            const auto mRT = tempTransform2.set(
-                    ed.cs, ed.sn, 0,
-                    -ed.sn, ed.cs, 0,
-                    0, 0, 1);
-
-            const auto mDRF = mDsqrt.multiply(mRT).multiply(mF);
-
-            auto transformAngle = [&](auto phi) {
-                Vector3 v(std::cos(phi), std::sin(phi), 0);
-                v.applyMatrix3(mDRF);
-
-                return std::atan2(v.y, v.x);
-            };
-
-            curve.aStartAngle = transformAngle(curve.aStartAngle);
-            curve.aEndAngle = transformAngle(curve.aEndAngle);
-
-            if (isTransformFlipped(m)) {
-
-                curve.aClockwise = !curve.aClockwise;
+                doSetFirstPoint = true;
+                isFirstPoint = false;
             }
-        }
-    }
 
-    void transfEllipseNoSkew(EllipseCurve& curve, const Matrix3& m) {
+            std::vector<float> numbers;
 
-        // Faster shortcut if no skew is applied
-        // (e.g, a euclidean transform of a group containing the ellipse)
+            switch (type) {
 
-        const auto sx = getTransformScaleX(m);
-        const auto sy = getTransformScaleY(m);
+                case 'M':
+                    numbers = parseFloats(data);
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
 
-        curve.xRadius *= sx;
-        curve.yRadius *= sy;
+                        point.x = numbers[j + 0];
+                        point.y = numbers[j + 1];
+                        control.x = point.x;
+                        control.y = point.y;
 
-        // Extract rotation angle from the matrix of form:
-        //
-        //  | cosθ sx   -sinθ sy |
-        //  | sinθ sx    cosθ sy |
-        //
-        // Remembering that tanθ = sinθ / cosθ; and that
-        // `sx`, `sy`, or both might be zero.
-        const auto theta =
-                sx > std::numeric_limits<float>::epsilon()
-                        ? std::atan2(m.elements[1], m.elements[0])
-                        : std::atan2(-m.elements[3], m.elements[4]);
+                        if (j == 0) {
 
-        curve.aRotation += theta;
+                            path.moveTo(point.x, point.y);
 
-        if (isTransformFlipped(m)) {
+                        } else {
 
-            curve.aStartAngle *= -1;
-            curve.aEndAngle *= -1;
-            curve.aClockwise = !curve.aClockwise;
-        }
-    }
+                            path.lineTo(point.x, point.y);
+                        }
 
-    void transformPath(ShapePath& path, const Matrix3& m) {
-
-        auto transfVec2 = [&](Vector2& v2) {
-            tempV3.set(v2.x, v2.y, 1).applyMatrix3(m);
-
-            v2.set(tempV3.x, tempV3.y);
-        };
-
-        const auto isRotated = isTransformRotated(m);
-
-        const auto& subPaths = path.subPaths;
-
-        for (unsigned i = 0, n = subPaths.size(); i < n; i++) {
-
-            const auto& subPath = subPaths[i];
-            const auto& curves = subPath->curves;
-
-            for (unsigned j = 0; j < curves.size(); j++) {
-
-                const auto& curve = curves[j];
-
-                if (auto lineCurve = std::dynamic_pointer_cast<LineCurve>(curve)) {
-
-                    transfVec2(lineCurve->v1);
-                    transfVec2(lineCurve->v2);
-
-                } else if (auto cubicBezierCurve = std::dynamic_pointer_cast<CubicBezierCurve>(curve)) {
-
-                    transfVec2(cubicBezierCurve->v0);
-                    transfVec2(cubicBezierCurve->v1);
-                    transfVec2(cubicBezierCurve->v2);
-                    transfVec2(cubicBezierCurve->v3);
-
-                } else if (auto quadraticBezierCurve = std::dynamic_pointer_cast<QuadraticBezierCurve>(curve)) {
-
-                    transfVec2(quadraticBezierCurve->v0);
-                    transfVec2(quadraticBezierCurve->v1);
-                    transfVec2(quadraticBezierCurve->v2);
-
-                } else if (auto ellipseCurve = std::dynamic_pointer_cast<EllipseCurve>(curve)) {
-
-                    // Transform ellipse center point
-
-                    tempV2.set(ellipseCurve->aX, ellipseCurve->aY);
-                    transfVec2(tempV2);
-                    ellipseCurve->aX = tempV2.x;
-                    ellipseCurve->aY = tempV2.y;
-
-                    // Transform ellipse shape parameters
-
-                    if (isTransformSkewed(m)) {
-
-                        transfEllipseGeneric(*ellipseCurve, m);
-
-                    } else {
-
-                        transfEllipseNoSkew(*ellipseCurve, m);
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
                     }
-                }
+
+                    break;
+
+                case 'H':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
+
+                        point.x = numbers[j];
+                        control.x = point.x;
+                        control.y = point.y;
+                        path.lineTo(point.x, point.y);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'V':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
+
+                        point.y = numbers[j];
+                        control.x = point.x;
+                        control.y = point.y;
+                        path.lineTo(point.x, point.y);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'L':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
+
+                        point.x = numbers[j + 0];
+                        point.y = numbers[j + 1];
+                        control.x = point.x;
+                        control.y = point.y;
+                        path.lineTo(point.x, point.y);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'C':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 6) {
+
+                        path.bezierCurveTo(
+                                numbers[j + 0],
+                                numbers[j + 1],
+                                numbers[j + 2],
+                                numbers[j + 3],
+                                numbers[j + 4],
+                                numbers[j + 5]);
+                        control.x = numbers[j + 2];
+                        control.y = numbers[j + 3];
+                        point.x = numbers[j + 4];
+                        point.y = numbers[j + 5];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'S':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
+
+                        path.bezierCurveTo(
+                                getReflection(point.x, control.x),
+                                getReflection(point.y, control.y),
+                                numbers[j + 0],
+                                numbers[j + 1],
+                                numbers[j + 2],
+                                numbers[j + 3]);
+                        control.x = numbers[j + 0];
+                        control.y = numbers[j + 1];
+                        point.x = numbers[j + 2];
+                        point.y = numbers[j + 3];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'Q':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
+
+                        path.quadraticCurveTo(
+                                numbers[j + 0],
+                                numbers[j + 1],
+                                numbers[j + 2],
+                                numbers[j + 3]);
+                        control.x = numbers[j + 0];
+                        control.y = numbers[j + 1];
+                        point.x = numbers[j + 2];
+                        point.y = numbers[j + 3];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'T':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
+
+                        const auto rx = getReflection(point.x, control.x);
+                        const auto ry = getReflection(point.y, control.y);
+                        path.quadraticCurveTo(
+                                rx,
+                                ry,
+                                numbers[j + 0],
+                                numbers[j + 1]);
+                        control.x = rx;
+                        control.y = ry;
+                        point.x = numbers[j + 0];
+                        point.y = numbers[j + 1];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'A':
+                    numbers = parseFloats(data, {3, 4}, 7);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 7) {
+
+                        // skip command if start point == end point
+                        if (numbers[j + 5] == point.x && numbers[j + 6] == point.y) continue;
+
+                        const auto start = point.clone();
+                        point.x = numbers[j + 5];
+                        point.y = numbers[j + 6];
+                        control.x = point.x;
+                        control.y = point.y;
+                        parseArcCommand(
+                                path, numbers[j], numbers[j + 1], numbers[j + 2], numbers[j + 3], numbers[j + 4], start, point);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'm':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
+
+                        point.x += numbers[j + 0];
+                        point.y += numbers[j + 1];
+                        control.x = point.x;
+                        control.y = point.y;
+
+                        if (j == 0) {
+
+                            path.moveTo(point.x, point.y);
+
+                        } else {
+
+                            path.lineTo(point.x, point.y);
+                        }
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'h':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
+
+                        point.x += numbers[j];
+                        control.x = point.x;
+                        control.y = point.y;
+                        path.lineTo(point.x, point.y);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'v':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
+
+                        point.y += numbers[j];
+                        control.x = point.x;
+                        control.y = point.y;
+                        path.lineTo(point.x, point.y);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'l':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
+
+                        point.x += numbers[j + 0];
+                        point.y += numbers[j + 1];
+                        control.x = point.x;
+                        control.y = point.y;
+                        path.lineTo(point.x, point.y);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'c':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 6) {
+
+                        path.bezierCurveTo(
+                                point.x + numbers[j + 0],
+                                point.y + numbers[j + 1],
+                                point.x + numbers[j + 2],
+                                point.y + numbers[j + 3],
+                                point.x + numbers[j + 4],
+                                point.y + numbers[j + 5]);
+                        control.x = point.x + numbers[j + 2];
+                        control.y = point.y + numbers[j + 3];
+                        point.x += numbers[j + 4];
+                        point.y += numbers[j + 5];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 's':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
+
+                        path.bezierCurveTo(
+                                getReflection(point.x, control.x),
+                                getReflection(point.y, control.y),
+                                point.x + numbers[j + 0],
+                                point.y + numbers[j + 1],
+                                point.x + numbers[j + 2],
+                                point.y + numbers[j + 3]);
+                        control.x = point.x + numbers[j + 0];
+                        control.y = point.y + numbers[j + 1];
+                        point.x += numbers[j + 2];
+                        point.y += numbers[j + 3];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'q':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
+
+                        path.quadraticCurveTo(
+                                point.x + numbers[j + 0],
+                                point.y + numbers[j + 1],
+                                point.x + numbers[j + 2],
+                                point.y + numbers[j + 3]);
+                        control.x = point.x + numbers[j + 0];
+                        control.y = point.y + numbers[j + 1];
+                        point.x += numbers[j + 2];
+                        point.y += numbers[j + 3];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 't':
+                    numbers = parseFloats(data);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
+
+                        const auto rx = getReflection(point.x, control.x);
+                        const auto ry = getReflection(point.y, control.y);
+                        path.quadraticCurveTo(
+                                rx,
+                                ry,
+                                point.x + numbers[j + 0],
+                                point.y + numbers[j + 1]);
+                        control.x = rx;
+                        control.y = ry;
+                        point.x = point.x + numbers[j + 0];
+                        point.y = point.y + numbers[j + 1];
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'a':
+                    numbers = parseFloats(data, {3, 4}, 7);
+
+                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 7) {
+
+                        // skip command if no displacement
+                        if (numbers[j + 5] == 0 && numbers[j + 6] == 0) continue;
+
+                        const auto start = point.clone();
+                        point.x += numbers[j + 5];
+                        point.y += numbers[j + 6];
+                        control.x = point.x;
+                        control.y = point.y;
+                        parseArcCommand(
+                                path, numbers[j], numbers[j + 1], numbers[j + 2], numbers[j + 3], numbers[j + 4], start, point);
+
+                        if (j == 0 && doSetFirstPoint) firstPoint.copy(point);
+                    }
+
+                    break;
+
+                case 'Z':
+                case 'z':
+                    path.currentPath->autoClose = true;
+
+                    if (!path.currentPath->curves.empty()) {
+
+                        // Reset point to beginning of Path
+                        point.copy(firstPoint);
+                        path.currentPath->currentPoint.copy(point);
+                        isFirstPoint = true;
+                    }
+
+                    break;
+
+                default:
+                    std::cerr << command << std::endl;
             }
+
+            // console.log( type, parseFloats( data ), parseFloats( data ).length  )
+
+            doSetFirstPoint = false;
         }
+
+        return path;
     }
 
     void parseNode(const pugi::xml_node& node, Style style) {

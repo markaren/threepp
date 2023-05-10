@@ -66,6 +66,10 @@ namespace {
 
         auto svg = Group::create();
         svg->name = std::filesystem::path(name).stem().string();
+        svg->scale.multiplyScalar(0.25f);
+        svg->position.x = -70;
+        svg->position.y = 70;
+        svg->scale.y *= -1;
 
         for (const auto& data : svgData) {
 
@@ -79,24 +83,13 @@ namespace {
                          {"side", DoubleSide},
                          {"depthWrite", false}});
 
-                if (false) {
-                    const auto shapes = data.path.toShapes(true);
+                const auto shapes = SVGLoader::createShapes(data);
 
-                    auto geometry = ShapeGeometry::create(shapes);
-                    auto mesh = Mesh::create(geometry, material);
-                    mesh->name = data.style.id;
-                    mesh->visible = data.style.visibility;
-                    svg->add(mesh);
-
-                } else {
-                    const auto shapes = SVGLoader::createShapes(data);
-
-                    auto geometry = ShapeGeometry::create(shapes);
-                    auto mesh = Mesh::create(geometry, material);
-                    mesh->name = data.style.id;
-                    mesh->visible = data.style.visibility;
-                    svg->add(mesh);
-                }
+                auto geometry = ShapeGeometry::create(shapes);
+                auto mesh = Mesh::create(geometry, material);
+                mesh->name = data.style.id;
+                mesh->visible = data.style.visibility;
+                svg->add(mesh);
             }
 
             auto strokeColor = data.style.stroke;
@@ -121,11 +114,6 @@ namespace {
             }
         }
 
-        svg->scale.multiplyScalar(0.25f);
-        svg->position.x = -70;
-        svg->position.y = 70;
-        svg->scale.y *= -1;
-
         return svg;
     }
 
@@ -141,7 +129,6 @@ namespace {
         rotation.premultiply(origin).multiply(temp.copy(origin).invert());
 
         o.applyMatrix4(rotation);
-
     }
 
 }// namespace
@@ -224,13 +211,13 @@ int main() {
         if (svg->name == "OpenBridge_Heading") {
 
             auto cog = svg->getObjectByName("COG_2");
-            rotateAround(*cog, {0,0,1}, center, -0.3f*dt);
+            rotateAround(*cog, {0, 0, 1}, center, -0.3f * dt);
 
             auto hdg = svg->getObjectByName("HDG_2");
-            rotateAround(*hdg, {0,0,1}, center, 0.5f*dt);
+            rotateAround(*hdg, {0, 0, 1}, center, 0.5f * dt);
 
             auto sp = svg->getObjectByName("Shape");
-            rotateAround(*sp, {0,0,1}, center, 0.1f*dt);
+            rotateAround(*sp, {0, 0, 1}, center, 0.1f * dt);
         }
 
         ui.render();

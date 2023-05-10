@@ -4,7 +4,12 @@
 
 #include "threepp/extras/core/ShapePath.hpp"
 
+#include "threepp/extras/curves/CubicBezierCurve.hpp"
+#include "threepp/extras/curves/EllipseCurve.hpp"
+#include "threepp/extras/curves/LineCurve.hpp"
+#include "threepp/extras/curves/QuadraticBezierCurve.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Matrix3.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #include "SVGTypes.hpp"
@@ -16,7 +21,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "pugixml.hpp"
 
 namespace threepp::svg {
 
@@ -307,421 +311,6 @@ namespace threepp::svg {
         const auto delta = std::fmod(svgAngle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry), (math::PI * 2));
 
         path.currentPath->absellipse(cx, cy, rx, ry, theta, theta + delta, sweep_flag == 0, x_axis_rotation);
-    }
-
-
-    ShapePath parsePathNode(const pugi::xml_node& node) {
-
-        ShapePath path;
-
-        Vector2 point;
-        Vector2 control;
-
-        Vector2 firstPoint;
-        bool isFirstPoint = true;
-        bool doSetFirstPoint = false;
-
-        const std::string d = node.attribute("d").value();
-
-        std::regex r{"[a-df-z][^a-df-z]*", std::regex::icase};
-
-        for (std::sregex_iterator i = std::sregex_iterator(d.begin(), d.end(), r);
-             i != std::sregex_iterator();
-             ++i) {
-            std::smatch m = *i;
-
-            std::string command = m.str();
-
-            const auto type = command[0];
-            const auto data = utils::trim(command.substr(1));
-
-            if (isFirstPoint == true) {
-
-                doSetFirstPoint = true;
-                isFirstPoint = false;
-            }
-
-            std::vector<float> numbers;
-
-            switch (type) {
-
-                case 'M':
-                    numbers = parseFloats(data);
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
-
-                        point.x = numbers[j + 0];
-                        point.y = numbers[j + 1];
-                        control.x = point.x;
-                        control.y = point.y;
-
-                        if (j == 0) {
-
-                            path.moveTo(point.x, point.y);
-
-                        } else {
-
-                            path.lineTo(point.x, point.y);
-                        }
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'H':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
-
-                        point.x = numbers[j];
-                        control.x = point.x;
-                        control.y = point.y;
-                        path.lineTo(point.x, point.y);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'V':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
-
-                        point.y = numbers[j];
-                        control.x = point.x;
-                        control.y = point.y;
-                        path.lineTo(point.x, point.y);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'L':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
-
-                        point.x = numbers[j + 0];
-                        point.y = numbers[j + 1];
-                        control.x = point.x;
-                        control.y = point.y;
-                        path.lineTo(point.x, point.y);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'C':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 6) {
-
-                        path.bezierCurveTo(
-                                numbers[j + 0],
-                                numbers[j + 1],
-                                numbers[j + 2],
-                                numbers[j + 3],
-                                numbers[j + 4],
-                                numbers[j + 5]);
-                        control.x = numbers[j + 2];
-                        control.y = numbers[j + 3];
-                        point.x = numbers[j + 4];
-                        point.y = numbers[j + 5];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'S':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
-
-                        path.bezierCurveTo(
-                                getReflection(point.x, control.x),
-                                getReflection(point.y, control.y),
-                                numbers[j + 0],
-                                numbers[j + 1],
-                                numbers[j + 2],
-                                numbers[j + 3]);
-                        control.x = numbers[j + 0];
-                        control.y = numbers[j + 1];
-                        point.x = numbers[j + 2];
-                        point.y = numbers[j + 3];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'Q':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
-
-                        path.quadraticCurveTo(
-                                numbers[j + 0],
-                                numbers[j + 1],
-                                numbers[j + 2],
-                                numbers[j + 3]);
-                        control.x = numbers[j + 0];
-                        control.y = numbers[j + 1];
-                        point.x = numbers[j + 2];
-                        point.y = numbers[j + 3];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'T':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
-
-                        const auto rx = getReflection(point.x, control.x);
-                        const auto ry = getReflection(point.y, control.y);
-                        path.quadraticCurveTo(
-                                rx,
-                                ry,
-                                numbers[j + 0],
-                                numbers[j + 1]);
-                        control.x = rx;
-                        control.y = ry;
-                        point.x = numbers[j + 0];
-                        point.y = numbers[j + 1];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'A':
-                    numbers = parseFloats(data, {3, 4}, 7);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 7) {
-
-                        // skip command if start point == end point
-                        if (numbers[j + 5] == point.x && numbers[j + 6] == point.y) continue;
-
-                        const auto start = point.clone();
-                        point.x = numbers[j + 5];
-                        point.y = numbers[j + 6];
-                        control.x = point.x;
-                        control.y = point.y;
-                        parseArcCommand(
-                                path, numbers[j], numbers[j + 1], numbers[j + 2], numbers[j + 3], numbers[j + 4], start, point);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'm':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
-
-                        point.x += numbers[j + 0];
-                        point.y += numbers[j + 1];
-                        control.x = point.x;
-                        control.y = point.y;
-
-                        if (j == 0) {
-
-                            path.moveTo(point.x, point.y);
-
-                        } else {
-
-                            path.lineTo(point.x, point.y);
-                        }
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'h':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
-
-                        point.x += numbers[j];
-                        control.x = point.x;
-                        control.y = point.y;
-                        path.lineTo(point.x, point.y);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'v':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j++) {
-
-                        point.y += numbers[j];
-                        control.x = point.x;
-                        control.y = point.y;
-                        path.lineTo(point.x, point.y);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'l':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
-
-                        point.x += numbers[j + 0];
-                        point.y += numbers[j + 1];
-                        control.x = point.x;
-                        control.y = point.y;
-                        path.lineTo(point.x, point.y);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'c':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 6) {
-
-                        path.bezierCurveTo(
-                                point.x + numbers[j + 0],
-                                point.y + numbers[j + 1],
-                                point.x + numbers[j + 2],
-                                point.y + numbers[j + 3],
-                                point.x + numbers[j + 4],
-                                point.y + numbers[j + 5]);
-                        control.x = point.x + numbers[j + 2];
-                        control.y = point.y + numbers[j + 3];
-                        point.x += numbers[j + 4];
-                        point.y += numbers[j + 5];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 's':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
-
-                        path.bezierCurveTo(
-                                getReflection(point.x, control.x),
-                                getReflection(point.y, control.y),
-                                point.x + numbers[j + 0],
-                                point.y + numbers[j + 1],
-                                point.x + numbers[j + 2],
-                                point.y + numbers[j + 3]);
-                        control.x = point.x + numbers[j + 0];
-                        control.y = point.y + numbers[j + 1];
-                        point.x += numbers[j + 2];
-                        point.y += numbers[j + 3];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'q':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 4) {
-
-                        path.quadraticCurveTo(
-                                point.x + numbers[j + 0],
-                                point.y + numbers[j + 1],
-                                point.x + numbers[j + 2],
-                                point.y + numbers[j + 3]);
-                        control.x = point.x + numbers[j + 0];
-                        control.y = point.y + numbers[j + 1];
-                        point.x += numbers[j + 2];
-                        point.y += numbers[j + 3];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 't':
-                    numbers = parseFloats(data);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 2) {
-
-                        const auto rx = getReflection(point.x, control.x);
-                        const auto ry = getReflection(point.y, control.y);
-                        path.quadraticCurveTo(
-                                rx,
-                                ry,
-                                point.x + numbers[j + 0],
-                                point.y + numbers[j + 1]);
-                        control.x = rx;
-                        control.y = ry;
-                        point.x = point.x + numbers[j + 0];
-                        point.y = point.y + numbers[j + 1];
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'a':
-                    numbers = parseFloats(data, {3, 4}, 7);
-
-                    for (unsigned j = 0, jl = numbers.size(); j < jl; j += 7) {
-
-                        // skip command if no displacement
-                        if (numbers[j + 5] == 0 && numbers[j + 6] == 0) continue;
-
-                        const auto start = point.clone();
-                        point.x += numbers[j + 5];
-                        point.y += numbers[j + 6];
-                        control.x = point.x;
-                        control.y = point.y;
-                        parseArcCommand(
-                                path, numbers[j], numbers[j + 1], numbers[j + 2], numbers[j + 3], numbers[j + 4], start, point);
-
-                        if (j == 0 && doSetFirstPoint == true) firstPoint.copy(point);
-                    }
-
-                    break;
-
-                case 'Z':
-                case 'z':
-                    path.currentPath->autoClose = true;
-
-                    if (path.currentPath->curves.size() > 0) {
-
-                        // Reset point to beginning of Path
-                        point.copy(firstPoint);
-                        path.currentPath->currentPoint.copy(point);
-                        isFirstPoint = true;
-                    }
-
-                    break;
-
-                default:
-                    std::cerr << command << std::endl;
-            }
-
-            // console.log( type, parseFloats( data ), parseFloats( data ).length  )
-
-            doSetFirstPoint = false;
-        }
-
-        return path;
     }
 
     void classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
@@ -1160,6 +749,179 @@ namespace threepp::svg {
         }
 
         return {rt1, rt2, cs, sn};
+    }
+
+    void transfEllipseGeneric(EllipseCurve& curve, const Matrix3& m) {
+
+        Matrix3 tempTransform0;
+        Matrix3 tempTransform1;
+        Matrix3 tempTransform2;
+        Matrix3 tempTransform3;
+
+        // For math description see:
+        // https://math.stackexchange.com/questions/4544164
+
+        const auto a = curve.xRadius;
+        const auto b = curve.yRadius;
+
+        const auto cosTheta = std::cos(curve.aRotation);
+        const auto sinTheta = std::sin(curve.aRotation);
+
+        auto v1 = Vector3(a * cosTheta, a * sinTheta, 0);
+        auto v2 = Vector3(-b * sinTheta, b * cosTheta, 0);
+
+        const auto f1 = v1.applyMatrix3(m);
+        const auto f2 = v2.applyMatrix3(m);
+
+        const auto mF = tempTransform0.set(
+                f1.x, f2.x, 0,
+                f1.y, f2.y, 0,
+                0, 0, 1);
+
+        const auto mFInv = tempTransform1.copy(mF).invert();
+        auto mFInvT = tempTransform2.copy(mFInv).transpose();
+        const auto mQ = mFInvT.multiply(mFInv);
+        const auto mQe = mQ.elements;
+
+        const auto ed = eigenDecomposition(mQe[0], mQe[1], mQe[4]);
+        const auto rt1sqrt = std::sqrt(ed.rt1);
+        const auto rt2sqrt = std::sqrt(ed.rt2);
+
+        curve.xRadius = 1.f / rt1sqrt;
+        curve.yRadius = 1.f / rt2sqrt;
+        curve.aRotation = std::atan2(ed.sn, ed.cs);
+
+        const auto isFullEllipse =
+                std::fmod((curve.aEndAngle - curve.aStartAngle), (2 * math::PI)) < std::numeric_limits<float>::epsilon();
+
+        // Do not touch angles of a full ellipse because after transformation they
+        // would converge to a sinle value effectively removing the whole curve
+
+        if (!isFullEllipse) {
+
+            auto mDsqrt = tempTransform1.set(
+                    rt1sqrt, 0, 0,
+                    0, rt2sqrt, 0,
+                    0, 0, 1);
+
+            const auto mRT = tempTransform2.set(
+                    ed.cs, ed.sn, 0,
+                    -ed.sn, ed.cs, 0,
+                    0, 0, 1);
+
+            const auto mDRF = mDsqrt.multiply(mRT).multiply(mF);
+
+            auto transformAngle = [&](auto phi) {
+                Vector3 v(std::cos(phi), std::sin(phi), 0);
+                v.applyMatrix3(mDRF);
+
+                return std::atan2(v.y, v.x);
+            };
+
+            curve.aStartAngle = transformAngle(curve.aStartAngle);
+            curve.aEndAngle = transformAngle(curve.aEndAngle);
+
+            if (isTransformFlipped(m)) {
+
+                curve.aClockwise = !curve.aClockwise;
+            }
+        }
+    }
+
+    void transfEllipseNoSkew(EllipseCurve& curve, const Matrix3& m) {
+
+        // Faster shortcut if no skew is applied
+        // (e.g, a euclidean transform of a group containing the ellipse)
+
+        const auto sx = getTransformScaleX(m);
+        const auto sy = getTransformScaleY(m);
+
+        curve.xRadius *= sx;
+        curve.yRadius *= sy;
+
+        // Extract rotation angle from the matrix of form:
+        //
+        //  | cosθ sx   -sinθ sy |
+        //  | sinθ sx    cosθ sy |
+        //
+        // Remembering that tanθ = sinθ / cosθ; and that
+        // `sx`, `sy`, or both might be zero.
+        const auto theta =
+                sx > std::numeric_limits<float>::epsilon()
+                        ? std::atan2(m.elements[1], m.elements[0])
+                        : std::atan2(-m.elements[3], m.elements[4]);
+
+        curve.aRotation += theta;
+
+        if (isTransformFlipped(m)) {
+
+            curve.aStartAngle *= -1;
+            curve.aEndAngle *= -1;
+            curve.aClockwise = !curve.aClockwise;
+        }
+    }
+
+    void transformPath(ShapePath& path, const Matrix3& m) {
+
+        Vector2 tempV2;
+        Vector3 tempV3;
+
+        auto transfVec2 = [&](Vector2& v2) {
+            tempV3.set(v2.x, v2.y, 1).applyMatrix3(m);
+
+            v2.set(tempV3.x, tempV3.y);
+        };
+
+        const auto isRotated = isTransformRotated(m);
+
+        const auto& subPaths = path.subPaths;
+
+        for (const auto& subPath : subPaths) {
+
+            const auto& curves = subPath->curves;
+
+            for (const auto& curve : curves) {
+
+                if (auto lineCurve = std::dynamic_pointer_cast<LineCurve>(curve)) {
+
+                    transfVec2(lineCurve->v1);
+                    transfVec2(lineCurve->v2);
+
+                } else if (auto cubicBezierCurve = std::dynamic_pointer_cast<CubicBezierCurve>(curve)) {
+
+                    transfVec2(cubicBezierCurve->v0);
+                    transfVec2(cubicBezierCurve->v1);
+                    transfVec2(cubicBezierCurve->v2);
+                    transfVec2(cubicBezierCurve->v3);
+
+                } else if (auto quadraticBezierCurve = std::dynamic_pointer_cast<QuadraticBezierCurve>(curve)) {
+
+                    transfVec2(quadraticBezierCurve->v0);
+                    transfVec2(quadraticBezierCurve->v1);
+                    transfVec2(quadraticBezierCurve->v2);
+
+                } else if (auto ellipseCurve = std::dynamic_pointer_cast<EllipseCurve>(curve)) {
+
+                    // Transform ellipse center point
+
+                    tempV2.set(ellipseCurve->aX, ellipseCurve->aY);
+                    transfVec2(tempV2);
+                    ellipseCurve->aX = tempV2.x;
+                    ellipseCurve->aY = tempV2.y;
+
+                    // Transform ellipse shape parameters
+
+                    if (isTransformSkewed(m)) {
+
+                        transfEllipseGeneric(*ellipseCurve, m);
+
+                    } else {
+
+                        transfEllipseNoSkew(*ellipseCurve, m);
+                    }
+                }
+            }
+        }
     }
 
 }// namespace threepp::svg
