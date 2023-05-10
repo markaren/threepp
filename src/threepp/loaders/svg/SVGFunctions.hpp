@@ -914,7 +914,7 @@ namespace threepp::svg {
         return allIntersections;
     }
 
-    AHole isHoleTo(const SimplePath& simplePath, const std::vector<SimplePath>& allPaths, float scanlineMinX, float scanlineMaxX, std::string fillRule) {
+    std::optional<AHole> isHoleTo(const SimplePath& simplePath, const std::vector<SimplePath>& allPaths, float scanlineMinX, float scanlineMaxX, std::string fillRule) {
 
         if (fillRule.empty()) {
 
@@ -968,7 +968,7 @@ namespace threepp::svg {
 
         stack.emplace_back(simplePath.identifier);
 
-        if (fillRule == "evenodd") {
+        if (fillRule == "evenodd" && stack.size() > 1) {
 
             const auto isHole = stack.size() % 2 == 0;
             const auto isHoleFor = stack[stack.size() - 2];
@@ -1002,6 +1002,7 @@ namespace threepp::svg {
         } else {
 
             std::cerr << "fill-rule: '" << fillRule << "' is currently not implemented." << std::endl;
+            return std::nullopt;
         }
     }
 

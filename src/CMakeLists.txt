@@ -94,7 +94,6 @@ set(publicHeaders
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
-        "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
@@ -197,8 +196,6 @@ set(privateHeaders
         "threepp/extras/earcut.hpp"
         "threepp/extras/quickhull.hpp"
 
-        "threepp/loaders/nanosvg.h"
-
         "threepp/materials/MeshDistanceMaterial.hpp"
 
         "threepp/renderers/gl/Buffer.hpp"
@@ -300,7 +297,6 @@ set(sources
         "threepp/loaders/MTLLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
-        "threepp/loaders/SVGLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
 
         "threepp/materials/LineBasicMaterial.cpp"
@@ -412,7 +408,9 @@ target_link_libraries(threepp
         glfw::glfw)
 if (THREEPP_WITH_SVG_FEATURE)
     target_link_libraries(threepp PRIVATE pugixml::shared pugixml::pugixml)
-#    target_include_directories(threepp PRIVATE "${PUGIXML_INCLUDE_DIR}")
+    target_sources(threepp
+            PRIVATE
+            "threepp/loaders/SVGLoader.cpp")
 endif ()
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread)

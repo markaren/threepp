@@ -45,6 +45,7 @@ namespace threepp::svg {
     };
 
     struct SimplePath {
+        std::vector<std::shared_ptr<Curve2>> curves;
         std::vector<Vector2> points;
         bool isCW;
         int identifier;

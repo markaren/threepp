@@ -948,27 +948,6 @@ struct SVGLoader::Impl {
 
     ShapePath parsePolygonNode(const pugi::xml_node& node) {
 
-        //                int index = 0;
-
-        //                auto iterator = ( match, a, b ) {
-        //
-        //                    const x = parseFloatWithUnits( a );
-        //                    const y = parseFloatWithUnits( b );
-        //
-        //                    if ( index === 0 ) {
-        //
-        //                        path.moveTo( x, y );
-        //
-        //                    } else {
-        //
-        //                        path.lineTo( x, y );
-        //
-        //                    }
-        //
-        //                    index ++;
-        //
-        //                }
-
         const static std::regex regex{R"((-?[+\d\.?]+)[,|\s](-?[\d\.?]+))"};
 
         ShapePath path;
@@ -1349,13 +1328,11 @@ std::vector<SVGLoader::SVGData> SVGLoader::parse(const std::string& text) {
     return pimpl_->load(doc);
 }
 
-std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
+std::vector<std::shared_ptr<Shape>> SVGLoader::createShapes(const SVGData& data) {
 
     const auto& shapePath = data.path;
 
     const auto BIGNUMBER = 999999999.f;
-
-    int identifier = 0;
 
     auto scanlineMinX = BIGNUMBER;
     auto scanlineMaxX = -BIGNUMBER;
@@ -1407,7 +1384,7 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
             scanlineMinX = minX - 1;
         }
 
-        return SimplePath{points, shapeutils::isClockWise(points), identifier++, Box2({minX, minY}, {maxX, maxY})};
+        return SimplePath{p->curves, points, shapeutils::isClockWise(points), -1, Box2({minX, minY}, {maxX, maxY})};
     });
 
     // simplePaths = simplePaths.filter( sp => sp.points.length > 1 );
@@ -1419,26 +1396,35 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
         }
     }
 
-    std::vector<AHole> isAHole;
+    for ( int identifier = 0; identifier < simplePaths.size(); identifier ++ ) {
+
+        simplePaths[ identifier ].identifier = identifier;
+
+    }
+
+    std::vector<std::optional<AHole>> isAHole;
     std::transform(simplePaths.begin(), simplePaths.end(), std::back_inserter(isAHole), [&](const auto& p) {
         return isHoleTo(p, simplePaths, scanlineMinX, scanlineMaxX, data.style.fillRule);
     });
 
-    std::vector<Shape> shapesToReturn;
+    std::vector<std::shared_ptr<Shape>> shapesToReturn;
     for (const auto& p : simplePaths) {
 
         const auto amIAHole = isAHole[p.identifier];
 
-        if (!amIAHole.isHole) {
+        if (amIAHole && !amIAHole->isHole) {
 
-            Shape shape(p.points);
+            auto shape = std::make_shared<Shape>();
+            shape->curves = p.curves;
 
             for (const auto& h : isAHole) {
 
-                if (h.isHole && h._for == p.identifier) {
+                if (h->isHole && h->_for == p.identifier) {
 
-                    const auto& path = simplePaths[h.identifier];
-                    shape.holes.emplace_back(std::make_shared<Path>(path.points));
+                    const auto& hole = simplePaths[h->identifier];
+                    auto path = std::make_shared<Path>();
+                    path->curves = hole.curves;
+                    shape->holes.emplace_back(path);
                 }
             }
             shapesToReturn.emplace_back(shape);

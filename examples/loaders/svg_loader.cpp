@@ -88,11 +88,10 @@ namespace {
                 } else {
                     const auto shapes = SVGLoader::createShapes(data);
 
-                    for (auto& shape : shapes) {
-                        auto geometry = ShapeGeometry::create(shape);
-                        auto mesh = Mesh::create(geometry, material);
-                        svg->add(mesh);
-                    }
+                    auto geometry = ShapeGeometry::create(shapes);
+                    auto mesh = Mesh::create(geometry, material);
+                    mesh->name = data.style.id;
+                    svg->add(mesh);
                 }
             }
 

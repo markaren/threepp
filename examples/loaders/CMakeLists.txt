@@ -10,7 +10,7 @@ if (assimp_FOUND)
     target_link_libraries(assimp_loader PUBLIC threepp assimp::assimp)
 endif()
 
-if (THREEPP_WITH_SVG_FEATURE AND PUGIXML_FOUND)
+if (THREEPP_WITH_SVG_FEATURE)
     add_executable(svg_loader svg_loader.cpp)
     target_link_libraries(svg_loader PUBLIC threepp)
     if (imgui_FOUND)
