@@ -1106,6 +1106,8 @@ struct SVGLoader::Impl {
                         style.strokeWidth = positive(std::stof(strValue));
                     } else if (key == "stroke-miter-limit") {
                         style.strokeMiterLimit = positive(std::stof(strValue));
+                    } else if (key == "visibility") {
+                        style.visibility = strValue == "true";
                     }
                 }
             }
@@ -1144,7 +1146,7 @@ struct SVGLoader::Impl {
         }
 
         if (node.attribute("visibility")) {
-            style.fillOpacity = node.attribute("visibility").as_float();
+            style.visibility = node.attribute("visibility").as_bool();
         }
 
         return style;

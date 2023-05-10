@@ -932,7 +932,7 @@ namespace threepp::svg {
         auto scanlineIntersections = getScanlineIntersections(scanline, simplePath.boundingBox, allPaths);
 
         std::sort(scanlineIntersections.begin(), scanlineIntersections.end(), [](const auto& i1, const auto& i2) {
-            return i1.point.x > i2.point.x;
+            return i1.point.x < i2.point.x;
         });
 
         std::vector<svg::Intersection> baseIntersections;
@@ -971,10 +971,13 @@ namespace threepp::svg {
 
         stack.emplace_back(simplePath.identifier);
 
-        if (fillRule == "evenodd" && stack.size() > 1) {
+        if (fillRule == "evenodd") {
 
             const auto isHole = stack.size() % 2 == 0;
-            const auto isHoleFor = stack[stack.size() - 2];
+            std::optional<int> isHoleFor;
+            if (isHole) {
+                isHoleFor = stack[stack.size() - 2];
+            }
 
             return AHole{simplePath.identifier, isHole, isHoleFor};
 

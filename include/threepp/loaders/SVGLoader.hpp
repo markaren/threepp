@@ -26,7 +26,7 @@ namespace threepp {
             std::string strokeLineCap;
             float strokeMiterLimit;
             std::string fillRule;
-            bool visibility;
+            bool visibility = true;
             float opacity;
             std::optional<std::string> stroke;
             std::string id;

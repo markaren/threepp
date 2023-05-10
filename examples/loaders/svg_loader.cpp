@@ -78,12 +78,13 @@ namespace {
                          {"side", DoubleSide},
                          {"depthWrite", false}});
 
-                if (true) {
+                if (false) {
                     const auto shapes = data.path.toShapes(true);
 
                     auto geometry = ShapeGeometry::create(shapes);
                     auto mesh = Mesh::create(geometry, material);
                     mesh->name = data.style.id;
+                    mesh->visible = data.style.visibility;
                     svg->add(mesh);
 
                 } else {
@@ -92,6 +93,7 @@ namespace {
                     auto geometry = ShapeGeometry::create(shapes);
                     auto mesh = Mesh::create(geometry, material);
                     mesh->name = data.style.id;
+                    mesh->visible = data.style.visibility;
                     svg->add(mesh);
                 }
             }
