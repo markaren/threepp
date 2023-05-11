@@ -407,7 +407,7 @@ target_link_libraries(threepp
         glad::glad
         glfw::glfw)
 if (THREEPP_WITH_SVG_FEATURE)
-    target_link_libraries(threepp PRIVATE pugixml::shared pugixml::pugixml)
+    target_link_libraries(threepp PRIVATE pugixml::pugixml)
     target_sources(threepp
             PRIVATE
             "threepp/loaders/SVGLoader.cpp")
