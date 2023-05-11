@@ -1,4 +1,4 @@
-
+find_package(nlohmann_json CONFIG QUIET)
 add_compile_definitions(DATA_FOLDER="${PROJECT_SOURCE_DIR}/data")
 
 function(add_test_executable name)
