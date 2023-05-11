@@ -3,6 +3,7 @@
 #define THREEPP_STRINGUTILS_HPP
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -94,6 +95,19 @@ namespace threepp::utils {
                        [](unsigned char c) { return std::tolower(c); });
     }
 
+    // https://stackoverflow.com/questions/4654636/how-to-determine-if-a-string-is-a-number-with-c
+    inline bool isNumber(const std::string& s) {
+
+        char *p;
+        strtod(s.c_str(), &p);
+        return !*p;
+    }
+
+    // https://stackoverflow.com/questions/874134/find-out-if-string-ends-with-another-string-in-c
+    inline bool endsWith(std::string const& value, std::string const& ending) {
+        if (ending.size() > value.size()) return false;
+        return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
+    }
 
 }// namespace threepp::utils
 
