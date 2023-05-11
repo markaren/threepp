@@ -37,8 +37,7 @@ namespace threepp::svg {
     };
 
     // http://www.w3.org/TR/SVG11/implnote.html#PathElementImplementationNotes
-
-    float getReflection(float a, float b) {
+    inline float getReflection(float a, float b) {
 
         return a - (b - a);
     }

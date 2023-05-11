@@ -94,6 +94,7 @@ set(publicHeaders
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
+        "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
@@ -406,12 +407,6 @@ target_link_libraries(threepp
         PRIVATE
         glad::glad
         glfw::glfw)
-if (THREEPP_WITH_SVG_FEATURE)
-    target_link_libraries(threepp PRIVATE pugixml::pugixml)
-    target_sources(threepp
-            PRIVATE
-            "threepp/loaders/SVGLoader.cpp")
-endif ()
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread)
 endif ()

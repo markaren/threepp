@@ -6,7 +6,6 @@ message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" OFF)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
-option(THREEPP_WITH_SVG_FEATURE "Build test suite" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 
@@ -30,10 +29,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(stb CONFIG QUIET)
-
-if (THREEPP_WITH_SVG_FEATURE)
-    find_package(pugixml CONFIG REQUIRED)
-endif ()
 
 if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
     add_library(glfw::glfw ALIAS glfw)
