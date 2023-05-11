@@ -4,6 +4,7 @@ add_compile_definitions(DATA_FOLDER="${PROJECT_SOURCE_DIR}/data")
 function(add_test_executable name)
     add_executable(${name} ${name}.cpp)
     target_link_libraries(${name} PRIVATE threepp Catch2::Catch2)
+    target_include_directories(${name} PRIVATE "${PROJECT_SOURCE_DIR}/src")
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 

@@ -406,9 +406,15 @@ target_link_libraries(threepp
         PRIVATE
         glad::glad
         glfw::glfw)
-if(UNIX)
+if (THREEPP_WITH_SVG_FEATURE)
+    target_link_libraries(threepp PRIVATE pugixml::pugixml)
+    target_sources(threepp
+            PRIVATE
+            "threepp/loaders/SVGLoader.cpp")
+endif ()
+if (UNIX)
     target_link_libraries(threepp PRIVATE pthread)
-endif()
+endif ()
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
