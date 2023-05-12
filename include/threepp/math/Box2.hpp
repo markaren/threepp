@@ -25,6 +25,8 @@ namespace threepp {
 
         Box2& setFromPoints(const std::vector<Vector2>& points);
 
+        Box2& setFromCenterAndSize(const Vector2& center, const Vector2& size);
+
         Box2& copy(const Box2& box);
 
         Box2& makeEmpty();

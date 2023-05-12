@@ -5,6 +5,12 @@
 
 using namespace threepp;
 
+namespace {
+
+    Vector2 _vector;
+
+}
+
 Box2::Box2()
     : min_(+Infinity<float>, +Infinity<float>),
       max_(-Infinity<float>, -Infinity<float>) {}
@@ -36,6 +42,15 @@ Box2& Box2::setFromPoints(const std::vector<Vector2>& points) {
 
         this->expandByPoint(point);
     }
+
+    return *this;
+}
+
+Box2& Box2::setFromCenterAndSize(const Vector2& center, const Vector2& size) {
+
+    const auto halfSize = _vector.copy( size ).multiplyScalar( 0.5 );
+    this->min_.copy( center ).sub( halfSize );
+    this->max_.copy( center ).add( halfSize );
 
     return *this;
 }
