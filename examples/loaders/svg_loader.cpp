@@ -79,7 +79,7 @@ namespace {
                 auto material = MeshBasicMaterial::create(
                         {{"color", data.path.color},
                          {"opacity", data.style.fillOpacity},
-                         {"transparent", data.style.fillOpacity < 1},
+                         {"transparent", true},
                          {"side", DoubleSide},
                          {"depthWrite", false}});
 
@@ -97,7 +97,7 @@ namespace {
                 auto strokeMaterial = MeshBasicMaterial::create(
                         {{"color", Color().setStyle(*data.style.stroke)},
                          {"opacity", data.style.strokeOpacity},
-                         {"transparent", data.style.strokeOpacity < 1},
+                         {"transparent", true},
                          {"side", DoubleSide},
                          {"depthWrite", false}});
 
