@@ -98,11 +98,11 @@ Box3& Box3::setFromCenterAndSize(const Vector3& center, const Vector3& size) {
     return *this;
 }
 
-Box3& Box3::setFromObject(Object3D& object) {
+Box3& Box3::setFromObject(Object3D& object, bool precise) {
 
     this->makeEmpty();
 
-    return this->expandByObject(object);
+    return this->expandByObject(object, precise);
 }
 
 Box3 Box3::clone() const {
@@ -176,7 +176,7 @@ bool Box3::containsPoint(const Vector3& point) const {
                    : true;
 }
 
-Box3& Box3::expandByObject(Object3D& object) {
+Box3& Box3::expandByObject(Object3D& object, bool presice) {
 
     // Computes the world-axis-aligned bounding box of an object (including its children),
     // accounting for both the object's, and children's, world transforms
@@ -187,21 +187,34 @@ Box3& Box3::expandByObject(Object3D& object) {
 
     if (geometry) {
 
-        if (!geometry->boundingBox) {
+        if (presice && geometry->getAttributes().count("position")) {
 
-            geometry->computeBoundingBox();
+            const auto position = geometry->getAttribute<float>("position");
+            for (unsigned i = 0, l = position->count(); i < l; i++) {
+
+                position->setFromBufferAttribute(_vector, i);
+                _vector.applyMatrix4(*object.matrixWorld);
+                this->expandByPoint(_vector);
+            }
+
+        } else {
+
+            if (!geometry->boundingBox) {
+
+                geometry->computeBoundingBox();
+            }
+
+            Box3 _box{};
+            _box.copy(geometry->boundingBox.value());
+            _box.applyMatrix4(*object.matrixWorld);
+
+            this->union_(_box);
         }
-
-        Box3 _box{};
-        _box.copy(geometry->boundingBox.value());
-        _box.applyMatrix4(*object.matrixWorld);
-
-        this->union_(_box);
     }
 
     for (auto& child : object.children) {
 
-        this->expandByObject(*child);
+        this->expandByObject(*child, presice);
     }
 
     return *this;

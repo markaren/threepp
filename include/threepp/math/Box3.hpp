@@ -77,7 +77,7 @@ namespace threepp {
 
         Box3& setFromCenterAndSize(const Vector3& center, const Vector3& size);
 
-        Box3& setFromObject(Object3D& object);
+        Box3& setFromObject(Object3D& object, bool precise = false);
 
         [[nodiscard]] Box3 clone() const;
 
@@ -97,7 +97,7 @@ namespace threepp {
 
         Box3& expandByScalar(float scalar);
 
-        Box3& expandByObject(Object3D& object);
+        Box3& expandByObject(Object3D& object, bool presice = false);
 
         [[nodiscard]] bool containsPoint(const Vector3& point) const;
 
