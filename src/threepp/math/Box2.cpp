@@ -96,6 +96,24 @@ Box2& Box2::expandByPoint(const Vector2& point) {
     return *this;
 }
 
+Box2& Box2::expandByVector(const Vector2& vector) {
+
+    this->min_.sub( vector );
+    this->max_.add( vector );
+
+    return *this;
+
+}
+
+Box2& Box2::expandByScalar(float scalar) {
+
+    this->min_.addScalar( - scalar );
+    this->max_.addScalar( scalar );
+
+    return *this;
+
+}
+
 bool Box2::containsPoint(const Vector2& point) const {
     // clang-format off
     return point.x < this->min_.x || point.x > this->max_.x ||

@@ -39,6 +39,10 @@ namespace threepp {
 
         Box2& expandByPoint(const Vector2& point);
 
+        Box2&  expandByVector( const Vector2& vector );
+
+        Box2& expandByScalar( float scalar );
+
         [[nodiscard]] bool containsPoint(const Vector2& point) const;
 
         [[nodiscard]] bool containsBox(const Box2& box) const;
