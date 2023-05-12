@@ -73,6 +73,7 @@ struct Canvas::Impl {
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
 
         if (params.antialiasing_ > 0) {
             glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
@@ -424,6 +425,11 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
             vsync(std::get<bool>(value));
             used = true;
 
+        } else if (key == "resizable") {
+
+            resizable(std::get<bool>(value));
+            used = true;
+
         } else if (key == "size") {
 
             auto _size = std::get<WindowSize>(value);
@@ -477,6 +483,13 @@ Canvas::Parameters& Canvas::Parameters::antialiasing(int antialiasing) {
 Canvas::Parameters& Canvas::Parameters::vsync(bool flag) {
 
     this->vsync_ = flag;
+
+    return *this;
+}
+
+Canvas::Parameters& threepp::Canvas::Parameters::resizable(bool flag) {
+
+    this->resizable_ = flag;
 
     return *this;
 }

@@ -104,6 +104,8 @@ namespace threepp {
 
             Parameters& vsync(bool flag);
 
+            Parameters& resizable(bool flag);
+
             Parameters& favicon(const std::filesystem::path& path);
 
         private:
@@ -111,6 +113,7 @@ namespace threepp {
             int antialiasing_{0};
             std::string title_{"threepp"};
             bool vsync_{true};
+            bool resizable_{true};
             std::optional<std::filesystem::path> favicon_;
 
             friend struct Canvas::Impl;
