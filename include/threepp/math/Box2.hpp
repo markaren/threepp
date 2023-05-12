@@ -39,13 +39,25 @@ namespace threepp {
 
         Box2& expandByPoint(const Vector2& point);
 
-        Box2&  expandByVector( const Vector2& vector );
+        Box2& expandByVector(const Vector2& vector);
 
-        Box2& expandByScalar( float scalar );
+        Box2& expandByScalar(float scalar);
 
         [[nodiscard]] bool containsPoint(const Vector2& point) const;
 
         [[nodiscard]] bool containsBox(const Box2& box) const;
+
+        [[nodiscard]] bool intersectsBox(const Box2& box) const;
+
+        Vector2& clampPoint(const Vector2& point, Vector2& target) const;
+
+        [[nodiscard]] float distanceToPoint(const Vector2& point) const;
+
+        Box2& intersect(const Box2& box);
+
+        Box2& _union(const Box2& box);
+
+        Box2& translate(const Vector2& offset);
 
         friend std::ostream& operator<<(std::ostream& os, const Box2& v) {
             os << "Box2(max=" << v.min_ << ", max=" << v.max_ << ")";
