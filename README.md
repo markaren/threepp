@@ -18,7 +18,7 @@ however much remains to be done..
 * Transparency, Shadows
 * OrbitControls, FlyControls
 * Water and Sky shader
-* Loaders [Binary STL, OBJ/MTL]
+* Loaders [Binary STL, OBJ/MTL, SVG]
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
 * Easy integration with [Bullet](https://github.com/bulletphysics/bullet3)
@@ -78,7 +78,7 @@ auto createBox(const Vector3& pos, const Color& color) {
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("Demo");
     GLRenderer renderer{canvas};
 
     auto scene = Scene::create();
