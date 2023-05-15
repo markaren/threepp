@@ -98,12 +98,6 @@ struct TextureLoader::Impl {
 TextureLoader::TextureLoader(bool useCache)
     : pimpl_(std::make_unique<Impl>(useCache)) {}
 
-
-std::shared_ptr<Texture> TextureLoader::loadTexture(const std::filesystem::path& path, bool flipY) {
-
-    return pimpl_->load(path, flipY);
-}
-
 std::shared_ptr<Texture> TextureLoader::load(const std::filesystem::path& path, bool flipY) {
 
     return pimpl_->load(path, flipY);
