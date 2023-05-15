@@ -51,6 +51,21 @@ Under MinGW you'll need to specify the vcpkg triplet:
 -DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
 ```
 
+##### Optional downstream dependencies
+
+When consuming `threepp` in your own application, 
+some headers will require additional dependencies in order to compile.
+
+| **Header**    | **Depedency** | **Description**                               |
+|---------------|---------------|-----------------------------------------------|
+| UrlFetcher    | curl          | Download content from the internet            |
+| AssimpLoader  | assimp        | Import a wide variety of different 3D formats |
+| FontLoader    | nhlomann-json | Import fonts to be used for 3D text           |
+| SVGLoader     | pugixml       | Import SVG files                              |
+| imgui_context | imgui         | ImGUI utility                                 |
+| BulletWrapper | bullet3       | Bullet utility                                |
+
+
 ### Implementation notes
 
 In general, you'll find that math classes are value types, while `threepp` expect smart pointers for other types. 
