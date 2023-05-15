@@ -2,7 +2,6 @@
 #include "threepp/Canvas.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 
-#include "threepp/core/Clock.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #include "threepp/favicon.hpp"
