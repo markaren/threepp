@@ -45,7 +45,7 @@ set(publicHeaders
         "threepp/extras/curves/SplineCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve3.hpp"
-        "threepp/extras/imgui/imgui_context.hpp"
+        "threepp/extras/imgui/ImguiContext.hpp"
 
         "threepp/input/KeyListener.hpp"
         "threepp/input/MouseListener.hpp"
