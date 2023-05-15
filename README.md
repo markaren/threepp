@@ -63,7 +63,7 @@ some headers will require additional dependencies in order to compile.
 | FontLoader    | nlohmann-json  | Import fonts to be used for 3D text           |
 | SVGLoader     | pugixml        | Import SVG files                              |
 | imgui_context | imgui          | ImGUI utility                                 |
-| BulletWrapper | bullet3        | Bullet utility                                |
+| BulletPhysics | bullet3        | Bullet utility                                |
 
 
 ### Implementation notes
