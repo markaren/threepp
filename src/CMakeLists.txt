@@ -29,7 +29,6 @@ set(publicHeaders
         "threepp/cameras/PerspectiveCamera.hpp"
         "threepp/cameras/OrthographicCamera.hpp"
 
-        "threepp/extras/bullet/BulletWrapper.hpp"
         "threepp/extras/ShapeUtils.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
