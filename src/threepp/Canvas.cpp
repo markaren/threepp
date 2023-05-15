@@ -359,7 +359,7 @@ void Canvas::invokeLater(const std::function<void()>& f, float t) {
     pimpl_->invokeLater(f, t);
 }
 
-void* Canvas::window_ptr() const {
+void* Canvas::windowPtr() const {
 
     return pimpl_->window;
 }

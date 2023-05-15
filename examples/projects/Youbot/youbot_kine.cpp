@@ -5,7 +5,7 @@
 #include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/utils/ThreadPool.hpp"
 
 using namespace threepp;

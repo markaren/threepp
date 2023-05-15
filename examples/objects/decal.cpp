@@ -5,7 +5,7 @@
 #include <threepp/threepp.hpp>
 
 #ifdef HAS_IMGUI
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #endif
 
 using namespace threepp;
@@ -70,12 +70,12 @@ namespace {
 
 #ifdef HAS_IMGUI
 
-    struct MyGui: public imgui_context {
+    struct MyGui: public ImguiContext {
 
         bool clear = false;
         bool mouseHover = false;
 
-        explicit MyGui(const Canvas& canvas): imgui_context(canvas.window_ptr()) {}
+        explicit MyGui(const Canvas& canvas): ImguiContext(canvas.windowPtr()) {}
 
         void onRender() override {
 

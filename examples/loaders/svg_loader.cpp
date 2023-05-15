@@ -2,7 +2,7 @@
 #include "threepp/threepp.hpp"
 
 #ifdef HAS_IMGUI
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #endif
 
 using namespace threepp;
@@ -11,10 +11,10 @@ namespace {
 
 #ifdef HAS_IMGUI
 
-    struct MyUI: public imgui_context {
+    struct MyUI: public ImguiContext {
 
     public:
-        explicit MyUI(void* ptr): imgui_context(ptr) {}
+        explicit MyUI(void* ptr): ImguiContext(ptr) {}
 
         [[nodiscard]] bool newSelection() const {
             return lastSelectedIndex != selectedIndex;
@@ -159,7 +159,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
 #ifdef HAS_IMGUI
-    MyUI ui(canvas.window_ptr());
+    MyUI ui(canvas.windowPtr());
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {
