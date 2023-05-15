@@ -402,7 +402,7 @@ include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
 add_library(threepp::threepp ALIAS threepp)
-target_compile_features(threepp PUBLIC cxx_std_17)
+target_compile_features(threepp PUBLIC cxx_std_20)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
