@@ -60,7 +60,7 @@ some headers will require additional dependencies in order to compile.
 |---------------|---------------|-----------------------------------------------|
 | UrlFetcher    | curl          | Download content from the internet            |
 | AssimpLoader  | assimp        | Import a wide variety of different 3D formats |
-| FontLoader    | nhlomann-json | Import fonts to be used for 3D text           |
+| FontLoader    | nlohmann-json | Import fonts to be used for 3D text           |
 | SVGLoader     | pugixml       | Import SVG files                              |
 | imgui_context | imgui         | ImGUI utility                                 |
 | BulletWrapper | bullet3       | Bullet utility                                |
