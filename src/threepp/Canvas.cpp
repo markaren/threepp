@@ -149,34 +149,6 @@ struct Canvas::Impl {
         while (animateOnce(f)) {}
     }
 
-    void animate(const std::function<void(float)>& f) {
-
-        Clock clock;
-        while (!glfwWindowShouldClose(window)) {
-
-            handleTasks();
-
-            f(clock.getDelta());
-
-            glfwSwapBuffers(window);
-            glfwPollEvents();
-        }
-    }
-
-    void animate(const std::function<void(float, float)>& f) {
-
-        Clock clock;
-        while (!glfwWindowShouldClose(window)) {
-
-            handleTasks();
-
-            f(static_cast<float>(glfwGetTime()), clock.getDelta());
-
-            glfwSwapBuffers(window);
-            glfwPollEvents();
-        }
-    }
-
     void onWindowResize(std::function<void(WindowSize)> f) {
         this->resizeListener = std::move(f);
     }
@@ -336,16 +308,6 @@ void Canvas::animate(const std::function<void()>& f) {
 bool Canvas::animateOnce(const std::function<void()>& f) {
 
     return pimpl_->animateOnce(f);
-}
-
-void Canvas::animate(const std::function<void(float)>& f) {
-
-    pimpl_->animate(f);
-}
-
-void Canvas::animate(const std::function<void(float, float)>& f) {
-
-    pimpl_->animate(f);
 }
 
 const WindowSize& Canvas::getSize() const {
