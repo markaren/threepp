@@ -14,17 +14,17 @@ however much remains to be done..
 * Geometries [Box, Sphere, Plane, Cylindrical, Capsule, Tube, ++]  
 * Lights [Ambient, Directional, Point, Spot, Hemi]
 * Raycasting [Mesh, Line, Points]
-* 2D Textures, 3D text, Sprites, RenderTarget
+* 2D/3D Textures, 3D text, Sprites, RenderTarget
 * Transparency, Shadows
 * OrbitControls, FlyControls
-* Water and Sky shader
+* Water and Sky shaders
 * Loaders [Binary STL, OBJ/MTL, SVG]
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
 * Easy integration with [Bullet](https://github.com/bulletphysics/bullet3)
 * Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
-Builds on Windows, Linux, MacOS, MinGW.
+Builds on Windows, Linux, MacOS and MinGW.
 
 ### But, but why?
 
