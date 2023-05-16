@@ -42,7 +42,7 @@ int main() {
     textHandle.scale = 2;
 
     std::array<float, 3> posBuf{};
-    imgui_functional_context ui(canvas.window_ptr(), [&] {
+    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("Demo");
