@@ -17,6 +17,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <type_traits>
 
 namespace threepp {
 
@@ -164,7 +165,7 @@ namespace threepp {
 
         static std::shared_ptr<Object3D> create() {
 
-            return std::shared_ptr<Object3D>(new Object3D());
+            return std::make_shared<Object3D>();
         }
 
         virtual BufferGeometry* geometry() {
@@ -188,12 +189,14 @@ namespace threepp {
         }
 
         template<class T>
+            requires std::derived_from<T, Object3D>
         T* as() {
 
             return dynamic_cast<T*>(this);
         }
 
         template<class T>
+            requires std::derived_from<T, Object3D>
         bool is() {
 
             return dynamic_cast<T*>(this) != nullptr;

@@ -91,6 +91,7 @@ namespace threepp {
         [[nodiscard]] virtual std::string type() const = 0;
 
         template<class T>
+            requires std::derived_from<T, Material>
         std::shared_ptr<T> as() {
 
             auto m = shared_from_this();
@@ -98,6 +99,7 @@ namespace threepp {
         }
 
         template<class T>
+            requires std::derived_from<T, Material>
         bool is() {
 
             return dynamic_cast<T*>(this) != nullptr;
