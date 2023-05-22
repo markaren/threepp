@@ -24,7 +24,7 @@ namespace {
 
         auto geometry = PlaneGeometry::create(params);
         auto material = MeshBasicMaterial::create();
-        material->side = DoubleSide;
+        material->side = Side::Double;
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));

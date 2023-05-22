@@ -80,7 +80,7 @@ namespace {
                         {{"color", data.path.color},
                          {"opacity", data.style.fillOpacity},
                          {"transparent", true},
-                         {"side", DoubleSide},
+                         {"side", Side::Double},
                          {"depthWrite", false}});
 
                 const auto shapes = SVGLoader::createShapes(data);
@@ -98,7 +98,7 @@ namespace {
                         {{"color", Color().setStyle(*data.style.stroke)},
                          {"opacity", data.style.strokeOpacity},
                          {"transparent", true},
-                         {"side", DoubleSide},
+                         {"side", Side::Double},
                          {"depthWrite", false}});
 
                 for (const auto& subPath : data.path.subPaths) {

@@ -28,7 +28,7 @@ namespace {
         const auto planeGeometry = PlaneGeometry::create(105, 105);
         const auto planeMaterial = MeshPhongMaterial::create();
         planeMaterial->color.setHex(Color::white);
-        planeMaterial->side = DoubleSide;
+        planeMaterial->side = Side::Double;
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->receiveShadow = true;
         plane->rotateX(math::degToRad(-90));

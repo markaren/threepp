@@ -34,20 +34,20 @@ namespace threepp {
             bool instancingColor{};
 
             bool supportsVertexTextures;
-            int outputEncoding{};
+            Encoding outputEncoding{};
             bool map{};
-            int mapEncoding{};
+            Encoding mapEncoding{};
             bool matcap{};
-            int matcapEncoding{};
+            Encoding matcapEncoding{};
             bool envMap{};
             int envMapMode{};
-            int envMapEncoding{};
+            Encoding envMapEncoding{};
             bool envMapCubeUV{};
             bool lightMap{};
-            int lightMapEncoding{};
+            Encoding lightMapEncoding{};
             bool aoMap{};
             bool emissiveMap{};
-            int emissiveMapEncoding{};
+            Encoding emissiveMapEncoding{};
             bool bumpMap{};
             bool normalMap{};
             bool objectSpaceNormalMap{};
@@ -109,7 +109,7 @@ namespace threepp {
             bool dithering{};
 
             bool shadowMapEnabled{};
-            int shadowMapType{};
+            ShadowMap shadowMapType{};
 
             int toneMapping{};
             bool physicallyCorrectLights{};

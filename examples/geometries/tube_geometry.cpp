@@ -39,7 +39,7 @@ int main() {
 
     const auto geometry = TubeGeometry::create(curve);
     const auto material = MeshBasicMaterial::create({{"color", 0xff0000},
-                                                     {"side", DoubleSide}});
+                                                     {"side", Side::Double}});
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 

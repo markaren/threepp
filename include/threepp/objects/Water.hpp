@@ -25,7 +25,7 @@ namespace threepp {
             std::optional<Color> waterColor;
             std::optional<Vector3> eye;
             std::optional<float> distortionScale;
-            std::optional<int> side;
+            std::optional<Side> side;
             std::optional<bool> fog;
         };
 

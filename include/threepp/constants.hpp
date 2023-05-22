@@ -3,19 +3,45 @@
 #ifndef THREEPP_CONSTANTS_HPP
 #define THREEPP_CONSTANTS_HPP
 
+#include <type_traits>
+
 namespace threepp {
+
+    // https://stackoverflow.com/questions/11421432/how-can-i-output-the-value-of-an-enum-class-in-c11
+    template <typename Enumeration>
+    auto as_integer(const Enumeration value)
+            -> typename std::underlying_type<Enumeration>::type
+    {
+        return static_cast<typename std::underlying_type<Enumeration>::type>(value);
+    }
 
     const int CullFaceNone = 0;
     const int CullFaceBack = 1;
     const int CullFaceFront = 2;
     const int CullFaceFrontBack = 3;
-    const int BasicShadowMap = 0;
-    const int PCFShadowMap = 1;
-    const int PCFSoftShadowMap = 2;
-    const int VSMShadowMap = 3;
-    const int FrontSide = 0;
-    const int BackSide = 1;
-    const int DoubleSide = 2;
+
+//    const int BasicShadowMap = 0;
+//    const int PCFShadowMap = 1;
+//    const int PCFSoftShadowMap = 2;
+//    const int VSMShadowMap = 3;
+
+    enum class ShadowMap {
+        Basic,
+        PFC,
+        PFCSoft,
+        VSM
+    };
+
+//    const int FrontSide = 0;
+//    const int BackSide = 1;
+//    const int DoubleSide = 2;
+
+    enum class Side {
+        Front,
+        Back,
+        Double
+    };
+
     const int FlatShading = 1;
     const int SmoothShading = 2;
     const int NoBlending = 0;
@@ -65,9 +91,17 @@ namespace threepp {
     const int EquirectangularRefractionMapping = 304;
     const int CubeUVReflectionMapping = 306;
     const int CubeUVRefractionMapping = 307;
-    const int RepeatWrapping = 1000;
-    const int ClampToEdgeWrapping = 1001;
-    const int MirroredRepeatWrapping = 1002;
+
+//    const int RepeatWrapping = 1000;
+//    const int ClampToEdgeWrapping = 1001;
+//    const int MirroredRepeatWrapping = 1002;
+
+    enum class TextureWrapping: int {
+        Repeat = 1000,
+        ClampToEdge = 1001,
+        MirroredRepeat = 1002
+    };
+
     const int NearestFilter = 1003;
     const int NearestMipmapNearestFilter = 1004;
     const int NearestMipMapNearestFilter = 1004;
@@ -159,14 +193,27 @@ namespace threepp {
     const int TrianglesDrawMode = 0;
     const int TriangleStripDrawMode = 1;
     const int TriangleFanDrawMode = 2;
-    const int LinearEncoding = 3000;
-    const int sRGBEncoding = 3001;
-    const int GammaEncoding = 3007;
-    const int RGBEEncoding = 3002;
-    const int LogLuvEncoding = 3003;
-    const int RGBM7Encoding = 3004;
-    const int RGBM16Encoding = 3005;
-    const int RGBDEncoding = 3006;
+
+//    const int LinearEncoding = 3000;
+//    const int sRGBEncoding = 3001;
+//    const int GammaEncoding = 3007;
+//    const int RGBEEncoding = 3002;
+//    const int LogLuvEncoding = 3003;
+//    const int RGBM7Encoding = 3004;
+//    const int RGBM16Encoding = 3005;
+//    const int RGBDEncoding = 3006;
+
+    enum class Encoding: int {
+        Linear = 3000,
+        sRGB = 3001,
+        Gamma = 3007,
+        RGBE = 3002,
+        LogLuv = 3003,
+        RGBM7 = 3004,
+        RGBM16 = 3005,
+        RGBD = 3006
+    };
+
     const int BasicDepthPacking = 3200;
     const int RGBADepthPacking = 3201;
     const int TangentSpaceNormalMap = 0;
@@ -190,9 +237,16 @@ namespace threepp {
     const int GreaterEqualStencilFunc = 518;
     const int AlwaysStencilFunc = 519;
 
-    const int StaticDrawUsage = 35044;
-    const int DynamicDrawUsage = 35048;
-    const int StreamDrawUsage = 35040;
+//    const int StaticDrawUsage = 35044;
+//    const int DynamicDrawUsage = 35048;
+//    const int StreamDrawUsage = 35040;
+
+    enum class DrawUsage: int {
+        Static = 35044,
+        Dynamic = 35048,
+        Stream = 35040
+    };
+
     const int StaticReadUsage = 35045;
     const int DynamicReadUsage = 35049;
     const int StreamReadUsage = 35041;

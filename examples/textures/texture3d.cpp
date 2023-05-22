@@ -19,7 +19,7 @@ namespace {
         auto m = RawShaderMaterial::create();
         m->vertexShader = vertexSource();
         m->fragmentShader = fragmentSource();
-        m->side = BackSide;
+        m->side = Side::Back;
         m->transparent = true;
 
         UniformMap uniforms{

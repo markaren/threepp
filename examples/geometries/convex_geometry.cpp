@@ -55,7 +55,6 @@ int main() {
     auto convexMaterial = MeshBasicMaterial::create();
     convexMaterial->color = Color::gray;
     convexMaterial->transparent = true;
-    convexMaterial->side = FrontSide;
     convexMaterial->opacity = 0.8f;
     auto convex = Mesh::create(convexGeometry, convexMaterial);
     scene->add(convex);

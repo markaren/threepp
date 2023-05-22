@@ -82,7 +82,7 @@ int main() {
     (*material->uniforms)["time"] = Uniform();
     material->vertexShader = vertexSource();
     material->fragmentShader = fragmentSource();
-    material->side = DoubleSide;
+    material->side = Side::Double;
     material->transparent = true;
 
     auto mesh = Mesh::create(geometry, material);

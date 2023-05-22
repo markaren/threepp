@@ -3,6 +3,8 @@
 #ifndef THREEPP_GLSHADOWMAP_HPP
 #define THREEPP_GLSHADOWMAP_HPP
 
+#include "threepp/constants.hpp"
+
 #include <memory>
 #include <vector>
 
@@ -24,7 +26,7 @@ namespace threepp {
             bool autoUpdate = true;
             bool needsUpdate = false;
 
-            int type;
+            ShadowMap type;
 
             explicit GLShadowMap(GLObjects& objects);
 

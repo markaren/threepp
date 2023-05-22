@@ -39,7 +39,7 @@ namespace threepp {
             return normalized_;
         }
 
-        [[nodiscard]] int getUsage() const {
+        [[nodiscard]] DrawUsage getUsage() const {
 
             return usage_;
         }
@@ -49,7 +49,7 @@ namespace threepp {
             ++version;
         }
 
-        void setUsage(int value) {
+        void setUsage(DrawUsage value) {
 
             this->usage_ = value;
         }
@@ -66,7 +66,7 @@ namespace threepp {
         int itemSize_{};
         bool normalized_{};
 
-        int usage_{StaticDrawUsage};
+        DrawUsage usage_{DrawUsage::Static};
 
         BufferAttribute() = default;
 

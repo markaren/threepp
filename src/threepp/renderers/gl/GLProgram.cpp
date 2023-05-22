@@ -32,28 +32,28 @@ namespace {
         return shader;
     }
 
-    std::pair<std::string, std::string> getEncodingComponents(int encoding) {
+    std::pair<std::string, std::string> getEncodingComponents(Encoding encoding) {
 
         switch (encoding) {
 
-            case LinearEncoding:
+            case Encoding::Linear:
                 return {"Linear", "( value )"};
-            case sRGBEncoding:
+            case Encoding::sRGB:
                 return {"sRGB", "( value )"};
-            case RGBEEncoding:
+            case Encoding::RGBE:
                 return {"RGBE", "( value )"};
-            case RGBM7Encoding:
+            case Encoding::RGBM7:
                 return {"RGBM", "( value, 7.0 )"};
-            case RGBM16Encoding:
+            case Encoding::RGBM16:
                 return {"RGBM", "( value, 16.0 )"};
-            case RGBDEncoding:
+            case Encoding::RGBD:
                 return {"RGBD", "( value, 256.0 )"};
-            case GammaEncoding:
+            case Encoding::Gamma:
                 return {"Gamma", "( value, float( GAMMA_FACTOR ) )"};
-            case LogLuvEncoding:
+            case Encoding::LogLuv:
                 return {"LogLuv", "( value )"};
             default:
-                std::cerr << "THREE.WebGLProgram: Unsupported encoding:" << encoding << std::endl;
+                std::cerr << "THREE.GLProgram: Unsupported encoding:" << as_integer(encoding) << std::endl;
                 return {"Linear", "( value )"};
         }
     }
@@ -76,13 +76,13 @@ namespace {
         return ss.str();
     }
 
-    std::string getTexelDecodingFunction(const std::string& functionName, int encoding) {
+    std::string getTexelDecodingFunction(const std::string& functionName, Encoding encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return " + components.first + "ToLinear" + components.second + "; }";
     }
 
-    std::string getTexelEncodingFunction(const std::string& functionName, int encoding) {
+    std::string getTexelEncodingFunction(const std::string& functionName, Encoding encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
@@ -237,15 +237,15 @@ namespace {
 
         std::string shadowMapTypeDefine = "SHADOWMAP_TYPE_BASIC";
 
-        if (parameters->shadowMapType == PCFShadowMap) {
+        if (parameters->shadowMapType == ShadowMap::PFC) {
 
             shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF";
 
-        } else if (parameters->shadowMapType == PCFSoftShadowMap) {
+        } else if (parameters->shadowMapType == ShadowMap::PFCSoft) {
 
             shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF_SOFT";
 
-        } else if (parameters->shadowMapType == VSMShadowMap) {
+        } else if (parameters->shadowMapType == ShadowMap::VSM) {
 
             shadowMapTypeDefine = "SHADOWMAP_TYPE_VSM";
         }

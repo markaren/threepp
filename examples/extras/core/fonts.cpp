@@ -12,7 +12,7 @@ int main() {
     Canvas canvas("Fonts", {{"antialiasing", 8}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = PCFSoftShadowMap;
+    renderer.shadowMap().type = ShadowMap::PFCSoft;
 
     auto scene = Scene::create();
     scene->background = Color::black;

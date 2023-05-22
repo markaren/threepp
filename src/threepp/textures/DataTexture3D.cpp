@@ -25,7 +25,7 @@ DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data, unsigned in
     this->magFilter = NearestFilter;
     this->minFilter = NearestFilter;
 
-    this->wrapR = ClampToEdgeWrapping;
+    this->wrapR = TextureWrapping::ClampToEdge;
 
     this->generateMipmaps = false;
     this->unpackAlignment = 1;

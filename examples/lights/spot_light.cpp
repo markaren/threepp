@@ -26,7 +26,7 @@ namespace {
 
     auto createPlane() {
         const auto planeGeometry = PlaneGeometry::create(150, 150);
-        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", DoubleSide}});
+        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", Side::Double}});
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->position.setY(-1);
         plane->rotateX(math::degToRad(-90));

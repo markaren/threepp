@@ -21,14 +21,14 @@ namespace threepp {
         struct Options {
 
             std::optional<int> mapping;
-            std::optional<int> wrapS;
-            std::optional<int> wrapT;
+            std::optional<TextureWrapping> wrapS;
+            std::optional<TextureWrapping> wrapT;
             std::optional<int> magFilter;
             std::optional<int> minFilter;
             std::optional<int> format;
             std::optional<int> type;
             std::optional<int> anisotropy;
-            std::optional<int> encoding;
+            std::optional<Encoding> encoding;
 
             bool generateMipmaps = false;
             bool depthBuffer = true;
