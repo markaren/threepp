@@ -73,7 +73,6 @@ namespace {
     struct MyGui: public ImguiContext {
 
         bool clear = false;
-        bool mouseHover = false;
 
         explicit MyGui(const Canvas& canvas): ImguiContext(canvas.windowPtr()) {}
 
@@ -84,8 +83,6 @@ namespace {
 
             ImGui::Begin("Options");
             ImGui::Checkbox("Clear", &clear);
-
-            mouseHover = ImGui::IsWindowHovered();
 
             ImGui::End();
         }
