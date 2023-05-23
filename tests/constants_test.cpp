@@ -10,12 +10,7 @@ TEST_CASE("constants") {
     REQUIRE(threepp::CullFaceBack == 1);
     REQUIRE(threepp::CullFaceFront == 2);
     REQUIRE(threepp::CullFaceFrontBack == 3);
-//    REQUIRE(threepp::BasicShadowMap == 0);
-//    REQUIRE(threepp::PCFShadowMap == 1);
-//    REQUIRE(threepp::PCFSoftShadowMap == 2);
-//    REQUIRE(threepp::FrontSide == 0);
-//    REQUIRE(threepp::BackSide == 1);
-//    REQUIRE(threepp::DoubleSide == 2);
+
     REQUIRE(threepp::NoBlending == 0);
     REQUIRE(threepp::NormalBlending == 1);
     REQUIRE(threepp::AdditiveBlending == 2);
@@ -49,21 +44,14 @@ TEST_CASE("constants") {
     REQUIRE(threepp::MultiplyOperation == 0);
     REQUIRE(threepp::MixOperation == 1);
     REQUIRE(threepp::AddOperation == 2);
-    REQUIRE(threepp::NoToneMapping == 0);
-    REQUIRE(threepp::LinearToneMapping == 1);
-    REQUIRE(threepp::ReinhardToneMapping == 2);
-    REQUIRE(threepp::CineonToneMapping == 3);
-    REQUIRE(threepp::ACESFilmicToneMapping == 4);
+
     REQUIRE(threepp::UVMapping == 300);
     REQUIRE(threepp::CubeReflectionMapping == 301);
     REQUIRE(threepp::CubeRefractionMapping == 302);
     REQUIRE(threepp::EquirectangularReflectionMapping == 303);
     REQUIRE(threepp::EquirectangularRefractionMapping == 304);
     REQUIRE(threepp::CubeUVReflectionMapping == 306);
-//    REQUIRE(threepp::RepeatWrapping == 1000);
-//    REQUIRE(threepp::ClampToEdgeWrapping == 1001);
-//    REQUIRE(threepp::MirroredRepeatWrapping == 1002);
-//    REQUIRE(threepp::NearestFilter == 1003);
+
     REQUIRE(threepp::NearestMipMapNearestFilter == 1004);
     REQUIRE(threepp::NearestMipMapLinearFilter == 1005);
     REQUIRE(threepp::LinearFilter == 1006);
@@ -99,8 +87,7 @@ TEST_CASE("constants") {
     REQUIRE(threepp::TrianglesDrawMode == 0);
     REQUIRE(threepp::TriangleStripDrawMode == 1);
     REQUIRE(threepp::TriangleFanDrawMode == 2);
-//    REQUIRE(threepp::LinearEncoding == 3000);
-//    REQUIRE(threepp::sRGBEncoding == 3001);
+
     REQUIRE(threepp::BasicDepthPacking == 3200);
     REQUIRE(threepp::RGBADepthPacking == 3201);
 }

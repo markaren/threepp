@@ -68,7 +68,7 @@ namespace threepp {
 
         // tone mapping
 
-        int toneMapping = NoToneMapping;
+        ToneMapping toneMapping{ToneMapping::None};
         float toneMappingExposure = 1.0f;
 
         bool checkShaderErrors = false;

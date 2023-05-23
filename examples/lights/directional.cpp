@@ -61,7 +61,7 @@ int main() {
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
-    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);

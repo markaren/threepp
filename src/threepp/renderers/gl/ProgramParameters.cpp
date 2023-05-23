@@ -176,7 +176,7 @@ ProgramParameters::ProgramParameters(
     shadowMapEnabled = renderer.shadowMap().enabled && numShadows > 0;
     shadowMapType = renderer.shadowMap().type;
 
-    toneMapping = material->toneMapped ? renderer.toneMapping : NoToneMapping;
+    toneMapping = material->toneMapped ? renderer.toneMapping : ToneMapping::None;
     physicallyCorrectLights = renderer.physicallyCorrectLights;
 
     premultipliedAlpha = material->premultipliedAlpha;
@@ -275,7 +275,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(shadowMapEnabled) << '\n';
     s << std::to_string(as_integer(shadowMapType)) << '\n';
 
-    s << std::to_string(toneMapping) << '\n';
+    s << std::to_string(as_integer(toneMapping)) << '\n';
     s << std::to_string(physicallyCorrectLights) << '\n';
 
     s << std::to_string(premultipliedAlpha) << '\n';

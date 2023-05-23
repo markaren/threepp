@@ -88,34 +88,34 @@ namespace {
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
     }
 
-    std::string getToneMappingFunction(const std::string& functionName, int toneMapping) {
+    std::string getToneMappingFunction(const std::string& functionName, ToneMapping toneMapping) {
 
         std::string toneMappingName;
 
         switch (toneMapping) {
 
-            case LinearToneMapping:
+            case ToneMapping::Linear:
                 toneMappingName = "Linear";
                 break;
 
-            case ReinhardToneMapping:
+            case ToneMapping::Reinhard:
                 toneMappingName = "Reinhard";
                 break;
 
-            case CineonToneMapping:
+            case ToneMapping::Cineon:
                 toneMappingName = "OptimizedCineon";
                 break;
 
-            case ACESFilmicToneMapping:
+            case ToneMapping::ACESFilmic:
                 toneMappingName = "ACESFilmic";
                 break;
 
-            case CustomToneMapping:
+            case ToneMapping::Custom:
                 toneMappingName = "Custom";
                 break;
 
             default:
-                std::cerr << "THREE.WebGLProgram: Unsupported toneMapping:" << toneMapping << std::endl;
+                std::cerr << "THREE.GLProgram: Unsupported toneMapping "<< std::endl;
                 toneMappingName = "Linear";
         }
 
@@ -570,9 +570,9 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     "uniform vec3 cameraPosition;",
                     "uniform bool isOrthographic;",
 
-                    (parameters->toneMapping != NoToneMapping) ? "#define TONE_MAPPING" : "",
-                    (parameters->toneMapping != NoToneMapping) ? shaders::ShaderChunk::instance().tonemapping_pars_fragment() : "",// this code is required here because it is used by the toneMapping() function defined below
-                    (parameters->toneMapping != NoToneMapping) ? getToneMappingFunction("toneMapping", parameters->toneMapping) : "",
+                    (parameters->toneMapping != ToneMapping::None) ? "#define TONE_MAPPING" : "",
+                    (parameters->toneMapping != ToneMapping::None) ? shaders::ShaderChunk::instance().tonemapping_pars_fragment() : "",// this code is required here because it is used by the toneMapping() function defined below
+                    (parameters->toneMapping != ToneMapping::None) ? getToneMappingFunction("toneMapping", parameters->toneMapping) : "",
 
                     parameters->dithering ? "#define DITHERING" : "",
 

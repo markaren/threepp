@@ -29,7 +29,7 @@ int main() {
 
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
-    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     const auto sphereGeometry = SphereGeometry::create(30);
     const auto sphereMaterial = MeshBasicMaterial::create();

@@ -77,12 +77,21 @@ namespace threepp {
     const int MultiplyOperation = 0;
     const int MixOperation = 1;
     const int AddOperation = 2;
-    const int NoToneMapping = 0;
-    const int LinearToneMapping = 1;
-    const int ReinhardToneMapping = 2;
-    const int CineonToneMapping = 3;
-    const int ACESFilmicToneMapping = 4;
-    const int CustomToneMapping = 5;
+//    const int NoToneMapping = 0;
+//    const int LinearToneMapping = 1;
+//    const int ReinhardToneMapping = 2;
+//    const int CineonToneMapping = 3;
+//    const int ACESFilmicToneMapping = 4;
+//    const int CustomToneMapping = 5;
+
+    enum class ToneMapping: int {
+        None = 0,
+        Linear = 1,
+        Reinhard = 2,
+        Cineon = 3,
+        ACESFilmic = 4,
+        Custom = 5
+    };
 
     const int UVMapping = 300;
     const int CubeReflectionMapping = 301;
