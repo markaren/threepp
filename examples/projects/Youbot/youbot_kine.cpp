@@ -11,7 +11,7 @@
 using namespace threepp;
 using namespace kine;
 
-struct MyUI: imgui_context {
+struct MyUI: ImguiContext {
 
     bool mouseHover = false;
     bool jointMode = true;
@@ -22,7 +22,7 @@ struct MyUI: imgui_context {
     std::vector<float> values;
 
     explicit MyUI(const Canvas& canvas, Kine& kine)
-        : imgui_context(canvas.window_ptr()),
+        : ImguiContext(canvas.windowPtr()),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 

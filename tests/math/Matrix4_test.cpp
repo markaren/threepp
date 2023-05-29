@@ -1,6 +1,6 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/math/Euler.hpp"
 #include "threepp/math/Matrix3.hpp"
@@ -11,22 +11,24 @@
 
 #include "../equals_util.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 TEST_CASE("determinant") {
 
     Matrix4 a;
-    REQUIRE(a.determinant() == Approx(1));
+    REQUIRE_THAT(a.determinant(), Catch::Matchers::WithinRel(1.f));
 
     a.elements[0] = 2;
-    REQUIRE(a.determinant() == Approx(2));
+    REQUIRE_THAT(a.determinant(), Catch::Matchers::WithinRel(2.f));
 
     a.elements[0] = 0;
-    REQUIRE(a.determinant() == Approx(0));
+    REQUIRE_THAT(a.determinant(), Catch::Matchers::WithinRel(0.f));
 
     // calculated via http://www.euclideanspace.com/maths/algebra/matrix/functions/determinant/fourD/index.htm
     a.set(2, 3, 4, 5, -1, -21, -3, -4, 6, 7, 8, 10, -8, -9, -10, -12);
-    REQUIRE(a.determinant() == Approx(76));
+    REQUIRE_THAT(a.determinant(), Catch::Matchers::WithinRel(76.f));
 }
 
 TEST_CASE("set") {
@@ -157,7 +159,7 @@ TEST_CASE("lookat") {
 
     a.lookAt(eye, target, up);
     auto rotation = Euler().setFromRotationMatrix(a);
-    REQUIRE(rotation.x * (180 / math::PI) == Approx(45));
+    REQUIRE_THAT(rotation.x * (180 / math::PI), Catch::Matchers::WithinRel(45.f));
 
     // eye and target are in the same position
     eye.copy(target);
@@ -183,22 +185,22 @@ TEST_CASE("premultiply") {
 
     rhs.premultiply(lhs);
 
-    REQUIRE(rhs.elements[0] == Approx(1585));
-    REQUIRE(rhs.elements[1] == Approx(5318));
-    REQUIRE(rhs.elements[2] == Approx(10514));
-    REQUIRE(rhs.elements[3] == Approx(15894));
-    REQUIRE(rhs.elements[4] == Approx(1655));
-    REQUIRE(rhs.elements[5] == Approx(5562));
-    REQUIRE(rhs.elements[6] == Approx(11006));
-    REQUIRE(rhs.elements[7] == Approx(16634));
-    REQUIRE(rhs.elements[8] == Approx(1787));
-    REQUIRE(rhs.elements[9] == Approx(5980));
-    REQUIRE(rhs.elements[10] == Approx(11840));
-    REQUIRE(rhs.elements[11] == Approx(17888));
-    REQUIRE(rhs.elements[12] == Approx(1861));
-    REQUIRE(rhs.elements[13] == Approx(6246));
-    REQUIRE(rhs.elements[14] == Approx(12378));
-    REQUIRE(rhs.elements[15] == Approx(18710));
+    CHECK_THAT(rhs.elements[0], Catch::Matchers::WithinRel(1585.f));
+    CHECK_THAT(rhs.elements[1], Catch::Matchers::WithinRel(5318.f));
+    CHECK_THAT(rhs.elements[2], Catch::Matchers::WithinRel(10514.f));
+    CHECK_THAT(rhs.elements[3], Catch::Matchers::WithinRel(15894.f));
+    CHECK_THAT(rhs.elements[4], Catch::Matchers::WithinRel(1655.f));
+    CHECK_THAT(rhs.elements[5], Catch::Matchers::WithinRel(5562.f));
+    CHECK_THAT(rhs.elements[6], Catch::Matchers::WithinRel(11006.f));
+    CHECK_THAT(rhs.elements[7], Catch::Matchers::WithinRel(16634.f));
+    CHECK_THAT(rhs.elements[8], Catch::Matchers::WithinRel(1787.f));
+    CHECK_THAT(rhs.elements[9], Catch::Matchers::WithinRel(5980.f));
+    CHECK_THAT(rhs.elements[10], Catch::Matchers::WithinRel(11840.f));
+    CHECK_THAT(rhs.elements[11], Catch::Matchers::WithinRel(17888.f));
+    CHECK_THAT(rhs.elements[12], Catch::Matchers::WithinRel(1861.f));
+    CHECK_THAT(rhs.elements[13], Catch::Matchers::WithinRel(6246.f));
+    CHECK_THAT(rhs.elements[14], Catch::Matchers::WithinRel(12378.f));
+    CHECK_THAT(rhs.elements[15], Catch::Matchers::WithinRel(18710.f));
 }
 
 TEST_CASE("transpose") {
@@ -222,22 +224,22 @@ TEST_CASE("multipyMatrices") {
 
     ans.multiplyMatrices(lhs, rhs);
 
-    REQUIRE(ans.elements[0] == Approx(1585));
-    REQUIRE(ans.elements[1] == Approx(5318));
-    REQUIRE(ans.elements[2] == Approx(10514));
-    REQUIRE(ans.elements[3] == Approx(15894));
-    REQUIRE(ans.elements[4] == Approx(1655));
-    REQUIRE(ans.elements[5] == Approx(5562));
-    REQUIRE(ans.elements[6] == Approx(11006));
-    REQUIRE(ans.elements[7] == Approx(16634));
-    REQUIRE(ans.elements[8] == Approx(1787));
-    REQUIRE(ans.elements[9] == Approx(5980));
-    REQUIRE(ans.elements[10] == Approx(11840));
-    REQUIRE(ans.elements[11] == Approx(17888));
-    REQUIRE(ans.elements[12] == Approx(1861));
-    REQUIRE(ans.elements[13] == Approx(6246));
-    REQUIRE(ans.elements[14] == Approx(12378));
-    REQUIRE(ans.elements[15] == Approx(18710));
+    CHECK_THAT(ans.elements[0], Catch::Matchers::WithinRel(1585.f));
+    CHECK_THAT(ans.elements[1], Catch::Matchers::WithinRel(5318.f));
+    CHECK_THAT(ans.elements[2], Catch::Matchers::WithinRel(10514.f));
+    CHECK_THAT(ans.elements[3], Catch::Matchers::WithinRel(15894.f));
+    CHECK_THAT(ans.elements[4], Catch::Matchers::WithinRel(1655.f));
+    CHECK_THAT(ans.elements[5], Catch::Matchers::WithinRel(5562.f));
+    CHECK_THAT(ans.elements[6], Catch::Matchers::WithinRel(11006.f));
+    CHECK_THAT(ans.elements[7], Catch::Matchers::WithinRel(16634.f));
+    CHECK_THAT(ans.elements[8], Catch::Matchers::WithinRel(1787.f));
+    CHECK_THAT(ans.elements[9], Catch::Matchers::WithinRel(5980.f));
+    CHECK_THAT(ans.elements[10], Catch::Matchers::WithinRel(11840.f));
+    CHECK_THAT(ans.elements[11], Catch::Matchers::WithinRel(17888.f));
+    CHECK_THAT(ans.elements[12], Catch::Matchers::WithinRel(1861.f));
+    CHECK_THAT(ans.elements[13], Catch::Matchers::WithinRel(6246.f));
+    CHECK_THAT(ans.elements[14], Catch::Matchers::WithinRel(12378.f));
+    CHECK_THAT(ans.elements[15], Catch::Matchers::WithinRel(18710.f));
 }
 
 TEST_CASE("invert") {
