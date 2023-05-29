@@ -1,6 +1,6 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Vector2.hpp"
@@ -66,13 +66,13 @@ TEST_CASE("angleTo") {
     Vector2 b(0.18851655680720186f, -0.9820700116639124f);
 
     CHECK(a.angleTo(a) == 0);
-    CHECK(a.angleTo(b) == Approx(math::PI));
+    CHECK_THAT(a.angleTo(b), Catch::Matchers::WithinRel(math::PI));
 
     Vector2 _x(1, 0);
     Vector2 _y(0, 1);
 
-    CHECK(_x.angleTo(_y) == Approx(math::PI / 2));
-    CHECK(_y.angleTo(_x) == Approx(math::PI / 2));
+    CHECK_THAT(_x.angleTo(_y), Catch::Matchers::WithinRel(math::PI / 2));
+    CHECK_THAT(_y.angleTo(_x), Catch::Matchers::WithinRel(math::PI / 2));
 
     CHECK(std::abs(_x.angleTo(Vector2(1, 1)) - (math::PI / 4)) < 0.0000001);
 }
