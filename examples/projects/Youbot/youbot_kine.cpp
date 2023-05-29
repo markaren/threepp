@@ -13,7 +13,6 @@ using namespace kine;
 
 struct MyUI: ImguiContext {
 
-    bool mouseHover = false;
     bool jointMode = true;
     bool posMode = false;
 
@@ -59,7 +58,6 @@ struct MyUI: ImguiContext {
 
         jointMode = !posMode;
 
-        mouseHover = ImGui::IsWindowHovered();
         ImGui::End();
     }
 };
