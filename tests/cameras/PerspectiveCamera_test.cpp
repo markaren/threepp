@@ -3,8 +3,7 @@
 
 #include "../equals_util.hpp"
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using namespace threepp;
 
@@ -23,9 +22,9 @@ TEST_CASE("updateProjectionMatrix") {
     // this matrix was calculated by hand via glMatrix.perspective(75, 16 / 9, 0.1, 300.0, pMatrix)
     // to get a reference matrix from plain WebGL
     auto reference = Matrix4().set(
-            0.7330642938613892, 0, 0, 0,
-            0, 1.3032253980636597, 0, 0,
-            0, 0, -1.000666856765747, -0.2000666856765747,
+            0.7330642938613892f, 0, 0, 0,
+            0, 1.3032253980636597f, 0, 0,
+            0, 0, -1.000666856765747f, -0.2000666856765747f,
             0, 0, -1, 0);
 
     // assert.ok( reference.equals(m) );

@@ -1,8 +1,10 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/math/Color.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 
@@ -34,9 +36,9 @@ TEST_CASE("setRGB") {
 
     Color c;
     c.setRGB(0.3f, 0.5f, 0.7f);
-    CHECK(c.r == Approx(0.3f));
-    CHECK(c.g == Approx(0.5));
-    CHECK(c.b == Approx(0.7));
+    CHECK_THAT(c.r, Catch::Matchers::WithinRel(0.3f));
+    CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.5f));
+    CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.7f));
 }
 
 TEST_CASE("setHSL") {
@@ -46,9 +48,9 @@ TEST_CASE("setHSL") {
     c.setHSL(0.75f, 1.0f, 0.25f);
     c.getHSL(hsl);
 
-    CHECK(hsl.h == Approx(0.75f));
-    CHECK(hsl.s == Approx(1.00f));
-    CHECK(hsl.l == Approx(0.25f));
+    CHECK_THAT(hsl.h, Catch::Matchers::WithinRel(0.75f));
+    CHECK_THAT(hsl.s, Catch::Matchers::WithinRel(1.00f));
+    CHECK_THAT(hsl.l, Catch::Matchers::WithinRel(0.25f));
 }
 
 TEST_CASE("getHex") {
@@ -71,9 +73,9 @@ TEST_CASE("getHSL") {
     HSL hsl = {0, 0, 0};
     c.getHSL(hsl);
 
-    CHECK(hsl.h == Approx(0.5f));
-    CHECK(hsl.s == Approx(1.0f));
-    CHECK((std::round(hsl.l * 100) / 100) == Approx(0.75));
+    CHECK_THAT(hsl.h, Catch::Matchers::WithinRel(0.5f));
+    CHECK_THAT(hsl.s, Catch::Matchers::WithinRel(1.0f));
+    CHECK_THAT((std::round(hsl.l * 100) / 100), Catch::Matchers::WithinRel(0.75));
 }
 
 TEST_CASE("getStyle") {
@@ -122,9 +124,9 @@ TEST_CASE("lerp") {
     Color c2 ;
     c.setRGB( 0, 0, 0 );
     c.lerp( c2, 0.2f );
-    CHECK( c.r == Approx(0.2f));
-    CHECK( c.g == Approx(0.2f));
-    CHECK( c.b == Approx(0.2f));
+    CHECK_THAT( c.r, Catch::Matchers::WithinRel(0.2f));
+    CHECK_THAT( c.g, Catch::Matchers::WithinRel(0.2f));
+    CHECK_THAT( c.b, Catch::Matchers::WithinRel(0.2f));
 }
 
 TEST_CASE("setStyleRGBed") {
@@ -167,36 +169,36 @@ TEST_CASE("setStyleRGBedPercent") {
 
     Color c;
     c.setStyle("rgb(100%,50%,10%)");
-    CHECK(c.r == 1);
-    CHECK(c.g == Approx(0.5f));
-    CHECK(c.b == Approx(0.1f));
+    CHECK_THAT(c.r, Catch::Matchers::WithinRel(1.f));
+    CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.5f));
+    CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.1f));
 }
 
 TEST_CASE("setStyleRGBedPercentWithSpaces") {
 
     Color c;
     c.setStyle("rgb( 100%, 50%, 10%)");
-    CHECK(c.r == 1);
-    CHECK(c.g == Approx(0.5f));
-    CHECK(c.b == Approx(0.1f));
+    CHECK_THAT(c.r, Catch::Matchers::WithinRel(1.f));
+    CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.5f));
+    CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.1f));
 }
 
 TEST_CASE("setStyleRGBAedPercentWithSpaces") {
 
     Color c;
     c.setStyle("rgb( 100%, 50%, 10%, 0.5)");
-    CHECK(c.r == 1);
-    CHECK(c.g == Approx(0.5f));
-    CHECK(c.b == Approx(0.1f));
+    CHECK_THAT(c.r, Catch::Matchers::WithinRel(1.f));
+    CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.5f));
+    CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.1f));
 }
 
 TEST_CASE("setStyleHSLRed") {
 
     Color c;
     c.setStyle("hsl(360,100%,50%)");
-    CHECK(c.r == 1);
-    CHECK(c.g == 0);
-    CHECK(c.b == Approx(0).margin(1e-4));
+    CHECK_THAT(c.r, Catch::Matchers::WithinRel(1.f));
+    CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.f));
+    CHECK_THAT(c.b, Catch::Matchers::WithinAbs(0.f, 0.001f));
 }
 
 TEST_CASE("setStyleHexSkyBlue") {

@@ -1,8 +1,10 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/math/Ray.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 
@@ -82,15 +84,15 @@ TEST_CASE("distanceToPoint") {
 
     // behind the ray
     float b = a.distanceToPoint(zero3);
-    CHECK(b == Approx(std::sqrt(3)));
+    CHECK_THAT(b, Catch::Matchers::WithinRel(std::sqrt(3.f)));
 
     // front of the ray
     float c = a.distanceToPoint(Vector3(0, 0, 50));
-    CHECK(c == Approx(std::sqrt(2)));
+    CHECK_THAT(c, Catch::Matchers::WithinRel(std::sqrt(2.f)));
 
     // exactly on the ray
     float d = a.distanceToPoint(one3);
-    CHECK(d == Approx(0));
+    CHECK_THAT(d, Catch::Matchers::WithinRel(0.f));
 }
 
 TEST_CASE("distanceSqToPoint") {
@@ -99,15 +101,15 @@ TEST_CASE("distanceSqToPoint") {
 
     // behind the ray
     float b = a.distanceSqToPoint(zero3);
-    CHECK(b == Approx(3));
+    CHECK_THAT(b, Catch::Matchers::WithinRel(3.f));
 
     // front of the ray
     float c = a.distanceSqToPoint(Vector3(0, 0, 50));
-    CHECK(c == Approx(2));
+    CHECK_THAT(c, Catch::Matchers::WithinRel(2.f));
 
     // exactly on the ray
     float d = a.distanceSqToPoint(one3);
-    CHECK(d == Approx(0));
+    CHECK_THAT(d, Catch::Matchers::WithinRel(0.f));
 }
 
 TEST_CASE("distanceSqToSegment") {

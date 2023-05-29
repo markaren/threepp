@@ -1,7 +1,5 @@
 
-
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Matrix4.hpp"
