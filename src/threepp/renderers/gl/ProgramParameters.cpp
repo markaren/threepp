@@ -34,8 +34,6 @@ ProgramParameters::ProgramParameters(
         Material* material,
         const std::unordered_map<std::string, std::string>& shaderIDs) {
 
-    auto& shadowMap = renderer.shadowMap();
-
     auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
     auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
     auto aomapMaterial = dynamic_cast<MaterialWithAoMap*>(material);
