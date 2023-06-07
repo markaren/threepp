@@ -22,14 +22,14 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
         bytesPerElement = sizeof(unsigned int);
         auto attr = attribute->typed<unsigned int>();
         const auto& array = attr->array();
-        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
+        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), as_integer(usage));
 
     } else if (attribute->typed<float>()) {
         type = GL_FLOAT;
         bytesPerElement = sizeof(float);
         auto attr = attribute->typed<float>();
         const auto& array = attr->array();
-        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
+        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), as_integer(usage));
     } else {
 
         throw std::runtime_error("TODO");

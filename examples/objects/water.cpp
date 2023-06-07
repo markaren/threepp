@@ -29,7 +29,7 @@ int main() {
 
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
-    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     const auto sphereGeometry = SphereGeometry::create(30);
     const auto sphereMaterial = MeshBasicMaterial::create();
@@ -40,8 +40,8 @@ int main() {
 
     TextureLoader textureLoader{};
     auto texture = textureLoader.load("data/textures/waternormals.jpg");
-    texture->wrapS = RepeatWrapping;
-    texture->wrapT = RepeatWrapping;
+    texture->wrapS = TextureWrapping::Repeat;
+    texture->wrapT = TextureWrapping::Repeat;;
 
     Water::Options opt;
     opt.textureHeight = 512;

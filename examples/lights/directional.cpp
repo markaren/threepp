@@ -30,7 +30,7 @@ namespace {
         const auto planeGeometry = PlaneGeometry::create(100, 100);
         const auto planeMaterial = MeshLambertMaterial::create();
         planeMaterial->color = Color::gray;
-        planeMaterial->side = DoubleSide;
+        planeMaterial->side = Side::Double;
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->rotateX(math::degToRad(90));
         plane->receiveShadow = true;
@@ -60,8 +60,8 @@ int main() {
     Canvas canvas("DirectionalLight", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = PCFSoftShadowMap;
-    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.shadowMap().type = ShadowMap::PFCSoft;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);

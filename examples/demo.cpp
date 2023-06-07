@@ -90,7 +90,7 @@ auto createPlane() {
     planeMaterial->color.setHex(Color::yellow);
     planeMaterial->transparent = true;
     planeMaterial->opacity = 0.5f;
-    planeMaterial->side = DoubleSide;
+    planeMaterial->side = Side::Double;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-2);
 

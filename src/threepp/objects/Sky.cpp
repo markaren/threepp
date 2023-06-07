@@ -180,7 +180,7 @@ Sky::Sky(): Mesh(BoxGeometry::create(1, 1, 1), ShaderMaterial::create()) {
     m->fragmentShader = fragmentShader;
     m->vertexShader = vertexShader;
     m->uniforms = std::make_shared<UniformMap>(uniforms);
-    m->side = BackSide;
+    m->side = Side::Back;
     m->depthWrite = false;
 }
 

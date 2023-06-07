@@ -14,10 +14,10 @@ using namespace threepp;
 
 namespace {
 
-    std::unordered_map<int, int> wrappingToGL{
-            {RepeatWrapping, GL_REPEAT},
-            {ClampToEdgeWrapping, GL_CLAMP_TO_EDGE},
-            {MirroredRepeatWrapping, GL_MIRRORED_REPEAT}};
+    std::unordered_map<TextureWrapping, int> wrappingToGL{
+            {TextureWrapping::Repeat, GL_REPEAT},
+            {TextureWrapping::ClampToEdge, GL_CLAMP_TO_EDGE},
+            {TextureWrapping::MirroredRepeat, GL_MIRRORED_REPEAT}};
 
     std::unordered_map<int, int> filterToGL{
             {NearestFilter, GL_NEAREST},
@@ -96,12 +96,12 @@ void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuin
 
 void gl::GLTextures::setTextureParameters(GLuint textureType, Texture& texture) {
 
-    glTexParameteri(textureType, GL_TEXTURE_WRAP_S, wrappingToGL[texture.wrapS]);
-    glTexParameteri(textureType, GL_TEXTURE_WRAP_T, wrappingToGL[texture.wrapT]);
+    glTexParameteri(textureType, GL_TEXTURE_WRAP_S, wrappingToGL.at(texture.wrapS));
+    glTexParameteri(textureType, GL_TEXTURE_WRAP_T, wrappingToGL.at(texture.wrapT));
 
     if (textureType == GL_TEXTURE_3D || textureType == GL_TEXTURE_2D_ARRAY) {
 
-        glTexParameteri(textureType, GL_TEXTURE_WRAP_R, wrappingToGL[dynamic_cast<DataTexture3D*>(&texture)->wrapR]);
+        glTexParameteri(textureType, GL_TEXTURE_WRAP_R, wrappingToGL.at(dynamic_cast<DataTexture3D*>(&texture)->wrapR));
     }
 
     glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);

@@ -84,7 +84,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const Pro
             array.emplace_back(value);
         }
 
-        array.emplace_back(std::to_string(renderer.outputEncoding));
+        array.emplace_back(std::to_string(as_integer(renderer.outputEncoding)));
         array.emplace_back(std::to_string(renderer.gammaFactor));
     }
 

@@ -35,8 +35,8 @@ namespace threepp {
 
         std::optional<int> mapping = Texture::DEFAULT_MAPPING;
 
-        int wrapS = ClampToEdgeWrapping;
-        int wrapT = ClampToEdgeWrapping;
+        TextureWrapping wrapS{TextureWrapping::ClampToEdge};
+        TextureWrapping wrapT{TextureWrapping::ClampToEdge};
 
         int magFilter = LinearFilter;
         int minFilter = LinearMipmapLinearFilter;
@@ -63,7 +63,7 @@ namespace threepp {
         //
         // Also changing the encoding after already used by a Material will not automatically make the Material
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
-        int encoding = LinearEncoding;
+        Encoding encoding{Encoding::Linear};
 
         Texture(const Texture&) = delete;
         Texture operator=(const Texture&) = delete;

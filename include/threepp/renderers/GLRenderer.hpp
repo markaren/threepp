@@ -60,7 +60,7 @@ namespace threepp {
         // physically based shading
 
         float gammaFactor = 2.0f;// for backwards compatibility
-        int outputEncoding = LinearEncoding;
+        Encoding outputEncoding{Encoding::Linear};
 
         // physical lights
 
@@ -68,7 +68,7 @@ namespace threepp {
 
         // tone mapping
 
-        int toneMapping = NoToneMapping;
+        ToneMapping toneMapping{ToneMapping::None};
         float toneMappingExposure = 1.0f;
 
         bool checkShaderErrors = false;

@@ -10,7 +10,7 @@ namespace threepp {
     class DataTexture3D: public Texture {
 
     public:
-        int wrapR = ClampToEdgeWrapping;
+        TextureWrapping wrapR{TextureWrapping::ClampToEdge};
 
         static std::shared_ptr<DataTexture3D> create(const std::vector<unsigned char>& data, unsigned int width = 1, unsigned int height = 1, unsigned int depth = 1);
 

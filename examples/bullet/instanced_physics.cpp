@@ -80,7 +80,7 @@ int main() {
     Canvas canvas(Canvas::Parameters().antialiasing(4));
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = PCFSoftShadowMap;
+    renderer.shadowMap().type = ShadowMap::PFCSoft;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
@@ -95,13 +95,13 @@ int main() {
     TextureLoader tl;
     unsigned int count = 250;
     auto spheres = createSpheres(tl, count);
-    spheres->instanceMatrix->setUsage(DynamicDrawUsage);
+    spheres->instanceMatrix->setUsage(DrawUsage::Dynamic);
     spheres->castShadow = true;
     auto capsules = createCapsules(tl, count);
-    capsules->instanceMatrix->setUsage(DynamicDrawUsage);
+    capsules->instanceMatrix->setUsage(DrawUsage::Dynamic);
     capsules->castShadow = true;
     auto boxes = createBoxes(tl, count);
-    boxes->instanceMatrix->setUsage(DynamicDrawUsage);
+    boxes->instanceMatrix->setUsage(DrawUsage::Dynamic);
     boxes->castShadow = true;
     auto plane = createPlane(tl);
     plane->receiveShadow = true;

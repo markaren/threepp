@@ -532,11 +532,11 @@ void gl::GLState::setBlending(
 
 void gl::GLState::setMaterial(const Material* material, bool frontFaceCW) {
 
-    material->side == DoubleSide
+    material->side == Side::Double
             ? disable(GL_CULL_FACE)
             : enable(GL_CULL_FACE);
 
-    auto flipSided = (material->side == BackSide);
+    auto flipSided = (material->side == Side::Back);
     if (frontFaceCW) flipSided = !flipSided;
 
     setFlipSided(flipSided);

@@ -674,7 +674,7 @@ struct GLRenderer::Impl {
 
         auto fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
-        int encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
+        Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
         //                const envMap = cubemaps.get(material.envMap || environment);
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&

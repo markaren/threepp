@@ -9,12 +9,7 @@ TEST_CASE("constants") {
     REQUIRE(threepp::CullFaceBack == 1);
     REQUIRE(threepp::CullFaceFront == 2);
     REQUIRE(threepp::CullFaceFrontBack == 3);
-    REQUIRE(threepp::BasicShadowMap == 0);
-    REQUIRE(threepp::PCFShadowMap == 1);
-    REQUIRE(threepp::PCFSoftShadowMap == 2);
-    REQUIRE(threepp::FrontSide == 0);
-    REQUIRE(threepp::BackSide == 1);
-    REQUIRE(threepp::DoubleSide == 2);
+
     REQUIRE(threepp::NoBlending == 0);
     REQUIRE(threepp::NormalBlending == 1);
     REQUIRE(threepp::AdditiveBlending == 2);
@@ -48,21 +43,14 @@ TEST_CASE("constants") {
     REQUIRE(threepp::MultiplyOperation == 0);
     REQUIRE(threepp::MixOperation == 1);
     REQUIRE(threepp::AddOperation == 2);
-    REQUIRE(threepp::NoToneMapping == 0);
-    REQUIRE(threepp::LinearToneMapping == 1);
-    REQUIRE(threepp::ReinhardToneMapping == 2);
-    REQUIRE(threepp::CineonToneMapping == 3);
-    REQUIRE(threepp::ACESFilmicToneMapping == 4);
+
     REQUIRE(threepp::UVMapping == 300);
     REQUIRE(threepp::CubeReflectionMapping == 301);
     REQUIRE(threepp::CubeRefractionMapping == 302);
     REQUIRE(threepp::EquirectangularReflectionMapping == 303);
     REQUIRE(threepp::EquirectangularRefractionMapping == 304);
     REQUIRE(threepp::CubeUVReflectionMapping == 306);
-    REQUIRE(threepp::RepeatWrapping == 1000);
-    REQUIRE(threepp::ClampToEdgeWrapping == 1001);
-    REQUIRE(threepp::MirroredRepeatWrapping == 1002);
-    REQUIRE(threepp::NearestFilter == 1003);
+
     REQUIRE(threepp::NearestMipMapNearestFilter == 1004);
     REQUIRE(threepp::NearestMipMapLinearFilter == 1005);
     REQUIRE(threepp::LinearFilter == 1006);
@@ -85,29 +73,7 @@ TEST_CASE("constants") {
     REQUIRE(threepp::LuminanceAlphaFormat == 1025);
     REQUIRE(threepp::DepthFormat == 1026);
     REQUIRE(threepp::DepthStencilFormat == 1027);
-    REQUIRE(threepp::RGB_S3TC_DXT1_Format == 33776);
-    REQUIRE(threepp::RGBA_S3TC_DXT1_Format == 33777);
-    REQUIRE(threepp::RGBA_S3TC_DXT3_Format == 33778);
-    REQUIRE(threepp::RGBA_S3TC_DXT5_Format == 33779);
-    REQUIRE(threepp::RGB_PVRTC_4BPPV1_Format == 35840);
-    REQUIRE(threepp::RGB_PVRTC_2BPPV1_Format == 35841);
-    REQUIRE(threepp::RGBA_PVRTC_4BPPV1_Format == 35842);
-    REQUIRE(threepp::RGBA_PVRTC_2BPPV1_Format == 35843);
-    REQUIRE(threepp::RGB_ETC1_Format == 36196);
-    REQUIRE(threepp::RGBA_ASTC_4x4_Format == 37808);
-    REQUIRE(threepp::RGBA_ASTC_5x4_Format == 37809);
-    REQUIRE(threepp::RGBA_ASTC_5x5_Format == 37810);
-    REQUIRE(threepp::RGBA_ASTC_6x5_Format == 37811);
-    REQUIRE(threepp::RGBA_ASTC_6x6_Format == 37812);
-    REQUIRE(threepp::RGBA_ASTC_8x5_Format == 37813);
-    REQUIRE(threepp::RGBA_ASTC_8x6_Format == 37814);
-    REQUIRE(threepp::RGBA_ASTC_8x8_Format == 37815);
-    REQUIRE(threepp::RGBA_ASTC_10x5_Format == 37816);
-    REQUIRE(threepp::RGBA_ASTC_10x6_Format == 37817);
-    REQUIRE(threepp::RGBA_ASTC_10x8_Format == 37818);
-    REQUIRE(threepp::RGBA_ASTC_10x10_Format == 37819);
-    REQUIRE(threepp::RGBA_ASTC_12x10_Format == 37820);
-    REQUIRE(threepp::RGBA_ASTC_12x12_Format == 37821);
+
     REQUIRE(threepp::LoopOnce == 2200);
     REQUIRE(threepp::LoopRepeat == 2201);
     REQUIRE(threepp::LoopPingPong == 2202);
@@ -120,8 +86,7 @@ TEST_CASE("constants") {
     REQUIRE(threepp::TrianglesDrawMode == 0);
     REQUIRE(threepp::TriangleStripDrawMode == 1);
     REQUIRE(threepp::TriangleFanDrawMode == 2);
-    REQUIRE(threepp::LinearEncoding == 3000);
-    REQUIRE(threepp::sRGBEncoding == 3001);
+
     REQUIRE(threepp::BasicDepthPacking == 3200);
     REQUIRE(threepp::RGBADepthPacking == 3201);
 }
