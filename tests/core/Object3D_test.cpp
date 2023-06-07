@@ -1,6 +1,6 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Euler.hpp"
@@ -10,6 +10,8 @@
 #include "threepp/math/Vector3.hpp"
 
 #include "../equals_util.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 
@@ -112,7 +114,7 @@ TEST_CASE("lookAt") {
     auto obj = Object3D::create();
     obj->lookAt(Vector3(0, -1, 1));
 
-    REQUIRE(obj->rotation.x * math::RAD2DEG == Approx(45));
+    REQUIRE_THAT(obj->rotation.x * math::RAD2DEG, Catch::Matchers::WithinRel(45.f));
 }
 
 TEST_CASE("getWorldPosition") {

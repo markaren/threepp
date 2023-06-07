@@ -1,11 +1,7 @@
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
-
-#undef far
-#undef near
+#include <catch2/catch_test_macros.hpp>
 
 using namespace threepp;
 
@@ -23,8 +19,8 @@ TEST_CASE("updateProjectionMatrix") {
     //   0			0		-2/f-n	-(f+n/f-n)
     //   0			0			 0				1
 
-    CHECK(pMatrix[0] == 2 / (right - left));
-    CHECK(pMatrix[5] == 2 / (top - bottom));
+    CHECK(pMatrix[0] == 2.f / (right - left));
+    CHECK(pMatrix[5] == 2.f / (top - bottom));
     CHECK(pMatrix[10] == -2 / (far - near));
     CHECK(pMatrix[12] == -((right + left) / (right - left)));
     CHECK(pMatrix[13] == -((top + bottom) / (top - bottom)));
