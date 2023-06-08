@@ -55,7 +55,7 @@ int main() {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        textHandle.setPosition(0, size.height - 500);
+        textHandle.setPosition(0, size.height - 30);
     });
 
     canvas.animate([&] {
