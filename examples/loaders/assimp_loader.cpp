@@ -22,6 +22,7 @@ namespace {
     auto loadStl(AssimpLoader& loader) {
 
         auto model = loader.load("data/models/stl/pr2_head_pan.stl");
+        model->scale *= 100;
         return model;
     }
 
@@ -56,7 +57,6 @@ int main() {
     auto glb = loadGlb(loader);
     auto obj = loadObj(loader);
     auto stl = loadStl(loader);
-    stl->scale *=100;
 
     Box3 bb;
     bb.setFromObject(*obj);
