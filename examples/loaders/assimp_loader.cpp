@@ -19,6 +19,12 @@ namespace {
         return model;
     }
 
+    auto loadStl(AssimpLoader& loader) {
+
+        auto model = loader.load("data/models/stl/pr2_head_pan.stl");
+        return model;
+    }
+
     auto addLights(Scene& scene) {
         auto light1 = PointLight::create(0xffffff, 0.5f);
         light1->position.set(45, 115, 25);
@@ -49,6 +55,8 @@ int main() {
     AssimpLoader loader;
     auto glb = loadGlb(loader);
     auto obj = loadObj(loader);
+    auto stl = loadStl(loader);
+    stl->scale *=100;
 
     Box3 bb;
     bb.setFromObject(*obj);
@@ -58,8 +66,12 @@ int main() {
     bb.getCenter(glb->position);
     glb->position.x = sep;
 
+    bb.getCenter(stl->position);
+    stl->position.x = 0;
+
     scene->add(glb);
     scene->add(obj);
+    scene->add(stl);
 
     addLights(*scene);
 
