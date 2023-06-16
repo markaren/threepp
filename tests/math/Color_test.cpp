@@ -110,23 +110,23 @@ TEST_CASE("addColors") {
 
 TEST_CASE("multiply") {
 
-    Color a( 1, 0, 0.5f );
-    Color b( 0.5f, 1, 0.5f );
-    Color c( 0.5f, 0, 0.25f );
+    Color a(1, 0, 0.5f);
+    Color b(0.5f, 1, 0.5f);
+    Color c(0.5f, 0, 0.25f);
 
-    a.multiply( b );
-    CHECK( a.equals( c ));
+    a.multiply(b);
+    CHECK(a.equals(c));
 }
 
 TEST_CASE("lerp") {
 
     Color c;
-    Color c2 ;
-    c.setRGB( 0, 0, 0 );
-    c.lerp( c2, 0.2f );
-    CHECK_THAT( c.r, Catch::Matchers::WithinRel(0.2f));
-    CHECK_THAT( c.g, Catch::Matchers::WithinRel(0.2f));
-    CHECK_THAT( c.b, Catch::Matchers::WithinRel(0.2f));
+    Color c2;
+    c.setRGB(0, 0, 0);
+    c.lerp(c2, 0.2f);
+    CHECK_THAT(c.r, Catch::Matchers::WithinRel(0.2f));
+    CHECK_THAT(c.g, Catch::Matchers::WithinRel(0.2f));
+    CHECK_THAT(c.b, Catch::Matchers::WithinRel(0.2f));
 }
 
 TEST_CASE("setStyleRGBed") {

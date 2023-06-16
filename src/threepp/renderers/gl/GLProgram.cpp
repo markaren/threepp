@@ -115,7 +115,7 @@ namespace {
                 break;
 
             default:
-                std::cerr << "THREE.GLProgram: Unsupported toneMapping "<< std::endl;
+                std::cerr << "THREE.GLProgram: Unsupported toneMapping " << std::endl;
                 toneMappingName = "Linear";
         }
 

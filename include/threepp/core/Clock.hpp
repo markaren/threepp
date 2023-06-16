@@ -10,7 +10,6 @@ namespace threepp {
     class Clock {
 
     public:
-
         bool autoStart;
         bool running = false;
 

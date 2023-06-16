@@ -25,7 +25,7 @@ namespace {
     }
 
     //clang-format off
-    std::unordered_map<std::string, int> colorKeywords {
+    std::unordered_map<std::string, int> colorKeywords{
             {"aliceBlue", Color::aliceblue},
             {"antiquewhite", Color::antiquewhite},
             {"aqua", Color::aqua},

@@ -8,10 +8,9 @@
 namespace threepp {
 
     // https://stackoverflow.com/questions/11421432/how-can-i-output-the-value-of-an-enum-class-in-c11
-    template <typename Enumeration>
+    template<typename Enumeration>
     auto as_integer(const Enumeration value)
-            -> typename std::underlying_type<Enumeration>::type
-    {
+            -> typename std::underlying_type<Enumeration>::type {
         return static_cast<typename std::underlying_type<Enumeration>::type>(value);
     }
 
@@ -20,10 +19,10 @@ namespace threepp {
     const int CullFaceFront = 2;
     const int CullFaceFrontBack = 3;
 
-//    const int BasicShadowMap = 0;
-//    const int PCFShadowMap = 1;
-//    const int PCFSoftShadowMap = 2;
-//    const int VSMShadowMap = 3;
+    //    const int BasicShadowMap = 0;
+    //    const int PCFShadowMap = 1;
+    //    const int PCFSoftShadowMap = 2;
+    //    const int VSMShadowMap = 3;
 
     enum class ShadowMap {
         Basic,
@@ -32,9 +31,9 @@ namespace threepp {
         VSM
     };
 
-//    const int FrontSide = 0;
-//    const int BackSide = 1;
-//    const int DoubleSide = 2;
+    //    const int FrontSide = 0;
+    //    const int BackSide = 1;
+    //    const int DoubleSide = 2;
 
     enum class Side {
         Front,
@@ -77,14 +76,14 @@ namespace threepp {
     const int MultiplyOperation = 0;
     const int MixOperation = 1;
     const int AddOperation = 2;
-//    const int NoToneMapping = 0;
-//    const int LinearToneMapping = 1;
-//    const int ReinhardToneMapping = 2;
-//    const int CineonToneMapping = 3;
-//    const int ACESFilmicToneMapping = 4;
-//    const int CustomToneMapping = 5;
+    //    const int NoToneMapping = 0;
+    //    const int LinearToneMapping = 1;
+    //    const int ReinhardToneMapping = 2;
+    //    const int CineonToneMapping = 3;
+    //    const int ACESFilmicToneMapping = 4;
+    //    const int CustomToneMapping = 5;
 
-    enum class ToneMapping: int {
+    enum class ToneMapping : int {
         None = 0,
         Linear = 1,
         Reinhard = 2,
@@ -101,11 +100,11 @@ namespace threepp {
     const int CubeUVReflectionMapping = 306;
     const int CubeUVRefractionMapping = 307;
 
-//    const int RepeatWrapping = 1000;
-//    const int ClampToEdgeWrapping = 1001;
-//    const int MirroredRepeatWrapping = 1002;
+    //    const int RepeatWrapping = 1000;
+    //    const int ClampToEdgeWrapping = 1001;
+    //    const int MirroredRepeatWrapping = 1002;
 
-    enum class TextureWrapping: int {
+    enum class TextureWrapping : int {
         Repeat = 1000,
         ClampToEdge = 1001,
         MirroredRepeat = 1002
@@ -163,16 +162,16 @@ namespace threepp {
     const int TriangleStripDrawMode = 1;
     const int TriangleFanDrawMode = 2;
 
-//    const int LinearEncoding = 3000;
-//    const int sRGBEncoding = 3001;
-//    const int GammaEncoding = 3007;
-//    const int RGBEEncoding = 3002;
-//    const int LogLuvEncoding = 3003;
-//    const int RGBM7Encoding = 3004;
-//    const int RGBM16Encoding = 3005;
-//    const int RGBDEncoding = 3006;
+    //    const int LinearEncoding = 3000;
+    //    const int sRGBEncoding = 3001;
+    //    const int GammaEncoding = 3007;
+    //    const int RGBEEncoding = 3002;
+    //    const int LogLuvEncoding = 3003;
+    //    const int RGBM7Encoding = 3004;
+    //    const int RGBM16Encoding = 3005;
+    //    const int RGBDEncoding = 3006;
 
-    enum class Encoding: int {
+    enum class Encoding : int {
         Linear = 3000,
         sRGB = 3001,
         Gamma = 3007,
@@ -206,11 +205,11 @@ namespace threepp {
     const int GreaterEqualStencilFunc = 518;
     const int AlwaysStencilFunc = 519;
 
-//    const int StaticDrawUsage = 35044;
-//    const int DynamicDrawUsage = 35048;
-//    const int StreamDrawUsage = 35040;
+    //    const int StaticDrawUsage = 35044;
+    //    const int DynamicDrawUsage = 35048;
+    //    const int StreamDrawUsage = 35040;
 
-    enum class DrawUsage: int {
+    enum class DrawUsage : int {
         Static = 35044,
         Dynamic = 35048,
         Stream = 35040

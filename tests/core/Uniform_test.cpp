@@ -12,7 +12,7 @@ TEST_CASE("test_Uniform") {
     Uniform u(0.f);
     CHECK(0 == u.value<float>());
     u.value<float>() = 0.5f;
-    CHECK_THAT(0.5f, Catch::Matchers::WithinRel( u.value<float>()));
+    CHECK_THAT(0.5f, Catch::Matchers::WithinRel(u.value<float>()));
 
     Vector3 myVec(1.f, 1.f, 1.f);
     Uniform u1(myVec);

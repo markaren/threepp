@@ -98,7 +98,7 @@ namespace threepp::utils {
     // https://stackoverflow.com/questions/4654636/how-to-determine-if-a-string-is-a-number-with-c
     inline bool isNumber(const std::string& s) {
 
-        char *p;
+        char* p;
         strtod(s.c_str(), &p);
         return !*p;
     }

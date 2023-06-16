@@ -3,10 +3,10 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/core/BufferAttribute.hpp"
-#include "threepp/math/Sphere.hpp"
-#include "threepp/math/Plane.hpp"
-#include "threepp/math/Triangle.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Plane.hpp"
+#include "threepp/math/Sphere.hpp"
+#include "threepp/math/Triangle.hpp"
 
 #include <cmath>
 

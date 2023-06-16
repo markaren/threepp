@@ -92,7 +92,6 @@ struct TextureLoader::Impl {
 
         return texture;
     }
-
 };
 
 TextureLoader::TextureLoader(bool useCache)

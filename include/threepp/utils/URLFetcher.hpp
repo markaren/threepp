@@ -14,12 +14,12 @@ namespace threepp::utils {
 
 #ifdef THREEPP_WITH_CURL
 
-         inline static size_t write_data(char* ptr, size_t size, size_t nmemb, void* userdata) {
-            auto stream = (std::vector<unsigned char>*) userdata;
-            size_t count = size * nmemb;
-            stream->insert(stream->end(), ptr, ptr + count);
-            return count;
-        }
+    inline static size_t write_data(char* ptr, size_t size, size_t nmemb, void* userdata) {
+        auto stream = (std::vector<unsigned char>*) userdata;
+        size_t count = size * nmemb;
+        stream->insert(stream->end(), ptr, ptr + count);
+        return count;
+    }
 
 #endif
 
