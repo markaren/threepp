@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -107,6 +108,16 @@ namespace threepp::utils {
     inline bool endsWith(std::string const& value, std::string const& ending) {
         if (ending.size() > value.size()) return false;
         return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
+    }
+
+    template <typename T>
+    inline T parseNumber(std::string_view str) {
+        T value;
+        auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), value);
+        if (ec != std::errc()) {
+            throw std::runtime_error("Error during conversion!");
+        }
+        return value;
     }
 
 }// namespace threepp::utils

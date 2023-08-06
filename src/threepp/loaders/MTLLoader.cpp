@@ -65,7 +65,7 @@ namespace {
 
         if (pos != items.end()) {
 
-            params.bumpScale = std::stof(*(pos + 1));
+            params.bumpScale = utils::parseNumber<float>(*(pos + 1));
             items.erase(pos, pos + 2);
         }
 
@@ -73,7 +73,7 @@ namespace {
 
         if (pos != items.end()) {
 
-            texParams.scale.set(std::stof(*(pos + 1)), std::stof(*(pos + 2)));
+            texParams.scale.set(utils::parseNumber<float>(*(pos + 1)), utils::parseNumber<float>(*(pos + 2)));
             items.erase(pos, pos + 4);
         }
 
@@ -81,7 +81,7 @@ namespace {
 
         if (pos != items.end()) {
 
-            texParams.offset.set(std::stof(*(pos + 1)), std::stof(*(pos + 2)));
+            texParams.offset.set(utils::parseNumber<float>(*(pos + 1)), utils::parseNumber<float>(*(pos + 2)));
             items.erase(pos, pos + 4);
         }
 
@@ -125,7 +125,7 @@ std::shared_ptr<MaterialCreator> MTLLoader::load(const std::filesystem::path& pa
             if (key == "ka" || key == "kd" || key == "ks" || key == "ke") {
 
                 auto ss = utils::split(value, ' ');
-                (*info)[key] = std::vector<float>{std::stof(ss[0]), std::stof(ss[1]), std::stof(ss[2])};
+                (*info)[key] = std::vector<float>{utils::parseNumber<float>(ss[0]), utils::parseNumber<float>(ss[1]), utils::parseNumber<float>(ss[2])};
 
             } else {
 
@@ -267,11 +267,11 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
 
         } else if (lower == "ns") {
 
-            params->shininess = std::stof(std::get<std::string>(value));
+            params->shininess = utils::parseNumber<float>(std::get<std::string>(value));
 
         } else if (lower == "d") {
 
-            auto n = std::stof(std::get<std::string>(value));
+            auto n = utils::parseNumber<float>(std::get<std::string>(value));
 
             if (n < 1) {
 
@@ -281,7 +281,7 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
 
         } else if (lower == "tr") {
 
-            auto n = std::stof(std::get<std::string>(value));
+            auto n = utils::parseNumber<float>(std::get<std::string>(value));
 
             if (options && options->invertTrProperty) {
                 n = 1 - n;

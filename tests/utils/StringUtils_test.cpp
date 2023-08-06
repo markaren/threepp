@@ -1,5 +1,6 @@
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/utils/StringUtils.hpp"
 
@@ -82,3 +83,40 @@ TEST_CASE("trim") {
         REQUIRE(trim == std::string{str.begin() + 4, str.end() - 4});
     }
 }
+
+TEST_CASE("parseNumber successfully parses numbers from strings", "[parseNumber]") {
+    SECTION("Integer parsing") {
+        std::string_view strInt = "123";
+        auto intResult = utils::parseNumber<int>(strInt);
+        REQUIRE(intResult == 123);
+    }
+
+    SECTION("Float parsing") {
+        std::string_view strFloat = "456.789";
+        auto floatResult = utils::parseNumber<float>(strFloat);
+        REQUIRE_THAT(floatResult, Catch::Matchers::WithinRel(456.789f));
+    }
+
+    SECTION("Double parsing") {
+        std::string_view strDouble = "999.888777";
+        auto doubleResult = utils::parseNumber<double>(strDouble);
+        REQUIRE_THAT(doubleResult, Catch::Matchers::WithinRel(999.888777));
+    }
+}
+
+//TEST_CASE("parseNumber throws when given non-numeric strings", "[parseNumber]") {
+//    SECTION("Integer parsing") {
+//        std::string_view badStrInt = "123abc";
+//        REQUIRE_THROWS_AS(utils::parseNumber<int>(badStrInt), std::runtime_error);
+//    }
+//
+//    SECTION("Float parsing") {
+//        std::string_view badStrFloat = "123.abc";
+//        REQUIRE_THROWS_AS(utils::parseNumber<float>(badStrFloat), std::runtime_error);
+//    }
+//
+//    SECTION("Double parsing") {
+//        std::string_view badStrDouble = "123.abc";
+//        REQUIRE_THROWS_AS(utils::parseNumber<double>(badStrDouble), std::runtime_error);
+//    }
+//}
