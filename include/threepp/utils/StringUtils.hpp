@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <charconv>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -110,15 +109,9 @@ namespace threepp::utils {
         return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
     }
 
-    template <typename T>
-    inline T parseNumber(std::string_view str) {
-        T value;
-        auto [ptr, ec] = std::from_chars(str.data(), str.data() + str.size(), value);
-        if (ec != std::errc()) {
-            throw std::runtime_error("Error during conversion!");
-        }
-        return value;
-    }
+    int parseInt(const std::string& str);
+
+    float parseFloat(const std::string& str);
 
 }// namespace threepp::utils
 

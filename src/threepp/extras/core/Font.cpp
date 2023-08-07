@@ -32,34 +32,34 @@ namespace {
                 const auto& action = outline[i++];
 
                 if (action == "m") {// moveTo
-                    x = utils::parseNumber<float>(outline[i++]) * scale + offsetX;
-                    y = utils::parseNumber<float>(outline[i++]) * scale + offsetY;
+                    x = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    y = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.moveTo(x, y);
                 } else if (action == "l") {// lineTo
 
-                    x = utils::parseNumber<float>(outline[i++]) * scale + offsetX;
-                    y = utils::parseNumber<float>(outline[i++]) * scale + offsetY;
+                    x = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    y = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.lineTo(x, y);
 
                 } else if (action == "q") {// quadraticCurveTo
 
-                    cpx = utils::parseNumber<float>(outline[i++]) * scale + offsetX;
-                    cpy = utils::parseNumber<float>(outline[i++]) * scale + offsetY;
-                    cpx1 = utils::parseNumber<float>(outline[i++]) * scale + offsetX;
-                    cpy1 = utils::parseNumber<float>(outline[i++]) * scale + offsetY;
+                    cpx = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy = utils::parseFloat(outline[i++]) * scale + offsetY;
+                    cpx1 = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy1 = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.quadraticCurveTo(cpx1, cpy1, cpx, cpy);
 
                 } else if (action == "b") {// bezierCurveTo
 
-                    cpx = utils::parseNumber<float>(outline[i++]) * scale + offsetX;
-                    cpy = utils::parseNumber<float>(outline[i++]) * scale + offsetY;
-                    cpx1 = utils::parseNumber<float>(outline[i++]) * scale + offsetX;
-                    cpy1 = utils::parseNumber<float>(outline[i++]) * scale + offsetY;
-                    cpx2 = utils::parseNumber<float>(outline[i++]) * scale + offsetX;
-                    cpy2 = utils::parseNumber<float>(outline[i++]) * scale + offsetY;
+                    cpx = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy = utils::parseFloat(outline[i++]) * scale + offsetY;
+                    cpx1 = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy1 = utils::parseFloat(outline[i++]) * scale + offsetY;
+                    cpx2 = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy2 = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.bezierCurveTo(cpx1, cpy1, cpx2, cpy2, cpx, cpy);
                 }

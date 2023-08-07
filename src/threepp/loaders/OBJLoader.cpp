@@ -22,12 +22,12 @@ using namespace threepp;
 namespace {
 
     size_t parseVertexOrNormalIndex(const std::string& value, size_t len) {
-        int index = utils::parseNumber<int>(value);
+        int index = utils::parseInt(value);
         return (index > 0 ? (index - 1) : index + len / 3) * 3;
     }
 
     size_t parseUvIndex(const std::string& value, size_t len) {
-        int index = utils::parseNumber<int>(value);
+        int index = utils::parseInt(value);
         return (index > 0 ? (index - 1) : index + len / 2) * 2;
     }
 
@@ -335,22 +335,22 @@ struct OBJLoader::Impl {
                 auto data = utils::split(line, ' ');
 
                 if (data[0] == "v") {
-                    state.vertices.insert(state.vertices.end(), {utils::parseNumber<float>(data[1]),
-                                                                 utils::parseNumber<float>(data[2]),
-                                                                 utils::parseNumber<float>(data[3])});
+                    state.vertices.insert(state.vertices.end(), {utils::parseFloat(data[1]),
+                                                                 utils::parseFloat(data[2]),
+                                                                 utils::parseFloat(data[3])});
 
                     if (data.size() == 8) {
-                        state.colors.insert(state.colors.end(), {utils::parseNumber<float>(data[4]),
-                                                                 utils::parseNumber<float>(data[5]),
-                                                                 utils::parseNumber<float>(data[6])});
+                        state.colors.insert(state.colors.end(), {utils::parseFloat(data[4]),
+                                                                 utils::parseFloat(data[5]),
+                                                                 utils::parseFloat(data[6])});
                     }
                 } else if (data[0] == "vn") {
-                    state.normals.insert(state.normals.end(), {utils::parseNumber<float>(data[1]),
-                                                               utils::parseNumber<float>(data[2]),
-                                                               utils::parseNumber<float>(data[3])});
+                    state.normals.insert(state.normals.end(), {utils::parseFloat(data[1]),
+                                                               utils::parseFloat(data[2]),
+                                                               utils::parseFloat(data[3])});
                 } else if (data[0] == "vt") {
-                    state.uvs.insert(state.uvs.end(), {utils::parseNumber<float>(data[1]),
-                                                       utils::parseNumber<float>(data[2])});
+                    state.uvs.insert(state.uvs.end(), {utils::parseFloat(data[1]),
+                                                       utils::parseFloat(data[2])});
                 }
             } else if (lineFirstChar == 'f') {
 

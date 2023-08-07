@@ -86,37 +86,14 @@ TEST_CASE("trim") {
 
 TEST_CASE("parseNumber successfully parses numbers from strings", "[parseNumber]") {
     SECTION("Integer parsing") {
-        std::string_view strInt = "123";
-        auto intResult = utils::parseNumber<int>(strInt);
+        std::string strInt = "123";
+        auto intResult = utils::parseInt(strInt);
         REQUIRE(intResult == 123);
     }
 
     SECTION("Float parsing") {
-        std::string_view strFloat = "456.789";
-        auto floatResult = utils::parseNumber<float>(strFloat);
+        std::string strFloat = "456.789";
+        auto floatResult = utils::parseFloat(strFloat);
         REQUIRE_THAT(floatResult, Catch::Matchers::WithinRel(456.789f));
     }
-
-    SECTION("Double parsing") {
-        std::string_view strDouble = "999.888777";
-        auto doubleResult = utils::parseNumber<double>(strDouble);
-        REQUIRE_THAT(doubleResult, Catch::Matchers::WithinRel(999.888777));
-    }
 }
-
-//TEST_CASE("parseNumber throws when given non-numeric strings", "[parseNumber]") {
-//    SECTION("Integer parsing") {
-//        std::string_view badStrInt = "123abc";
-//        REQUIRE_THROWS_AS(utils::parseNumber<int>(badStrInt), std::runtime_error);
-//    }
-//
-//    SECTION("Float parsing") {
-//        std::string_view badStrFloat = "123.abc";
-//        REQUIRE_THROWS_AS(utils::parseNumber<float>(badStrFloat), std::runtime_error);
-//    }
-//
-//    SECTION("Double parsing") {
-//        std::string_view badStrDouble = "123.abc";
-//        REQUIRE_THROWS_AS(utils::parseNumber<double>(badStrDouble), std::runtime_error);
-//    }
-//}

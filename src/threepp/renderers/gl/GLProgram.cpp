@@ -63,8 +63,8 @@ namespace {
         static std::regex reg1(R"(\[\s*i\s*\])");
         static std::regex reg2("UNROLLED_LOOP_INDEX");
 
-        auto start = utils::parseNumber<int>(match[1].str());
-        auto end = utils::parseNumber<int>(match[2].str());
+        auto start = utils::parseInt(match[1].str());
+        auto end = utils::parseInt(match[2].str());
 
         std::stringstream ss;
         for (int i = start; i < end; ++i) {

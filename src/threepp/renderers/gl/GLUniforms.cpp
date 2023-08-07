@@ -368,7 +368,7 @@ namespace {
                             },
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
-                                    int index = utils::parseNumber<int>(u->id);
+                                    int index = utils::parseInt(u->id);
                                     u->setValue(*arg[index], textures);
                                 }
                             }},
@@ -404,7 +404,7 @@ namespace {
             bool isIndex = match[2] == "]";
             std::string subscript = match[3];
 
-            if (isIndex) id = std::to_string(utils::parseNumber<int>(id) | 0);
+            if (isIndex) id = std::to_string(utils::parseInt(id) | 0);
 
             if (!match[3].matched || subscript == "[" && matchEnd + 2 == pathLength) {
 
