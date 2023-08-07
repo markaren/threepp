@@ -2,9 +2,9 @@
 #include "threepp/math/Color.hpp"
 
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <iostream>
 #include <regex>
 #include <sstream>
@@ -471,18 +471,18 @@ Color& Color::setStyle(const std::string& style) {
             if (std::regex_match(components, match, ra)) {
 
                 // rgb(255,0,0) rgba(255,0,0,0.5)
-                this->r = std::min(255.f, static_cast<float>(std::stoi(match[1]))) / 255;
-                this->g = std::min(255.f, static_cast<float>(std::stoi(match[2]))) / 255;
-                this->b = std::min(255.f, static_cast<float>(std::stoi(match[3]))) / 255;
+                this->r = std::min(255.f, static_cast<float>(utils::parseInt(match[1].str()))) / 255;
+                this->g = std::min(255.f, static_cast<float>(utils::parseInt(match[2].str()))) / 255;
+                this->b = std::min(255.f, static_cast<float>(utils::parseInt(match[3].str()))) / 255;
 
                 return *this;
 
             } else if (std::regex_match(components, match, rb)) {
 
                 // rgb(100%,0%,0%) rgba(100%,0%,0%,0.5)
-                this->r = std::min(100.f, static_cast<float>(std::stoi(match[1]))) / 100;
-                this->g = std::min(100.f, static_cast<float>(std::stoi(match[2]))) / 100;
-                this->b = std::min(100.f, static_cast<float>(std::stoi(match[3]))) / 100;
+                this->r = std::min(100.f, static_cast<float>(utils::parseInt(match[1].str()))) / 100;
+                this->g = std::min(100.f, static_cast<float>(utils::parseInt(match[2].str()))) / 100;
+                this->b = std::min(100.f, static_cast<float>(utils::parseInt(match[3].str()))) / 100;
 
                 return *this;
             }
@@ -494,9 +494,9 @@ Color& Color::setStyle(const std::string& style) {
             if (std::regex_match(components, match, r)) {
 
                 // hsl(120,50%,50%) hsla(120,50%,50%,0.5)
-                const auto h = std::stof(match[1]) / 360;
-                const auto s = static_cast<float>(std::stoi(match[2])) / 100;
-                const auto l = static_cast<float>(std::stoi(match[3])) / 100;
+                const auto h = utils::parseFloat(match[1].str()) / 360;
+                const auto s = static_cast<float>(utils::parseInt(match[2].str())) / 100;
+                const auto l = static_cast<float>(utils::parseInt(match[3].str())) / 100;
 
                 return this->setHSL(h, s, l);
             }

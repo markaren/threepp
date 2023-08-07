@@ -2,6 +2,7 @@
 #include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include "threepp/renderers/gl/UniformUtils.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <glad/glad.h>
 
@@ -367,7 +368,7 @@ namespace {
                             },
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
-                                    int index = std::stoi(u->id);
+                                    int index = utils::parseInt(u->id);
                                     u->setValue(*arg[index], textures);
                                 }
                             }},
@@ -403,7 +404,7 @@ namespace {
             bool isIndex = match[2] == "]";
             std::string subscript = match[3];
 
-            if (isIndex) id = std::to_string(std::stoi(id) | 0);
+            if (isIndex) id = std::to_string(utils::parseInt(id) | 0);
 
             if (!match[3].matched || subscript == "[" && matchEnd + 2 == pathLength) {
 

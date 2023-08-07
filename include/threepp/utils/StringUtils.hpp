@@ -109,6 +109,10 @@ namespace threepp::utils {
         return std::equal(ending.rbegin(), ending.rend(), value.rbegin());
     }
 
+    int parseInt(const std::string& str);
+
+    float parseFloat(const std::string& str);
+
 }// namespace threepp::utils
 
 #endif//THREEPP_STRINGUTILS_HPP

@@ -366,6 +366,7 @@ set(sources
         "threepp/textures/DataTexture3D.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
+        "threepp/utils/StringUtils.cpp"
         "threepp/utils/ThreadPool.cpp"
 
         "threepp/renderers/TextHandle.cpp"
