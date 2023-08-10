@@ -24,6 +24,7 @@ namespace threepp::math {
     // Linear mapping from range <a1, a2> to range <b1, b2>
     float mapLinear(float x, float a1, float a2, float b1, float b2);
 
+    // Returns the percentage in the closed interval [0, 1] of the given value between the start and end point.
     float inverseLerp(float x, float y, float value);
 
     // Returns a value linearly interpolated from two known points based on the given interval - t = 0 will return x and t = 1 will return y.
@@ -36,19 +37,29 @@ namespace threepp::math {
     // Converts degrees to radians.
     float degToRad(float degrees);
 
+    // Converts radians to degrees.
     float radToDeg(float radians);
 
-    int randomInRange(int min, int max);
+    // Random integer in the interval [low, high].
+    int randInt(int low, int high);
 
-    float random();
+    // Random float in the interval [0, 1]
+    float randFloat();
 
-    float randomInRange(float min, float max);
+    // Random float in the interval [low, high]
+    float randFloat(float min, float max);
 
+    // Random float in the interval [- range / 2, range / 2].
+    float randFloatSpread(float range);
+
+    // Return true if n is a power of 2.
     bool isPowerOfTwo(int value);
 
-    float ceilPowerOfTwo(float value);
+    // Returns the smallest power of 2 that is greater than or equal to n.
+    int ceilPowerOfTwo(float value);
 
-    float floorPowerOfTwo(float value);
+    // Returns the largest power of 2 that is less than or equal to n.
+    int floorPowerOfTwo(float value);
 
     //https://stackoverflow.com/questions/1903954/is-there-a-standard-sign-function-signum-sgn-in-c-c
     template<typename T>

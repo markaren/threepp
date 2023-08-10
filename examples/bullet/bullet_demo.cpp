@@ -138,10 +138,10 @@ int main() {
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
         if (evt.key == 32) {// space
-            auto geom = SphereGeometry::create(0.1);
+            auto geom = SphereGeometry::create(0.1f);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
             mesh->position.copy(camera->position);
-            mesh->rotation.set(math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI));
+            mesh->rotation.set(math::randFloat(0, math::TWO_PI), math::randFloat(0, math::TWO_PI), math::randFloat(0, math::TWO_PI));
             Vector3 dir;
             camera->getWorldDirection(dir);
             bullet.addMesh(*mesh, 1);

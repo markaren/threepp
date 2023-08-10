@@ -48,7 +48,7 @@ namespace {
     }
 
     inline Vector3 randomPosition() {
-        return {math::randomInRange(-5.f, 5.f), math::randomInRange(5.f, 15.f), math::randomInRange(-5.f, 5.f)};
+        return {math::randFloat(-5.f, 5.f), math::randFloat(5.f, 15.f), math::randFloat(-5.f, 5.f)};
     }
 
     void initPositions(InstancedMesh& m) {
@@ -137,7 +137,7 @@ int main() {
             auto mesh = Mesh::create(tennisBallGeom, tennisBallMaterial);
             mesh->castShadow = true;
             mesh->position.copy(camera->position);
-            mesh->rotation.set(math::random() * math::TWO_PI, math::random() * math::TWO_PI, math::random() * math::TWO_PI);
+            mesh->rotation.set(math::randFloat() * math::TWO_PI, math::randFloat() * math::TWO_PI, math::randFloat() * math::TWO_PI);
             Vector3 dir;
             camera->getWorldDirection(dir);
             bullet.addMesh(*mesh, 1);

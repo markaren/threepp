@@ -64,14 +64,14 @@ int main() {
     colors.reserve(triangles*4);
 
     for (int i = 0; i < triangles; i++) {
-        positions.emplace_back(math::random() - .5f);
-        positions.emplace_back(math::random() - .5f);
-        positions.emplace_back(math::random() - .5f);
+        positions.emplace_back(math::randFloat() - .5f);
+        positions.emplace_back(math::randFloat() - .5f);
+        positions.emplace_back(math::randFloat() - .5f);
 
-        colors.emplace_back(math::random());
-        colors.emplace_back(math::random());
-        colors.emplace_back(math::random());
-        colors.emplace_back(math::random());
+        colors.emplace_back(math::randFloat());
+        colors.emplace_back(math::randFloat());
+        colors.emplace_back(math::randFloat());
+        colors.emplace_back(math::randFloat());
     }
 
     auto geometry = BufferGeometry::create();

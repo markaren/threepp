@@ -191,11 +191,11 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES() * math::randomInRange(0.6f, 1.2f);
+                Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
                 auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();
-                orientation.z = math::PI * math::random();
+                orientation.z = math::PI * math::randFloat();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
                 decals.emplace_back(m.get());
                 scene->add(m);

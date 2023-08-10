@@ -43,7 +43,7 @@ int main() {
     std::vector<Vector3> pts;
     pts.reserve(numPoints);
     for (unsigned i = 0; i < numPoints; i++) {
-        pts.emplace_back(math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f));
+        pts.emplace_back(math::randFloatSpread(20), math::randFloatSpread(20), math::randFloatSpread(20));
     }
 
     auto pointsGeometry = BufferGeometry::create();
@@ -69,8 +69,7 @@ int main() {
     auto points = Points::create(pointsGeometry, PointsMaterial::create({{"vertexColors", true}}));
     convex->add(points);
 
-    auto lineMaterial = LineBasicMaterial::create();
-    lineMaterial->color = Color::black;
+    auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
     auto edges = LineSegments::create(WireframeGeometry::create(*convexGeometry), lineMaterial);
     convex->add(edges);
 
