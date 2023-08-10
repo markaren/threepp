@@ -14,6 +14,7 @@ namespace threepp::math {
     const float DEG2RAD = PI / 180.f;
     const float RAD2DEG = 180.f / PI;
 
+    // Generate a UUID (universally unique identifier).
     std::string generateUUID();
 
     // compute euclidian modulo of m % n
@@ -25,10 +26,14 @@ namespace threepp::math {
 
     float inverseLerp(float x, float y, float value);
 
+    // Returns a value linearly interpolated from two known points based on the given interval - t = 0 will return x and t = 1 will return y.
     float lerp(float x, float y, float t);
 
+    // Smoothly interpolate a number from x toward y in a spring-like manner using the dt to maintain frame rate independent movement.
+    // For details, see Frame rate independent damping using lerp.
     float damp(float x, float y, float lambda, float dt);
 
+    // Converts degrees to radians.
     float degToRad(float degrees);
 
     float radToDeg(float radians);

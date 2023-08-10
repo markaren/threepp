@@ -10,6 +10,7 @@
 
 namespace threepp {
 
+    // Class representing triangular polygon mesh based objects.
     class Mesh: public Object3D {
 
     public:
