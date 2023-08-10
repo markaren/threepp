@@ -29,44 +29,75 @@ namespace threepp {
 
     typedef std::function<void(void*, Scene*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;
 
+    // This is the base class for most objects in three.js and provides a set of properties and methods for manipulating objects in 3D space.
+    //Note that this can be used for grouping objects via the .add( object ) method which adds the object as a child, however it is better to use Group for this.
     class Object3D: public EventDispatcher {
 
     public:
         inline static Vector3 defaultUp{0, 1, 0};
         inline static bool defaultMatrixAutoUpdate{true};
 
+        // Unique number for this object instance.
         unsigned int id{_object3Did++};
 
+        // UUID of this object instance. This gets automatically assigned, so this shouldn't be edited.
         const std::string uuid;
 
+        // Optional name of the object (doesn't need to be unique). Default is an empty string.
         std::string name;
 
+        // Non-owning pointer to Object's parent in the scene graph. An object can have at most one parent.
         Object3D* parent = nullptr;
+        // Vector with object's children. See Group for info on manually grouping objects.
         std::vector<std::shared_ptr<Object3D>> children;
 
+        // This is used by the lookAt method, for example, to determine the orientation of the result.
+        //Default is Object3D::defaultUp - that is, ( 0, 1, 0 ).
         Vector3 up{defaultUp};
 
+        // A Vector3 representing the object's local position. Default is `(0, 0, 0)`.
         Vector3 position;
+        // Object's local rotation (see Euler angles), in radians.
         Euler rotation;
+        // Object's local rotation as a Quaternion.
         Quaternion quaternion;
+        // The object's local scale. Default is Vector3( 1, 1, 1 ).
         Vector3 scale{1, 1, 1};
 
+        // This is passed to the shader and used to calculate the position of the object.
         Matrix4 modelViewMatrix;
+        // This is passed to the shader and used to calculate lighting for the object. It is the transpose of the inverse of the upper left 3x3 sub-matrix of this object's modelViewMatrix.
+        //The reason for this special matrix is that simply using the modelViewMatrix could result in a non-unit length of normals (on scaling) or in a non-perpendicular direction (on non-uniform scaling)
+        //On the other hand the translation part of the modelViewMatrix is not relevant for the calculation of normals. Thus a Matrix3 is sufficient.
         Matrix3 normalMatrix;
 
+        // The local transform matrix.
         std::shared_ptr<Matrix4> matrix;
+        // The global transform of the object. If the Object3D has no parent, then it's identical to the local transform .matrix.
         std::shared_ptr<Matrix4> matrixWorld;
 
+        // When this is set, it calculates the matrix of position, (rotation or quaternion) and scale every frame and also recalculates the matrixWorld property.
+        // Default is Object3D::defaultMatrixAutoUpdate (true).
         bool matrixAutoUpdate = defaultMatrixAutoUpdate;
+        // When this is set, it calculates the matrixWorld in that frame and resets this property to false. Default is false.
         bool matrixWorldNeedsUpdate = false;
 
+        // The layer membership of the object.
+        // The object is only visible if it has at least one layer in common with the Camera in use.
+        // This property can also be used to filter out unwanted objects in ray-intersection tests when using Raycaster.
         Layers layers;
+        // Object gets rendered if true. Default is true.
         bool visible = true;
 
+        // Whether the object gets rendered into shadow map. Default is false.
         bool castShadow = false;
         bool receiveShadow = false;
 
+        // When this is set, it checks every frame if the object is in the frustum of the camera before rendering the object.
+        // If set to false the object gets rendered every frame even if it is not in the frustum of the camera. Default is true.
         bool frustumCulled = true;
+        // This value allows the default rendering order of scene graph objects to be overridden although opaque and transparent objects remain sorted independently.
+        // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
         unsigned int renderOrder = 0;
 
         std::optional<RenderCallback> onBeforeRender;
@@ -74,13 +105,19 @@ namespace threepp {
 
         Object3D();
 
+        Object3D(Object3D&&) = delete;
+        Object3D(const Object3D&) = delete;
+        Object3D& operator=(const Object3D&) = delete;
+
         [[nodiscard]] virtual std::string type() const {
 
             return "Object3D";
         }
 
+        // Applies the matrix transform to the object and updates the object's position, rotation and scale.
         void applyMatrix4(const Matrix4& matrix);
 
+        // Applies the rotation represented by the quaternion to the object.
         Object3D& applyQuaternion(const Quaternion& q);
 
         void setRotationFromAxisAngle(const Vector3& axis, float angle);
@@ -111,30 +148,45 @@ namespace threepp {
 
         void localToWorld(Vector3& vector) const;
 
+        // Converts the vector from world space to this object's local space.
         void worldToLocal(Vector3& vector) const;
 
+        // Rotates the object to face a point in world space.
         void lookAt(const Vector3& vector);
 
+        // Rotates the object to face a point in world space.
         void lookAt(float x, float y, float z);
 
+        // Adds object as child of this object. An arbitrary number of objects may be added.
+        // Any current parent on an object passed in here will be removed, since an object can have at most one parent.
         Object3D& add(const std::shared_ptr<Object3D>& object);
 
+        // Removes object as child of this object.
         Object3D& remove(const std::shared_ptr<Object3D>& object);
 
+        // Removes object as child of this object.
         Object3D& remove(Object3D* object);
 
+        // Removes this object from its current parent.
         Object3D& removeFromParent();
 
+        // Removes all child objects.
         Object3D& clear();
 
+        // Searches through an object and its children, starting with the object itself, and returns the first with a matching name.
+        // Note that for most objects the name is an empty string by default. You will have to set it manually to make use of this method.
         Object3D* getObjectByName(const std::string& name);
 
-        Vector3& getWorldPosition(Vector3& target);
+        // Returns a vector representing the position of the object in world space.
+        void getWorldPosition(Vector3& target);
 
-        Quaternion& getWorldQuaternion(Quaternion& target);
+        // Returns a quaternion representing the rotation of the object in world space.
+        void getWorldQuaternion(Quaternion& target);
 
-        Vector3& getWorldScale(Vector3& target);
+        // Returns a vector of the scaling factors applied to the object for each axis in world space.
+        void getWorldScale(Vector3& target);
 
+        // Returns a vector representing the direction of object's positive z-axis in world space.
         virtual void getWorldDirection(Vector3& target);
 
         virtual void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {}
@@ -148,14 +200,13 @@ namespace threepp {
         template<class T>
         void traverseType(const std::function<void(T&)>& callback) {
             traverse([&](Object3D& o) {
-                auto dyn = dynamic_cast<T*>(&o);
-                if (dyn) {
+                if (auto dyn = dynamic_cast<T*>(&o)) {
                     callback(*dyn);
                 }
             });
         }
 
-
+        // Updates the local transform.
         void updateMatrix();
 
         virtual void updateMatrixWorld(bool force = false);
@@ -164,7 +215,7 @@ namespace threepp {
 
         static std::shared_ptr<Object3D> create() {
 
-            return std::shared_ptr<Object3D>(new Object3D());
+            return std::make_shared<Object3D>();
         }
 
         virtual BufferGeometry* geometry() {

@@ -134,15 +134,18 @@ TEST_CASE("getWorldPosition") {
     a->translateY(y);
     a->translateZ(z);
 
-    REQUIRE(a->getWorldPosition(position) == expectedSingle);
+    a->getWorldPosition(position);
+    REQUIRE(position == expectedSingle);
 
     // translate child and then parent
     b->translateZ(7);
     a->add(b);
     a->translateZ(-z);
 
-    REQUIRE(a->getWorldPosition(position) == expectedParent);
-    REQUIRE(b->getWorldPosition(position) == expectedChild);
+    a->getWorldPosition(position);
+    REQUIRE(position == expectedParent);
+    b->getWorldPosition(position);
+    REQUIRE(position == expectedChild);
 }
 
 TEST_CASE("getWorldScale") {
@@ -158,7 +161,8 @@ TEST_CASE("getWorldScale") {
     a->applyMatrix4(m);
 
     Vector3 scale;
-    REQUIRE(a->getWorldScale(scale) == expected);
+    a->getWorldScale(scale);
+    REQUIRE(scale == expected);
 }
 
 TEST_CASE("updateMatrixWorld") {

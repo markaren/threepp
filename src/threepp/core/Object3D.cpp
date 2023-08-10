@@ -267,14 +267,14 @@ Object3D* Object3D::getObjectByName(const std::string& name) {
     return nullptr;
 }
 
-Vector3& Object3D::getWorldPosition(Vector3& target) {
+void Object3D::getWorldPosition(Vector3& target) {
 
     this->updateWorldMatrix(true, false);
 
-    return target.setFromMatrixPosition(*this->matrixWorld);
+    target.setFromMatrixPosition(*this->matrixWorld);
 }
 
-Quaternion& Object3D::getWorldQuaternion(Quaternion& target) {
+void Object3D::getWorldQuaternion(Quaternion& target) {
 
     Vector3 _position{};
     Vector3 _scale{};
@@ -282,11 +282,9 @@ Quaternion& Object3D::getWorldQuaternion(Quaternion& target) {
     this->updateWorldMatrix(true, false);
 
     this->matrixWorld->decompose(_position, target, _scale);
-
-    return target;
 }
 
-Vector3& Object3D::getWorldScale(Vector3& target) {
+void Object3D::getWorldScale(Vector3& target) {
 
     Vector3 _position{};
     Quaternion _quaternion{};
@@ -294,8 +292,6 @@ Vector3& Object3D::getWorldScale(Vector3& target) {
     this->updateWorldMatrix(true, false);
 
     this->matrixWorld->decompose(_position, _quaternion, target);
-
-    return target;
 }
 
 void Object3D::getWorldDirection(Vector3& target) {
