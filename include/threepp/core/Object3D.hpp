@@ -178,13 +178,13 @@ namespace threepp {
         Object3D* getObjectByName(const std::string& name);
 
         // Returns a vector representing the position of the object in world space.
-        void getWorldPosition(Vector3& target);
+        Vector3& getWorldPosition(Vector3& target);
 
         // Returns a quaternion representing the rotation of the object in world space.
-        void getWorldQuaternion(Quaternion& target);
+        Quaternion& getWorldQuaternion(Quaternion& target);
 
         // Returns a vector of the scaling factors applied to the object for each axis in world space.
-        void getWorldScale(Vector3& target);
+        Vector3& getWorldScale(Vector3& target);
 
         // Returns a vector representing the direction of object's positive z-axis in world space.
         virtual void getWorldDirection(Vector3& target);
