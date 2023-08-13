@@ -15,6 +15,9 @@ namespace threepp {
     class Plane;
     class Object3D;
 
+    /**
+     * Represents an axis-aligned bounding box (AABB) in 3D space.
+     */
     class Box3 {
 
     public:
@@ -75,20 +78,30 @@ namespace threepp {
             return *this;
         }
 
+        // Centers this box on center and sets this box's width, height and depth to the values specified
+        // in size
         Box3& setFromCenterAndSize(const Vector3& center, const Vector3& size);
 
+        // Computes the world-axis-aligned bounding box of an Object3D (including its children),
+        // accounting for the object's, and children's, world transforms.
+        // The function may result in a larger box than strictly necessary.
         Box3& setFromObject(Object3D& object, bool precise = false);
 
         [[nodiscard]] Box3 clone() const;
 
         Box3& copy(const Box3& box);
 
+        // Makes this box empty.
         Box3& makeEmpty();
 
+        // Returns true if this box includes zero points within its bounds.
+        // Note that a box with equal lower and upper bounds still includes one point, the one both bounds share.
         [[nodiscard]] bool isEmpty() const;
 
+        // Get the center point of the box as a Vector3.
         void getCenter(Vector3& target) const;
 
+        // Get the width, height and depth of this box.
         void getSize(Vector3& target) const;
 
         Box3& expandByPoint(const Vector3& point);
@@ -101,6 +114,8 @@ namespace threepp {
 
         [[nodiscard]] bool containsPoint(const Vector3& point) const;
 
+        // Returns true if this box includes the entirety of box. If this and box are identical,
+        // this function also returns true.
         [[nodiscard]] bool containsBox(const Box3& box) const;
 
         void getParameter(const Vector3& point, Vector3& target) const;
@@ -115,6 +130,8 @@ namespace threepp {
 
         Vector3& clampPoint(const Vector3& point, Vector3& target) const;
 
+        // Returns the distance from any edge of this box to the specified point.
+        // If the point lies inside of this box, the distance will be 0.
         [[nodiscard]] float distanceToPoint(const Vector3& point) const;
 
         void getBoundingSphere(Sphere& target) const;
@@ -123,6 +140,7 @@ namespace threepp {
 
         Box3& union_(const Box3& box);
 
+        // Transforms this Box3 with the supplied matrix.
         Box3& applyMatrix4(const Matrix4& matrix);
 
         Box3& translate(const Vector3& offset);

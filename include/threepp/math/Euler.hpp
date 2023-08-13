@@ -12,6 +12,14 @@ namespace threepp {
     class Matrix4;
     class Quaternion;
 
+    /**
+     * A class representing Euler Angles.
+     *
+     * Euler angles describe a rotational transformation by rotating an object
+     * on its various axes in specified amounts per axis, and a specified axis order.
+     *
+     * Iterating through a Euler instance will yield its components (x, y, z, order) in the corresponding order.
+     */
     class Euler {
 
     public:

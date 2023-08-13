@@ -9,6 +9,7 @@
 
 namespace threepp {
 
+    // An internal wrapper around float that allows listeners to be notified about changes.
     class float_view {
 
     public:
