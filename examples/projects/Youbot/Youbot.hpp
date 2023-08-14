@@ -15,27 +15,27 @@ struct wasd {
 };
 
 struct Youbot: Object3D, KeyListener {
-    
+
     void onKeyPressed(KeyEvent evt) override {
-        if (evt.key == 87) {
+        if (evt.key == Key::W) {
             wasd_.up = true;
-        } else if (evt.key == 83) {
+        } else if (evt.key == Key::S) {
             wasd_.down = true;
-        } else if (evt.key == 68) {
+        } else if (evt.key == Key::D) {
             wasd_.right = true;
-        } else if (evt.key == 65) {
+        } else if (evt.key == Key::A) {
             wasd_.left = true;
         }
     }
 
     void onKeyReleased(KeyEvent evt) override {
-        if (evt.key == 87) {
+        if (evt.key == Key::W) {
             wasd_.up = false;
-        } else if (evt.key == 83) {
+        } else if (evt.key == Key::S) {
             wasd_.down = false;
-        } else if (evt.key == 68) {
+        } else if (evt.key == Key::D) {
             wasd_.right = false;
-        } else if (evt.key == 65) {
+        } else if (evt.key == Key::A) {
             wasd_.left = false;
         }
     }

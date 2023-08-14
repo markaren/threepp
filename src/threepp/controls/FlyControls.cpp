@@ -105,41 +105,43 @@ struct FlyControls::Impl {
             }
 
             switch (evt.key) {
-                case 87:
+                case Key::W:
                     scope.pimpl_->moveState.forward = 1;// w
                     break;
-                case 83:
+                case Key::S:
                     scope.pimpl_->moveState.back = 1;// s
                     break;
-                case 65:
+                case Key::A:
                     scope.pimpl_->moveState.left = 1;// a
                     break;
-                case 68:
+                case Key::D:
                     scope.pimpl_->moveState.right = 1;// d
                     break;
-                case 82:
+                case Key::R:
                     scope.pimpl_->moveState.up = 1;// r
                     break;
-                case 70:
+                case Key::F:
                     scope.pimpl_->moveState.down = 1;// f
                     break;
-                case 265:
+                case Key::UP:
                     scope.pimpl_->moveState.pitchUp = 1;// arrowup
                     break;
-                case 264:
+                case Key::DOWN:
                     scope.pimpl_->moveState.pitchDown = 1;// arrowdown
                     break;
-                case 263:
+                case Key::LEFT:
                     scope.pimpl_->moveState.yawLeft = 1;// arrowleft
                     break;
-                case 262:
+                case Key::RIGHT:
                     scope.pimpl_->moveState.yawRight = 1;// arrowright
                     break;
-                case 81:
+                case Key::Q:
                     scope.pimpl_->moveState.rollLeft = 1;// q
                     break;
-                case 69:
+                case Key::E:
                     scope.pimpl_->moveState.rollRight = 1;// e
+                    break;
+                default:
                     break;
             }
 
@@ -157,41 +159,43 @@ struct FlyControls::Impl {
         void onKeyReleased(KeyEvent evt) override {
 
             switch (evt.key) {
-                case 87:
+                case Key::W:
                     scope.pimpl_->moveState.forward = 0;// w
                     break;
-                case 83:
+                case Key::S:
                     scope.pimpl_->moveState.back = 0;// s
                     break;
-                case 65:
+                case Key::A:
                     scope.pimpl_->moveState.left = 0;// a
                     break;
-                case 68:
+                case Key::D:
                     scope.pimpl_->moveState.right = 0;// d
                     break;
-                case 82:
+                case Key::R:
                     scope.pimpl_->moveState.up = 0;// r
                     break;
-                case 70:
+                case Key::F:
                     scope.pimpl_->moveState.down = 0;// f
                     break;
-                case 265:
+                case Key::UP:
                     scope.pimpl_->moveState.pitchUp = 0;// arrowup
                     break;
-                case 264:
+                case Key::DOWN:
                     scope.pimpl_->moveState.pitchDown = 0;// arrowdown
                     break;
-                case 263:
+                case Key::LEFT:
                     scope.pimpl_->moveState.yawLeft = 0;// arrowleft
                     break;
-                case 262:
+                case Key::RIGHT:
                     scope.pimpl_->moveState.yawRight = 0;// arrowright
                     break;
-                case 81:
+                case Key::Q:
                     scope.pimpl_->moveState.rollLeft = 0;// q
                     break;
-                case 69:
+                case Key::E:
                     scope.pimpl_->moveState.rollRight = 0;// e
+                    break;
+                default:
                     break;
             }
 

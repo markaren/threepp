@@ -79,6 +79,56 @@ namespace {
         return static_cast<float>(SDL_GetTicks()) / 1000;
     }
 
+    inline Key getKey(SDL_Keycode key) {
+
+        switch (key) {
+            case SDLK_0: return Key::NUM_0;
+            case SDLK_1: return Key::NUM_1;
+            case SDLK_2: return Key::NUM_2;
+            case SDLK_3: return Key::NUM_3;
+            case SDLK_4: return Key::NUM_4;
+            case SDLK_5: return Key::NUM_5;
+            case SDLK_6: return Key::NUM_6;
+            case SDLK_7: return Key::NUM_7;
+            case SDLK_8: return Key::NUM_8;
+            case SDLK_9: return Key::NUM_9;
+
+            case SDLK_a: return Key::A;
+            case SDLK_b: return Key::B;
+            case SDLK_c: return Key::C;
+            case SDLK_d: return Key::D;
+            case SDLK_e: return Key::E;
+            case SDLK_f: return Key::F;
+            case SDLK_g: return Key::G;
+            case SDLK_h: return Key::H;
+            case SDLK_j: return Key::J;
+            case SDLK_k: return Key::K;
+            case SDLK_l: return Key::L;
+            case SDLK_m: return Key::M;
+            case SDLK_n: return Key::N;
+            case SDLK_o: return Key::O;
+            case SDLK_p: return Key::P;
+            case SDLK_r: return Key::R;
+            case SDLK_s: return Key::S;
+            case SDLK_t: return Key::T;
+            case SDLK_u: return Key::U;
+            case SDLK_v: return Key::V;
+            case SDLK_w: return Key::W;
+            case SDLK_x: return Key::X;
+            case SDLK_y: return Key::Y;
+            case SDLK_z: return Key::Z;
+
+            case SDLK_UP: return Key::UP;
+            case SDLK_DOWN: return Key::DOWN;
+            case SDLK_LEFT: return Key::LEFT;
+            case SDLK_RIGHT: return Key::RIGHT;
+
+            case SDLK_SPACE: return Key::SPACE;
+
+            default: return Key::UNKNOWN;
+        }
+    }
+
 }// namespace
 
 struct Canvas::Impl {
@@ -172,59 +222,6 @@ struct Canvas::Impl {
         }
     }
 
-    void handleEvents() {
-        if (event.type == SDL_WINDOWEVENT) {
-            if (event.window.event == SDL_WINDOWEVENT_RESIZED && resizeListener) {
-                WindowSize s{};
-                SDL_GetWindowSize(window, &s.width, &s.height);
-                resizeListener->operator()(s);
-            }
-        } else if (event.type == SDL_MOUSEBUTTONDOWN) {
-
-            if (ioCapture && (ioCapture->preventMouseEvent)()) {
-                return;
-            }
-
-            for (auto l : mouseListeners) {
-                auto action = event.button;
-                l->onMouseDown(sdlButtonConvert(action.button), {action.x, action.y});
-            }
-
-        } else if (event.type == SDL_MOUSEBUTTONUP) {
-
-            if (ioCapture && (ioCapture->preventMouseEvent)()) {
-                return;
-            }
-
-            for (auto l : mouseListeners) {
-                auto action = event.button;
-                l->onMouseUp(sdlButtonConvert(action.button), {action.x, action.y});
-            }
-
-        } else if (event.type == SDL_MOUSEMOTION) {
-
-            if (ioCapture && (ioCapture->preventMouseEvent)()) {
-                return;
-            }
-
-            for (auto l : mouseListeners) {
-                auto action = event.button;
-                l->onMouseMove({action.x, action.y});
-            }
-
-        } else if (event.type == SDL_MOUSEWHEEL) {
-
-            if (ioCapture && (ioCapture->preventScrollEvent)()) {
-                return;
-            }
-
-            for (auto l : mouseListeners) {
-                auto action = event.wheel;
-                l->onMouseWheel({action.x, action.y});
-            }
-        }
-    }
-
     bool animateOnce(const std::function<void()>& f) {
 
         SDL_GL_SwapWindow(window);
@@ -289,106 +286,99 @@ struct Canvas::Impl {
         tasks_.emplace(f, static_cast<float>(SDL_GetTicks()) + t);
     }
 
+
+    void handleEvents() {
+        if (event.type == SDL_WINDOWEVENT) {
+            if (event.window.event == SDL_WINDOWEVENT_RESIZED && resizeListener) {
+                WindowSize s{};
+                SDL_GetWindowSize(window, &s.width, &s.height);
+                resizeListener->operator()(s);
+            }
+        } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+
+            if (ioCapture && (ioCapture->preventMouseEvent)()) {
+                return;
+            }
+
+            auto listeners = mouseListeners;
+            for (auto l : listeners) {
+                auto action = event.button;
+                l->onMouseDown(sdlButtonConvert(action.button), {action.x, action.y});
+            }
+
+        } else if (event.type == SDL_MOUSEBUTTONUP) {
+
+            if (ioCapture && (ioCapture->preventMouseEvent)()) {
+                return;
+            }
+
+            for (auto l : mouseListeners) {
+                auto action = event.button;
+                l->onMouseUp(sdlButtonConvert(action.button), {action.x, action.y});
+            }
+
+        } else if (event.type == SDL_MOUSEMOTION) {
+
+            if (ioCapture && (ioCapture->preventMouseEvent)()) {
+                return;
+            }
+
+            auto listeners = mouseListeners;
+            for (auto l : listeners) {
+                auto action = event.button;
+                l->onMouseMove({action.x, action.y});
+            }
+
+        } else if (event.type == SDL_MOUSEWHEEL) {
+
+            if (ioCapture && (ioCapture->preventScrollEvent)()) {
+                return;
+            }
+
+            auto listeners = mouseListeners;
+            for (auto l : listeners) {
+                auto action = event.wheel;
+                l->onMouseWheel({action.x, action.y});
+            }
+
+        } else if (event.type == SDL_KEYDOWN) {
+
+            if (ioCapture && (ioCapture->preventKeyboardEvent)()) {
+                return;
+            }
+
+            KeyEvent evt{getKey(event.key.keysym.sym), event.key.keysym.scancode, event.key.keysym.mod};
+            auto listeners = keyListeners;
+            for (auto l : listeners) {
+
+                if (event.key.repeat) {
+                    l->onKeyRepeat(evt);
+                } else {
+                    l->onKeyPressed(evt);
+                }
+            }
+
+        } else if (event.type == SDL_KEYUP) {
+
+            if (ioCapture && (ioCapture->preventKeyboardEvent)()) {
+                return;
+            }
+
+            KeyEvent evt{getKey(event.key.keysym.sym), event.key.keysym.scancode, event.key.keysym.mod};
+            auto listeners = keyListeners;
+            for (auto l : listeners) {
+
+                l->onKeyReleased(evt);
+            }
+        }
+    }
+
     ~Impl() {
         SDL_GL_DeleteContext(maincontext);
         SDL_DestroyWindow(window);
         SDL_Quit();
     }
 
-    static void window_size_callback(SDL_Window* w, int width, int height) {
-        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        //        p->size_ = {width, height};
-        //        if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
-    }
-
-    static void error_callback(int error, const char* description) {
-        std::cerr << "Error: " << description << std::endl;
-    }
-
-    static void scroll_callback(SDL_Window* w, double xoffset, double yoffset) {
-        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        //
-        //        if (p->ioCapture && (p->ioCapture->preventScrollEvent)()) {
-        //            return;
-        //        }
-        //
-        //        auto listeners = p->mouseListeners;
-        //        if (listeners.empty()) return;
-        //        Vector2 delta{(float) xoffset, (float) yoffset};
-        //        for (auto l : listeners) {
-        //            l->onMouseWheel(delta);
-        //        }
-    }
-
-    static void mouse_callback(SDL_Window* w, int button, int action, int mods) {
-        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        //
-        //        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-        //            return;
-        //        }
-        //
-        //        auto listeners = p->mouseListeners;
-        //        for (auto l : listeners) {
-        //
-        //            switch (action) {
-        //                case GLFW_PRESS:
-        //                    l->onMouseDown(button, p->lastMousePos_);
-        //                    break;
-        //                case GLFW_RELEASE:
-        //                    l->onMouseUp(button, p->lastMousePos_);
-        //                    break;
-        //                default:
-        //                    break;
-        //            }
-        //        }
-    }
-
-    static void cursor_callback(SDL_Window* w, double xpos, double ypos) {
-        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        //
-        //        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-        //            return;
-        //        }
-        //
-        //        p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
-        //        auto listeners = p->mouseListeners;
-        //        for (auto l : listeners) {
-        //            l->onMouseMove(p->lastMousePos_);
-        //        }
-    }
-
-    static void key_callback(SDL_Window* w, int key, int scancode, int action, int mods) {
-        //        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-        //            glfwSetWindowShouldClose(w, GLFW_TRUE);
-        //            return;
-        //        }
-        //
-        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        //
-        //        if (p->ioCapture && (p->ioCapture->preventKeyboardEvent)()) {
-        //            return;
-        //        }
-        //
-        //        if (p->keyListeners.empty()) return;
-        //
-        //        KeyEvent evt{key, scancode, mods};
-        //        auto listeners = p->keyListeners;
-        //        for (auto l : listeners) {
-        //            switch (action) {
-        //                case GLFW_PRESS:
-        //                    l->onKeyPressed(evt);
-        //                    break;
-        //                case GLFW_RELEASE:
-        //                    l->onKeyReleased(evt);
-        //                    break;
-        //                case GLFW_REPEAT:
-        //                    l->onKeyRepeat(evt);
-        //                    break;
-        //                default:
-        //                    break;
-        //            }
-        //        }
-    }
 };
 
 Canvas::Canvas(const Canvas::Parameters& params)
