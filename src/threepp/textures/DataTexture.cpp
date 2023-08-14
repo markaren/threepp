@@ -10,7 +10,7 @@ DataTexture::DataTexture(const std::vector<unsigned char>& data, unsigned int wi
         tmp[i] = data[i];
     }
 
-    this->image = Image{std::shared_ptr<unsigned char>(tmp, free), width, height};
+    this->image = Image{std::shared_ptr<unsigned char>(tmp, free), width, height, Image::Format::RGB};
 
     this->magFilter = NearestFilter;
     this->minFilter = NearestFilter;

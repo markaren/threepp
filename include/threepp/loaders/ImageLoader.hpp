@@ -12,8 +12,8 @@ namespace threepp {
     class ImageLoader {
 
     public:
-        std::optional<Image> load(const std::filesystem::path& imagePath, int channels = 4, bool flipY = true);
-        std::optional<Image> load(const std::vector<unsigned char>& data, int channels = 4, bool flipY = true);
+        std::optional<Image> load(const std::filesystem::path& imagePath, Image::Format format = Image::Format::RGBA, bool flipY = true);
+        std::optional<Image> load(const std::vector<unsigned char>& data, Image::Format format = Image::Format::RGBA, bool flipY = true);
     };
 
 }// namespace threepp

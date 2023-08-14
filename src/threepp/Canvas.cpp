@@ -6,8 +6,8 @@
 
 #include "threepp/favicon.hpp"
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
+#define SDL_MAIN_HANDLED
+#include <SDL2/SDL.h>
 #include <glad/glad.h>
 
 #include <iostream>
@@ -24,34 +24,61 @@ namespace {
         bool operator()(const task& l, const task& r) const { return l.second > r.second; }
     };
 
-    void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
+    void setWindowIcon(SDL_Window* window, std::optional<std::filesystem::path> customIcon) {
 
         ImageLoader imageLoader;
         std::optional<Image> favicon;
         if (customIcon) {
-            favicon = imageLoader.load(*customIcon, 4, false);
+            favicon = imageLoader.load(*customIcon, Image::Format::RGBA, false);
         } else {
-            favicon = imageLoader.load(faviconSource(), 4, false);
+            favicon = imageLoader.load(faviconSource(), Image::Format::RGBA, false);
         }
         if (favicon) {
-            GLFWimage images[1];
-            images[0] = {static_cast<int>(favicon->width),
-                         static_cast<int>(favicon->height),
-                         favicon->getData()};
-            glfwSetWindowIcon(window, 1, images);
+            Uint32 rmask, gmask, bmask, amask;
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+            rmask = 0xff000000;
+            gmask = 0x00ff0000;
+            bmask = 0x0000ff00;
+            amask = 0x000000ff;
+#else
+            rmask = 0x000000ff;
+            gmask = 0x0000ff00;
+            bmask = 0x00ff0000;
+            amask = 0xff000000;
+#endif
+            int numChannels = favicon->numChannels();
+            SDL_Surface* s = SDL_CreateRGBSurfaceFrom(favicon->getData(), static_cast<int>(favicon->width), static_cast<int>(favicon->height), numChannels * 8, numChannels*favicon->width, rmask, gmask, bmask, amask);
+            SDL_SetWindowIcon(window, s);
+            SDL_FreeSurface(s);
         }
+    }
+
+    /** A simple function that prints a message, the error code returned by SDL,
+     * and quits the application
+     */
+    void sdldie(const char* msg) {
+        printf("%s: %s\n", msg, SDL_GetError());
+        SDL_Quit();
+        exit(1);
+    }
+
+    inline float time() {
+        return static_cast<float>(SDL_GetTicks()) / 1000;
     }
 
 }// namespace
 
 struct Canvas::Impl {
 
-    GLFWwindow* window;
+    SDL_Window* window;
+    SDL_GLContext maincontext;
 
     IOCapture* ioCapture;
 
     WindowSize size_;
     Vector2 lastMousePos_;
+
+    SDL_Event event;
 
     std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
@@ -62,41 +89,63 @@ struct Canvas::Impl {
     explicit Impl(const Canvas::Parameters& params)
         : size_(params.size_), ioCapture(nullptr) {
 
-        glfwSetErrorCallback(error_callback);
+        //        glfwSetErrorCallback(error_callback);
 
-        if (!glfwInit()) {
-            exit(EXIT_FAILURE);
+        if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+            sdldie("");
         }
+        SDL_GL_LoadLibrary(nullptr);// Default OpenGL is fine.
 
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
+        //        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        //        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        //        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        //        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        //        glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
+
+        /* Request opengl 3.2 context.
+     * SDL doesn't have the ability to choose which profile at this time of writing,
+     * but it should default to the core profile */
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+
+        /* Turn on double buffering with a 24bit Z buffer.
+     * You may need to change this to 16 or 32 for your system */
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
         if (params.antialiasing_ > 0) {
-            glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
+            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+            SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, params.antialiasing_);
+            //            glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
         }
 
-        window = glfwCreateWindow(params.size_.width, params.size_.height, params.title_.c_str(), nullptr, nullptr);
-        if (!window) {
-            glfwTerminate();
-            exit(EXIT_FAILURE);
+        Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN;
+        if (params.resizable_) {
+            flags = flags | SDL_WINDOW_RESIZABLE;
         }
+
+        window = SDL_CreateWindow(params.title_.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+                                  params.size_.width, params.size_.height, flags);
+        if (!window) {
+            sdldie("");
+        }
+
+        maincontext = SDL_GL_CreateContext(window);
 
         setWindowIcon(window, params.favicon_);
 
-        glfwSetWindowUserPointer(window, this);
 
-        glfwSetKeyCallback(window, key_callback);
-        glfwSetMouseButtonCallback(window, mouse_callback);
-        glfwSetCursorPosCallback(window, cursor_callback);
-        glfwSetScrollCallback(window, scroll_callback);
-        glfwSetWindowSizeCallback(window, window_size_callback);
+        //        glfwSetWindowUserPointer(window, this);
 
-        glfwMakeContextCurrent(window);
+        //        glfwSetKeyCallback(window, key_callback);
+        //        glfwSetMouseButtonCallback(window, mouse_callback);
+        //        glfwSetCursorPosCallback(window, cursor_callback);
+        //        glfwSetScrollCallback(window, scroll_callback);
+        //        glfwSetWindowSizeCallback(window, window_size_callback);
+
+        //        glfwMakeContextCurrent(window);
         gladLoadGL();
-        glfwSwapInterval(params.vsync_ ? 1 : 0);
+        //        glfwSwapInterval(params.vsync_ ? 1 : 0);
 
         if (params.antialiasing_ > 0) {
             glEnable(GL_MULTISAMPLE);
@@ -112,13 +161,13 @@ struct Canvas::Impl {
     }
 
     void setSize(WindowSize size) const {
-        glfwSetWindowSize(window, size.width, size.height);
+        SDL_SetWindowSize(window, size.width, size.height);
     }
 
     inline void handleTasks() {
         while (!tasks_.empty()) {
             auto& task = tasks_.top();
-            if (task.second < glfwGetTime()) {
+            if (task.second < time()) {
                 task.first();
                 tasks_.pop();
             } else {
@@ -129,16 +178,23 @@ struct Canvas::Impl {
 
     bool animateOnce(const std::function<void()>& f) {
 
-        if (glfwWindowShouldClose(window)) {
-            return false;
+        SDL_GL_SwapWindow(window);
+
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                return false;
+            } else if (event.type == SDL_WINDOWEVENT) {
+                if (event.window.event == SDL_WINDOWEVENT_RESIZED && resizeListener) {
+                    WindowSize s;
+                    SDL_GetWindowSize(window, &s.width, &s.height);
+                    resizeListener->operator()(s);
+                }
+            }
         }
 
         handleTasks();
 
         f();
-
-        glfwSwapBuffers(window);
-        glfwPollEvents();
 
         return true;
     }
@@ -185,107 +241,108 @@ struct Canvas::Impl {
     }
 
     void invokeLater(const std::function<void()>& f, float t) {
-        tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
+        tasks_.emplace(f, static_cast<float>(SDL_GetTicks()) + t);
     }
 
     ~Impl() {
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        SDL_GL_DeleteContext(maincontext);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
     }
 
-    static void window_size_callback(GLFWwindow* w, int width, int height) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-        p->size_ = {width, height};
-        if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
+    static void window_size_callback(SDL_Window* w, int width, int height) {
+        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        //        p->size_ = {width, height};
+        //        if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
     }
 
     static void error_callback(int error, const char* description) {
         std::cerr << "Error: " << description << std::endl;
     }
 
-    static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-
-        if (p->ioCapture && (p->ioCapture->preventScrollEvent)()) {
-            return;
-        }
-
-        auto listeners = p->mouseListeners;
-        if (listeners.empty()) return;
-        Vector2 delta{(float) xoffset, (float) yoffset};
-        for (auto l : listeners) {
-            l->onMouseWheel(delta);
-        }
+    static void scroll_callback(SDL_Window* w, double xoffset, double yoffset) {
+        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        //
+        //        if (p->ioCapture && (p->ioCapture->preventScrollEvent)()) {
+        //            return;
+        //        }
+        //
+        //        auto listeners = p->mouseListeners;
+        //        if (listeners.empty()) return;
+        //        Vector2 delta{(float) xoffset, (float) yoffset};
+        //        for (auto l : listeners) {
+        //            l->onMouseWheel(delta);
+        //        }
     }
 
-    static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-
-        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-            return;
-        }
-
-        auto listeners = p->mouseListeners;
-        for (auto l : listeners) {
-
-            switch (action) {
-                case GLFW_PRESS:
-                    l->onMouseDown(button, p->lastMousePos_);
-                    break;
-                case GLFW_RELEASE:
-                    l->onMouseUp(button, p->lastMousePos_);
-                    break;
-                default:
-                    break;
-            }
-        }
+    static void mouse_callback(SDL_Window* w, int button, int action, int mods) {
+        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        //
+        //        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
+        //            return;
+        //        }
+        //
+        //        auto listeners = p->mouseListeners;
+        //        for (auto l : listeners) {
+        //
+        //            switch (action) {
+        //                case GLFW_PRESS:
+        //                    l->onMouseDown(button, p->lastMousePos_);
+        //                    break;
+        //                case GLFW_RELEASE:
+        //                    l->onMouseUp(button, p->lastMousePos_);
+        //                    break;
+        //                default:
+        //                    break;
+        //            }
+        //        }
     }
 
-    static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-
-        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-            return;
-        }
-
-        p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
-        auto listeners = p->mouseListeners;
-        for (auto l : listeners) {
-            l->onMouseMove(p->lastMousePos_);
-        }
+    static void cursor_callback(SDL_Window* w, double xpos, double ypos) {
+        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        //
+        //        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
+        //            return;
+        //        }
+        //
+        //        p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
+        //        auto listeners = p->mouseListeners;
+        //        for (auto l : listeners) {
+        //            l->onMouseMove(p->lastMousePos_);
+        //        }
     }
 
-    static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-            glfwSetWindowShouldClose(w, GLFW_TRUE);
-            return;
-        }
-
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-
-        if (p->ioCapture && (p->ioCapture->preventKeyboardEvent)()) {
-            return;
-        }
-
-        if (p->keyListeners.empty()) return;
-
-        KeyEvent evt{key, scancode, mods};
-        auto listeners = p->keyListeners;
-        for (auto l : listeners) {
-            switch (action) {
-                case GLFW_PRESS:
-                    l->onKeyPressed(evt);
-                    break;
-                case GLFW_RELEASE:
-                    l->onKeyReleased(evt);
-                    break;
-                case GLFW_REPEAT:
-                    l->onKeyRepeat(evt);
-                    break;
-                default:
-                    break;
-            }
-        }
+    static void key_callback(SDL_Window* w, int key, int scancode, int action, int mods) {
+        //        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        //            glfwSetWindowShouldClose(w, GLFW_TRUE);
+        //            return;
+        //        }
+        //
+        //        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        //
+        //        if (p->ioCapture && (p->ioCapture->preventKeyboardEvent)()) {
+        //            return;
+        //        }
+        //
+        //        if (p->keyListeners.empty()) return;
+        //
+        //        KeyEvent evt{key, scancode, mods};
+        //        auto listeners = p->keyListeners;
+        //        for (auto l : listeners) {
+        //            switch (action) {
+        //                case GLFW_PRESS:
+        //                    l->onKeyPressed(evt);
+        //                    break;
+        //                case GLFW_RELEASE:
+        //                    l->onKeyReleased(evt);
+        //                    break;
+        //                case GLFW_REPEAT:
+        //                    l->onKeyRepeat(evt);
+        //                    break;
+        //                default:
+        //                    break;
+        //            }
+        //        }
     }
 };
 

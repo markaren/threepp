@@ -57,8 +57,9 @@ struct TextureLoader::Impl {
         }
 
         bool isJPEG = checkIsJPEG(path.string());
+        auto format = isJPEG ? Image::Format::RGB : Image::Format::RGBA;
 
-        auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
+        auto image = imageLoader_.load(path, format, flipY);
 
         auto texture = Texture::create(image);
         texture->name = path.stem().string();
@@ -79,8 +80,9 @@ struct TextureLoader::Impl {
         }
 
         bool isJPEG = checkIsJPEG(name);
+        auto format = isJPEG ? Image::Format::RGB : Image::Format::RGBA;
 
-        auto image = imageLoader_.load(data, isJPEG ? 3 : 4, flipY);
+        auto image = imageLoader_.load(data, format, flipY);
 
         auto texture = Texture::create(image);
         texture->name = name;

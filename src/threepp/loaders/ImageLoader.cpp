@@ -18,7 +18,7 @@ namespace {
 
 }// namespace
 
-std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, int channels, bool flipY) {
+std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, Image::Format format, bool flipY) {
 
     if (!std::filesystem::exists(imagePath)) {
         return std::nullopt;
@@ -26,24 +26,26 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
 
     ImageStruct image{};
     stbi_set_flip_vertically_on_load(flipY);
-    image.pixels = stbi_load(imagePath.string().c_str(), &image.width, &image.height, nullptr, channels);
+    image.pixels = stbi_load(imagePath.string().c_str(), &image.width, &image.height, nullptr, Image::getChannels(format));
 
     return Image{
             std::shared_ptr<unsigned char>(image.pixels, free),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
+            format,
             flipY};
 }
 
-std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, int channels, bool flipY) {
+std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, Image::Format format, bool flipY) {
 
     ImageStruct image{};
     stbi_set_flip_vertically_on_load(flipY);
-    image.pixels = stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &image.width, &image.height, nullptr, channels);
+    image.pixels = stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &image.width, &image.height, nullptr, Image::getChannels(format));
 
     return Image{
             std::shared_ptr<unsigned char>(image.pixels, free),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
+            format,
             flipY};
 }

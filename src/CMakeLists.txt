@@ -406,7 +406,8 @@ target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
         PRIVATE
         glad::glad
-        glfw::glfw)
+        $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
+)
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread)
 endif ()

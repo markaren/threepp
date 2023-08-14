@@ -26,13 +26,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 # Dependencies
 # ==============================================================================
 
-find_package(glfw3 CONFIG REQUIRED)
+#find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(stb CONFIG QUIET)
+find_package(SDL2 CONFIG REQUIRED)
+#find_package(SDL2_ttf CONFIG REQUIRED)
 
-if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
-    add_library(glfw::glfw ALIAS glfw)
-endif()
+#if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+#    add_library(glfw::glfw ALIAS glfw)
+#endif()
 
 if (NOT stb_INCLUDE_DIR)
     find_path(stb_INCLUDE_DIR "stb_c_lexer.h" REQUIRED)
