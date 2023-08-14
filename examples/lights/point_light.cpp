@@ -19,7 +19,7 @@ namespace {
         material->emissive = 0x000000;
         auto knot = Mesh::create(geometry, material);
         knot->castShadow = true;
-        knot->position.y = 0;
+        knot->position.y = 1;
 
         return knot;
     }
@@ -40,7 +40,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("PointLight", {{"antialiasing", 0}});
+    Canvas canvas("PointLight", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
 
