@@ -62,6 +62,19 @@ namespace {
         exit(1);
     }
 
+    inline int sdlButtonConvert(Uint8 btn) {
+        int result{};
+        if (btn == SDL_BUTTON_LEFT) {
+            result = 0;
+        } else if (btn == SDL_BUTTON_RIGHT) {
+            result = 1;
+        } else if (btn == SDL_BUTTON_MIDDLE) {
+            result = 2;
+        }
+
+        return result;
+    }
+
     inline float time() {
         return static_cast<float>(SDL_GetTicks()) / 1000;
     }
@@ -77,7 +90,6 @@ struct Canvas::Impl {
     IOCapture* ioCapture;
 
     WindowSize size_;
-    Vector2 lastMousePos_;
 
     SDL_Event event;
 
@@ -123,22 +135,13 @@ struct Canvas::Impl {
         if (!window) {
             sdldie("");
         }
-
         maincontext = SDL_GL_CreateContext(window);
 
         setWindowIcon(window, params.favicon_);
 
-        //        glfwSetWindowUserPointer(window, this);
-
-        //        glfwSetKeyCallback(window, key_callback);
-        //        glfwSetMouseButtonCallback(window, mouse_callback);
-        //        glfwSetCursorPosCallback(window, cursor_callback);
-        //        glfwSetScrollCallback(window, scroll_callback);
-        //        glfwSetWindowSizeCallback(window, window_size_callback);
-
-        //        glfwMakeContextCurrent(window);
         gladLoadGL();
-        //        glfwSwapInterval(params.vsync_ ? 1 : 0);
+
+        SDL_GL_SetSwapInterval(params.vsync_ ? 1 : 0);
 
         if (params.antialiasing_ > 0) {
             glEnable(GL_MULTISAMPLE);
@@ -178,47 +181,31 @@ struct Canvas::Impl {
             }
         } else if (event.type == SDL_MOUSEBUTTONDOWN) {
 
+            if (ioCapture && (ioCapture->preventMouseEvent)()) {
+                return;
+            }
+
             for (auto l : mouseListeners) {
                 auto action = event.button;
-                int btn{};
-                switch (action.button) {
-                    case SDL_BUTTON_LEFT: {
-                        btn = 0;
-                        break;
-                    }
-                    case SDL_BUTTON_RIGHT: {
-                        btn = 1;
-                        break;
-                    }
-                    case SDL_BUTTON_MIDDLE: {
-                        btn = 2;
-                        break;
-                    }
-                }
-                l->onMouseDown(btn, {action.x, action.y});
+                l->onMouseDown(sdlButtonConvert(action.button), {action.x, action.y});
             }
 
         } else if (event.type == SDL_MOUSEBUTTONUP) {
 
+            if (ioCapture && (ioCapture->preventMouseEvent)()) {
+                return;
+            }
+
             for (auto l : mouseListeners) {
                 auto action = event.button;
-                int btn{};
-                switch (action.button) {
-                    case SDL_BUTTON_LEFT: {
-                        btn = 0;
-                    }
-                    case SDL_BUTTON_RIGHT: {
-                        btn = 1;
-                    }
-                    case SDL_BUTTON_MIDDLE: {
-                        btn = 2;
-                    }
-                }
-
-                l->onMouseUp(btn, {action.x, action.y});
+                l->onMouseUp(sdlButtonConvert(action.button), {action.x, action.y});
             }
 
         } else if (event.type == SDL_MOUSEMOTION) {
+
+            if (ioCapture && (ioCapture->preventMouseEvent)()) {
+                return;
+            }
 
             for (auto l : mouseListeners) {
                 auto action = event.button;
@@ -227,11 +214,14 @@ struct Canvas::Impl {
 
         } else if (event.type == SDL_MOUSEWHEEL) {
 
+            if (ioCapture && (ioCapture->preventScrollEvent)()) {
+                return;
+            }
+
             for (auto l : mouseListeners) {
                 auto action = event.wheel;
                 l->onMouseWheel({action.x, action.y});
             }
-
         }
     }
 
