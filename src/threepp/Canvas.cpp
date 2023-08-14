@@ -133,15 +133,12 @@ namespace {
 
 struct Canvas::Impl {
 
+    SDL_Event event;
     SDL_Window* window;
-    SDL_Renderer* renderer;
     SDL_GLContext maincontext;
 
-    IOCapture* ioCapture;
-
     WindowSize size_;
-
-    SDL_Event event;
+    IOCapture* ioCapture;
 
     std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
@@ -156,12 +153,6 @@ struct Canvas::Impl {
             sdldie("");
         }
         SDL_GL_LoadLibrary(nullptr);// Default OpenGL is fine.
-
-        //        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        //        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        //        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        //        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        //        glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
 
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -285,7 +276,6 @@ struct Canvas::Impl {
     void invokeLater(const std::function<void()>& f, float t) {
         tasks_.emplace(f, static_cast<float>(SDL_GetTicks()) + t);
     }
-
 
     void handleEvents() {
         if (event.type == SDL_WINDOWEVENT) {
