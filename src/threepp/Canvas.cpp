@@ -47,7 +47,7 @@ namespace {
             amask = 0xff000000;
 #endif
             int numChannels = favicon->numChannels();
-            SDL_Surface* s = SDL_CreateRGBSurfaceFrom(favicon->getData(), static_cast<int>(favicon->width), static_cast<int>(favicon->height), numChannels * 8, numChannels*favicon->width, rmask, gmask, bmask, amask);
+            SDL_Surface* s = SDL_CreateRGBSurfaceFrom(favicon->getData(), static_cast<int>(favicon->width), static_cast<int>(favicon->height), numChannels * 8, numChannels * favicon->width, rmask, gmask, bmask, amask);
             SDL_SetWindowIcon(window, s);
             SDL_FreeSurface(s);
         }
@@ -56,8 +56,8 @@ namespace {
     /** A simple function that prints a message, the error code returned by SDL,
      * and quits the application
      */
-    void sdldie(const char* msg) {
-        printf("%s: %s\n", msg, SDL_GetError());
+    void sdldie(const std::string& msg) {
+        std::cerr << msg << ": " << SDL_GetError() << std::endl;
         SDL_Quit();
         exit(1);
     }
@@ -71,6 +71,7 @@ namespace {
 struct Canvas::Impl {
 
     SDL_Window* window;
+    SDL_Renderer* renderer;
     SDL_GLContext maincontext;
 
     IOCapture* ioCapture;
@@ -89,8 +90,6 @@ struct Canvas::Impl {
     explicit Impl(const Canvas::Parameters& params)
         : size_(params.size_), ioCapture(nullptr) {
 
-        //        glfwSetErrorCallback(error_callback);
-
         if (SDL_Init(SDL_INIT_VIDEO) < 0) {
             sdldie("");
         }
@@ -102,21 +101,16 @@ struct Canvas::Impl {
         //        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         //        glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
 
-        /* Request opengl 3.2 context.
-     * SDL doesn't have the ability to choose which profile at this time of writing,
-     * but it should default to the core profile */
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
 
-        /* Turn on double buffering with a 24bit Z buffer.
-     * You may need to change this to 16 or 32 for your system */
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
         if (params.antialiasing_ > 0) {
             SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
             SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, params.antialiasing_);
-            //            glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
         }
 
         Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN;
@@ -133,7 +127,6 @@ struct Canvas::Impl {
         maincontext = SDL_GL_CreateContext(window);
 
         setWindowIcon(window, params.favicon_);
-
 
         //        glfwSetWindowUserPointer(window, this);
 
@@ -176,6 +169,72 @@ struct Canvas::Impl {
         }
     }
 
+    void handleEvents() {
+        if (event.type == SDL_WINDOWEVENT) {
+            if (event.window.event == SDL_WINDOWEVENT_RESIZED && resizeListener) {
+                WindowSize s{};
+                SDL_GetWindowSize(window, &s.width, &s.height);
+                resizeListener->operator()(s);
+            }
+        } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+
+            for (auto l : mouseListeners) {
+                auto action = event.button;
+                int btn{};
+                switch (action.button) {
+                    case SDL_BUTTON_LEFT: {
+                        btn = 0;
+                        break;
+                    }
+                    case SDL_BUTTON_RIGHT: {
+                        btn = 1;
+                        break;
+                    }
+                    case SDL_BUTTON_MIDDLE: {
+                        btn = 2;
+                        break;
+                    }
+                }
+                l->onMouseDown(btn, {action.x, action.y});
+            }
+
+        } else if (event.type == SDL_MOUSEBUTTONUP) {
+
+            for (auto l : mouseListeners) {
+                auto action = event.button;
+                int btn{};
+                switch (action.button) {
+                    case SDL_BUTTON_LEFT: {
+                        btn = 0;
+                    }
+                    case SDL_BUTTON_RIGHT: {
+                        btn = 1;
+                    }
+                    case SDL_BUTTON_MIDDLE: {
+                        btn = 2;
+                    }
+                }
+
+                l->onMouseUp(btn, {action.x, action.y});
+            }
+
+        } else if (event.type == SDL_MOUSEMOTION) {
+
+            for (auto l : mouseListeners) {
+                auto action = event.button;
+                l->onMouseMove({action.x, action.y});
+            }
+
+        } else if (event.type == SDL_MOUSEWHEEL) {
+
+            for (auto l : mouseListeners) {
+                auto action = event.wheel;
+                l->onMouseWheel({action.x, action.y});
+            }
+
+        }
+    }
+
     bool animateOnce(const std::function<void()>& f) {
 
         SDL_GL_SwapWindow(window);
@@ -183,12 +242,8 @@ struct Canvas::Impl {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
                 return false;
-            } else if (event.type == SDL_WINDOWEVENT) {
-                if (event.window.event == SDL_WINDOWEVENT_RESIZED && resizeListener) {
-                    WindowSize s;
-                    SDL_GetWindowSize(window, &s.width, &s.height);
-                    resizeListener->operator()(s);
-                }
+            } else {
+                handleEvents();
             }
         }
 

@@ -39,7 +39,7 @@
       "dependencies": [
         {
           "name": "imgui",
-          "features": ["glfw-binding", "sdl2-renderer-binding", "opengl3-binding"]
+          "features": ["glfw-binding", "sdl2-binding", "opengl3-binding"]
         }
       ]
     },

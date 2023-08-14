@@ -24,6 +24,11 @@ namespace threepp {
 
             return static_cast<float>(width) / static_cast<float>(height);
         }
+
+        friend std::ostream& operator<<(std::ostream& os, const WindowSize& size) {
+            os << "WindowSize(" << size.width << ", " << size.height << ")";
+            return os;
+        }
     };
 
     using MouseCaptureCallback = std::function<bool(void)>;
