@@ -37,7 +37,7 @@ namespace threepp {
 
         Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values);
 
-        [[nodiscard]] const WindowSize& getSize() const override;
+        [[nodiscard]] const WindowSize& getSize() const;
 
         [[nodiscard]] float getAspect() const;
 
@@ -56,7 +56,7 @@ namespace threepp {
 
         [[nodiscard]] void* windowPtr() const;
 
-        ~Canvas();
+        ~Canvas() override;
 
     private:
         struct Impl;

@@ -10,7 +10,7 @@
 
 namespace threepp {
 
-    class PeripheralsEventSource;
+    class Canvas;
 
     class OrbitControls {
 
@@ -61,7 +61,7 @@ namespace threepp {
         // Set to false to disable use of the keys
         bool enableKeys = true;
 
-        OrbitControls(Camera& camera, PeripheralsEventSource& canvas);
+        OrbitControls(Camera& camera, Canvas& canvas);
 
         bool update();
 

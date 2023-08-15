@@ -15,8 +15,6 @@ namespace threepp {
 
     public:
 
-        [[nodiscard]] virtual const WindowSize& getSize() const = 0;
-
         void addKeyListener(KeyListener* listener);
 
         bool removeKeyListener(const KeyListener* listener);
@@ -25,7 +23,7 @@ namespace threepp {
 
         bool removeMouseListener(const MouseListener* listener);
 
-        virtual ~PeripheralsEventSource() = 0;
+        virtual ~PeripheralsEventSource() = default;
 
     protected:
         std::vector<KeyListener*> keyListeners;
