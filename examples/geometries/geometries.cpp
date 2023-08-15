@@ -174,6 +174,6 @@ int main() {
             m->rotation.y += 1 * dt;
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

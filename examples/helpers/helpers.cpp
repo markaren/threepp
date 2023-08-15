@@ -68,6 +68,6 @@ int main() {
 
         boxHelper->update();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

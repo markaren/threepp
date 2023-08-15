@@ -96,6 +96,6 @@ int main() {
         light2->position.x = 5 * std::sin(t);
         light2->position.z = 1 * std::sin(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

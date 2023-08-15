@@ -86,6 +86,6 @@ int main() {
 
         convex->rotation.y += 0.2f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

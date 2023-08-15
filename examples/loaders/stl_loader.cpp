@@ -46,6 +46,6 @@ int main() {
 
         mesh->rotation.z += 1 * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

@@ -162,7 +162,7 @@ int main() {
 
         target->rotation.z = opt.targetAngle * math::DEG2RAD;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
         ui.render();
 
 #ifdef HAS_MATPLOTLIB

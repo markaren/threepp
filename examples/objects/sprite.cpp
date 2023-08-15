@@ -62,6 +62,6 @@ int main() {
             helper->visible = true;
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

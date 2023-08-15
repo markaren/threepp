@@ -105,7 +105,7 @@ int main() {
         int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t) + 50);
         material->uniforms->at("steps").value<int>() = std::max(1, step);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
 

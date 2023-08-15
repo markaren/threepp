@@ -47,7 +47,7 @@ int main() {
         mesh->rotation.y = t;
         material->uniforms->at("iTime").setValue(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
 

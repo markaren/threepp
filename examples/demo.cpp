@@ -140,7 +140,7 @@ int main() {
         box->rotation.y += 0.5f * dt;
         handle.setText("Delta=" + std::to_string(dt));
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
 #ifdef HAS_IMGUI
         ui.render();

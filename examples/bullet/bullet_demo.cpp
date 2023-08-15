@@ -162,7 +162,7 @@ int main() {
         float dt = clock.getDelta();
         bullet.step(dt);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         std::stringstream ss;
         ss << renderer.info();
