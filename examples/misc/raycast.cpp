@@ -17,7 +17,7 @@ int main() {
     camera->layers.enableAll();
     camera->position.z = 5;
 
-    OrbitControls controls(camera, canvas);
+    OrbitControls controls(*camera, canvas);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();

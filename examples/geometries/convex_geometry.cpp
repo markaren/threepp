@@ -37,7 +37,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 1000);
     camera->position.set(0, 5, 30);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     int numPoints = 100;
     std::vector<Vector3> pts;

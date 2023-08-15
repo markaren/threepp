@@ -116,7 +116,7 @@ int main() {
 
     addLights(*scene);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     TextureLoader tl;
     AssimpLoader loader;

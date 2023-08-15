@@ -85,7 +85,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.set(-10, 10, 10);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);

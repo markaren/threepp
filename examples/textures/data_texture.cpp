@@ -37,7 +37,7 @@ int main() {
     auto orthoCamera = OrthographicCamera::create(-size.width / 2, size.width / 2, size.height / 2, -size.height / 2, 1, 10);
     orthoCamera->position.z = 10;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     unsigned int textureSize = 128;
     std::vector<unsigned char> data(textureSize * textureSize * 3);
