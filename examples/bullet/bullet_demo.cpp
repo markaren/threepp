@@ -137,7 +137,7 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        if (evt.key == 32) {// space
+        if (evt.key == Key::SPACE) {// space
             auto geom = SphereGeometry::create(0.1f);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
             mesh->position.copy(camera->position);

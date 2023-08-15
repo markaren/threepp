@@ -16,15 +16,6 @@ namespace {
 
     const float EPS = 0.000001f;
 
-    const int RIGHT_KEY = 262;
-    const int LEFT_KEY = 263;
-    const int BOTTOM_KEY = 264;
-    const int UP_KEY = 265;
-
-    const int LEFT_BUTTON = 0;
-    const int RIGHT_BUTTON = 1;
-    const int MIDDLE_BUTTON = 2;
-
     enum State {
 
         NONE,
@@ -293,22 +284,22 @@ struct OrbitControls::Impl {
     }
 
 
-    void handleKeyDown(int key) {
+    void handleKeyDown(Key key) {
 
         bool needsUpdate = true;
 
         switch (key) {
 
-            case UP_KEY:
+            case Key::UP:
                 pan(0, scope.keyPanSpeed);
                 break;
-            case BOTTOM_KEY:
+            case Key::DOWN:
                 pan(0, -scope.keyPanSpeed);
                 break;
-            case LEFT_KEY:
+            case Key::LEFT:
                 pan(scope.keyPanSpeed, 0);
                 break;
-            case RIGHT_KEY:
+            case Key::RIGHT:
                 pan(-scope.keyPanSpeed, 0);
                 break;
             default:
