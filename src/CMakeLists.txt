@@ -228,7 +228,7 @@ set(privateHeaders
 
 set(sources
 
-        "threepp/canvas/canvas.cpp"
+        "threepp/canvas/Canvas.cpp"
 
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
