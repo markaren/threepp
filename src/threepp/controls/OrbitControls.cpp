@@ -32,7 +32,7 @@ struct OrbitControls::Impl {
 
     Canvas& canvas;
     OrbitControls& scope;
-    Camera* camera;
+    Camera& camera;
 
     std::unique_ptr<KeyListener> keyListener;
     std::unique_ptr<MouseListener> mouseListener;
@@ -59,7 +59,7 @@ struct OrbitControls::Impl {
     Vector2 dollyEnd;
     Vector2 dollyDelta;
 
-    Impl(OrbitControls& scope, Canvas& canvas, Camera* camera)
+    Impl(OrbitControls& scope, Canvas& canvas, Camera& camera)
         : scope(scope), canvas(canvas), camera(camera),
           keyListener(std::make_unique<MyKeyListener>(scope)),
           mouseListener(std::make_unique<MyMouseListener>(scope)) {
@@ -75,13 +75,13 @@ struct OrbitControls::Impl {
         Vector3 offset;
 
         // so camera.up is the orbit axis
-        const auto quat = Quaternion().setFromUnitVectors(camera->up, {0, 1, 0});
+        const auto quat = Quaternion().setFromUnitVectors(camera.up, {0, 1, 0});
         auto quatInverse = Quaternion().copy(quat).invert();
 
         Vector3 lastPosition;
         Quaternion lastQuaternion;
 
-        auto& position = this->camera->position;
+        auto& position = this->camera.position;
 
         offset.copy(position).sub(scope.target);
 
@@ -138,7 +138,7 @@ struct OrbitControls::Impl {
 
         position.copy(scope.target).add(offset);
 
-        this->camera->lookAt(scope.target);
+        this->camera.lookAt(scope.target);
 
         if (scope.enableDamping) {
 
@@ -161,11 +161,11 @@ struct OrbitControls::Impl {
         // using small-angle approximation cos(x/2) = 1 - x^2 / 8
 
         if (zoomChanged ||
-            lastPosition.distanceToSquared(this->camera->position) > EPS ||
-            8 * (1 - lastQuaternion.dot(this->camera->quaternion)) > EPS) {
+            lastPosition.distanceToSquared(this->camera.position) > EPS ||
+            8 * (1 - lastQuaternion.dot(this->camera.quaternion)) > EPS) {
 
-            lastPosition.copy(this->camera->position);
-            lastQuaternion.copy(this->camera->quaternion);
+            lastPosition.copy(this->camera.position);
+            lastQuaternion.copy(this->camera.quaternion);
             zoomChanged = false;
 
             return true;
@@ -205,7 +205,7 @@ struct OrbitControls::Impl {
         } else {
 
             v.setFromMatrixColumn(objectMatrix, 0);
-            v.crossVectors(this->camera->up, v);
+            v.crossVectors(this->camera.up, v);
         }
 
         v.multiplyScalar(distance);
@@ -217,10 +217,10 @@ struct OrbitControls::Impl {
 
         Vector3 offset;
 
-        if (auto perspective = camera->as<PerspectiveCamera>()) {
+        if (auto perspective = camera.as<PerspectiveCamera>()) {
 
             // perspective
-            auto& position = this->camera->position;
+            auto& position = this->camera.position;
             offset.copy(position).sub(scope.target);
             auto targetDistance = offset.length();
 
@@ -229,19 +229,19 @@ struct OrbitControls::Impl {
 
             // we use only clientHeight here so aspect ratio does not distort speed
             const auto size = canvas.getSize();
-            panLeft(2 * deltaX * targetDistance / (float) size.height, *this->camera->matrix);
-            panUp(2 * deltaY * targetDistance / (float) size.height, *this->camera->matrix);
-        } else if (auto ortho = camera->as<OrthographicCamera>()) {
+            panLeft(2 * deltaX * targetDistance / (float) size.height, *this->camera.matrix);
+            panUp(2 * deltaY * targetDistance / (float) size.height, *this->camera.matrix);
+        } else if (auto ortho = camera.as<OrthographicCamera>()) {
 
             const auto size = canvas.getSize();
 
             // orthographic
             panLeft(
-                    deltaX * (ortho->right - ortho->left) / this->camera->zoom / size.width,
-                    *this->camera->matrix);
+                    deltaX * (ortho->right - ortho->left) / this->camera.zoom / size.width,
+                    *this->camera.matrix);
             panUp(
-                    deltaY * (ortho->top - ortho->bottom) / this->camera->zoom / size.height,
-                    *this->camera->matrix);
+                    deltaY * (ortho->top - ortho->bottom) / this->camera.zoom / size.height,
+                    *this->camera.matrix);
 
         } else {
 
@@ -253,14 +253,14 @@ struct OrbitControls::Impl {
 
     void dollyIn(float dollyScale) {
 
-        if (camera->as<PerspectiveCamera>()) {
+        if (camera.as<PerspectiveCamera>()) {
 
             scale /= dollyScale;
 
-        } else if (camera->as<OrthographicCamera>()) {
+        } else if (camera.as<OrthographicCamera>()) {
 
-            this->camera->zoom = std::max(scope.minZoom, std::min(scope.maxZoom, this->camera->zoom * dollyScale));
-            this->camera->updateProjectionMatrix();
+            this->camera.zoom = std::max(scope.minZoom, std::min(scope.maxZoom, this->camera.zoom * dollyScale));
+            this->camera.updateProjectionMatrix();
             zoomChanged = true;
         } else {
 
@@ -271,11 +271,11 @@ struct OrbitControls::Impl {
 
     void dollyOut(float dollyScale) {
 
-        if (camera->as<PerspectiveCamera>()) {
+        if (camera.as<PerspectiveCamera>()) {
             scale *= dollyScale;
-        } else if (camera->as<OrthographicCamera>()) {
-            this->camera->zoom = std::max(scope.minZoom, std::min(scope.maxZoom, this->camera->zoom / dollyScale));
-            this->camera->updateProjectionMatrix();
+        } else if (camera.as<OrthographicCamera>()) {
+            this->camera.zoom = std::max(scope.minZoom, std::min(scope.maxZoom, this->camera.zoom / dollyScale));
+            this->camera.updateProjectionMatrix();
             zoomChanged = true;
         } else {
             std::cerr << "[OrbotControls] encountered an unknown camera type - dolly/zoom disabled." << std::endl;
@@ -517,12 +517,8 @@ struct OrbitControls::Impl {
     };
 };
 
-OrbitControls::OrbitControls(Camera* camera, Canvas& canvas)
+OrbitControls::OrbitControls(Camera& camera, Canvas& canvas)
     : pimpl_(std::make_unique<Impl>(*this, canvas, camera)) {}
-
-OrbitControls::OrbitControls(const std::shared_ptr<Camera>& camera, Canvas& canvas)
-    : pimpl_(std::make_unique<Impl>(*this, canvas, camera.get())) {}
-
 
 bool OrbitControls::update() {
 

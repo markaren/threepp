@@ -16,7 +16,7 @@ int main() {
     auto camera = PerspectiveCamera::create(55, canvas.getAspect(), 1, 2000);
     camera->position.set(-300, 120, -150);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
     controls.maxPolarAngle = math::PI * 0.495f;
     controls.target.set(0, 10, 0);
     controls.minDistance = 40;

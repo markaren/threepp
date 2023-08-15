@@ -156,7 +156,7 @@ int main() {
         renderer.setSize(size);
     });
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
 #ifdef HAS_IMGUI
     MyUI ui(canvas.windowPtr());

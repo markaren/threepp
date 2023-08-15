@@ -74,7 +74,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
 
-    OrbitControls controls(camera, canvas);
+    OrbitControls controls(*camera, canvas);
 
     auto scene = Scene::create();
 

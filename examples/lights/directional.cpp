@@ -75,7 +75,7 @@ int main() {
     auto sky = createSky(light->position);
     scene->add(sky);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto helper = DirectionalLightHelper::create(*light);
     scene->add(helper);

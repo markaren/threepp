@@ -36,7 +36,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.set(5, 2, 5);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light = HemisphereLight::create(0xffffbb, 0x082820);
     light->position.y = 2;

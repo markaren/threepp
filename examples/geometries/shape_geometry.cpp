@@ -109,7 +109,7 @@ int main() {
     light2->intensity = 0.2f;
     scene->add(light2);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto group = Group::create();
     group->rotateX(-math::PI);
