@@ -57,6 +57,19 @@ namespace {
             case GLFW_KEY_8: return Key::NUM_8;
             case GLFW_KEY_9: return Key::NUM_9;
 
+            case GLFW_KEY_F1: return Key::F1;
+            case GLFW_KEY_F2: return Key::F2;
+            case GLFW_KEY_F3: return Key::F3;
+            case GLFW_KEY_F4: return Key::F4;
+            case GLFW_KEY_F5: return Key::F5;
+            case GLFW_KEY_F6: return Key::F6;
+            case GLFW_KEY_F7: return Key::F7;
+            case GLFW_KEY_F8: return Key::F8;
+            case GLFW_KEY_F9: return Key::F9;
+            case GLFW_KEY_F10: return Key::F10;
+            case GLFW_KEY_F11: return Key::F11;
+            case GLFW_KEY_F12: return Key::F12;
+
             case GLFW_KEY_A: return Key::A;
             case GLFW_KEY_B: return Key::B;
             case GLFW_KEY_C: return Key::C;
@@ -89,6 +102,16 @@ namespace {
             case GLFW_KEY_RIGHT: return Key::RIGHT;
 
             case GLFW_KEY_SPACE: return Key::SPACE;
+            case GLFW_KEY_COMMA: return Key::COMMA;
+            case GLFW_KEY_MINUS: return Key::MINUS;
+            case GLFW_KEY_PERIOD: return Key::PERIOD;
+            case GLFW_KEY_SLASH: return Key::SLASH;
+
+            case GLFW_KEY_ENTER: return Key::ENTER;
+            case GLFW_KEY_TAB: return Key::TAB;
+            case GLFW_KEY_BACKSPACE: return Key::BACKSLASH;
+            case GLFW_KEY_INSERT: return Key::INSERT;
+            case GLFW_KEY_DELETE: return Key::DELETE;
 
             default: return Key::UNKNOWN;
 
