@@ -25,6 +25,8 @@ namespace threepp {
 
         bool removeMouseListener(const MouseListener* listener);
 
+        virtual ~PeripheralsEventSource() = 0;
+
     protected:
         std::vector<KeyListener*> keyListeners;
         std::vector<MouseListener*> mouseListeners;
