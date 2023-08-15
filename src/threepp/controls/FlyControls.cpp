@@ -111,38 +111,36 @@ struct FlyControls::Impl {
                 case Key::S:
                     scope.pimpl_->moveState.back = 1;
                     break;
-                case Key::S:
-                    scope.pimpl_->moveState.back = 1;// s
                     break;
                 case Key::A:
-                    scope.pimpl_->moveState.left = 1;// a
+                    scope.pimpl_->moveState.left = 1;
                     break;
                 case Key::D:
-                    scope.pimpl_->moveState.right = 1;// d
+                    scope.pimpl_->moveState.right = 1;
                     break;
                 case Key::R:
-                    scope.pimpl_->moveState.up = 1;// r
+                    scope.pimpl_->moveState.up = 1;
                     break;
                 case Key::F:
-                    scope.pimpl_->moveState.down = 1;// f
+                    scope.pimpl_->moveState.down = 1;
                     break;
                 case Key::UP:
-                    scope.pimpl_->moveState.pitchUp = 1;// arrowup
+                    scope.pimpl_->moveState.pitchUp = 1;
                     break;
                 case Key::DOWN:
-                    scope.pimpl_->moveState.pitchDown = 1;// arrowdown
+                    scope.pimpl_->moveState.pitchDown = 1;
                     break;
                 case Key::LEFT:
-                    scope.pimpl_->moveState.yawLeft = 1;// arrowleft
+                    scope.pimpl_->moveState.yawLeft = 1;
                     break;
                 case Key::RIGHT:
-                    scope.pimpl_->moveState.yawRight = 1;// arrowright
+                    scope.pimpl_->moveState.yawRight = 1;
                     break;
                 case Key::Q:
-                    scope.pimpl_->moveState.rollLeft = 1;// q
+                    scope.pimpl_->moveState.rollLeft = 1;
                     break;
                 case Key::E:
-                    scope.pimpl_->moveState.rollRight = 1;// e
+                    scope.pimpl_->moveState.rollRight = 1;
                     break;
                 default:
                     break;
