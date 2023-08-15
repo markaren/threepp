@@ -131,7 +131,7 @@ int main() {
         float dt = clock.getDelta();
         group->rotation.y += 1.f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
 

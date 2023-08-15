@@ -90,6 +90,6 @@ int main() {
 
         helper->update();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

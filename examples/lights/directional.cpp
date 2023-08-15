@@ -107,6 +107,6 @@ int main() {
         light->updateMatrixWorld();
         helper->update();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

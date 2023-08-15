@@ -81,6 +81,6 @@ int main() {
             sphere->visible = true;
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

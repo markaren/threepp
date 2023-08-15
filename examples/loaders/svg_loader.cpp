@@ -184,7 +184,8 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        renderer.render(scene, camera);
+
+        renderer.render(*scene, *camera);
 
 #ifdef HAS_IMGUI
 

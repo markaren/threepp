@@ -77,6 +77,6 @@ int main() {
         capsule->rotation.y += 0.8f * dt;
         capsule->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
