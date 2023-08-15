@@ -42,20 +42,20 @@ public:
 
         if (game_.isRunning()) {
 
-            if (evt.key == 265 && game_.direction != Direction::DOWN) {
+            if (evt.key == Key::UP && game_.direction != Direction::DOWN) {
                 game_.nextDirection = Direction::UP;
             }
-            if (evt.key == 264 && game_.direction != Direction::UP) {
+            if (evt.key == Key::DOWN && game_.direction != Direction::UP) {
                 game_.nextDirection = Direction::DOWN;
             }
-            if (evt.key == 263 && game_.direction != Direction::RIGHT) {
+            if (evt.key == Key::LEFT && game_.direction != Direction::RIGHT) {
                 game_.nextDirection = Direction::LEFT;
             }
-            if (evt.key == 262 && game_.direction != Direction::LEFT) {
+            if (evt.key == Key::RIGHT && game_.direction != Direction::LEFT) {
                 game_.nextDirection = Direction::RIGHT;
             }
         }
-        if (evt.key == 82 /*r*/) {
+        if (evt.key == Key::R) {
 
             game_.reset();
             reset();
