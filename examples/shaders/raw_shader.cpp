@@ -102,6 +102,6 @@ int main() {
         mesh->rotation.y = t * 0.5f;
         material->uniforms->at("time").setValue(t * 5);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

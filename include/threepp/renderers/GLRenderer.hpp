@@ -131,9 +131,7 @@ namespace threepp {
 
         void dispose();
 
-        void render(Scene* scene, Camera* camera);
-
-        void render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera);
+        void render(Scene& scene, Camera& camera);
 
         void renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group);
 

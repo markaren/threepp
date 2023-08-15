@@ -106,7 +106,10 @@ struct FlyControls::Impl {
 
             switch (evt.key) {
                 case Key::W:
-                    scope.pimpl_->moveState.forward = 1;// w
+                    scope.pimpl_->moveState.forward = 1;
+                    break;
+                case Key::S:
+                    scope.pimpl_->moveState.back = 1;
                     break;
                 case Key::S:
                     scope.pimpl_->moveState.back = 1;// s
@@ -160,40 +163,40 @@ struct FlyControls::Impl {
 
             switch (evt.key) {
                 case Key::W:
-                    scope.pimpl_->moveState.forward = 0;// w
+                    scope.pimpl_->moveState.forward = 0;
                     break;
                 case Key::S:
-                    scope.pimpl_->moveState.back = 0;// s
+                    scope.pimpl_->moveState.back = 0;
                     break;
                 case Key::A:
-                    scope.pimpl_->moveState.left = 0;// a
+                    scope.pimpl_->moveState.left = 0;
                     break;
                 case Key::D:
-                    scope.pimpl_->moveState.right = 0;// d
+                    scope.pimpl_->moveState.right = 0;
                     break;
                 case Key::R:
-                    scope.pimpl_->moveState.up = 0;// r
+                    scope.pimpl_->moveState.up = 0;
                     break;
                 case Key::F:
-                    scope.pimpl_->moveState.down = 0;// f
+                    scope.pimpl_->moveState.down = 0;
                     break;
                 case Key::UP:
-                    scope.pimpl_->moveState.pitchUp = 0;// arrowup
+                    scope.pimpl_->moveState.pitchUp = 0;
                     break;
                 case Key::DOWN:
-                    scope.pimpl_->moveState.pitchDown = 0;// arrowdown
+                    scope.pimpl_->moveState.pitchDown = 0;
                     break;
                 case Key::LEFT:
-                    scope.pimpl_->moveState.yawLeft = 0;// arrowleft
+                    scope.pimpl_->moveState.yawLeft = 0;
                     break;
                 case Key::RIGHT:
-                    scope.pimpl_->moveState.yawRight = 0;// arrowright
+                    scope.pimpl_->moveState.yawRight = 0;
                     break;
                 case Key::Q:
-                    scope.pimpl_->moveState.rollLeft = 0;// q
+                    scope.pimpl_->moveState.rollLeft = 0;
                     break;
                 case Key::E:
-                    scope.pimpl_->moveState.rollRight = 0;// e
+                    scope.pimpl_->moveState.rollRight = 0;
                     break;
                 default:
                     break;

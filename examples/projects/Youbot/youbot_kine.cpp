@@ -142,7 +142,7 @@ int main() {
 
         float dt = clock.getDelta();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         if (youbot) {
 

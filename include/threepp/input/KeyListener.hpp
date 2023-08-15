@@ -168,9 +168,7 @@ namespace threepp {
         KP_7,
         KP_8,
         KP_9
-
     };
-
 
 }// namespace threepp
 

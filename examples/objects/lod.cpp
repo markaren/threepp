@@ -39,6 +39,6 @@ int main() {
 
         handle.setText("LOD level: " + std::to_string(lod->getCurrentLevel()));
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

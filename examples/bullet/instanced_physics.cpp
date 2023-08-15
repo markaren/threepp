@@ -132,7 +132,7 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        if (evt.key == Key::SPACE) {// space
+        if (evt.key == Key::SPACE) {
 
             auto mesh = Mesh::create(tennisBallGeom, tennisBallMaterial);
             mesh->castShadow = true;
@@ -145,7 +145,7 @@ int main() {
             scene->add(mesh);
 
             canvas.invokeLater([mesh] { mesh->removeFromParent(); }, 2);
-        } else if (evt.key == Key::R) {// r
+        } else if (evt.key == Key::R) {
 
             for (unsigned i = 0; i < count; i++) {
 
@@ -166,7 +166,7 @@ int main() {
         float dt = clock.getDelta();
         bullet.step(dt);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         std::stringstream ss;
         ss << renderer.info();

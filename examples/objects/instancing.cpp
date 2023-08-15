@@ -107,6 +107,6 @@ int main() {
         counter.update(clock.getElapsedTime());
         handle.setText("FPS: " + std::to_string(counter.fps));
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

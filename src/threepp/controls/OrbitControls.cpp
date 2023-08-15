@@ -16,15 +16,6 @@ namespace {
 
     const float EPS = 0.000001f;
 
-//    const int RIGHT_KEY = 262;
-//    const int LEFT_KEY = 263;
-//    const int BOTTOM_KEY = 264;
-//    const int UP_KEY = 265;
-//
-//    const int LEFT_BUTTON = 0;
-//    const int RIGHT_BUTTON = 1;
-//    const int MIDDLE_BUTTON = 2;
-
     enum State {
 
         NONE,
