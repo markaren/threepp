@@ -1,10 +1,9 @@
 
-#include "threepp/Canvas.hpp"
-#include "threepp/loaders/ImageLoader.hpp"
-
-#include "threepp/utils/StringUtils.hpp"
+#include "threepp/canvas/Canvas.hpp"
 
 #include "threepp/favicon.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -18,10 +17,10 @@ using namespace threepp;
 
 namespace {
 
-    typedef std::pair<std::function<void()>, float> task;
+    typedef std::pair<std::function<void()>, float> Task;
 
     struct CustomComparator {
-        bool operator()(const task& l, const task& r) const { return l.second > r.second; }
+        bool operator()(const Task& l, const Task& r) const { return l.second > r.second; }
     };
 
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
@@ -123,21 +122,20 @@ namespace {
 
 struct Canvas::Impl {
 
+    Canvas& scope;
     GLFWwindow* window;
-
-    IOCapture* ioCapture;
 
     WindowSize size_;
     Vector2 lastMousePos_;
 
-    std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
+    IOCapture* ioCapture;
+
+    std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
-    std::vector<KeyListener*> keyListeners;
-    std::vector<MouseListener*> mouseListeners;
 
 
-    explicit Impl(const Canvas::Parameters& params)
-        : size_(params.size_), ioCapture(nullptr) {
+    explicit Impl(Canvas& scope, const Canvas::Parameters& params)
+        : scope(scope), size_(params.size_), ioCapture(nullptr) {
 
         glfwSetErrorCallback(error_callback);
 
@@ -229,38 +227,6 @@ struct Canvas::Impl {
         this->resizeListener = std::move(f);
     }
 
-    void addKeyListener(KeyListener* listener) {
-        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
-        if (find == keyListeners.end()) {
-            keyListeners.emplace_back(listener);
-        }
-    }
-
-    bool removeKeyListener(const KeyListener* listener) {
-        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
-        if (find != keyListeners.end()) {
-            keyListeners.erase(find);
-            return true;
-        }
-        return false;
-    }
-
-    void addMouseListener(MouseListener* listener) {
-        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
-        if (find == mouseListeners.end()) {
-            mouseListeners.emplace_back(listener);
-        }
-    }
-
-    bool removeMouseListener(const MouseListener* listener) {
-        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
-        if (find != mouseListeners.end()) {
-            mouseListeners.erase(find);
-            return true;
-        }
-        return false;
-    }
-
     void invokeLater(const std::function<void()>& f, float t) {
         tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
     }
@@ -287,7 +253,7 @@ struct Canvas::Impl {
             return;
         }
 
-        auto listeners = p->mouseListeners;
+        auto listeners = p->scope.mouseListeners;
         if (listeners.empty()) return;
         Vector2 delta{(float) xoffset, (float) yoffset};
         for (auto l : listeners) {
@@ -302,7 +268,7 @@ struct Canvas::Impl {
             return;
         }
 
-        auto listeners = p->mouseListeners;
+        auto listeners = p->scope.mouseListeners;
         for (auto l : listeners) {
 
             switch (action) {
@@ -326,7 +292,7 @@ struct Canvas::Impl {
         }
 
         p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
-        auto listeners = p->mouseListeners;
+        auto listeners = p->scope.mouseListeners;
         for (auto l : listeners) {
             l->onMouseMove(p->lastMousePos_);
         }
@@ -344,10 +310,10 @@ struct Canvas::Impl {
             return;
         }
 
-        if (p->keyListeners.empty()) return;
+        if (p->scope.keyListeners.empty()) return;
 
         KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
-        auto listeners = p->keyListeners;
+        auto listeners = p->scope.keyListeners;
         for (auto l : listeners) {
             switch (action) {
                 case GLFW_PRESS:
@@ -367,7 +333,7 @@ struct Canvas::Impl {
 };
 
 Canvas::Canvas(const Canvas::Parameters& params)
-    : pimpl_(new Impl(params)) {}
+    : pimpl_(new Impl(*this, params)) {}
 
 Canvas::Canvas(const std::string& name)
     : Canvas(Canvas::Parameters().title(name)) {}
@@ -406,29 +372,9 @@ void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
     pimpl_->onWindowResize(std::move(f));
 }
 
-void Canvas::addKeyListener(KeyListener* listener) {
-
-    pimpl_->addKeyListener(listener);
-}
-
-bool Canvas::removeKeyListener(const KeyListener* listener) {
-
-    return pimpl_->removeKeyListener(listener);
-}
-
 void Canvas::setIOCapture(IOCapture* capture) {
 
     pimpl_->ioCapture = capture;
-}
-
-void Canvas::addMouseListener(MouseListener* listener) {
-
-    pimpl_->addMouseListener(listener);
-}
-
-bool Canvas::removeMouseListener(const MouseListener* listener) {
-
-    return pimpl_->removeMouseListener(listener);
 }
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {

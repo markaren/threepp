@@ -33,7 +33,7 @@ int main() {
     pointLight->position.set(0, 2, 10);
     scene->add(pointLight);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     FontLoader loader;
     auto data = loader.load("data/fonts/optimer_bold.typeface.json");

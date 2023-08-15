@@ -18,7 +18,7 @@ int main() {
     camera->position.z = 2;
     camera->position.y = 1;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     const auto arrow = ArrowHelper::create({0, 1, 0}, {0, 0, 0}, 0.5f, 0xff0000);
     arrow->position.setX(0.5f);

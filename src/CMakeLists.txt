@@ -2,9 +2,11 @@ set(publicHeaderDir ${PROJECT_SOURCE_DIR}/include)
 
 set(publicHeaders
 
-        "threepp/Canvas.hpp"
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
+
+        "threepp/canvas/Canvas.hpp"
+        "threepp/canvas/WindowSize.hpp"
 
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
@@ -49,6 +51,7 @@ set(publicHeaders
 
         "threepp/input/KeyListener.hpp"
         "threepp/input/MouseListener.hpp"
+        "threepp/input/PeripheralsEventSource.hpp"
 
         "threepp/geometries/geometries.hpp"
         "threepp/geometries/BoxGeometry.hpp"
@@ -225,7 +228,7 @@ set(privateHeaders
 
 set(sources
 
-        "threepp/Canvas.cpp"
+        "threepp/canvas/canvas.cpp"
 
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
@@ -292,6 +295,8 @@ set(sources
         "threepp/helpers/PointLightHelper.cpp"
         "threepp/helpers/PolarGridHelper.cpp"
         "threepp/helpers/SpotLightHelper.cpp"
+
+        "threepp/input/PeripheralsEventSource.cpp"
 
         "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/MTLLoader.cpp"

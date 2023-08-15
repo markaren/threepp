@@ -47,7 +47,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.set(0, 10, 25);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light = SpotLight::create(Color::peachpuff);
     light->distance = 30;

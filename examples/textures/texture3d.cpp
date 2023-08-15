@@ -71,7 +71,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 1.5f;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     unsigned int size = 128;
     auto data = createTextureData(size);

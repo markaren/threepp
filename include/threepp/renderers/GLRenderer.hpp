@@ -3,13 +3,14 @@
 #ifndef THREEPP_GLRENDERER_HPP
 #define THREEPP_GLRENDERER_HPP
 
+#include "threepp/constants.hpp"
+
 #include "threepp/math/Color.hpp"
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
 
-#include "threepp/Canvas.hpp"
-#include "threepp/constants.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/misc.hpp"
 
 #include "threepp/renderers/gl/GLInfo.hpp"

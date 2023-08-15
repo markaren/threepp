@@ -1,7 +1,7 @@
 
 #include "threepp/controls/FlyControls.hpp"
 
-#include "threepp/Canvas.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Spherical.hpp"
 
@@ -31,7 +31,7 @@ namespace {
 
 struct FlyControls::Impl {
 
-    Impl(FlyControls& scope, Canvas& canvas, Object3D* object)
+    Impl(FlyControls& scope, PeripheralsEventSource& canvas, Object3D* object)
         : canvas(canvas), scope(scope), object(object),
           keyUp(scope), keydown(scope),
           mouseDown(scope), mouseMove(scope), mouseUp(scope) {
@@ -288,7 +288,7 @@ struct FlyControls::Impl {
     };
 
 private:
-    Canvas& canvas;
+    PeripheralsEventSource& canvas;
     FlyControls& scope;
     Object3D* object;
 
@@ -311,7 +311,7 @@ private:
     MouseUpListener mouseUp;
 };
 
-FlyControls::FlyControls(Object3D& object, Canvas& canvas)
+FlyControls::FlyControls(Object3D& object, PeripheralsEventSource& canvas)
     : pimpl_(std::make_unique<Impl>(*this, canvas, &object)) {}
 
 void threepp::FlyControls::update(float delta) {

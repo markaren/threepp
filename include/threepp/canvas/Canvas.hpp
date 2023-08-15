@@ -2,8 +2,8 @@
 #ifndef THREEPP_CANVAS_HPP
 #define THREEPP_CANVAS_HPP
 
-#include "threepp/input/KeyListener.hpp"
-#include "threepp/input/MouseListener.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
+#include "threepp/canvas/WindowSize.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -13,18 +13,7 @@
 #include <unordered_map>
 #include <variant>
 
-
 namespace threepp {
-
-    struct WindowSize {
-        int width;
-        int height;
-
-        [[nodiscard]] float getAspect() const {
-
-            return static_cast<float>(width) / static_cast<float>(height);
-        }
-    };
 
     using MouseCaptureCallback = std::function<bool(void)>;
     using ScrollCaptureCallback = std::function<bool(void)>;
@@ -36,7 +25,7 @@ namespace threepp {
         KeyboardCaptureCallback preventKeyboardEvent = [] { return false; };
     };
 
-    class Canvas {
+    class Canvas: public PeripheralsEventSource {
 
     public:
         struct Parameters;
@@ -48,7 +37,7 @@ namespace threepp {
 
         Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values);
 
-        [[nodiscard]] const WindowSize& getSize() const;
+        [[nodiscard]] const WindowSize& getSize() const override;
 
         [[nodiscard]] float getAspect() const;
 
@@ -56,15 +45,7 @@ namespace threepp {
 
         void onWindowResize(std::function<void(WindowSize)> f);
 
-        void addKeyListener(KeyListener* listener);
-
-        bool removeKeyListener(const KeyListener* listener);
-
         void setIOCapture(IOCapture* callback);
-
-        void addMouseListener(MouseListener* listener);
-
-        bool removeMouseListener(const MouseListener* listener);
 
         void animate(const std::function<void()>& f);
 

@@ -40,7 +40,7 @@ int main() {
     auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 1000);
     camera2->position.x = 30;
 
-    OrbitControls controls{camera2, canvas};
+    OrbitControls controls{*camera2, canvas};
     controls.target = sphere->position;
     controls.update();
 
