@@ -58,6 +58,6 @@ int main() {
         points->rotation.x = t * 0.25f;
         points->rotation.y = t * 0.5f;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

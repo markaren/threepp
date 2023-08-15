@@ -52,6 +52,6 @@ int main() {
 
     canvas.animate([&]() {
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

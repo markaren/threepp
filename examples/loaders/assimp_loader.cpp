@@ -91,6 +91,6 @@ int main() {
             child->rotation.y += 1 * dt;
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

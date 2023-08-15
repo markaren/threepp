@@ -87,6 +87,6 @@ int main() {
 
         water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

@@ -58,6 +58,6 @@ int main() {
         obj1->rotation.y += 1 * dt;
         obj2->rotation.y += 1 * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

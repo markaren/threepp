@@ -87,7 +87,7 @@ int main() {
         mesh->rotation.y += 0.8f * dt;
         mesh->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         ui.render();
 

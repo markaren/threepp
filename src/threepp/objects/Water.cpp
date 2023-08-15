@@ -241,7 +241,7 @@ struct Water::Impl {
             _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
-            _renderer->render(scene, mirrorCamera.get());
+            _renderer->render(*scene, *mirrorCamera);
             water_.visible = true;
             _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport

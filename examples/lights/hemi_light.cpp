@@ -66,6 +66,6 @@ int main() {
 
         group->rotation.y += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

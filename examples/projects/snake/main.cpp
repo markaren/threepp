@@ -30,6 +30,6 @@ int main() {
             scene->update();
 
         }
-        renderer.render(scene.get(), &scene->camera());
+        renderer.render(*scene, scene->camera());
     });
 }

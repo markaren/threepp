@@ -72,6 +72,6 @@ int main() {
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
