@@ -13,9 +13,9 @@
 class ImguiContext {
 
 public:
-    explicit ImguiContext(void* window) {
+    explicit ImguiContext(GLFWwindow* window) {
         ImGui::CreateContext();
-        ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) window, true);
+        ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init("#version 330");
     }
 
@@ -47,7 +47,7 @@ protected:
 class ImguiFunctionalContext: public ImguiContext {
 
 public:
-    explicit ImguiFunctionalContext(void* window, std::function<void()> f)
+    explicit ImguiFunctionalContext(GLFWwindow* window, std::function<void()> f)
         : ImguiContext(window),
           f_(std::move(f)) {}
 

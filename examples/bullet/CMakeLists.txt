@@ -1,13 +1,13 @@
 
 add_executable(bullet_demo bullet_demo.cpp)
-target_link_libraries(bullet_demo PRIVATE threepp Bullet::Bullet)
+target_link_libraries(bullet_demo PRIVATE threepp Bullet::Bullet glfw::glfw)
 
 add_executable(instanced_physics instanced_physics.cpp)
-target_link_libraries(instanced_physics PRIVATE threepp Bullet::Bullet)
+target_link_libraries(instanced_physics PRIVATE threepp Bullet::Bullet glfw::glfw)
 
 if (imgui_FOUND)
     add_executable(pid_control pid_control.cpp)
-    target_link_libraries(pid_control PRIVATE threepp Bullet::Bullet imgui::imgui)
+    target_link_libraries(pid_control PRIVATE threepp Bullet::Bullet imgui::imgui glfw::glfw)
     if (matplotlib_FOUND)
         target_link_libraries(pid_control PRIVATE matplotlib::matplotlib)
     endif()

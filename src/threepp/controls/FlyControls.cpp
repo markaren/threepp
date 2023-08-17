@@ -31,7 +31,7 @@ namespace {
 
 struct FlyControls::Impl {
 
-    Impl(FlyControls& scope, Canvas& canvas, Object3D* object)
+    Impl(FlyControls& scope, CanvasBase& canvas, Object3D* object)
         : canvas(canvas), scope(scope), object(object),
           keyUp(scope), keydown(scope),
           mouseDown(scope), mouseMove(scope), mouseUp(scope) {
@@ -288,7 +288,7 @@ struct FlyControls::Impl {
     };
 
 private:
-    Canvas& canvas;
+    CanvasBase& canvas;
     FlyControls& scope;
     Object3D* object;
 
@@ -311,7 +311,7 @@ private:
     MouseUpListener mouseUp;
 };
 
-FlyControls::FlyControls(Object3D& object, Canvas& canvas)
+FlyControls::FlyControls(Object3D& object, CanvasBase& canvas)
     : pimpl_(std::make_unique<Impl>(*this, canvas, &object)) {}
 
 void threepp::FlyControls::update(float delta) {

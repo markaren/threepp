@@ -32,6 +32,9 @@ find_package(stb CONFIG QUIET)
 
 if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
     add_library(glfw::glfw ALIAS glfw)
+    set_property(TARGET glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
+else () # conan?
+    set_property(TARGET glfw::glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
 endif()
 
 if (NOT stb_INCLUDE_DIR)

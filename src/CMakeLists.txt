@@ -6,7 +6,10 @@ set(publicHeaders
         "threepp/threepp.hpp"
 
         "threepp/canvas/Canvas.hpp"
+        "threepp/canvas/CanvasOptions.hpp"
         "threepp/canvas/WindowSize.hpp"
+
+        "threepp/canvas/glfw/GLFW3Canvas.hpp"
 
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
@@ -229,6 +232,7 @@ set(privateHeaders
 set(sources
 
         "threepp/canvas/Canvas.cpp"
+        "threepp/canvas/CanvasOptions.cpp"
 
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
@@ -409,9 +413,9 @@ add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generat
 add_library(threepp::threepp ALIAS threepp)
 target_compile_features(threepp PUBLIC cxx_std_17)
 target_link_libraries(threepp
-        PRIVATE
+        PUBLIC
         glad::glad
-        glfw::glfw)
+)
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread)
 endif ()

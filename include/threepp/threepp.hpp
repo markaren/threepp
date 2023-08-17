@@ -5,8 +5,6 @@
 
 #include "threepp/constants.hpp"
 
-#include "threepp/canvas/Canvas.hpp"
-
 #include "threepp/lights/lights.hpp"
 
 #include "threepp/controls/OrbitControls.hpp"
@@ -36,5 +34,11 @@
 #include "threepp/renderers/GLRenderer.hpp"
 
 #include "threepp/loaders/loaders.hpp"
+
+#ifdef THREEPP_USING_GLFW
+#include "threepp/canvas/glfw/GLFW3Canvas.hpp"
+
+using Canvas = threepp::GLFW3Canvas;
+#endif
 
 #endif//THREEPP_THREEPP_HPP

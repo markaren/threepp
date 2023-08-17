@@ -6,7 +6,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(8));
+    Canvas canvas("CatmullRoomCurve3", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 

@@ -27,7 +27,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(8)};
+    Canvas canvas("Camera helper", {{"antialiasing", 4}});
     GLRenderer renderer(canvas);
     renderer.autoClear = false;
 

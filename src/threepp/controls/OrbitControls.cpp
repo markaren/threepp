@@ -30,7 +30,7 @@ namespace {
 
 struct OrbitControls::Impl {
 
-    Canvas& canvas;
+    CanvasBase& canvas;
     OrbitControls& scope;
     Camera& camera;
 
@@ -59,7 +59,7 @@ struct OrbitControls::Impl {
     Vector2 dollyEnd;
     Vector2 dollyDelta;
 
-    Impl(OrbitControls& scope, Canvas& canvas, Camera& camera)
+    Impl(OrbitControls& scope, CanvasBase& canvas, Camera& camera)
         : scope(scope), canvas(canvas), camera(camera),
           keyListener(std::make_unique<MyKeyListener>(scope)),
           mouseListener(std::make_unique<MyMouseListener>(scope)) {
@@ -517,7 +517,7 @@ struct OrbitControls::Impl {
     };
 };
 
-OrbitControls::OrbitControls(Camera& camera, Canvas& canvas)
+OrbitControls::OrbitControls(Camera& camera, CanvasBase& canvas)
     : pimpl_(std::make_unique<Impl>(*this, canvas, camera)) {}
 
 

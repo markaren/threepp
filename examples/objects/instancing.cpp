@@ -30,7 +30,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4).vsync(false));
+    Canvas canvas("Instancing", {{"antialiasing", 4}, {"vsync", false}});
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 

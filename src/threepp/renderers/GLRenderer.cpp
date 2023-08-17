@@ -57,7 +57,7 @@ struct GLRenderer::Impl {
         GLRenderer::Impl* scope_;
     };
 
-    Canvas& canvas_;
+    CanvasBase& canvas_;
     GLRenderer& scope;
 
     gl::GLState state;
@@ -132,7 +132,7 @@ struct GLRenderer::Impl {
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
 
-    Impl(GLRenderer& scope, Canvas& canvas, const GLRenderer::Parameters& parameters)
+    Impl(GLRenderer& scope, CanvasBase& canvas, const GLRenderer::Parameters& parameters)
         : scope(scope), canvas_(canvas), _size(canvas.getSize()),
           _viewport(0, 0, _size.width, _size.height),
           _scissor(0, 0, _size.width, _size.height),
@@ -1086,7 +1086,7 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
+GLRenderer::GLRenderer(CanvasBase& canvas, const GLRenderer::Parameters& parameters)
     : pimpl_(std::make_unique<Impl>(*this, canvas, parameters)) {}
 
 
