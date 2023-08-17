@@ -2,9 +2,10 @@
 #ifndef THREEPP_THREEPP_HPP
 #define THREEPP_THREEPP_HPP
 
-#include "threepp/Canvas.hpp"
 
 #include "threepp/constants.hpp"
+
+#include "threepp/canvas/Canvas.hpp"
 
 #include "threepp/lights/lights.hpp"
 

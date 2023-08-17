@@ -1,7 +1,7 @@
 
 #include "threepp/controls/FlyControls.hpp"
 
-#include "threepp/Canvas.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Spherical.hpp"
 

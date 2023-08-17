@@ -1,7 +1,7 @@
 
 #include "threepp/controls/OrbitControls.hpp"
 
-#include "threepp/Canvas.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/math/Spherical.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -519,6 +519,7 @@ struct OrbitControls::Impl {
 
 OrbitControls::OrbitControls(Camera& camera, Canvas& canvas)
     : pimpl_(std::make_unique<Impl>(*this, canvas, camera)) {}
+
 
 bool OrbitControls::update() {
 
