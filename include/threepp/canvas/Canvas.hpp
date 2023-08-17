@@ -2,8 +2,8 @@
 #ifndef THREEPP_CANVAS_HPP
 #define THREEPP_CANVAS_HPP
 
-#include "threepp/input/PeripheralsEventSource.hpp"
 #include "threepp/canvas/WindowSize.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -14,16 +14,6 @@
 #include <variant>
 
 namespace threepp {
-
-    using MouseCaptureCallback = std::function<bool(void)>;
-    using ScrollCaptureCallback = std::function<bool(void)>;
-    using KeyboardCaptureCallback = std::function<bool(void)>;
-
-    struct IOCapture {
-        MouseCaptureCallback preventMouseEvent = [] { return false; };
-        ScrollCaptureCallback preventScrollEvent = [] { return false; };
-        KeyboardCaptureCallback preventKeyboardEvent = [] { return false; };
-    };
 
     class Canvas: public PeripheralsEventSource {
 
@@ -44,8 +34,6 @@ namespace threepp {
         void setSize(WindowSize size);
 
         void onWindowResize(std::function<void(WindowSize)> f);
-
-        void setIOCapture(IOCapture* callback);
 
         void animate(const std::function<void()>& f);
 

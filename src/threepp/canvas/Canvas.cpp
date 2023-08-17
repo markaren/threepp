@@ -128,14 +128,12 @@ struct Canvas::Impl {
     WindowSize size_;
     Vector2 lastMousePos_;
 
-    IOCapture* ioCapture;
-
     std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
 
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
-        : scope(scope), size_(params.size_), ioCapture(nullptr) {
+        : scope(scope), size_(params.size_) {
 
         glfwSetErrorCallback(error_callback);
 
@@ -249,91 +247,62 @@ struct Canvas::Impl {
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->ioCapture && (p->ioCapture->preventScrollEvent)()) {
-            return;
-        }
-
-        auto listeners = p->scope.mouseListeners;
-        if (listeners.empty()) return;
-        Vector2 delta{(float) xoffset, (float) yoffset};
-        for (auto l : listeners) {
-            l->onMouseWheel(delta);
-        }
+        p->scope.onMouseWheelEvent({static_cast<float>(xoffset), static_cast<float>(yoffset)});
     }
 
-    static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
+    static void mouse_callback(GLFWwindow* w, int button, int action, int) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-            return;
-        }
-
-        auto listeners = p->scope.mouseListeners;
-        for (auto l : listeners) {
-
-            switch (action) {
-                case GLFW_PRESS:
-                    l->onMouseDown(button, p->lastMousePos_);
-                    break;
-                case GLFW_RELEASE:
-                    l->onMouseUp(button, p->lastMousePos_);
-                    break;
-                default:
-                    break;
-            }
+        switch (action) {
+            case GLFW_PRESS:
+                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::PRESS);
+                break;
+            case GLFW_RELEASE:
+                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::RELEASE);
+                break;
+            default:
+                break;
         }
     }
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-            return;
-        }
-
-        p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
-        auto listeners = p->scope.mouseListeners;
-        for (auto l : listeners) {
-            l->onMouseMove(p->lastMousePos_);
-        }
+        Vector2 mousePos(static_cast<float>(xpos), static_cast<float>(ypos));
+        p->scope.onMouseMoveEvent(mousePos);
+        p->lastMousePos_.copy(mousePos);
     }
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
+
         if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
 
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-
-        if (p->ioCapture && (p->ioCapture->preventKeyboardEvent)()) {
-            return;
-        }
-
-        if (p->scope.keyListeners.empty()) return;
-
         KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
-        auto listeners = p->scope.keyListeners;
-        for (auto l : listeners) {
-            switch (action) {
-                case GLFW_PRESS:
-                    l->onKeyPressed(evt);
-                    break;
-                case GLFW_RELEASE:
-                    l->onKeyReleased(evt);
-                    break;
-                case GLFW_REPEAT:
-                    l->onKeyRepeat(evt);
-                    break;
-                default:
-                    break;
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        switch (action) {
+            case GLFW_PRESS: {
+                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::PRESS);
+                break;
             }
+            case GLFW_RELEASE: {
+                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::RELEASE);
+                break;
+            }
+            case GLFW_REPEAT: {
+                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::REPEAT);
+                break;
+            }
+            default:
+                break;
         }
     }
 };
 
 Canvas::Canvas(const Canvas::Parameters& params)
-    : pimpl_(new Impl(*this, params)) {}
+    : pimpl_(std::make_unique<Impl>(*this, params)) {}
 
 Canvas::Canvas(const std::string& name)
     : Canvas(Canvas::Parameters().title(name)) {}
@@ -370,11 +339,6 @@ void Canvas::setSize(WindowSize size) {
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
-}
-
-void Canvas::setIOCapture(IOCapture* capture) {
-
-    pimpl_->ioCapture = capture;
 }
 
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
