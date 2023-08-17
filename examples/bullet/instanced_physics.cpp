@@ -77,7 +77,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas(CanvasOptions().antialiasing(4));
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;

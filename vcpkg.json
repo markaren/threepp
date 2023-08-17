@@ -6,8 +6,9 @@
       "name": "glad",
       "features": ["gl-api-41"]
     },
+    "stb",
     "glfw3",
-    "stb"
+    "sdl2"
   ],
   "features": {
     "curl": {
@@ -39,7 +40,7 @@
       "dependencies": [
         {
           "name": "imgui",
-          "features": ["glfw-binding", "opengl3-binding"]
+          "features": ["glfw-binding", "sdl2-binding", "opengl3-binding"]
         }
       ]
     },

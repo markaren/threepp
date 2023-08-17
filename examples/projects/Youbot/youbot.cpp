@@ -10,7 +10,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().size({1280, 720}).antialiasing(8)};
+    Canvas canvas{CanvasOptions().size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas};
     renderer.setClearColor(Color::aliceblue);
 

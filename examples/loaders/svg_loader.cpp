@@ -14,7 +14,7 @@ namespace {
     struct MyUI: public ImguiContext {
 
     public:
-        explicit MyUI(void* ptr): ImguiContext(ptr) {}
+        explicit MyUI(CanvasBase& canvas): ImguiContext(canvas) {}
 
         [[nodiscard]] bool newSelection() const {
             return lastSelectedIndex != selectedIndex;
@@ -159,7 +159,7 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
 #ifdef HAS_IMGUI
-    MyUI ui(canvas.windowPtr());
+    MyUI ui(canvas);
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {

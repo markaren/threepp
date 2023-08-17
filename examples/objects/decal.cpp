@@ -74,7 +74,7 @@ namespace {
 
         bool clear = false;
 
-        explicit MyGui(const Canvas& canvas): ImguiContext(canvas.windowPtr()) {}
+        explicit MyGui(CanvasBase& canvas): ImguiContext(canvas) {}
 
         void onRender() override {
 
@@ -107,7 +107,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(8)};
+    Canvas canvas{CanvasOptions().antialiasing(8)};
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

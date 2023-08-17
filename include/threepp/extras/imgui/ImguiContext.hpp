@@ -3,62 +3,70 @@
 #ifndef THREEPP_IMGUI_HELPER_HPP
 #define THREEPP_IMGUI_HELPER_HPP
 
+#include "threepp/canvas/Canvas.hpp"
+
 #include "imgui.h"
-#include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
 #include <functional>
 #include <utility>
 
-class ImguiContext {
+namespace threepp {
 
-public:
-    explicit ImguiContext(GLFWwindow* window) {
-        ImGui::CreateContext();
-        ImGui_ImplGlfw_InitForOpenGL(window, true);
-        ImGui_ImplOpenGL3_Init("#version 330");
-    }
+    class ImguiContext {
 
-    ImguiContext(ImguiContext&&) = delete;
-    ImguiContext(const ImguiContext&) = delete;
-    ImguiContext& operator=(const ImguiContext&) = delete;
+    public:
+        explicit ImguiContext(CanvasBase& canvas): canvas(canvas) {
+            ImGui::CreateContext();
+            canvas.initImguiContext();
+            ImGui_ImplOpenGL3_Init("#version 330");
+        }
 
-    void render() {
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
+        ImguiContext(ImguiContext&&) = delete;
+        ImguiContext(const ImguiContext&) = delete;
+        ImguiContext& operator=(const ImguiContext&) = delete;
 
-        onRender();
+        void render() {
+            ImGui_ImplOpenGL3_NewFrame();
+            canvas.newImguiFrame();
+            ImGui::NewFrame();
 
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    }
+            onRender();
 
-    ~ImguiContext() {
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
-    }
+            ImGui::Render();
+            ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        }
 
-protected:
-    virtual void onRender() = 0;
-};
+        ~ImguiContext() {
+            ImGui_ImplOpenGL3_Shutdown();
+            canvas.destroyImguiContext();
+            ImGui::DestroyContext();
+        }
 
-class ImguiFunctionalContext: public ImguiContext {
+    protected:
+        virtual void onRender() = 0;
 
-public:
-    explicit ImguiFunctionalContext(GLFWwindow* window, std::function<void()> f)
-        : ImguiContext(window),
-          f_(std::move(f)) {}
+    private:
+        CanvasBase& canvas;
+    };
+
+    class ImguiFunctionalContext: public ImguiContext {
+
+    public:
+        explicit ImguiFunctionalContext(CanvasBase& canvas, std::function<void()> f)
+            : ImguiContext(canvas),
+              f_(std::move(f)) {}
 
 
-protected:
-    void onRender() override {
-        f_();
-    }
+    protected:
+        void onRender() override {
+            f_();
+        }
 
-private:
-    std::function<void()> f_;
-};
+    private:
+        std::function<void()> f_;
+    };
+
+}
 
 #endif//THREEPP_IMGUI_HELPER_HPP

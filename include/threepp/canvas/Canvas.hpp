@@ -58,6 +58,14 @@ namespace threepp {
 
         virtual float getTime() = 0;
 
+#ifdef HAS_IMGUI
+        virtual void initImguiContext() = 0;
+        virtual void newImguiFrame() = 0;
+        virtual void destroyImguiContext() = 0;
+
+        friend class ImguiContext;
+#endif
+
     private:
         std::priority_queue<detail::Task, std::vector<detail::Task>, detail::CustomComparator> tasks_;
 

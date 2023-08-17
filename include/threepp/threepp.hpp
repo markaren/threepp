@@ -37,8 +37,13 @@
 
 #ifdef THREEPP_USING_GLFW
 #include "threepp/canvas/glfw/GLFW3Canvas.hpp"
-
 using Canvas = threepp::GLFW3Canvas;
+#else
+#ifdef THREEPP_USING_SDL
+#include "threepp/canvas/sdl/SDLCanvas.hpp"
+using Canvas = threepp::SDLCanvas;
 #endif
+#endif
+
 
 #endif//THREEPP_THREEPP_HPP

@@ -26,20 +26,24 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 # Dependencies
 # ==============================================================================
 
-find_package(glfw3 CONFIG REQUIRED)
 find_package(glad CONFIG REQUIRED)
 find_package(stb CONFIG QUIET)
-
-if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
-    add_library(glfw::glfw ALIAS glfw)
-    set_property(TARGET glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
-else () # conan?
-    set_property(TARGET glfw::glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
-endif()
 
 if (NOT stb_INCLUDE_DIR)
     find_path(stb_INCLUDE_DIR "stb_c_lexer.h" REQUIRED)
 endif()
+
+find_package(glfw3 CONFIG)
+find_package(SDL2 CONFIG)
+
+if (glfw3_FOUND)
+    if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+        add_library(glfw::glfw ALIAS glfw)
+        set_property(TARGET glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
+    else () # conan?
+        set_property(TARGET glfw::glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
+    endif()
+endif ()
 
 include(FetchContent)
 FetchContent_Declare(

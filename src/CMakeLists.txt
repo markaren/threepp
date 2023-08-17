@@ -10,6 +10,7 @@ set(publicHeaders
         "threepp/canvas/WindowSize.hpp"
 
         "threepp/canvas/glfw/GLFW3Canvas.hpp"
+        "threepp/canvas/sdl/SDLCanvas.hpp"
 
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"

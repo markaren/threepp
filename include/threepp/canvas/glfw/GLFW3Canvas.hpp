@@ -9,6 +9,10 @@
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
 
+#ifdef HAS_IMGUI
+#include "imgui_impl_glfw.h"
+#endif
+
 #include <iostream>
 
 namespace threepp {
@@ -185,6 +189,20 @@ namespace threepp {
 
             return static_cast<float>(glfwGetTime());
         }
+
+#ifdef HAS_IMGUI
+        void initImguiContext() override {
+            ImGui_ImplGlfw_InitForOpenGL(window_, true);
+        }
+
+        void newImguiFrame() override {
+            ImGui_ImplGlfw_NewFrame();
+        }
+
+        void destroyImguiContext() override {
+            ImGui_ImplGlfw_Shutdown();
+        }
+#endif
 
     private:
         GLFWwindow* window_;

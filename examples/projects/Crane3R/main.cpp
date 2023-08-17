@@ -24,8 +24,8 @@ struct MyUI: ImguiContext {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit MyUI(const Canvas& canvas, Kine& kine)
-        : ImguiContext(canvas.windowPtr()),
+    explicit MyUI(Canvas& canvas, Kine& kine)
+        : ImguiContext(canvas),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 

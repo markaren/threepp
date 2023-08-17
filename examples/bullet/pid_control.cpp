@@ -57,8 +57,8 @@ namespace {
 
     struct MyUI: ImguiContext {
 
-        explicit MyUI(const Canvas& canvas, PID& pid, ControllableOptions& opt)
-            : ImguiContext(canvas.windowPtr()), pid_(pid), opt_(opt) {}
+        explicit MyUI(Canvas& canvas, PID& pid, ControllableOptions& opt)
+            : ImguiContext(canvas), pid_(pid), opt_(opt) {}
 
         void onRender() override {
 

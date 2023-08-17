@@ -20,8 +20,8 @@ struct MyUI: ImguiContext {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit MyUI(const Canvas& canvas, Kine& kine)
-        : ImguiContext(canvas.windowPtr()),
+    explicit MyUI(Canvas& canvas, Kine& kine)
+        : ImguiContext(canvas),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -64,7 +64,7 @@ struct MyUI: ImguiContext {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().size({1280, 720}).antialiasing(8)};
+    Canvas canvas{CanvasOptions().size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas};
     renderer.setClearColor(Color::aliceblue);
 
