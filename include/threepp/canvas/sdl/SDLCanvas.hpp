@@ -192,13 +192,14 @@ namespace threepp {
 
             SDL_GL_SwapWindow(window);
 
-            if (processEvents) {
-                while (SDL_PollEvent(&event)) {
-                    if (event.type == SDL_QUIT) {
-                        return false;
-                    }
-                    handleEvents();
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_QUIT) {
+                    return false;
                 }
+#ifdef HAS_IMGUI
+                ImGui_ImplSDL2_ProcessEvent(&event);
+#endif
+                handleEvents();
             }
 
             handleTasks();
@@ -219,7 +220,6 @@ namespace threepp {
         }
 
         void newImguiFrame() override {
-            processEvents = !ImGui_ImplSDL2_ProcessEvent(&event);
             ImGui_ImplSDL2_NewFrame();
         }
 
