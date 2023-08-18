@@ -4,6 +4,7 @@
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/canvas/CanvasOptions.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
@@ -170,7 +171,7 @@ namespace threepp {
             }
             maincontext = SDL_GL_CreateContext(window);
 
-            //            setWindowIcon(window, params.favicon_);
+            setWindowIcon(params.favicon_);
 
             gladLoadGL();
 
@@ -278,6 +279,40 @@ namespace threepp {
 
                 KeyEvent evt{detail::getKey(event.key.keysym.sym), event.key.keysym.scancode, event.key.keysym.mod};
                 onKeyEvent(evt, KeyAction::RELEASE);
+            }
+        }
+
+        void setWindowIcon(std::optional<std::filesystem::path> customIcon) {
+
+            ImageLoader imageLoader;
+            std::optional<Image> favicon;
+            if (customIcon) {
+                favicon = imageLoader.load(*customIcon, 4, false);
+            } else {
+                favicon = loadFavicon();
+            }
+            if (favicon) {
+                Uint32 rmask, gmask, bmask, amask;
+#if SDL_BYTEORDER == SDL_BIG_ENDIAN
+                rmask = 0xff000000;
+                gmask = 0x00ff0000;
+                bmask = 0x0000ff00;
+                amask = 0x000000ff;
+#else
+                rmask = 0x000000ff;
+                gmask = 0x0000ff00;
+                bmask = 0x00ff0000;
+                amask = 0xff000000;
+#endif
+                unsigned int numChannels = 4;
+                SDL_Surface* s = SDL_CreateRGBSurfaceFrom(
+                        favicon->getData(), static_cast<int>(favicon->width),
+                        static_cast<int>(favicon->height),
+                        static_cast<int>(numChannels * 8),
+                        static_cast<int>(numChannels * favicon->width),
+                        rmask, gmask, bmask, amask);
+                SDL_SetWindowIcon(window, s);
+                SDL_FreeSurface(s);
             }
         }
     };
