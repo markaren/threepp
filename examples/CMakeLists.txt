@@ -2,9 +2,9 @@
 include(LibConfig.cmake)
 
 add_executable(demo demo.cpp)
-target_link_libraries(demo PUBLIC threepp)
+target_link_libraries(demo PUBLIC threepp SDL2::SDL2)
 if (imgui_FOUND)
-    target_link_libraries(demo PUBLIC SDL2::SDL2 imgui::imgui)
+    target_link_libraries(demo PUBLIC imgui::imgui)
 endif()
 
 add_subdirectory(geometries)
