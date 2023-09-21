@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -42,7 +42,7 @@ int main() {
     textHandle.scale = 2;
 
     std::array<float, 3> posBuf{};
-    imgui_functional_context ui(canvas.window_ptr(), [&] {
+    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("Demo");
@@ -55,7 +55,7 @@ int main() {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        textHandle.setPosition(0, size.height - 500);
+        textHandle.setPosition(0, size.height - 30);
     });
 
     canvas.animate([&] {

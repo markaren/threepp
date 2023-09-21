@@ -2,9 +2,11 @@ set(publicHeaderDir ${PROJECT_SOURCE_DIR}/include)
 
 set(publicHeaders
 
-        "threepp/Canvas.hpp"
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
+
+        "threepp/canvas/Canvas.hpp"
+        "threepp/canvas/WindowSize.hpp"
 
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
@@ -29,7 +31,6 @@ set(publicHeaders
         "threepp/cameras/PerspectiveCamera.hpp"
         "threepp/cameras/OrthographicCamera.hpp"
 
-        "threepp/extras/bullet/BulletWrapper.hpp"
         "threepp/extras/ShapeUtils.hpp"
         "threepp/extras/core/Curve.hpp"
         "threepp/extras/core/CurvePath.hpp"
@@ -46,10 +47,11 @@ set(publicHeaders
         "threepp/extras/curves/SplineCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve.hpp"
         "threepp/extras/curves/QuadraticBezierCurve3.hpp"
-        "threepp/extras/imgui/imgui_context.hpp"
+        "threepp/extras/imgui/ImguiContext.hpp"
 
         "threepp/input/KeyListener.hpp"
         "threepp/input/MouseListener.hpp"
+        "threepp/input/PeripheralsEventSource.hpp"
 
         "threepp/geometries/geometries.hpp"
         "threepp/geometries/BoxGeometry.hpp"
@@ -226,7 +228,7 @@ set(privateHeaders
 
 set(sources
 
-        "threepp/Canvas.cpp"
+        "threepp/canvas/Canvas.cpp"
 
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
@@ -293,6 +295,8 @@ set(sources
         "threepp/helpers/PointLightHelper.cpp"
         "threepp/helpers/PolarGridHelper.cpp"
         "threepp/helpers/SpotLightHelper.cpp"
+
+        "threepp/input/PeripheralsEventSource.cpp"
 
         "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/MTLLoader.cpp"
@@ -367,6 +371,7 @@ set(sources
         "threepp/textures/DataTexture3D.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
+        "threepp/utils/StringUtils.cpp"
         "threepp/utils/ThreadPool.cpp"
 
         "threepp/renderers/TextHandle.cpp"

@@ -2,8 +2,8 @@
 #ifndef THREEPP_CANVAS_HPP
 #define THREEPP_CANVAS_HPP
 
-#include "threepp/input/KeyListener.hpp"
-#include "threepp/input/MouseListener.hpp"
+#include "threepp/canvas/WindowSize.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -13,30 +13,9 @@
 #include <unordered_map>
 #include <variant>
 
-
 namespace threepp {
 
-    struct WindowSize {
-        int width;
-        int height;
-
-        [[nodiscard]] float getAspect() const {
-
-            return static_cast<float>(width) / static_cast<float>(height);
-        }
-    };
-
-    using MouseCaptureCallback = std::function<bool(void)>;
-    using ScrollCaptureCallback = std::function<bool(void)>;
-    using KeyboardCaptureCallback = std::function<bool(void)>;
-
-    struct IOCapture {
-        MouseCaptureCallback preventMouseEvent = [] { return false; };
-        ScrollCaptureCallback preventScrollEvent = [] { return false; };
-        KeyboardCaptureCallback preventKeyboardEvent = [] { return false; };
-    };
-
-    class Canvas {
+    class Canvas: public PeripheralsEventSource {
 
     public:
         struct Parameters;
@@ -56,32 +35,16 @@ namespace threepp {
 
         void onWindowResize(std::function<void(WindowSize)> f);
 
-        void addKeyListener(KeyListener* listener);
-
-        bool removeKeyListener(const KeyListener* listener);
-
-        void setIOCapture(IOCapture* callback);
-
-        void addMouseListener(MouseListener* listener);
-
-        bool removeMouseListener(const MouseListener* listener);
-
         void animate(const std::function<void()>& f);
 
         // returns false if application should quit, true otherwise
         bool animateOnce(const std::function<void()>& f);
 
-        [[deprecated("Use animate with no parameters and create a Clock object if timings are needed")]]
-        void animate(const std::function<void(float)>& f);
-
-        [[deprecated("Use animate with no parameters and create a Clock object if timings are needed")]]
-        void animate(const std::function<void(float, float)>& f);
-
         void invokeLater(const std::function<void()>& f, float t = 0);
 
-        [[nodiscard]] void* window_ptr() const;
+        [[nodiscard]] void* windowPtr() const;
 
-        ~Canvas();
+        ~Canvas() override;
 
     private:
         struct Impl;

@@ -12,7 +12,7 @@ int main() {
     Canvas canvas("Fonts", {{"antialiasing", 8}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = PCFSoftShadowMap;
+    renderer.shadowMap().type = ShadowMap::PFCSoft;
 
     auto scene = Scene::create();
     scene->background = Color::black;
@@ -33,7 +33,7 @@ int main() {
     pointLight->position.set(0, 2, 10);
     scene->add(pointLight);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     FontLoader loader;
     auto data = loader.load("data/fonts/optimer_bold.typeface.json");
@@ -71,6 +71,6 @@ int main() {
 
     canvas.animate([&]() {
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

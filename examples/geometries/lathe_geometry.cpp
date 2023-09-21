@@ -16,7 +16,7 @@ namespace {
 
     std::shared_ptr<Mesh> createLathe() {
         auto geometry = LatheGeometry::create(generateLathePoints());
-        auto material = MeshNormalMaterial::create({{"side", DoubleSide}});
+        auto material = MeshNormalMaterial::create({{"side", Side::Double}});
         auto mesh = Mesh::create(geometry, material);
 
         auto line = LineSegments::create(WireframeGeometry::create(*geometry));
@@ -49,7 +49,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 5;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto lathe = createLathe();
     lathe->scale *= 0.1;
@@ -77,6 +77,6 @@ int main() {
         capsule->rotation.y += 0.8f * dt;
         capsule->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

@@ -1,4 +1,4 @@
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -24,7 +24,7 @@ namespace {
 
         auto geometry = PlaneGeometry::create(params);
         auto material = MeshBasicMaterial::create();
-        material->side = DoubleSide;
+        material->side = Side::Double;
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
@@ -56,7 +56,7 @@ int main() {
     });
 
     bool paramsChanged = false;
-    auto ui = imgui_functional_context(canvas.window_ptr(), [&] {
+    auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("PlaneGeometry");
@@ -79,7 +79,7 @@ int main() {
         mesh->rotation.y += 0.8f * dt;
         mesh->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         ui.render();
 

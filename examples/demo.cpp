@@ -4,13 +4,13 @@
 using namespace threepp;
 
 #ifdef HAS_IMGUI
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 
-struct MyGui: public imgui_context {
+struct MyGui: public ImguiContext {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m): imgui_context(canvas.window_ptr()) {
+    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m): ImguiContext(canvas.windowPtr()) {
         colorBuf_[0] = m.color.r;
         colorBuf_[1] = m.color.g;
         colorBuf_[2] = m.color.b;
@@ -90,7 +90,7 @@ auto createPlane() {
     planeMaterial->color.setHex(Color::yellow);
     planeMaterial->transparent = true;
     planeMaterial->opacity = 0.5f;
-    planeMaterial->side = DoubleSide;
+    planeMaterial->side = Side::Double;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-2);
 
@@ -140,7 +140,7 @@ int main() {
         box->rotation.y += 0.5f * dt;
         handle.setText("Delta=" + std::to_string(dt));
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
 #ifdef HAS_IMGUI
         ui.render();

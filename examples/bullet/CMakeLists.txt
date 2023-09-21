@@ -1,7 +1,4 @@
 
-add_executable(hello_bullet hello_bullet.cpp)
-target_link_libraries(hello_bullet PRIVATE threepp Bullet::Bullet)
-
 add_executable(bullet_demo bullet_demo.cpp)
 target_link_libraries(bullet_demo PRIVATE threepp Bullet::Bullet)
 

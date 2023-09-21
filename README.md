@@ -56,14 +56,14 @@ Under MinGW you'll need to specify the vcpkg triplet:
 When consuming `threepp` in your own application, 
 some headers will require additional dependencies in order to compile.
 
-| **Header**    | **Dependency** | **Description**                               |
-|---------------|----------------|-----------------------------------------------|
-| UrlFetcher    | curl           | Download content from the internet            |
-| AssimpLoader  | assimp         | Import a wide variety of different 3D formats |
-| FontLoader    | nlohmann-json  | Import fonts to be used for 3D text           |
-| SVGLoader     | pugixml        | Import SVG files                              |
-| imgui_context | imgui          | ImGUI utility                                 |
-| BulletPhysics | bullet3        | Bullet utility                                |
+| **Header**     | **Dependency** | **Description**                               |
+|----------------|----------------|-----------------------------------------------|
+| UrlFetcher     | curl           | Download content from the internet            |
+| AssimpLoader   | assimp         | Import a wide variety of different 3D formats |
+| FontLoader     | nlohmann-json  | Import fonts to be used for 3D text           |
+| SVGLoader      | pugixml        | Import SVG files                              |
+| ImguiContext   | imgui          | ImGUI utility                                 |
+| BulletPhysics  | bullet3        | Bullet utility                                |
 
 
 ### Implementation notes
@@ -131,7 +131,7 @@ int main() {
         float dt = clock.getDelta();
         group->rotation.y += 1.f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
 

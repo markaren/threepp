@@ -29,7 +29,7 @@ int main() {
     (*material->uniforms)["iResolution"] = Uniform(Vector2(size.width, size.height));
     material->vertexShader = vertexSource();
     material->fragmentShader = fragmentSource();
-    material->side = DoubleSide;
+    material->side = Side::Double;
 
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
@@ -47,7 +47,7 @@ int main() {
         mesh->rotation.y = t;
         material->uniforms->at("iTime").setValue(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
 

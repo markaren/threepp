@@ -15,6 +15,10 @@
 
 using namespace threepp;
 
+namespace {
+    thread_local Quaternion _quaternion;
+}
+
 Vector3::Vector3(): Vector3(0, 0, 0) {}
 
 Vector3::Vector3(float x, float y, float z)
@@ -169,6 +173,16 @@ Vector3& Vector3::multiplyVectors(const Vector3& a, const Vector3& b) {
     this->z = a.z * b.z;
 
     return *this;
+}
+
+Vector3& Vector3::applyAxisAngle(const Vector3& axis, float angle) {
+
+    return this->applyQuaternion(_quaternion.setFromAxisAngle(axis, angle));
+}
+
+Vector3& Vector3::applyEuler(const Euler& euler) {
+
+    return this->applyQuaternion(_quaternion.setFromEuler(euler));
 }
 
 Vector3& Vector3::applyMatrix3(const Matrix3& m) {

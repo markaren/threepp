@@ -10,14 +10,18 @@
 #include <functional>
 #include <utility>
 
-class imgui_context {
+class ImguiContext {
 
 public:
-    explicit imgui_context(void* window) {
+    explicit ImguiContext(void* window) {
         ImGui::CreateContext();
         ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) window, true);
         ImGui_ImplOpenGL3_Init("#version 330");
     }
+
+    ImguiContext(ImguiContext&&) = delete;
+    ImguiContext(const ImguiContext&) = delete;
+    ImguiContext& operator=(const ImguiContext&) = delete;
 
     void render() {
         ImGui_ImplOpenGL3_NewFrame();
@@ -30,7 +34,7 @@ public:
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     }
 
-    ~imgui_context() {
+    ~ImguiContext() {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
@@ -40,11 +44,11 @@ protected:
     virtual void onRender() = 0;
 };
 
-class imgui_functional_context: public imgui_context {
+class ImguiFunctionalContext: public ImguiContext {
 
 public:
-    explicit imgui_functional_context(void* window, std::function<void()> f)
-        : imgui_context(window),
+    explicit ImguiFunctionalContext(void* window, std::function<void()> f)
+        : ImguiContext(window),
           f_(std::move(f)) {}
 
 

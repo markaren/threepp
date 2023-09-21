@@ -69,7 +69,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
     shapeGeometry->scale(scale, scale, scale);
 
     auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create({{"color", Color::orange},
-                                                                            {"side", DoubleSide}}));
+                                                                            {"side", Side::Double}}));
     auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
     wireframe->position.z = -5;
     shapeMesh->add(wireframe);
@@ -109,7 +109,7 @@ int main() {
     light2->intensity = 0.2f;
     scene->add(light2);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto group = Group::create();
     group->rotateX(-math::PI);
@@ -140,6 +140,6 @@ int main() {
 
         group->rotation.y += 0.8f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

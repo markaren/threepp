@@ -9,10 +9,10 @@
 using namespace threepp;
 
 
-class SnakeScene : public Scene, public KeyListener {
+class SnakeScene: public Scene, public KeyListener {
 
 public:
-    explicit SnakeScene(SnakeGame &game) : game_(game) {
+    explicit SnakeScene(SnakeGame& game): game_(game) {
 
         int size = game.gridSize();
         auto grid = GridHelper::create(size, size, 0x444444, 0x444444);
@@ -42,20 +42,20 @@ public:
 
         if (game_.isRunning()) {
 
-            if (evt.key == 265 && game_.direction != Direction::DOWN) {
+            if (evt.key == Key::UP && game_.direction != Direction::DOWN) {
                 game_.nextDirection = Direction::UP;
             }
-            if (evt.key == 264 && game_.direction != Direction::UP) {
+            if (evt.key == Key::DOWN && game_.direction != Direction::UP) {
                 game_.nextDirection = Direction::DOWN;
             }
-            if (evt.key == 263 && game_.direction != Direction::RIGHT) {
+            if (evt.key == Key::LEFT && game_.direction != Direction::RIGHT) {
                 game_.nextDirection = Direction::LEFT;
             }
-            if (evt.key == 262 && game_.direction != Direction::LEFT) {
+            if (evt.key == Key::RIGHT && game_.direction != Direction::LEFT) {
                 game_.nextDirection = Direction::RIGHT;
             }
         }
-        if (evt.key == 82 /*r*/) {
+        if (evt.key == Key::R) {
 
             game_.reset();
             reset();
@@ -66,9 +66,9 @@ public:
         auto foodPos = game_.foodPos();
         food_->position.set(foodPos.x, foodPos.y, 0);
 
-        auto &positions = game_.snake().positions();
+        auto& positions = game_.snake().positions();
         for (unsigned i = 0; i < positions.size(); ++i) {
-            auto &pos = positions.at(i);
+            auto& pos = positions.at(i);
             if (positions.size() != snake_.size()) {
                 snake_.emplace_back(Mesh::create(boxGeometry_, snakeMaterial_));
                 add(snake_.back());
@@ -93,12 +93,12 @@ public:
         snakeMaterial_->color = Color::white;
     }
 
-    [[nodiscard]] OrthographicCamera &camera() const {
+    [[nodiscard]] OrthographicCamera& camera() const {
         return *camera_;
     }
 
 private:
-    SnakeGame &game_;
+    SnakeGame& game_;
     std::shared_ptr<Mesh> food_;
     std::shared_ptr<OrthographicCamera> camera_;
 

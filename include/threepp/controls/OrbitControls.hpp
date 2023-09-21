@@ -51,7 +51,7 @@ namespace threepp {
         bool enablePan = true;
         float panSpeed = 1.0f;
         bool screenSpacePanning = true;// if true, pan in screen-space
-        float keyPanSpeed = 7.f;        // pixels moved per arrow key push
+        float keyPanSpeed = 7.f;       // pixels moved per arrow key push
 
         // Set to true to automatically rotate around the target
         // If auto-rotate is enabled, you must call controls.update() in your animation loop
@@ -61,8 +61,7 @@ namespace threepp {
         // Set to false to disable use of the keys
         bool enableKeys = true;
 
-        OrbitControls(Camera* camera, Canvas& canvas);
-        OrbitControls(const std::shared_ptr<Camera>& camera, Canvas& canvas);
+        OrbitControls(Camera& camera, Canvas& canvas);
 
         bool update();
 

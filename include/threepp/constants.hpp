@@ -3,19 +3,44 @@
 #ifndef THREEPP_CONSTANTS_HPP
 #define THREEPP_CONSTANTS_HPP
 
+#include <type_traits>
+
 namespace threepp {
+
+    // https://stackoverflow.com/questions/11421432/how-can-i-output-the-value-of-an-enum-class-in-c11
+    template<typename Enumeration>
+    auto as_integer(const Enumeration value)
+            -> typename std::underlying_type<Enumeration>::type {
+        return static_cast<typename std::underlying_type<Enumeration>::type>(value);
+    }
 
     const int CullFaceNone = 0;
     const int CullFaceBack = 1;
     const int CullFaceFront = 2;
     const int CullFaceFrontBack = 3;
-    const int BasicShadowMap = 0;
-    const int PCFShadowMap = 1;
-    const int PCFSoftShadowMap = 2;
-    const int VSMShadowMap = 3;
-    const int FrontSide = 0;
-    const int BackSide = 1;
-    const int DoubleSide = 2;
+
+    //    const int BasicShadowMap = 0;
+    //    const int PCFShadowMap = 1;
+    //    const int PCFSoftShadowMap = 2;
+    //    const int VSMShadowMap = 3;
+
+    enum class ShadowMap {
+        Basic,
+        PFC,
+        PFCSoft,
+        VSM
+    };
+
+    //    const int FrontSide = 0;
+    //    const int BackSide = 1;
+    //    const int DoubleSide = 2;
+
+    enum class Side {
+        Front,
+        Back,
+        Double
+    };
+
     const int FlatShading = 1;
     const int SmoothShading = 2;
     const int NoBlending = 0;
@@ -51,12 +76,21 @@ namespace threepp {
     const int MultiplyOperation = 0;
     const int MixOperation = 1;
     const int AddOperation = 2;
-    const int NoToneMapping = 0;
-    const int LinearToneMapping = 1;
-    const int ReinhardToneMapping = 2;
-    const int CineonToneMapping = 3;
-    const int ACESFilmicToneMapping = 4;
-    const int CustomToneMapping = 5;
+    //    const int NoToneMapping = 0;
+    //    const int LinearToneMapping = 1;
+    //    const int ReinhardToneMapping = 2;
+    //    const int CineonToneMapping = 3;
+    //    const int ACESFilmicToneMapping = 4;
+    //    const int CustomToneMapping = 5;
+
+    enum class ToneMapping : int {
+        None = 0,
+        Linear = 1,
+        Reinhard = 2,
+        Cineon = 3,
+        ACESFilmic = 4,
+        Custom = 5
+    };
 
     const int UVMapping = 300;
     const int CubeReflectionMapping = 301;
@@ -65,9 +99,17 @@ namespace threepp {
     const int EquirectangularRefractionMapping = 304;
     const int CubeUVReflectionMapping = 306;
     const int CubeUVRefractionMapping = 307;
-    const int RepeatWrapping = 1000;
-    const int ClampToEdgeWrapping = 1001;
-    const int MirroredRepeatWrapping = 1002;
+
+    //    const int RepeatWrapping = 1000;
+    //    const int ClampToEdgeWrapping = 1001;
+    //    const int MirroredRepeatWrapping = 1002;
+
+    enum class TextureWrapping : int {
+        Repeat = 1000,
+        ClampToEdge = 1001,
+        MirroredRepeat = 1002
+    };
+
     const int NearestFilter = 1003;
     const int NearestMipmapNearestFilter = 1004;
     const int NearestMipMapNearestFilter = 1004;
@@ -105,46 +147,6 @@ namespace threepp {
     const int RGBIntegerFormat = 1032;
     const int RGBAIntegerFormat = 1033;
 
-    const int RGB_S3TC_DXT1_Format = 33776;
-    const int RGBA_S3TC_DXT1_Format = 33777;
-    const int RGBA_S3TC_DXT3_Format = 33778;
-    const int RGBA_S3TC_DXT5_Format = 33779;
-    const int RGB_PVRTC_4BPPV1_Format = 35840;
-    const int RGB_PVRTC_2BPPV1_Format = 35841;
-    const int RGBA_PVRTC_4BPPV1_Format = 35842;
-    const int RGBA_PVRTC_2BPPV1_Format = 35843;
-    const int RGB_ETC1_Format = 36196;
-    const int RGB_ETC2_Format = 37492;
-    const int RGBA_ETC2_EAC_Format = 37496;
-    const int RGBA_ASTC_4x4_Format = 37808;
-    const int RGBA_ASTC_5x4_Format = 37809;
-    const int RGBA_ASTC_5x5_Format = 37810;
-    const int RGBA_ASTC_6x5_Format = 37811;
-    const int RGBA_ASTC_6x6_Format = 37812;
-    const int RGBA_ASTC_8x5_Format = 37813;
-    const int RGBA_ASTC_8x6_Format = 37814;
-    const int RGBA_ASTC_8x8_Format = 37815;
-    const int RGBA_ASTC_10x5_Format = 37816;
-    const int RGBA_ASTC_10x6_Format = 37817;
-    const int RGBA_ASTC_10x8_Format = 37818;
-    const int RGBA_ASTC_10x10_Format = 37819;
-    const int RGBA_ASTC_12x10_Format = 37820;
-    const int RGBA_ASTC_12x12_Format = 37821;
-    const int RGBA_BPTC_Format = 36492;
-    const int SRGB8_ALPHA8_ASTC_4x4_Format = 37840;
-    const int SRGB8_ALPHA8_ASTC_5x4_Format = 37841;
-    const int SRGB8_ALPHA8_ASTC_5x5_Format = 37842;
-    const int SRGB8_ALPHA8_ASTC_6x5_Format = 37843;
-    const int SRGB8_ALPHA8_ASTC_6x6_Format = 37844;
-    const int SRGB8_ALPHA8_ASTC_8x5_Format = 37845;
-    const int SRGB8_ALPHA8_ASTC_8x6_Format = 37846;
-    const int SRGB8_ALPHA8_ASTC_8x8_Format = 37847;
-    const int SRGB8_ALPHA8_ASTC_10x5_Format = 37848;
-    const int SRGB8_ALPHA8_ASTC_10x6_Format = 37849;
-    const int SRGB8_ALPHA8_ASTC_10x8_Format = 37850;
-    const int SRGB8_ALPHA8_ASTC_10x10_Format = 37851;
-    const int SRGB8_ALPHA8_ASTC_12x10_Format = 37852;
-    const int SRGB8_ALPHA8_ASTC_12x12_Format = 37853;
     const int LoopOnce = 2200;
     const int LoopRepeat = 2201;
     const int LoopPingPong = 2202;
@@ -159,14 +161,27 @@ namespace threepp {
     const int TrianglesDrawMode = 0;
     const int TriangleStripDrawMode = 1;
     const int TriangleFanDrawMode = 2;
-    const int LinearEncoding = 3000;
-    const int sRGBEncoding = 3001;
-    const int GammaEncoding = 3007;
-    const int RGBEEncoding = 3002;
-    const int LogLuvEncoding = 3003;
-    const int RGBM7Encoding = 3004;
-    const int RGBM16Encoding = 3005;
-    const int RGBDEncoding = 3006;
+
+    //    const int LinearEncoding = 3000;
+    //    const int sRGBEncoding = 3001;
+    //    const int GammaEncoding = 3007;
+    //    const int RGBEEncoding = 3002;
+    //    const int LogLuvEncoding = 3003;
+    //    const int RGBM7Encoding = 3004;
+    //    const int RGBM16Encoding = 3005;
+    //    const int RGBDEncoding = 3006;
+
+    enum class Encoding : int {
+        Linear = 3000,
+        sRGB = 3001,
+        Gamma = 3007,
+        RGBE = 3002,
+        LogLuv = 3003,
+        RGBM7 = 3004,
+        RGBM16 = 3005,
+        RGBD = 3006
+    };
+
     const int BasicDepthPacking = 3200;
     const int RGBADepthPacking = 3201;
     const int TangentSpaceNormalMap = 0;
@@ -190,9 +205,16 @@ namespace threepp {
     const int GreaterEqualStencilFunc = 518;
     const int AlwaysStencilFunc = 519;
 
-    const int StaticDrawUsage = 35044;
-    const int DynamicDrawUsage = 35048;
-    const int StreamDrawUsage = 35040;
+    //    const int StaticDrawUsage = 35044;
+    //    const int DynamicDrawUsage = 35048;
+    //    const int StreamDrawUsage = 35040;
+
+    enum class DrawUsage : int {
+        Static = 35044,
+        Dynamic = 35048,
+        Stream = 35040
+    };
+
     const int StaticReadUsage = 35045;
     const int DynamicReadUsage = 35049;
     const int StreamReadUsage = 35041;

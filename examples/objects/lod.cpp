@@ -13,7 +13,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10);
     camera->position.z = -5;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto lod = LOD::create();
     scene->add(lod);
@@ -39,6 +39,6 @@ int main() {
 
         handle.setText("LOD level: " + std::to_string(lod->getCurrentLevel()));
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

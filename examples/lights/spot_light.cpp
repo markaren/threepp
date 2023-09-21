@@ -26,7 +26,7 @@ namespace {
 
     auto createPlane() {
         const auto planeGeometry = PlaneGeometry::create(150, 150);
-        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", DoubleSide}});
+        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", Side::Double}});
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->position.setY(-1);
         plane->rotateX(math::degToRad(-90));
@@ -47,7 +47,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.set(0, 10, 25);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light = SpotLight::create(Color::peachpuff);
     light->distance = 30;
@@ -90,6 +90,6 @@ int main() {
 
         helper->update();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

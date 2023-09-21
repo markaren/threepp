@@ -1,9 +1,10 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Spherical.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 

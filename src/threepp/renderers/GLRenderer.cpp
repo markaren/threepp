@@ -674,7 +674,7 @@ struct GLRenderer::Impl {
 
         auto fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
-        int encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
+        Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
         //                const envMap = cubemaps.get(material.envMap || environment);
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
@@ -1244,14 +1244,9 @@ void GLRenderer::dispose() {
     pimpl_->dispose();
 }
 
-void GLRenderer::render(Scene* scene, Camera* camera) {
+void GLRenderer::render(Scene& scene, Camera& camera) {
 
-    pimpl_->render(scene, camera);
-}
-
-void threepp::GLRenderer::render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera) {
-
-    render(scene.get(), camera.get());
+    pimpl_->render(&scene, &camera);
 }
 
 void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {

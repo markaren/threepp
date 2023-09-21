@@ -37,7 +37,7 @@ int main() {
     auto orthoCamera = OrthographicCamera::create(-size.width / 2, size.width / 2, size.height / 2, -size.height / 2, 1, 10);
     orthoCamera->position.z = 10;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     unsigned int textureSize = 128;
     std::vector<unsigned char> data(textureSize * textureSize * 3);
@@ -93,7 +93,7 @@ int main() {
         sphere->rotation.x += 0.5f * dt;
 
         renderer.clear();
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         vector.x = (size.width / 2) - (textureSize / 2);
         vector.y = (size.height / 2) - (textureSize / 2);
@@ -101,6 +101,6 @@ int main() {
         renderer.copyFramebufferToTexture(vector, *texture);
 
         renderer.clearDepth();
-        renderer.render(orthoScene, orthoCamera);
+        renderer.render(*orthoScene, *orthoCamera);
     });
 }

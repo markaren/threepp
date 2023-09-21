@@ -33,10 +33,10 @@ using namespace threepp::gl;
 
 namespace {
 
-    inline std::unordered_map<int, int> shadowSide{
-            {0, BackSide},
-            {1, FrontSide},
-            {2, DoubleSide}};
+    inline std::unordered_map<Side, Side> shadowSide{
+            {Side::Front, Side::Back},
+            {Side::Back, Side::Front},
+            {Side::Double, Side::Double}};
 
     std::shared_ptr<ShaderMaterial> createShadowMaterialVertical() {
 
@@ -200,7 +200,7 @@ struct GLShadowMap::Impl {
         }
 
 
-        if (scope->type == VSMShadowMap) {
+        if (scope->type == ShadowMap::VSM) {
 
             result->side = (material->shadowSide) ? *material->shadowSide : material->side;
 
@@ -238,7 +238,7 @@ struct GLShadowMap::Impl {
 
         if (visible && (object->is<Mesh>() || object->is<Line>() || object->is<Points>())) {
 
-            if ((object->castShadow || (object->receiveShadow && scope->type == VSMShadowMap)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
+            if ((object->castShadow || (object->receiveShadow && scope->type == ShadowMap::VSM)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
 
                 object->modelViewMatrix.multiplyMatrices(shadowCamera->matrixWorldInverse, *object->matrixWorld);
 
@@ -338,7 +338,7 @@ struct GLShadowMap::Impl {
                 }
             }
 
-            if (!shadow->map && !std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == VSMShadowMap) {
+            if (!shadow->map && !std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == ShadowMap::VSM) {
 
                 GLRenderTarget::Options pars{};
                 pars.minFilter = LinearFilter;
@@ -396,7 +396,7 @@ struct GLShadowMap::Impl {
 
             // do blur pass for VSM
 
-            if (!std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == VSMShadowMap) {
+            if (!std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == ShadowMap::VSM) {
 
                 VSMPass(_renderer, shadow.get(), camera);
             }
@@ -411,7 +411,7 @@ struct GLShadowMap::Impl {
 };
 
 GLShadowMap::GLShadowMap(GLObjects& objects)
-    : type(PCFShadowMap), pimpl_(std::make_unique<Impl>(this, objects)) {}
+    : type(ShadowMap::PFC), pimpl_(std::make_unique<Impl>(this, objects)) {}
 
 
 void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {

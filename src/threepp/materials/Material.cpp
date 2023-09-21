@@ -125,7 +125,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "side") {
 
-            side = std::get<int>(value);
+            side = std::get<Side>(value);
             used = true;
 
         } else if (key == "vertexColors") {
@@ -229,7 +229,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "shadowSide") {
 
-            shadowSide = std::get<int>(value);
+            shadowSide = std::get<Side>(value);
             used = true;
 
         } else if (key == "colorWrite") {

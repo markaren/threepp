@@ -19,7 +19,7 @@ namespace {
         auto m = RawShaderMaterial::create();
         m->vertexShader = vertexSource();
         m->fragmentShader = fragmentSource();
-        m->side = BackSide;
+        m->side = Side::Back;
         m->transparent = true;
 
         UniformMap uniforms{
@@ -71,7 +71,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 1.5f;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     unsigned int size = 128;
     auto data = createTextureData(size);
@@ -105,7 +105,7 @@ int main() {
         int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t) + 50);
         material->uniforms->at("steps").value<int>() = std::max(1, step);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
 

@@ -33,13 +33,13 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 20;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto curve = std::make_shared<CustomSineCurve>(10.f);
 
     const auto geometry = TubeGeometry::create(curve);
     const auto material = MeshBasicMaterial::create({{"color", 0xff0000},
-                                                     {"side", DoubleSide}});
+                                                     {"side", Side::Double}});
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
 
@@ -59,6 +59,6 @@ int main() {
     canvas.animate([&]() {
         mesh->rotation.y += 1 * clock.getDelta();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

@@ -5,7 +5,7 @@
 #include <threepp/threepp.hpp>
 
 #ifdef HAS_IMGUI
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #endif
 
 using namespace threepp;
@@ -70,12 +70,11 @@ namespace {
 
 #ifdef HAS_IMGUI
 
-    struct MyGui: public imgui_context {
+    struct MyGui: public ImguiContext {
 
         bool clear = false;
-        bool mouseHover = false;
 
-        explicit MyGui(const Canvas& canvas): imgui_context(canvas.window_ptr()) {}
+        explicit MyGui(const Canvas& canvas): ImguiContext(canvas.windowPtr()) {}
 
         void onRender() override {
 
@@ -84,8 +83,6 @@ namespace {
 
             ImGui::Begin("Options");
             ImGui::Checkbox("Clear", &clear);
-
-            mouseHover = ImGui::IsWindowHovered();
 
             ImGui::End();
         }
@@ -119,7 +116,7 @@ int main() {
 
     addLights(*scene);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     TextureLoader tl;
     AssimpLoader loader;
@@ -194,18 +191,18 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES() * math::randomInRange(0.6f, 1.2f);
+                Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
                 auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();
-                orientation.z = math::PI * math::random();
+                orientation.z = math::PI * math::randFloat();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
                 decals.emplace_back(m.get());
                 scene->add(m);
             }
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
 #ifdef HAS_IMGUI
 

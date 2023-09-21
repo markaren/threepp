@@ -37,13 +37,13 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 1000);
     camera->position.set(0, 5, 30);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     int numPoints = 100;
     std::vector<Vector3> pts;
     pts.reserve(numPoints);
     for (unsigned i = 0; i < numPoints; i++) {
-        pts.emplace_back(math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f), math::randomInRange(-10.f, 10.f));
+        pts.emplace_back(math::randFloatSpread(20), math::randFloatSpread(20), math::randFloatSpread(20));
     }
 
     auto pointsGeometry = BufferGeometry::create();
@@ -55,7 +55,6 @@ int main() {
     auto convexMaterial = MeshBasicMaterial::create();
     convexMaterial->color = Color::gray;
     convexMaterial->transparent = true;
-    convexMaterial->side = FrontSide;
     convexMaterial->opacity = 0.8f;
     auto convex = Mesh::create(convexGeometry, convexMaterial);
     scene->add(convex);
@@ -70,8 +69,7 @@ int main() {
     auto points = Points::create(pointsGeometry, PointsMaterial::create({{"vertexColors", true}}));
     convex->add(points);
 
-    auto lineMaterial = LineBasicMaterial::create();
-    lineMaterial->color = Color::black;
+    auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
     auto edges = LineSegments::create(WireframeGeometry::create(*convexGeometry), lineMaterial);
     convex->add(edges);
 
@@ -88,6 +86,6 @@ int main() {
 
         convex->rotation.y += 0.2f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

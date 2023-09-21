@@ -44,7 +44,7 @@ namespace threepp::gl {
         std::shared_ptr<Texture> envMap;
         std::shared_ptr<Texture> environment;
 
-        int outputEncoding{};
+        std::optional<Encoding> outputEncoding;
         bool instancing{};
         bool vertexAlphas{};
 

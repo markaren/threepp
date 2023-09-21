@@ -28,7 +28,7 @@ namespace {
         const auto planeGeometry = PlaneGeometry::create(105, 105);
         const auto planeMaterial = MeshPhongMaterial::create();
         planeMaterial->color.setHex(Color::white);
-        planeMaterial->side = DoubleSide;
+        planeMaterial->side = Side::Double;
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->receiveShadow = true;
         plane->rotateX(math::degToRad(-90));
@@ -48,7 +48,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.set(5, 3, 5);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light1 = PointLight::create(Color::yellow);
     light1->castShadow = true;
@@ -96,6 +96,6 @@ int main() {
         light2->position.x = 5 * std::sin(t);
         light2->position.z = 1 * std::sin(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

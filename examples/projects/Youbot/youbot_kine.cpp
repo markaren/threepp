@@ -5,15 +5,14 @@
 #include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/utils/ThreadPool.hpp"
 
 using namespace threepp;
 using namespace kine;
 
-struct MyUI: imgui_context {
+struct MyUI: ImguiContext {
 
-    bool mouseHover = false;
     bool jointMode = true;
     bool posMode = false;
 
@@ -22,7 +21,7 @@ struct MyUI: imgui_context {
     std::vector<float> values;
 
     explicit MyUI(const Canvas& canvas, Kine& kine)
-        : imgui_context(canvas.window_ptr()),
+        : ImguiContext(canvas.windowPtr()),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -59,7 +58,6 @@ struct MyUI: imgui_context {
 
         jointMode = !posMode;
 
-        mouseHover = ImGui::IsWindowHovered();
         ImGui::End();
     }
 };
@@ -75,7 +73,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
 
-    OrbitControls controls(camera, canvas);
+    OrbitControls controls(*camera, canvas);
 
     auto grid = GridHelper::create(20, 10, Color::yellowgreen);
     scene->add(grid);
@@ -144,7 +142,7 @@ int main() {
 
         float dt = clock.getDelta();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         if (youbot) {
 

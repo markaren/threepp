@@ -3,13 +3,14 @@
 #ifndef THREEPP_GLRENDERER_HPP
 #define THREEPP_GLRENDERER_HPP
 
+#include "threepp/constants.hpp"
+
 #include "threepp/math/Color.hpp"
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
 
-#include "threepp/Canvas.hpp"
-#include "threepp/constants.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/misc.hpp"
 
 #include "threepp/renderers/gl/GLInfo.hpp"
@@ -60,7 +61,7 @@ namespace threepp {
         // physically based shading
 
         float gammaFactor = 2.0f;// for backwards compatibility
-        int outputEncoding = LinearEncoding;
+        Encoding outputEncoding{Encoding::Linear};
 
         // physical lights
 
@@ -68,7 +69,7 @@ namespace threepp {
 
         // tone mapping
 
-        int toneMapping = NoToneMapping;
+        ToneMapping toneMapping{ToneMapping::None};
         float toneMappingExposure = 1.0f;
 
         bool checkShaderErrors = false;
@@ -131,9 +132,7 @@ namespace threepp {
 
         void dispose();
 
-        void render(Scene* scene, Camera* camera);
-
-        void render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera);
+        void render(Scene& scene, Camera& camera);
 
         void renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group);
 

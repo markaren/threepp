@@ -48,7 +48,7 @@ void PlaneHelper::updateMatrixWorld(bool force) {
 
     this->scale.set(0.5f * this->size, 0.5f * this->size, scale);
 
-    this->children[0]->material()->side = (scale < 0) ? BackSide : FrontSide;// renderer flips side when determinant < 0; flipping not wanted here
+    this->children[0]->material()->side = (scale < 0) ? Side::Back : Side::Front;// renderer flips side when determinant < 0; flipping not wanted here
 
     this->lookAt(this->plane.normal);
 

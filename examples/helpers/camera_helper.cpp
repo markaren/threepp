@@ -40,7 +40,7 @@ int main() {
     auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 1000);
     camera2->position.x = 30;
 
-    OrbitControls controls{camera2, canvas};
+    OrbitControls controls{*camera2, canvas};
     controls.target = sphere->position;
     controls.update();
 
@@ -64,12 +64,12 @@ int main() {
         helper->visible = false;
 
         renderer.setViewport({size.width / 2, 0, size.width / 2, size.height});
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         helper->visible = true;
 
         renderer.setViewport({0, 0, size.width / 2, size.height});
-        renderer.render(scene, camera2);
+        renderer.render(*scene, *camera2);
 
         camera->position.z = 4 * std::sin(math::TWO_PI * 0.1f * clock.getElapsedTime());
     });

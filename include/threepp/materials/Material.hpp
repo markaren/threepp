@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Side, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
@@ -25,7 +25,7 @@ namespace threepp {
         bool fog = true;
 
         int blending = NormalBlending;
-        int side = FrontSide;
+        Side side{Side::Front};
         bool vertexColors = false;
 
         float opacity = 1;
@@ -56,7 +56,7 @@ namespace threepp {
         bool clipShadows = false;
         bool clipping = false;
 
-        std::optional<int> shadowSide{};
+        std::optional<Side> shadowSide{};
 
         bool colorWrite = true;
 

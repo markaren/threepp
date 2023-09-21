@@ -2,7 +2,7 @@
 #include "threepp/threepp.hpp"
 
 #ifdef HAS_IMGUI
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #endif
 
 using namespace threepp;
@@ -11,10 +11,10 @@ namespace {
 
 #ifdef HAS_IMGUI
 
-    struct MyUI: public imgui_context {
+    struct MyUI: public ImguiContext {
 
     public:
-        explicit MyUI(void* ptr): imgui_context(ptr) {}
+        explicit MyUI(void* ptr): ImguiContext(ptr) {}
 
         [[nodiscard]] bool newSelection() const {
             return lastSelectedIndex != selectedIndex;
@@ -80,7 +80,7 @@ namespace {
                         {{"color", data.path.color},
                          {"opacity", data.style.fillOpacity},
                          {"transparent", true},
-                         {"side", DoubleSide},
+                         {"side", Side::Double},
                          {"depthWrite", false}});
 
                 const auto shapes = SVGLoader::createShapes(data);
@@ -98,7 +98,7 @@ namespace {
                         {{"color", Color().setStyle(*data.style.stroke)},
                          {"opacity", data.style.strokeOpacity},
                          {"transparent", true},
-                         {"side", DoubleSide},
+                         {"side", Side::Double},
                          {"depthWrite", false}});
 
                 for (const auto& subPath : data.path.subPaths) {
@@ -156,10 +156,10 @@ int main() {
         renderer.setSize(size);
     });
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
 #ifdef HAS_IMGUI
-    MyUI ui(canvas.window_ptr());
+    MyUI ui(canvas.windowPtr());
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {
@@ -184,7 +184,8 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        renderer.render(scene, camera);
+
+        renderer.render(*scene, *camera);
 
 #ifdef HAS_IMGUI
 

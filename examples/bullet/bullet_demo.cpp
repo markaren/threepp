@@ -85,7 +85,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.set(-10, 10, 10);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
@@ -137,11 +137,11 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        if (evt.key == 32) {// space
-            auto geom = SphereGeometry::create(0.1);
+        if (evt.key == Key::SPACE) {// space
+            auto geom = SphereGeometry::create(0.1f);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
             mesh->position.copy(camera->position);
-            mesh->rotation.set(math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI));
+            mesh->rotation.set(math::randFloat(0, math::TWO_PI), math::randFloat(0, math::TWO_PI), math::randFloat(0, math::TWO_PI));
             Vector3 dir;
             camera->getWorldDirection(dir);
             bullet.addMesh(*mesh, 1);
@@ -162,7 +162,7 @@ int main() {
         float dt = clock.getDelta();
         bullet.step(dt);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         std::stringstream ss;
         ss << renderer.info();

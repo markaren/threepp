@@ -6,6 +6,7 @@
 
 namespace threepp {
 
+    // This class is almost identical to an Object3D. Its purpose is to make working with groups of objects syntactically clearer.
     class Group: public Object3D {
 
     public:

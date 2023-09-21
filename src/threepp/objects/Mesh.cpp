@@ -19,13 +19,13 @@ namespace {
 
         static Vector3 _intersectionPointWorld{};
 
-        if (material->side == BackSide) {
+        if (material->side == Side::Back) {
 
             ray.intersectTriangle(pC, pB, pA, true, point);
 
         } else {
 
-            ray.intersectTriangle(pA, pB, pC, material->side != DoubleSide, point);
+            ray.intersectTriangle(pA, pB, pC, material->side != Side::Double, point);
         }
 
         if (point.isNan()) return std::nullopt;

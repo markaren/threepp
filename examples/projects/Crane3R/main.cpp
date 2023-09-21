@@ -7,14 +7,14 @@
 using namespace threepp;
 
 #ifdef HAS_IMGUI
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
 using namespace kine;
 
-struct MyUI: imgui_context {
+struct MyUI: ImguiContext {
 
     bool jointMode = true;
     bool posMode = false;
@@ -25,7 +25,7 @@ struct MyUI: imgui_context {
     std::vector<float> values;
 
     explicit MyUI(const Canvas& canvas, Kine& kine)
-        : imgui_context(canvas.window_ptr()),
+        : ImguiContext(canvas.windowPtr()),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -74,7 +74,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
 
-    OrbitControls controls(camera, canvas);
+    OrbitControls controls(*camera, canvas);
 
     auto scene = Scene::create();
 
@@ -135,7 +135,7 @@ int main() {
 
         float dt = clock.getDelta();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         if (crane) {
 

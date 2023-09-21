@@ -1,5 +1,5 @@
 
-#include "threepp/extras/imgui/imgui_context.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/extras/physics/BulletPhysics.hpp"
 #include "threepp/threepp.hpp"
 
@@ -55,10 +55,10 @@ namespace {
     };
 
 
-    struct MyUI: imgui_context {
+    struct MyUI: ImguiContext {
 
         explicit MyUI(const Canvas& canvas, PID& pid, ControllableOptions& opt)
-            : imgui_context(canvas.window_ptr()), pid_(pid), opt_(opt) {}
+            : ImguiContext(canvas.windowPtr()), pid_(pid), opt_(opt) {}
 
         void onRender() override {
 
@@ -162,7 +162,7 @@ int main() {
 
         target->rotation.z = opt.targetAngle * math::DEG2RAD;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
         ui.render();
 
 #ifdef HAS_MATPLOTLIB

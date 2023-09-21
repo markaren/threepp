@@ -1,11 +1,9 @@
 
-#include "threepp/Canvas.hpp"
-#include "threepp/loaders/ImageLoader.hpp"
-
-#include "threepp/core/Clock.hpp"
-#include "threepp/utils/StringUtils.hpp"
+#include "threepp/canvas/Canvas.hpp"
 
 #include "threepp/favicon.hpp"
+#include "threepp/loaders/ImageLoader.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -19,10 +17,10 @@ using namespace threepp;
 
 namespace {
 
-    typedef std::pair<std::function<void()>, float> task;
+    typedef std::pair<std::function<void()>, float> Task;
 
     struct CustomComparator {
-        bool operator()(const task& l, const task& r) const { return l.second > r.second; }
+        bool operator()(const Task& l, const Task& r) const { return l.second > r.second; }
     };
 
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
@@ -43,25 +41,99 @@ namespace {
         }
     }
 
+    Key glfwKeyCodeToKey(int keyCode) {
+
+        // clang-format off
+        switch (keyCode) {
+            case GLFW_KEY_0: return Key::NUM_0;
+            case GLFW_KEY_1: return Key::NUM_1;
+            case GLFW_KEY_2: return Key::NUM_2;
+            case GLFW_KEY_3: return Key::NUM_3;
+            case GLFW_KEY_4: return Key::NUM_4;
+            case GLFW_KEY_5: return Key::NUM_5;
+            case GLFW_KEY_6: return Key::NUM_6;
+            case GLFW_KEY_7: return Key::NUM_7;
+            case GLFW_KEY_8: return Key::NUM_8;
+            case GLFW_KEY_9: return Key::NUM_9;
+
+            case GLFW_KEY_F1: return Key::F1;
+            case GLFW_KEY_F2: return Key::F2;
+            case GLFW_KEY_F3: return Key::F3;
+            case GLFW_KEY_F4: return Key::F4;
+            case GLFW_KEY_F5: return Key::F5;
+            case GLFW_KEY_F6: return Key::F6;
+            case GLFW_KEY_F7: return Key::F7;
+            case GLFW_KEY_F8: return Key::F8;
+            case GLFW_KEY_F9: return Key::F9;
+            case GLFW_KEY_F10: return Key::F10;
+            case GLFW_KEY_F11: return Key::F11;
+            case GLFW_KEY_F12: return Key::F12;
+
+            case GLFW_KEY_A: return Key::A;
+            case GLFW_KEY_B: return Key::B;
+            case GLFW_KEY_C: return Key::C;
+            case GLFW_KEY_D: return Key::D;
+            case GLFW_KEY_E: return Key::E;
+            case GLFW_KEY_F: return Key::F;
+            case GLFW_KEY_G: return Key::G;
+            case GLFW_KEY_H: return Key::H;
+            case GLFW_KEY_J: return Key::J;
+            case GLFW_KEY_K: return Key::K;
+            case GLFW_KEY_L: return Key::L;
+            case GLFW_KEY_M: return Key::M;
+            case GLFW_KEY_N: return Key::N;
+            case GLFW_KEY_O: return Key::O;
+            case GLFW_KEY_P: return Key::P;
+            case GLFW_KEY_Q: return Key::Q;
+            case GLFW_KEY_R: return Key::R;
+            case GLFW_KEY_S: return Key::S;
+            case GLFW_KEY_T: return Key::T;
+            case GLFW_KEY_U: return Key::U;
+            case GLFW_KEY_V: return Key::V;
+            case GLFW_KEY_W: return Key::W;
+            case GLFW_KEY_X: return Key::X;
+            case GLFW_KEY_Y: return Key::Y;
+            case GLFW_KEY_Z: return Key::Z;
+
+            case GLFW_KEY_UP: return Key::UP;
+            case GLFW_KEY_DOWN: return Key::DOWN;
+            case GLFW_KEY_LEFT: return Key::LEFT;
+            case GLFW_KEY_RIGHT: return Key::RIGHT;
+
+            case GLFW_KEY_SPACE: return Key::SPACE;
+            case GLFW_KEY_COMMA: return Key::COMMA;
+            case GLFW_KEY_MINUS: return Key::MINUS;
+            case GLFW_KEY_PERIOD: return Key::PERIOD;
+            case GLFW_KEY_SLASH: return Key::SLASH;
+
+            case GLFW_KEY_ENTER: return Key::ENTER;
+            case GLFW_KEY_TAB: return Key::TAB;
+            case GLFW_KEY_BACKSPACE: return Key::BACKSLASH;
+            case GLFW_KEY_INSERT: return Key::INSERT;
+            case GLFW_KEY_DELETE: return Key::DELETE;
+
+            default: return Key::UNKNOWN;
+
+        }
+        // clang-format on
+    }
+
 }// namespace
 
 struct Canvas::Impl {
 
+    Canvas& scope;
     GLFWwindow* window;
-
-    IOCapture* ioCapture;
 
     WindowSize size_;
     Vector2 lastMousePos_;
 
-    std::priority_queue<task, std::vector<task>, CustomComparator> tasks_;
+    std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
-    std::vector<KeyListener*> keyListeners;
-    std::vector<MouseListener*> mouseListeners;
 
 
-    explicit Impl(const Canvas::Parameters& params)
-        : size_(params.size_), ioCapture(nullptr) {
+    explicit Impl(Canvas& scope, const Canvas::Parameters& params)
+        : scope(scope), size_(params.size_) {
 
         glfwSetErrorCallback(error_callback);
 
@@ -149,68 +221,8 @@ struct Canvas::Impl {
         while (animateOnce(f)) {}
     }
 
-    void animate(const std::function<void(float)>& f) {
-
-        Clock clock;
-        while (!glfwWindowShouldClose(window)) {
-
-            handleTasks();
-
-            f(clock.getDelta());
-
-            glfwSwapBuffers(window);
-            glfwPollEvents();
-        }
-    }
-
-    void animate(const std::function<void(float, float)>& f) {
-
-        Clock clock;
-        while (!glfwWindowShouldClose(window)) {
-
-            handleTasks();
-
-            f(static_cast<float>(glfwGetTime()), clock.getDelta());
-
-            glfwSwapBuffers(window);
-            glfwPollEvents();
-        }
-    }
-
     void onWindowResize(std::function<void(WindowSize)> f) {
         this->resizeListener = std::move(f);
-    }
-
-    void addKeyListener(KeyListener* listener) {
-        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
-        if (find == keyListeners.end()) {
-            keyListeners.emplace_back(listener);
-        }
-    }
-
-    bool removeKeyListener(const KeyListener* listener) {
-        auto find = std::find(keyListeners.begin(), keyListeners.end(), listener);
-        if (find != keyListeners.end()) {
-            keyListeners.erase(find);
-            return true;
-        }
-        return false;
-    }
-
-    void addMouseListener(MouseListener* listener) {
-        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
-        if (find == mouseListeners.end()) {
-            mouseListeners.emplace_back(listener);
-        }
-    }
-
-    bool removeMouseListener(const MouseListener* listener) {
-        auto find = std::find(mouseListeners.begin(), mouseListeners.end(), listener);
-        if (find != mouseListeners.end()) {
-            mouseListeners.erase(find);
-            return true;
-        }
-        return false;
     }
 
     void invokeLater(const std::function<void()>& f, float t) {
@@ -235,91 +247,62 @@ struct Canvas::Impl {
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->ioCapture && (p->ioCapture->preventScrollEvent)()) {
-            return;
-        }
-
-        auto listeners = p->mouseListeners;
-        if (listeners.empty()) return;
-        Vector2 delta{(float) xoffset, (float) yoffset};
-        for (auto l : listeners) {
-            l->onMouseWheel(delta);
-        }
+        p->scope.onMouseWheelEvent({static_cast<float>(xoffset), static_cast<float>(yoffset)});
     }
 
-    static void mouse_callback(GLFWwindow* w, int button, int action, int mods) {
+    static void mouse_callback(GLFWwindow* w, int button, int action, int) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-            return;
-        }
-
-        auto listeners = p->mouseListeners;
-        for (auto l : listeners) {
-
-            switch (action) {
-                case GLFW_PRESS:
-                    l->onMouseDown(button, p->lastMousePos_);
-                    break;
-                case GLFW_RELEASE:
-                    l->onMouseUp(button, p->lastMousePos_);
-                    break;
-                default:
-                    break;
-            }
+        switch (action) {
+            case GLFW_PRESS:
+                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::PRESS);
+                break;
+            case GLFW_RELEASE:
+                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::RELEASE);
+                break;
+            default:
+                break;
         }
     }
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        if (p->ioCapture && (p->ioCapture->preventMouseEvent)()) {
-            return;
-        }
-
-        p->lastMousePos_.set(static_cast<float>(xpos), static_cast<float>(ypos));
-        auto listeners = p->mouseListeners;
-        for (auto l : listeners) {
-            l->onMouseMove(p->lastMousePos_);
-        }
+        Vector2 mousePos(static_cast<float>(xpos), static_cast<float>(ypos));
+        p->scope.onMouseMoveEvent(mousePos);
+        p->lastMousePos_.copy(mousePos);
     }
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
+
         if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
 
+        KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
-
-        if (p->ioCapture && (p->ioCapture->preventKeyboardEvent)()) {
-            return;
-        }
-
-        if (p->keyListeners.empty()) return;
-
-        KeyEvent evt{key, scancode, mods};
-        auto listeners = p->keyListeners;
-        for (auto l : listeners) {
-            switch (action) {
-                case GLFW_PRESS:
-                    l->onKeyPressed(evt);
-                    break;
-                case GLFW_RELEASE:
-                    l->onKeyReleased(evt);
-                    break;
-                case GLFW_REPEAT:
-                    l->onKeyRepeat(evt);
-                    break;
-                default:
-                    break;
+        switch (action) {
+            case GLFW_PRESS: {
+                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::PRESS);
+                break;
             }
+            case GLFW_RELEASE: {
+                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::RELEASE);
+                break;
+            }
+            case GLFW_REPEAT: {
+                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::REPEAT);
+                break;
+            }
+            default:
+                break;
         }
     }
 };
 
 Canvas::Canvas(const Canvas::Parameters& params)
-    : pimpl_(new Impl(params)) {}
+    : pimpl_(std::make_unique<Impl>(*this, params)) {}
 
 Canvas::Canvas(const std::string& name)
     : Canvas(Canvas::Parameters().title(name)) {}
@@ -336,16 +319,6 @@ void Canvas::animate(const std::function<void()>& f) {
 bool Canvas::animateOnce(const std::function<void()>& f) {
 
     return pimpl_->animateOnce(f);
-}
-
-void Canvas::animate(const std::function<void(float)>& f) {
-
-    pimpl_->animate(f);
-}
-
-void Canvas::animate(const std::function<void(float, float)>& f) {
-
-    pimpl_->animate(f);
 }
 
 const WindowSize& Canvas::getSize() const {
@@ -368,37 +341,12 @@ void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
     pimpl_->onWindowResize(std::move(f));
 }
 
-void Canvas::addKeyListener(KeyListener* listener) {
-
-    pimpl_->addKeyListener(listener);
-}
-
-bool Canvas::removeKeyListener(const KeyListener* listener) {
-
-    return pimpl_->removeKeyListener(listener);
-}
-
-void Canvas::setIOCapture(IOCapture* capture) {
-
-    pimpl_->ioCapture = capture;
-}
-
-void Canvas::addMouseListener(MouseListener* listener) {
-
-    pimpl_->addMouseListener(listener);
-}
-
-bool Canvas::removeMouseListener(const MouseListener* listener) {
-
-    return pimpl_->removeMouseListener(listener);
-}
-
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
 
     pimpl_->invokeLater(f, t);
 }
 
-void* Canvas::window_ptr() const {
+void* Canvas::windowPtr() const {
 
     return pimpl_->window;
 }

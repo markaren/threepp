@@ -13,7 +13,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 1;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     STLLoader loader;
     auto geometry = loader.load("data/models/stl/pr2_head_pan.stl");
@@ -46,6 +46,6 @@ int main() {
 
         mesh->rotation.z += 1 * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

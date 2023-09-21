@@ -14,7 +14,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
     camera->position.set(5, 10, 20);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto curve = CatmullRomCurve3();
     curve.points.insert(curve.points.end(),
@@ -52,6 +52,6 @@ int main() {
 
     canvas.animate([&]() {
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

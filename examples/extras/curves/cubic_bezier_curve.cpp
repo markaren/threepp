@@ -15,7 +15,7 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
     camera->position.set(0, 5, 20);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     const auto material = LineBasicMaterial::create();
     material->color = 0xff0000;
@@ -80,6 +80,6 @@ int main() {
 
     canvas.animate([&]() {
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

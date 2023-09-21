@@ -271,7 +271,9 @@ Vector3& Object3D::getWorldPosition(Vector3& target) {
 
     this->updateWorldMatrix(true, false);
 
-    return target.setFromMatrixPosition(*this->matrixWorld);
+    target.setFromMatrixPosition(*this->matrixWorld);
+
+    return target;
 }
 
 Quaternion& Object3D::getWorldQuaternion(Quaternion& target) {

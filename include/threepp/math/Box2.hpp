@@ -60,7 +60,7 @@ namespace threepp {
         Box2& translate(const Vector2& offset);
 
         friend std::ostream& operator<<(std::ostream& os, const Box2& v) {
-            os << "Box2(max=" << v.min_ << ", max=" << v.max_ << ")";
+            os << "Box2(min=" << v.min_ << ", max=" << v.max_ << ")";
             return os;
         }
 

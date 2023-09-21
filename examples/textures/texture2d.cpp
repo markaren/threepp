@@ -17,7 +17,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
     camera->position.z = 5;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     TextureLoader tl;
 
@@ -45,7 +45,7 @@ int main() {
     scene->add(box);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
-    const auto planeMaterial = MeshBasicMaterial::create({{"side", DoubleSide},
+    const auto planeMaterial = MeshBasicMaterial::create({{"side", Side::Double},
                                                           {"map", tl.load("data/textures/brick_bump.jpg")}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
@@ -72,6 +72,6 @@ int main() {
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

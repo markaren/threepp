@@ -1,5 +1,5 @@
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #define private public
 
@@ -113,7 +113,7 @@ TEST_CASE("push") {
         CHECK(o->program == proA.get());
         CHECK(o->groupOrder == 0);
         CHECK(o->renderOrder == 0);
-        CHECK(o->z == Approx(0.5f));
+        CHECK_THAT(o->z, Catch::Matchers::WithinRel(0.5f));
         CHECK(!o->group.has_value());
     }
 
@@ -131,7 +131,7 @@ TEST_CASE("push") {
         CHECK(o->program == proB.get());
         CHECK(o->groupOrder == 1);
         CHECK(o->renderOrder == 0);
-        CHECK(o->z == Approx(1.5f));
+        CHECK_THAT(o->z, Catch::Matchers::WithinRel(1.5f));
         CHECK(!o->group.has_value());
     }
 
@@ -149,7 +149,7 @@ TEST_CASE("push") {
         CHECK(o->program == proC.get());
         CHECK(o->groupOrder == 2);
         CHECK(o->renderOrder == 0);
-        CHECK(o->z == Approx(2.5f));
+        CHECK_THAT(o->z, Catch::Matchers::WithinRel(2.5f));
         CHECK(!o->group.has_value());
     }
 
@@ -167,26 +167,7 @@ TEST_CASE("push") {
         CHECK(o->program == proD.get());
         CHECK(o->groupOrder == 3);
         CHECK(o->renderOrder == 0);
-        CHECK(o->z == Approx(3.5f));
+        CHECK_THAT(o->z, Catch::Matchers::WithinRel(3.5f));
         CHECK(!o->group.has_value());
     }
 }
-
-//struct DummyItem {
-//    Object3D o;
-//    BufferGeometry g;
-//    DummyMaterial m;
-//    unsigned int groupOrder = 0;
-//    float z = 0;
-//
-//    DummyItem(int id) {
-//        o.id = id;
-//    }
-//};
-//
-//TEST_CASE("sort") {
-//
-//    GLProperties properties;
-//    GLRenderList list(properties);
-//
-//}

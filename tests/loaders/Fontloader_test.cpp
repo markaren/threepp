@@ -1,5 +1,4 @@
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include "threepp/loaders/FontLoader.hpp"
 
@@ -20,8 +19,7 @@ TEST_CASE("Test FontLoader") {
     CHECK(data->boundingBox.yMin == -373.75);
     CHECK(data->boundingBox.yMax == 1267);
 
-    CHECK(o.x_min == 41 );
-    CHECK(o.x_max == 710 );
-    CHECK(o.ha == 753 );
-
+    CHECK(o.x_min == 41);
+    CHECK(o.x_max == 710);
+    CHECK(o.ha == 753);
 }

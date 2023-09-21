@@ -17,7 +17,7 @@ int main() {
     camera->layers.enableAll();
     camera->position.z = 5;
 
-    OrbitControls controls(camera, canvas);
+    OrbitControls controls(*camera, canvas);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
@@ -28,7 +28,7 @@ int main() {
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create();
     planeMaterial->color = Color::yellow;
-    planeMaterial->side = DoubleSide;
+    planeMaterial->side = Side::Double;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.z = -2;
     scene->add(plane);
@@ -81,6 +81,6 @@ int main() {
             sphere->visible = true;
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
