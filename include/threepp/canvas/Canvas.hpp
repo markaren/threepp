@@ -73,7 +73,7 @@ namespace threepp {
 
         private:
             WindowSize size_{640, 480};
-            int antialiasing_{0};
+            int antialiasing_{2};
             std::string title_{"threepp"};
             bool vsync_{true};
             bool resizable_{true};
