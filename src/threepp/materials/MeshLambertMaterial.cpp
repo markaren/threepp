@@ -10,7 +10,7 @@ MeshLambertMaterial::MeshLambertMaterial()
       MaterialWithLightMap(1),
       MaterialWithEmissive(0x000000, 1),
       MaterialWithAoMap(1),
-      MaterialWithCombine(MultiplyOperation) {}
+      MaterialWithCombine(CombineOperation::Multiply) {}
 
 
 std::string MeshLambertMaterial::type() const {
@@ -134,7 +134,7 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "combine") {
 
-        combine = std::get<int>(value);
+        combine = std::get<CombineOperation>(value);
         return true;
 
     } else if (key == "reflectivity") {

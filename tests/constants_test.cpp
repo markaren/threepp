@@ -5,33 +5,6 @@
 
 TEST_CASE("constants") {
 
-    REQUIRE(threepp::CullFaceNone == 0);
-    REQUIRE(threepp::CullFaceBack == 1);
-    REQUIRE(threepp::CullFaceFront == 2);
-    REQUIRE(threepp::CullFaceFrontBack == 3);
-
-    REQUIRE(threepp::NoBlending == 0);
-    REQUIRE(threepp::NormalBlending == 1);
-    REQUIRE(threepp::AdditiveBlending == 2);
-    REQUIRE(threepp::SubtractiveBlending == 3);
-    REQUIRE(threepp::MultiplyBlending == 4);
-    REQUIRE(threepp::CustomBlending == 5);
-    REQUIRE(threepp::AddEquation == 100);
-    REQUIRE(threepp::SubtractEquation == 101);
-    REQUIRE(threepp::ReverseSubtractEquation == 102);
-    REQUIRE(threepp::MinEquation == 103);
-    REQUIRE(threepp::MaxEquation == 104);
-    REQUIRE(threepp::ZeroFactor == 200);
-    REQUIRE(threepp::OneFactor == 201);
-    REQUIRE(threepp::SrcColorFactor == 202);
-    REQUIRE(threepp::OneMinusSrcColorFactor == 203);
-    REQUIRE(threepp::SrcAlphaFactor == 204);
-    REQUIRE(threepp::OneMinusSrcAlphaFactor == 205);
-    REQUIRE(threepp::DstAlphaFactor == 206);
-    REQUIRE(threepp::OneMinusDstAlphaFactor == 207);
-    REQUIRE(threepp::DstColorFactor == 208);
-    REQUIRE(threepp::OneMinusDstColorFactor == 209);
-    REQUIRE(threepp::SrcAlphaSaturateFactor == 210);
     REQUIRE(threepp::NeverDepth == 0);
     REQUIRE(threepp::AlwaysDepth == 1);
     REQUIRE(threepp::LessDepth == 2);
@@ -40,9 +13,6 @@ TEST_CASE("constants") {
     REQUIRE(threepp::GreaterEqualDepth == 5);
     REQUIRE(threepp::GreaterDepth == 6);
     REQUIRE(threepp::NotEqualDepth == 7);
-    REQUIRE(threepp::MultiplyOperation == 0);
-    REQUIRE(threepp::MixOperation == 1);
-    REQUIRE(threepp::AddOperation == 2);
 
     REQUIRE(threepp::UVMapping == 300);
     REQUIRE(threepp::CubeReflectionMapping == 301);
@@ -74,9 +44,6 @@ TEST_CASE("constants") {
     REQUIRE(threepp::DepthFormat == 1026);
     REQUIRE(threepp::DepthStencilFormat == 1027);
 
-    REQUIRE(threepp::LoopOnce == 2200);
-    REQUIRE(threepp::LoopRepeat == 2201);
-    REQUIRE(threepp::LoopPingPong == 2202);
     REQUIRE(threepp::InterpolateDiscrete == 2300);
     REQUIRE(threepp::InterpolateLinear == 2301);
     REQUIRE(threepp::InterpolateSmooth == 2302);
@@ -87,6 +54,4 @@ TEST_CASE("constants") {
     REQUIRE(threepp::TriangleStripDrawMode == 1);
     REQUIRE(threepp::TriangleFanDrawMode == 2);
 
-    REQUIRE(threepp::BasicDepthPacking == 3200);
-    REQUIRE(threepp::RGBADepthPacking == 3201);
 }

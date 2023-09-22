@@ -130,7 +130,7 @@ struct GLShadowMap::Impl {
         if (index >= _depthMaterials.size()) {
 
             auto material = MeshDepthMaterial::create();
-            material->depthPacking = RGBADepthPacking;
+            material->depthPacking = DepthPacking::RGBA;
 
             _depthMaterials.emplace_back(material);
 
@@ -292,7 +292,7 @@ struct GLShadowMap::Impl {
         auto& _state = _renderer.state();
 
         // Set GL state for depth map.
-        _state.setBlending(NoBlending);
+        _state.setBlending(Blending::None);
         _state.colorBuffer.setClear(1, 1, 1, 1);
         _state.depthBuffer.setTest(true);
         _state.setScissorTest(false);

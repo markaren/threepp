@@ -7,7 +7,7 @@ MeshBasicMaterial::MeshBasicMaterial()
     : MaterialWithColor(0xffffff),
       MaterialWithAoMap(1),
       MaterialWithLightMap(1),
-      MaterialWithCombine(MultiplyOperation),
+      MaterialWithCombine(CombineOperation::Multiply),
       MaterialWithReflectivity(1, 0.98f),
       MaterialWithWireframe(false, 1) {}
 
@@ -119,7 +119,7 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
     } else if (key == "combine") {
 
-        combine = std::get<int>(value);
+        combine = std::get<CombineOperation>(value);
         return true;
 
     } else if (key == "reflectivity") {

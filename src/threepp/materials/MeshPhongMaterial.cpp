@@ -5,7 +5,7 @@ using namespace threepp;
 
 MeshPhongMaterial::MeshPhongMaterial()
     : MaterialWithColor(0xffffff),
-      MaterialWithCombine(MultiplyOperation),
+      MaterialWithCombine(CombineOperation::Multiply),
       MaterialWithFlatShading(false),
       MaterialWithSpecular(0x111111, 30),
       MaterialWithLightMap(1),
@@ -189,7 +189,7 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
 
     } else if (key == "combine") {
 
-        combine = std::get<int>(value);
+        combine = std::get<CombineOperation>(value);
         return true;
 
     } else if (key == "reflectivity") {

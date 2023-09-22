@@ -69,7 +69,7 @@ namespace threepp {
             bool transmissionMap;
             bool thicknessMap;
 
-            std::optional<int> combine;
+            std::optional<CombineOperation> combine;
 
             bool vertexTangents{};
             bool vertexColors{};

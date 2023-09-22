@@ -183,7 +183,7 @@ ProgramParameters::ProgramParameters(
     doubleSided = material->side == Side::Double;
     flipSided = material->side == Side::Back;
 
-    depthPacking = depthpackMaterial ? depthpackMaterial->depthPacking : 0;
+    depthPacking = depthpackMaterial ? as_integer(depthpackMaterial->depthPacking) : 0;
 
     if (shaderMaterial) {
         index0AttributeName = shaderMaterial->index0AttributeName;
@@ -238,7 +238,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(transmissionMap) << '\n';
     s << std::to_string(thicknessMap) << '\n';
 
-    s << (combine.has_value() ? std::to_string(*combine) : std::string("undefined")) << '\n';
+    s << (combine.has_value() ? std::to_string(as_integer(*combine)) : std::string("undefined")) << '\n';
 
     s << std::to_string(vertexTangents) << '\n';
     s << std::to_string(vertexColors) << '\n';
