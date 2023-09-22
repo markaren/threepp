@@ -62,7 +62,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("DataTexture3D", {{"antialiasing", 4}});
+    Canvas canvas("DataTexture3D", {{"aa", 4}});
     GLRenderer renderer(canvas);
     renderer.checkShaderErrors = true;
     renderer.setClearColor(Color::blue);

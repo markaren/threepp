@@ -10,7 +10,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("Water", {{"aa", 4}});
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(55, canvas.getAspect(), 1, 2000);

@@ -29,7 +29,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("ConvexGeometry", {{"antialiasing", 4}});
+    Canvas canvas("ConvexGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

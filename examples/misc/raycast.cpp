@@ -7,9 +7,8 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("Raycast");
     GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();

@@ -41,7 +41,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("LatheGeometry", {{"antialiasing", 4}});
+    Canvas canvas("LatheGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
