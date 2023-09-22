@@ -88,7 +88,7 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
         for (auto& [name, attr] : geometry->getAttributes()) {
 
-            if (!attributesUsed.count(name)) {
+            if (!attributesUsed.contains(name)) {
 
                 std::cerr << "THREE.BufferGeometryUtils: .mergeBufferGeometries() failed with geometry at index " << i << ". All geometries must have compatible attributes; make sure \"" + name + "\" attribute exists among all geometries, or in none of them." << std::endl;
                 return nullptr;

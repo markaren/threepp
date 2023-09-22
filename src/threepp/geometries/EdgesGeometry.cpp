@@ -98,7 +98,7 @@ EdgesGeometry::EdgesGeometry(const BufferGeometry* geometry, float thresholdAngl
             const auto reverseHash = ss.str();
             ss.str(std::string());
 
-            if (edgeData.count(reverseHash) && edgeData[reverseHash]) {
+            if (edgeData.contains(reverseHash) && edgeData.at(reverseHash)) {
 
                 // if we found a sibling edge add it into the vertex array if
                 // it meets the angle threshold and delete the edge from the map.

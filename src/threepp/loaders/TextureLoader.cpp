@@ -32,8 +32,8 @@ struct TextureLoader::Impl {
 
         std::shared_ptr<Texture> tex;
 
-        if (useCache_ && cache_.count(name)) {
-            auto cached = cache_[name];
+        if (useCache_ && cache_.contains(name)) {
+            auto cached = cache_.at(name);
             if (!cached.expired()) {
                 tex = cached.lock();
             } else {

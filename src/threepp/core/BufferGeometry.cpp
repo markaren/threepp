@@ -81,7 +81,7 @@ void BufferGeometry::setAttribute(const std::string& name, std::unique_ptr<Buffe
 
 bool BufferGeometry::hasAttribute(const std::string& name) const {
 
-    return attributes_.count(name);
+    return attributes_.contains(name);
 }
 
 void BufferGeometry::addGroup(int start, int count, unsigned int materialIndex) {
@@ -272,7 +272,7 @@ void BufferGeometry::computeBoundingBox() {
         this->boundingBox = Box3();
     }
 
-    if (this->attributes_.count("position")) {
+    if (this->attributes_.contains("position")) {
 
         const auto position = this->attributes_.at("position")->typed<float>();
 
@@ -296,7 +296,7 @@ void BufferGeometry::computeBoundingSphere() {
         this->boundingSphere = Sphere();
     }
 
-    if (this->attributes_.count("position")) {
+    if (this->attributes_.contains("position")) {
 
         const auto& position = this->attributes_.at("position")->typed<float>();
 

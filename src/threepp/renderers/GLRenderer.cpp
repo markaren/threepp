@@ -573,7 +573,7 @@ struct GLRenderer::Impl {
 
         std::shared_ptr<gl::GLProgram> program = nullptr;
 
-        if (programs.count(programCacheKey)) {
+        if (programs.contains(programCacheKey)) {
 
             program = programs.at(programCacheKey);
 
@@ -805,9 +805,9 @@ struct GLRenderer::Impl {
                 isMeshStandardMaterial ||
                 isEnvMap) {
 
-                if (p_uniforms->map.count("cameraPosition")) {
+                if (p_uniforms->map.contains("cameraPosition")) {
 
-                    auto& uCamPos = p_uniforms->map["cameraPosition"];
+                    auto& uCamPos = p_uniforms->map.at("cameraPosition");
                     _vector3.setFromMatrixPosition(*camera->matrixWorld);
                     uCamPos->setValue(_vector3);
                 }

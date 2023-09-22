@@ -40,7 +40,7 @@ struct GLGeometries::Impl {
             scope_->geometries_.erase(geometry);
 
 
-            if (scope_->wireframeAttributes_.count(geometry)) {
+            if (scope_->wireframeAttributes_.contains(geometry)) {
 
                 const auto& attribute = scope_->wireframeAttributes_.at(geometry);
 
@@ -79,7 +79,7 @@ struct GLGeometries::Impl {
 
     void get(Object3D* object, BufferGeometry* geometry) {
 
-        if (geometries_.count(geometry) && geometries_.at(geometry)) return;
+        if (geometries_.contains(geometry) && geometries_.at(geometry)) return;
 
         geometry->addEventListener("dispose", onGeometryDispose_);
 
@@ -142,7 +142,7 @@ struct GLGeometries::Impl {
 
         // Updating index buffer in VAO now. See WebGLBindingStates
 
-        if (wireframeAttributes_.count(geometry)) {
+        if (wireframeAttributes_.contains(geometry)) {
             auto previousAttribute = wireframeAttributes_.at(geometry).get();
             attributes_.remove(previousAttribute);
         }
@@ -152,7 +152,7 @@ struct GLGeometries::Impl {
 
     IntBufferAttribute* getWireframeAttribute(BufferGeometry* geometry) {
 
-        if (wireframeAttributes_.count(geometry)) {
+        if (wireframeAttributes_.contains(geometry)) {
 
             const auto& currentAttribute = wireframeAttributes_.at(geometry);
 

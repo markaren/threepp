@@ -345,7 +345,7 @@ gl::GLState::GLState(): maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE
 }
 
 void gl::GLState::enable(int id) {
-    if (!enabledCapabilities.count(id) || enabledCapabilities.at(id) == false) {
+    if (!enabledCapabilities.contains(id) || enabledCapabilities.at(id) == false) {
 
         glEnable(id);
         enabledCapabilities[id] = true;
@@ -353,7 +353,7 @@ void gl::GLState::enable(int id) {
 }
 
 void gl::GLState::disable(int id) {
-    if (enabledCapabilities.count(id) && enabledCapabilities.at(id) == true) {
+    if (enabledCapabilities.contains(id) && enabledCapabilities.at(id) == true) {
 
         glDisable(id);
         enabledCapabilities[id] = false;
@@ -362,7 +362,7 @@ void gl::GLState::disable(int id) {
 
 bool gl::GLState::bindFramebuffer(int target, unsigned int framebuffer) {
 
-    if (!currentBoundFramebuffers.count(target) || (currentBoundFramebuffers.count(target) && currentBoundFramebuffers[target] != framebuffer)) {
+    if (!currentBoundFramebuffers.contains(target) || (currentBoundFramebuffers.contains(target) && currentBoundFramebuffers.at(target) != framebuffer)) {
 
         glBindFramebuffer(target, framebuffer);
 
@@ -679,7 +679,7 @@ void gl::GLState::bindTexture(int glType, std::optional<int> glTexture) {
         activeTexture();
     }
 
-    if (!currentBoundTextures.count(*currentTextureSlot)) {
+    if (!currentBoundTextures.contains(*currentTextureSlot)) {
 
         BoundTexture boundTexture{};
         currentBoundTextures[*currentTextureSlot] = boundTexture;
@@ -698,7 +698,7 @@ void gl::GLState::bindTexture(int glType, std::optional<int> glTexture) {
 
 void gl::GLState::unbindTexture() {
 
-    if (currentTextureSlot && currentBoundTextures.count(*currentTextureSlot)) {
+    if (currentTextureSlot && currentBoundTextures.contains(*currentTextureSlot)) {
 
         auto& boundTexture = currentBoundTextures.at(*currentTextureSlot);
 

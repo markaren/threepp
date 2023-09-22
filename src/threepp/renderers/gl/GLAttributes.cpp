@@ -101,7 +101,7 @@ void GLAttributes::remove(BufferAttribute* attribute) {
         attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
     }
 
-    if (buffers_.count(attribute)) {
+    if (buffers_.contains(attribute)) {
 
         auto& data = buffers_.at(attribute);
 
@@ -117,7 +117,7 @@ void GLAttributes::update(BufferAttribute* attribute, GLenum bufferType) {
         attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
     }
 
-    if (!buffers_.count(attribute)) {
+    if (!buffers_.contains(attribute)) {
 
         buffers_[attribute] = createBuffer(attribute, bufferType);
 

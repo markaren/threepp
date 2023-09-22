@@ -165,7 +165,7 @@ namespace threepp {
 
         RigidBodyConstructionInfo* get(Mesh& m) {
 
-            if (meshMap.count(&m)) {
+            if (meshMap.contains(&m)) {
                 return meshMap.at(&m).get();
             }
 
@@ -231,7 +231,7 @@ namespace threepp {
 
         void setMeshPosition(Mesh& mesh, const Vector3& position, unsigned int index = 0) {
 
-            if (!meshMap.count(&mesh)) return;
+            if (!meshMap.contains(&mesh)) return;
 
             auto& body = meshMap.at(&mesh);
 
@@ -246,7 +246,7 @@ namespace threepp {
 
         void setInstancedMeshPosition(InstancedMesh& mesh, const Vector3& position, unsigned int index = 0) {
 
-            if (!instancedMeshMap.count(&mesh)) return;
+            if (!instancedMeshMap.contains(&mesh)) return;
 
             auto& bodies = instancedMeshMap.at(&mesh);
             auto& body = bodies[index];
@@ -324,7 +324,7 @@ namespace threepp {
             void onEvent(Event& event) override {
                 if (event.type == "remove") {
                     auto m = static_cast<Mesh*>(event.target);
-                    if (scope->meshMap.count(m)) {
+                    if (scope->meshMap.contains(m)) {
                         auto& rb = scope->meshMap.at(m);
                         scope->world.removeRigidBody(rb->body.get());
                         scope->meshMap.erase(m);
@@ -343,7 +343,7 @@ namespace threepp {
             void onEvent(Event& event) override {
                 if (event.type == "remove") {
                     auto m = static_cast<InstancedMesh*>(event.target);
-                    if (scope->instancedMeshMap.count(m)) {
+                    if (scope->instancedMeshMap.contains(m)) {
                         auto& bodies = scope->instancedMeshMap.at(m);
                         for (auto& body : bodies) {
                             scope->world.removeRigidBody(body->body.get());

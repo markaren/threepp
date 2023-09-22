@@ -164,7 +164,7 @@ GLRenderLists::GLRenderLists(GLProperties& properties): properties(properties) {
 
 std::shared_ptr<GLRenderList> GLRenderLists::get(Scene* scene, size_t renderCallDepth) {
 
-    if (!lists.count(scene->uuid)) {
+    if (!lists.contains(scene->uuid)) {
 
         auto& l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{std::make_shared<GLRenderList>(properties)};
         return l.back();

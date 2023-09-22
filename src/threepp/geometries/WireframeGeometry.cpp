@@ -48,7 +48,7 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
                     std::string key = std::to_string(edge.first) + ',' + std::to_string(edge.second);
 
-                    if (!edges.count(key)) {
+                    if (!edges.contains(key)) {
 
                         edges[key] = edge;
                     }
