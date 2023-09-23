@@ -39,9 +39,9 @@ find_package(SDL2 CONFIG)
 if (glfw3_FOUND)
     if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
         add_library(glfw::glfw ALIAS glfw)
-        set_property(TARGET glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
+        set_property(TARGET glfw APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
     else () # conan?
-        set_property(TARGET glfw::glfw  APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
+        set_property(TARGET glfw::glfw APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS THREEPP_USING_GLFW)
     endif()
 endif ()
 
