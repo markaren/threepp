@@ -15,7 +15,7 @@ CanvasOptions::CanvasOptions(const std::unordered_map<std::string, detail::Param
 
         bool used = false;
 
-        if (key == "antialiasing") {
+        if (key == "antialiasing" || key == "aa") {
 
             antialiasing(std::get<int>(value));
             used = true;
