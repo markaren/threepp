@@ -40,8 +40,8 @@
 using Canvas = threepp::GLFW3Canvas;
 #else
 #ifdef THREEPP_USING_SDL
-#include "threepp/canvas/sdl/SDLCanvas.hpp"
-using Canvas = threepp::SDLCanvas;
+#include "threepp/canvas/sdl/SDL2Canvas.hpp"
+using Canvas = threepp::SDL2Canvas;
 #endif
 #endif
 

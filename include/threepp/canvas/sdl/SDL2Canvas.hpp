@@ -1,6 +1,6 @@
 
-#ifndef THREEPP_SDLCANVAS_HPP
-#define THREEPP_SDLCANVAS_HPP
+#ifndef THREEPP_SDL2CANVAS_HPP
+#define THREEPP_SDL2CANVAS_HPP
 
 #include "threepp/canvas/Canvas.hpp"
 #include "threepp/canvas/CanvasOptions.hpp"
@@ -130,16 +130,16 @@ namespace threepp {
         }
     }// namespace detail
 
-    class SDLCanvas: public CanvasBase {
+    class SDL2Canvas: public CanvasBase {
 
     public:
-        explicit SDLCanvas(const std::string& name)
-            : SDLCanvas(CanvasOptions().title(name)) {}
+        explicit SDL2Canvas(const std::string& name)
+            : SDL2Canvas(CanvasOptions().title(name)) {}
 
-        SDLCanvas(const std::string& name, const std::unordered_map<std::string, detail::ParameterValue>& values)
-            : SDLCanvas(CanvasOptions(values).title(name)) {}
+        SDL2Canvas(const std::string& name, const std::unordered_map<std::string, detail::ParameterValue>& values)
+            : SDL2Canvas(CanvasOptions(values).title(name)) {}
 
-        explicit SDLCanvas(const CanvasOptions& params = CanvasOptions())
+        explicit SDL2Canvas(const CanvasOptions& params = CanvasOptions())
             : CanvasBase(params.size_), event{} {
 
             if (SDL_Init(SDL_INIT_VIDEO) < 0) {
@@ -319,4 +319,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_SDLCANVAS_HPP
+#endif//THREEPP_SDL2CANVAS_HPP
