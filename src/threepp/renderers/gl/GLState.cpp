@@ -12,51 +12,51 @@ using namespace threepp;
 
 namespace {
 
-    inline GLenum equationToGL(int eq) {
+    inline GLenum equationToGL(BlendEquation eq) {
 
         switch (eq) {
-            case AddEquation:
+            case BlendEquation::Add:
                 return GL_FUNC_ADD;
-            case SubtractEquation:
+            case BlendEquation::Subtract:
                 return GL_FUNC_SUBTRACT;
-            case ReverseSubtractEquation:
+            case BlendEquation::ReverseSubtract:
                 return GL_FUNC_REVERSE_SUBTRACT;
-            case MinEquation:
+            case BlendEquation::Min:
                 return GL_MIN;
-            case MaxEquation:
+            case BlendEquation::Max:
                 return GL_MAX;
             default:
-                throw std::runtime_error("Unknown equation: " + std::to_string(eq));
+                throw std::runtime_error("Unknown equation: " + std::to_string(as_integer(eq)));
         }
     }
 
-    inline GLenum factorToGL(int factor) {
+    inline GLenum factorToGL(BlendFactor factor) {
 
         switch (factor) {
-            case ZeroFactor:
+            case BlendFactor::Zero:
                 return GL_ZERO;
-            case OneFactor:
+            case BlendFactor::One:
                 return GL_ONE;
-            case SrcColorFactor:
+            case BlendFactor::SrcColor:
                 return GL_SRC_COLOR;
-            case SrcAlphaFactor:
+            case BlendFactor::SrcAlpha:
                 return GL_SRC_ALPHA;
-            case SrcAlphaSaturateFactor:
+            case BlendFactor::SrcAlphaSaturate:
                 return GL_SRC_ALPHA_SATURATE;
-            case DstColorFactor:
+            case BlendFactor::DstColor:
                 return GL_DST_COLOR;
-            case DstAlphaFactor:
+            case BlendFactor::DstAlpha:
                 return GL_DST_ALPHA;
-            case OneMinusSrcColorFactor:
+            case BlendFactor::OneMinusSrcColor:
                 return GL_ONE_MINUS_SRC_COLOR;
-            case OneMinusSrcAlphaFactor:
+            case BlendFactor::OneMinusSrcAlpha:
                 return GL_ONE_MINUS_SRC_ALPHA;
-            case OneMinusDstColorFactor:
+            case BlendFactor::OneMinusDstColor:
                 return GL_ONE_MINUS_DST_COLOR;
-            case OneMinusDstAlphaFactor:
+            case BlendFactor::OneMinusDstAlpha:
                 return GL_ONE_MINUS_DST_ALPHA;
             default:
-                throw std::runtime_error("Unknown factor: " + std::to_string(factor));
+                throw std::runtime_error("Unknown factor: " + std::to_string(as_integer(factor)));
         }
     }
 
@@ -234,13 +234,13 @@ void gl::StencilBuffer::setMask(int stencilMask) {
     }
 }
 
-void gl::StencilBuffer::setFunc(int stencilFunc, int stencilRef, int stencilMask) {
+void gl::StencilBuffer::setFunc(StencilFunc stencilFunc, int stencilRef, int stencilMask) {
 
     if (currentStencilFunc != stencilFunc ||
         currentStencilRef != stencilRef ||
         currentStencilFuncMask != stencilMask) {
 
-        glStencilFunc(stencilFunc, stencilRef, stencilMask);
+        glStencilFunc(as_integer(stencilFunc), stencilRef, stencilMask);
 
         currentStencilFunc = stencilFunc;
         currentStencilRef = stencilRef;
@@ -248,13 +248,13 @@ void gl::StencilBuffer::setFunc(int stencilFunc, int stencilRef, int stencilMask
     }
 }
 
-void gl::StencilBuffer::setOp(int stencilFail, int stencilZFail, int stencilZPass) {
+void gl::StencilBuffer::setOp(StencilOp stencilFail, StencilOp stencilZFail, StencilOp stencilZPass) {
 
     if (currentStencilFail != stencilFail ||
         currentStencilZFail != stencilZFail ||
         currentStencilZPass != stencilZPass) {
 
-        glStencilOp(stencilFail, stencilZFail, stencilZPass);
+        glStencilOp(as_integer(stencilFail), as_integer(stencilZFail), as_integer(stencilZPass));
 
         currentStencilFail = stencilFail;
         currentStencilZFail = stencilZFail;
@@ -338,10 +338,10 @@ gl::GLState::GLState(): maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE
     depthBuffer.setFunc(LessEqualDepth);
 
     setFlipSided(false);
-    setCullFace(CullFaceBack);
+    setCullFace(CullFace::Back);
     enable(GL_CULL_FACE);
 
-    setBlending(NormalBlending);
+    setBlending(Blending::Normal);
 }
 
 void gl::GLState::enable(int id) {
@@ -401,16 +401,16 @@ bool gl::GLState::useProgram(unsigned int program, bool force) {
 }
 
 void gl::GLState::setBlending(
-        int blending,
-        std::optional<int> blendEquation,
-        std::optional<int> blendSrc,
-        std::optional<int> blendDst,
-        std::optional<int> blendEquationAlpha,
-        std::optional<int> blendSrcAlpha,
-        std::optional<int> blendDstAlpha,
+        Blending blending,
+        std::optional<BlendEquation> blendEquation,
+        std::optional<BlendFactor> blendSrc,
+        std::optional<BlendFactor> blendDst,
+        std::optional<BlendEquation> blendEquationAlpha,
+        std::optional<BlendFactor> blendSrcAlpha,
+        std::optional<BlendFactor> blendDstAlpha,
         std::optional<bool> premultipliedAlpha) {
 
-    if (blending == NoBlending) {
+    if (blending == Blending::None) {
 
         if (currentBlendingEnabled) {
 
@@ -427,40 +427,40 @@ void gl::GLState::setBlending(
         currentBlendingEnabled = true;
     }
 
-    if (blending != CustomBlending) {
+    if (blending != Blending::Custom) {
 
         if (blending != currentBlending || premultipliedAlpha != currentPremultipledAlpha) {
 
-            if (currentBlendEquation != AddEquation || currentBlendEquationAlpha != AddEquation) {
+            if (currentBlendEquation != BlendEquation::Add || currentBlendEquationAlpha != BlendEquation::Add) {
 
                 glBlendEquation(GL_FUNC_ADD);
 
-                currentBlendEquation = AddEquation;
-                currentBlendEquationAlpha = AddEquation;
+                currentBlendEquation = BlendEquation::Add;
+                currentBlendEquationAlpha = BlendEquation::Add;
             }
 
             if (premultipliedAlpha && premultipliedAlpha.value()) {
 
                 switch (blending) {
 
-                    case NormalBlending:
+                    case Blending::Normal:
                         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                         break;
 
-                    case AdditiveBlending:
+                    case Blending::Additive:
                         glBlendFunc(GL_ONE, GL_ONE);
                         break;
 
-                    case SubtractiveBlending:
+                    case Blending::Subtractive:
                         glBlendFuncSeparate(GL_ZERO, GL_ZERO, GL_ONE_MINUS_SRC_COLOR, GL_ONE_MINUS_SRC_ALPHA);
                         break;
 
-                    case MultiplyBlending:
+                    case Blending::Multiply:
                         glBlendFuncSeparate(GL_ZERO, GL_SRC_COLOR, GL_ZERO, GL_SRC_ALPHA);
                         break;
 
                     default:
-                        std::cerr << "THREE.GLState: Invalid blending: " << blending << std::endl;
+                        std::cerr << "THREE.GLState: Invalid blending: " << as_integer(blending) << std::endl;
                         break;
                 }
 
@@ -468,24 +468,24 @@ void gl::GLState::setBlending(
 
                 switch (blending) {
 
-                    case NormalBlending:
+                    case Blending::Normal:
                         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                         break;
 
-                    case AdditiveBlending:
+                    case Blending::Additive:
                         glBlendFunc(GL_SRC_ALPHA, GL_ONE);
                         break;
 
-                    case SubtractiveBlending:
+                    case Blending::Subtractive:
                         glBlendFunc(GL_ZERO, GL_ONE_MINUS_SRC_COLOR);
                         break;
 
-                    case MultiplyBlending:
+                    case Blending::Multiply:
                         glBlendFunc(GL_ZERO, GL_SRC_COLOR);
                         break;
 
                     default:
-                        std::cerr << "THREE.GLState: Invalid blending: " << blending << std::endl;
+                        std::cerr << "THREE.GLState: Invalid blending: " << as_integer(blending) << std::endl;
                         break;
                 }
             }
@@ -504,9 +504,18 @@ void gl::GLState::setBlending(
 
     // custom blending
 
-    blendEquationAlpha = blendEquationAlpha || blendEquation;
-    blendSrcAlpha = blendSrcAlpha || blendSrc;
-    blendDstAlpha = blendDstAlpha || blendDst;
+    std::optional<BlendEquation> blendEquationAlpha_ = blendEquationAlpha;
+    if (!blendEquationAlpha_) {
+        blendEquationAlpha_ = blendEquation;
+    }
+    std::optional<BlendFactor> blendSrcAlpha_ = blendSrcAlpha;
+    if (!blendSrcAlpha_) {
+        blendSrcAlpha_ = blendSrc;
+    }
+    std::optional<BlendFactor> blendDstAlpha_ = blendDstAlpha;
+    if (!blendDstAlpha_) {
+        blendDstAlpha_ = blendDst;
+    }
 
     if (blendEquation != currentBlendEquation || blendEquationAlpha != currentBlendEquationAlpha) {
 
@@ -541,8 +550,8 @@ void gl::GLState::setMaterial(const Material* material, bool frontFaceCW) {
 
     setFlipSided(flipSided);
 
-    (material->blending == NormalBlending && !material->transparent)
-            ? setBlending(NoBlending)
+    (material->blending == Blending::Normal && !material->transparent)
+            ? setBlending(Blending::None)
             : setBlending(
                       material->blending,
                       material->blendEquation,
@@ -589,19 +598,19 @@ void gl::GLState::setFlipSided(bool flipSided) {
     }
 }
 
-void gl::GLState::setCullFace(int cullFace) {
+void gl::GLState::setCullFace(CullFace cullFace) {
 
-    if (cullFace != CullFaceNone) {
+    if (cullFace != CullFace::None) {
 
         enable(GL_CULL_FACE);
 
         if (cullFace != currentCullFace) {
 
-            if (cullFace == CullFaceBack) {
+            if (cullFace == CullFace::Back) {
 
                 glCullFace(GL_BACK);
 
-            } else if (cullFace == CullFaceFront) {
+            } else if (cullFace == CullFace::Front) {
 
                 glCullFace(GL_FRONT);
 

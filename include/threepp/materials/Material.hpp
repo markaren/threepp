@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Side, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
@@ -24,31 +24,31 @@ namespace threepp {
 
         bool fog = true;
 
-        int blending = NormalBlending;
+        Blending blending = Blending::Normal;
         Side side{Side::Front};
         bool vertexColors = false;
 
         float opacity = 1;
         bool transparent = false;
 
-        int blendSrc = SrcAlphaFactor;
-        int blendDst = OneMinusSrcAlphaFactor;
-        int blendEquation = AddEquation;
-        std::optional<int> blendSrcAlpha;
-        std::optional<int> blendDstAlpha;
-        std::optional<int> blendEquationAlpha;
+        BlendFactor blendSrc = BlendFactor::SrcAlpha;
+        BlendFactor blendDst = BlendFactor::OneMinusSrcAlpha;
+        BlendEquation blendEquation = BlendEquation::Add;
+        std::optional<BlendFactor> blendSrcAlpha;
+        std::optional<BlendFactor> blendDstAlpha;
+        std::optional<BlendEquation> blendEquationAlpha;
 
         int depthFunc = LessEqualDepth;
         bool depthTest = true;
         bool depthWrite = true;
 
         int stencilWriteMask = 0xff;
-        int stencilFunc = AlwaysStencilFunc;
+        StencilFunc stencilFunc{StencilFunc::Always};
         int stencilRef = 0;
         int stencilFuncMask = 0xff;
-        int stencilFail = KeepStencilOp;
-        int stencilZFail = KeepStencilOp;
-        int stencilZPass = KeepStencilOp;
+        StencilOp stencilFail{StencilOp::Keep};
+        StencilOp stencilZFail{StencilOp::Keep};
+        StencilOp stencilZPass{StencilOp::Keep};
         bool stencilWrite = false;
 
         std::vector<Plane> clippingPlanes;

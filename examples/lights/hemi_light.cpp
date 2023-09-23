@@ -29,7 +29,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("HemisphereLight", {{"antialiasing", 4}});
+    Canvas canvas("HemisphereLight", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

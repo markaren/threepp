@@ -36,7 +36,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("SphereGeometry", {{"antialiasing", 4}});
+    Canvas canvas("SphereGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

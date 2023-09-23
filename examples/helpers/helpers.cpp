@@ -10,7 +10,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("Helpers");
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

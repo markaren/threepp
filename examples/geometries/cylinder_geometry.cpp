@@ -36,7 +36,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("CylinderGeometry", {{"antialiasing", 4}});
+    Canvas canvas("CylinderGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

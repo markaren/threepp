@@ -27,7 +27,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Camera helper", {{"antialiasing", 4}});
+    Canvas canvas{"Camera helper"};
     GLRenderer renderer(canvas);
     renderer.autoClear = false;
 

@@ -7,7 +7,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("CubicBezierCurve", {{"antialiasing", 4}});
+    Canvas canvas("CubicBezierCurve", {{"aa", 8}});
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 

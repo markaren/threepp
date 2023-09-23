@@ -5,7 +5,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("points", {{"antialiasing", 8}});
+    Canvas canvas("Points", {{"aa", 8}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

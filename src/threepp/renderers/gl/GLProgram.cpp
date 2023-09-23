@@ -303,15 +303,15 @@ namespace {
 
             switch (*parameters->combine) {
 
-                case MultiplyOperation:
+                case CombineOperation::Multiply:
                     envMapBlendingDefine = "ENVMAP_BLENDING_MULTIPLY";
                     break;
 
-                case MixOperation:
+                case CombineOperation::Mix:
                     envMapBlendingDefine = "ENVMAP_BLENDING_MIX";
                     break;
 
-                case AddOperation:
+                case CombineOperation::Add:
                     envMapBlendingDefine = "ENVMAP_BLENDING_ADD";
                     break;
             }

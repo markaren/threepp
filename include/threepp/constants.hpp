@@ -9,15 +9,22 @@ namespace threepp {
 
     // https://stackoverflow.com/questions/11421432/how-can-i-output-the-value-of-an-enum-class-in-c11
     template<typename Enumeration>
-    auto as_integer(const Enumeration value)
+    constexpr auto as_integer(const Enumeration value)
             -> typename std::underlying_type<Enumeration>::type {
         return static_cast<typename std::underlying_type<Enumeration>::type>(value);
     }
 
-    const int CullFaceNone = 0;
-    const int CullFaceBack = 1;
-    const int CullFaceFront = 2;
-    const int CullFaceFrontBack = 3;
+    //    const int CullFaceNone = 0;
+    //    const int CullFaceBack = 1;
+    //    const int CullFaceFront = 2;
+    //    const int CullFaceFrontBack = 3;
+
+    enum class CullFace {
+        None = 0,
+        Back = 1,
+        Front = 2,
+        FrontBack = 3
+    };
 
     //    const int BasicShadowMap = 0;
     //    const int PCFShadowMap = 1;
@@ -43,28 +50,63 @@ namespace threepp {
 
     const int FlatShading = 1;
     const int SmoothShading = 2;
-    const int NoBlending = 0;
-    const int NormalBlending = 1;
-    const int AdditiveBlending = 2;
-    const int SubtractiveBlending = 3;
-    const int MultiplyBlending = 4;
-    const int CustomBlending = 5;
-    const int AddEquation = 100;
-    const int SubtractEquation = 101;
-    const int ReverseSubtractEquation = 102;
-    const int MinEquation = 103;
-    const int MaxEquation = 104;
-    const int ZeroFactor = 200;
-    const int OneFactor = 201;
-    const int SrcColorFactor = 202;
-    const int OneMinusSrcColorFactor = 203;
-    const int SrcAlphaFactor = 204;
-    const int OneMinusSrcAlphaFactor = 205;
-    const int DstAlphaFactor = 206;
-    const int OneMinusDstAlphaFactor = 207;
-    const int DstColorFactor = 208;
-    const int OneMinusDstColorFactor = 209;
-    const int SrcAlphaSaturateFactor = 210;
+
+    enum class Blending {
+        None = 0,
+        Normal = 1,
+        Additive = 2,
+        Subtractive = 3,
+        Multiply = 4,
+        Custom = 5
+    };
+
+    //    const int NoBlending = 0;
+    //    const int NormalBlending = 1;
+    //    const int AdditiveBlending = 2;
+    //    const int SubtractiveBlending = 3;
+    //    const int MultiplyBlending = 4;
+    //    const int CustomBlending = 5;
+
+    //    const int AddEquation = 100;
+    //    const int SubtractEquation = 101;
+    //    const int ReverseSubtractEquation = 102;
+    //    const int MinEquation = 103;
+    //    const int MaxEquation = 104;
+
+    enum class BlendEquation {
+        Add = 100,
+        Subtract = 101,
+        ReverseSubtract = 102,
+        Min = 103,
+        Max = 104
+    };
+
+//    const int ZeroFactor = 200;
+//    const int OneFactor = 201;
+//    const int SrcColorFactor = 202;
+//    const int OneMinusSrcColorFactor = 203;
+//    const int SrcAlphaFactor = 204;
+//    const int OneMinusSrcAlphaFactor = 205;
+//    const int DstAlphaFactor = 206;
+//    const int OneMinusDstAlphaFactor = 207;
+//    const int DstColorFactor = 208;
+//    const int OneMinusDstColorFactor = 209;
+//    const int SrcAlphaSaturateFactor = 210;
+
+    enum class BlendFactor {
+        Zero = 200,
+        One = 201,
+        SrcColor = 202,
+        OneMinusSrcColor = 203,
+        SrcAlpha = 204,
+        OneMinusSrcAlpha = 205,
+        DstAlpha = 206,
+        OneMinusDstAlpha = 207,
+        DstColor = 208,
+        OneMinusDstColor = 209,
+        SrcAlphaSaturate = 210
+    };
+
     const int NeverDepth = 0;
     const int AlwaysDepth = 1;
     const int LessDepth = 2;
@@ -73,9 +115,17 @@ namespace threepp {
     const int GreaterEqualDepth = 5;
     const int GreaterDepth = 6;
     const int NotEqualDepth = 7;
-    const int MultiplyOperation = 0;
-    const int MixOperation = 1;
-    const int AddOperation = 2;
+
+    //    const int MultiplyOperation = 0;
+    //    const int MixOperation = 1;
+    //    const int AddOperation = 2;
+
+    enum class CombineOperation {
+        Multiply = 0,
+        Mix = 1,
+        Add = 2
+    };
+
     //    const int NoToneMapping = 0;
     //    const int LinearToneMapping = 1;
     //    const int ReinhardToneMapping = 2;
@@ -147,9 +197,16 @@ namespace threepp {
     const int RGBIntegerFormat = 1032;
     const int RGBAIntegerFormat = 1033;
 
-    const int LoopOnce = 2200;
-    const int LoopRepeat = 2201;
-    const int LoopPingPong = 2202;
+    //    const int LoopOnce = 2200;
+    //    const int LoopRepeat = 2201;
+    //    const int LoopPingPong = 2202;
+
+    enum class Loop {
+        Once = 2200,
+        Repeat = 2201,
+        PingPong = 2202
+    };
+
     const int InterpolateDiscrete = 2300;
     const int InterpolateLinear = 2301;
     const int InterpolateSmooth = 2302;
@@ -182,28 +239,57 @@ namespace threepp {
         RGBD = 3006
     };
 
-    const int BasicDepthPacking = 3200;
-    const int RGBADepthPacking = 3201;
+    //    const int BasicDepthPacking = 3200;
+    //    const int RGBADepthPacking = 3201;
+
+    enum class DepthPacking {
+        Basic = 3200,
+        RGBA = 3201
+    };
+
     const int TangentSpaceNormalMap = 0;
     const int ObjectSpaceNormalMap = 1;
 
-    const int ZeroStencilOp = 0;
-    const int KeepStencilOp = 7680;
-    const int ReplaceStencilOp = 7681;
-    const int IncrementStencilOp = 7682;
-    const int DecrementStencilOp = 7683;
-    const int IncrementWrapStencilOp = 34055;
-    const int DecrementWrapStencilOp = 34056;
-    const int InvertStencilOp = 5386;
+    //    const int ZeroStencilOp = 0;
+    //    const int KeepStencilOp = 7680;
+    //    const int ReplaceStencilOp = 7681;
+    //    const int IncrementStencilOp = 7682;
+    //    const int DecrementStencilOp = 7683;
+    //    const int IncrementWrapStencilOp = 34055;
+    //    const int DecrementWrapStencilOp = 34056;
+    //    const int InvertStencilOp = 5386;
 
-    const int NeverStencilFunc = 512;
-    const int LessStencilFunc = 513;
-    const int EqualStencilFunc = 514;
-    const int LessEqualStencilFunc = 515;
-    const int GreaterStencilFunc = 516;
-    const int NotEqualStencilFunc = 517;
-    const int GreaterEqualStencilFunc = 518;
-    const int AlwaysStencilFunc = 519;
+    enum class StencilOp {
+        Zero = 0,
+        Keep = 7680,
+        Replace = 7681,
+        Increment = 7682,
+        Decrement = 7683,
+        IncrementWrap = 34055,
+        DecrementWrap = 34056,
+        Invert = 5386
+    };
+
+    //    const int NeverStencilFunc = 512;
+    //    const int LessStencilFunc = 513;
+    //    const int EqualStencilFunc = 514;
+    //    const int LessEqualStencilFunc = 515;
+    //    const int GreaterStencilFunc = 516;
+    //    const int NotEqualStencilFunc = 517;
+    //    const int GreaterEqualStencilFunc = 518;
+    //    const int AlwaysStencilFunc = 519;
+
+    enum class StencilFunc {
+        Never = 512,
+        Less = 513,
+        Equal = 514,
+        LessEqual = 515,
+        Greater = 516,
+        NotEqual = 517,
+        GreaterEqual = 518,
+        Always = 519
+
+    };
 
     //    const int StaticDrawUsage = 35044;
     //    const int DynamicDrawUsage = 35048;

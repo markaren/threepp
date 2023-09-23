@@ -109,7 +109,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Geometries", {{"antialiasing", 4}});
+    Canvas canvas("Geometries", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

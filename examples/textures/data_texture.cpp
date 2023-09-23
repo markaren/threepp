@@ -21,7 +21,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Data texture", {{"antialiasing", 4}});
+    Canvas canvas("Data texture", {{"aa", 4}});
     GLRenderer renderer{canvas};
     renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);

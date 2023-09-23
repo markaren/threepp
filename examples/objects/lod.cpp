@@ -6,7 +6,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("LOD");
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

@@ -57,7 +57,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("DirectionalLight", {{"antialiasing", 4}});
+    Canvas canvas("DirectionalLight", {{"aa", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;

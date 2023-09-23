@@ -39,7 +39,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("SpotLight", {{"antialiasing", 4}});
+    Canvas canvas("SpotLight", {{"aa", 4}});
     GLRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
 

@@ -107,7 +107,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas{CanvasOptions().antialiasing(8)};
+    Canvas canvas{"Decals", {{"aa", 8}}};
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

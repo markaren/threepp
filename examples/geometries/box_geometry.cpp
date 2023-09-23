@@ -35,7 +35,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("BoxGeometry", {{"antialiasing", 4}});
+    Canvas canvas("BoxGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();

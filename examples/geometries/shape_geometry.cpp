@@ -93,7 +93,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
 
 int main() {
 
-    Canvas canvas("ShapeGeometry", {{"antialiasing", 4}});
+    Canvas canvas("ShapeGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas);
 
     auto scene = Scene::create();
