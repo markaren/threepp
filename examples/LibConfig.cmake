@@ -1,6 +1,5 @@
 find_package(imgui CONFIG)
 find_package(Bullet CONFIG)
-find_package(CURL CONFIG QUIET)
 find_package(assimp CONFIG QUIET)
 find_package(pugixml CONFIG QUIET)
 find_package(nlohmann_json CONFIG QUIET)
