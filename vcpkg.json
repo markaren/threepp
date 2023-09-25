@@ -48,12 +48,6 @@
       "dependencies": [
         "pugixml"
       ]
-    },
-    "matplotlib": {
-      "description": "Enable plotting in examples",
-      "dependencies": [
-        "matplotlib-cpp"
-      ]
     }
   }
 }
