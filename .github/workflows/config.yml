@@ -13,8 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-20.04]
-        compiler_version: [9]
+        os: [ubuntu-22.04]
+        compiler_version: [11]
 
     steps:
     - uses: actions/checkout@v3
@@ -54,7 +54,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2019, windows-2022]
+        os: [windows-2022]
 
     steps:
       - uses: actions/checkout@v3
