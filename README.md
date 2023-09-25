@@ -99,7 +99,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
     camera->position.z = 5;
     
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light = HemisphereLight::create();
     scene->add(light);
@@ -112,7 +112,7 @@ int main() {
     auto planeGeometry = PlaneGeometry::create(5, 5);
     auto planeMaterial = MeshLambertMaterial::create();
     planeMaterial->color = Color::gray;
-    planeMaterial->side = DoubleSide;
+    planeMaterial->side = Side::Double;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.y = -1;
     plane->rotateX(math::degToRad(90));
