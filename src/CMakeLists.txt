@@ -160,7 +160,6 @@ set(publicHeaders
         "threepp/utils/BufferGeometryUtils.hpp"
         "threepp/utils/StringUtils.hpp"
         "threepp/utils/ThreadPool.hpp"
-        "threepp/utils/URLFetcher.hpp"
 
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"

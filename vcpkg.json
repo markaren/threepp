@@ -10,12 +10,6 @@
     "stb"
   ],
   "features": {
-    "curl": {
-      "description": "Enable URLFetcher in library.",
-      "dependencies": [
-        "curl"
-      ]
-    },
     "json": {
       "description": "Enable JSON support in library. Required to use Fonts.",
       "dependencies":[
