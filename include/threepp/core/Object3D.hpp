@@ -109,10 +109,7 @@ namespace threepp {
         Object3D(const Object3D&) = delete;
         Object3D& operator=(const Object3D&) = delete;
 
-        [[nodiscard]] virtual std::string type() const {
-
-            return "Object3D";
-        }
+        [[nodiscard]] virtual std::string type() const;
 
         // Applies the matrix transform to the object and updates the object's position, rotation and scale.
         void applyMatrix4(const Matrix4& matrix);

@@ -25,6 +25,11 @@ Object3D::Object3D()
     });
 }
 
+std::string Object3D::type() const {
+
+    return "Object3D";
+}
+
 void Object3D::applyMatrix4(const Matrix4& m) {
 
     if (this->matrixAutoUpdate) this->updateMatrix();

@@ -15,7 +15,7 @@ namespace threepp {
         [[nodiscard]] std::string type() const override;
 
     protected:
-        EdgesGeometry(const BufferGeometry* geometry, float thresholdAngle);
+        EdgesGeometry(const BufferGeometry& geometry, float thresholdAngle);
     };
 
 }// namespace threepp

@@ -114,20 +114,11 @@ namespace threepp {
 
         void copy(const BufferGeometry& source);
 
-        [[nodiscard]] std::shared_ptr<BufferGeometry> clone() const {
-            auto g = std::make_shared<BufferGeometry>();
-            g->copy(*this);
-            return g;
-        }
+        [[nodiscard]] std::shared_ptr<BufferGeometry> clone() const;
 
-        static std::shared_ptr<BufferGeometry> create() {
+        ~BufferGeometry() override;
 
-            return std::make_shared<BufferGeometry>();
-        }
-
-        ~BufferGeometry() override {
-            dispose();
-        };
+        static std::shared_ptr<BufferGeometry> create();
 
     private:
         bool disposed_ = false;
