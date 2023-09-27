@@ -20,9 +20,8 @@ namespace kine {
 
     private:
         threepp::Matrix4 transformation_;
-
     };
 
-}
+}// namespace kine
 
 #endif//THREEPP_LINK_HPP
