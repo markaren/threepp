@@ -7,11 +7,11 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("CatmullRoomCurve", {{"aa", 8}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.set(5, 10, 20);
 
     OrbitControls controls{*camera, canvas};

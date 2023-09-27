@@ -63,12 +63,12 @@ namespace {
 int main() {
 
     Canvas canvas("DataTexture3D", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
     renderer.setClearColor(Color::blue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.z = 1.5f;
 
     OrbitControls controls{*camera, canvas};

@@ -42,11 +42,11 @@ namespace {
 int main() {
 
     Canvas canvas("LatheGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = Color::gray;
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
     OrbitControls controls{*camera, canvas};

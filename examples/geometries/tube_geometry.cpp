@@ -27,10 +27,10 @@ namespace {
 int main() {
 
     Canvas canvas("TubeGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 20;
 
     OrbitControls controls{*camera, canvas};

@@ -50,11 +50,11 @@ int main() {
 
     Canvas canvas("Raw Shader demo", {{"antialiasing", 4}});
 
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
     auto scene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 1, 10);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 1, 10);
     camera->position.z = 2;
 
     int triangles = 1000;

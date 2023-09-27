@@ -68,10 +68,10 @@ struct MyUI: ImguiContext {
 int main() {
 
     Canvas canvas{"Crane3R", {{"size", WindowSize{1280, 720}}, {"antialiasing", 8}}};
-    GLRenderer renderer{canvas};
+    GLRenderer renderer{canvas.size()};
     renderer.setClearColor(Color::aliceblue);
 
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
 
     OrbitControls controls(*camera, canvas);

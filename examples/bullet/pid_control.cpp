@@ -91,7 +91,7 @@ namespace {
 int main() {
 
     Canvas canvas;
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();

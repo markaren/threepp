@@ -6,7 +6,7 @@ int main() {
     SnakeGame game(10);
 
     Canvas canvas("Snake");
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = std::make_shared<SnakeScene>(game);
     canvas.addKeyListener(scene.get());

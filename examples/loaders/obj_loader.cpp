@@ -20,10 +20,10 @@ void createAndAddLights(Scene& scene) {
 int main() {
 
     Canvas canvas{Canvas::Parameters().antialiasing(8)};
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(0, 100, 150);
 
     OBJLoader loader;

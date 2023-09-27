@@ -31,14 +31,14 @@ namespace {
 int main() {
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     int amount = 10;
     int count = static_cast<int>(std::pow(amount, 3));
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10000);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
     camera->position.set(amount, amount, amount);
 
     OrbitControls controls{*camera, canvas};
@@ -76,7 +76,7 @@ int main() {
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](auto& pos) {
-        auto size = canvas.getSize();
+        auto size = canvas.size();
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
     });

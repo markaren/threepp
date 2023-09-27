@@ -110,10 +110,10 @@ namespace {
 int main() {
 
     Canvas canvas("Geometries", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.z = 8;
 
     TextureLoader tl;

@@ -6,11 +6,11 @@ using namespace threepp;
 int main() {
 
     Canvas canvas{Canvas::Parameters().antialiasing(4)};
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.z = 1;
 
     OrbitControls controls{*camera, canvas};

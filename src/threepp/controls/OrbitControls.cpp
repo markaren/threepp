@@ -228,12 +228,12 @@ struct OrbitControls::Impl {
             targetDistance *= std::tan((perspective->fov / 2) * math::PI / 180.f);
 
             // we use only clientHeight here so aspect ratio does not distort speed
-            const auto size = canvas.getSize();
+            const auto size = canvas.size();
             panLeft(2 * deltaX * targetDistance / (float) size.height, *this->camera.matrix);
             panUp(2 * deltaY * targetDistance / (float) size.height, *this->camera.matrix);
         } else if (auto ortho = camera.as<OrthographicCamera>()) {
 
-            const auto size = canvas.getSize();
+            const auto size = canvas.size();
 
             // orthographic
             panLeft(
@@ -333,7 +333,7 @@ struct OrbitControls::Impl {
 
         rotateDelta.subVectors(rotateEnd, rotateStart).multiplyScalar(scope.rotateSpeed);
 
-        const auto size = canvas.getSize();
+        const auto size = canvas.size();
         rotateLeft(2 * math::PI * rotateDelta.x / static_cast<float>(size.height));// yes, height
 
         rotateUp(2 * math::PI * rotateDelta.y / static_cast<float>(size.height));

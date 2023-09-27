@@ -58,13 +58,13 @@ namespace {
 int main() {
 
     Canvas canvas("DirectionalLight", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(-5, 2, -5);
 
     auto light = DirectionalLight::create();
