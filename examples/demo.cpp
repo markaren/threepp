@@ -102,10 +102,10 @@ int main() {
     Canvas canvas("threepp demo");
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto box = createBox();
@@ -120,14 +120,14 @@ int main() {
 
     renderer.enableTextRendering();
     auto& handle = renderer.textHandle();
-    handle.setPosition(canvas.getSize().width - 130, 0);
+    handle.setPosition(canvas.size().width - 130, 0);
     handle.color = Color::red;
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.getAspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        handle.setPosition(canvas.getSize().width - 130, 0);
+        handle.setPosition(canvas.size().width - 130, 0);
     });
 
 #ifdef HAS_IMGUI

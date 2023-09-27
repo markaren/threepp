@@ -27,9 +27,9 @@ namespace threepp {
 
         Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values);
 
-        [[nodiscard]] const WindowSize& getSize() const;
+        [[nodiscard]] const WindowSize& size() const;
 
-        [[nodiscard]] float getAspect() const;
+        [[nodiscard]] float aspect() const;
 
         void setSize(WindowSize size);
 

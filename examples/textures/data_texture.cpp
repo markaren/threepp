@@ -22,16 +22,16 @@ namespace {
 int main() {
 
     Canvas canvas("Data texture", {{"aa", 4}});
-    GLRenderer renderer{canvas};
+    GLRenderer renderer{canvas.size()};
     renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
 
-    const auto& size = canvas.getSize();
+    const auto& size = canvas.size();
 
     auto scene = Scene::create();
     auto orthoScene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(70, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 10;
 
     auto orthoCamera = OrthographicCamera::create(-size.width / 2, size.width / 2, size.height / 2, -size.height / 2, 1, 10);

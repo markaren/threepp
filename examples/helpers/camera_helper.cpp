@@ -28,16 +28,16 @@ namespace {
 int main() {
 
     Canvas canvas{"Camera helper"};
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.autoClear = false;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, 0.5f * canvas.getAspect(), 1, 10);
+    auto camera = PerspectiveCamera::create(60, 0.5f * canvas.aspect(), 1, 10);
 
     auto sphere = createSphere();
     scene->add(sphere);
 
-    auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.getAspect(), 1, 1000);
+    auto camera2 = PerspectiveCamera::create(50, 0.5f * canvas.aspect(), 1, 1000);
     camera2->position.x = 30;
 
     OrbitControls controls{*camera2, canvas};
@@ -57,7 +57,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        auto size = canvas.getSize();
+        auto size = canvas.size();
 
         renderer.clear();
 

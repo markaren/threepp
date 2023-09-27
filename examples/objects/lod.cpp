@@ -7,10 +7,10 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("LOD");
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10);
     camera->position.z = -5;
 
     OrbitControls controls{*camera, canvas};

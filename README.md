@@ -93,10 +93,10 @@ auto createBox(const Vector3& pos, const Color& color) {
 int main() {
 
     Canvas canvas("Demo");
-    GLRenderer renderer{canvas};
+    GLRenderer renderer{canvas.size()};
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.z = 5;
     
     OrbitControls controls{*camera, canvas};
@@ -119,7 +119,7 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });

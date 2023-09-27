@@ -9,11 +9,11 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Texture2D", {{"aa", 8}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
     OrbitControls controls{*camera, canvas};

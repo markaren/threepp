@@ -138,10 +138,10 @@ int main() {
     Canvas canvas("SVGLoader", {{"antialiasing", 4}});
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 100;
 
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto gridHelper = GridHelper::create(160, 10);

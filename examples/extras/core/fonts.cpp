@@ -10,13 +10,13 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Fonts", {{"aa", 8}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
 
     auto scene = Scene::create();
     scene->background = Color::black;
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10000);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
     camera->position.set(0, 5, 40);
 
     auto light = DirectionalLight::create();

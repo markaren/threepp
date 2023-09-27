@@ -74,7 +74,7 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
-        explicit GLRenderer(Canvas& canvas, const Parameters& parameters = {});
+        explicit GLRenderer(WindowSize size, const Parameters& parameters = {});
 
         const gl::GLInfo& info();
 

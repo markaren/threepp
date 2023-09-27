@@ -78,13 +78,13 @@ namespace {
 int main() {
 
     Canvas canvas(Canvas::Parameters().antialiasing(4));
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(-20, 10, 20);
 
     OrbitControls controls{*camera, canvas};

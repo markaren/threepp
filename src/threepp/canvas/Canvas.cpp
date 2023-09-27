@@ -321,14 +321,14 @@ bool Canvas::animateOnce(const std::function<void()>& f) {
     return pimpl_->animateOnce(f);
 }
 
-const WindowSize& Canvas::getSize() const {
+const WindowSize& Canvas::size() const {
 
     return pimpl_->getSize();
 }
 
-float Canvas::getAspect() const {
+float Canvas::aspect() const {
 
-    return getSize().getAspect();
+    return size().getAspect();
 }
 
 void Canvas::setSize(WindowSize size) {

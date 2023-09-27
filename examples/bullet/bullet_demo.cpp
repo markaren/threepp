@@ -82,12 +82,12 @@ int main() {
     Canvas canvas(Canvas::Parameters().antialiasing(4));
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(-10, 10, 10);
 
     OrbitControls controls{*camera, canvas};
 
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     scene->add(HemisphereLight::create());

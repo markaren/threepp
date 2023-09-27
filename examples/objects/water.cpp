@@ -13,7 +13,7 @@ int main() {
     Canvas canvas("Water", {{"aa", 4}});
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(55, canvas.getAspect(), 1, 2000);
+    auto camera = PerspectiveCamera::create(55, canvas.aspect(), 1, 2000);
     camera->position.set(-300, 120, -150);
 
     OrbitControls controls{*camera, canvas};
@@ -27,7 +27,7 @@ int main() {
     light->position.set(100, 10, 100);
     scene->add(light);
 
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
