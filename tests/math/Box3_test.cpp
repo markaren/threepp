@@ -144,7 +144,7 @@ TEST_CASE("getCenter") {
     CHECK(center.equals(midpoint));
 }
 
-TEST_CASE("size") {
+TEST_CASE("getSize") {
 
     Box3 a(zero3, zero3);
     Vector3 size;
