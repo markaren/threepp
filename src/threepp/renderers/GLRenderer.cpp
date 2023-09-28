@@ -67,7 +67,7 @@ struct GLRenderer::Impl {
     bool textEnabled_ = false;
     std::vector<std::shared_ptr<TextHandle>> textHandles_;
 
-    std::shared_ptr<OnMaterialDispose> onMaterialDispose;
+    OnMaterialDispose onMaterialDispose;
 
     std::shared_ptr<gl::GLRenderList> currentRenderList;
     std::shared_ptr<gl::GLRenderState> currentRenderState;
@@ -147,8 +147,8 @@ struct GLRenderer::Impl {
           shadowMap(objects),
           materials(properties),
           programCache(bindingStates, clipping),
-          onMaterialDispose(std::make_shared<OnMaterialDispose>(this)),
-          _currentDrawBuffers(GL_BACK) {}
+          _currentDrawBuffers(GL_BACK),
+          onMaterialDispose(this){}
 
     void deallocateMaterial(Material* material) {
 
@@ -567,7 +567,7 @@ struct GLRenderer::Impl {
 
             // new material
 
-            material->addEventListener("dispose", onMaterialDispose);
+            material->addEventListener("dispose", &onMaterialDispose);
         }
 
         std::shared_ptr<gl::GLProgram> program = nullptr;

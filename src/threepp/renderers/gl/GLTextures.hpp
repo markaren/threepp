@@ -92,8 +92,8 @@ namespace threepp::gl {
         GLState& state;
         GLProperties& properties;
 
-        std::shared_ptr<TextureEventListener> onTextureDispose_;
-        std::shared_ptr<RenderTargetEventListener> onRenderTargetDispose_;
+        TextureEventListener onTextureDispose_;
+        RenderTargetEventListener onRenderTargetDispose_;
 
         int textureUnits = 0;
     };
