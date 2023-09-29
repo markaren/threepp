@@ -36,12 +36,12 @@ void CanvasBase::invokeLater(const std::function<void()>& f, float t) {
     tasks_.emplace(f, static_cast<float>(getTime()) + t);
 }
 
-const WindowSize& CanvasBase::getSize() const {
+const WindowSize& CanvasBase::size() const {
 
     return size_;
 }
 
-float CanvasBase::getAspect() const {
+float CanvasBase::aspect() const {
 
     return size_.getAspect();
 }

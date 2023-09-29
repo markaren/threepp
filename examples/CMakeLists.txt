@@ -26,4 +26,3 @@ if(THREEPP_BUILD_EXAMPLE_PROJECTS)
 else()
     message(AUTHOR_WARNING "Building examples, but NOT example projects. Re-run with -DTHREEPP_BUILD_EXAMPLE_PROJECTS=ON to change this behaviour.")
 endif()
-
