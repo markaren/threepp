@@ -19,7 +19,7 @@ void createAndAddLights(Scene& scene) {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(8)};
+    Canvas canvas{"OBJ loader", {{"aa", 8}}};
     GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();

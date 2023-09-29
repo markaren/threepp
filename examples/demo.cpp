@@ -100,13 +100,12 @@ auto createPlane() {
 int main() {
 
     Canvas canvas("threepp demo");
+    GLRenderer renderer(canvas.size());
+    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
-
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
 
     auto box = createBox();
     scene->add(box);

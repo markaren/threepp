@@ -44,7 +44,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(4)};
+    Canvas canvas{"Assimp loader", {{"aa", 4}}};
     GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 

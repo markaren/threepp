@@ -11,6 +11,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Water", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
+    renderer.checkShaderErrors = true;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(55, canvas.aspect(), 1, 2000);
@@ -26,10 +29,6 @@ int main() {
     auto light = DirectionalLight::create(0xffffff);
     light->position.set(100, 10, 100);
     scene->add(light);
-
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
-    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     const auto sphereGeometry = SphereGeometry::create(30);
     const auto sphereMaterial = MeshBasicMaterial::create();

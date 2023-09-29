@@ -77,7 +77,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("Instanced physics", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
