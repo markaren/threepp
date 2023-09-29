@@ -242,9 +242,9 @@ namespace threepp {
         }
 
         template<class T>
-        bool is() {
+        [[nodiscard]] bool is() const {
 
-            return dynamic_cast<T*>(this) != nullptr;
+            return dynamic_cast<const T*>(this) != nullptr;
         }
 
         void copy(const Object3D& source, bool recursive = true);
