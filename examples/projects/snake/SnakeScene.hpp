@@ -42,19 +42,34 @@ public:
 
         if (game_.isRunning()) {
 
-            if (evt.key == Key::UP && game_.direction != Direction::DOWN) {
-                game_.nextDirection = Direction::UP;
-            }
-            if (evt.key == Key::DOWN && game_.direction != Direction::UP) {
-                game_.nextDirection = Direction::DOWN;
-            }
-            if (evt.key == Key::LEFT && game_.direction != Direction::RIGHT) {
-                game_.nextDirection = Direction::LEFT;
-            }
-            if (evt.key == Key::RIGHT && game_.direction != Direction::LEFT) {
-                game_.nextDirection = Direction::RIGHT;
+            switch (evt.key) {
+                case Key::UP:
+                case Key::W: {
+                    if (game_.direction != Direction::DOWN) {
+                        game_.nextDirection = Direction::UP;
+                    }
+                } break;
+                case Key::DOWN:
+                case Key::S: {
+                    if (game_.direction != Direction::UP) {
+                        game_.nextDirection = Direction::DOWN;
+                    }
+                } break;
+                case Key::LEFT:
+                case Key::A: {
+                    if (game_.direction != Direction::RIGHT) {
+                        game_.nextDirection = Direction::LEFT;
+                    }
+                } break;
+                case Key::RIGHT:
+                case Key::D: {
+                    if (game_.direction != Direction::LEFT) {
+                        game_.nextDirection = Direction::RIGHT;
+                    }
+                }
             }
         }
+
         if (evt.key == Key::R) {
 
             game_.reset();

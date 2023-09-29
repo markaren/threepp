@@ -10,7 +10,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().size({1280, 720}).antialiasing(8)};
+    Canvas canvas{Canvas::Parameters().title("Youbot").size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas.size()};
     renderer.setClearColor(Color::aliceblue);
 

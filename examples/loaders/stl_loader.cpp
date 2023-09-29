@@ -5,7 +5,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(4)};
+    Canvas canvas{"STL loader", {{"aa", 4}}};
     GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 

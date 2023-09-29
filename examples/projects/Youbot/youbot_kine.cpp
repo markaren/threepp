@@ -64,7 +64,7 @@ struct MyUI: ImguiContext {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().size({1280, 720}).antialiasing(8)};
+    Canvas canvas{Canvas::Parameters().title("Youbot-kine").size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas.size()};
     renderer.setClearColor(Color::aliceblue);
 

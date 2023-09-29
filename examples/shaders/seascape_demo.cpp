@@ -16,6 +16,7 @@ int main() {
 
     GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
+
     auto scene = Scene::create();
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 1, 1000000);

@@ -90,7 +90,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas;
+    Canvas canvas("PID control");
     GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
