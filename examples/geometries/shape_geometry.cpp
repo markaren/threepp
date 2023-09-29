@@ -94,11 +94,11 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
 int main() {
 
     Canvas canvas("ShapeGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = Color::blue;
-    auto camera = PerspectiveCamera::create(65, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(65, canvas.aspect(), 0.1f, 1000);
     camera->position.set(0, 0, 60);
 
     auto light1 = DirectionalLight::create(0xffffff, 0.7f);

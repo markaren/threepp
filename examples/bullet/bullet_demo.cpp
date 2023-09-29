@@ -79,16 +79,17 @@ namespace {
 
 int main() {
 
-    Canvas canvas(CanvasOptions().antialiasing(4));
+    Canvas canvas("Bullet demo", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
+    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(-10, 10, 10);
 
     OrbitControls controls{*camera, canvas};
 
-    GLRenderer renderer(canvas);
-    renderer.setClearColor(Color::aliceblue);
+
 
     scene->add(HemisphereLight::create());
 

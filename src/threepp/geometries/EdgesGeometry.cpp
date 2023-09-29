@@ -25,14 +25,14 @@ namespace {
 }// namespace
 
 
-EdgesGeometry::EdgesGeometry(const BufferGeometry* geometry, float thresholdAngle) {
+EdgesGeometry::EdgesGeometry(const BufferGeometry& geometry, float thresholdAngle) {
 
     const auto precisionPoints = 4;
     const auto precision = std::pow(10, precisionPoints);
     const auto thresholdDot = std::cos(math::DEG2RAD * thresholdAngle);
 
-    const auto indexAttr = geometry->getIndex();
-    const auto positionAttr = geometry->getAttribute<float>("position");
+    const auto indexAttr = geometry.getIndex();
+    const auto positionAttr = geometry.getAttribute<float>("position");
     const auto indexCount = indexAttr ? indexAttr->count() : positionAttr->count();
 
     std::vector<unsigned int> indexArr{0, 0, 0};
@@ -147,5 +147,5 @@ std::string EdgesGeometry::type() const {
 
 std::shared_ptr<EdgesGeometry> EdgesGeometry::create(const BufferGeometry& geometry, float thresholdAngle) {
 
-    return std::shared_ptr<EdgesGeometry>(new EdgesGeometry(&geometry, thresholdAngle));
+    return std::shared_ptr<EdgesGeometry>(new EdgesGeometry(geometry, thresholdAngle));
 }

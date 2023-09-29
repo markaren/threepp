@@ -6,11 +6,11 @@ using namespace threepp;
 int main() {
 
     Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", "data/textures/three.png"}}};
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 8;
 
     OrbitControls controls{*camera, canvas};
@@ -42,7 +42,7 @@ int main() {
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](auto &pos) {
-        auto size = canvas.getSize();
+        auto size = canvas.size();
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
     });

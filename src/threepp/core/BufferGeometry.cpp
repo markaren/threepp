@@ -562,10 +562,26 @@ void BufferGeometry::computeVertexNormals() {
     }
 }
 
+std::shared_ptr<BufferGeometry> BufferGeometry::clone() const {
+    auto g = std::make_shared<BufferGeometry>();
+    g->copy(*this);
+
+    return g;
+}
+
 void BufferGeometry::dispose() {
 
     if (!disposed_) {
         disposed_ = true;
         this->dispatchEvent("dispose", this);
     }
+}
+
+BufferGeometry::~BufferGeometry() {
+    dispose();
+}
+
+std::shared_ptr<BufferGeometry> BufferGeometry::create() {
+
+    return std::make_shared<BufferGeometry>();
 }

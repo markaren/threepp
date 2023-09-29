@@ -6,13 +6,13 @@ int main() {
     SnakeGame game(10);
 
     Canvas canvas("Snake");
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
-    auto scene = std::make_shared<SnakeScene>(game);
-    canvas.addKeyListener(scene.get());
+    auto scene = SnakeScene(game);
+    canvas.addKeyListener(&scene);
 
     canvas.onWindowResize([&](WindowSize size) {
-        scene->camera().updateProjectionMatrix();
+        scene.camera().updateProjectionMatrix();
         renderer.setSize(size);
     });
 
@@ -27,9 +27,9 @@ int main() {
         if (game.isRunning()) {
 
             game.update(dt);
-            scene->update();
+            scene.update();
 
         }
-        renderer.render(*scene, scene->camera());
+        renderer.render(scene, scene.camera());
     });
 }

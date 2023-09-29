@@ -1,7 +1,6 @@
 
 #include "threepp/objects/Reflector.hpp"
 #include "threepp/threepp.hpp"
-#include "threepp/utils/URLFetcher.hpp"
 
 #include <iostream>
 
@@ -10,11 +9,11 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Texture2D", {{"aa", 8}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
     OrbitControls controls{*camera, canvas};
@@ -29,16 +28,7 @@ int main() {
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
-
-#ifdef THREEPP_WITH_CURL
-    std::string url{"https://raw.githubusercontent.com/mrdoob/three.js/r129/examples/textures/crate.gif"};
-    utils::UrlFetcher urlFetcher;
-    std::vector<unsigned char> data;
-    urlFetcher.fetch(url, data);
-    boxMaterial->map = tl.loadFromMemory(url, data);
-#else
     boxMaterial->map = tl.load("data/textures/crate.gif");
-#endif
 
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);

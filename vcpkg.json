@@ -11,12 +11,6 @@
     "sdl2"
   ],
   "features": {
-    "curl": {
-      "description": "Enable URLFetcher in library.",
-      "dependencies": [
-        "curl"
-      ]
-    },
     "json": {
       "description": "Enable JSON support in library. Required to use Fonts.",
       "dependencies":[
@@ -48,12 +42,6 @@
       "description": "Enable SVGLoader",
       "dependencies": [
         "pugixml"
-      ]
-    },
-    "matplotlib": {
-      "description": "Enable plotting in examples",
-      "dependencies": [
-        "matplotlib-cpp"
       ]
     }
   }

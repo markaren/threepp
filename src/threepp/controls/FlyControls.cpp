@@ -243,8 +243,8 @@ struct FlyControls::Impl {
 
             if (!scope.dragToLook || scope.pimpl_->mouseStatus > 0) {
 
-                const float halfWidth = static_cast<float>(scope.pimpl_->canvas.getSize().width) / 2;
-                const float halfHeight = static_cast<float>(scope.pimpl_->canvas.getSize().height) / 2;
+                const float halfWidth = static_cast<float>(scope.pimpl_->canvas.size().width) / 2;
+                const float halfHeight = static_cast<float>(scope.pimpl_->canvas.size().height) / 2;
 
                 scope.pimpl_->moveState.yawLeft = -((pos.x) - halfWidth) / halfWidth;
                 scope.pimpl_->moveState.pitchDown = ((pos.y) - halfHeight) / halfHeight;

@@ -30,11 +30,11 @@ namespace {
 int main() {
 
     Canvas canvas("ConvexGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = Color::blue;
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000);
     camera->position.set(0, 5, 30);
 
     OrbitControls controls{*camera, canvas};

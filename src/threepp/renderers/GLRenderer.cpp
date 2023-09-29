@@ -57,7 +57,6 @@ struct GLRenderer::Impl {
         GLRenderer::Impl* scope_;
     };
 
-    CanvasBase& canvas_;
     GLRenderer& scope;
 
     gl::GLState state;
@@ -132,13 +131,13 @@ struct GLRenderer::Impl {
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
 
-    Impl(GLRenderer& scope, CanvasBase& canvas, const GLRenderer::Parameters& parameters)
-        : scope(scope), canvas_(canvas), _size(canvas.getSize()),
+    Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
+        : scope(scope), _size(size),
           _viewport(0, 0, _size.width, _size.height),
           _scissor(0, 0, _size.width, _size.height),
           background(state, parameters.premultipliedAlpha),
-          bufferRenderer(new gl::GLBufferRenderer(_info)),
-          indexedBufferRenderer(new gl::GLIndexedBufferRenderer(_info)),
+          bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
+          indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
           clipping(properties),
           bindingStates(attributes),
           geometries(attributes, _info, bindingStates),
@@ -1086,8 +1085,8 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(CanvasBase& canvas, const GLRenderer::Parameters& parameters)
-    : pimpl_(std::make_unique<Impl>(*this, canvas, parameters)) {}
+GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters)
+    : pimpl_(std::make_unique<Impl>(*this, size, parameters)) {}
 
 
 const gl::GLInfo& threepp::GLRenderer::info() {
@@ -1133,8 +1132,6 @@ void GLRenderer::setSize(WindowSize size) {
     int canvasWidth = pimpl_->_size.width * pimpl_->_pixelRatio;
     int canvasHeight = pimpl_->_size.height * pimpl_->_pixelRatio;
 
-    pimpl_->canvas_.setSize({canvasWidth, canvasHeight});
-
     this->setViewport(0, 0, size.width, size.height);
 }
 
@@ -1149,8 +1146,6 @@ void GLRenderer::setDrawingBufferSize(int width, int height, int pixelRatio) {
     pimpl_->_size.height = height;
 
     pimpl_->_pixelRatio = pixelRatio;
-
-    pimpl_->canvas_.setSize({width * pixelRatio, height * pixelRatio});
 
     this->setViewport(0, 0, width, height);
 }

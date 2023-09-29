@@ -41,11 +41,11 @@ namespace {
 int main() {
 
     Canvas canvas("PointLight", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.set(5, 3, 5);
 
     OrbitControls controls{*camera, canvas};

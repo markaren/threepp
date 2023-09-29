@@ -6,12 +6,12 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Points", {{"aa", 8}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = 0x050505;
     scene->fog = Fog(0x050505, 2000, 3500);
-    auto camera = PerspectiveCamera::create(27, canvas.getAspect(), 5, 3500);
+    auto camera = PerspectiveCamera::create(27, canvas.aspect(), 5, 3500);
     camera->position.z = 2750;
 
     canvas.onWindowResize([&](WindowSize size) {

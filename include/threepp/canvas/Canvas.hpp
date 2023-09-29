@@ -31,9 +31,9 @@ namespace threepp {
     public:
         explicit CanvasBase(const WindowSize& size);
 
-        [[nodiscard]] const WindowSize& getSize() const;
+        [[nodiscard]] const WindowSize& size() const;
 
-        [[nodiscard]] float getAspect() const;
+        [[nodiscard]] float aspect() const;
 
         void onWindowResize(std::function<void(WindowSize)> f);
 

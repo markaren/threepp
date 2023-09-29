@@ -20,14 +20,14 @@ namespace {
 
 int main() {
 
-    Canvas canvas("threepp demo", {{"antialiasing", 4}});
+    Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas);
     renderer.setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create();
     camera->position.z = 5;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto scene = Scene::create();
 
@@ -59,7 +59,7 @@ int main() {
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         ui.render();
         group->position.fromArray(posBuf);
