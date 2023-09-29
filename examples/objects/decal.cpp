@@ -169,8 +169,8 @@ int main() {
     Raycaster raycaster;
     canvas.animate([&]() {
 
-        raycaster.setFromCamera(mouseListener.mouse, camera);
-        auto intersects = raycaster.intersectObject(mesh, false);
+        raycaster.setFromCamera(mouseListener.mouse, *camera);
+        auto intersects = raycaster.intersectObject(*mesh, false);
 
         bool click = mouseListener.mouseClick();
 
