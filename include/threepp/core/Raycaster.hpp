@@ -57,7 +57,7 @@ namespace threepp {
 
         std::vector<Intersection> intersectObject(Object3D& object, bool recursive = false);
 
-        std::vector<Intersection> intersectObjects(const std::vector<std::shared_ptr<Object3D>>& objects, bool recursive = false);
+        std::vector<Intersection> intersectObjects(const std::vector<Object3D*>& objects, bool recursive = false);
     };
 
 }// namespace threepp

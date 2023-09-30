@@ -55,7 +55,7 @@ std::vector<Intersection> Raycaster::intersectObject(Object3D& object, bool recu
     return intersects;
 }
 
-std::vector<Intersection> Raycaster::intersectObjects(const std::vector<std::shared_ptr<Object3D>>& objects, bool recursive) {
+std::vector<Intersection> Raycaster::intersectObjects(const std::vector<Object3D*>& objects, bool recursive) {
 
     std::vector<Intersection> intersects;
 

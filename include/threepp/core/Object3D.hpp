@@ -49,7 +49,7 @@ namespace threepp {
         // Non-owning pointer to Object's parent in the scene graph. An object can have at most one parent.
         Object3D* parent = nullptr;
         // Vector with object's children. See Group for info on manually grouping objects.
-        std::vector<std::shared_ptr<Object3D>> children;
+        std::vector<Object3D*> children;
 
         // This is used by the lookAt method, for example, to determine the orientation of the result.
         //Default is Object3D::defaultUp - that is, ( 0, 1, 0 ).
@@ -156,32 +156,29 @@ namespace threepp {
 
         // Adds object as child of this object. An arbitrary number of objects may be added.
         // Any current parent on an object passed in here will be removed, since an object can have at most one parent.
-        Object3D& add(const std::shared_ptr<Object3D>& object);
+        void add(const std::shared_ptr<Object3D>& object);
 
         // Removes object as child of this object.
-        Object3D& remove(const std::shared_ptr<Object3D>& object);
-
-        // Removes object as child of this object.
-        Object3D& remove(Object3D* object);
+        void remove(Object3D& object);
 
         // Removes this object from its current parent.
-        Object3D& removeFromParent();
+        void removeFromParent();
 
         // Removes all child objects.
-        Object3D& clear();
+        void clear();
 
         // Searches through an object and its children, starting with the object itself, and returns the first with a matching name.
         // Note that for most objects the name is an empty string by default. You will have to set it manually to make use of this method.
         Object3D* getObjectByName(const std::string& name);
 
         // Returns a vector representing the position of the object in world space.
-        Vector3& getWorldPosition(Vector3& target);
+        void getWorldPosition(Vector3& target);
 
         // Returns a quaternion representing the rotation of the object in world space.
-        Quaternion& getWorldQuaternion(Quaternion& target);
+        void getWorldQuaternion(Quaternion& target);
 
         // Returns a vector of the scaling factors applied to the object for each axis in world space.
-        Vector3& getWorldScale(Vector3& target);
+        void getWorldScale(Vector3& target);
 
         // Returns a vector representing the direction of object's positive z-axis in world space.
         virtual void getWorldDirection(Vector3& target);
@@ -255,6 +252,8 @@ namespace threepp {
 
     private:
         inline static unsigned int _object3Did{0};
+
+        std::vector<std::shared_ptr<Object3D>> children_;
     };
 
 }// namespace threepp
