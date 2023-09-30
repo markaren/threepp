@@ -69,7 +69,7 @@ int main() {
     scene.add(box);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera.aspect = size.getAspect();
+        camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
         orthoCamera.left = -size.width / 2;

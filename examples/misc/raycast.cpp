@@ -46,7 +46,7 @@ int main() {
     scene.add(grid);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera.aspect = size.getAspect();
+        camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
         renderer.setSize(size);
     });

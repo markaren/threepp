@@ -150,7 +150,7 @@ int main() {
     std::shared_ptr<Object3D> svg;
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
