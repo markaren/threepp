@@ -2,11 +2,15 @@
 #include "threepp/objects/LineSegments.hpp"
 
 #include <iostream>
+#include <memory>
 
 using namespace threepp;
 
-LineSegments::LineSegments(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
+LineSegments::LineSegments(
+        const std::shared_ptr<BufferGeometry>& geometry,
+        const std::shared_ptr<Material>& material)
     : Line(geometry, material) {}
+
 
 std::string LineSegments::type() const {
 
@@ -49,7 +53,9 @@ std::shared_ptr<Object3D> LineSegments::clone(bool recursive) {
     return clone;
 }
 
-std::shared_ptr<LineSegments> LineSegments::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {
+std::shared_ptr<LineSegments> LineSegments::create(
+        const std::shared_ptr<BufferGeometry>& geometry,
+        const std::shared_ptr<Material>& material) {
 
-    return std::shared_ptr<LineSegments>(new LineSegments(geometry, (material)));
+    return std::make_shared<LineSegments>(geometry, (material));
 }

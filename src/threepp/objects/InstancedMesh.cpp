@@ -1,4 +1,6 @@
 
+#include <memory>
+
 #include "threepp/objects/InstancedMesh.hpp"
 
 #include "threepp/core/Raycaster.hpp"
@@ -17,11 +19,16 @@ namespace {
 }// namespace
 
 
-InstancedMesh::InstancedMesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, unsigned int count)
-    : Mesh(std::move(geometry), std::move(material)), count(static_cast<int>(count)), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
+InstancedMesh::InstancedMesh(
+        std::shared_ptr<BufferGeometry> geometry,
+        std::shared_ptr<Material> material,
+        size_t count)
+    : Mesh(std::move(geometry), std::move(material)),
+      count(count), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
 
     this->frustumCulled = false;
 }
+
 
 std::string InstancedMesh::type() const {
 
@@ -95,7 +102,10 @@ void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& int
     }
 }
 
-std::shared_ptr<InstancedMesh> InstancedMesh::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material, unsigned int count) {
+std::shared_ptr<InstancedMesh> InstancedMesh::create(
+        std::shared_ptr<BufferGeometry> geometry,
+        std::shared_ptr<Material> material,
+        size_t count) {
 
-    return std::shared_ptr<InstancedMesh>(new InstancedMesh(std::move(geometry), std::move(material), count));
+    return std::make_shared<InstancedMesh>(std::move(geometry), std::move(material), count);
 }

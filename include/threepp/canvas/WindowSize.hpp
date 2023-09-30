@@ -5,8 +5,8 @@
 namespace threepp {
 
     struct WindowSize {
-        int width;
-        int height;
+        int width{};
+        int height{};
 
         [[nodiscard]] float getAspect() const {
 

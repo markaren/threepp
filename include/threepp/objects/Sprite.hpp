@@ -13,8 +13,9 @@ namespace threepp {
 
     public:
         Vector2 center{0.5f, 0.5f};
-
         std::shared_ptr<SpriteMaterial> material;
+
+        explicit Sprite(const std::shared_ptr<SpriteMaterial>& material);
 
         [[nodiscard]] std::string type() const override;
 
@@ -26,8 +27,6 @@ namespace threepp {
 
     private:
         std::shared_ptr<BufferGeometry> _geometry;
-
-        explicit Sprite(const std::shared_ptr<SpriteMaterial>& material);
     };
 
 }// namespace threepp

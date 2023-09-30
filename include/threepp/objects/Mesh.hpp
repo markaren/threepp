@@ -14,6 +14,10 @@ namespace threepp {
     class Mesh: public Object3D {
 
     public:
+
+        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
+        Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
+
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
@@ -49,9 +53,6 @@ namespace threepp {
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
         std::vector<std::shared_ptr<Material>> materials_;
-
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
     };
 
 }// namespace threepp

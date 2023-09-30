@@ -16,6 +16,8 @@ namespace threepp {
     class Line: public Object3D {
 
     public:
+        Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
+
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
@@ -35,8 +37,6 @@ namespace threepp {
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
         std::shared_ptr<Material> material_;
-
-        Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
     };
 
 }// namespace threepp

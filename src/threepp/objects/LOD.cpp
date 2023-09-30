@@ -1,4 +1,6 @@
 
+#include <memory>
+
 #include "threepp/objects/LOD.hpp"
 
 #include "threepp/cameras/Camera.hpp"
@@ -12,7 +14,7 @@ std::string LOD::type() const {
 
 std::shared_ptr<LOD> LOD::create() {
 
-    return std::shared_ptr<LOD>(new LOD());
+    return std::make_shared<LOD>();
 }
 
 LOD& LOD::addLevel(const std::shared_ptr<Object3D>& object, float distance) {

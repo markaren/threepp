@@ -7,22 +7,22 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Raycast");
+    Canvas canvas("Raycast", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
-    auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
-    camera->layers.enableAll();
-    camera->position.z = 5;
+    Scene scene;
+    PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
+    camera.layers.enableAll();
+    camera.position.z = 5;
 
-    OrbitControls controls(*camera, canvas);
+    OrbitControls controls(camera, canvas);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
     boxMaterial->color = Color::green;
     auto box = Mesh::create(boxGeometry, boxMaterial);
-    scene->add(box);
+    scene.add(box);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create();
@@ -30,7 +30,7 @@ int main() {
     planeMaterial->side = Side::Double;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.z = -2;
-    scene->add(plane);
+    scene.add(plane);
 
     float sphereRadius = 0.1f;
     const auto sphereGeometry = SphereGeometry::create(sphereRadius);
@@ -39,15 +39,15 @@ int main() {
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->visible = false;
     sphere->layers.set(1);
-    scene->add(sphere);
+    scene.add(sphere);
 
     auto grid = GridHelper::create();
     grid->position.y = -4;
-    scene->add(grid);
+    scene.add(grid);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
+        camera.aspect = size.getAspect();
+        camera.updateProjectionMatrix();
         renderer.setSize(size);
     });
 
@@ -65,13 +65,13 @@ int main() {
     Raycaster raycaster;
     raycaster.params.lineThreshold = 0.1f;
     canvas.animate([&]() {
-        raycaster.setFromCamera(mouse, *camera);
+        raycaster.setFromCamera(mouse, camera);
 
         sphere->visible = false;
-        auto intersects = raycaster.intersectObjects(scene->children);
+        const auto intersects = raycaster.intersectObjects(scene.children);
 
         if (!intersects.empty()) {
-            auto& intersect = intersects.front();
+            const auto& intersect = intersects.front();
 
             sphere->position.copy(intersect.point);
             if (intersect.face) {
@@ -80,6 +80,6 @@ int main() {
             sphere->visible = true;
         }
 
-        renderer.render(*scene, *camera);
+        renderer.render(scene, camera);
     });
 }

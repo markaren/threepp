@@ -1,4 +1,6 @@
 
+#include <memory>
+
 #include "threepp/objects/Sky.hpp"
 
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -191,5 +193,5 @@ std::string Sky::type() const {
 
 std::shared_ptr<Sky> Sky::create() {
 
-    return std::shared_ptr<Sky>(new Sky());
+    return std::make_shared<Sky>();
 }

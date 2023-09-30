@@ -25,6 +25,8 @@ namespace threepp {
     public:
         bool autoUpdate = true;
 
+        LOD() = default;
+
         [[nodiscard]] std::string type() const override;
 
         LOD& addLevel(const std::shared_ptr<Object3D>& object, float distance = 0);
@@ -34,9 +36,6 @@ namespace threepp {
         void update(Camera* camera);
 
         static std::shared_ptr<LOD> create();
-
-    protected:
-        LOD() = default;
 
     private:
         size_t _currentLevel = 0;

@@ -67,11 +67,11 @@ int main() {
     renderer.checkShaderErrors = true;
     renderer.setClearColor(Color::blue);
 
-    auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
-    camera->position.z = 1.5f;
+    Scene scene;
+    PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 100);
+    camera.position.z = 1.5f;
 
-    OrbitControls controls{*camera, canvas};
+    OrbitControls controls{camera, canvas};
 
     unsigned int size = 128;
     auto data = createTextureData(size);
@@ -85,11 +85,11 @@ int main() {
     auto geometry = BoxGeometry::create(1, 1, 1);
 
     auto mesh = Mesh::create(geometry, material);
-    scene->add(mesh);
+    scene.add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
+        camera.aspect = size.getAspect();
+        camera.updateProjectionMatrix();
         renderer.setSize(size);
     });
 
@@ -99,13 +99,13 @@ int main() {
 
         float t = clock.getElapsedTime();
 
-        material->uniforms->at("cameraPos").value<Vector3>().copy(camera->position);
+        material->uniforms->at("cameraPos").value<Vector3>().copy(camera.position);
         material->uniforms->at("frame").value<int>()++;
 
         int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t) + 50);
         material->uniforms->at("steps").value<int>() = std::max(1, step);
 
-        renderer.render(*scene, *camera);
+        renderer.render(scene, camera);
     });
 }
 
