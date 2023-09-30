@@ -210,17 +210,41 @@ void Object3D::add(const std::shared_ptr<Object3D>& object) {
     object->dispatchEvent("added");
 }
 
+void Object3D::add(Object3D& object) {
+
+    if (object.parent) {
+
+        object.parent->remove(object);
+    }
+
+    object.parent = this;
+    this->children.emplace_back(&object);
+
+    object.dispatchEvent("added");
+}
+
 void Object3D::remove(Object3D& object) {
 
-    auto find = std::find_if(children_.begin(), children_.end(), [&object](const auto& obj) {
-        return obj.get() == &object;
-    });
-    if (find != children_.end()) {
-        std::shared_ptr<Object3D> child = *find;
-        children.erase(children.begin() + std::distance(children_.begin(), find));
-        children_.erase(find);
-        child->parent = nullptr;
-        child->dispatchEvent("remove", child.get());
+    { // non-owning (all children should be represented here)
+        auto find = std::find_if(children.begin(), children.end(), [&object](const auto& obj) {
+            return obj == &object;
+        });
+        if (find != children.end()) {
+            Object3D* child = *find;
+            children.erase(find);
+
+            child->parent = nullptr;
+            child->dispatchEvent("remove", child);
+        }
+    }
+    { // owning
+        auto find = std::find_if(children_.begin(), children_.end(), [&object](const auto& obj) {
+            return obj.get() == &object;
+        });
+        if (find != children_.end()) {
+
+            children_.erase(find);
+        }
     }
 }
 
