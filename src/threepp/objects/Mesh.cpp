@@ -112,6 +112,11 @@ Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr
     : geometry_(std::move(geometry)), materials_{std::move(materials)} {
 }
 
+Mesh::Mesh(Mesh&& other) noexcept: Object3D(std::move(other)){
+    geometry_ = std::move(other.geometry_);
+    materials_ = std::move(other.materials_);
+}
+
 std::vector<Material*> Mesh::materials() {
 
     std::vector<Material*> res(materials_.size());

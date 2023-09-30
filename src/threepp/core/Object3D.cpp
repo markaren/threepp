@@ -225,7 +225,7 @@ void Object3D::add(Object3D& object) {
 
 void Object3D::remove(Object3D& object) {
 
-    { // non-owning (all children should be represented here)
+    {// non-owning (all children should be represented here)
         auto find = std::find_if(children.begin(), children.end(), [&object](const auto& obj) {
             return obj == &object;
         });
@@ -237,7 +237,7 @@ void Object3D::remove(Object3D& object) {
             child->dispatchEvent("remove", child);
         }
     }
-    { // owning
+    {// owning
         auto find = std::find_if(children_.begin(), children_.end(), [&object](const auto& obj) {
             return obj.get() == &object;
         });
@@ -460,6 +460,58 @@ std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
     clone->copy(*this, recursive);
 
     return clone;
+}
+
+Object3D::Object3D(Object3D&& source) noexcept {
+
+    this->id = source.id;
+    this->uuid = std::move(source.uuid);
+    this->name = std::move(source.name);
+
+    this->up = source.up;
+    source.up = defaultUp;
+
+    this->parent = source.parent;
+    source.parent = nullptr;
+
+    this->scale.copy(source.scale);
+    this->position.copy(source.position);
+
+    this->rotation = std::move(source.rotation);
+    this->quaternion = std::move(source.quaternion);
+
+    this->matrix = std::move(source.matrix);
+    this->matrixWorld = std::move(source.matrixWorld);
+
+    this->matrixAutoUpdate = source.matrixAutoUpdate;
+    this->matrixWorldNeedsUpdate = source.matrixWorldNeedsUpdate;
+
+    this->layers.mask_ = source.layers.mask_;
+    this->visible = source.visible;
+
+    this->castShadow = source.castShadow;
+    this->receiveShadow = source.receiveShadow;
+
+    this->frustumCulled = source.frustumCulled;
+    this->renderOrder = source.renderOrder;
+
+    this->onAfterRender = std::move(onAfterRender);
+    this->onBeforeRender = std::move(onBeforeRender);
+
+    this->rotation._onChange([this] {
+        quaternion.setFromEuler(rotation, false);
+    });
+    this->quaternion._onChange([this] {
+        rotation.setFromQuaternion(quaternion, std::nullopt, false);
+    });
+
+    this->children = std::move(source.children);
+    this->children_ = std::move(source.children_);
+
+    for (auto& c : children) {
+        c->parent = this;
+    }
+
 }
 
 Object3D::~Object3D() = default;

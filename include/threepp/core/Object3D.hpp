@@ -41,7 +41,7 @@ namespace threepp {
         unsigned int id{_object3Did++};
 
         // UUID of this object instance. This gets automatically assigned, so this shouldn't be edited.
-        const std::string uuid;
+        std::string uuid;
 
         // Optional name of the object (doesn't need to be unique). Default is an empty string.
         std::string name;
@@ -105,7 +105,8 @@ namespace threepp {
 
         Object3D();
 
-        Object3D(Object3D&&) = delete;
+        Object3D(Object3D&& source) noexcept;
+        Object3D& operator=(Object3D&& other) noexcept;
         Object3D(const Object3D&) = delete;
         Object3D& operator=(const Object3D&) = delete;
 

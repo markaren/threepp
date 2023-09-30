@@ -18,6 +18,8 @@ namespace threepp {
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
 
+        Mesh(Mesh&& other) noexcept;
+
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
