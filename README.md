@@ -69,8 +69,8 @@ some headers will require additional dependencies in order to compile.
 
 In general, you'll find that math classes are value types, while `threepp` expect smart pointers for other types. 
 For convenience, geometries, materials etc. has a static `::create` function that returns a `std::shared_ptr`.
-There should never be a need to handle memory explicitly using `threepp`.
-Furthermore, materials, geometries and textures are automatically disposed when they are no longer referenced.
+Thus, you don't necessarily need to handle memory explicitly using `threepp`.
+Furthermore, materials, geometries and textures are automatically disposed when they go out of scope.
 Yay!
 
 ### Example
