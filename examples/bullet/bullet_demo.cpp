@@ -84,14 +84,12 @@ int main() {
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
+    scene->add(HemisphereLight::create());
+
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(-10, 10, 10);
 
     OrbitControls controls{*camera, canvas};
-
-
-
-    scene->add(HemisphereLight::create());
 
     TextureLoader tl;
     auto box = createBox(tl);
@@ -138,7 +136,8 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        if (evt.key == Key::SPACE) {// space
+
+        if (evt.key == Key::SPACE) {
             auto geom = SphereGeometry::create(0.1f);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
             mesh->position.copy(camera->position);
