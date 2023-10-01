@@ -79,7 +79,7 @@ int main() {
 
     Canvas canvas("Instanced physics", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+//    renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
     renderer.setClearColor(Color::aliceblue);
 

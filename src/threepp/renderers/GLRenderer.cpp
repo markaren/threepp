@@ -60,7 +60,7 @@ struct GLRenderer::Impl {
     GLRenderer& scope;
 
     gl::GLState state;
-    gl::GLShadowMap shadowMap;
+
 
     Scene _emptyScene;
 
@@ -130,6 +130,7 @@ struct GLRenderer::Impl {
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
+    gl::GLShadowMap shadowMap;
 
     Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
         : scope(scope), _size(size),
