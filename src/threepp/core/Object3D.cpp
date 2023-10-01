@@ -462,10 +462,8 @@ std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
     return clone;
 }
 
-Object3D::Object3D(Object3D&& source) noexcept {
+Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
 
-    this->id = source.id;
-    this->uuid = std::move(source.uuid);
     this->name = std::move(source.name);
 
     this->up = source.up;
@@ -511,7 +509,6 @@ Object3D::Object3D(Object3D&& source) noexcept {
     for (auto& c : children) {
         c->parent = this;
     }
-
 }
 
 Object3D::~Object3D() = default;

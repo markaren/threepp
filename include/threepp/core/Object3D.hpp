@@ -41,7 +41,7 @@ namespace threepp {
         unsigned int id{_object3Did++};
 
         // UUID of this object instance. This gets automatically assigned, so this shouldn't be edited.
-        std::string uuid;
+        const std::string uuid;
 
         // Optional name of the object (doesn't need to be unique). Default is an empty string.
         std::string name;
