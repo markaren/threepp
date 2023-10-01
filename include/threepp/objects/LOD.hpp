@@ -29,11 +29,13 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
+        LOD& addLevel(Object3D& object, float distance = 0);
+
         LOD& addLevel(const std::shared_ptr<Object3D>& object, float distance = 0);
 
         [[nodiscard]] size_t getCurrentLevel() const;
 
-        void update(Camera* camera);
+        void update(Camera& camera);
 
         static std::shared_ptr<LOD> create();
 
