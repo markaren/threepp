@@ -15,7 +15,7 @@ namespace threepp {
 
     public:
 
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
+        explicit Mesh(std::shared_ptr<BufferGeometry> geometry = nullptr, std::shared_ptr<Material> material = nullptr);
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
 
         Mesh(Mesh&& other) noexcept;
