@@ -2,10 +2,11 @@
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
+using namespace std::string_literals;
 
 int main() {
 
-    Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", "data/textures/three.png"}}};
+    Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", "data/textures/three.png"s}}};
     GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
@@ -35,7 +36,7 @@ int main() {
     scene->add(helper);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -54,8 +55,8 @@ int main() {
         helper->visible = false;
         material->rotation += 1 * clock.getDelta();
 
-        raycaster.setFromCamera(mouse, camera.get());
-        auto intersects = raycaster.intersectObject(sprites.get(), true);
+        raycaster.setFromCamera(mouse, *camera);
+        auto intersects = raycaster.intersectObject(*sprites, true);
         if (!intersects.empty()) {
             auto &i = intersects.front();
             helper->position.copy(i.point);

@@ -53,13 +53,11 @@ namespace threepp {
 
         void set(const Vector3& origin, const Vector3& direction);
 
-        void setFromCamera(const Vector2& coords, Camera* camera);
+        void setFromCamera(const Vector2& coords, Camera& camera);
 
-        void setFromCamera(const Vector2& coords, const std::shared_ptr<Camera>& camera);
+        std::vector<Intersection> intersectObject(Object3D& object, bool recursive = false);
 
-        std::vector<Intersection> intersectObject(Object3D* object, bool recursive = false);
-
-        std::vector<Intersection> intersectObjects(std::vector<std::shared_ptr<Object3D>>& objects, bool recursive = false);
+        std::vector<Intersection> intersectObjects(const std::vector<Object3D*>& objects, bool recursive = false);
     };
 
 }// namespace threepp

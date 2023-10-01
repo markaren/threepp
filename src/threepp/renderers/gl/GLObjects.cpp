@@ -61,8 +61,7 @@ struct GLObjects::Impl {
             updateMap_[geometry] = frame;
         }
 
-        auto instancedMesh = object->as<InstancedMesh>();
-        if (instancedMesh) {
+        if (auto instancedMesh = object->as<InstancedMesh>()) {
 
             if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
 

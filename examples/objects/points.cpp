@@ -15,7 +15,7 @@ int main() {
     camera->position.z = 2750;
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });

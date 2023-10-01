@@ -12,11 +12,11 @@ int main() {
     GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
-    auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
-    camera->position.z = 5;
+    Scene scene;
+    PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
+    camera.position.z = 5;
 
-    OrbitControls controls{*camera, canvas};
+    OrbitControls controls{camera, canvas};
 
     TextureLoader tl;
 
@@ -24,7 +24,7 @@ int main() {
     const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load("data/textures/checker.png")}});
     auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
     sphere->position.setX(1);
-    scene->add(sphere);
+    scene.add(sphere);
 
     const auto boxGeometry = BoxGeometry::create();
     const auto boxMaterial = MeshBasicMaterial::create();
@@ -32,14 +32,14 @@ int main() {
 
     auto box = Mesh::create(boxGeometry, boxMaterial);
     box->position.setX(-1);
-    scene->add(box);
+    scene.add(box);
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create({{"side", Side::Double},
                                                           {"map", tl.load("data/textures/brick_bump.jpg")}});
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
-    scene->add(plane);
+    scene.add(plane);
 
     Reflector::Options opt;
     opt.clipBias = 0.003f;
@@ -47,11 +47,11 @@ int main() {
     auto reflector = Reflector::create(PlaneGeometry::create(10, 10), opt);
     reflector->rotateX(math::degToRad(-90));
     reflector->position.setY(-2.5f);
-    scene->add(reflector);
+    scene.add(reflector);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
+        camera.aspect = size.aspect();
+        camera.updateProjectionMatrix();
         renderer.setSize(size);
     });
 
@@ -62,6 +62,6 @@ int main() {
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer.render(scene, camera);
     });
 }

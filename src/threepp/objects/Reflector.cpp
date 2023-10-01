@@ -1,4 +1,5 @@
 
+#include <memory>
 #include <utility>
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -197,7 +198,7 @@ std::string threepp::Reflector::type() const {
 
 std::shared_ptr<Reflector> Reflector::create(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options) {
 
-    return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));
+    return std::make_shared<Reflector>(geometry, std::move(options));
 }
 
 Reflector::~Reflector() = default;

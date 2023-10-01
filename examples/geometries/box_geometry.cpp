@@ -11,6 +11,17 @@ namespace {
         return LineSegments::create(WireframeGeometry::create(geometry), material);
     }
 
+    auto createMesh(const BoxGeometry::Params& params) {
+
+        auto geometry = BoxGeometry::create(params);
+        auto material = MeshBasicMaterial::create();
+
+        Mesh mesh(geometry, material);
+        mesh.add(createWireframe(*geometry));
+
+        return mesh;
+    }
+
     void updateGroupGeometry(Mesh& mesh, const BoxGeometry::Params& params) {
 
         auto g = BoxGeometry::create(params);
@@ -20,16 +31,6 @@ namespace {
         mesh.add(createWireframe(*g));
     }
 
-    auto createMesh(const BoxGeometry::Params& params) {
-
-        auto geometry = BoxGeometry::create(params);
-        auto material = MeshBasicMaterial::create();
-
-        auto mesh = Mesh::create(geometry, material);
-        mesh->add(createWireframe(*geometry));
-
-        return mesh;
-    }
 
 }// namespace
 
@@ -38,19 +39,19 @@ int main() {
     Canvas canvas("BoxGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
 
-    auto scene = Scene::create();
-    scene->background = Color::blue;
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
-    camera->position.z = 5;
+    Scene scene;
+    scene.background = Color::blue;
+    PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 100);
+    camera.position.z = 5;
 
     BoxGeometry::Params params{};
 
     auto mesh = createMesh(params);
-    scene->add(mesh);
+    scene.add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
+        camera.aspect = size.aspect();
+        camera.updateProjectionMatrix();
         renderer.setSize(size);
     });
 
@@ -79,16 +80,16 @@ int main() {
 
         float dt = clock.getDelta();
 
-        mesh->rotation.y += 0.8f * dt;
-        mesh->rotation.x += 0.5f * dt;
+        mesh.rotation.y += 0.8f * dt;
+        mesh.rotation.x += 0.5f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer.render(scene, camera);
 
         ui.render();
 
         if (paramsChanged) {
             paramsChanged = false;
-            updateGroupGeometry(*mesh, params);
+            updateGroupGeometry(mesh, params);
         }
     });
 }

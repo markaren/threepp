@@ -274,7 +274,7 @@ struct GLShadowMap::Impl {
 
         for (auto& child : object->children) {
 
-            renderObject(_renderer, child.get(), camera, shadowCamera, light);
+            renderObject(_renderer, child, camera, shadowCamera, light);
         }
     }
 

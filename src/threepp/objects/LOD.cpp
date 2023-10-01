@@ -1,4 +1,6 @@
 
+#include <memory>
+
 #include "threepp/objects/LOD.hpp"
 
 #include "threepp/cameras/Camera.hpp"
@@ -12,7 +14,28 @@ std::string LOD::type() const {
 
 std::shared_ptr<LOD> LOD::create() {
 
-    return std::shared_ptr<LOD>(new LOD());
+    return std::make_shared<LOD>();
+}
+
+LOD& LOD::addLevel(Object3D& object, float distance) {
+
+    distance = std::abs(distance);
+
+    int l;
+
+    for (l = 0; l < levels.size(); l++) {
+
+        if (distance < levels[l].distance) {
+
+            break;
+        }
+    }
+
+    levels.insert(levels.begin() + l, {distance, &object});
+
+    this->add(object);
+
+    return *this;
 }
 
 LOD& LOD::addLevel(const std::shared_ptr<Object3D>& object, float distance) {
@@ -41,17 +64,17 @@ size_t LOD::getCurrentLevel() const {
     return _currentLevel;
 }
 
-void LOD::update(Camera* camera) {
+void LOD::update(Camera& camera) {
 
     static Vector3 _v1;
     static Vector3 _v2;
 
     if (levels.size() > 1) {
 
-        _v1.setFromMatrixPosition(*camera->matrixWorld);
+        _v1.setFromMatrixPosition(*camera.matrixWorld);
         _v2.setFromMatrixPosition(*this->matrixWorld);
 
-        float distance = _v1.distanceTo(_v2) / camera->zoom;
+        float distance = _v1.distanceTo(_v2) / camera.zoom;
 
         levels[0].object->visible = true;
 

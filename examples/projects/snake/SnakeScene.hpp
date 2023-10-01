@@ -100,7 +100,7 @@ public:
         // keep initial box
         auto head = snake_.front();
         for (unsigned i = 1; i < snake_.size(); ++i) {
-            remove(snake_.at(i));
+            remove(*snake_.at(i));
         }
         snake_.clear();
         snake_.emplace_back(head);

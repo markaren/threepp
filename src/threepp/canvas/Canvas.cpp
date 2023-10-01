@@ -328,7 +328,7 @@ const WindowSize& Canvas::size() const {
 
 float Canvas::aspect() const {
 
-    return size().getAspect();
+    return size().aspect();
 }
 
 void Canvas::setSize(WindowSize size) {

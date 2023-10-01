@@ -9,6 +9,7 @@
 #include "threepp/math/Triangle.hpp"
 
 #include <algorithm>
+#include <memory>
 
 
 using namespace threepp;
@@ -109,6 +110,11 @@ Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> m
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
     : geometry_(std::move(geometry)), materials_{std::move(materials)} {
+}
+
+Mesh::Mesh(Mesh&& other) noexcept: Object3D(std::move(other)){
+    geometry_ = std::move(other.geometry_);
+    materials_ = std::move(other.materials_);
 }
 
 std::vector<Material*> Mesh::materials() {
@@ -312,10 +318,10 @@ size_t Mesh::numMaterials() const {
 
 std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
 
-    return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
+    return std::make_shared<Mesh>(std::move(geometry), std::move(material));
 }
 
 std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials) {
 
-    return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(materials)));
+    return std::make_shared<Mesh>(std::move(geometry), std::move(materials));
 }

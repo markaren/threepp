@@ -380,11 +380,11 @@ struct OrbitControls::Impl {
     void handleMouseWheel(const Vector2& delta) {
         if (delta.y < 0) {
 
-            dollyOut(scope.getZoomScale());
+            dollyIn(scope.getZoomScale());
 
         } else if (delta.y > 0) {
 
-            dollyIn(scope.getZoomScale());
+            dollyOut(scope.getZoomScale());
         }
 
         scope.update();

@@ -16,8 +16,7 @@ namespace threepp {
 
         static std::shared_ptr<Group> create();
 
-    protected:
-        Group();
+        ~Group() override = default;
     };
 
 }// namespace threepp

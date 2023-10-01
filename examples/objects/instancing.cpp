@@ -69,7 +69,7 @@ int main() {
     scene->add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -92,8 +92,8 @@ int main() {
     std::unordered_map<int, bool> map;
     canvas.animate([&]() {
 
-        raycaster.setFromCamera(mouse, camera);
-        auto intersects = raycaster.intersectObject(mesh.get());
+        raycaster.setFromCamera(mouse, *camera);
+        auto intersects = raycaster.intersectObject(*mesh);
 
         if (!intersects.empty()) {
             auto instanceId = intersects.front().instanceId;

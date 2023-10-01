@@ -144,7 +144,7 @@ int main() {
     canvas.addMouseListener(&mouseListener);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -169,8 +169,8 @@ int main() {
     Raycaster raycaster;
     canvas.animate([&]() {
 
-        raycaster.setFromCamera(mouseListener.mouse, camera);
-        auto intersects = raycaster.intersectObject(mesh, false);
+        raycaster.setFromCamera(mouseListener.mouse, *camera);
+        auto intersects = raycaster.intersectObject(*mesh, false);
 
         bool click = mouseListener.mouseClick();
 

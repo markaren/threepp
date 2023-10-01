@@ -1,9 +1,9 @@
 
+#include <memory>
+
 #include "threepp/objects/Group.hpp"
 
 using namespace threepp;
-
-Group::Group() = default;
 
 std::string Group::type() const {
 
@@ -18,5 +18,6 @@ std::shared_ptr<Object3D> Group::clone(bool recursive) {
 }
 
 std::shared_ptr<Group> Group::create() {
-    return std::shared_ptr<Group>(new Group());
+
+    return std::make_shared<Group>();
 }

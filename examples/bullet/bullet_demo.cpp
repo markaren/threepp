@@ -118,7 +118,7 @@ int main() {
     scene->add(trimesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -136,7 +136,8 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        if (evt.key == Key::SPACE) {// space
+
+        if (evt.key == Key::SPACE) {
             auto geom = SphereGeometry::create(0.1f);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
             mesh->position.copy(camera->position);

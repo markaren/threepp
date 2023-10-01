@@ -435,7 +435,7 @@ struct GLRenderer::Impl {
 
             } else if (auto lod = object->as<LOD>()) {
 
-                if (lod->autoUpdate) lod->update(camera);
+                if (lod->autoUpdate) lod->update(*camera);
 
             } else if (auto light = object->as<Light>()) {
 
@@ -502,7 +502,7 @@ struct GLRenderer::Impl {
 
         for (const auto& child : object->children) {
 
-            projectObject(child.get(), camera, groupOrder, sortObjects);
+            projectObject(child, camera, groupOrder, sortObjects);
         }
     }
 

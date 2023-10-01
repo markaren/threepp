@@ -123,7 +123,7 @@ int main() {
     handle.color = Color::red;
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
         handle.setPosition(canvas.size().width - 130, 0);

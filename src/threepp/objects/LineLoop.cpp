@@ -1,11 +1,16 @@
 
+#include <memory>
+
 #include "threepp/objects/LineLoop.hpp"
 
 using namespace threepp;
 
 
-LineLoop::LineLoop(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
+LineLoop::LineLoop(
+        const std::shared_ptr<BufferGeometry>& geometry,
+        const std::shared_ptr<Material>& material)
     : Line(geometry, material) {}
+
 
 std::string LineLoop::type() const {
 
@@ -21,5 +26,5 @@ std::shared_ptr<Object3D> LineLoop::clone(bool recursive) {
 
 std::shared_ptr<LineLoop> LineLoop::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {
 
-    return std::shared_ptr<LineLoop>(new LineLoop(geometry, (material)));
+    return std::make_shared<LineLoop>(geometry, (material));
 }

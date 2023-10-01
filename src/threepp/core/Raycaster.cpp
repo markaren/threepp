@@ -16,20 +16,20 @@ namespace {
         return a.distance < b.distance;
     }
 
-    void intersectObject(Object3D* object, Raycaster& raycaster, std::vector<Intersection>& intersects, bool recursive) {
+    void intersectObject(Object3D& object, Raycaster& raycaster, std::vector<Intersection>& intersects, bool recursive) {
 
-        if (object->layers.test(raycaster.layers)) {
+        if (object.layers.test(raycaster.layers)) {
 
-            object->raycast(raycaster, intersects);
+            object.raycast(raycaster, intersects);
         }
 
         if (recursive) {
 
-            auto& children = object->children;
+            const auto& children = object.children;
 
-            for (auto& child : children) {
+            for (const auto& child : children) {
 
-                intersectObject(child.get(), raycaster, intersects, true);
+                intersectObject(*child, raycaster, intersects, true);
             }
         }
     }
@@ -44,7 +44,7 @@ void Raycaster::set(const Vector3& origin, const Vector3& direction) {
     this->ray.set(origin, direction);
 }
 
-std::vector<Intersection> Raycaster::intersectObject(Object3D* object, bool recursive) {
+std::vector<Intersection> Raycaster::intersectObject(Object3D& object, bool recursive) {
 
     std::vector<Intersection> intersects;
 
@@ -55,13 +55,13 @@ std::vector<Intersection> Raycaster::intersectObject(Object3D* object, bool recu
     return intersects;
 }
 
-std::vector<Intersection> Raycaster::intersectObjects(std::vector<std::shared_ptr<Object3D>>& objects, bool recursive) {
+std::vector<Intersection> Raycaster::intersectObjects(const std::vector<Object3D*>& objects, bool recursive) {
 
     std::vector<Intersection> intersects;
 
     for (auto& object : objects) {
 
-        ::intersectObject(object.get(), *this, intersects, recursive);
+        ::intersectObject(*object, *this, intersects, recursive);
     }
 
     std::stable_sort(intersects.begin(), intersects.end(), &ascSort);
@@ -69,26 +69,21 @@ std::vector<Intersection> Raycaster::intersectObjects(std::vector<std::shared_pt
     return intersects;
 }
 
-void Raycaster::setFromCamera(const Vector2& coords, Camera* camera) {
+void Raycaster::setFromCamera(const Vector2& coords, Camera& camera) {
 
-    if (camera->is<PerspectiveCamera>()) {
+    if (camera.is<PerspectiveCamera>()) {
 
-        this->ray.origin.setFromMatrixPosition(*camera->matrixWorld);
-        this->ray.direction.set(coords.x, coords.y, 0.5f).unproject(*camera).sub(this->ray.origin).normalize();
-        this->camera = camera;
+        this->ray.origin.setFromMatrixPosition(*camera.matrixWorld);
+        this->ray.direction.set(coords.x, coords.y, 0.5f).unproject(camera).sub(this->ray.origin).normalize();
+        this->camera = &camera;
 
-    } else if (camera->is<OrthographicCamera>()) {
+    } else if (camera.is<OrthographicCamera>()) {
 
-        this->ray.origin.set(coords.x, coords.y, (camera->near + camera->far) / (camera->near - camera->far)).unproject(*camera);// set origin in plane of camera
-        this->ray.direction.set(0, 0, -1).transformDirection(*camera->matrixWorld);
-        this->camera = camera;
+        this->ray.origin.set(coords.x, coords.y, (camera.near + camera.far) / (camera.near - camera.far)).unproject(camera);// set origin in plane of camera
+        this->ray.direction.set(0, 0, -1).transformDirection(*camera.matrixWorld);
+        this->camera = &camera;
 
     } else {
-        std::cerr << "THREE.Raycaster: Unsupported camera type" << std::endl;
+        std::cerr << "[Raycaster] Unsupported camera type" << std::endl;
     }
-}
-
-void Raycaster::setFromCamera(const Vector2& coords, const std::shared_ptr<Camera>& camera) {
-
-    setFromCamera(coords, camera.get());
 }

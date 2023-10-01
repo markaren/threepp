@@ -1,4 +1,6 @@
 
+#include <memory>
+
 #include "threepp/objects/Water.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -282,9 +284,11 @@ std::string threepp::Water::type() const {
     return "Water";
 }
 
-std::shared_ptr<Water> threepp::Water::create(const std::shared_ptr<BufferGeometry>& geometry, Water::Options options) {
+std::shared_ptr<Water> threepp::Water::create(
+        const std::shared_ptr<BufferGeometry>& geometry,
+        Water::Options options) {
 
-    return std::shared_ptr<Water>(new Water(geometry, std::move(options)));
+    return std::make_shared<Water>(geometry, std::move(options));
 }
 
 threepp::Water::~Water() = default;

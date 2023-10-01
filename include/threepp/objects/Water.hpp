@@ -29,17 +29,19 @@ namespace threepp {
             std::optional<bool> fog;
         };
 
+        Water(const std::shared_ptr<BufferGeometry>& geometry, Options options);
+
         [[nodiscard]] std::string type() const override;
 
-        static std::shared_ptr<Water> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options());
+        static std::shared_ptr<Water> create(
+                const std::shared_ptr<BufferGeometry>& geometry,
+                Options options = Options());
 
         ~Water() override;
 
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
-
-        Water(const std::shared_ptr<BufferGeometry>& geometry, Options options);
     };
 
 }// namespace threepp

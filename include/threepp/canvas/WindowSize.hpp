@@ -5,10 +5,11 @@
 namespace threepp {
 
     struct WindowSize {
-        int width;
-        int height;
+        
+        int width{};
+        int height{};
 
-        [[nodiscard]] float getAspect() const {
+        [[nodiscard]] float aspect() const {
 
             return static_cast<float>(width) / static_cast<float>(height);
         }

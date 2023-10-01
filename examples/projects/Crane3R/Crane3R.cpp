@@ -65,8 +65,11 @@ namespace {
             auto house = cylinder.first;
             auto rod = cylinder.second;
 
-            house->lookAt(rod->getWorldPosition(tmp));
-            rod->lookAt(house->getWorldPosition(tmp));
+            rod->getWorldPosition(tmp);
+            house->lookAt(tmp);
+
+            house->getWorldPosition(tmp);
+            rod->lookAt(tmp);
         }
     }
 
