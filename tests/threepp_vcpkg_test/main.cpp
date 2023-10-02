@@ -21,7 +21,7 @@ namespace {
 int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create();
@@ -37,8 +37,9 @@ int main() {
     scene->add(group);
 
     renderer.enableTextRendering();
+    int textYOffset = 30;
     auto& textHandle = renderer.textHandle("Hello World");
-    textHandle.setPosition(0, canvas.getSize().height - 30);
+    textHandle.setPosition(0, canvas.size().height - textYOffset);
     textHandle.scale = 2;
 
     std::array<float, 3> posBuf{};
@@ -52,13 +53,18 @@ int main() {
     });
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        textHandle.setPosition(0, size.height - 30);
+        textHandle.setPosition(0, size.height - textYOffset);
     });
 
+    Clock clock;
+    float rotationSpeed = 1;
     canvas.animate([&] {
+        auto dt = clock.getDelta();
+        group->rotation.y += rotationSpeed * dt;
+
         renderer.render(*scene, *camera);
 
         ui.render();
