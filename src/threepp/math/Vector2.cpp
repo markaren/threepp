@@ -38,7 +38,7 @@ Vector2& Vector2::setX(float value) {
 
 Vector2& Vector2::setY(float value) {
 
-    y = value;
+    this->y = value;
 
     return *this;
 }

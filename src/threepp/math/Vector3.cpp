@@ -51,14 +51,14 @@ Vector3& Vector3::setX(float value) {
 
 Vector3& Vector3::setY(float value) {
 
-    y = value;
+    this->y = value;
 
     return *this;
 }
 
 Vector3& Vector3::setZ(float value) {
 
-    z = value;
+    this->z = value;
 
     return *this;
 }
