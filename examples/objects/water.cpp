@@ -41,7 +41,6 @@ int main() {
     auto texture = textureLoader.load("data/textures/waternormals.jpg");
     texture->wrapS = TextureWrapping::Repeat;
     texture->wrapT = TextureWrapping::Repeat;
-    ;
 
     Water::Options opt;
     opt.textureHeight = 512;
