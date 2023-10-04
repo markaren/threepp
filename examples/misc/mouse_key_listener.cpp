@@ -65,7 +65,6 @@ int main() {
 
     bool finish = false;
     canvas.animate([&]() {
-
         clock.getElapsedTime();
 
         if (clock.elapsedTime > 2 && clock.elapsedTime < 4) {
@@ -78,5 +77,4 @@ int main() {
             finish = true;
         }
     });
-
 }

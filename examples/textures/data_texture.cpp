@@ -86,7 +86,6 @@ int main() {
     Clock clock;
     Vector2 vector;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         box.rotation.y += 0.5f * dt;

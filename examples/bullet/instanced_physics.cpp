@@ -1,6 +1,6 @@
 
-#include "threepp/threepp.hpp"
 #include "threepp/extras/physics/BulletPhysics.hpp"
+#include "threepp/threepp.hpp"
 
 #include "threepp/lights/LightShadow.hpp"
 
@@ -162,7 +162,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         bullet.step(dt);
 

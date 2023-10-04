@@ -77,7 +77,7 @@ public:
         return gridSize_;
     }
 
-    [[nodiscard]] const Snake &snake() const {
+    [[nodiscard]] const Snake& snake() const {
         return snake_;
     }
 

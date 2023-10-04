@@ -19,7 +19,7 @@ public:
     virtual ~Actuator() = default;
 };
 
-class Object3DActuator : public Actuator {
+class Object3DActuator: public Actuator {
 
 public:
     enum Axis {
@@ -28,7 +28,7 @@ public:
         Z
     };
 
-    Object3DActuator(threepp::Object3D *obj, Axis axis, float maxSpeed, std::pair<float, float> limit)
+    Object3DActuator(threepp::Object3D* obj, Axis axis, float maxSpeed, std::pair<float, float> limit)
         : obj_(obj),
           axis_(axis),
           gain_(0),
@@ -81,7 +81,7 @@ private:
     std::optional<std::pair<float, float>> limit_;
 
     Axis axis_;
-    threepp::Object3D *obj_;
+    threepp::Object3D* obj_;
 };
 
 

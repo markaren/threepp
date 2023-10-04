@@ -94,7 +94,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         torusKnot->rotation.y -= 0.5f * dt;

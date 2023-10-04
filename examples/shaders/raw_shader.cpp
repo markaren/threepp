@@ -60,9 +60,9 @@ int main() {
 
     int triangles = 1000;
     std::vector<float> positions;
-    positions.reserve(triangles*3);
+    positions.reserve(triangles * 3);
     std::vector<float> colors;
-    colors.reserve(triangles*4);
+    colors.reserve(triangles * 4);
 
     for (int i = 0; i < triangles; i++) {
         positions.emplace_back(math::randFloat() - .5f);
@@ -97,7 +97,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         mesh->rotation.y = t * 0.5f;

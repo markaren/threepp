@@ -73,7 +73,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         mesh->rotation.y += 0.8f * dt;

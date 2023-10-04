@@ -139,7 +139,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         renderer.render(*scene, *camera);

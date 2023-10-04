@@ -81,17 +81,17 @@ namespace threepp {
         Max = 104
     };
 
-//    const int ZeroFactor = 200;
-//    const int OneFactor = 201;
-//    const int SrcColorFactor = 202;
-//    const int OneMinusSrcColorFactor = 203;
-//    const int SrcAlphaFactor = 204;
-//    const int OneMinusSrcAlphaFactor = 205;
-//    const int DstAlphaFactor = 206;
-//    const int OneMinusDstAlphaFactor = 207;
-//    const int DstColorFactor = 208;
-//    const int OneMinusDstColorFactor = 209;
-//    const int SrcAlphaSaturateFactor = 210;
+    //    const int ZeroFactor = 200;
+    //    const int OneFactor = 201;
+    //    const int SrcColorFactor = 202;
+    //    const int OneMinusSrcColorFactor = 203;
+    //    const int SrcAlphaFactor = 204;
+    //    const int OneMinusSrcAlphaFactor = 205;
+    //    const int DstAlphaFactor = 206;
+    //    const int OneMinusDstAlphaFactor = 207;
+    //    const int DstColorFactor = 208;
+    //    const int OneMinusDstColorFactor = 209;
+    //    const int SrcAlphaSaturateFactor = 210;
 
     enum class BlendFactor {
         Zero = 200,

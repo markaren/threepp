@@ -107,7 +107,7 @@ int main() {
 
 #ifdef HAS_IMGUI
 
-    IOCapture capture {};
+    IOCapture capture{};
     capture.preventMouseEvent = [] {
         return ImGui::GetIO().WantCaptureMouse;
     };
@@ -132,7 +132,6 @@ int main() {
 #endif
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         renderer.render(*scene, *camera);
@@ -163,5 +162,4 @@ int main() {
             crane->update(dt);
         }
     });
-
 }

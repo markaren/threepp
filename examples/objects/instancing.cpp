@@ -91,7 +91,6 @@ int main() {
     Raycaster raycaster;
     std::unordered_map<int, bool> map;
     canvas.animate([&]() {
-
         raycaster.setFromCamera(mouse, *camera);
         auto intersects = raycaster.intersectObject(*mesh);
 

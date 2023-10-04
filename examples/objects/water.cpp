@@ -40,7 +40,8 @@ int main() {
     TextureLoader textureLoader{};
     auto texture = textureLoader.load("data/textures/waternormals.jpg");
     texture->wrapS = TextureWrapping::Repeat;
-    texture->wrapT = TextureWrapping::Repeat;;
+    texture->wrapT = TextureWrapping::Repeat;
+    ;
 
     Water::Options opt;
     opt.textureHeight = 512;
@@ -77,7 +78,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         sphere->position.y = std::sin(t) * 20 + 5;

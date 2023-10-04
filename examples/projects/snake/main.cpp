@@ -21,14 +21,12 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         if (game.isRunning()) {
 
             game.update(dt);
             scene.update();
-
         }
         renderer.render(scene, scene.camera());
     });

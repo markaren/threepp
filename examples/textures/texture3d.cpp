@@ -96,7 +96,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         material->uniforms->at("cameraPos").value<Vector3>().copy(camera.position);

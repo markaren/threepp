@@ -39,7 +39,6 @@ namespace threepp {
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
                 size_t count);
-
     };
 
 }// namespace threepp
