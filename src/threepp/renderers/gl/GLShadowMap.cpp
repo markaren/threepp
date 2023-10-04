@@ -178,9 +178,9 @@ struct GLShadowMap::Impl {
 
             auto keyA = result->uuid(), keyB = material->uuid();
 
-            auto materialsForVariant = _materialCache[keyA];
+            auto& materialsForVariant = _materialCache[keyA];
 
-            auto cachedMaterial = materialsForVariant[keyB];
+            auto& cachedMaterial = materialsForVariant[keyB];
 
             if (!cachedMaterial) {
 

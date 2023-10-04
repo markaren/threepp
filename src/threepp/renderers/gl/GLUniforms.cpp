@@ -297,6 +297,11 @@ namespace {
                         auto& data = std::get<std::vector<Vector3>>(value);
                         glUniform3fv(addr, activeInfo.size, flatten(data, activeInfo.size, 3).data());
                     };
+                case 0x8b52:// VEC4
+                    return [&](const UniformValue& value, GLTextures*) {
+                        auto& data = std::get<std::vector<float>>(value);
+                        glUniform4fv(addr, activeInfo.size, data.data());
+                    };
 
                 case 0x8b5b:// MAT3
                     return [&](const UniformValue& value, GLTextures*) {
