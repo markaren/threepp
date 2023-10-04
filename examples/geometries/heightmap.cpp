@@ -1,6 +1,7 @@
 
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Sky.hpp"
+#include "threepp/objects/Water.hpp"
 #include "threepp/threepp.hpp"
 #include "threepp/utils/ThreadPool.hpp"
 
@@ -33,6 +34,7 @@ int main() {
 
     Canvas canvas("Heightmap");
     GLRenderer renderer{canvas.size()};
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 5000);
@@ -41,7 +43,8 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     auto light = DirectionalLight::create();
-    light->position.set(0, 1, 0);
+    light->position.set(-1, 1, 0);
+    light->intensity = 0.5;
     scene->add(light);
 
     auto sky = Sky::create();
@@ -53,6 +56,29 @@ int main() {
     shaderUniforms->at("mieDirectionalG").value<float>() = 0.8;
     shaderUniforms->at("sunPosition").value<Vector3>().copy(light->position);
     scene->add(sky);
+
+    TextureLoader textureLoader{};
+    auto texture = textureLoader.load("data/textures/waternormals.jpg");
+    texture->wrapS = TextureWrapping::Repeat;
+    texture->wrapT = TextureWrapping::Repeat;
+
+    Water::Options opt;
+    opt.textureHeight = 512;
+    opt.textureWidth = 512;
+    opt.alpha = 0.8f;
+    opt.waterNormals = texture;
+    opt.distortionScale = 3.7f;
+    opt.sunDirection = light->position.clone().normalize();
+    opt.sunColor = light->color;
+    opt.waterColor = 0x001e0f;
+    opt.fog = scene->fog.has_value();
+
+    auto waterGeometry = PlaneGeometry::create(5041, 5041);
+
+    auto water = Water::create(waterGeometry, opt);
+    water->rotateX(math::degToRad(-90));
+    water->position.y = 5;
+    scene->add(water);
 
     std::promise<std::shared_ptr<Material>> promise;
     auto future = promise.get_future();
@@ -89,7 +115,11 @@ int main() {
         renderer.setSize(size);
     });
 
+    Clock clock;
     canvas.animate([&]() {
+        float t = clock.getElapsedTime();
+        water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
+
         renderer.render(*scene, *camera);
     });
 }
