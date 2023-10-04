@@ -758,7 +758,7 @@ struct GLRenderer::Impl {
         bool refreshLights = false;
 
         auto p_uniforms = program->getUniforms();
-        auto& m_uniforms = materialProperties->uniforms;
+        auto& m_uniforms = *materialProperties->uniforms;
 
         if (state.useProgram(program->program, textEnabled_)) {
 
@@ -844,6 +844,11 @@ struct GLRenderer::Impl {
 
             p_uniforms->setValue("toneMappingExposure", scope.toneMappingExposure);
 
+            // [threepp] hack to solve #162
+            if (_clippingEnabled) {
+                m_uniforms["clippingPlanes"] = clipping.uniform;
+            }
+
             if (materialProperties->needsLights) {
 
                 // the current material requires lighting info
@@ -855,19 +860,19 @@ struct GLRenderer::Impl {
                 // use the current material's .needsUpdate flags to set
                 // the GL state when required
 
-                markUniformsLightsNeedsUpdate(*m_uniforms, refreshLights);
+                markUniformsLightsNeedsUpdate(m_uniforms, refreshLights);
             }
 
             // refresh uniforms common to several materials
 
             if (fog && material->fog) {
 
-                materials.refreshFogUniforms(*m_uniforms, *fog);
+                materials.refreshFogUniforms(m_uniforms, *fog);
             }
 
-            materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height);
+            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height);
 
-            gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
+            gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
 
         if (isShaderMaterial) {
@@ -875,7 +880,7 @@ struct GLRenderer::Impl {
             auto m = dynamic_cast<ShaderMaterial*>(material);
             if (m->uniformsNeedUpdate) {
 
-                gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
+                gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
                 m->uniformsNeedUpdate = false;
             }
         }
