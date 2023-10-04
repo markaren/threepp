@@ -6,6 +6,8 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 int main() {
