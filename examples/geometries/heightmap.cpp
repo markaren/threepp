@@ -10,25 +10,68 @@
 
 using namespace threepp;
 
-std::vector<float> loadHeights() {
+namespace {
 
-    std::ifstream file("data/models/terrain/aalesund.bin", std::ios::binary);
+    std::vector<float> loadHeights() {
 
-    std::vector<float> data;
-    // Read the data
-    while (true) {
-        uint16_t value;
-        file.read(reinterpret_cast<char*>(&value), sizeof(uint16_t));
+        std::ifstream file("data/models/terrain/aalesund.bin", std::ios::binary);
 
-        if (file.fail()) {
-            break;
+        std::vector<float> data;
+        // Read the data
+        while (true) {
+            uint16_t value;
+            file.read(reinterpret_cast<char*>(&value), sizeof(uint16_t));
+
+            if (file.fail()) {
+                break;
+            }
+
+            data.emplace_back(static_cast<float>(value) / 65535.f * 255);
         }
 
-        data.emplace_back(static_cast<float>(value) / 65535.f * 255);
+        return data;
     }
 
-    return data;
-}
+    auto createSky(const Vector3& lightPos) {
+        auto sky = Sky::create();
+        sky->scale.setScalar(10000);
+        auto shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+        shaderUniforms->at("turbidity").value<float>() = 10;
+        shaderUniforms->at("rayleigh").value<float>() = 1;
+        shaderUniforms->at("mieCoefficient").value<float>() = 0.005;
+        shaderUniforms->at("mieDirectionalG").value<float>() = 0.8;
+        shaderUniforms->at("sunPosition").value<Vector3>().copy(lightPos);
+
+        return sky;
+    }
+
+    auto createWater(const DirectionalLight& light, bool fog) {
+        TextureLoader textureLoader{};
+        auto texture = textureLoader.load("data/textures/waternormals.jpg");
+        texture->wrapS = TextureWrapping::Repeat;
+        texture->wrapT = TextureWrapping::Repeat;
+
+        Water::Options opt;
+        opt.textureHeight = 512;
+        opt.textureWidth = 512;
+        opt.alpha = 0.8f;
+        opt.waterNormals = texture;
+        opt.distortionScale = 3.7f;
+        opt.sunDirection = light.position.clone().normalize();
+        opt.sunColor = light.color;
+        opt.waterColor = 0x001e0f;
+        opt.fog = fog;
+
+        auto waterGeometry = PlaneGeometry::create(5041, 5041);
+
+        auto water = Water::create(waterGeometry, opt);
+        water->rotateX(math::degToRad(-90));
+        water->position.y = 5;
+
+        return water;
+    }
+
+}// namespace
 
 int main() {
 
@@ -37,6 +80,7 @@ int main() {
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
+    scene->fog = Fog(0xcccccc, 500, 3500);
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 5000);
     camera->position.set(500, 200, 500);
 
@@ -47,37 +91,10 @@ int main() {
     light->intensity = 0.5;
     scene->add(light);
 
-    auto sky = Sky::create();
-    sky->scale.setScalar(10000);
-    auto shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
-    shaderUniforms->at("turbidity").value<float>() = 10;
-    shaderUniforms->at("rayleigh").value<float>() = 1;
-    shaderUniforms->at("mieCoefficient").value<float>() = 0.005;
-    shaderUniforms->at("mieDirectionalG").value<float>() = 0.8;
-    shaderUniforms->at("sunPosition").value<Vector3>().copy(light->position);
+    auto sky = createSky(light->position);
     scene->add(sky);
 
-    TextureLoader textureLoader{};
-    auto texture = textureLoader.load("data/textures/waternormals.jpg");
-    texture->wrapS = TextureWrapping::Repeat;
-    texture->wrapT = TextureWrapping::Repeat;
-
-    Water::Options opt;
-    opt.textureHeight = 512;
-    opt.textureWidth = 512;
-    opt.alpha = 0.8f;
-    opt.waterNormals = texture;
-    opt.distortionScale = 3.7f;
-    opt.sunDirection = light->position.clone().normalize();
-    opt.sunColor = light->color;
-    opt.waterColor = 0x001e0f;
-    opt.fog = scene->fog.has_value();
-
-    auto waterGeometry = PlaneGeometry::create(5041, 5041);
-
-    auto water = Water::create(waterGeometry, opt);
-    water->rotateX(math::degToRad(-90));
-    water->position.y = 5;
+    auto water = createWater(*light, scene->fog.has_value());
     scene->add(water);
 
     std::promise<std::shared_ptr<Material>> promise;
