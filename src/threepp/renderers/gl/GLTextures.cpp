@@ -126,7 +126,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
-    const auto& image = *texture.image;
+    auto& image = *texture.image;
 
     GLuint glFormat = convert(texture.format);
 
@@ -135,11 +135,15 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     setTextureParameters(textureType, texture);
 
-    const auto& mipmaps = texture.mipmaps;
+    auto& mipmaps = texture.mipmaps;
 
     if (dataTexture3D) {
 
-        state.texImage3D(GL_TEXTURE_3D, 0, glInternalFormat, image.width, image.height, image.depth, glFormat, glType, image.getData());
+        state.texImage3D(GL_TEXTURE_3D, 0, glInternalFormat,
+                         static_cast<int>(image.width),
+                         static_cast<int>(image.height),
+                         static_cast<int>(image.depth),
+                         glFormat, glType, image.data().data());
         textureProperties->maxMipLevel = 0;
 
     } else {
@@ -154,8 +158,10 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
             for (int i = 0; i < mipmaps.size(); ++i) {
 
-                const auto& mipmap = mipmaps[i];
-                state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());
+                auto& mipmap = mipmaps[i];
+                state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
+                                 static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
+                                 glFormat, glType, mipmap.data().data());
             }
 
             texture.generateMipmaps = false;
@@ -163,7 +169,9 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         } else {
 
-            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
+            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                             static_cast<int>(image.width), static_cast<int>(image.height),
+                             glFormat, glType, texture.image->data().data());
             textureProperties->maxMipLevel = 0;
         }
     }

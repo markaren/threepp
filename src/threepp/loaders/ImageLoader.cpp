@@ -11,9 +11,29 @@ using namespace threepp;
 namespace {
 
     struct ImageStruct {
-        int width;
-        int height;
+
+        int width{};
+        int height{};
+        int channels;
         unsigned char* pixels;
+
+        ImageStruct(const std::vector<unsigned char>& data, int channels, bool flipY): channels(channels) {
+            stbi_set_flip_vertically_on_load(flipY);
+            pixels = stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &width, &height, nullptr, channels);
+        }
+
+        ImageStruct(const std::filesystem::path& imagePath, int channels, bool flipY): channels(channels) {
+            stbi_set_flip_vertically_on_load(flipY);
+            pixels = stbi_load(imagePath.string().c_str(), &width, &height, nullptr, channels);
+        }
+
+        [[nodiscard]] std::vector<unsigned char> get() const {
+            return {pixels, pixels + (channels * width * height)};
+        }
+
+        ~ImageStruct() {
+            stbi_image_free(pixels);
+        }
     };
 
 }// namespace
@@ -24,12 +44,10 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
         return std::nullopt;
     }
 
-    ImageStruct image{};
-    stbi_set_flip_vertically_on_load(flipY);
-    image.pixels = stbi_load(imagePath.string().c_str(), &image.width, &image.height, nullptr, channels);
+    ImageStruct image{imagePath, channels, flipY};
 
     return Image{
-            std::shared_ptr<unsigned char>(image.pixels, free),
+            image.get(),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
             flipY};
@@ -37,12 +55,10 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
 
 std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, int channels, bool flipY) {
 
-    ImageStruct image{};
-    stbi_set_flip_vertically_on_load(flipY);
-    image.pixels = stbi_load_from_memory(data.data(), static_cast<int>(data.size()), &image.width, &image.height, nullptr, channels);
+    ImageStruct image{data, channels, flipY};
 
     return Image{
-            std::shared_ptr<unsigned char>(image.pixels, free),
+            image.get(),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
             flipY};

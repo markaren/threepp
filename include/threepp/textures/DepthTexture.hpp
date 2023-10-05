@@ -10,7 +10,11 @@ namespace threepp {
     class DepthTexture: public Texture {
 
     protected:
-        DepthTexture(int width, int height, int type, int mapping, int wrapS, int wrapT, int magFilter, int minFilter, int anisotropy, int format)
+        DepthTexture(int width, int height,
+                     int type, int mapping,
+                     int wrapS, int wrapT,
+                     int magFilter, int minFilter,
+                     int anisotropy, int format)
             : Texture(std::nullopt) {
         }
     };

@@ -36,7 +36,7 @@ namespace {
             GLFWimage images[1];
             images[0] = {static_cast<int>(favicon->width),
                          static_cast<int>(favicon->height),
-                         favicon->getData()};
+                         favicon->data().data()};
             glfwSetWindowIcon(window, 1, images);
         }
     }

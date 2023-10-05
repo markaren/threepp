@@ -57,8 +57,6 @@ namespace threepp {
         GLRenderTarget(const GLRenderTarget&&) = delete;
         GLRenderTarget operator=(const GLRenderTarget&) = delete;
 
-        void setTexture(const std::shared_ptr<Texture>& tex);
-
         void setSize(unsigned int width, unsigned int height, unsigned int depth = 1);
 
         GLRenderTarget& copy(const GLRenderTarget& source);
