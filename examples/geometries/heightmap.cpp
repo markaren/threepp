@@ -7,6 +7,7 @@
 
 #include <fstream>
 #include <future>
+#include <iostream>
 
 using namespace threepp;
 
@@ -16,17 +17,16 @@ namespace {
 
         std::ifstream file("data/models/terrain/aalesund.bin", std::ios::binary);
 
-        std::vector<float> data;
-        // Read the data
-        while (true) {
-            uint16_t value;
-            file.read(reinterpret_cast<char*>(&value), sizeof(uint16_t));
+        file.seekg(0, std::ios_base::end);
+        auto size = file.tellg();
+        file.seekg(0, std::ios_base::beg);
+        std::vector<uint16_t> raw(size / sizeof(uint16_t));
+        file.read((char*) &raw[0], static_cast<std::streamsize>(size));
+        file.close();
 
-            if (file.fail()) {
-                break;
-            }
-
-            data.emplace_back(static_cast<float>(value) / 65535.f * 255);
+        std::vector<float> data(raw.size());
+        for (unsigned i = 0; i < raw.size(); ++i) {
+            data[i] = static_cast<float>(raw[i]) / 65535.f * 255;
         }
 
         return data;
@@ -88,7 +88,7 @@ int main() {
 
     auto light = DirectionalLight::create();
     light->position.set(-1, 1, 0);
-    light->intensity = 0.5;
+    light->intensity = 0.7;
     scene->add(light);
 
     auto sky = createSky(light->position);
@@ -100,13 +100,20 @@ int main() {
     std::promise<std::shared_ptr<Material>> promise;
     auto future = promise.get_future();
 
+    std::cout << "Loading terrain.." << std::endl;
+
+    std::mutex m;
     utils::ThreadPool pool(2);
     pool.submit([&] {
         TextureLoader tl;
         auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
         auto material = MeshPhongMaterial::create({{"map", texture}});
         promise.set_value(material);
+
+        std::lock_guard<std::mutex> lck(m);
+        std::cout << "Material loaded" << std::endl;
     });
+
     pool.submit([&] {
         auto data = loadHeights();
 
@@ -118,8 +125,15 @@ int main() {
             pos->setY(i, data[i]);
         }
 
+        {
+            std::lock_guard<std::mutex> lck(m);
+            std::cout << "Geometry loaded" << std::endl;
+        }
+
         auto material = future.get();
         auto mesh = Mesh::create(geometry, material);
+
+        std::cout << "Terrain loaded" << std::endl;
 
         canvas.invokeLater([&, mesh] {
             scene->add(mesh);

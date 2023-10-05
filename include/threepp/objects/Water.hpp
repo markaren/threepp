@@ -35,7 +35,7 @@ namespace threepp {
 
         static std::shared_ptr<Water> create(
                 const std::shared_ptr<BufferGeometry>& geometry,
-                Options options = Options());
+                const Options& options = Options());
 
         ~Water() override;
 
