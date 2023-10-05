@@ -1,3 +1,4 @@
+// https://threejs.org/examples/?q=clipping#webgl_clipping
 
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/lights/DirectionalLightShadow.hpp"
@@ -12,7 +13,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("clipping", {{"aa", 6}});
+    Canvas canvas("Clipping", {{"aa", 6}});
     GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
 
@@ -34,7 +35,7 @@ int main() {
     spotLight->shadow->mapSize.y = 1024;
     scene->add(spotLight);
 
-    auto dirLight = DirectionalLight::create(0x55505a, 1);
+    auto dirLight = DirectionalLight::create(0x55505a, 1.f);
     dirLight->position.set(0, 3, 0);
     dirLight->castShadow = true;
     dirLight->shadow->camera->near = 1;
@@ -56,7 +57,7 @@ int main() {
                                                {"side", Side::Double}});
 
     // ***** Clipping setup (material): *****
-    auto& localPlane = material->clippingPlanes.emplace_back(Vector3(0, -1, 0), 0.8);
+    auto& localPlane = material->clippingPlanes.emplace_back(Vector3(0, -1, 0), 0.8f);
     material->clipShadows = true;
 
     auto geometry = TorusKnotGeometry::create(0.4, 0.08, 95, 20);
