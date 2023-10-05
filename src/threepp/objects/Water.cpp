@@ -127,7 +127,7 @@ namespace {
 
 struct Water::Impl {
 
-    Impl(Water& water, Water::Options options)
+    Impl(Water& water, const Water::Options& options)
         : water_(water),
           clipBias(options.clipBias.value_or(0.f)),
           eye(options.eye.value_or(Vector3{0, 0, 0})) {
@@ -143,6 +143,8 @@ struct Water::Impl {
 
         Color sunColor{options.sunColor.value_or(0xffffff)};
         Color waterColor{options.waterColor.value_or(0x7f7f7f)};
+
+        waterNormals = options.waterNormals;
 
         Shader shader = mirrorShader();
 
@@ -171,7 +173,7 @@ struct Water::Impl {
         (*material->uniforms)["textureMatrix"].setValue(&textureMatrix);
         (*material->uniforms)["alpha"].setValue(alpha);
         (*material->uniforms)["time"].setValue(time);
-        (*material->uniforms)["normalSampler"].setValue(options.waterNormals.get());
+        (*material->uniforms)["normalSampler"].setValue(waterNormals.get());
         (*material->uniforms)["sunColor"].setValue(sunColor);
         (*material->uniforms)["waterColor"].setValue(waterColor);
         (*material->uniforms)["sunDirection"].setValue(sunDirection);
@@ -271,13 +273,14 @@ private:
     Vector3 target;
     Vector4 q;
     Matrix4 textureMatrix;
+    std::shared_ptr<Texture> waterNormals;
 
     std::shared_ptr<PerspectiveCamera> mirrorCamera = PerspectiveCamera::create();
     std::shared_ptr<GLRenderTarget> renderTarget;
 };
 
-Water::Water(const std::shared_ptr<BufferGeometry>& geometry, Water::Options options)
-    : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {}
+Water::Water(const std::shared_ptr<BufferGeometry>& geometry, const Water::Options& options)
+    : Mesh(geometry, nullptr), pimpl_(std::make_unique<Impl>(*this, std::move(options))) {}
 
 std::string threepp::Water::type() const {
 
