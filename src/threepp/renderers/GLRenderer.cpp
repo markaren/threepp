@@ -999,17 +999,9 @@ struct GLRenderer::Impl {
         const auto width = static_cast<int>(texture.image->width * levelScale);
         const auto height = static_cast<int>(texture.image->height * levelScale);
 
-        auto glFormat = gl::convert(texture.format);
-
-        // Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1120100
-
-        if (glFormat == GL_RGB) glFormat = GL_RGB8;
-        if (glFormat == GL_RGBA) glFormat = GL_RGBA8;
-
-
         textures.setTexture2D(texture, 0);
 
-        glCopyTexImage2D(GL_TEXTURE_2D, level, glFormat, static_cast<int>(position.x), static_cast<int>(position.y), width, height, 0);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, static_cast<int>(position.x), static_cast<int>(position.y), width, height);
 
         state.unbindTexture();
     }
