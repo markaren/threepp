@@ -53,7 +53,9 @@ int main() {
         flip(image, image, 0);
         cvtColor(image, image, cv::COLOR_BGR2RGB);
         imshow(windowTitle, image);
-        waitKey(1);
+        if (waitKey(1) == 'q') {
+            canvas.close();
+        }
 //        ready = true;
     });
 
