@@ -31,7 +31,8 @@ int main() {
     auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    auto& handle = renderer.textHandle("Loading model..");
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Loading model..");
     handle.scale = 2;
 
     utils::ThreadPool pool;
@@ -56,6 +57,9 @@ int main() {
         float dt = clock.getDelta();
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
+
+        textRenderer.render();
 
         if (youbot) youbot->update(dt);
     });

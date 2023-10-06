@@ -157,8 +157,8 @@ int main() {
     });
     canvas.addKeyListener(&keyListener);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     Clock clock;
     canvas.animate([&]() {
@@ -166,9 +166,12 @@ int main() {
         bullet.step(dt);
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
 
         std::stringstream ss;
         ss << renderer.info();
         handle.setText(ss.str());
+
+        textRenderer.render();
     });
 }

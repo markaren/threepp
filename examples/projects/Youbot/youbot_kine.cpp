@@ -91,7 +91,8 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    auto& handle = renderer.textHandle("Loading model..");
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Loading model..");
     handle.scale = 2;
 
     utils::ThreadPool pool;
@@ -167,6 +168,10 @@ int main() {
 
             youbot->setJointValues(ui.values);
             youbot->update(dt);
+        } else {
+
+            renderer.resetState();
+            textRenderer.render();
         }
     });
 }

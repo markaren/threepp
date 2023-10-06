@@ -117,10 +117,15 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
     handle.setPosition(canvas.size().width - 130, 0);
     handle.color = Color::red;
+
+    auto& handle2 = textRenderer.createHandle("Hello world!");
+    handle2.setPosition(0, canvas.size().height - 35);
+    handle2.color = Color::white;
+    handle2.scale = 2;
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -140,6 +145,8 @@ int main() {
         handle.setText("Delta=" + std::to_string(dt));
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
+        textRenderer.render();
 
 #ifdef HAS_IMGUI
         ui.render();

@@ -64,9 +64,6 @@ struct GLRenderer::Impl {
 
     Scene _emptyScene;
 
-    bool textEnabled_ = false;
-    std::vector<std::shared_ptr<TextHandle>> textHandles_;
-
     std::shared_ptr<OnMaterialDispose> onMaterialDispose;
 
     std::shared_ptr<gl::GLRenderList> currentRenderList;
@@ -285,7 +282,7 @@ struct GLRenderer::Impl {
             currentRenderList = nullptr;
         }
 
-        renderText();
+//        renderText();
     }
 
     void renderBufferDirect(Camera* camera, Scene* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
@@ -760,7 +757,7 @@ struct GLRenderer::Impl {
         auto p_uniforms = program->getUniforms();
         auto& m_uniforms = materialProperties->uniforms;
 
-        if (state.useProgram(program->program, textEnabled_)) {
+        if (state.useProgram(program->program)) {
 
             refreshProgram = true;
             refreshMaterial = true;
@@ -1018,10 +1015,6 @@ struct GLRenderer::Impl {
         _viewport.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
 
         state.viewport(_currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
-
-        if (textEnabled_) {
-            TextHandle::setViewport(width, height);
-        }
     }
 
     void setScissor(int x, int y, int width, int height) {
@@ -1041,43 +1034,12 @@ struct GLRenderer::Impl {
         bindingStates.dispose();
     }
 
-    void enableTextRendering() {
-        if (!textEnabled_) {
-            textEnabled_ = TextHandle::init();
-            TextHandle::setViewport(static_cast<int>(_viewport.z), static_cast<int>(_viewport.w));
-        }
+    void reset() {
+        state.reset(_size.width, _size.height);
+        bindingStates.reset();
     }
 
-    TextHandle& textHandle(const std::string& str) {
-        if (!textEnabled_) enableTextRendering();
-        textHandles_.emplace_back(std::make_unique<TextHandle>(str));
-        return *textHandles_.back();
-    }
-
-    void renderText() {
-        if (textEnabled_ && !textHandles_.empty()) {
-
-            TextHandle::beginDraw(state.currentBlendingEnabled);
-            auto it = textHandles_.begin();
-            while (it != textHandles_.end()) {
-
-                if ((*it)->invalidate_) {
-                    it = textHandles_.erase(it);
-                } else {
-                    (*it)->render();
-                    ++it;
-                }
-            }
-            TextHandle::endDraw(state.currentBlendingEnabled);
-            bindingStates.reset();
-        }
-    }
-
-    ~Impl() {
-        if (textEnabled_) {
-            TextHandle::terminate();
-        }
-    }
+    ~Impl() = default;
 
     friend struct gl::ProgramParameters;
     friend struct gl::GLShadowMap;
@@ -1260,14 +1222,9 @@ void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, For
     pimpl_->readPixels(position, size, format, data);
 }
 
-void GLRenderer::enableTextRendering() {
+void GLRenderer::resetState() {
 
-    pimpl_->enableTextRendering();
-}
-
-TextHandle& GLRenderer::textHandle(const std::string& str) {
-
-    return pimpl_->textHandle(str);
+    pimpl_->reset();
 }
 
 const gl::GLInfo& threepp::GLRenderer::info() const {

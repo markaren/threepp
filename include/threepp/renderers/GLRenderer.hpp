@@ -17,8 +17,6 @@
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include "TextHandle.hpp"
-
 #include <memory>
 #include <vector>
 
@@ -148,9 +146,7 @@ namespace threepp {
 
         void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
 
-        void enableTextRendering();
-
-        TextHandle& textHandle(const std::string& str = "");
+        void resetState();
 
         [[nodiscard]] const gl::GLInfo& info() const;
 
