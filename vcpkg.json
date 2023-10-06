@@ -42,6 +42,10 @@
       "dependencies": [
         "pugixml"
       ]
+    },
+    "opencv": {
+      "description": "Enable OpenCV in examples",
+      "dependencies": ["opencv"]
     }
   }
 }
