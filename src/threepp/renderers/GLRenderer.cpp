@@ -1006,11 +1006,11 @@ struct GLRenderer::Impl {
         state.unbindTexture();
     }
 
-    void readPixels(const Vector2& position, const WindowSize& size, int type, unsigned char* data) {
+    void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
 
-        type = gl::convert(type);
+        auto glFormat = gl::toGLFormat(format);
 
-        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, type, GL_UNSIGNED_BYTE, data);
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, glFormat, GL_UNSIGNED_BYTE, data);
     }
 
     void setViewport(int x, int y, int width, int height) {
@@ -1255,9 +1255,9 @@ void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& text
     pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
-void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, int type, unsigned char* data) {
+void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
 
-    pimpl_->readPixels(position, size,  type, data);
+    pimpl_->readPixels(position, size, format, data);
 }
 
 void GLRenderer::enableTextRendering() {

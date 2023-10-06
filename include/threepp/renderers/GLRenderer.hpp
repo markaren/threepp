@@ -146,7 +146,7 @@ namespace threepp {
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
-        void readPixels(const Vector2& position, const WindowSize& size, int type, unsigned char* data);
+        void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
 
         void enableTextRendering();
 

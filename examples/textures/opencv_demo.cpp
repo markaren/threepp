@@ -32,7 +32,7 @@ int main() {
     canvas.animate([&] {
         renderer.render(*scene, *camera);
 
-        renderer.readPixels({0,0}, size, RGBFormat, image.data);
+        renderer.readPixels({0,0}, size, Format::RGB, image.data);
 
         flip(image, image, 0);
         cvtColor(image, image, cv::COLOR_BGR2RGB);
