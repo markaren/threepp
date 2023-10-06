@@ -7,8 +7,8 @@ DataTexture::DataTexture(const std::vector<unsigned char>& data, unsigned int wi
 
     this->image = Image{data, width, height};
 
-    this->magFilter = NearestFilter;
-    this->minFilter = NearestFilter;
+    this->magFilter = Filter::Nearest;
+    this->minFilter = Filter::Nearest;
 
     this->generateMipmaps = false;
     this->unpackAlignment = 1;

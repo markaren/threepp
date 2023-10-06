@@ -68,9 +68,9 @@ struct Reflector::Impl {
         Shader shader = options.shader.value_or(reflectorShader());
 
         GLRenderTarget::Options parameters;
-        parameters.minFilter = LinearFilter;
-        parameters.magFilter = LinearFilter;
-        parameters.format = RGBAFormat;
+        parameters.minFilter = Filter::Linear;
+        parameters.magFilter = Filter::Linear;
+        parameters.format = Format::RGBA;
 
         renderTarget = GLRenderTarget::create(textureWidth, textureHeight, parameters);
 

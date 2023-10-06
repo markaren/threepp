@@ -149,9 +149,9 @@ struct Water::Impl {
         Shader shader = mirrorShader();
 
         GLRenderTarget::Options parameters;
-        parameters.minFilter = LinearFilter;
-        parameters.magFilter = LinearFilter;
-        parameters.format = RGBFormat;
+        parameters.minFilter = Filter::Linear;
+        parameters.magFilter = Filter::Linear;
+        parameters.format = Format::RGB;
 
         renderTarget = GLRenderTarget::create(textureWidth, textureHeight, parameters);
 
