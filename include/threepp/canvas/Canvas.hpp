@@ -42,6 +42,8 @@ namespace threepp {
 
         void invokeLater(const std::function<void()>& f, float t = 0);
 
+        void close();
+
         [[nodiscard]] void* windowPtr() const;
 
         ~Canvas() override;

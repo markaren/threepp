@@ -128,6 +128,8 @@ struct Canvas::Impl {
     WindowSize size_;
     Vector2 lastMousePos_;
 
+    bool close_{false};
+
     std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
@@ -202,7 +204,7 @@ struct Canvas::Impl {
 
     bool animateOnce(const std::function<void()>& f) {
 
-        if (glfwWindowShouldClose(window)) {
+        if (close_ || glfwWindowShouldClose(window)) {
             return false;
         }
 
@@ -227,6 +229,11 @@ struct Canvas::Impl {
 
     void invokeLater(const std::function<void()>& f, float t) {
         tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
+    }
+
+    void close() {
+
+        close_ = true;
     }
 
     ~Impl() {
@@ -344,6 +351,11 @@ void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 void Canvas::invokeLater(const std::function<void()>& f, float t) {
 
     pimpl_->invokeLater(f, t);
+}
+
+void Canvas::close() {
+
+    pimpl_->close();
 }
 
 void* Canvas::windowPtr() const {
