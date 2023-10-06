@@ -118,9 +118,14 @@ int main() {
     scene->add(plane);
 
     TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle("Hello");
+    auto& handle = textRenderer.createHandle();
     handle.setPosition(canvas.size().width - 130, 0);
     handle.color = Color::red;
+
+    auto& handle2 = textRenderer.createHandle("Hello world!");
+    handle2.setPosition(0, canvas.size().height - 35);
+    handle2.color = Color::white;
+    handle2.scale = 2;
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
