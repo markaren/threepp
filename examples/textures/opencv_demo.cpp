@@ -9,18 +9,14 @@ using namespace threepp;
 
 namespace {
 
-    Mat colorDetection(Mat& image) {
+    Mat colorDetection(Mat& image, cv::Scalar lower_hsv_range, cv::Scalar upper_hsv_range) {
         flip(image, image, 0);
-        //        cvtColor(image, image, cv::COLOR_BGR2RGB);
         cvtColor(image, image, cv::COLOR_BGR2HSV);
-
-        cv::Scalar lower_hsv_range(60, 120, 70);
-        cv::Scalar upper_hsv_range(120, 255, 255);
 
         cv::Mat mask;
         cv::inRange(image, lower_hsv_range, upper_hsv_range, mask);
 
-        std::vector<cv::Point> locations;// output, locations of non-zero pixels
+        std::vector<cv::Point> locations;
         cv::findNonZero(mask, locations);
 
         if (!locations.empty()) {
@@ -41,8 +37,8 @@ namespace {
                      cv::Point(mean_point.x, mean_point.y + crossSize / 2),
                      crossColor, 2, 8, 0);
 
-            return mask;
         }
+        return mask;
     }
 
 }// namespace
@@ -52,7 +48,6 @@ int main() {
     Canvas canvas("OpenGL demo", {{"aa", 4}, {"resizable", false}});
     auto size = canvas.size();
     GLRenderer renderer{size};
-    //    renderer.setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
@@ -75,6 +70,9 @@ int main() {
     namedWindow(windowTitle, WINDOW_AUTOSIZE);
     Mat image(size.height, size.width, CV_8UC3);
 
+    cv::Scalar lower_hsv_range(60, 120, 70);
+    cv::Scalar upper_hsv_range(120, 255, 255);
+
     Clock clock;
     float A = 2;
     float f = 0.1f;
@@ -85,7 +83,7 @@ int main() {
         renderer.render(*scene, *camera);
         renderer.readPixels({0, 0}, size, Format::RGB, image.data);
 
-        Mat mask = colorDetection(image);
+        Mat mask = colorDetection(image, lower_hsv_range, upper_hsv_range);
         imshow(windowTitle, mask);
         if (waitKey(1) == 'q') {
             canvas.close();
