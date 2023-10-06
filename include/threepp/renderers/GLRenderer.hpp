@@ -148,10 +148,6 @@ namespace threepp {
 
         void resetState();
 
-//        void enableTextRendering();
-
-//        TextHandle& textHandle(const std::string& str = "");
-
         [[nodiscard]] const gl::GLInfo& info() const;
 
         ~GLRenderer();
