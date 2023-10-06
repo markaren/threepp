@@ -341,9 +341,9 @@ struct GLShadowMap::Impl {
             if (!shadow->map && !std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == ShadowMap::VSM) {
 
                 GLRenderTarget::Options pars{};
-                pars.minFilter = LinearFilter;
-                pars.magFilter = LinearFilter;
-                pars.format = RGBAFormat;
+                pars.minFilter = Filter::Linear;
+                pars.magFilter = Filter::Linear;
+                pars.format = Format::RGBA;
 
                 shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                 shadow->map->texture->name = light->name + ".shadowMap";
@@ -356,9 +356,9 @@ struct GLShadowMap::Impl {
             if (!shadow->map) {
 
                 GLRenderTarget::Options pars{};
-                pars.minFilter = NearestFilter;
-                pars.magFilter = NearestFilter;
-                pars.format = RGBAFormat;
+                pars.minFilter = Filter::Nearest;
+                pars.magFilter = Filter::Nearest;
+                pars.format = Format::RGBA;
 
                 shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                 shadow->map->texture->name = light->name + ".shadowMap";

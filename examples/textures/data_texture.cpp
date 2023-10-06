@@ -41,9 +41,9 @@ int main() {
 
     unsigned int textureSize = 128;
     auto texture = DataTexture::create(textureSize * textureSize * 3, textureSize, textureSize);
-    texture->format = RGBFormat;
-    texture->minFilter = NearestFilter;
-    texture->magFilter = NearestFilter;
+    texture->format = Format::RGB;
+    texture->minFilter = Filter::Nearest;
+    texture->magFilter = Filter::Nearest;
 
     auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
     spriteMaterial->map->offset.set(0.5, 0.5);

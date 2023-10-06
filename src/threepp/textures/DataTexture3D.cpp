@@ -18,8 +18,8 @@ DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data,
 
     this->image = Image{data, width, height, depth};
 
-    this->magFilter = NearestFilter;
-    this->minFilter = NearestFilter;
+    this->magFilter = Filter::Nearest;
+    this->minFilter = Filter::Nearest;
 
     this->wrapR = TextureWrapping::ClampToEdge;
 

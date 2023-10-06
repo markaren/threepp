@@ -63,7 +63,7 @@ struct TextureLoader::Impl {
         auto texture = Texture::create(image);
         texture->name = path.stem().string();
 
-        texture->format = isJPEG ? RGBFormat : RGBAFormat;
+        texture->format = isJPEG ? Format::RGB : Format::RGBA;
         texture->needsUpdate();
 
         if (useCache_) cache_[path.string()] = texture;
@@ -85,7 +85,7 @@ struct TextureLoader::Impl {
         auto texture = Texture::create(image);
         texture->name = name;
 
-        texture->format = isJPEG ? RGBFormat : RGBAFormat;
+        texture->format = isJPEG ? Format::RGB : Format::RGBA;
         texture->needsUpdate();
 
         if (useCache_) cache_[name] = texture;
