@@ -1,11 +1,12 @@
 
-#ifndef THREEPP_TEXTHANDLE_HPP
-#define THREEPP_TEXTHANDLE_HPP
+#ifndef THREEPP_TEXTRENDERER_HPP
+#define THREEPP_TEXTRENDERER_HPP
 
 #include "threepp/math/Color.hpp"
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace threepp {
 
@@ -33,7 +34,6 @@ namespace threepp {
         HorizontalAlignment horizontalAlignment{HorizontalAlignment::LEFT};
         VerticalAlignment verticalAlignment{VerticalAlignment::TOP};
 
-        explicit TextHandle(const std::string& str);
 
         void setText(const std::string& str);
 
@@ -58,20 +58,42 @@ namespace threepp {
 
         bool invalidate_ = false;
 
+        explicit TextHandle(const std::string& str);
+
         void render();
 
-        static void setViewport(int width, int height);
-
-        static bool init();
-
-        static void beginDraw(bool blendingEnabled);
-        static void endDraw(bool blendingEnabled);
-
-        static void terminate();
-
-        friend class GLRenderer;
+        friend class TextRenderer;
     };
+
+
+    class TextRenderer {
+
+    public:
+        TextRenderer();
+
+        TextRenderer(TextRenderer&&) = delete;
+        TextRenderer(const TextRenderer&) = delete;
+        TextRenderer& operator=(const TextRenderer&) = delete;
+
+        void setViewport(int width, int height);
+
+        TextHandle& createHandle(const std::string& text = "") {
+
+            auto handle = std::unique_ptr<TextHandle>(new TextHandle(text));
+            textHandles_.emplace_back(std::move(handle));
+
+            return *textHandles_.back();
+        }
+
+        void render();
+
+        ~TextRenderer();
+
+    private:
+        std::vector<std::unique_ptr<TextHandle>> textHandles_;
+    };
+
 
 }// namespace threepp
 
-#endif//THREEPP_TEXTHANDLE_HPP
+#endif//THREEPP_TEXTRENDERER_HPP

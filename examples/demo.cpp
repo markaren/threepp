@@ -117,8 +117,8 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Hello");
     handle.setPosition(canvas.size().width - 130, 0);
     handle.color = Color::red;
 
@@ -140,6 +140,8 @@ int main() {
         handle.setText("Delta=" + std::to_string(dt));
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
+        textRenderer.render();
 
 #ifdef HAS_IMGUI
         ui.render();

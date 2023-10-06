@@ -34,6 +34,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/TextRenderer.hpp"
 
 #include "threepp/loaders/loaders.hpp"
 
