@@ -7,3 +7,7 @@ target_link_libraries(texture3d PRIVATE threepp)
 
 add_executable(data_texture data_texture.cpp)
 target_link_libraries(data_texture PRIVATE threepp)
+if (OpenCV_FOUND)
+    add_executable(opencv_demo opencv_demo.cpp)
+    target_link_libraries(opencv_demo PRIVATE threepp glad::glad ${OpenCV_LIBRARIES})
+endif ()
