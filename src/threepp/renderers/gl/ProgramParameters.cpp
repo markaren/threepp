@@ -150,7 +150,8 @@ ProgramParameters::ProgramParameters(
         flatShading = flatshadeMaterial->flatShading;
     }
 
-    sizeAttenuation = material->is<MaterialWithSize>();
+    auto sizeMaterial = material->as<MaterialWithSize>();
+    sizeAttenuation = sizeMaterial ? sizeMaterial->sizeAttenuation : false;
 
     skinning = false;// TODO
     maxBones = 0;    // TODO
