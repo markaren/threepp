@@ -2,7 +2,6 @@
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
 
-#include <glad/glad.h>
 #include <opencv2/opencv.hpp>
 
 using namespace cv;
@@ -33,7 +32,8 @@ int main() {
     canvas.animate([&] {
         renderer.render(*scene, *camera);
 
-        glReadPixels(0, 0, size.width, size.height, GL_RGB, GL_UNSIGNED_BYTE, image.data);
+        renderer.readPixels({0,0}, size, RGBFormat, image.data);
+
         flip(image, image, 0);
         cvtColor(image, image, cv::COLOR_BGR2RGB);
         imshow(windowTitle, image);
