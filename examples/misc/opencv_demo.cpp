@@ -4,16 +4,17 @@
 
 #include <opencv2/opencv.hpp>
 
+#include <sstream>
+
 using namespace cv;
 using namespace threepp;
 
 namespace {
 
-    Mat colorDetection(Mat& image, cv::Scalar lower_hsv_range, cv::Scalar upper_hsv_range) {
+    std::optional<cv::Point> colorDetection(Mat& image, cv::Scalar lower_hsv_range, cv::Scalar upper_hsv_range, Mat& mask) {
         flip(image, image, 0);
         cvtColor(image, image, cv::COLOR_BGR2HSV);
 
-        cv::Mat mask;
         cv::inRange(image, lower_hsv_range, upper_hsv_range, mask);
 
         std::vector<cv::Point> locations;
@@ -21,24 +22,26 @@ namespace {
 
         if (!locations.empty()) {
 
-            cv::Point mean_point;
+            cv::Point meanPoint;
             for (const auto& point : locations) {
-                mean_point += point;
+                meanPoint += point;
             }
-            mean_point.x /= locations.size();
-            mean_point.y /= locations.size();
+            meanPoint.x /= static_cast<int>(locations.size());
+            meanPoint.y /= static_cast<int>(locations.size());
 
             int crossSize = 10;
             cv::Scalar crossColor(0, 255, 0);
-            cv::line(mask, cv::Point(mean_point.x - crossSize / 2, mean_point.y),
-                     cv::Point(mean_point.x + crossSize / 2, mean_point.y),
+            cv::line(mask, cv::Point(meanPoint.x - crossSize / 2, meanPoint.y),
+                     cv::Point(meanPoint.x + crossSize / 2, meanPoint.y),
                      crossColor, 2, 8, 0);
-            cv::line(mask, cv::Point(mean_point.x, mean_point.y - crossSize / 2),
-                     cv::Point(mean_point.x, mean_point.y + crossSize / 2),
+            cv::line(mask, cv::Point(meanPoint.x, meanPoint.y - crossSize / 2),
+                     cv::Point(meanPoint.x, meanPoint.y + crossSize / 2),
                      crossColor, 2, 8, 0);
 
+            return meanPoint;
         }
-        return mask;
+
+        return std::nullopt;
     }
 
 }// namespace
@@ -70,12 +73,21 @@ int main() {
     namedWindow(windowTitle, WINDOW_AUTOSIZE);
     Mat image(size.height, size.width, CV_8UC3);
 
+    Mat mask;
     cv::Scalar lower_hsv_range(60, 120, 70);
     cv::Scalar upper_hsv_range(120, 255, 255);
+
+    TextRenderer textRenderer;
+    auto& handle1 = textRenderer.createHandle("+");
+    handle1.verticalAlignment = TextHandle::VerticalAlignment::CENTER;
+    handle1.horizontalAlignment = TextHandle::HorizontalAlignment::CENTER;
+    handle1.scale = 2;
+    auto& handle2 = textRenderer.createHandle();
 
     Clock clock;
     float A = 2;
     float f = 0.1f;
+
     canvas.animate([&] {
         auto dt = clock.getDelta();
         ball->position.x = A * std::sin(2 * math::PI * clock.elapsedTime * f);
@@ -83,10 +95,21 @@ int main() {
         renderer.render(*scene, *camera);
         renderer.readPixels({0, 0}, size, Format::RGB, image.data);
 
-        Mat mask = colorDetection(image, lower_hsv_range, upper_hsv_range);
+        auto pos = colorDetection(image, lower_hsv_range, upper_hsv_range, mask);
         imshow(windowTitle, mask);
         if (waitKey(1) == 'q') {
             canvas.close();
+        }
+
+        if (pos) {
+            std::stringstream ss;
+            ss << "Detected ball at pos (" << pos->x << ", " << pos->y << ")";
+
+            handle2.setText(ss.str());
+            handle1.setPosition(pos->x, pos->y);
+
+            renderer.resetState();
+            textRenderer.render();
         }
     });
 }
