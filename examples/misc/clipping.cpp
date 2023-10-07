@@ -120,6 +120,12 @@ int main() {
     controls.target.set(0, 1, 0);
     controls.update();
 
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.aspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+    });
+
     Clock clock;
     canvas.animate([&] {
         auto time = clock.getElapsedTime();
