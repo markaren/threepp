@@ -20,7 +20,7 @@ namespace threepp {
     public:
         struct Options {
 
-            std::optional<int> mapping;
+            std::optional<Mapping> mapping;
             std::optional<TextureWrapping> wrapS;
             std::optional<TextureWrapping> wrapT;
             std::optional<Filter> magFilter;

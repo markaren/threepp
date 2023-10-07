@@ -174,7 +174,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "depthFunc") {
 
-            depthFunc = std::get<int>(value);
+            depthFunc = std::get<DepthFunc>(value);
             used = true;
 
         } else if (key == "depthTest") {

@@ -45,7 +45,7 @@ namespace threepp {
             bool locked = false;
 
             std::optional<bool> currentDepthMask;
-            std::optional<int> currentDepthFunc;
+            std::optional<DepthFunc> currentDepthFunc;
             std::optional<float> currentDepthClear;
 
             std::function<void(int)> enable;
@@ -57,7 +57,7 @@ namespace threepp {
 
             void setMask(bool depthMask);
 
-            void setFunc(int depthFunc);
+            void setFunc(DepthFunc depthFunc);
 
             void setLocked(bool lock);
 

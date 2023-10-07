@@ -107,14 +107,25 @@ namespace threepp {
         SrcAlphaSaturate = 210
     };
 
-    const int NeverDepth = 0;
-    const int AlwaysDepth = 1;
-    const int LessDepth = 2;
-    const int LessEqualDepth = 3;
-    const int EqualDepth = 4;
-    const int GreaterEqualDepth = 5;
-    const int GreaterDepth = 6;
-    const int NotEqualDepth = 7;
+//    const int NeverDepth = 0;
+//    const int AlwaysDepth = 1;
+//    const int LessDepth = 2;
+//    const int LessEqualDepth = 3;
+//    const int EqualDepth = 4;
+//    const int GreaterEqualDepth = 5;
+//    const int GreaterDepth = 6;
+//    const int NotEqualDepth = 7;
+
+    enum class DepthFunc {
+        Never = 0,
+        Always = 1,
+        Less = 2,
+        LessEqual = 3,
+        Equal = 4,
+        GreaterEqual = 5,
+        Greater = 6,
+        NotEqual = 7
+    };
 
     //    const int MultiplyOperation = 0;
     //    const int MixOperation = 1;
@@ -142,13 +153,23 @@ namespace threepp {
         Custom = 5
     };
 
-    const int UVMapping = 300;
-    const int CubeReflectionMapping = 301;
-    const int CubeRefractionMapping = 302;
-    const int EquirectangularReflectionMapping = 303;
-    const int EquirectangularRefractionMapping = 304;
-    const int CubeUVReflectionMapping = 306;
-    const int CubeUVRefractionMapping = 307;
+//    const int UVMapping = 300;
+//    const int CubeReflectionMapping = 301;
+//    const int CubeRefractionMapping = 302;
+//    const int EquirectangularReflectionMapping = 303;
+//    const int EquirectangularRefractionMapping = 304;
+//    const int CubeUVReflectionMapping = 306;
+//    const int CubeUVRefractionMapping = 307;
+
+    enum class Mapping {
+        UV = 300,
+        CubeReflection = 301,
+        CubeRefraction = 302,
+        EquirectangularReflection = 303,
+        EquirectangularRefraction = 304,
+        CubeUVReflection = 306,
+        CubeUVRefraction = 307
+    };
 
     //    const int RepeatWrapping = 1000;
     //    const int ClampToEdgeWrapping = 1001;

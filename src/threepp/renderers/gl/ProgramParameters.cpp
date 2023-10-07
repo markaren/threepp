@@ -96,11 +96,13 @@ ProgramParameters::ProgramParameters(
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
     envMap = envmapMaterial && envmapMaterial->envMap;
-    envMapMode = envMap && envmapMaterial->envMap->mapping;
+    if (envMap && envmapMaterial->envMap->mapping){
+        envMapMode = as_integer(*envmapMaterial->envMap->mapping);
+    }
     envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
     envMapCubeUV = envMapMode != 0 &&
-                   (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping ||
-                    envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping);
+                   (envmapMaterial->envMap->mapping == Mapping::CubeReflection ||
+                    envmapMaterial->envMap->mapping == Mapping::CubeRefraction);
     lightMap = lightmapMaterial && lightmapMaterial->lightMap;
     lightMapEncoding = getTextureEncodingFromMap(lightMap ? lightmapMaterial->lightMap : nullptr);
     aoMap = aomapMaterial && aomapMaterial->aoMap;

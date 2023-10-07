@@ -32,7 +32,7 @@ void Texture::dispose() {
 
 void Texture::transformUv(Vector2& uv) const {
 
-    if (this->mapping != UVMapping) return;
+    if (this->mapping != Mapping::UV) return;
 
     uv.applyMatrix3(this->matrix);
 

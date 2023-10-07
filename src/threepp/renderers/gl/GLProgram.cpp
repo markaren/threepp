@@ -261,13 +261,13 @@ namespace {
 
             switch (parameters->envMapMode) {
 
-                case CubeReflectionMapping:
-                case CubeRefractionMapping:
+                case Mapping::CubeReflection:
+                case Mapping::CubeRefraction:
                     envMapTypeDefine = "ENVMAP_TYPE_CUBE";
                     break;
 
-                case CubeUVReflectionMapping:
-                case CubeUVRefractionMapping:
+                case Mapping::CubeUVReflection:
+                case Mapping::CubeUVRefraction:
                     envMapTypeDefine = "ENVMAP_TYPE_CUBE_UV";
                     break;
             }
@@ -284,8 +284,8 @@ namespace {
 
             switch (parameters->envMapMode) {
 
-                case CubeRefractionMapping:
-                case CubeUVRefractionMapping:
+                case threepp::Mapping::CubeRefraction:
+                case threepp::Mapping::CubeUVRefraction:
 
                     envMapModeDefine = "ENVMAP_MODE_REFRACTION";
                     break;

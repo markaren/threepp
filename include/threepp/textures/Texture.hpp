@@ -22,7 +22,7 @@ namespace threepp {
     class Texture: public EventDispatcher {
 
     public:
-        inline static int DEFAULT_MAPPING = UVMapping;
+        inline static Mapping DEFAULT_MAPPING = Mapping::UV;
 
         unsigned int id = textureId++;
 
@@ -33,7 +33,7 @@ namespace threepp {
         std::optional<Image> image;
         std::vector<Image> mipmaps;
 
-        std::optional<int> mapping = Texture::DEFAULT_MAPPING;
+        std::optional<Mapping> mapping = Texture::DEFAULT_MAPPING;
 
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};
         TextureWrapping wrapT{TextureWrapping::ClampToEdge};
