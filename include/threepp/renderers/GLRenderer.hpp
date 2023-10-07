@@ -74,6 +74,10 @@ namespace threepp {
 
         explicit GLRenderer(WindowSize size, const Parameters& parameters = {});
 
+        GLRenderer(GLRenderer&&) = delete;
+        GLRenderer(const GLRenderer&) = delete;
+        GLRenderer& operator=(const GLRenderer&) = delete;
+
         const gl::GLInfo& info();
 
         gl::GLShadowMap& shadowMap();
