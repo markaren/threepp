@@ -82,12 +82,11 @@ int main() {
     });
     canvas.addMouseListener(&l);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
-
-    FPSCounter counter;
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     Clock clock;
+    FPSCounter counter;
     Raycaster raycaster;
     std::unordered_map<int, bool> map;
     canvas.animate([&]() {
@@ -107,5 +106,7 @@ int main() {
         handle.setText("FPS: " + std::to_string(counter.fps));
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
+        textRenderer.render();
     });
 }

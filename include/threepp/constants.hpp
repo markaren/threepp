@@ -160,42 +160,88 @@ namespace threepp {
         MirroredRepeat = 1002
     };
 
-    const int NearestFilter = 1003;
-    const int NearestMipmapNearestFilter = 1004;
-    const int NearestMipMapNearestFilter = 1004;
-    const int NearestMipmapLinearFilter = 1005;
-    const int NearestMipMapLinearFilter = 1005;
-    const int LinearFilter = 1006;
-    const int LinearMipmapNearestFilter = 1007;
-    const int LinearMipMapNearestFilter = 1007;
-    const int LinearMipmapLinearFilter = 1008;
-    const int LinearMipMapLinearFilter = 1008;
-    const int UnsignedByteType = 1009;
-    const int ByteType = 1010;
-    const int ShortType = 1011;
-    const int UnsignedShortType = 1012;
-    const int IntType = 1013;
-    const int UnsignedIntType = 1014;
-    const int FloatType = 1015;
-    const int HalfFloatType = 1016;
-    const int UnsignedShort4444Type = 1017;
-    const int UnsignedShort5551Type = 1018;
-    const int UnsignedShort565Type = 1019;
-    const int UnsignedInt248Type = 1020;
-    const int AlphaFormat = 1021;
-    const int RGBFormat = 1022;
-    const int RGBAFormat = 1023;
-    const int LuminanceFormat = 1024;
-    const int LuminanceAlphaFormat = 1025;
-    const int RGBEFormat = RGBAFormat;
-    const int DepthFormat = 1026;
-    const int DepthStencilFormat = 1027;
-    const int RedFormat = 1028;
-    const int RedIntegerFormat = 1029;
-    const int RGFormat = 1030;
-    const int RGIntegerFormat = 1031;
-    const int RGBIntegerFormat = 1032;
-    const int RGBAIntegerFormat = 1033;
+    //    const int NearestFilter = 1003;
+    //    const int NearestMipmapNearestFilter = 1004;
+    //    const int NearestMipMapNearestFilter = 1004;
+    //    const int NearestMipmapLinearFilter = 1005;
+    //    const int NearestMipMapLinearFilter = 1005;
+    //    const int LinearFilter = 1006;
+    //    const int LinearMipmapNearestFilter = 1007;
+    //    const int LinearMipMapNearestFilter = 1007;
+    //    const int LinearMipmapLinearFilter = 1008;
+    //    const int LinearMipMapLinearFilter = 1008;
+
+    enum class Filter {
+        Nearest = 1003,
+        NearestMipmapNearest = 1004,
+        NearestMipMapNearest = 1004,
+        NearestMipmapLinear = 1005,
+        NearestMipMapLinear = 1005,
+        Linear = 1006,
+        LinearMipmapNearest = 1007,
+        LinearMipMapNearest = 1007,
+        LinearMipmapLinear = 1008,
+        LinearMipMapLinear = 1008
+    };
+
+    //    const int UnsignedByteType = 1009;
+    //    const int ByteType = 1010;
+    //    const int ShortType = 1011;
+    //    const int UnsignedShortType = 1012;
+    //    const int IntType = 1013;
+    //    const int UnsignedIntType = 1014;
+    //    const int FloatType = 1015;
+    //    const int HalfFloatType = 1016;
+    //    const int UnsignedShort4444Type = 1017;
+    //    const int UnsignedShort5551Type = 1018;
+    //    const int UnsignedShort565Type = 1019;
+    //    const int UnsignedInt248Type = 1020;
+
+    enum class Type {
+        UnsignedByte = 1009,
+        Byte = 1010,
+        Short = 1011,
+        UnsignedShort = 1012,
+        Int = 1013,
+        UnsignedInt = 1014,
+        Float = 1015,
+        HalfFloat = 1016,
+        UnsignedShort4444 = 1017,
+        UnsignedShort5551 = 1018,
+        UnsignedShort565 = 1019,
+        UnsignedInt248 = 1020
+    };
+
+    //    const int AlphaFormat = 1021;
+    //    const int RGBFormat = 1022;
+    //    const int RGBAFormat = 1023;
+    //    const int LuminanceFormat = 1024;
+    //    const int LuminanceAlphaFormat = 1025;
+    //    const int RGBEFormat = RGBAFormat;
+    //    const int DepthFormat = 1026;
+    //    const int DepthStencilFormat = 1027;
+    //    const int RedFormat = 1028;
+    //    const int RedIntegerFormat = 1029;
+    //    const int RGFormat = 1030;
+    //    const int RGIntegerFormat = 1031;
+    //    const int RGBIntegerFormat = 1032;
+    //    const int RGBAIntegerFormat = 1033;
+
+    enum class Format {
+        Alpha,
+        RGB,
+        RGBA,
+        Luminance,
+        LuminanceAlpha,
+        Depth,
+        DepthStencil,
+        Red,
+        RedInteger,
+        RG,
+        RGInteger,
+        RGBInteger,
+        RGBAInteger
+    };
 
     //    const int LoopOnce = 2200;
     //    const int LoopRepeat = 2201;

@@ -19,24 +19,24 @@ namespace {
             {TextureWrapping::ClampToEdge, GL_CLAMP_TO_EDGE},
             {TextureWrapping::MirroredRepeat, GL_MIRRORED_REPEAT}};
 
-    std::unordered_map<int, int> filterToGL{
-            {NearestFilter, GL_NEAREST},
-            {NearestMipmapNearestFilter, GL_NEAREST_MIPMAP_NEAREST},
-            {NearestMipmapLinearFilter, GL_NEAREST_MIPMAP_LINEAR},
+    std::unordered_map<Filter, int> filterToGL{
+            {Filter::Nearest, GL_NEAREST},
+            {Filter::NearestMipmapNearest, GL_NEAREST_MIPMAP_NEAREST},
+            {Filter::NearestMipmapLinear, GL_NEAREST_MIPMAP_LINEAR},
 
-            {LinearFilter, GL_LINEAR},
-            {LinearMipmapNearestFilter, GL_LINEAR_MIPMAP_NEAREST},
-            {LinearMipmapLinearFilter, GL_LINEAR_MIPMAP_LINEAR}};
+            {Filter::Linear, GL_LINEAR},
+            {Filter::LinearMipmapNearest, GL_LINEAR_MIPMAP_NEAREST},
+            {Filter::LinearMipmapLinear, GL_LINEAR_MIPMAP_LINEAR}};
 
     bool textureNeedsGenerateMipmaps(const Texture& texture) {
 
         return texture.generateMipmaps &&
-               texture.minFilter != NearestFilter && texture.minFilter != LinearFilter;
+               texture.minFilter != Filter::Nearest && texture.minFilter != Filter::Linear;
     }
 
-    GLuint filterFallback(int f) {
+    GLuint filterFallback(Filter f) {
 
-        if (f == NearestFilter || f == NearestMipmapNearestFilter || f == NearestMipmapLinearFilter) {
+        if (f == Filter::Nearest || f == Filter::NearestMipmapNearest || f == Filter::NearestMipmapLinear) {
 
             return GL_NEAREST;
         }
@@ -126,20 +126,24 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
-    const auto& image = *texture.image;
+    auto& image = *texture.image;
 
-    GLuint glFormat = convert(texture.format);
+    GLuint glFormat = toGLFormat(texture.format);
 
-    GLuint glType = convert(texture.type);
+    GLuint glType = toGLType(texture.type);
     auto glInternalFormat = getInternalFormat(glFormat, glType);
 
     setTextureParameters(textureType, texture);
 
-    const auto& mipmaps = texture.mipmaps;
+    auto& mipmaps = texture.mipmaps;
 
     if (dataTexture3D) {
 
-        state.texImage3D(GL_TEXTURE_3D, 0, glInternalFormat, image.width, image.height, image.depth, glFormat, glType, image.getData());
+        state.texImage3D(GL_TEXTURE_3D, 0, glInternalFormat,
+                         static_cast<int>(image.width),
+                         static_cast<int>(image.height),
+                         static_cast<int>(image.depth),
+                         glFormat, glType, image.data().data());
         textureProperties->maxMipLevel = 0;
 
     } else {
@@ -154,8 +158,10 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
             for (int i = 0; i < mipmaps.size(); ++i) {
 
-                const auto& mipmap = mipmaps[i];
-                state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat, mipmap.width, mipmap.height, glFormat, glType, mipmap.getData());
+                auto& mipmap = mipmaps[i];
+                state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
+                                 static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
+                                 glFormat, glType, mipmap.data().data());
             }
 
             texture.generateMipmaps = false;
@@ -163,7 +169,9 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         } else {
 
-            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat, image.width, image.height, glFormat, glType, texture.image->getData());
+            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                             static_cast<int>(image.width), static_cast<int>(image.height),
+                             glFormat, glType, texture.image->data().data());
             textureProperties->maxMipLevel = 0;
         }
     }
@@ -326,8 +334,8 @@ void gl::GLTextures::setupFrameBufferTexture(
         const std::shared_ptr<GLRenderTarget>& renderTarget,
         Texture& texture, GLuint attachment, GLuint textureTarget) {
 
-    const auto glFormat = convert(texture.format);
-    const auto glType = convert(texture.type);
+    const auto glFormat = toGLFormat(texture.format);
+    const auto glType = toGLType(texture.type);
     const auto glInternalFormat = getInternalFormat(/*texture.internalFormat,*/ glFormat, glType);
 
     if (textureTarget == GL_TEXTURE_3D || textureTarget == GL_TEXTURE_2D_ARRAY) {
@@ -370,8 +378,8 @@ void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, const s
         // Use the first texture for MRT so far
         const auto texture = renderTarget->texture;
 
-        const auto glFormat = convert(texture->format);
-        const auto glType = convert(texture->type);
+        const auto glFormat = toGLFormat(texture->format);
+        const auto glType = toGLType(texture->type);
         const auto glInternalFormat = getInternalFormat(glFormat, glType);
 
         glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, renderTarget->width, renderTarget->height);
@@ -403,11 +411,11 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, const std::shar
 
     const auto glDepthTexture = properties.textureProperties.get(renderTarget->depthTexture->uuid)->glTexture;
 
-    if (renderTarget->depthTexture->format == DepthFormat) {
+    if (renderTarget->depthTexture->format == Format::Depth) {
 
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, *glDepthTexture, 0);
 
-    } else if (renderTarget->depthTexture->format == DepthStencilFormat) {
+    } else if (renderTarget->depthTexture->format == Format::DepthStencil) {
 
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, *glDepthTexture, 0);
 
@@ -454,9 +462,9 @@ void gl::GLTextures::setupRenderTarget(const std::shared_ptr<GLRenderTarget>& re
 
     // Handles WebGL2 RGBFormat fallback - #18858
 
-    if (texture->format == RGBFormat && (texture->type == FloatType || texture->type == HalfFloatType)) {
+    if (texture->format == Format::RGB && (texture->type == Type::Float || texture->type == Type::HalfFloat)) {
 
-        texture->format = RGBAFormat;
+        texture->format = Format::RGBA;
 
         std::cerr << "THREE.GLRenderer: Rendering to textures with RGB format is not supported. Using RGBA format instead." << std::endl;
     }

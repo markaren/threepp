@@ -32,12 +32,14 @@ int main() {
         renderer.setSize(size);
     });
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     canvas.animate([&]() {
         handle.setText("LOD level: " + std::to_string(lod.getCurrentLevel()));
 
         renderer.render(scene, camera);
+        renderer.resetState();
+        textRenderer.render();
     });
 }

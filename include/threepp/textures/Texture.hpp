@@ -38,14 +38,14 @@ namespace threepp {
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};
         TextureWrapping wrapT{TextureWrapping::ClampToEdge};
 
-        int magFilter = LinearFilter;
-        int minFilter = LinearMipmapLinearFilter;
+        Filter magFilter{Filter::Linear};
+        Filter minFilter{Filter::LinearMipmapLinear};
 
         int anisotropy = 1;
 
-        int format = RGBAFormat;
+        Format format{Format::RGBA};
         std::optional<std::string> internalFormat;
-        int type = UnsignedByteType;
+        Type type{Type::UnsignedByte};
 
         Vector2 offset = Vector2(0, 0);
         Vector2 repeat = Vector2(1, 1);

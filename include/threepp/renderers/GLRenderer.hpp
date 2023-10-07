@@ -17,8 +17,6 @@
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include "TextHandle.hpp"
-
 #include <memory>
 #include <vector>
 
@@ -75,6 +73,10 @@ namespace threepp {
         bool checkShaderErrors = false;
 
         explicit GLRenderer(WindowSize size, const Parameters& parameters = {});
+
+        GLRenderer(GLRenderer&&) = delete;
+        GLRenderer(const GLRenderer&) = delete;
+        GLRenderer& operator=(const GLRenderer&) = delete;
 
         const gl::GLInfo& info();
 
@@ -146,9 +148,9 @@ namespace threepp {
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
-        void enableTextRendering();
+        void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
 
-        TextHandle& textHandle(const std::string& str = "");
+        void resetState();
 
         [[nodiscard]] const gl::GLInfo& info() const;
 

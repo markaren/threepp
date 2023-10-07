@@ -150,7 +150,7 @@ namespace threepp {
 
             bool bindFramebuffer(int target, unsigned int framebuffer);
 
-            bool useProgram(unsigned int program, bool force);
+            bool useProgram(unsigned int program);
 
             void setBlending(
                     Blending blending,

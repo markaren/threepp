@@ -386,9 +386,9 @@ bool gl::GLState::bindFramebuffer(int target, unsigned int framebuffer) {
     return false;
 }
 
-bool gl::GLState::useProgram(unsigned int program, bool force) {
+bool gl::GLState::useProgram(unsigned int program) {
 
-    if (force || currentProgram != program) {
+    if (currentProgram != program) {
 
         glUseProgram(program);
 
