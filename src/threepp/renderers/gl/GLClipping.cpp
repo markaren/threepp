@@ -81,7 +81,7 @@ struct GLClipping::Impl {
 
             dstArray = projectPlanes(planes, camera, lGlobal, useCache);
 
-            for (int i = 0; i != lGlobal; ++i) {
+            for (unsigned i = 0; i != lGlobal; ++i) {
 
                 dstArray[i] = scope.globalState.value()[i];
             }
