@@ -22,7 +22,7 @@ namespace threepp {
 
             std::optional<std::vector<float>> globalState;
 
-            int numGlobalPlanes = 0;
+            size_t numGlobalPlanes = 0;
             bool localClippingEnabled = false;
             bool renderingShadows = false;
 
@@ -31,8 +31,8 @@ namespace threepp {
 
             Uniform uniform;
 
-            int numPlanes = 0;
-            int numIntersection = 0;
+            size_t numPlanes = 0;
+            size_t numIntersection = 0;
 
             explicit GLClipping(GLProperties& properties);
 

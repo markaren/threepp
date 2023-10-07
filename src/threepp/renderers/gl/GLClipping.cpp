@@ -30,7 +30,7 @@ struct GLClipping::Impl {
         scope.localClippingEnabled = enableLocalClipping;
 
         scope.globalState = scope.projectPlanes(planes, camera, 0);
-        scope.numGlobalPlanes = (int) planes.size();
+        scope.numGlobalPlanes = planes.size();
 
         return enabled;
     }
@@ -91,6 +91,7 @@ struct GLClipping::Impl {
             scope.numPlanes += nGlobal;
         }
     }
+
     void resetGlobalState() {
 
         if (!scope.uniform.hasValue() || scope.uniform.value<std::vector<float>>() != scope.globalState) {
@@ -102,12 +103,14 @@ struct GLClipping::Impl {
         scope.numPlanes = scope.numGlobalPlanes;
         scope.numIntersection = 0;
     }
+
     void projectPlanes() {
 
         scope.numPlanes = 0;
         scope.numIntersection = 0;
     }
-    std::vector<float> projectPlanes(const std::vector<Plane>& planes, Camera* camera, int dstOffset, bool skipTransform) {
+
+    std::vector<float> projectPlanes(const std::vector<Plane>& planes, Camera* camera, size_t dstOffset, bool skipTransform) {
 
         const auto nPlanes = planes.size();
         std::vector<float> dstArray;
@@ -130,7 +133,7 @@ struct GLClipping::Impl {
                     dstArray.resize(flatSize);
                 }
 
-                for (int i = 0, i4 = dstOffset; i != nPlanes; ++i, i4 += 4) {
+                for (unsigned i = 0, i4 = dstOffset; i != nPlanes; ++i, i4 += 4) {
 
                     scope.plane.copy(planes[i]).applyMatrix4(viewMatrix, scope.viewNormalMatrix);
 
