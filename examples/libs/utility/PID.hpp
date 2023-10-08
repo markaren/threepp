@@ -6,8 +6,6 @@
 #include <limits>
 #include <optional>
 
-#include "threepp/math/MathUtils.hpp"
-
 struct PIDParameters {
     float kp;
     float ti;
