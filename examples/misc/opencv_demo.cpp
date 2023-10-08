@@ -1,6 +1,7 @@
 
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/threepp.hpp"
+#include "utility/PID.hpp"
 
 #include <opencv2/opencv.hpp>
 
@@ -52,9 +53,6 @@ int main() {
     auto size = canvas.size();
     GLRenderer renderer{size};
 
-    auto camera = PerspectiveCamera::create(70, canvas.aspect(), 0.1f, 1000);
-    camera->position.z = 5;
-
     auto scene = Scene::create();
 
     auto light = HemisphereLight::create();
@@ -66,8 +64,6 @@ int main() {
 
     auto ball = Mesh::create(SphereGeometry::create(), MeshPhongMaterial::create({{"color", Color::green}}));
     scene->add(ball);
-
-    OrbitControls controls{*camera, canvas};
 
     std::string windowTitle = "OpenCV";
     namedWindow(windowTitle, WINDOW_AUTOSIZE);
@@ -84,15 +80,32 @@ int main() {
     handle1.scale = 2;
     auto& handle2 = textRenderer.createHandle();
 
-    Clock clock;
-    float A = 2;
-    float f = 0.1f;
+    // simulate a pan-tilt mechanism with camera attached
+    Object3D yRot;
+    yRot.position.z = 5;
+    Object3D zRot;
+    zRot.position.y = 1;
+    PerspectiveCamera camera(70, canvas.aspect(), 0.1f, 1000);
 
+    yRot.add(zRot);
+    zRot.add(camera);
+    scene->add(yRot);
+
+    PID pid1(0.1, 0.001, 0.0001);// horizontal
+    PID pid2(0.1, 0.001, 0.0001);// vertical
+
+    pid1.setWindupGuard(10.f);
+    pid2.setWindupGuard(10.f);
+
+    float maxRotationSpeed = 2;// deg
+
+    Clock clock;
     canvas.animate([&] {
         auto dt = clock.getDelta();
-        ball->position.x = A * std::sin(2 * math::PI * clock.elapsedTime * f);
+        ball->position.x = 1 * std::sin(math::TWO_PI * clock.elapsedTime * 0.1f);
+        ball->position.y = 2 * std::sin(math::TWO_PI * clock.elapsedTime * 0.5f);
 
-        renderer.render(*scene, *camera);
+        renderer.render(*scene, camera);
         renderer.readPixels({0, 0}, size, Format::RGB, image.data);
 
         auto pos = colorDetection(image, lower_hsv_range, upper_hsv_range, mask);
@@ -102,8 +115,19 @@ int main() {
         }
 
         if (pos) {
+
+            // want (0,0) to be center
+            int xZeroed = pos->x - size.width / 2;
+            int yZeroed = pos->y - size.height / 2;
+
+            auto gain1 = pid1.regulate(0, static_cast<float>(xZeroed), dt);
+            auto gain2 = pid2.regulate(0, static_cast<float>(yZeroed), dt);
+
+            yRot.rotation.y += gain1 * math::degToRad(maxRotationSpeed);
+            zRot.rotation.x += gain2 * math::degToRad(maxRotationSpeed);
+
             std::stringstream ss;
-            ss << "Detected ball at pos (" << pos->x << ", " << pos->y << ")";
+            ss << "Detected ball at pos (" << xZeroed << ", " << yZeroed << ")";
 
             handle2.setText(ss.str());
             handle1.setPosition(pos->x, pos->y);
