@@ -536,7 +536,7 @@ struct GLRenderer::Impl {
         }
     }
 
-    std::shared_ptr<gl::GLProgram> getProgram(Material* material, Scene* scene, Object3D* object) {
+    gl::GLProgram* getProgram(Material* material, Scene* scene, Object3D* object) {
 
         //    bool isScene = instanceof <Scene>(scene);
         //
@@ -577,7 +577,7 @@ struct GLRenderer::Impl {
 
                 updateCommonMaterialProperties(material, parameters);
 
-                return program;
+                return program.get();
             }
 
         } else {
@@ -636,7 +636,7 @@ struct GLRenderer::Impl {
         materialProperties->currentProgram = program;
         materialProperties->uniformsList = uniformsList;
 
-        return materialProperties->currentProgram;
+        return materialProperties->currentProgram.get();
     }
 
     void updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
@@ -650,7 +650,7 @@ struct GLRenderer::Impl {
         materialProperties->vertexAlphas = parameters.vertexAlphas;
     }
 
-    std::shared_ptr<gl::GLProgram> setProgram(Camera* camera, Scene* scene, Material* material, Object3D* object) {
+    gl::GLProgram* setProgram(Camera* camera, Scene* scene, Material* material, Object3D* object) {
 
         //    bool isScene = instanceof <Scene>(scene);
 
@@ -743,7 +743,7 @@ struct GLRenderer::Impl {
 
         //
 
-        auto program = materialProperties->currentProgram;
+        gl::GLProgram* program = materialProperties->currentProgram.get();
 
         if (needsProgramChange) {
 
