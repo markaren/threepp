@@ -101,15 +101,17 @@ namespace {
 Font::Font(FontData data): data(std::move(data)) {}
 
 
-std::vector<std::shared_ptr<Shape>> Font::generateShapes(const std::string& text, unsigned int size) {
+std::vector<Shape> Font::generateShapes(const std::string& text, unsigned int size) {
 
-    std::vector<std::shared_ptr<Shape>> shapes;
+    std::vector<Shape> shapes;
     auto paths = createPaths(text, size, data);
 
     for (const auto& path : paths) {
 
         auto pathShapes = path.toShapes();
-        shapes.insert(shapes.end(), pathShapes.begin(), pathShapes.end());
+        for (auto& s : pathShapes) {
+            shapes.emplace_back(*s);
+        }
     }
 
     return shapes;

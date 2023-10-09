@@ -80,7 +80,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
 
     ExtrudeGeometry::Options opts;
     opts.depth = 3;
-    auto extrudeGeometry = ExtrudeGeometry::create(shape, opts);
+    auto extrudeGeometry = ExtrudeGeometry::create({shape}, opts);
     extrudeGeometry->center();
     extrudeGeometry->scale(scale, scale, scale);
     auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create({{"color", Color::orange}, {"flatShading", true}}));

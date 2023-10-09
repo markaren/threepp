@@ -43,7 +43,7 @@ namespace threepp {
     public:
         explicit Font(FontData data);
 
-        std::vector<std::shared_ptr<Shape>> generateShapes(const std::string& text, unsigned int size = 100);
+        std::vector<Shape> generateShapes(const std::string& text, unsigned int size = 100);
 
     private:
         FontData data;

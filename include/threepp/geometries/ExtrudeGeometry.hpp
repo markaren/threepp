@@ -30,12 +30,10 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
-        static std::shared_ptr<ExtrudeGeometry> create(const Shape& shape, const Options& options = {});
-
-        static std::shared_ptr<ExtrudeGeometry> create(const std::vector<std::shared_ptr<Shape>>& shape, const Options& options = {});
+        static std::shared_ptr<ExtrudeGeometry> create(const std::vector<Shape>& shape, const Options& options = {});
 
     protected:
-        ExtrudeGeometry(const std::vector<const Shape*>& shapes, const Options& options);
+        ExtrudeGeometry(const std::vector<Shape>& shapes, const Options& options);
     };
 
 }// namespace threepp
