@@ -36,16 +36,17 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    renderer.enableTextRendering();
-    int textYOffset = 30;
-    auto& textHandle = renderer.textHandle("Hello World");
-    textHandle.setPosition(0, canvas.size().height - textYOffset);
+    TextRenderer textRenderer;
+    auto& textHandle = textRenderer.createHandle("Hello World");
+    textHandle.verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
+    textHandle.setPosition(0, canvas.size().height);
     textHandle.scale = 2;
 
     std::array<float, 3> posBuf{};
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
+
         ImGui::Begin("Demo");
         ImGui::SliderFloat3("position", posBuf.data(), -1.f, 1.f);
         controls.enabled = !ImGui::IsWindowHovered();
@@ -56,7 +57,7 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        textHandle.setPosition(0, size.height - textYOffset);
+        textHandle.setPosition(0, size.height);
     });
 
     Clock clock;
@@ -66,6 +67,9 @@ int main() {
         group->rotation.y += rotationSpeed * dt;
 
         renderer.render(*scene, *camera);
+
+        renderer.resetState();// needed when using TextRenderer
+        textRenderer.render();
 
         ui.render();
         group->position.fromArray(posBuf);
