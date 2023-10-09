@@ -1,4 +1,4 @@
-// https://github.com/mrdoob/three.js/blob/r150/src/geometries/EdgesGeometry.js
+// https://github.com/mrdoob/three.js/blob/r150/src/geometries/ExtrudeGeometry.js
 
 #ifndef THREEPP_EXTRUDEGEOMETRY_HPP
 #define THREEPP_EXTRUDEGEOMETRY_HPP
