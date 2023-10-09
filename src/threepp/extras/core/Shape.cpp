@@ -5,7 +5,7 @@
 
 using namespace threepp;
 
-Shape::Shape(const std::optional<std::vector<Vector2>>& points)
+Shape::Shape(const std::vector<Vector2>& points)
     : Path(points), uuid{math::generateUUID()} {}
 
 std::vector<std::vector<Vector2>> Shape::getPointsHoles(unsigned int divisions) const {
