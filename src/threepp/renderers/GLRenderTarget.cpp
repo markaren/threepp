@@ -30,13 +30,6 @@ GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GL
     if (options.encoding) texture->encoding = *options.encoding;
 }
 
-void GLRenderTarget::setTexture(const std::shared_ptr<Texture>& tex) {
-
-    texture->image = Image{nullptr, width, height, depth};
-
-    this->texture = tex;
-}
-
 void GLRenderTarget::setSize(unsigned int width, unsigned int height, unsigned int depth) {
 
     if (this->width != width || this->height != height || this->depth != depth) {

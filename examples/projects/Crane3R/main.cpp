@@ -88,11 +88,16 @@ int main() {
     auto light = AmbientLight::create(Color::white);
     scene->add(light);
 
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Loading Crane3R..");
+    handle.scale = 2;
+
     utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
     pool.submit([&] {
         crane = Crane3R::create();
         canvas.invokeLater([&, crane] {
+            handle.invalidate();
             scene->add(crane);
             endEffectorHelper->visible = true;
         });
@@ -104,10 +109,9 @@ int main() {
         renderer.setSize(size);
     });
 
-
 #ifdef HAS_IMGUI
 
-    IOCapture capture {};
+    IOCapture capture{};
     capture.preventMouseEvent = [] {
         return ImGui::GetIO().WantCaptureMouse;
     };
@@ -132,7 +136,6 @@ int main() {
 #endif
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         renderer.render(*scene, *camera);
@@ -161,7 +164,10 @@ int main() {
 #endif
 
             crane->update(dt);
+        } else {
+
+            renderer.resetState();
+            textRenderer.render();
         }
     });
-
 }

@@ -1,6 +1,6 @@
 
-#include "threepp/threepp.hpp"
 #include "threepp/extras/physics/BulletPhysics.hpp"
+#include "threepp/threepp.hpp"
 
 #include "threepp/lights/LightShadow.hpp"
 
@@ -157,19 +157,21 @@ int main() {
     });
     canvas.addKeyListener(&keyListener);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         bullet.step(dt);
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
 
         std::stringstream ss;
         ss << renderer.info();
         handle.setText(ss.str());
+
+        textRenderer.render();
     });
 }

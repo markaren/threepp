@@ -243,7 +243,7 @@ namespace {
 }// namespace
 
 
-ExtrudeGeometry::ExtrudeGeometry(const std::vector<const Shape*>& shapes, const ExtrudeGeometry::Options& options) {
+ExtrudeGeometry::ExtrudeGeometry(const std::vector<Shape>& shapes, const ExtrudeGeometry::Options& options) {
 
     std::vector<float> verticesArray;
     std::vector<float> uvArray;
@@ -597,9 +597,9 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<const Shape*>& shapes, const 
     };
 
 
-    for (auto shape : shapes) {
+    for (const auto& shape : shapes) {
 
-        addShape(*shape);
+        addShape(shape);
     }
 
     // build geometry
@@ -610,17 +610,9 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<const Shape*>& shapes, const 
     this->computeVertexNormals();
 }
 
-std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(const Shape& shape, const ExtrudeGeometry::Options& options) {
+std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(const std::vector<Shape>& shapes, const ExtrudeGeometry::Options& options) {
 
-    return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry({&shape}, options));
-}
-
-std::shared_ptr<ExtrudeGeometry> ExtrudeGeometry::create(const std::vector<std::shared_ptr<Shape>>& shape, const ExtrudeGeometry::Options& options) {
-
-    std::vector<const Shape*> ptrs(shape.size());
-    std::transform(shape.begin(), shape.end(), ptrs.begin(), [&](auto& s) { return s.get(); });
-
-    return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry(ptrs, options));
+    return std::shared_ptr<ExtrudeGeometry>(new ExtrudeGeometry(shapes, options));
 }
 
 std::string ExtrudeGeometry::type() const {

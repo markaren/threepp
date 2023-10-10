@@ -41,7 +41,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         mesh->rotation.z += 1 * dt;

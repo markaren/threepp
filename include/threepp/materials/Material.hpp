@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
@@ -38,7 +38,7 @@ namespace threepp {
         std::optional<BlendFactor> blendDstAlpha;
         std::optional<BlendEquation> blendEquationAlpha;
 
-        int depthFunc = LessEqualDepth;
+        DepthFunc depthFunc{DepthFunc::LessEqual};
         bool depthTest = true;
         bool depthWrite = true;
 

@@ -2,11 +2,9 @@
 #ifndef THREEPP_PID_HPP
 #define THREEPP_PID_HPP
 
+#include <algorithm>
 #include <limits>
 #include <optional>
-#include <algorithm>
-
-#include "threepp/math/MathUtils.hpp"
 
 struct PIDParameters {
     float kp;
@@ -17,10 +15,9 @@ struct PIDParameters {
 class PID {
 
 public:
+    PID(): PID(1, 0.01, 0.001) {}
 
-    PID() : PID(1, 0.01, 0.001) {}
-
-    PID(float kp, float ti, float td) : params_{kp, ti, td} {}
+    PID(float kp, float ti, float td): params_{kp, ti, td} {}
 
     float regulate(float setPoint, float measuredValue, float dt) {
         if (dt == 0) dt = std::numeric_limits<float>::min();
@@ -48,7 +45,7 @@ public:
         return std::clamp(P + I + D, -1.f, 1.f);
     }
 
-    void setWindupGuard(const std::optional<float> &windupGuard) {
+    void setWindupGuard(const std::optional<float>& windupGuard) {
         windup_guard_ = windupGuard;
     }
 
@@ -60,12 +57,11 @@ public:
         return params_;
     }
 
-    [[nodiscard]] const PIDParameters& params() const{
+    [[nodiscard]] const PIDParameters& params() const {
         return params_;
     }
 
 private:
-
     float integral_{};
     float prev_error_{};
     PIDParameters params_;

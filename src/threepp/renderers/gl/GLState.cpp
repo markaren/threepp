@@ -128,48 +128,48 @@ void gl::DepthBuffer::setMask(bool depthMask) {
     }
 }
 
-void gl::DepthBuffer::setFunc(int depthFunc) {
+void gl::DepthBuffer::setFunc(DepthFunc depthFunc) {
 
     if (currentDepthFunc != depthFunc) {
 
         switch (depthFunc) {
 
-            case NeverDepth:
+            case DepthFunc::Never:
 
                 glDepthFunc(GL_NEVER);
                 break;
 
-            case AlwaysDepth:
+            case DepthFunc::Always:
 
                 glDepthFunc(GL_ALWAYS);
                 break;
 
-            case LessDepth:
+            case DepthFunc::Less:
 
                 glDepthFunc(GL_LESS);
                 break;
 
-            case LessEqualDepth:
+            case DepthFunc::LessEqual:
 
                 glDepthFunc(GL_LEQUAL);
                 break;
 
-            case EqualDepth:
+            case DepthFunc::Equal:
 
                 glDepthFunc(GL_EQUAL);
                 break;
 
-            case GreaterEqualDepth:
+            case DepthFunc::GreaterEqual:
 
                 glDepthFunc(GL_GEQUAL);
                 break;
 
-            case GreaterDepth:
+            case DepthFunc::Greater:
 
                 glDepthFunc(GL_GREATER);
                 break;
 
-            case NotEqualDepth:
+            case DepthFunc::NotEqual:
 
                 glDepthFunc(GL_NOTEQUAL);
                 break;
@@ -335,7 +335,7 @@ gl::GLState::GLState(): maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE
     stencilBuffer.setClear(0);
 
     enable(GL_DEPTH_TEST);
-    depthBuffer.setFunc(LessEqualDepth);
+    depthBuffer.setFunc(DepthFunc::LessEqual);
 
     setFlipSided(false);
     setCullFace(CullFace::Back);
@@ -386,9 +386,9 @@ bool gl::GLState::bindFramebuffer(int target, unsigned int framebuffer) {
     return false;
 }
 
-bool gl::GLState::useProgram(unsigned int program, bool force) {
+bool gl::GLState::useProgram(unsigned int program) {
 
-    if (force || currentProgram != program) {
+    if (currentProgram != program) {
 
         glUseProgram(program);
 

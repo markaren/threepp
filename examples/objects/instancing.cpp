@@ -1,32 +1,11 @@
 
 #include "threepp/objects/LOD.hpp"
 #include "threepp/threepp.hpp"
+#include "utility/FPSCounter.hpp"
 
 #include <cmath>
 
 using namespace threepp;
-
-namespace {
-
-    struct FPSCounter {
-
-        int fps = 0;
-
-        void update(float currentTime) {
-            nbFrames++;
-            if (currentTime - lastTime >= 1) {
-                fps = nbFrames;
-                nbFrames = 0;
-                lastTime += 1;
-            }
-        }
-
-    private:
-        int nbFrames = 0;
-        float lastTime = 0;
-    };
-
-}// namespace
 
 int main() {
 
@@ -39,7 +18,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
-    camera->position.set(amount, amount, amount);
+    camera->position.set(float(amount), float(amount), float(amount));
 
     OrbitControls controls{*camera, canvas};
 
@@ -58,7 +37,7 @@ int main() {
     for (int x = 0; x < amount; x++) {
         for (int y = 0; y < amount; y++) {
             for (int z = 0; z < amount; z++) {
-                matrix.setPosition(offset - x, offset - y, offset - z);
+                matrix.setPosition(offset - float(x), offset - float(y), offset - float(z));
                 mesh->setMatrixAt(index, matrix);
                 mesh->setColorAt(index, color);
                 ++index;
@@ -82,16 +61,14 @@ int main() {
     });
     canvas.addMouseListener(&l);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
-
-    FPSCounter counter;
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     Clock clock;
+    FPSCounter counter;
     Raycaster raycaster;
     std::unordered_map<int, bool> map;
     canvas.animate([&]() {
-
         raycaster.setFromCamera(mouse, *camera);
         auto intersects = raycaster.intersectObject(*mesh);
 
@@ -108,5 +85,7 @@ int main() {
         handle.setText("FPS: " + std::to_string(counter.fps));
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
+        textRenderer.render();
     });
 }

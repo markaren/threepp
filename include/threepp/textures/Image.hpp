@@ -15,30 +15,25 @@ namespace threepp {
         unsigned int height;
         unsigned int depth;
 
-        Image(std::shared_ptr<unsigned char> data, unsigned int width, unsigned int height, bool flipped = true)
-            : data_(std::move(data)), width(width), height(height), depth(0), flipped_(flipped){};
+        Image(const std::vector<unsigned char>& data, unsigned int width, unsigned int height, bool flipped = true)
+            : data_(data), width(width), height(height), depth(0), flipped_(flipped){};
 
-        Image(std::shared_ptr<unsigned char> data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
-            : data_(std::move(data)), width(width), height(height), depth(depth), flipped_(flipped){};
+        Image(const std::vector<unsigned char>& data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
+            : data_(data), width(width), height(height), depth(depth), flipped_(flipped){};
 
         [[nodiscard]] bool flipped() const {
 
             return flipped_;
         }
 
-        [[nodiscard]] unsigned char* getData() {
+        [[nodiscard]] std::vector<unsigned char>& data() {
 
-            return data_.get();
-        }
-
-        [[nodiscard]] const unsigned char* getData() const {
-
-            return data_.get();
+            return data_;
         }
 
     private:
         bool flipped_;
-        std::shared_ptr<unsigned char> data_{};
+        std::vector<unsigned char> data_;
     };
 
 }// namespace threepp

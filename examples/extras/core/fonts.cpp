@@ -70,7 +70,6 @@ int main() {
     });
 
     canvas.animate([&]() {
-
         renderer.render(*scene, *camera);
     });
 }

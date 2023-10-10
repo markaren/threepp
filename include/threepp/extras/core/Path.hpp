@@ -14,7 +14,7 @@ namespace threepp {
     public:
         Vector2 currentPoint;
 
-        explicit Path(const std::optional<std::vector<Vector2>>& points = {});
+        explicit Path(const std::vector<Vector2>& points = {});
 
         Path& setFromPoints(const std::vector<Vector2>& points);
 

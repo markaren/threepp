@@ -83,7 +83,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         for (auto& child : scene->children) {

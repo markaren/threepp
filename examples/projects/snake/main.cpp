@@ -16,20 +16,21 @@ int main() {
         renderer.setSize(size);
     });
 
-    renderer.enableTextRendering();
-    renderer.textHandle("Press \"r\" to reset");
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Press \"r\" to reset");
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         if (game.isRunning()) {
 
             game.update(dt);
             scene.update();
-
         }
         renderer.render(scene, scene.camera());
+        renderer.resetState();
+
+        textRenderer.render();
     });
 }

@@ -79,7 +79,7 @@ namespace threepp {
 
         void createMaterial(const std::string& materialName);
 
-        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<int> mapping = std::nullopt);
+        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<Mapping> mapping = std::nullopt);
     };
 
 

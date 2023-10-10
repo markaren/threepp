@@ -46,7 +46,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
-    camera->position.set(5, 3, 5);
+    camera->position.set(5, 4, 6);
 
     OrbitControls controls{*camera, canvas};
 
@@ -74,6 +74,7 @@ int main() {
     scene->add(knot);
 
     auto plane = createPlane();
+    plane->position.y = -1;
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -84,7 +85,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         float t = clock.elapsedTime;
 

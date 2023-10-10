@@ -174,9 +174,9 @@ set(publicHeaders
         "threepp/lights/SpotLight.hpp"
         "threepp/lights/SpotLightShadow.hpp"
 
-        "threepp/renderers/TextHandle.hpp"
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
+        "threepp/renderers/TextRenderer.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLShadowMap.hpp"

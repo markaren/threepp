@@ -261,13 +261,13 @@ namespace {
 
             switch (parameters->envMapMode) {
 
-                case CubeReflectionMapping:
-                case CubeRefractionMapping:
+                case as_integer(Mapping::CubeReflection):
+                case as_integer(Mapping::CubeRefraction):
                     envMapTypeDefine = "ENVMAP_TYPE_CUBE";
                     break;
 
-                case CubeUVReflectionMapping:
-                case CubeUVRefractionMapping:
+                case as_integer(Mapping::CubeUVReflection):
+                case as_integer(Mapping::CubeUVRefraction):
                     envMapTypeDefine = "ENVMAP_TYPE_CUBE_UV";
                     break;
             }
@@ -284,8 +284,8 @@ namespace {
 
             switch (parameters->envMapMode) {
 
-                case CubeRefractionMapping:
-                case CubeUVRefractionMapping:
+                case as_integer(Mapping::CubeRefraction):
+                case as_integer(Mapping::CubeUVRefraction):
 
                     envMapModeDefine = "ENVMAP_MODE_REFRACTION";
                     break;

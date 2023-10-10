@@ -8,7 +8,7 @@ target_link_libraries(obj_loader PRIVATE threepp)
 if (assimp_FOUND)
     add_executable(assimp_loader assimp_loader.cpp)
     target_link_libraries(assimp_loader PRIVATE threepp assimp::assimp)
-endif()
+endif ()
 
 if (pugixml_FOUND)
     add_executable(svg_loader svg_loader.cpp)

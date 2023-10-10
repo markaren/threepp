@@ -40,11 +40,10 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     unsigned int textureSize = 128;
-    std::vector<unsigned char> data(textureSize * textureSize * 3);
-    auto texture = DataTexture::create(data, textureSize, textureSize);
-    texture->format = RGBFormat;
-    texture->minFilter = NearestFilter;
-    texture->magFilter = NearestFilter;
+    auto texture = DataTexture::create(textureSize * textureSize * 3, textureSize, textureSize);
+    texture->format = Format::RGB;
+    texture->minFilter = Filter::Nearest;
+    texture->magFilter = Filter::Nearest;
 
     auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
     spriteMaterial->map->offset.set(0.5, 0.5);
@@ -86,7 +85,6 @@ int main() {
     Clock clock;
     Vector2 vector;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         box.rotation.y += 0.5f * dt;

@@ -61,7 +61,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         group->rotation.y += 0.5f * dt;

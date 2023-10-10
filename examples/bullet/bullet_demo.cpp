@@ -136,7 +136,6 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-
         if (evt.key == Key::SPACE) {
             auto geom = SphereGeometry::create(0.1f);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
@@ -153,19 +152,21 @@ int main() {
     });
     canvas.addKeyListener(&keyListener);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         bullet.step(dt);
 
         renderer.render(*scene, *camera);
+        renderer.resetState();
 
         std::stringstream ss;
         ss << renderer.info();
         handle.setText(ss.str());
+
+        textRenderer.render();
     });
 }

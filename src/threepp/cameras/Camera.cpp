@@ -9,11 +9,8 @@ Camera::Camera(float near, float far)
 
 void Camera::getWorldDirection(Vector3& target) {
 
-    this->updateWorldMatrix(true, false);
-
-    const auto& e = this->matrixWorld->elements;
-
-    target.set(-e[8], -e[9], -e[10]).normalize();
+    Object3D::getWorldDirection(target);
+    target.negate();
 }
 
 void Camera::updateMatrixWorld(bool force) {

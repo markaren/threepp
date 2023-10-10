@@ -42,7 +42,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         mesh->rotation.y = t;

@@ -64,9 +64,6 @@ struct GLRenderer::Impl {
 
     Scene _emptyScene;
 
-    bool textEnabled_ = false;
-    std::vector<std::shared_ptr<TextHandle>> textHandles_;
-
     OnMaterialDispose onMaterialDispose;
 
     std::shared_ptr<gl::GLRenderList> currentRenderList;
@@ -286,7 +283,6 @@ struct GLRenderer::Impl {
             currentRenderList = nullptr;
         }
 
-        renderText();
     }
 
     void renderBufferDirect(Camera* camera, Scene* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
@@ -540,7 +536,7 @@ struct GLRenderer::Impl {
         }
     }
 
-    std::shared_ptr<gl::GLProgram> getProgram(Material* material, Scene* scene, Object3D* object) {
+    gl::GLProgram* getProgram(Material* material, Scene* scene, Object3D* object) {
 
         //    bool isScene = instanceof <Scene>(scene);
         //
@@ -581,7 +577,7 @@ struct GLRenderer::Impl {
 
                 updateCommonMaterialProperties(material, parameters);
 
-                return program;
+                return program.get();
             }
 
         } else {
@@ -640,7 +636,7 @@ struct GLRenderer::Impl {
         materialProperties->currentProgram = program;
         materialProperties->uniformsList = uniformsList;
 
-        return materialProperties->currentProgram;
+        return materialProperties->currentProgram.get();
     }
 
     void updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
@@ -654,7 +650,7 @@ struct GLRenderer::Impl {
         materialProperties->vertexAlphas = parameters.vertexAlphas;
     }
 
-    std::shared_ptr<gl::GLProgram> setProgram(Camera* camera, Scene* scene, Material* material, Object3D* object) {
+    gl::GLProgram* setProgram(Camera* camera, Scene* scene, Material* material, Object3D* object) {
 
         //    bool isScene = instanceof <Scene>(scene);
 
@@ -747,7 +743,7 @@ struct GLRenderer::Impl {
 
         //
 
-        auto program = materialProperties->currentProgram;
+        gl::GLProgram* program = materialProperties->currentProgram.get();
 
         if (needsProgramChange) {
 
@@ -759,9 +755,9 @@ struct GLRenderer::Impl {
         bool refreshLights = false;
 
         auto p_uniforms = program->getUniforms();
-        auto& m_uniforms = materialProperties->uniforms;
+        auto& m_uniforms = *materialProperties->uniforms;
 
-        if (state.useProgram(program->program, textEnabled_)) {
+        if (state.useProgram(program->program)) {
 
             refreshProgram = true;
             refreshMaterial = true;
@@ -845,6 +841,11 @@ struct GLRenderer::Impl {
 
             p_uniforms->setValue("toneMappingExposure", scope.toneMappingExposure);
 
+            // [threepp] hack to solve #162
+            if (_clippingEnabled) {
+                m_uniforms["clippingPlanes"] = clipping.uniform;
+            }
+
             if (materialProperties->needsLights) {
 
                 // the current material requires lighting info
@@ -856,19 +857,19 @@ struct GLRenderer::Impl {
                 // use the current material's .needsUpdate flags to set
                 // the GL state when required
 
-                markUniformsLightsNeedsUpdate(*m_uniforms, refreshLights);
+                markUniformsLightsNeedsUpdate(m_uniforms, refreshLights);
             }
 
             // refresh uniforms common to several materials
 
             if (fog && material->fog) {
 
-                materials.refreshFogUniforms(*m_uniforms, *fog);
+                materials.refreshFogUniforms(m_uniforms, *fog);
             }
 
-            materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height);
+            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height);
 
-            gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
+            gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
 
         if (isShaderMaterial) {
@@ -876,7 +877,7 @@ struct GLRenderer::Impl {
             auto m = dynamic_cast<ShaderMaterial*>(material);
             if (m->uniformsNeedUpdate) {
 
-                gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
+                gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
                 m->uniformsNeedUpdate = false;
             }
         }
@@ -1000,19 +1001,18 @@ struct GLRenderer::Impl {
         const auto width = static_cast<int>(texture.image->width * levelScale);
         const auto height = static_cast<int>(texture.image->height * levelScale);
 
-        auto glFormat = gl::convert(texture.format);
-
-        // Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1120100
-
-        if (glFormat == GL_RGB) glFormat = GL_RGB8;
-        if (glFormat == GL_RGBA) glFormat = GL_RGBA8;
-
-
         textures.setTexture2D(texture, 0);
 
-        glCopyTexImage2D(GL_TEXTURE_2D, level, glFormat, static_cast<int>(position.x), static_cast<int>(position.y), width, height, 0);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, static_cast<int>(position.x), static_cast<int>(position.y), width, height);
 
         state.unbindTexture();
+    }
+
+    void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
+
+        auto glFormat = gl::toGLFormat(format);
+
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, glFormat, GL_UNSIGNED_BYTE, data);
     }
 
     void setViewport(int x, int y, int width, int height) {
@@ -1020,10 +1020,6 @@ struct GLRenderer::Impl {
         _viewport.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
 
         state.viewport(_currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
-
-        if (textEnabled_) {
-            TextHandle::setViewport(width, height);
-        }
     }
 
     void setScissor(int x, int y, int width, int height) {
@@ -1043,43 +1039,12 @@ struct GLRenderer::Impl {
         bindingStates.dispose();
     }
 
-    void enableTextRendering() {
-        if (!textEnabled_) {
-            textEnabled_ = TextHandle::init();
-            TextHandle::setViewport(static_cast<int>(_viewport.z), static_cast<int>(_viewport.w));
-        }
+    void reset() {
+        state.reset(_size.width, _size.height);
+        bindingStates.reset();
     }
 
-    TextHandle& textHandle(const std::string& str) {
-        if (!textEnabled_) enableTextRendering();
-        textHandles_.emplace_back(std::make_unique<TextHandle>(str));
-        return *textHandles_.back();
-    }
-
-    void renderText() {
-        if (textEnabled_ && !textHandles_.empty()) {
-
-            TextHandle::beginDraw(state.currentBlendingEnabled);
-            auto it = textHandles_.begin();
-            while (it != textHandles_.end()) {
-
-                if ((*it)->invalidate_) {
-                    it = textHandles_.erase(it);
-                } else {
-                    (*it)->render();
-                    ++it;
-                }
-            }
-            TextHandle::endDraw(state.currentBlendingEnabled);
-            bindingStates.reset();
-        }
-    }
-
-    ~Impl() {
-        if (textEnabled_) {
-            TextHandle::terminate();
-        }
-    }
+    ~Impl() = default;
 
     friend struct gl::ProgramParameters;
     friend struct gl::GLShadowMap;
@@ -1129,9 +1094,6 @@ WindowSize GLRenderer::getSize() const {
 void GLRenderer::setSize(WindowSize size) {
 
     pimpl_->_size = size;
-
-    int canvasWidth = pimpl_->_size.width * pimpl_->_pixelRatio;
-    int canvasHeight = pimpl_->_size.height * pimpl_->_pixelRatio;
 
     this->setViewport(0, 0, size.width, size.height);
 }
@@ -1260,14 +1222,14 @@ void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& text
     pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
-void GLRenderer::enableTextRendering() {
+void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
 
-    pimpl_->enableTextRendering();
+    pimpl_->readPixels(position, size, format, data);
 }
 
-TextHandle& GLRenderer::textHandle(const std::string& str) {
+void GLRenderer::resetState() {
 
-    return pimpl_->textHandle(str);
+    pimpl_->reset();
 }
 
 const gl::GLInfo& threepp::GLRenderer::info() const {

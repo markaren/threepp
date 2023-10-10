@@ -1,6 +1,7 @@
 
 #include "threepp/renderers/shaders/ShaderChunk.hpp"
 
+// clang-format off
 @THREEPP_SHADER_INCLUDES@
 
 using namespace threepp::shaders;
@@ -11,3 +12,4 @@ ShaderChunk::ShaderChunk() {
 @THREEPP_SHADERLIB_CODE@
 
 }
+// clang-format on

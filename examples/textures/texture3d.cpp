@@ -76,9 +76,9 @@ int main() {
     unsigned int size = 128;
     auto data = createTextureData(size);
     auto texture = DataTexture3D::create(data, size, size, size);
-    texture->format = RedFormat;
-    texture->minFilter = LinearFilter;
-    texture->magFilter = LinearFilter;
+    texture->format = Format::Red;
+    texture->minFilter = Filter::Linear;
+    texture->magFilter = Filter::Linear;
     texture->unpackAlignment = 1;
 
     auto material = createMaterial(texture.get());
@@ -96,7 +96,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         material->uniforms->at("cameraPos").value<Vector3>().copy(camera.position);

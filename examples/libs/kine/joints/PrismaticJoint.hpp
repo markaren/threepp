@@ -7,10 +7,9 @@
 
 namespace kine {
 
-    class PrismaticJoint : public KineJoint {
+    class PrismaticJoint: public KineJoint {
 
     public:
-
         PrismaticJoint(const threepp::Vector3& axis, KineLimit limit): KineJoint(axis, limit) {}
 
         [[nodiscard]] threepp::Matrix4 getTransformation(float value) const override {
@@ -20,9 +19,8 @@ namespace kine {
 
     private:
         mutable threepp::Vector3 tmp_;
-
     };
 
-}
+}// namespace kine
 
 #endif//THREEPP_PRISMATICJOINT_HPP

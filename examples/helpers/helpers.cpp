@@ -57,7 +57,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         arrow->rotation.z += 0.5f * dt;

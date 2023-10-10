@@ -5,7 +5,7 @@
 namespace threepp {
 
     struct WindowSize {
-        
+
         int width{};
         int height{};
 
@@ -15,6 +15,6 @@ namespace threepp {
         }
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_WINDOWSIZE_HPP

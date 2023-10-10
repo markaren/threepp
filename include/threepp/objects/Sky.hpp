@@ -23,13 +23,11 @@ namespace threepp {
     class Sky: public Mesh {
 
     public:
-
         Sky();
 
         [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<Sky> create();
-
     };
 
 }// namespace threepp
