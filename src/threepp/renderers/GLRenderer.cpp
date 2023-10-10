@@ -146,7 +146,7 @@ struct GLRenderer::Impl {
           materials(properties),
           programCache(bindingStates, clipping),
           _currentDrawBuffers(GL_BACK),
-          onMaterialDispose(this){}
+          onMaterialDispose(this) {}
 
     void deallocateMaterial(Material* material) {
 
@@ -282,7 +282,6 @@ struct GLRenderer::Impl {
 
             currentRenderList = nullptr;
         }
-
     }
 
     void renderBufferDirect(Camera* camera, Scene* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
