@@ -1,6 +1,5 @@
-#include "threepp/extras/core/Font.hpp"
 #include "threepp/geometries/EdgesGeometry.hpp"
-#include "threepp/geometries/ExtrudeGeometry.hpp"
+#include "threepp/geometries/TextGeometry.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/threepp.hpp"
@@ -36,24 +35,27 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     FontLoader loader;
-    auto data = loader.load("data/fonts/optimer_bold.typeface.json");
-    Font font(*data);
-    auto shapes = font.generateShapes("threepp!", 10);
+    auto font = loader.load("data/fonts/optimer_bold.typeface.json");
 
-    auto material = MeshStandardMaterial::create();
-    material->color = Color::orange;
-    auto extrude = ExtrudeGeometry::create(shapes);
-    extrude->center();
-    extrude->computeVertexNormals();
-    auto mesh = Mesh::create(extrude, material);
-    mesh->castShadow = true;
-    scene->add(mesh);
+    if (font) {
+        TextGeometry::Options opts(*font, 10);
+        opts.height = 1;
+        auto geometry = TextGeometry::create("threepp!", opts);
+        geometry->center();
 
-    auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
-    lineMaterial->color = Color::black;
-    lineMaterial->linewidth = 20000;
-    auto edges = LineSegments::create(EdgesGeometry::create(*extrude, 10), lineMaterial);
-    mesh->add(edges);
+        auto material = MeshPhongMaterial::create();
+        material->color = Color::orange;
+
+        auto mesh = Mesh::create(geometry, material);
+        mesh->castShadow = true;
+        scene->add(mesh);
+
+        auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
+        lineMaterial->color = Color::black;
+        lineMaterial->linewidth = 20000;
+        auto edges = LineSegments::create(EdgesGeometry::create(*geometry, 10), lineMaterial);
+        mesh->add(edges);
+    }
 
     auto planeMaterial = MeshPhongMaterial::create();
     planeMaterial->color = Color::gray;

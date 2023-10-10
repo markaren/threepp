@@ -14,25 +14,25 @@ namespace threepp {
     struct FontData {
 
         struct Glyph {
-            float x_min;
-            float x_max;
-            int ha;
+            float x_min{};
+            float x_max{};
+            int ha{};
             std::vector<std::string> o;
         };
 
         struct BoundingBox {
-            float xMin;
-            float xMax;
-            float yMin;
-            float yMax;
+            float xMin{};
+            float xMax{};
+            float yMin{};
+            float yMax{};
         };
 
         std::string familyName;
         BoundingBox boundingBox;
 
-        unsigned int resolution;
-        int lineHeight;
-        int underlineThickness;
+        unsigned int resolution{};
+        int lineHeight{};
+        int underlineThickness{};
 
         std::unordered_map<char, Glyph> glyphs;
     };
@@ -43,7 +43,7 @@ namespace threepp {
     public:
         explicit Font(FontData data);
 
-        std::vector<Shape> generateShapes(const std::string& text, unsigned int size = 100);
+        std::vector<Shape> generateShapes(const std::string& text, unsigned int size = 100) const;
 
     private:
         FontData data;
