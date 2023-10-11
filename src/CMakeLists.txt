@@ -71,6 +71,7 @@ set(publicHeaders
         "threepp/geometries/RingGeometry.hpp"
         "threepp/geometries/ShapeGeometry.hpp"
         "threepp/geometries/SphereGeometry.hpp"
+        "threepp/geometries/TextGeometry.hpp"
         "threepp/geometries/TorusGeometry.hpp"
         "threepp/geometries/TorusKnotGeometry.hpp"
         "threepp/geometries/TubeGeometry.hpp"

@@ -11,7 +11,7 @@ namespace {
 
     struct FontPath {
 
-        float offsetX;
+        float offsetX{};
         ShapePath path;
     };
 
@@ -101,7 +101,7 @@ namespace {
 Font::Font(FontData data): data(std::move(data)) {}
 
 
-std::vector<Shape> Font::generateShapes(const std::string& text, unsigned int size) {
+std::vector<Shape> Font::generateShapes(const std::string& text, unsigned int size) const {
 
     std::vector<Shape> shapes;
     auto paths = createPaths(text, size, data);
