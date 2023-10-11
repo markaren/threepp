@@ -18,11 +18,13 @@ namespace threepp {
     class BufferGeometry: public EventDispatcher {
 
     public:
-        const unsigned int id = ++_id;
+        const unsigned int id{++_id};
 
         const std::string uuid;
 
         std::string name;
+
+        bool morphTargetsRelative{false};
 
         std::vector<GeometryGroup> groups;
 
@@ -66,6 +68,12 @@ namespace threepp {
             if (!hasAttribute(name)) return nullptr;
 
             return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
+        }
+
+        template<class T>
+        std::vector<std::unique_ptr<BufferAttribute>>& getMorphAttribute(const std::string& name) {
+
+            return morphAttributes_[name];
         }
 
         [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& getAttributes() const;
@@ -124,6 +132,7 @@ namespace threepp {
         bool disposed_ = false;
         std::unique_ptr<IntBufferAttribute> index_;
         std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
+        std::unordered_map<std::string, std::vector<std::unique_ptr<BufferAttribute>>> morphAttributes_;
 
         inline static unsigned int _id{0};
     };
