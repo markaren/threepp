@@ -17,6 +17,9 @@ target_link_libraries(convex_geometry PRIVATE threepp)
 add_executable(heightmap heightmap.cpp)
 target_link_libraries(heightmap PRIVATE threepp)
 
+add_executable(dynamic dynamic.cpp)
+target_link_libraries(dynamic PRIVATE threepp)
+
 if (imgui_FOUND)
     add_executable(box_geometry box_geometry.cpp)
     target_link_libraries(box_geometry PRIVATE threepp imgui::imgui)
