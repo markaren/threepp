@@ -281,8 +281,6 @@ struct GLRenderer::Impl {
 
             currentRenderList = nullptr;
         }
-
-//        renderText();
     }
 
     void renderBufferDirect(Camera* camera, Scene* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
