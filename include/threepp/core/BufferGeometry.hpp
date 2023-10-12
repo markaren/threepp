@@ -54,6 +54,13 @@ namespace threepp {
             return *this;
         }
 
+        BufferAttribute* getAttribute(const std::string& name) {
+
+            if (!hasAttribute(name)) return nullptr;
+
+            return attributes_.at(name).get();
+        }
+
         template<class T>
         TypedBufferAttribute<T>* getAttribute(const std::string& name) {
 
@@ -71,14 +78,16 @@ namespace threepp {
         }
 
         template<class T>
-        std::vector<std::unique_ptr<BufferAttribute>>& getMorphAttribute(const std::string& name) {
+        std::vector<std::shared_ptr<BufferAttribute>>* getMorphAttribute(const std::string& name) {
 
-            return morphAttributes_[name];
+            return &morphAttributes_[name];
         }
 
-        [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& getAttributes() const;
+        [[nodiscard]] const std::unordered_map<std::string, std::shared_ptr<BufferAttribute>>& getAttributes() const;
 
-        void setAttribute(const std::string& name, std::unique_ptr<BufferAttribute> attribute);
+        void setAttribute(const std::string& name, std::shared_ptr<BufferAttribute> attribute);
+
+        void deleteAttribute(const std::string& name);
 
         [[nodiscard]] bool hasAttribute(const std::string& name) const;
 
@@ -127,12 +136,13 @@ namespace threepp {
         ~BufferGeometry() override;
 
         static std::shared_ptr<BufferGeometry> create();
+        const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>>& getMorphAttributes() const;
 
     private:
         bool disposed_ = false;
         std::unique_ptr<IntBufferAttribute> index_;
-        std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
-        std::unordered_map<std::string, std::vector<std::unique_ptr<BufferAttribute>>> morphAttributes_;
+        std::unordered_map<std::string, std::shared_ptr<BufferAttribute>> attributes_;
+        std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>> morphAttributes_;
 
         inline static unsigned int _id{0};
     };

@@ -69,14 +69,27 @@ const IntBufferAttribute* BufferGeometry::getIndex() const {
     return this->index_.get();
 }
 
-const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& BufferGeometry::getAttributes() const {
+const std::unordered_map<std::string, std::shared_ptr<BufferAttribute>>& BufferGeometry::getAttributes() const {
 
     return attributes_;
 }
 
-void BufferGeometry::setAttribute(const std::string& name, std::unique_ptr<BufferAttribute> attribute) {
+const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>>& BufferGeometry::getMorphAttributes() const {
+
+    return morphAttributes_;
+}
+
+void BufferGeometry::setAttribute(const std::string& name, std::shared_ptr<BufferAttribute> attribute) {
 
     attributes_[name] = std::move(attribute);
+}
+
+void BufferGeometry::deleteAttribute(const std::string& name) {
+
+    if (attributes_.count(name)) {
+
+        attributes_.erase(name);
+    }
 }
 
 bool BufferGeometry::hasAttribute(const std::string& name) const {

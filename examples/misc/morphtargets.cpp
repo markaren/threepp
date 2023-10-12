@@ -12,8 +12,7 @@ namespace {
         auto positionAttribute = geometry->getAttribute<float>("position");
 
         std::vector<float> spherePositions;
-        spherePositions.reserve(positionAttribute->count() * 3);
-        std::vector<float> twistPositions(positionAttribute->count() * 3);
+        std::vector<float> twistPositions(positionAttribute->count()*3);
         Vector3 direction(1, 0, 0);
         Vector3 vertex;
 
@@ -22,7 +21,7 @@ namespace {
             auto y = positionAttribute->getY(i);
             auto z = positionAttribute->getZ(i);
 
-            spherePositions.insert(spherePositions.begin(),
+            spherePositions.insert(spherePositions.end(),
                                    {x * std::sqrt(1 - (y * y / 2) - (z * z / 2) + (y * y * z * z / 3)),
                                     y * std::sqrt(1 - (z * z / 2) - (x * x / 2) + (z * z * x * x / 3)),
                                     z * std::sqrt(1 - (x * x / 2) - (y * y / 2) + (x * x * y * y / 3))});
@@ -32,10 +31,9 @@ namespace {
             vertex.applyAxisAngle(direction, math::PI * x / 2).toArray(twistPositions, j);
         }
 
-        auto& morphPositions = geometry->getMorphAttribute<float>("position");
-        morphPositions.resize(2);
-        morphPositions[0] = FloatBufferAttribute::create(spherePositions, 3);
-        morphPositions[1] = FloatBufferAttribute::create(twistPositions, 3);
+        auto morphPositions = geometry->getMorphAttribute<float>("position");
+        morphPositions->emplace_back(FloatBufferAttribute::create(spherePositions, 3));
+//        morphPositions->emplace_back(FloatBufferAttribute::create(twistPositions, 3));
 
         return geometry;
     }
@@ -46,6 +44,7 @@ int main() {
 
     Canvas canvas("Morphtargets");
     GLRenderer renderer(canvas.size());
+    renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();
     scene->background = Color(0x8FBCD4);
@@ -67,12 +66,22 @@ int main() {
     material->morphTargets = true;
 
     auto mesh = Mesh::create(geometry, material);
+    mesh->morphTargetInfluences.emplace_back();
+    mesh->morphTargetInfluences.emplace_back();
     scene->add(mesh);
 
+    auto clone = mesh->clone();
+    clone->position.x = 3;
+    scene->add(clone);
+
+
     OrbitControls controls{*camera, canvas};
-    controls.enableZoom = true;
+//    controls.enableZoom = true;
 
     canvas.animate([&] {
         renderer.render(*scene, *camera);
+
+        mesh->morphTargetInfluences[0] = 0.9;
+//        mesh->morphTargetInfluences[1] = 0;
     });
 }

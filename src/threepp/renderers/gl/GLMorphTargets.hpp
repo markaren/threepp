@@ -3,46 +3,50 @@
 #define THREEPP_GLMORPHTARGETS_HPP
 
 #include "GLProgram.hpp"
+#include "GLUniforms.hpp"
 #include "threepp/core/BufferGeometry.hpp"
-#include "threepp/materials/Material.hpp"
+#include "threepp/materials/materials.hpp"
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 #include <algorithm>
-#include <unordered_map>
+#include <iostream>
 #include <limits>
+#include <unordered_map>
+#include <utility>
 
 namespace {
 
-    bool numericalSort(const std::vector<int>& a, const std::vector<int>& b) {
-        return a[0] < b[0];
+    const int MAX_SAFE_INTEGER = std::numeric_limits<int>::max();
+
+    bool numericalSort(const std::pair<int, float>& a, const std::pair<int, float>& b) {
+        return a.first < b.first;
     }
 
-    bool absNumericalSort(const std::vector<int>& a, const std::vector<int>& b) {
-        return std::abs(b[1]) < std::abs(a[1]);
+    bool absNumericalSort(const std::pair<int, float>& a, const std::pair<int, float>& b) {
+        return std::abs(b.second) < std::abs(a.second);
     }
 
-}
+}// namespace
 
 namespace threepp::gl {
 
     class GLMorphTargets {
 
     public:
-        std::unordered_map<unsigned int, std::vector<std::vector<int>>> influencesList;
+        std::unordered_map<unsigned int, std::shared_ptr<std::vector<std::pair<int, float>>>> influencesList;
         std::vector<float> morphInfluences;
 
-        std::vector<std::vector<int>> workInfluences;
+        std::vector<std::pair<int, float>> workInfluences;
 
-        GLMorphTargets() {
+        GLMorphTargets(): morphInfluences(8) {
 
             for (int i = 0; i < 8; i++) {
 
-                auto& influences = workInfluences.emplace_back();
-                influences.insert(influences.begin(), {static_cast<float>(i), 0});
+                workInfluences.emplace_back(i, 0.f);
             }
         }
 
-        void update(Object3D* object, BufferGeometry* geometry, Material* material, GLProgram& program) {
+        void update(Object3D* object, BufferGeometry* geometry, Material* material, GLProgram* program) {
 
             std::vector<float> objectInfluences;
             if (auto objectWithMorphTargetInfluences = dynamic_cast<ObjectWithMorphTargetInfluences*>(object)) {
@@ -51,7 +55,7 @@ namespace threepp::gl {
 
             auto length = objectInfluences.size();
 
-            std::vector<std::vector<int>> influences;
+            std::shared_ptr<std::vector<std::pair<int, float>>> influences = nullptr;
 
             if (influencesList.count(geometry->id)) {
 
@@ -59,10 +63,11 @@ namespace threepp::gl {
 
             } else {
 
+                influences = std::make_shared<std::vector<std::pair<int, float>>>();
+
                 for (int i = 0; i < length; i++) {
 
-                    auto& list = influences.emplace_back();
-                    list.insert(list.begin(), {i, 0});
+                    influences->emplace_back(i, 0.f);
                 }
 
                 influencesList[geometry->id] = influences;
@@ -70,34 +75,92 @@ namespace threepp::gl {
 
             // Collect influences
 
-            for ( unsigned i = 0; i < length; i ++ ) {
+            for (int i = 0; i < length; i++) {
 
-                auto& influence = influences[ i ];
+                auto& influence = influences->at(i);
 
-                influence[ 0 ] = i;
-                influence[ 1 ] = objectInfluences[ i ];
-
+                influence.first = i;
+                influence.second = objectInfluences[i];
             }
 
-            std::sort(influences.begin(), influences.end(), absNumericalSort);
+            std::stable_sort(influences->begin(), influences->end(), absNumericalSort);
 
-            for ( unsigned i = 0; i < 8; i ++ ) {
+            for (unsigned i = 0; i < 8; i++) {
 
-                if ( i < length && influences[ i ][ 1 ] ) {
+                if (i < length && influences->at(i).second) {
 
-                    workInfluences[ i ][ 0 ] = influences[ i ][ 0 ];
-                    workInfluences[ i ][ 1 ] = influences[ i ][ 1 ];
+                    workInfluences[i].first = influences->at(i).first;
+                    workInfluences[i].second = influences->at(i).second;
 
                 } else {
 
-                    workInfluences[ i ][ 0 ] = std::numeric_limits<int>::max();
-                    workInfluences[ i ][ 1 ] = 0;
-
+                    workInfluences[i].first = MAX_SAFE_INTEGER;
+                    workInfluences[i].second = 0;
                 }
-
             }
 
-            std::sort(workInfluences.begin(), workInfluences.end(), absNumericalSort);
+            std::stable_sort(workInfluences.begin(), workInfluences.end(), numericalSort);
+
+            std::vector<std::shared_ptr<BufferAttribute>>* morphTargets = nullptr;
+            std::vector<std::shared_ptr<BufferAttribute>>* morphNormals = nullptr;
+            if (auto m = material->as<MaterialWithMorphTargets>()) {
+                if (m->morphTargets) {
+                    morphTargets = geometry->getMorphAttribute<float>("position");
+                }
+                if (m->morphNormals) {
+                    morphNormals = geometry->getMorphAttribute<float>("normal");
+                }
+            }
+
+            float morphInfluencesSum = 0;
+
+            for (int i = 0; i < 8; i++) {
+
+                auto& influence = workInfluences[i];
+                auto index = influence.first;
+                auto value = influence.second;
+
+                std::string morphTarget_i = "morphTarget" + std::to_string(i);
+                std::string morphNormal_i = "morphNormal" + std::to_string(i);
+
+                if (index != MAX_SAFE_INTEGER && value) {
+
+                    if (morphTargets && geometry->getAttribute(morphTarget_i) != (*morphTargets)[index].get()) {
+
+                        geometry->setAttribute(morphTarget_i, (*morphTargets)[index]);
+                    }
+
+                    if (morphNormals && geometry->getAttribute(morphNormal_i) != (*morphNormals)[index].get()) {
+
+                        geometry->setAttribute(morphNormal_i, (*morphNormals)[index]);
+                    }
+
+                    morphInfluences[i] = value;
+                    morphInfluencesSum += value;
+
+                } else {
+
+                    if (morphTargets && geometry->hasAttribute(morphTarget_i) == true) {
+
+                        geometry->deleteAttribute(morphTarget_i);
+                    }
+
+                    if (morphNormals && geometry->hasAttribute(morphNormal_i) == true) {
+
+                        geometry->deleteAttribute(morphNormal_i);
+                    }
+
+                    morphInfluences[i] = 0;
+                }
+            }
+
+            // GLSL shader uses formula baseinfluence * base + sum(target * influence)
+            // This allows us to switch between absolute morphs and relative morphs without changing shader code
+            // When baseinfluence = 1 - sum(influence), the above is equivalent to sum((target - base) * influence)
+            float morphBaseInfluence = geometry->morphTargetsRelative ? 1.f : 1.f - morphInfluencesSum;
+
+            program->getUniforms()->setValue("morphTargetBaseInfluence", morphBaseInfluence);
+            program->getUniforms()->setValue("morphTargetInfluences", morphInfluences);
         }
     };
 
