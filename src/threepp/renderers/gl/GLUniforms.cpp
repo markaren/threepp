@@ -285,7 +285,7 @@ namespace {
                 case 0x1406:// FLOAT
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<float>>(value);
-                        glUniform2fv(addr, activeInfo.size, data.data());
+                        glUniform1fv(addr, activeInfo.size, data.data());
                     };
                 case 0x8b50:// VEC2
                     return [&](const UniformValue& value, GLTextures*) {
