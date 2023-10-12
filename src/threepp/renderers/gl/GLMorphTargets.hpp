@@ -16,13 +16,15 @@
 
 namespace {
 
-    const auto MAX_SAFE_INTEGER = std::numeric_limits<size_t>::max();
+    using Influence = std::pair<size_t, float>;
 
-    bool numericalSort(const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
+    const auto MAX_SAFE_INTEGER = std::numeric_limits<unsigned int>::max();
+
+    bool numericalSort(const Influence& a, const Influence& b) {
         return a.first < b.first;
     }
 
-    bool absNumericalSort(const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
+    bool absNumericalSort(const Influence& a, const Influence& b) {
         return std::abs(b.second) < std::abs(a.second);
     }
 
@@ -33,10 +35,10 @@ namespace threepp::gl {
     class GLMorphTargets {
 
     public:
-        std::unordered_map<size_t, std::vector<std::pair<size_t, float>>> influencesList;
+        std::unordered_map<unsigned int, std::vector<Influence>> influencesList;
         std::vector<float> morphInfluences;
 
-        std::vector<std::pair<size_t, float>> workInfluences;
+        std::vector<Influence> workInfluences;
 
         GLMorphTargets(): morphInfluences(8) {
 
@@ -55,7 +57,7 @@ namespace threepp::gl {
 
             auto length = objectInfluences.size();
 
-            std::vector<std::pair<size_t, float>> influences;
+            std::vector<Influence> influences;
 
             if (influencesList.count(geometry->id)) {
 
@@ -121,16 +123,18 @@ namespace threepp::gl {
                 std::string morphTarget_i = "morphTarget" + std::to_string(i);
                 std::string morphNormal_i = "morphNormal" + std::to_string(i);
 
-                if (index != MAX_SAFE_INTEGER && value != 0) {
+                if (index != MAX_SAFE_INTEGER && value > 0) {
 
                     if (morphTargets && geometry->getAttribute(morphTarget_i) != (*morphTargets)[index].get()) {
 
-                        geometry->setAttribute(morphTarget_i, (*morphTargets)[index]);
+                        auto attr = morphTargets->at(index);
+                        geometry->setAttribute(morphTarget_i, attr);
                     }
 
                     if (morphNormals && geometry->getAttribute(morphNormal_i) != (*morphNormals)[index].get()) {
 
-                        geometry->setAttribute(morphNormal_i, (*morphNormals)[index]);
+                        auto attr = morphNormals->at(index);
+                        geometry->setAttribute(morphNormal_i, attr);
                     }
 
                     morphInfluences[i] = value;

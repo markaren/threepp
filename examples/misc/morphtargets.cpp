@@ -13,7 +13,7 @@ namespace {
         auto positionAttribute = geometry->getAttribute<float>("position");
 
         std::vector<float> spherePositions;
-        std::vector<float> twistPositions(positionAttribute->count()*3);
+        std::vector<float> twistPositions(positionAttribute->count() * 3);
         Vector3 direction(1, 0, 0);
         Vector3 vertex;
 
@@ -29,7 +29,7 @@ namespace {
 
             vertex.set(x * 2, y, z);
 
-            vertex.applyAxisAngle(direction, (math::PI * x) / 2).toArray(twistPositions, j);
+            vertex.applyAxisAngle(direction, math::PI * x / 2.f).toArray(twistPositions, j);
         }
 
         auto morphPositions = geometry->getMorphAttribute<float>("position");
@@ -71,13 +71,7 @@ int main() {
     mesh->morphTargetInfluences.emplace_back();
     scene->add(mesh);
 
-    auto clone = Mesh::create(BoxGeometry::create(), MeshPhongMaterial::create());
-    clone->position.x = 3;
-    scene->add(clone);
-
-
     OrbitControls controls{*camera, canvas};
-    controls.enableZoom = true;
 
     auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
@@ -94,6 +88,12 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
+
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.aspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+    });
 
     canvas.animate([&] {
         renderer.render(*scene, *camera);
