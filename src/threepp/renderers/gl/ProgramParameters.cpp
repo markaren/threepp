@@ -263,6 +263,9 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(sizeAttenuation) << '\n';
     s << std::to_string(logarithmicDepthBuffer) << '\n';
 
+    s << std::to_string(morphTargets) << '\n';
+    s << std::to_string(morphNormals) << '\n';
+
     s << std::to_string(numDirLights) << '\n';
     s << std::to_string(numPointLights) << '\n';
     s << std::to_string(numSpotLights) << '\n';

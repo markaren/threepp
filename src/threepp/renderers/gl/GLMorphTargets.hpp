@@ -114,7 +114,7 @@ namespace threepp::gl {
 
             for (int i = 0; i < 8; i++) {
 
-                auto& influence = workInfluences[i];
+                auto& influence = workInfluences.at(i);
                 auto index = influence.first;
                 auto value = influence.second;
 
