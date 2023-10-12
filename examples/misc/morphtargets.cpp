@@ -1,4 +1,5 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -22,18 +23,18 @@ namespace {
             auto z = positionAttribute->getZ(i);
 
             spherePositions.insert(spherePositions.end(),
-                                   {x * std::sqrt(1 - (y * y / 2) - (z * z / 2) + (y * y * z * z / 3)),
-                                    y * std::sqrt(1 - (z * z / 2) - (x * x / 2) + (z * z * x * x / 3)),
-                                    z * std::sqrt(1 - (x * x / 2) - (y * y / 2) + (x * x * y * y / 3))});
+                                   {x * std::sqrt(1 - (y * y / 2.f) - (z * z / 2.f) + (y * y * z * z / 3.f)),
+                                    y * std::sqrt(1 - (z * z / 2.f) - (x * x / 2.f) + (z * z * x * x / 3.f)),
+                                    z * std::sqrt(1 - (x * x / 2.f) - (y * y / 2.f) + (x * x * y * y / 3.f))});
 
             vertex.set(x * 2, y, z);
 
-            vertex.applyAxisAngle(direction, math::PI * x / 2).toArray(twistPositions, j);
+            vertex.applyAxisAngle(direction, (math::PI * x) / 2).toArray(twistPositions, j);
         }
 
         auto morphPositions = geometry->getMorphAttribute<float>("position");
         morphPositions->emplace_back(FloatBufferAttribute::create(spherePositions, 3));
-//        morphPositions->emplace_back(FloatBufferAttribute::create(twistPositions, 3));
+        morphPositions->emplace_back(FloatBufferAttribute::create(twistPositions, 3));
 
         return geometry;
     }
@@ -70,18 +71,36 @@ int main() {
     mesh->morphTargetInfluences.emplace_back();
     scene->add(mesh);
 
-    auto clone = mesh->clone();
+    auto clone = Mesh::create(BoxGeometry::create(), MeshPhongMaterial::create());
     clone->position.x = 3;
     scene->add(clone);
 
 
     OrbitControls controls{*camera, canvas};
-//    controls.enableZoom = true;
+    controls.enableZoom = true;
+
+    auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({230, 0}, 0);
+
+        ImGui::Begin("Morphing");
+        ImGui::SliderFloat("sphere", &mesh->morphTargetInfluences.at(0), 0, 1);
+        ImGui::SliderFloat("twist", &mesh->morphTargetInfluences.at(1), 0, 1);
+        ImGui::End();
+    });
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
 
     canvas.animate([&] {
         renderer.render(*scene, *camera);
 
-        mesh->morphTargetInfluences[0] = 0.9;
-//        mesh->morphTargetInfluences[1] = 0;
+        ui.render();
+
+//        mesh->morphTargetInfluences[0] = 0;
+//        mesh->morphTargetInfluences[1] = 0.6;
     });
 }

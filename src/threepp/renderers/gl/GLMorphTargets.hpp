@@ -16,13 +16,13 @@
 
 namespace {
 
-    const int MAX_SAFE_INTEGER = std::numeric_limits<int>::max();
+    const auto MAX_SAFE_INTEGER = std::numeric_limits<size_t>::max();
 
-    bool numericalSort(const std::pair<int, float>& a, const std::pair<int, float>& b) {
+    bool numericalSort(const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
         return a.first < b.first;
     }
 
-    bool absNumericalSort(const std::pair<int, float>& a, const std::pair<int, float>& b) {
+    bool absNumericalSort(const std::pair<size_t, float>& a, const std::pair<size_t, float>& b) {
         return std::abs(b.second) < std::abs(a.second);
     }
 
@@ -33,10 +33,10 @@ namespace threepp::gl {
     class GLMorphTargets {
 
     public:
-        std::unordered_map<unsigned int, std::shared_ptr<std::vector<std::pair<int, float>>>> influencesList;
+        std::unordered_map<size_t, std::vector<std::pair<size_t, float>>> influencesList;
         std::vector<float> morphInfluences;
 
-        std::vector<std::pair<int, float>> workInfluences;
+        std::vector<std::pair<size_t, float>> workInfluences;
 
         GLMorphTargets(): morphInfluences(8) {
 
@@ -55,7 +55,7 @@ namespace threepp::gl {
 
             auto length = objectInfluences.size();
 
-            std::shared_ptr<std::vector<std::pair<int, float>>> influences = nullptr;
+            std::vector<std::pair<size_t, float>> influences;
 
             if (influencesList.count(geometry->id)) {
 
@@ -63,11 +63,9 @@ namespace threepp::gl {
 
             } else {
 
-                influences = std::make_shared<std::vector<std::pair<int, float>>>();
+                for (auto i = 0; i < length; i++) {
 
-                for (int i = 0; i < length; i++) {
-
-                    influences->emplace_back(i, 0.f);
+                    influences.emplace_back(i, 0.f);
                 }
 
                 influencesList[geometry->id] = influences;
@@ -77,20 +75,20 @@ namespace threepp::gl {
 
             for (int i = 0; i < length; i++) {
 
-                auto& influence = influences->at(i);
+                auto& influence = influences.at(i);
 
                 influence.first = i;
                 influence.second = objectInfluences[i];
             }
 
-            std::stable_sort(influences->begin(), influences->end(), absNumericalSort);
+            std::stable_sort(influences.begin(), influences.end(), absNumericalSort);
 
             for (unsigned i = 0; i < 8; i++) {
 
-                if (i < length && influences->at(i).second) {
+                if (i < length && influences.at(i).second != 0) {
 
-                    workInfluences[i].first = influences->at(i).first;
-                    workInfluences[i].second = influences->at(i).second;
+                    workInfluences[i].first = influences.at(i).first;
+                    workInfluences[i].second = influences.at(i).second;
 
                 } else {
 
@@ -123,7 +121,7 @@ namespace threepp::gl {
                 std::string morphTarget_i = "morphTarget" + std::to_string(i);
                 std::string morphNormal_i = "morphNormal" + std::to_string(i);
 
-                if (index != MAX_SAFE_INTEGER && value) {
+                if (index != MAX_SAFE_INTEGER && value != 0) {
 
                     if (morphTargets && geometry->getAttribute(morphTarget_i) != (*morphTargets)[index].get()) {
 

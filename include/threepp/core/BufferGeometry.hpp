@@ -91,6 +91,8 @@ namespace threepp {
 
         [[nodiscard]] bool hasAttribute(const std::string& name) const;
 
+        [[nodiscard]] const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>>& getMorphAttributes() const;
+
         void addGroup(int start, int count, unsigned int materialIndex = 0);
 
         void clearGroups();
@@ -136,7 +138,6 @@ namespace threepp {
         ~BufferGeometry() override;
 
         static std::shared_ptr<BufferGeometry> create();
-        const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>>& getMorphAttributes() const;
 
     private:
         bool disposed_ = false;
