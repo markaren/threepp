@@ -99,8 +99,5 @@ int main() {
         renderer.render(*scene, *camera);
 
         ui.render();
-
-//        mesh->morphTargetInfluences[0] = 0;
-//        mesh->morphTargetInfluences[1] = 0.6;
     });
 }
