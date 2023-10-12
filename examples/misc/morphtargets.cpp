@@ -32,7 +32,7 @@ namespace {
             vertex.applyAxisAngle(direction, math::PI * x / 2.f).toArray(twistPositions, j);
         }
 
-        auto morphPositions = geometry->getMorphAttribute<float>("position");
+        auto morphPositions = geometry->getMorphAttribute("position");
         morphPositions->emplace_back(FloatBufferAttribute::create(spherePositions, 3));
         morphPositions->emplace_back(FloatBufferAttribute::create(twistPositions, 3));
 

@@ -54,12 +54,7 @@ namespace threepp {
             return *this;
         }
 
-        BufferAttribute* getAttribute(const std::string& name) {
-
-            if (!hasAttribute(name)) return nullptr;
-
-            return attributes_.at(name).get();
-        }
+        BufferAttribute* getAttribute(const std::string& name);
 
         template<class T>
         TypedBufferAttribute<T>* getAttribute(const std::string& name) {
@@ -77,11 +72,7 @@ namespace threepp {
             return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
         }
 
-        template<class T>
-        std::vector<std::shared_ptr<BufferAttribute>>* getMorphAttribute(const std::string& name) {
-
-            return &morphAttributes_[name];
-        }
+        std::vector<std::shared_ptr<BufferAttribute>>* getMorphAttribute(const std::string& name);
 
         [[nodiscard]] const std::unordered_map<std::string, std::shared_ptr<BufferAttribute>>& getAttributes() const;
 

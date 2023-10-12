@@ -105,10 +105,10 @@ namespace threepp::gl {
             std::vector<std::shared_ptr<BufferAttribute>>* morphNormals = nullptr;
             if (auto m = material->as<MaterialWithMorphTargets>()) {
                 if (m->morphTargets) {
-                    morphTargets = geometry->getMorphAttribute<float>("position");
+                    morphTargets = geometry->getMorphAttribute("position");
                 }
                 if (m->morphNormals) {
-                    morphNormals = geometry->getMorphAttribute<float>("normal");
+                    morphNormals = geometry->getMorphAttribute("normal");
                 }
             }
 
