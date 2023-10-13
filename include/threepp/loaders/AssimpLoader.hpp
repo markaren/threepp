@@ -3,7 +3,6 @@
 #define THREEPP_ASSIMPLOADER_HPP
 
 #include "threepp/loaders/TextureLoader.hpp"
-#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -132,7 +131,6 @@ namespace threepp {
                     geometry->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
                 }
 
-
                 if (aiScene->HasMaterials()) {
                     aiString p;
                     auto mi = aiMesh->mMaterialIndex;
@@ -141,58 +139,57 @@ namespace threepp {
                     if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                             auto tex = loadTexture(aiScene, path, p.C_Str());
-                            std::dynamic_pointer_cast<MaterialWithMap>(material)->map = tex;
+                            material->map = tex;
                         }
                     } else {
                         C_STRUCT aiColor4D diffuse;
                         if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_DIFFUSE, &diffuse)) {
-                            std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(diffuse.r, diffuse.g, diffuse.b);
+                            material->color.setRGB(diffuse.r, diffuse.g, diffuse.b);
                         }
                     }
-
-                    auto m = material->as<MeshPhongMaterial>();
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
                             auto tex = loadTexture(aiScene, path, p.C_Str());
-                            m->emissiveMap = tex;
+                            material->emissiveMap = tex;
                         }
                     } else {
                         C_STRUCT aiColor4D emissive;
                         if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_EMISSIVE, &emissive)) {
-                            m->emissive.setRGB(emissive.r, emissive.g, emissive.b);
+                            material->emissive.setRGB(emissive.r, emissive.g, emissive.b);
                         }
                     }
 
                     if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
                         if (aiGetMaterialTexture(mat, aiTextureType_SPECULAR, 0, &p) == aiReturn_SUCCESS) {
                             auto tex = loadTexture(aiScene, path, p.C_Str());
-                            m->specularMap = tex;
+                            material->specularMap = tex;
                         }
                     } else {
                         C_STRUCT aiColor4D specular;
                         if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_SPECULAR, &specular)) {
-                            m->specular.setRGB(specular.r, specular.g, specular.b);
+                            material->specular.setRGB(specular.r, specular.g, specular.b);
                         }
                     }
 
                     float shininess;
                     if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_SHININESS, &shininess)) {
-                        m->shininess = shininess;
+                        material->shininess = shininess;
                     }
 
                     float emmisiveIntensity;
                     if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity)) {
-                        m->emissiveIntensity = emmisiveIntensity;
+                        material->emissiveIntensity = emmisiveIntensity;
                     }
 
+                    // should this be added?
                     //                    C_STRUCT aiColor4D ambient;
                     //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_AMBIENT, &ambient)) {
-                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
+                    //                        material->color.add(Color().setRGB(ambient.r, ambient.g, ambient.b));
                     //                    }
                     //
                     //                    if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_BASE_COLOR, &ambient)) {
-                    //                        std::dynamic_pointer_cast<MaterialWithColor>(material)->color.setRGB(ambient.r, ambient.g, ambient.b);
+                    //                        material->color.setRGB(ambient.r, ambient.g, ambient.b);
                     //                    }
 
                     float opacity;
@@ -207,13 +204,18 @@ namespace threepp {
                 group->add(mesh);
             }
 
+            aiVector3t<float> pos;
+            aiQuaterniont<float> quat;
+            aiVector3t<float> scale;
             auto t = aiNode->mTransformation;
+            t.Decompose(scale, quat, pos);
+
             Matrix4 m;
-            m.set(t.a1, t.a2, t.a3, t.a4,
-                  t.b1, t.b2, t.b3, t.b4,
-                  t.c1, t.c2, t.c3, t.c4,
-                  t.d1, t.d2, t.d3, t.d4);
+            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
+            m.setPosition({pos.x, pos.y, pos.z});
+
             group->applyMatrix4(m);
+            group->scale.set(scale.x, scale.y, scale.z);
 
             parent.add(group);
 
