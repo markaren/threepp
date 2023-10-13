@@ -132,7 +132,6 @@ namespace threepp {
                     geometry->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
                 }
 
-
                 if (aiScene->HasMaterials()) {
                     aiString p;
                     auto mi = aiMesh->mMaterialIndex;
@@ -204,16 +203,51 @@ namespace threepp {
 
                 auto mesh = Mesh::create(geometry, material);
                 mesh->name = aiMesh->mName.C_Str();
+
+                for (unsigned j = 0; j < aiMesh->mNumAnimMeshes; j++) {
+                    auto aiAnim = aiMesh->mAnimMeshes[j];
+
+                    if (aiAnim->HasPositions()) {
+
+                        std::vector<float> v;
+                        v.reserve(aiAnim->mNumVertices);
+
+                        if (aiMesh->HasFaces()) {
+                            auto numFaces = aiMesh->mNumFaces;
+                            for (unsigned j = 0; j < numFaces; ++j) {
+                                auto face = aiMesh->mFaces[j];
+                                auto numIndices = face.mNumIndices;
+                                for (unsigned n = 0; n < numIndices; ++n) {
+                                    auto vertexIndex = face.mIndices[n];
+
+                                    v.emplace_back(aiAnim->mVertices[vertexIndex].x);
+                                    v.emplace_back(aiAnim->mVertices[vertexIndex].y);
+                                    v.emplace_back(aiAnim->mVertices[vertexIndex].z);
+                                }
+                            }
+                        }
+
+                        geometry->getMorphAttribute("position")->emplace_back(FloatBufferAttribute::create(v, 3));
+                        mesh->morphTargetInfluences().emplace_back();
+                    }
+                }
+
+                material->morphTargets = !geometry->getMorphAttributes().empty();
+
                 group->add(mesh);
             }
 
+            aiVector3t<float> pos;
+            aiQuaterniont<float> quat;
+            aiVector3t<float> scale;
             auto t = aiNode->mTransformation;
+            t.Decompose(scale, quat, pos);
+
             Matrix4 m;
-            m.set(t.a1, t.a2, t.a3, t.a4,
-                  t.b1, t.b2, t.b3, t.b4,
-                  t.c1, t.c2, t.c3, t.c4,
-                  t.d1, t.d2, t.d3, t.d4);
+            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
+            m.setPosition({pos.x, pos.y, pos.z});
             group->applyMatrix4(m);
+            group->scale.set(scale.x, scale.y, scale.z);
 
             parent.add(group);
 

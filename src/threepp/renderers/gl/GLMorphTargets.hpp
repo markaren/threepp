@@ -52,7 +52,7 @@ namespace threepp::gl {
 
             std::vector<float> objectInfluences;
             if (auto objectWithMorphTargetInfluences = dynamic_cast<ObjectWithMorphTargetInfluences*>(object)) {
-                objectInfluences = objectWithMorphTargetInfluences->morphTargetInfluences;
+                objectInfluences = objectWithMorphTargetInfluences->morphTargetInfluences();
             }
 
             auto length = objectInfluences.size();

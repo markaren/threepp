@@ -6,7 +6,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
-#include "ObjectWithMorphTargetInfluences.hpp"
+#include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 
 namespace threepp {
@@ -23,6 +23,11 @@ namespace threepp {
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
+
+        std::shared_ptr<BufferGeometry> shared_geometry() {
+
+            return geometry_;
+        }
 
         [[nodiscard]] const BufferGeometry* geometry() const;
 

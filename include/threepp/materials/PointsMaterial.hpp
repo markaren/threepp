@@ -12,7 +12,8 @@ namespace threepp {
                           public MaterialWithColor,
                           public MaterialWithMap,
                           public MaterialWithAlphaMap,
-                          public MaterialWithSize {
+                          public MaterialWithSize,
+                          public MaterialWithMorphTargets {
 
     public:
         [[nodiscard]] std::string type() const override;
