@@ -24,6 +24,11 @@ namespace threepp {
 
         BufferGeometry* geometry() override;
 
+        std::shared_ptr<BufferGeometry> shared_geometry() {
+
+            return geometry_;
+        }
+
         [[nodiscard]] const BufferGeometry* geometry() const;
 
         void setGeometry(const std::shared_ptr<BufferGeometry>& geometry);
