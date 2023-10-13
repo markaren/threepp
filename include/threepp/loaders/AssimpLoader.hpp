@@ -225,6 +225,7 @@ namespace threepp {
                             }
                         }
 
+                        geometry->registerMorphAttribute("position");
                         geometry->getMorphAttribute("position")->emplace_back(FloatBufferAttribute::create(v, 3));
                         mesh->morphTargetInfluences().emplace_back();
                     }

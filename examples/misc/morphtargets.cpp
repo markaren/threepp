@@ -33,6 +33,7 @@ namespace {
             vertex.applyAxisAngle(direction, math::PI * x / 2.f).toArray(twistPositions, j);
         }
 
+        geometry->registerMorphAttribute("position");
         auto morphPositions = geometry->getMorphAttribute("position");
         morphPositions->emplace_back(FloatBufferAttribute::create(spherePositions, 3));
         morphPositions->emplace_back(FloatBufferAttribute::create(twistPositions, 3));
@@ -52,6 +53,7 @@ int main() {
     scene->background = Color(0x8FBCD4);
 
     auto camera = PerspectiveCamera::create();
+    camera->layers.enableAll();
     camera->position.z = 10;
     scene->add(camera);
 
@@ -71,6 +73,15 @@ int main() {
     mesh->morphTargetInfluences().emplace_back();
     mesh->morphTargetInfluences().emplace_back();
     scene->add(mesh);
+
+    float sphereRadius = 0.1f;
+    const auto sphereGeometry = SphereGeometry::create(sphereRadius);
+    const auto sphereMaterial = MeshBasicMaterial::create();
+    sphereMaterial->color = Color::black;
+    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
+    sphere->visible = false;
+    sphere->layers.set(1);
+    scene->add(sphere);
 
     OrbitControls controls{*camera, canvas};
 
@@ -96,7 +107,42 @@ int main() {
         renderer.setSize(size);
     });
 
+    Vector2 mouse{-Infinity<float>, -Infinity<float>};
+    MouseMoveListener l([&](Vector2 pos) {
+        // calculate mouse position in normalized device coordinates
+        // (-1 to +1) for both components
+
+        auto size = canvas.size();
+        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+    });
+    canvas.addMouseListener(&l);
+
+    Box3 box;
+    auto helper = Box3Helper::create(box);
+    helper->layers.set(1);
+    scene->add(helper);
+
+    Raycaster raycaster;
     canvas.animate([&] {
+
+        box.setFromObject(*mesh);
+
+        raycaster.setFromCamera(mouse, *camera);
+
+        sphere->visible = false;
+        const auto intersects = raycaster.intersectObjects(scene->children);
+
+        if (!intersects.empty()) {
+            const auto& intersect = intersects.front();
+
+            sphere->position.copy(intersect.point);
+            if (intersect.face) {
+                sphere->position += (intersect.face.value().normal * sphereRadius);
+            }
+            sphere->visible = true;
+        }
+
         renderer.render(*scene, *camera);
 
         ui.render();

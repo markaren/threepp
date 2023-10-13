@@ -16,7 +16,9 @@ using namespace threepp;
 
 namespace {
 
-    std::optional<Intersection> checkIntersection(Object3D* object, Material* material, Raycaster& raycaster, Ray& ray, const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
+    std::optional<Intersection> checkIntersection(
+            Object3D* object, Material* material, Raycaster& raycaster, Ray& ray,
+            const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
         static Vector3 _intersectionPointWorld{};
 
@@ -47,8 +49,13 @@ namespace {
     }
 
     std::optional<Intersection> checkBufferGeometryIntersection(
-            Object3D* object, Material* material, Raycaster& raycaster, Ray& ray,
-            const FloatBufferAttribute& position, const FloatBufferAttribute* uv, const FloatBufferAttribute* uv2,
+            Object3D* object, Material* material,
+            Raycaster& raycaster, Ray& ray,
+            const FloatBufferAttribute& position,
+            const std::vector<std::shared_ptr<BufferAttribute>>* morphPosition,
+            bool morphTargetsRelative,
+            const FloatBufferAttribute* uv,
+            const FloatBufferAttribute* uv2,
             unsigned int a, unsigned int b, unsigned int c) {
 
         static Vector3 _vA{};
@@ -59,6 +66,60 @@ namespace {
         position.setFromBufferAttribute(_vA, a);
         position.setFromBufferAttribute(_vB, b);
         position.setFromBufferAttribute(_vC, c);
+
+        if (morphPosition) {
+
+            if (auto morphObject = object->as<ObjectWithMorphTargetInfluences>()) {
+
+                if (auto morphMaterial = material->as<MaterialWithMorphTargets>()) {
+
+                    if (morphMaterial->morphTargets) {
+
+                        const auto& morphInfluences = morphObject->morphTargetInfluences();
+
+                        if (!morphInfluences.empty()) {
+
+                            Vector3 _morphA;
+                            Vector3 _morphB;
+                            Vector3 _morphC;
+                            Vector3 _tempA;
+                            Vector3 _tempB;
+                            Vector3 _tempC;
+
+                            for (unsigned i = 0, il = morphPosition->size(); i < il; i++) {
+
+                                float influence = morphInfluences[i];
+
+                                if (influence == 0) continue;
+
+                                auto morphAttribute = morphPosition->at(i)->typed<float>();
+
+                                morphAttribute->setFromBufferAttribute(_tempA, a);
+                                morphAttribute->setFromBufferAttribute(_tempB, b);
+                                morphAttribute->setFromBufferAttribute(_tempC, c);
+
+                                if (morphTargetsRelative) {
+
+                                    _morphA.addScaledVector(_tempA, influence);
+                                    _morphB.addScaledVector(_tempB, influence);
+                                    _morphC.addScaledVector(_tempC, influence);
+
+                                } else {
+
+                                    _morphA.addScaledVector(_tempA.sub(_vA), influence);
+                                    _morphB.addScaledVector(_tempB.sub(_vB), influence);
+                                    _morphC.addScaledVector(_tempC.sub(_vC), influence);
+                                }
+                            }
+
+                            _vA.add(_morphA);
+                            _vB.add(_morphB);
+                            _vC.add(_morphC);
+                        }
+                    }
+                }
+            }
+        }
 
         auto intersection = checkIntersection(object, material, raycaster, ray, _vA, _vB, _vC, _intersectionPoint);
 
@@ -159,6 +220,8 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
     const auto index = geometry_->getIndex();
     const auto position = geometry_->getAttribute<float>("position");
+    const auto morphPosition = geometry_->getMorphAttribute("position");
+    const auto morphTargetsRelative = geometry_->morphTargetsRelative;
     const auto uv = geometry_->getAttribute<float>("uv");
     const auto uv2 = geometry_->getAttribute<float>("uv2");
     const auto groups = geometry_->groups;
@@ -183,7 +246,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                     const auto b = index->getX(j + 1);
                     const auto c = index->getX(j + 2);
 
-                    intersection = checkBufferGeometryIntersection(this, groupMaterial, raycaster, _ray, *position, uv, uv2, a, b, c);
+                    intersection = checkBufferGeometryIntersection(
+                            this, groupMaterial, raycaster, _ray, *position,
+                            morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                     if (intersection) {
 
@@ -205,7 +270,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                 const auto b = index->getX(i + 1);
                 const auto c = index->getX(i + 2);
 
-                intersection = checkBufferGeometryIntersection(this, material(), raycaster, _ray, *position, uv, uv2, a, b, c);
+                intersection = checkBufferGeometryIntersection(
+                        this, material(), raycaster, _ray, *position,
+                        morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                 if (intersection) {
 
@@ -234,7 +301,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                     const auto b = j + 1;
                     const auto c = j + 2;
 
-                    intersection = checkBufferGeometryIntersection(this, groupMaterial, raycaster, _ray, *position, uv, uv2, a, b, c);
+                    intersection = checkBufferGeometryIntersection(
+                            this, groupMaterial, raycaster, _ray, *position,
+                            morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                     if (intersection) {
 
@@ -256,7 +325,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                 const int b = i + 1;
                 const int c = i + 2;
 
-                intersection = checkBufferGeometryIntersection(this, material(), raycaster, _ray, *position, uv, uv2, a, b, c);
+                intersection = checkBufferGeometryIntersection(
+                        this, material(), raycaster, _ray, *position,
+                        morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                 if (intersection) {
 
