@@ -384,7 +384,7 @@ namespace threepp {
             BufferAttribute::copy(source);
 
             this->count_ = source.count_;
-            this->array_ = array_;
+            this->array_ = source.array_;
         }
 
         [[nodiscard]] std::unique_ptr<TypedBufferAttribute<T>> clone() const {
