@@ -13,6 +13,7 @@ namespace {
         auto positionAttribute = geometry->getAttribute<float>("position");
 
         std::vector<float> spherePositions;
+        spherePositions.reserve(positionAttribute->count() * 3);
         std::vector<float> twistPositions(positionAttribute->count() * 3);
         Vector3 direction(1, 0, 0);
         Vector3 vertex;
