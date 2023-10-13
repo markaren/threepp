@@ -104,6 +104,11 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
         return true;
 
+    } else if (key == "map") {
+
+        map = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
     } else if (key == "emissive") {
 
         if (std::holds_alternative<int>(value)) {
