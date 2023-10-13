@@ -19,7 +19,7 @@ int main() {
     light1->position.set(100, 100, 100);
     scene.add(light1);
 
-    auto light2 = PointLight::create(0xff2200, 0.7f);
+    auto light2 = PointLight::create(0x22ff00, 0.7f);
     light2->position.set(-100, -100, -100);
     scene.add(light2);
 
@@ -68,7 +68,7 @@ int main() {
         mesh->rotation.y += step;
 
         auto& influence = mesh->morphTargetInfluences()[1];
-        influence += (step * sign);
+        influence += step * sign;
 
         if (influence <= 0 || influence >= 1) {
             sign *= -1;
