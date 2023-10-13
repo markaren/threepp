@@ -60,10 +60,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    float sign = -1;
+    float sign = 1;
     float speed = 0.5f;
 
     Clock clock;
+    clock.start();
     canvas.animate([&] {
         auto delta = clock.getDelta();
 
@@ -76,6 +77,7 @@ int main() {
 
         if (influence <= 0 || influence >= 1) {
             sign *= -1;
+            influence = std::clamp(influence, 0.01f, 0.99f); // avoid "locking"
         }
 
         renderer.render(scene, camera);
