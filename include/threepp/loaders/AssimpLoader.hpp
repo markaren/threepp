@@ -207,13 +207,17 @@ namespace threepp {
                 group->add(mesh);
             }
 
+            aiVector3t<float> pos;
+            aiQuaterniont<float> quat;
+            aiVector3t<float> scale;
             auto t = aiNode->mTransformation;
+            t.Decompose(scale, quat, pos);
+
             Matrix4 m;
-            m.set(t.a1, t.a2, t.a3, t.a4,
-                  t.b1, t.b2, t.b3, t.b4,
-                  t.c1, t.c2, t.c3, t.c4,
-                  t.d1, t.d2, t.d3, t.d4);
+            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
+            m.setPosition({pos.x, pos.y, pos.z});
             group->applyMatrix4(m);
+            group->scale.set(scale.x, scale.y, scale.z);
 
             parent.add(group);
 
