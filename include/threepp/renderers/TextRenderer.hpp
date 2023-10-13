@@ -34,6 +34,7 @@ namespace threepp {
         HorizontalAlignment horizontalAlignment{HorizontalAlignment::LEFT};
         VerticalAlignment verticalAlignment{VerticalAlignment::TOP};
 
+        [[nodiscard]] int getTextSize() const;
 
         void setText(const std::string& str);
 
