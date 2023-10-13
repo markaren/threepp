@@ -29,21 +29,20 @@ int main() {
     auto gltf = loader.load("data/models/gltf/AnimatedMorphSphere/AnimatedMorphSphere.gltf");
     scene.add(gltf);
 
-    Mesh* mesh;
-    gltf->traverseType<Mesh>([&](Mesh& m){
-        std::cout << "+er" << std::endl;
-        m.rotation.z = math::PI / 2;
-        mesh = &m;
-    });
-
     auto pointsMaterial = PointsMaterial::create();
     pointsMaterial->size = 10;
     pointsMaterial->sizeAttenuation = false;
     pointsMaterial->alphaTest = 0.5;
+    pointsMaterial->map = TextureLoader().load("data/textures/sprites/disc.png");
 
-    auto points = Points::create(mesh->shared_geometry(), pointsMaterial);
-    points->scale *= 100;
-    scene.add(points);
+    Mesh* mesh;
+    gltf->traverseType<Mesh>([&](Mesh& m){
+        m.rotation.z = math::PI / 2;
+        mesh = &m;
+
+        auto points = Points::create(mesh->shared_geometry(), pointsMaterial);
+        mesh->add(points);
+    });
 
     OrbitControls controls(camera, canvas);
     controls.minDistance = 0.1;
