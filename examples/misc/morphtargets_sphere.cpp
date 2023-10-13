@@ -41,6 +41,10 @@ int main() {
         m.rotation.z = math::PI / 2;
         mesh = &m;
 
+        auto newMat = MeshStandardMaterial::create();
+        newMat->morphTargets = true;
+        mesh->setMaterial(newMat);
+
         auto points = Points::create(mesh->shared_geometry(), pointsMaterial);
         points->copyMorphTargetInfluences(&mesh->morphTargetInfluences());
         mesh->add(points);

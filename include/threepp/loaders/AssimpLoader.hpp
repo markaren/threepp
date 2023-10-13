@@ -230,7 +230,8 @@ namespace threepp {
                     }
                 }
 
-                material->morphTargets = !geometry->getMorphAttributes().empty();
+                // let users decide to enable?
+//                material->morphTargets = !geometry->getMorphAttributes().empty();
 
                 group->add(mesh);
             }
