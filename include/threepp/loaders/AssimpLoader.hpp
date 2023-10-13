@@ -132,7 +132,6 @@ namespace threepp {
                     geometry->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
                 }
 
-
                 if (aiScene->HasMaterials()) {
                     aiString p;
                     auto mi = aiMesh->mMaterialIndex;
@@ -204,6 +203,37 @@ namespace threepp {
 
                 auto mesh = Mesh::create(geometry, material);
                 mesh->name = aiMesh->mName.C_Str();
+
+                for (unsigned j = 0; j < aiMesh->mNumAnimMeshes; j++) {
+                    auto aiAnim = aiMesh->mAnimMeshes[j];
+
+                    if (aiAnim->HasPositions()) {
+
+                        std::vector<float> v;
+                        v.reserve(aiAnim->mNumVertices);
+
+                        if (aiMesh->HasFaces()) {
+                            auto numFaces = aiMesh->mNumFaces;
+                            for (unsigned j = 0; j < numFaces; ++j) {
+                                auto face = aiMesh->mFaces[j];
+                                auto numIndices = face.mNumIndices;
+                                for (unsigned n = 0; n < numIndices; ++n) {
+                                    auto vertexIndex = face.mIndices[n];
+
+                                    v.emplace_back(aiAnim->mVertices[vertexIndex].x);
+                                    v.emplace_back(aiAnim->mVertices[vertexIndex].y);
+                                    v.emplace_back(aiAnim->mVertices[vertexIndex].z);
+                                }
+                            }
+                        }
+
+                        geometry->getMorphAttribute("position")->emplace_back(FloatBufferAttribute::create(v, 3));
+                        mesh->morphTargetInfluences().emplace_back();
+                    }
+                }
+
+                material->morphTargets = !geometry->getMorphAttributes().empty();
+
                 group->add(mesh);
             }
 

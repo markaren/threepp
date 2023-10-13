@@ -68,8 +68,8 @@ int main() {
     material->morphTargets = true;
 
     auto mesh = Mesh::create(geometry, material);
-    mesh->morphTargetInfluences.emplace_back();
-    mesh->morphTargetInfluences.emplace_back();
+    mesh->morphTargetInfluences().emplace_back();
+    mesh->morphTargetInfluences().emplace_back();
     scene->add(mesh);
 
     OrbitControls controls{*camera, canvas};
@@ -79,8 +79,8 @@ int main() {
         ImGui::SetNextWindowSize({230, 0}, 0);
 
         ImGui::Begin("Morphing");
-        ImGui::SliderFloat("sphere", &mesh->morphTargetInfluences.at(0), 0, 1);
-        ImGui::SliderFloat("twist", &mesh->morphTargetInfluences.at(1), 0, 1);
+        ImGui::SliderFloat("sphere", &mesh->morphTargetInfluences().at(0), 0, 1);
+        ImGui::SliderFloat("twist", &mesh->morphTargetInfluences().at(1), 0, 1);
         ImGui::End();
     });
 

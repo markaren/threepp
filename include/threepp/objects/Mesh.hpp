@@ -6,7 +6,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
-#include "ObjectWithMorphTargetInfluences.hpp"
+#include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 
 namespace threepp {

@@ -34,13 +34,15 @@ int main() {
     pointsMaterial->sizeAttenuation = false;
     pointsMaterial->alphaTest = 0.5;
     pointsMaterial->map = TextureLoader().load("data/textures/sprites/disc.png");
+    pointsMaterial->morphTargets = true;
 
     Mesh* mesh;
-    gltf->traverseType<Mesh>([&](Mesh& m){
+    gltf->traverseType<Mesh>([&](Mesh& m) {
         m.rotation.z = math::PI / 2;
         mesh = &m;
 
         auto points = Points::create(mesh->shared_geometry(), pointsMaterial);
+        points->copyMorphTargetInfluences(&mesh->morphTargetInfluences());
         mesh->add(points);
     });
 
@@ -54,8 +56,24 @@ int main() {
         renderer.setSize(size);
     });
 
+    float sign = -1;
+    float speed = 0.5f;
+
     Clock clock;
     canvas.animate([&] {
+        auto delta = clock.getDelta();
+
+        auto step = delta * speed;
+
+        mesh->rotation.y += step;
+
+        auto& influence = mesh->morphTargetInfluences()[1];
+        influence += (step * sign);
+
+        if (influence <= 0 || influence >= 1) {
+            sign *= -1;
+        }
+
         renderer.render(scene, camera);
     });
 }
