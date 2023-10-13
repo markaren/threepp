@@ -123,7 +123,8 @@ int main() {
     handle.color = Color::red;
 
     auto& handle2 = textRenderer.createHandle("Hello world!");
-    handle2.setPosition(0, canvas.size().height - 35);
+    handle2.verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
+    handle2.setPosition(0, canvas.size().height);
     handle2.color = Color::white;
     handle2.scale = 2;
 
@@ -132,6 +133,7 @@ int main() {
         camera->updateProjectionMatrix();
         renderer.setSize(size);
         handle.setPosition(canvas.size().width - 130, 0);
+        handle2.setPosition(0, canvas.size().height);
     });
 
 #ifdef HAS_IMGUI
