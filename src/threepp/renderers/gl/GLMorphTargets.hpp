@@ -87,7 +87,7 @@ namespace threepp::gl {
 
             for (unsigned i = 0; i < 8; i++) {
 
-                if (i < length && influences.at(i).second != 0) {
+                if (i < length && influences.at(i).second > 0) {
 
                     workInfluences[i].first = influences.at(i).first;
                     workInfluences[i].second = influences.at(i).second;
