@@ -62,7 +62,10 @@ void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {
 
 void InstancedMesh::dispose() {
 
-    dispatchEvent("dispose", this);
+    if (!disposed) {
+        disposed = true;
+        dispatchEvent("dispose", this);
+    }
 }
 
 void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
@@ -100,6 +103,10 @@ void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& int
 
         _instanceIntersects.clear();
     }
+}
+
+InstancedMesh::~InstancedMesh() {
+    dispose();
 }
 
 std::shared_ptr<InstancedMesh> InstancedMesh::create(
