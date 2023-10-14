@@ -224,6 +224,12 @@ namespace threepp {
         std::unordered_map<std::string, std::string> defines;
     };
 
+    struct MaterialWithMorphTargets: virtual Material {
+
+        bool morphTargets = false;
+        bool morphNormals = false;
+    };
+
 }// namespace threepp
 
 

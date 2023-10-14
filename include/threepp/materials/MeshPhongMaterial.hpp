@@ -25,7 +25,8 @@ namespace threepp {
           public MaterialWithReflectivity,
           public MaterialWithWireframe,
           public MaterialWithCombine,
-          public MaterialWithFlatShading {
+          public MaterialWithFlatShading,
+          public MaterialWithMorphTargets {
 
     public:
         [[nodiscard]] std::string type() const override;

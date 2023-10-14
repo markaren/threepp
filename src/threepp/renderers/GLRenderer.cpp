@@ -9,6 +9,7 @@
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
+#include "threepp/renderers/gl/GLMorphTargets.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
@@ -122,6 +123,7 @@ struct GLRenderer::Impl {
     gl::GLRenderStates renderStates;
     gl::GLRenderLists renderLists;
     gl::GLObjects objects;
+    gl::GLMorphTargets morphTargets;
     gl::GLPrograms programCache;
 
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
@@ -325,6 +327,12 @@ struct GLRenderer::Impl {
 
             index = geometries.getWireframeAttribute(geometry);
             rangeFactor = 2;
+        }
+
+        if (auto m = material->as<MaterialWithMorphTargets>()) {
+            if (m->morphTargets || m ->morphNormals) {
+                morphTargets.update(object, geometry, material, program);
+            }
         }
 
         bindingStates.setup(object, material, program, geometry, index);

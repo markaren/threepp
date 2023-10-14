@@ -94,9 +94,23 @@ struct GLGeometries::Impl {
 
         // Updating index buffer in VAO now. See WebGLBindingStates.
 
-        for (auto& [name, value] : geometryAttributes) {
+        for (auto& [name, attribute] : geometryAttributes) {
 
-            attributes_.update(value.get(), GL_ARRAY_BUFFER);
+            attributes_.update(attribute.get(), GL_ARRAY_BUFFER);
+        }
+
+        // morph targets
+
+        auto& morphAttributes = geometry->getMorphAttributes();
+
+        for (auto& [name, value] : morphAttributes) {
+
+            auto& array = morphAttributes.at(name);
+
+            for (const auto& attribute : array) {
+
+                attributes_.update(attribute.get(), GL_ARRAY_BUFFER);
+            }
         }
     }
 
