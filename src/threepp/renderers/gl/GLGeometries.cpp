@@ -50,8 +50,7 @@ struct GLGeometries::Impl {
 
             scope_->bindingStates_.releaseStatesOfGeometry(geometry);
 
-            auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry);
-            if (ig) {
+            if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
                 ig->_maxInstanceCount = 0;
             }
 
