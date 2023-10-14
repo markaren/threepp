@@ -72,9 +72,11 @@ namespace threepp {
             return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
         }
 
-        void registerMorphAttribute(const std::string& name);
+        bool hasMorphAttribute(const std::string& name);
 
         std::vector<std::shared_ptr<BufferAttribute>>* getMorphAttribute(const std::string& name);
+
+        std::vector<std::shared_ptr<BufferAttribute>>* getOrCreateMorphAttribute(const std::string& name);
 
         [[nodiscard]] const std::unordered_map<std::string, std::shared_ptr<BufferAttribute>>& getAttributes() const;
 

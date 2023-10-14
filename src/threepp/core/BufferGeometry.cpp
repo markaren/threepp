@@ -76,19 +76,16 @@ BufferAttribute* BufferGeometry::getAttribute(const std::string& name) {
     return attributes_.at(name).get();
 }
 
-void BufferGeometry::registerMorphAttribute(const std::string& name) {
-
-    if (!morphAttributes_.count(name)) {
-
-        morphAttributes_[name] = {};
-    }
-}
-
 std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getMorphAttribute(const std::string& name) {
 
     if (!morphAttributes_.count(name)) return nullptr;
 
     return &morphAttributes_.at(name);
+}
+
+std::vector<std::shared_ptr<BufferAttribute>>* BufferGeometry::getOrCreateMorphAttribute(const std::string& name) {
+
+    return &morphAttributes_[name];
 }
 
 const std::unordered_map<std::string, std::shared_ptr<BufferAttribute>>& BufferGeometry::getAttributes() const {
