@@ -5,15 +5,12 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
-#include "AudioListener.hpp"
-#include "threepp/audio/AudioListener.hpp"
-
 #include <filesystem>
 #include <memory>
 
 namespace detail {
 
-    using CallbackType = void(*)(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
+    using CallbackType = void (*)(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
 
 }
 
@@ -22,63 +19,37 @@ namespace threepp {
     class Audio {
 
     public:
-
         bool autoPlay{false};
 
         Audio(const std::filesystem::path& file) {
 
-            result = ma_decoder_init_file("data/sounds/376737_Skullbeatz___Bad_Cat_Maste.mp3", nullptr, &decoder);
+            engineConfig = ma_engine_config_init();
+
+            ma_result result = ma_engine_init(&engineConfig, &engine);
             if (result != MA_SUCCESS) {
-                throw std::runtime_error("[Audio] Failed to load audio file");
+                throw std::runtime_error("[Audio] Failed init engine");
             }
 
-            detail::CallbackType callback = [](ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount){
-
-                auto* audio = static_cast<Audio*>(pDevice->pUserData);
-
-                auto* pDecoder = static_cast<ma_decoder*>(&audio->decoder);
-                if (pDecoder == nullptr) {
-                    return;
-                }
-
-                ma_decoder_read_pcm_frames(pDecoder, pOutput, frameCount, nullptr);
-
-                (void)pInput;
-            };
-
-            deviceConfig = ma_device_config_init(ma_device_type_playback);
-            deviceConfig.playback.format   = decoder.outputFormat;
-            deviceConfig.playback.channels = decoder.outputChannels;
-            deviceConfig.sampleRate        = decoder.outputSampleRate;
-            deviceConfig.dataCallback      = *callback;
-            deviceConfig.pUserData         = this;
-
-            if (ma_device_init(nullptr, &deviceConfig, &device) != MA_SUCCESS) {
-                printf("Failed to open playback device.\n");
-                ma_decoder_uninit(&decoder);
-                throw std::runtime_error("[Audio] Failed to open playback device.");
+            result = ma_sound_init_from_file(&engine, file.string().c_str(), 0, nullptr, nullptr, &sound);
+            if (result != MA_SUCCESS) {
+                throw std::runtime_error("[Audio] Failed to load audio file");
             }
 
             if (autoPlay) {
                 play();
             }
-
         }
 
-        bool isPlaying() {
+        [[nodiscard]] bool isPlaying() const {
 
-            return playing_;
+            return ma_sound_is_playing(&sound);
         }
 
         void play() {
-            if (ma_device_start(&device) != MA_SUCCESS) {
-                throw std::runtime_error("Failed to start playback device.");
-            }
-
-            playing_ = true;
+            ma_sound_start(&sound);
         }
 
-        void play(bool flag) {
+        void togglePlay() {
             if (!isPlaying()) {
                 play();
             } else {
@@ -87,45 +58,39 @@ namespace threepp {
         }
 
         void stop() {
-            if (ma_device_stop(&device) != MA_SUCCESS) {
-                // Handle error
-            }
-            playing_ = false;
+            ma_sound_stop(&sound);
         }
 
         float getMasterVolume() {
 
             float volume;
-            ma_device_get_master_volume(&device, &volume);
+            ma_device_get_master_volume(engine.pDevice, &volume);
 
             return volume;
         }
 
         void setLooping(bool flag) {
-            ma_data_source_set_looping(&decoder, flag);
+            ma_sound_set_looping(&sound, flag);
         }
 
         void setMasterVolume(float volume) {
 
-            ma_device_set_master_volume(&device, volume);
+            ma_device_set_master_volume(engine.pDevice, volume);
         }
 
         ~Audio() {
-            ma_device_uninit(&device);
-            ma_decoder_uninit(&decoder);
+            ma_sound_uninit(&sound);
+            ma_engine_uninit(&engine);
         }
 
     private:
-        ma_result result;
-        ma_decoder decoder;
-        ma_device_config deviceConfig;
-        ma_device device;
 
-        bool playing_{false};
-
+        ma_engine engine;
+        ma_engine_config engineConfig;
+        ma_sound sound;
     };
 
-}
+}// namespace threepp
 
 
 #endif//THREEPP_AUDIO_HPP

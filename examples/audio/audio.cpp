@@ -10,13 +10,17 @@ int main()
 {
 
     Canvas canvas;
+    GLRenderer renderer(canvas.size());
+
+    Scene scene;
+    PerspectiveCamera camera;
 
     Audio audio("data/sounds/376737_Skullbeatz___Bad_Cat_Maste.mp3");
     audio.setLooping(true);
     audio.play();
 
-    float volume = audio.getMasterVolume();
     bool play = audio.isPlaying();
+    float volume = audio.getMasterVolume();
     ImguiFunctionalContext ui(canvas.windowPtr(), [&]{
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
@@ -27,12 +31,17 @@ int main()
         }
         ImGui::Checkbox("Play", &play);
         if (ImGui::IsItemEdited()) {
-            audio.play(play);
+            audio.togglePlay();
         }
         ImGui::End();
     });
 
-    canvas.animate([&]{
+    Clock clock;
+    canvas.animate([&] {
+
+        auto delta = clock.getDelta();
+
+        renderer.render(scene, camera);
 
         ui.render();
     });
