@@ -5,6 +5,11 @@ find_package(assimp CONFIG QUIET)
 find_package(pugixml CONFIG QUIET)
 find_package(nlohmann_json CONFIG QUIET)
 
+find_path(MINIAUDIO_INCLUDE_DIRS "miniaudio.h")
+if (MINIAUDIO_INCLUDE_DIRS)
+    include_directories(${MINIAUDIO_INCLUDE_DIRS})
+endif ()
+
 if (BULLET_FOUND AND NOT TARGET Bullet::Bullet)
     add_library(Bullet::Bullet INTERFACE IMPORTED)
     if ("${BULLET_INCLUDE_DIRS}" MATCHES ".*/bullet$")

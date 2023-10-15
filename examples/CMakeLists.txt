@@ -7,6 +7,7 @@ if (imgui_FOUND)
     target_link_libraries(demo PRIVATE imgui::imgui)
 endif ()
 
+add_subdirectory(audio)
 add_subdirectory(geometries)
 add_subdirectory(shaders)
 add_subdirectory(objects)
