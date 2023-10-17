@@ -5,9 +5,6 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
-        "threepp/audio/Audio.hpp"
-        "threepp/audio/AudioListener.hpp"
-
         "threepp/canvas/Canvas.hpp"
         "threepp/canvas/WindowSize.hpp"
 

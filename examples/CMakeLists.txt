@@ -7,7 +7,6 @@ if (imgui_FOUND)
     target_link_libraries(demo PRIVATE imgui::imgui)
 endif ()
 
-add_subdirectory(audio)
 add_subdirectory(geometries)
 add_subdirectory(shaders)
 add_subdirectory(objects)
@@ -20,6 +19,10 @@ add_subdirectory(textures)
 
 if (BULLET_FOUND)
     add_subdirectory(bullet)
+endif ()
+
+if (imgui_FOUND AND MINIAUDIO_INCLUDE_DIRS)
+    add_subdirectory(audio)
 endif ()
 
 if (THREEPP_BUILD_EXAMPLE_PROJECTS)

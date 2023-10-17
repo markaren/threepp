@@ -1,6 +1,6 @@
 
-#include "threepp/threepp.hpp"
-#include "threepp/audio/Audio.hpp"
+#include "threepp/canvas/Canvas.hpp"
+#include "audio/Audio.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -8,12 +8,7 @@ using namespace threepp;
 
 int main()
 {
-
     Canvas canvas;
-    GLRenderer renderer(canvas.size());
-
-    Scene scene;
-    PerspectiveCamera camera;
 
     Audio audio("data/sounds/376737_Skullbeatz___Bad_Cat_Maste.mp3");
     audio.setLooping(true);
@@ -36,12 +31,7 @@ int main()
         ImGui::End();
     });
 
-    Clock clock;
     canvas.animate([&] {
-
-        auto delta = clock.getDelta();
-
-        renderer.render(scene, camera);
 
         ui.render();
     });

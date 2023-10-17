@@ -21,7 +21,7 @@ namespace threepp {
     public:
         bool autoPlay{false};
 
-        Audio(const std::filesystem::path& file) {
+        explicit Audio(const std::filesystem::path& file) {
 
             engineConfig = ma_engine_config_init();
 
@@ -39,6 +39,12 @@ namespace threepp {
                 play();
             }
         }
+
+        Audio(Audio&&) = delete;
+        Audio& operator=(Audio&&) = delete;
+        Audio(const Audio&) = delete;
+        Audio& operator=(const Audio&) = delete;
+
 
         [[nodiscard]] bool isPlaying() const {
 
@@ -84,7 +90,6 @@ namespace threepp {
         }
 
     private:
-
         ma_engine engine;
         ma_engine_config engineConfig;
         ma_sound sound;
