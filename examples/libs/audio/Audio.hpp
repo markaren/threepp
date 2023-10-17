@@ -2,17 +2,13 @@
 #ifndef THREEPP_AUDIO_HPP
 #define THREEPP_AUDIO_HPP
 
-#define MINIAUDIO_IMPLEMENTATION
-#include "miniaudio.h"
+#include "threepp/core/Object3D.hpp"
 
 #include <filesystem>
 #include <memory>
 
-namespace detail {
+#include "AudioListener.hpp"
 
-    using CallbackType = void (*)(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount);
-
-}
 
 namespace threepp {
 
@@ -21,16 +17,9 @@ namespace threepp {
     public:
         bool autoPlay{false};
 
-        explicit Audio(const std::filesystem::path& file) {
+        Audio(AudioListener& ctx, const std::filesystem::path& file): ctx_(ctx) {
 
-            engineConfig = ma_engine_config_init();
-
-            ma_result result = ma_engine_init(&engineConfig, &engine);
-            if (result != MA_SUCCESS) {
-                throw std::runtime_error("[Audio] Failed init engine");
-            }
-
-            result = ma_sound_init_from_file(&engine, file.string().c_str(), 0, nullptr, nullptr, &sound);
+            ma_result result = ma_sound_init_from_file(&ctx_.engine, file.string().c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, nullptr, &sound_);
             if (result != MA_SUCCESS) {
                 throw std::runtime_error("[Audio] Failed to load audio file");
             }
@@ -45,17 +34,23 @@ namespace threepp {
         Audio(const Audio&) = delete;
         Audio& operator=(const Audio&) = delete;
 
-
         [[nodiscard]] bool isPlaying() const {
 
-            return ma_sound_is_playing(&sound);
+            return ma_sound_is_playing(&sound_);
         }
 
         void play() {
-            ma_sound_start(&sound);
+
+            ma_sound_start(&sound_);
+        }
+
+        void setVolume(float volume) {
+
+            ma_sound_set_volume(&sound_, volume);
         }
 
         void togglePlay() {
+
             if (!isPlaying()) {
                 play();
             } else {
@@ -64,35 +59,45 @@ namespace threepp {
         }
 
         void stop() {
-            ma_sound_stop(&sound);
-        }
 
-        float getMasterVolume() {
-
-            float volume;
-            ma_device_get_master_volume(engine.pDevice, &volume);
-
-            return volume;
+            ma_sound_stop(&sound_);
         }
 
         void setLooping(bool flag) {
-            ma_sound_set_looping(&sound, flag);
-        }
-
-        void setMasterVolume(float volume) {
-
-            ma_device_set_master_volume(engine.pDevice, volume);
+            ma_sound_set_looping(&sound_, flag);
         }
 
         ~Audio() {
-            ma_sound_uninit(&sound);
-            ma_engine_uninit(&engine);
+            ma_sound_uninit(&sound_);
         }
 
-    private:
-        ma_engine engine;
-        ma_engine_config engineConfig;
-        ma_sound sound;
+    protected:
+        AudioListener& ctx_;
+        ma_sound sound_;
+    };
+
+    class PositionalAudio: public Audio, public Object3D {
+
+    public:
+        PositionalAudio(AudioListener& ctx, const std::filesystem::path& file): Audio(ctx, file) {
+
+            ma_sound_set_spatialization_enabled(&sound_, true);
+        }
+
+        void updateMatrixWorld(bool force) override {
+            Object3D::updateMatrixWorld(force);
+
+            Vector3 pos;
+            Vector3 scale;
+            Quaternion quat;
+            matrixWorld->decompose(pos, quat, scale);
+
+            Vector3 _orientation;
+            _orientation.set(0, 0, -1).applyQuaternion(quat);
+
+            ma_sound_set_position(&sound_, pos.x, pos.y, pos.z);
+            ma_sound_set_direction(&sound_, _orientation.x, _orientation.y, _orientation.z);
+        }
     };
 
 }// namespace threepp
