@@ -104,7 +104,7 @@ void SkinnedMesh::boneTransform(size_t index, Vector3& target) {
 
     for (unsigned i = 0; i < 4; i++) {
 
-        auto weight = _skinWeight[i];
+        const auto& weight = _skinWeight[i];
 
         if (weight != 0) {
 

@@ -7,14 +7,14 @@ using namespace threepp;
 
 namespace {
 
-    threepp::Matrix4 _identityMatrix;
-    threepp::Matrix4 _offsetMatrix;
+    Matrix4 _identityMatrix;
+    Matrix4 _offsetMatrix;
+
 }// namespace
 
 
 Skeleton::Skeleton(const std::vector<std::shared_ptr<Bone>>& bones)
-    : uuid_(math::generateUUID()), bones(bones),
-      boneMatrices(bones.size() * 16) {
+    : uuid_(math::generateUUID()), bones(bones), boneMatrices(bones.size() * 16) {
 
     init();
 }
@@ -68,7 +68,7 @@ void Skeleton::pose() {
 
     for (unsigned i = 0, il = this->bones.size(); i < il; i++) {
 
-        auto bone = this->bones[i];
+        const auto& bone = this->bones[i];
 
         if (bone) {
 
@@ -105,7 +105,7 @@ void Skeleton::update() {
 
         // compute the offset between the current and the original transform
 
-        auto matrix = bones[i] ? *bones[i]->matrixWorld : _identityMatrix;
+        const auto& matrix = bones[i] ? *bones[i]->matrixWorld : _identityMatrix;
 
         _offsetMatrix.multiplyMatrices(matrix, boneInverses[i]);
         _offsetMatrix.toArray(boneMatrices, i * 16);
@@ -131,14 +131,17 @@ Skeleton& Skeleton::computeBoneTexture() {
     sizei = std::max(sizei, 4);
 
     // TODO
-//            auto boneMatrices = std::vector<float>(sizei * sizei * 4);// 4 floats per RGBA pixel
-//            boneMatrices.set(this->boneMatrices);                   // copy current values
-//
-//            auto boneTexture = DataTexture::create(boneMatrices, sizei, sizei, Format::RGBA, Type::Float);
-//
-//            this->boneMatrices = boneMatrices;
-//            this->boneTexture = boneTexture;
-//            this->boneTextureSize = size;
+                auto boneMatrices = std::vector<float>(sizei * sizei * 4);// 4 floats per RGBA pixel
+//                boneMatrices.set(this->boneMatrices);                   // copy current values
+                for (unsigned i = 0; i < this->boneMatrices.size(); ++i) {
+                    boneMatrices[i] = this->boneMatrices[i];
+                }
+    //
+    //            auto boneTexture = DataTexture::create(boneMatrices, sizei, sizei, Format::RGBA, Type::Float);
+    //
+                this->boneMatrices = boneMatrices;
+    //            this->boneTexture = boneTexture;
+    //            this->boneTextureSize = size;
 
     return *this;
 }

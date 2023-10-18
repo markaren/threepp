@@ -21,7 +21,7 @@ namespace threepp {
         std::vector<Matrix4> boneInverses;
         std::vector<float> boneMatrices;
 
-        std::shared_ptr<Texture> boneTexture;
+        std::shared_ptr<Texture> boneTexture{nullptr};
         int boneTextureSize{0};
 
         [[nodiscard]] std::string uuid() const {

@@ -29,7 +29,7 @@ namespace threepp::gl {
         const int maxFragmentUniforms;
 
         const bool vertexTextures;
-        const bool floatVertexTextures = true;
+        const bool floatVertexTextures = false;
 
         const int maxSamples;
 

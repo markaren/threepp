@@ -13,12 +13,12 @@ namespace threepp {
     public:
         enum class BindMode {
             Attached,
-            Detatched
+            Detached
         };
 
         BindMode bindMode{BindMode::Attached};
-        Matrix4* bindMatrix;
-        Matrix4* bindMatrixInverse;
+        Matrix4* bindMatrix = nullptr;
+        Matrix4* bindMatrixInverse = nullptr;
 
         std::shared_ptr<Skeleton> skeleton = nullptr;
 

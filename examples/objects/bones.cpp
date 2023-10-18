@@ -4,6 +4,8 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 namespace {
@@ -116,6 +118,7 @@ int main() {
 
     Canvas canvas("Bones");
     GLRenderer renderer(canvas.size());
+    renderer.checkShaderErrors = true;
 
     Scene scene;
     scene.background = Color(0x444444);
@@ -146,8 +149,13 @@ int main() {
         renderer.setSize(size);
     });
 
+    bool animate{false};
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::Begin("Options");
+        ImGui::Checkbox("animate", &animate);
+        ImGui::End();
     });
 
     IOCapture capture{};
@@ -156,8 +164,18 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
+    Clock clock;
     canvas.animate([&] {
+        auto time = clock.getElapsedTime();
+
         renderer.render(scene, camera);
         ui.render();
+
+        if (animate) {
+            for (unsigned i = 0; i < mesh->skeleton->bones.size(); i++) {
+
+                mesh->skeleton->bones[i]->rotation.z = std::sin(time) * 2 / float(mesh->skeleton->bones.size());
+            }
+        }
     });
 }

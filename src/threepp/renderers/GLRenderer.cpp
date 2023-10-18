@@ -735,12 +735,15 @@ struct GLRenderer::Impl {
             } else if (!isInstancedMesh && materialProperties->instancing) {
 
                 needsProgramChange = true;
+
             } else if (isSkinnedMesh && !materialProperties->skinning) {
 
                 needsProgramChange = true;
+
             } else if (!isSkinnedMesh && materialProperties->skinning) {
 
                 needsProgramChange = true;
+
             } else if (false /*materialProperties.envMap != envMap*/) {
 
                 needsProgramChange = true;
@@ -886,7 +889,7 @@ struct GLRenderer::Impl {
 
                 } else {
 
-                    auto boneMatrices = skeleton->boneMatrices;
+                    const auto& boneMatrices = skeleton->boneMatrices;
                     if (!boneMatrices.empty()) {
                         p_uniforms->setValue("boneMatrices", boneMatrices);
                     }
