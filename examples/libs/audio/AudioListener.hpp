@@ -11,6 +11,13 @@
 
 namespace threepp {
 
+    namespace {
+        Vector3 _pos;
+        Vector3 _scale;
+        Quaternion _quat;
+        Vector3 _orientation;
+    }
+
     // The Audio API is highly experimental
     class AudioListener: public Object3D {
 
@@ -44,15 +51,11 @@ namespace threepp {
         void updateMatrixWorld(bool force) override {
             Object3D::updateMatrixWorld(force);
 
-            Vector3 pos;
-            Vector3 scale;
-            Quaternion quat;
-            matrixWorld->decompose(pos, quat, scale);
+            matrixWorld->decompose(_pos, _quat, _scale);
 
-            Vector3 _orientation;
-            _orientation.set(0, 0, -1).applyQuaternion(quat);
+            _orientation.set(0, 0, -1).applyQuaternion(_quat);
 
-            ma_engine_listener_set_position(&engine, 0, pos.x, pos.y, pos.z);
+            ma_engine_listener_set_position(&engine, 0, _pos.x, _pos.y, _pos.z);
             ma_engine_listener_set_direction(&engine, 0, _orientation.x, _orientation.y, _orientation.z);
         }
 

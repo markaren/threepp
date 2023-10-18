@@ -15,17 +15,11 @@ namespace threepp {
     class Audio {
 
     public:
-        bool autoPlay{false};
-
         Audio(AudioListener& ctx, const std::filesystem::path& file): ctx_(ctx) {
 
             ma_result result = ma_sound_init_from_file(&ctx_.engine, file.string().c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, nullptr, &sound_);
             if (result != MA_SUCCESS) {
                 throw std::runtime_error("[Audio] Failed to load audio file");
-            }
-
-            if (autoPlay) {
-                play();
             }
         }
 
@@ -87,15 +81,11 @@ namespace threepp {
         void updateMatrixWorld(bool force) override {
             Object3D::updateMatrixWorld(force);
 
-            Vector3 pos;
-            Vector3 scale;
-            Quaternion quat;
-            matrixWorld->decompose(pos, quat, scale);
+            matrixWorld->decompose(_pos, _quat, scale);
 
-            Vector3 _orientation;
-            _orientation.set(0, 0, -1).applyQuaternion(quat);
+            _orientation.set(0, 0, -1).applyQuaternion(_quat);
 
-            ma_sound_set_position(&sound_, pos.x, pos.y, pos.z);
+            ma_sound_set_position(&sound_, _pos.x, _pos.y, _pos.z);
             ma_sound_set_direction(&sound_, _orientation.x, _orientation.y, _orientation.z);
         }
     };
