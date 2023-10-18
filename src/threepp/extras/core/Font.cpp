@@ -98,13 +98,22 @@ namespace {
 
 }// namespace
 
-Font::Font(FontData data): data(std::move(data)) {}
+Font::Font(FontData data): data_(std::move(data)) {}
 
+FontData& Font::data() {
+
+    return data_;
+}
+
+const FontData& Font::data() const{
+
+    return data_;
+}
 
 std::vector<Shape> Font::generateShapes(const std::string& text, unsigned int size) const {
 
     std::vector<Shape> shapes;
-    auto paths = createPaths(text, size, data);
+    auto paths = createPaths(text, size, data_);
 
     for (const auto& path : paths) {
 
