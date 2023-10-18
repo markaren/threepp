@@ -11,6 +11,8 @@ SpotLight::SpotLight(const Color& color, std::optional<float> intensity, float d
 
     this->position.copy(Object3D::defaultUp);
     this->updateMatrix();
+
+    this->typeMap_["SpotLight"] = true;
 }
 
 

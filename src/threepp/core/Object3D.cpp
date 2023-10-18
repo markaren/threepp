@@ -1,14 +1,10 @@
 
 #include "threepp/core/Object3D.hpp"
 
-#include "threepp/cameras/Camera.hpp"
-
 #include "threepp/math/MathUtils.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Raycaster.hpp"
-
-#include "threepp/lights/Light.hpp"
 
 using namespace threepp;
 
@@ -177,7 +173,7 @@ void Object3D::lookAt(float x, float y, float z) {
 
     _position.setFromMatrixPosition(*this->matrixWorld);
 
-    if (this->is<Camera>() || this->is<Light>()) {
+    if (this->is("Camera") || this->is("Light")) {
 
         _m1.lookAt(_position, _target, this->up);
 

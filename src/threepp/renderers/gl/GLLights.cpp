@@ -53,13 +53,13 @@ void GLLights::setup(std::vector<Light*>& lights) {
         auto& color = light->color;
         auto intensity = light->intensity;
 
-        if (light->is<AmbientLight>()) {
+        if (light->is("AmbientLight")) {
 
             r += color.r * intensity;
             g += color.g * intensity;
             b += color.b * intensity;
 
-        } else if (light->type() == "LightProbe") {
+        } else if (light->is("LightProbe")) {
 
             auto l = light->as<LightProbe>();
 
@@ -68,8 +68,9 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 state.probe[j].addScaledVector(l->sh.getCoefficients()[j], intensity);
             }
 
-        } else if (auto directionalLight = light->as<DirectionalLight>()) {
+        } else if (light->is("DirectionalLight")) {
 
+            auto directionalLight = light->as<DirectionalLight>();
             auto uniforms = cache_.get(*light);
 
             std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(light->intensity);
@@ -100,8 +101,9 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             ++directionalLength;
 
-        } else if (auto spotLight = light->as<SpotLight>()) {
+        } else if (light->is("SpotLight")) {
 
+            auto spotLight = light->as<SpotLight>();
             auto uniforms = cache_.get(*light);
 
             std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(*spotLight->matrixWorld);
@@ -138,8 +140,9 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             ++spotLength;
 
-        } else if (auto pointLight = light->as<PointLight>()) {
+        } else if (light->is("PointLight")) {
 
+            auto pointLight = light->as<PointLight>();
             auto uniforms = cache_.get(*light);
 
             std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(pointLight->intensity);
@@ -173,8 +176,9 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             ++pointLength;
 
-        } else if (auto hemisphereLight = light->as<HemisphereLight>()) {
+        } else if (light->is("HemisphereLight")) {
 
+            auto hemisphereLight = light->as<HemisphereLight>();
             auto uniforms = cache_.get(*light);
 
             std::get<Color>(uniforms->at("skyColor")).copy(hemisphereLight->color).multiplyScalar(intensity);

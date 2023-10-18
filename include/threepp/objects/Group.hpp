@@ -10,6 +10,8 @@ namespace threepp {
     class Group: public Object3D {
 
     public:
+        Group();
+
         [[nodiscard]] std::string type() const override;
 
         std::shared_ptr<Object3D> clone(bool recursive = true) override;

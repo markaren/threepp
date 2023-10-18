@@ -49,6 +49,8 @@ namespace {
 
 Points::Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
     : geometry_(std::move(geometry)), material_(std::move(material)) {
+
+    this->typeMap_["Points"] = true;
 }
 
 std::string Points::type() const {

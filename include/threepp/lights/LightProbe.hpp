@@ -18,7 +18,10 @@ namespace threepp {
 
     protected:
         explicit LightProbe(SphericalHarmonis3 sh = SphericalHarmonis3(), float intensity = 1)
-            : Light(0xffffff, intensity), sh(std::move(sh)) {}
+            : Light(0xffffff, intensity), sh(std::move(sh)) {
+
+            this->typeMap_["LightProbe"] = true;
+        }
     };
 
 }// namespace threepp

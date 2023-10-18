@@ -12,6 +12,8 @@ PerspectiveCamera::PerspectiveCamera(float fov, float aspect, float near, float 
     : Camera(near, far), fov(fov), aspect(aspect) {
 
     PerspectiveCamera::updateProjectionMatrix();
+
+    this->typeMap_["PerspectiveCamera"] = true;
 }
 
 void PerspectiveCamera::setFocalLength(float focalLength) {

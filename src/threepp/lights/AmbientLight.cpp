@@ -5,7 +5,10 @@ using namespace threepp;
 
 
 AmbientLight::AmbientLight(const Color& color, std::optional<float> intensity)
-    : Light(color, intensity) {}
+    : Light(color, intensity) {
+
+    this->typeMap_["AmbientLight"] = true;
+}
 
 
 std::string AmbientLight::type() const {

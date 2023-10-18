@@ -20,7 +20,10 @@ namespace {
 
 Line::Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
     : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-      material_(material ? std::move(material) : LineBasicMaterial::create()) {}
+      material_(material ? std::move(material) : LineBasicMaterial::create()) {
+
+    this->typeMap_["Line"] = true;
+}
 
 std::string Line::type() const {
 

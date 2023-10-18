@@ -164,13 +164,13 @@ namespace {
 }// namespace
 
 
-Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-    : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-      materials_{material ? std::move(material) : MeshBasicMaterial::create()} {
-}
+Mesh::Mesh(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
+    : Mesh(geometry, std::vector<std::shared_ptr<Material>>{material ? material : MeshBasicMaterial::create()}){}
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
-    : geometry_(std::move(geometry)), materials_{std::move(materials)} {
+    : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()), materials_{std::move(materials)} {
+
+    this->typeMap_["Mesh"] = true;
 }
 
 Mesh::Mesh(Mesh&& other) noexcept: Object3D(std::move(other)) {

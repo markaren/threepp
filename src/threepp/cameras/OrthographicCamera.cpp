@@ -7,6 +7,8 @@ OrthographicCamera::OrthographicCamera(int left, int right, int top, int bottom,
     : Camera(near, far), left(left), right(right), top(top), bottom(bottom) {
 
     OrthographicCamera::updateProjectionMatrix();
+
+    this->typeMap_["OrthographicCamera"] = true;
 }
 
 void OrthographicCamera::setViewOffset(int fullWidth, int fullHeight, int x, int y, int width, int height) {

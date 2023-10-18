@@ -27,6 +27,8 @@ namespace threepp {
 
         bool autoUpdate = true;
 
+        Scene();
+
         static std::shared_ptr<Scene> create();
     };
 

@@ -10,6 +10,8 @@ HemisphereLight::HemisphereLight(const Color& skyColor, const Color& groundColor
 
     position.copy(Object3D::defaultUp);
     updateMatrix();
+
+    this->typeMap_["HemisphereLight"] = true;
 }
 
 

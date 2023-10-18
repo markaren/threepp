@@ -38,7 +38,7 @@ namespace threepp {
         // The inverse of projectionMatrix.
         Matrix4 projectionMatrixInverse;
 
-        Camera() = default;
+        Camera();
         Camera(float near, float far);
         Camera(const Camera&) = delete;
 

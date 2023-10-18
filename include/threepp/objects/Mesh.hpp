@@ -15,7 +15,7 @@ namespace threepp {
     class Mesh: public Object3D, public ObjectWithMorphTargetInfluences {
 
     public:
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
+        Mesh(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material);
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
 
         Mesh(Mesh&& other) noexcept;

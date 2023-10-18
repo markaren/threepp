@@ -152,11 +152,11 @@ namespace threepp {
 
             if (shape) {
 
-                if (mesh.is<InstancedMesh>()) {
+                if (mesh.is("InstancedMesh")) {
 
                     handleInstancedMesh(mesh.as<InstancedMesh>(), mass, std::move(shape), disableDeactivation);
 
-                } else if (mesh.is<Mesh>()) {
+                } else if (mesh.is("Mesh")) {
 
                     handleMesh(&mesh, mass, std::move(shape), disableDeactivation);
                 }

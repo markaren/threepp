@@ -9,7 +9,10 @@ using namespace threepp;
 LineSegments::LineSegments(
         const std::shared_ptr<BufferGeometry>& geometry,
         const std::shared_ptr<Material>& material)
-    : Line(geometry, material) {}
+    : Line(geometry, material) {
+
+    this->typeMap_["LineSegments"] = true;
+}
 
 
 std::string LineSegments::type() const {

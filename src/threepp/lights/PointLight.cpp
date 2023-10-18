@@ -10,7 +10,10 @@ using namespace threepp;
 
 
 PointLight::PointLight(const Color& color, std::optional<float> intensity, float distance, float decay)
-    : Light(color, intensity), LightWithShadow(PointLightShadow::create()), distance(distance), decay(decay) {}
+    : Light(color, intensity), LightWithShadow(PointLightShadow::create()), distance(distance), decay(decay) {
+
+    this->typeMap_["PointLight"] = true;
+}
 
 
 std::string PointLight::type() const {

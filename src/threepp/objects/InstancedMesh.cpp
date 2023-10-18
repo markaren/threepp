@@ -27,6 +27,7 @@ InstancedMesh::InstancedMesh(
       count(count), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
 
     this->frustumCulled = false;
+    this->typeMap_["InstancedMesh"] = true;
 }
 
 

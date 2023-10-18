@@ -49,7 +49,7 @@ struct GLBindingStates::Impl {
             saveCache(geometry, index);
         }
 
-        if (object->is<InstancedMesh>()) {
+        if (object->is("InstancedMesh")) {
 
             updateBuffers = true;
         }

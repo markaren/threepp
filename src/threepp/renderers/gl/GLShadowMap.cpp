@@ -236,7 +236,7 @@ struct GLShadowMap::Impl {
 
         bool visible = object->layers.test(camera->layers);
 
-        if (visible && (object->is<Mesh>() || object->is<Line>() || object->is<Points>())) {
+        if (visible && (object->is("Mesh") || object->is("Line") || object->is("Points"))) {
 
             if ((object->castShadow || (object->receiveShadow && scope->type == ShadowMap::VSM)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
 

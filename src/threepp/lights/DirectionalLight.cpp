@@ -12,6 +12,8 @@ DirectionalLight::DirectionalLight(const Color& color, std::optional<float> inte
 
     this->position.copy(Object3D::defaultUp);
     this->updateMatrix();
+
+    this->typeMap_["DirectionalLight"] = true;
 }
 
 

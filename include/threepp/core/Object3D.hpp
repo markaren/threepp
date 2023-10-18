@@ -245,10 +245,9 @@ namespace threepp {
             return dynamic_cast<T*>(this);
         }
 
-        template<class T>
-        [[nodiscard]] bool is() const {
+        [[nodiscard]] bool is(const std::string& typeName) const {
 
-            return dynamic_cast<const T*>(this) != nullptr;
+            return typeMap_.count(typeName) && typeMap_.at(typeName);
         }
 
         void copy(const Object3D& source, bool recursive = true);
@@ -256,6 +255,9 @@ namespace threepp {
         virtual std::shared_ptr<Object3D> clone(bool recursive = true);
 
         ~Object3D() override;
+
+    protected:
+        std::unordered_map<std::string, bool> typeMap_;
 
     private:
         inline static unsigned int _object3Did{0};

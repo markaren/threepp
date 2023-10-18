@@ -293,7 +293,7 @@ struct GLRenderer::Impl {
             scene = &_emptyScene;
         }
 
-        bool isMesh = object->is<Mesh>();
+        bool isMesh = object->is("Mesh");
         const auto frontFaceCW = (isMesh && object->matrixWorld->determinant() < 0);
 
         auto program = setProgram(camera, scene, material, object);
@@ -378,7 +378,7 @@ struct GLRenderer::Impl {
                 renderer->setMode(GL_TRIANGLES);
             }
 
-        } else if (object->is<Line>()) {
+        } else if (object->is("Line")) {
 
             float lineWidth = 1;
             if (auto lw = material->as<MaterialWithLineWidth>()) {
@@ -387,11 +387,11 @@ struct GLRenderer::Impl {
 
             state.setLineWidth(lineWidth * static_cast<float>(scope.getTargetPixelRatio()));
 
-            if (object->is<LineSegments>()) {
+            if (object->is("LineSegments")) {
 
                 renderer->setMode(GL_LINES);
 
-            } else if (object->is<LineLoop>()) {
+            } else if (object->is("LineLoop")) {
 
                 renderer->setMode(GL_LINE_LOOP);
 
@@ -400,11 +400,11 @@ struct GLRenderer::Impl {
                 renderer->setMode(GL_LINE_STRIP);
             }
 
-        } else if (object->is<Points>()) {
+        } else if (object->is("Points")) {
 
             renderer->setMode(GL_POINTS);
 
-        } else if (object->is<Sprite>()) {
+        } else if (object->is("Sprite")) {
 
             renderer->setMode(GL_TRIANGLES);
         }
@@ -432,16 +432,18 @@ struct GLRenderer::Impl {
 
         if (visible) {
 
-            if (object->is<Group>()) {
+            if (object->is("Group")) {
 
                 groupOrder = object->renderOrder;
 
-            } else if (auto lod = object->as<LOD>()) {
+            } else if (object->is("LOD")) {
 
+                auto lod = object->as<LOD>();
                 if (lod->autoUpdate) lod->update(*camera);
 
-            } else if (auto light = object->as<Light>()) {
+            } else if (object->is("Light")) {
 
+                auto light = object->as<Light>();
                 currentRenderState->pushLight(light);
 
                 if (light->castShadow) {
@@ -449,8 +451,9 @@ struct GLRenderer::Impl {
                     currentRenderState->pushShadow(light);
                 }
 
-            } else if (auto sprite = object->as<Sprite>()) {
+            } else if (object->is("Sprite")) {
 
+                auto sprite = object->as<Sprite>();
                 if (!object->frustumCulled || _frustum.intersectsSprite(*sprite)) {
 
                     if (sortObjects) {
@@ -468,7 +471,7 @@ struct GLRenderer::Impl {
                     }
                 }
 
-            } else if (object->is<Mesh>() || object->is<Line>() || object->is<Points>()) {
+            } else if (object->is("Mesh") || object->is("Line") || object->is("Points")) {
 
                 if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
 
@@ -822,7 +825,7 @@ struct GLRenderer::Impl {
                 isMeshStandardMaterial ||
                 isShaderMaterial) {
 
-                p_uniforms->setValue("isOrthographic", camera->is<OrthographicCamera>());
+                p_uniforms->setValue("isOrthographic", camera->is("OrthographicCamera"));
             }
 
             if (isMeshPhongMaterial ||
@@ -888,7 +891,7 @@ struct GLRenderer::Impl {
             }
         }
 
-        if (material->is<SpriteMaterial>() && object->is<Sprite>()) {
+        if (material->is<SpriteMaterial>() && object->is("Sprite")) {
 
             p_uniforms->setValue("center", object->as<Sprite>()->center);
         }

@@ -3,9 +3,13 @@
 
 using namespace threepp;
 
+Camera::Camera(): Camera(0, 0) {}
 
 Camera::Camera(float near, float far)
-    : near(near), far(far) {}
+    : near(near), far(far) {
+
+    this->typeMap_["Camera"] = true;
+}
 
 void Camera::getWorldDirection(Vector3& target) {
 

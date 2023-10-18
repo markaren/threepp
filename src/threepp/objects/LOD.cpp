@@ -7,6 +7,11 @@
 
 using namespace threepp;
 
+LOD::LOD() {
+
+    this->typeMap_["LOD"] = true;
+}
+
 std::string LOD::type() const {
 
     return "LOD";

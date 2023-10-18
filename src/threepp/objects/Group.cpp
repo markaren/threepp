@@ -5,6 +5,12 @@
 
 using namespace threepp;
 
+Group::Group() {
+
+    typeMap_["Group"] = true;
+}
+
+
 std::string Group::type() const {
 
     return "Group";
