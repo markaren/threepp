@@ -21,6 +21,10 @@ if (BULLET_FOUND)
     add_subdirectory(bullet)
 endif ()
 
+if (imgui_FOUND AND MINIAUDIO_INCLUDE_DIRS)
+    add_subdirectory(audio)
+endif ()
+
 if (THREEPP_BUILD_EXAMPLE_PROJECTS)
     add_subdirectory(projects)
 else ()

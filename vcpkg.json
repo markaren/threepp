@@ -10,6 +10,10 @@
     "stb"
   ],
   "features": {
+    "audio": {
+      "description": "Audio support",
+      "dependencies": ["miniaudio"]
+    },
     "json": {
       "description": "Enable JSON support in library. Required to use Fonts.",
       "dependencies":[
