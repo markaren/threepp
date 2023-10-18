@@ -1,6 +1,8 @@
 
 #include "threepp/objects/Mesh.hpp"
 
+#include "threepp/objects/SkinnedMesh.hpp"
+
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
@@ -119,6 +121,12 @@ namespace {
                     }
                 }
             }
+        }
+
+        if (auto skinned = object->as<SkinnedMesh>()) {
+            skinned->boneTransform(a, _vA);
+            skinned->boneTransform(b, _vB);
+            skinned->boneTransform(c, _vC);
         }
 
         auto intersection = checkIntersection(object, material, raycaster, ray, _vA, _vB, _vC, _intersectionPoint);

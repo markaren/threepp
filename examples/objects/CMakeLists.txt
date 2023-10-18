@@ -15,6 +15,11 @@ target_link_libraries(sprite PRIVATE threepp)
 add_executable(points points.cpp)
 target_link_libraries(points PRIVATE threepp)
 
+if (imgui_FOUND)
+    add_executable(bones bones.cpp)
+    target_link_libraries(bones PRIVATE threepp imgui::imgui)
+endif ()
+
 if (assimp_FOUND)
     add_executable(decal decal.cpp)
     target_link_libraries(decal PRIVATE threepp assimp::assimp)
