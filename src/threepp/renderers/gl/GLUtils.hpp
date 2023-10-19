@@ -9,9 +9,15 @@
 
 namespace threepp::gl {
 
-    inline GLint glGetParameter(GLenum id) {
+    inline GLint glGetParameteri(GLenum id) {
         GLint result;
         glGetIntegerv(id, &result);
+        return result;
+    }
+
+    inline GLfloat glGetParameterf(GLenum id) {
+        GLfloat result;
+        glGetFloatv(id, &result);
         return result;
     }
 

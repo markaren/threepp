@@ -436,7 +436,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     parameters->flatShading ? "#define FLAT_SHADED" : "",
 
                     parameters->skinning ? "#define USE_SKINNING" : "",
-//                    parameters->useVertexTexture ? "#define BONE_TEXTURE" : "",
+                    parameters->useVertexTexture ? "#define BONE_TEXTURE" : "",
 
                     parameters->morphTargets ? "#define USE_MORPHTARGETS" : "",
                     parameters->morphNormals && !parameters->flatShading ? "#define USE_MORPHNORMALS" : "",

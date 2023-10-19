@@ -31,7 +31,8 @@ namespace threepp::gl {
         const int maxFragmentUniforms;
 
         const bool vertexTextures;
-        const bool floatVertexTextures = false;
+        const bool floatFragmentTextures;
+        const bool floatVertexTextures;
 
         const int maxSamples;
 
@@ -62,21 +63,23 @@ namespace threepp::gl {
 
     private:
         GLCapabilities()
-            : maxAnisotropy(0),
+            : maxAnisotropy(static_cast<int>(glGetParameterf(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT))),
 
-              maxTextures(glGetParameter(GL_MAX_TEXTURE_IMAGE_UNITS)),
-              maxVertexTextures(glGetParameter(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS)),
-              maxTextureSize(glGetParameter(GL_MAX_TEXTURE_SIZE)),
-              maxCubemapSize(glGetParameter(GL_MAX_CUBE_MAP_TEXTURE_SIZE)),
+              maxTextures(glGetParameteri(GL_MAX_TEXTURE_IMAGE_UNITS)),
+              maxVertexTextures(glGetParameteri(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS)),
+              maxTextureSize(glGetParameteri(GL_MAX_TEXTURE_SIZE)),
+              maxCubemapSize(glGetParameteri(GL_MAX_CUBE_MAP_TEXTURE_SIZE)),
 
-              maxAttributes(glGetParameter(GL_MAX_VERTEX_ATTRIBS)),
-              maxVertexUniforms(glGetParameter(GL_MAX_VERTEX_UNIFORM_VECTORS)),
-              maxVaryings(glGetParameter(GL_MAX_VARYING_VECTORS)),
-              maxFragmentUniforms(glGetParameter(GL_MAX_FRAGMENT_UNIFORM_VECTORS)),
+              maxAttributes(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
+              maxVertexUniforms(glGetParameteri(GL_MAX_VERTEX_UNIFORM_VECTORS)),
+              maxVaryings(glGetParameteri(GL_MAX_VARYING_VECTORS)),
+              maxFragmentUniforms(glGetParameteri(GL_MAX_FRAGMENT_UNIFORM_VECTORS)),
 
               vertexTextures(maxVertexTextures > 0),
+              floatFragmentTextures(!GLAD_GL_ARB_texture_float),
+              floatVertexTextures(vertexTextures && floatFragmentTextures),
 
-              maxSamples(glGetParameter(GL_MAX_SAMPLES)) {}
+              maxSamples(glGetParameteri(GL_MAX_SAMPLES)) {}
     };
 
 }// namespace threepp::gl
