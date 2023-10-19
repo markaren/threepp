@@ -103,6 +103,8 @@ namespace {
             }
         }
 
+        // Single texture (2D / Cube)
+
         void setValueT1(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);

@@ -881,11 +881,10 @@ struct GLRenderer::Impl {
 
                 if (gl::GLCapabilities::instance().floatVertexTextures) {
 
-                    //TODO
-//                    if (!skeleton->boneTexture) skeleton->computeBoneTexture();
-//
-//                    p_uniforms->setValue("boneTexture", skeleton->boneTexture.get(), &textures);
-//                    p_uniforms->setValue("boneTextureSize", skeleton->boneTextureSize);
+                    if (!skeleton->boneTexture) skeleton->computeBoneTexture();
+
+                    p_uniforms->setValue("boneTexture", skeleton->boneTexture.get(), &textures);
+                    p_uniforms->setValue("boneTextureSize", skeleton->boneTextureSize);
 
                 } else {
 

@@ -113,6 +113,7 @@ void Skeleton::update() {
 
     if (boneTexture) {
 
+        boneTexture->setData(boneMatrices);
         boneTexture->needsUpdate();
     }
 }
@@ -130,18 +131,19 @@ Skeleton& Skeleton::computeBoneTexture() {
     int sizei = math::ceilPowerOfTwo(size);
     sizei = std::max(sizei, 4);
 
-    // TODO
-                auto boneMatrices = std::vector<float>(sizei * sizei * 4);// 4 floats per RGBA pixel
-//                boneMatrices.set(this->boneMatrices);                   // copy current values
-                for (unsigned i = 0; i < this->boneMatrices.size(); ++i) {
-                    boneMatrices[i] = this->boneMatrices[i];
-                }
-    //
-    //            auto boneTexture = DataTexture::create(boneMatrices, sizei, sizei, Format::RGBA, Type::Float);
-    //
-                this->boneMatrices = boneMatrices;
-    //            this->boneTexture = boneTexture;
-    //            this->boneTextureSize = size;
+    auto boneMatrices = std::vector<float>(sizei * sizei * 4);// 4 floats per RGBA pixel
+    //                boneMatrices.set(this->boneMatrices);                   // copy current values
+    for (unsigned i = 0; i < this->boneMatrices.size(); ++i) {
+        boneMatrices[i] = this->boneMatrices[i];
+    }
+
+    auto boneTexture = DataTexture::create(boneMatrices, sizei, sizei);
+    boneTexture->format = Format::RGBA;
+    boneTexture->type = Type::Float;
+
+    this->boneMatrices = boneMatrices;
+    this->boneTexture = boneTexture;
+    this->boneTextureSize = sizei;
 
     return *this;
 }

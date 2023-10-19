@@ -376,7 +376,6 @@ set(sources
         "threepp/objects/Water.cpp"
 
         "threepp/textures/Texture.cpp"
-        "threepp/textures/DataTexture.cpp"
         "threepp/textures/DataTexture3D.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
@@ -391,7 +390,6 @@ set(sources
         "threepp/renderers/gl/GLBackground.cpp"
         "threepp/renderers/gl/GLBindingStates.cpp"
         "threepp/renderers/gl/GLBufferRenderer.cpp"
-        "threepp/renderers/gl/GLCapabilities.cpp"
         "threepp/renderers/gl/GLClipping.cpp"
         "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"
