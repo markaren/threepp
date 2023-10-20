@@ -42,7 +42,7 @@ namespace {
             auto y = (vertex.y + sizing.halfHeight);
 
             auto skinIndex = std::floor(y / sizing.segmentHeight);
-            auto skinWeight = fmod(y, sizing.segmentHeight) / sizing.segmentHeight;
+            auto skinWeight = float(fmod(y, sizing.segmentHeight) / sizing.segmentHeight);
 
             skinIndices.insert(skinIndices.end(), {skinIndex, skinIndex + 1, 0, 0});
             skinWeights.insert(skinWeights.end(), {1.f - skinWeight, skinWeight, 0, 0});
