@@ -32,7 +32,7 @@ namespace {
 
         Vector3 vertex;
 
-        std::vector<int> skinIndices;
+        std::vector<float> skinIndices;
         std::vector<float> skinWeights;
 
         for (unsigned i = 0; i < position->count(); i++) {
@@ -41,14 +41,14 @@ namespace {
 
             auto y = (vertex.y + sizing.halfHeight);
 
-            auto skinIndex = static_cast<int>(std::floor(y / sizing.segmentHeight));
+            auto skinIndex = std::floor(y / sizing.segmentHeight);
             auto skinWeight = fmod(y, sizing.segmentHeight) / sizing.segmentHeight;
 
             skinIndices.insert(skinIndices.end(), {skinIndex, skinIndex + 1, 0, 0});
             skinWeights.insert(skinWeights.end(), {1.f - skinWeight, skinWeight, 0, 0});
         }
 
-        geometry->setAttribute("skinIndex", IntBufferAttribute::create(skinIndices, 4));
+        geometry->setAttribute("skinIndex", FloatBufferAttribute::create(skinIndices, 4));
         geometry->setAttribute("skinWeight", FloatBufferAttribute::create(skinWeights, 4));
 
         return geometry;
