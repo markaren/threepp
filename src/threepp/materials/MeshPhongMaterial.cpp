@@ -89,7 +89,15 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
         } else {
             color.copy(std::get<Color>(value));
         }
+        return true;
 
+    } else if (key == "emissive") {
+
+        if (std::holds_alternative<int>(value)) {
+            emissive = std::get<int>(value);
+        } else {
+            emissive.copy(std::get<Color>(value));
+        }
         return true;
 
     } else if (key == "wireframe") {

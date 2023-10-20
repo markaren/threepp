@@ -169,9 +169,18 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         } else {
 
-            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                             static_cast<int>(image.width), static_cast<int>(image.height),
-                             glFormat, glType, texture.image->data().data());
+            if (glType == GL_UNSIGNED_BYTE) {
+                state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                                 static_cast<int>(image.width), static_cast<int>(image.height),
+                                 glFormat, glType, texture.image->data().data());
+            } else if (glType == GL_FLOAT) {
+                state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                                 static_cast<int>(image.width), static_cast<int>(image.height),
+                                 glFormat, glType, texture.image->data<float>().data());
+            } else {
+
+                std::cerr << "Unnsupported gltype=" << glType << std::endl;
+            }
             textureProperties->maxMipLevel = 0;
         }
     }

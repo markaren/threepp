@@ -515,6 +515,13 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
                     "#endif",
 
+                    "#ifdef USE_SKINNING",
+
+                    "	attribute vec4 skinIndex;",
+                    "	attribute vec4 skinWeight;",
+
+                    "#endif",
+
                     "\n"
 
             };

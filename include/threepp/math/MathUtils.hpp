@@ -7,7 +7,7 @@
 
 namespace threepp::math {
 
-    const float LN2 = 0.6931471805599453094f;
+    const float LN2 = 0.6931471805599453094172321214581765680755001343602552541206800094;
     const float PI = 3.14159265358979323846f;// 2.f * std::acos(0.f)
     const float TWO_PI = 6.28318530718f;
 

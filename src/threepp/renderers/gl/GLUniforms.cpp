@@ -103,6 +103,8 @@ namespace {
             }
         }
 
+        // Single texture (2D / Cube)
+
         void setValueT1(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
             glUniform1i(addr, unit);
@@ -312,6 +314,7 @@ namespace {
                     return [&](const UniformValue& value, GLTextures*) {
                         std::visit(overloaded{
                                            [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                                           [&](std::vector<float> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, arg.data()); },
                                            [&](std::vector<Matrix4> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
                                            [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
                                    value);
