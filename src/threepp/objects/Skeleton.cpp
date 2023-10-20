@@ -1,6 +1,7 @@
 
 #include "threepp/objects/Skeleton.hpp"
 
+#include <cmath>
 #include <iostream>
 
 using namespace threepp;
