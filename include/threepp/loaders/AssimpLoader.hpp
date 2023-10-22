@@ -70,10 +70,27 @@ namespace threepp {
             return tex;
         }
 
+        void setTransform(Object3D& obj, const aiMatrix4x4& t) {
+            aiVector3t<float> pos;
+            aiQuaterniont<float> quat;
+            aiVector3t<float> scale;
+            t.Decompose(scale, quat, pos);
+
+            Matrix4 m;
+            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
+            m.setPosition({pos.x, pos.y, pos.z});
+
+            obj.applyMatrix4(m);
+            obj.scale.set(scale.x, scale.y, scale.z);
+        }
+
         void parseNodes(const std::filesystem::path& path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 
             auto group = Group::create();
             group->name = aiNode->mName.C_Str();
+            setTransform(*group, aiNode->mTransformation);
+            parent.add(group);
+
 
             for (unsigned i = 0; i < aiNode->mNumMeshes; ++i) {
                 auto geometry = BufferGeometry::create();
@@ -230,26 +247,8 @@ namespace threepp {
                     }
                 }
 
-                // let users decide to enable?
-//                material->morphTargets = !geometry->getMorphAttributes().empty();
-
                 group->add(mesh);
             }
-
-            aiVector3t<float> pos;
-            aiQuaterniont<float> quat;
-            aiVector3t<float> scale;
-            auto t = aiNode->mTransformation;
-            t.Decompose(scale, quat, pos);
-
-            Matrix4 m;
-            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
-            m.setPosition({pos.x, pos.y, pos.z});
-
-            group->applyMatrix4(m);
-            group->scale.set(scale.x, scale.y, scale.z);
-
-            parent.add(group);
 
             for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
                 parseNodes(path, aiScene, aiNode->mChildren[i], *group);
