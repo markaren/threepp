@@ -212,8 +212,8 @@ namespace threepp {
 
                         if (aiMesh->HasFaces()) {
                             auto numFaces = aiMesh->mNumFaces;
-                            for (unsigned j = 0; j < numFaces; ++j) {
-                                auto face = aiMesh->mFaces[j];
+                            for (unsigned k = 0; k < numFaces; ++k) {
+                                auto face = aiMesh->mFaces[k];
                                 auto numIndices = face.mNumIndices;
                                 for (unsigned n = 0; n < numIndices; ++n) {
                                     auto vertexIndex = face.mIndices[n];
