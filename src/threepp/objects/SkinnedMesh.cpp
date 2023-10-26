@@ -13,9 +13,6 @@ namespace {
     Vector3 _vector;
     Matrix4 _matrix;
 
-    Matrix4 _defaultBindMatrix;
-    Matrix4 _defaultBindMatrixInverse;
-
 }// namespace
 
 

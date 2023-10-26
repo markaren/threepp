@@ -40,6 +40,10 @@ namespace threepp {
 
             return std::make_shared<SkinnedMesh>(geometry, material);
         }
+
+    private:
+        Matrix4 _defaultBindMatrix;
+        Matrix4 _defaultBindMatrixInverse;
     };
 
 }// namespace threepp
