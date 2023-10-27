@@ -24,10 +24,7 @@ namespace threepp {
         std::shared_ptr<DataTexture> boneTexture{nullptr};
         int boneTextureSize{0};
 
-        [[nodiscard]] std::string uuid() const {
-
-            return uuid_;
-        }
+        [[nodiscard]] std::string uuid() const;
 
         void init();
 
@@ -45,12 +42,13 @@ namespace threepp {
 
         ~Skeleton();
 
-        static std::shared_ptr<Skeleton> create(const std::vector<std::shared_ptr<Bone>>& bones);
+        static std::shared_ptr<Skeleton> create(const std::vector<std::shared_ptr<Bone>>& bones,
+                                                const std::vector<Matrix4>& boneInverses = {});
 
     private:
         std::string uuid_;
 
-        Skeleton(const std::vector<std::shared_ptr<Bone>>& bones);
+        Skeleton(const std::vector<std::shared_ptr<Bone>>& bones, const std::vector<Matrix4>& boneInverses);
 
         friend class SkinnedMesh;
     };

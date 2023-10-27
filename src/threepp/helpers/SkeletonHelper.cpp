@@ -65,6 +65,11 @@ SkeletonHelper::SkeletonHelper(Object3D& object)
     this->matrix = object.matrixWorld;
 }
 
+const std::vector<Bone*>& SkeletonHelper::getBones() const {
+
+    return bones;
+}
+
 void SkeletonHelper::updateMatrixWorld(bool force) {
 
     auto position = geometry_->getAttribute<float>("position");

@@ -14,6 +14,8 @@ namespace threepp {
     public:
         explicit SkeletonHelper(Object3D& skeleton);
 
+        const std::vector<Bone*>& getBones() const;
+
         void updateMatrixWorld(bool force) override;
 
         static std::shared_ptr<SkeletonHelper> create(Object3D& skeleton) {
