@@ -100,6 +100,16 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
         }
         return true;
 
+    } else if (key == "emissiveIntensity") {
+
+        emissiveIntensity = std::get<float>(value);
+        return true;
+
+    } else if (key == "emissiveMap") {
+
+        emissiveMap = std::get<std::shared_ptr<Texture>>(value);
+        return true;
+
     } else if (key == "wireframe") {
 
         wireframe = std::get<bool>(value);
