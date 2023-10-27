@@ -53,21 +53,17 @@ int main() {
     //
 
     AssimpLoader loader;
-    //    auto gltf = loader.load("data/models/gltf/SimpleSkinning.gltf");
+    //        auto gltf = loader.load("data/models/gltf/SimpleSkinning.gltf");
     auto gltf = loader.load("data/models/gltf/Soldier.glb");
     gltf->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
-        m.material()->opacity = 0.6;
-        m.material()->transparent = true;
     });
-//    gltf->position.y = -10;
-    gltf->scale *= 5;
     scene.add(gltf);
 
     auto skeletonHelper = SkeletonHelper::create(*gltf);
     skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
-    scene.add(skeletonHelper);
+    gltf->add(skeletonHelper);
 
     //
 
@@ -92,8 +88,8 @@ int main() {
 
         auto time = clock.getElapsedTime();
         for (auto i = 0; i < bones.size(); i++) {
-            bones[i]->rotation.x = std::sin(time) * 5 / float(bones.size());
+            bones[i]->rotation.y = std::sin(time) * 5 / float(bones.size());
+            bones[i]->updateMatrixWorld();
         }
-
     });
 }

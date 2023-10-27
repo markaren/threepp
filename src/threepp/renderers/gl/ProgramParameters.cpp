@@ -157,7 +157,7 @@ ProgramParameters::ProgramParameters(
     sizeAttenuation = sizeMaterial ? sizeMaterial->sizeAttenuation : false;
 
     skinning = object->is<SkinnedMesh>();
-    maxBones = 5;    // TODO
+    maxBones = 64;    // TODO
     useVertexTexture = GLCapabilities::instance().floatVertexTextures;
 
     if (auto m = material->as<MaterialWithMorphTargets>()) {
