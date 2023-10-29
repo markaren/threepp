@@ -11,9 +11,10 @@ int main() {
     Canvas canvas("Simple skinning", {{"aa", 8}});
     GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
+    renderer.shadowMap().type = threepp::ShadowMap::PFCSoft;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1, 10000);
-    camera.position.set(18, 6, -18);
+    camera.position.set(0, 6, -10);
 
     Scene scene;
     scene.background = Color(0xa0a0a0);
@@ -44,33 +45,50 @@ int main() {
     auto dirLight = DirectionalLight::create(0xffffff, 0.8f);
     dirLight->position.set(0, 20, 10);
     dirLight->castShadow = true;
-    dirLight->shadow->camera->as<OrthographicCamera>()->top = 18;
-    dirLight->shadow->camera->as<OrthographicCamera>()->bottom = -10;
-    dirLight->shadow->camera->as<OrthographicCamera>()->left = -12;
-    dirLight->shadow->camera->as<OrthographicCamera>()->right = 12;
     scene.add(dirLight);
 
     //
 
     AssimpLoader loader;
-    //        auto gltf = loader.load("data/models/gltf/SimpleSkinning.gltf");
-    auto gltf = loader.load("data/models/gltf/Soldier.glb");
-    gltf->traverseType<Mesh>([](Mesh& m) {
+
+    auto soldier = loader.load("data/models/gltf/Soldier.glb");
+    soldier->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
     });
-    scene.add(gltf);
+    scene.add(soldier);
+    soldier->scale *= 2;
+    soldier->position.x = -2;
 
-    auto skeletonHelper = SkeletonHelper::create(*gltf);
-    skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
-    gltf->add(skeletonHelper);
+    auto skeletonHelperSoldier = SkeletonHelper::create(*soldier);
+    skeletonHelperSoldier->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene.add(skeletonHelperSoldier);
+
+    //
+
+    auto stormTropper = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
+    stormTropper->traverseType<Mesh>([](Mesh& m) {
+        m.receiveShadow = true;
+        m.castShadow = true;
+
+        if (auto mat = m.material()->as<MaterialWithMap>()) {
+            mat->map->wrapS = TextureWrapping::Repeat;
+            mat->map->wrapT = TextureWrapping::Repeat;
+        }
+    });
+    scene.add(stormTropper);
+    stormTropper->scale *= 0.6;
+    stormTropper->position.x = 2;
+
+    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTropper);
+    skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene.add(skeletonHelperTrooper);
 
     //
 
     OrbitControls controls{camera, canvas};
-    //    controls.enablePan = false;
-    //    controls.minDistance = 5;
-    //    controls.maxDistance = 50;
+    controls.minDistance = 2;
+    controls.maxDistance = 20;
 
     //
 
@@ -80,16 +98,19 @@ int main() {
         renderer.setSize(size);
     });
 
-    auto& bones = skeletonHelper->getBones();
+    auto& soldierBones = skeletonHelperSoldier->getBones();
+    auto& trooperBones = skeletonHelperTrooper->getBones();
 
     Clock clock;
     canvas.animate([&] {
         renderer.render(scene, camera);
 
         auto time = clock.getElapsedTime();
-        for (auto i = 0; i < bones.size(); i++) {
-            bones[i]->rotation.y = std::sin(time) * 5 / float(bones.size());
-            bones[i]->updateMatrixWorld();
+        for (auto i = 0; i < soldierBones.size(); i++) {
+            soldierBones[i]->rotation.y = std::sin(time) * 5 / float(soldierBones.size());
+        }
+        for (auto i = 0; i < trooperBones.size(); i++) {
+            trooperBones[i]->rotation.y = std::sin(time) * 5 / float(trooperBones.size());
         }
     });
 }

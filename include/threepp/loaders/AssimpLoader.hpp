@@ -61,6 +61,7 @@ namespace threepp {
             preParse(info, aiScene, aiScene->mRootNode);
 
             auto group = Group::create();
+            group->name = path.filename().stem().string();
             parseNodes(info, aiScene, aiScene->mRootNode, *group);
 
             return group;
@@ -81,6 +82,19 @@ namespace threepp {
             group->name = nodeName;
             detail::setTransform(*group, aiNode->mTransformation);
             parent.add(group);
+            group->updateWorldMatrix(true, true);
+
+            auto meshes = parseNodeMeshes(info, aiScene, aiNode);
+            for (const auto& mesh : meshes) group->add(mesh);
+
+            for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
+                parseNodes(info, aiScene, aiNode->mChildren[i], *group);
+            }
+        }
+
+        std::vector<std::shared_ptr<Mesh>> parseNodeMeshes(const SceneInfo& info, const aiScene* aiScene, const aiNode* aiNode) {
+
+            std::vector<std::shared_ptr<Mesh>> children;
 
             for (unsigned i = 0; i < aiNode->mNumMeshes; ++i) {
 
@@ -99,15 +113,11 @@ namespace threepp {
                     geometry->setAttribute("skinIndex", FloatBufferAttribute::create(boneData.boneIndices, 4));
                     geometry->setAttribute("skinWeight", FloatBufferAttribute::create(boneData.boneWeights, 4));
 
-                    auto skeleton = Skeleton::create(boneData.bones, boneData.boneInverses);
-//                    skeleton->pose();
-
                     auto skinnedMesh = SkinnedMesh::create(geometry, material);
                     skinnedMesh->normalizeSkinWeights();
 
-                    Matrix4 bindMatrix = detail::aiMatrixToMatrix4(aiNode->mTransformation);
+                    auto skeleton = Skeleton::create(boneData.bones, boneData.boneInverses);
                     skinnedMesh->bind(skeleton, Matrix4());
-//                    skinnedMesh->bindMode = SkinnedMesh::BindMode::Detached;
 
                     mesh = skinnedMesh;
                 } else {
@@ -178,13 +188,10 @@ namespace threepp {
                         mesh->morphTargetInfluences().emplace_back();
                     }
                 }
-
-                group->add(mesh);
+                children.emplace_back(mesh);
             }
 
-            for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
-                parseNodes(info, aiScene, aiNode->mChildren[i], *group);
-            }
+            return children;
         }
 
         struct BoneData {
@@ -205,9 +212,6 @@ namespace threepp {
 
             [[nodiscard]] bool hasSkeleton(unsigned int meshIndex) const {
                 return boneData.count(meshIndex);
-//                return std::find_if(boneData.begin(), boneData.end(), [meshIndex](const auto& item) {
-//                    return item.meshIndex == meshIndex;
-//                }) != boneData.end();
             }
 
             [[nodiscard]] std::shared_ptr<Bone> getBone(const std::string& name) const {
@@ -237,11 +241,16 @@ namespace threepp {
                     for (auto j = 0; j < aiMesh->mNumBones; j++) {
 
                         const auto aiBone = aiMesh->mBones[j];
+                        std::string boneName(aiBone->mName.data);
 
-                        auto bone = Bone::create();
-                        bone->name = "Bone:" + std::string(aiBone->mName.data);
+                        std::shared_ptr<Bone> bone;
+                        if (auto oldBone = info.getBone(boneName)) {
+                            bone = oldBone;
+                        } else {
+                            bone = Bone::create();
+                            bone->name = "Bone:" + boneName;
+                        }
 
-//                        if (!data.bones.empty()) data.bones.back()->add(bone);
                         data.bones.emplace_back(bone);
 
                         data.boneInverses.emplace_back(detail::aiMatrixToMatrix4(aiBone->mOffsetMatrix));

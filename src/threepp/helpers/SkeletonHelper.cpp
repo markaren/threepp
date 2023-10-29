@@ -63,6 +63,7 @@ SkeletonHelper::SkeletonHelper(Object3D& object)
     m->transparent = true;
 
     this->matrix = object.matrixWorld;
+    this->matrixAutoUpdate = false;
 }
 
 const std::vector<Bone*>& SkeletonHelper::getBones() const {
