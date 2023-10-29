@@ -51,7 +51,7 @@ namespace threepp {
     public:
         std::shared_ptr<Group> load(const std::filesystem::path& path) {
 
-            auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcess_PopulateArmatureData);
+            auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
             if (!aiScene) {
                 throw std::runtime_error(importer_.GetErrorString());
