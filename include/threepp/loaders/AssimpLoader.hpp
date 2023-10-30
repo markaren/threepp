@@ -12,39 +12,11 @@
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
-#include <array>
 #include <filesystem>
 #include <sstream>
 #include <utility>
 
 namespace threepp {
-
-    namespace detail {
-
-        Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
-            Matrix4 m;
-            m.set(t.a1, t.a2, t.a3, t.a4,
-                  t.b1, t.b2, t.b3, t.b4,
-                  t.c1, t.c2, t.c3, t.c4,
-                  t.d1, t.d2, t.d3, t.d4);
-
-            return m;
-        }
-
-        void setTransform(Object3D& obj, const aiMatrix4x4& t) {
-            aiVector3t<float> pos;
-            aiQuaterniont<float> quat;
-            aiVector3t<float> scale;
-            t.Decompose(scale, quat, pos);
-
-            Matrix4 m;
-            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
-            m.setPosition({pos.x, pos.y, pos.z});
-
-            obj.applyMatrix4(m);
-            obj.scale.set(scale.x, scale.y, scale.z);
-        }
-    }// namespace detail
 
     class AssimpLoader {
 
@@ -80,9 +52,8 @@ namespace threepp {
             std::shared_ptr<Object3D> group = info.getBone(nodeName);
             if (!group) group = Group::create();
             group->name = nodeName;
-            detail::setTransform(*group, aiNode->mTransformation);
+            setTransform(*group, aiNode->mTransformation);
             parent.add(group);
-            group->updateWorldMatrix(true, true);
 
             auto meshes = parseNodeMeshes(info, aiScene, aiNode);
             for (const auto& mesh : meshes) group->add(mesh);
@@ -253,7 +224,7 @@ namespace threepp {
 
                         data.bones.emplace_back(bone);
 
-                        data.boneInverses.emplace_back(detail::aiMatrixToMatrix4(aiBone->mOffsetMatrix));
+                        data.boneInverses.emplace_back(aiMatrixToMatrix4(aiBone->mOffsetMatrix));
 
                         for (auto k = 0; k < aiBone->mNumWeights; k++) {
                             const auto aiWeight = aiBone->mWeights[k];
@@ -436,6 +407,30 @@ namespace threepp {
             }
 
             return tex;
+        }
+
+        Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
+            Matrix4 m;
+            m.set(t.a1, t.a2, t.a3, t.a4,
+                  t.b1, t.b2, t.b3, t.b4,
+                  t.c1, t.c2, t.c3, t.c4,
+                  t.d1, t.d2, t.d3, t.d4);
+
+            return m;
+        }
+
+        void setTransform(Object3D& obj, const aiMatrix4x4& t) {
+            aiVector3t<float> pos;
+            aiQuaterniont<float> quat;
+            aiVector3t<float> scale;
+            t.Decompose(scale, quat, pos);
+
+            Matrix4 m;
+            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
+            m.setPosition({pos.x, pos.y, pos.z});
+
+            obj.applyMatrix4(m);
+            obj.scale.set(scale.x, scale.y, scale.z);
         }
     };
 
