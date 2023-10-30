@@ -5,6 +5,14 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
+        "threepp/animation/AnimationAction.hpp"
+        "threepp/animation/AnimationClip.hpp"
+        "threepp/animation/AnimationMixer.hpp"
+        "threepp/animation/AnimationUtils.hpp"
+        "threepp/animation/KeyframeTrack.hpp"
+        "threepp/animation/PropertyBinding.hpp"
+        "threepp/animation/PropertyMixer.hpp"
+
         "threepp/canvas/Canvas.hpp"
         "threepp/canvas/WindowSize.hpp"
 
@@ -233,6 +241,12 @@ set(privateHeaders
         )
 
 set(sources
+
+        "threepp/animation/AnimationAction.cpp"
+        "threepp/animation/AnimationClip.cpp"
+        "threepp/animation/AnimationMixer.cpp"
+        "threepp/animation/KeyframeTrack.cpp"
+        "threepp/animation/PropertyMixer.cpp"
 
         "threepp/canvas/Canvas.cpp"
 
