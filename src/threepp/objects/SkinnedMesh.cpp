@@ -17,11 +17,7 @@ namespace {
 
 
 SkinnedMesh::SkinnedMesh(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
-    : Mesh(geometry, material) {
-
-    bindMatrix = &_defaultBindMatrix;
-    bindMatrixInverse = &_defaultBindMatrixInverse;
-}
+    : Mesh(geometry, material) {}
 
 
 std::string SkinnedMesh::type() const {
@@ -29,7 +25,7 @@ std::string SkinnedMesh::type() const {
     return "SkinnedMesh";
 }
 
-void SkinnedMesh::bind(const std::shared_ptr<Skeleton>& skeleton, Matrix4* bindMatrix) {
+void SkinnedMesh::bind(const std::shared_ptr<Skeleton>& skeleton, std::optional<Matrix4> bindMatrix) {
 
     this->skeleton = skeleton;
 
@@ -39,11 +35,11 @@ void SkinnedMesh::bind(const std::shared_ptr<Skeleton>& skeleton, Matrix4* bindM
 
         this->skeleton->calculateInverses();
 
-        bindMatrix = this->matrixWorld.get();
+        bindMatrix = *this->matrixWorld;
     }
 
-    this->bindMatrix->copy(*bindMatrix);
-    this->bindMatrixInverse->copy(*bindMatrix).invert();
+    this->bindMatrix.copy(*bindMatrix);
+    this->bindMatrixInverse.copy(*bindMatrix).invert();
 }
 
 void SkinnedMesh::pose() const {
@@ -83,9 +79,9 @@ void SkinnedMesh::updateMatrixWorld(bool force) {
     Object3D::updateMatrixWorld(force);
 
     if (this->bindMode == BindMode::Attached) {
-        this->bindMatrixInverse->copy(*this->matrixWorld).invert();
+        this->bindMatrixInverse.copy(*this->matrixWorld).invert();
     } else {
-        this->bindMatrixInverse->copy(*this->bindMatrix).invert();
+        this->bindMatrixInverse.copy(this->bindMatrix).invert();
     }
 }
 
@@ -95,7 +91,7 @@ void SkinnedMesh::boneTransform(size_t index, Vector3& target) {
     geometry_->getAttribute<float>("skinWeight")->setFromBufferAttribute(_skinWeight, index);
 
     geometry_->getAttribute<float>("position")->setFromBufferAttribute(_basePosition, index);
-    _basePosition.applyMatrix4(*this->bindMatrix);
+    _basePosition.applyMatrix4(this->bindMatrix);
 
     target.set(0, 0, 0);
 
@@ -113,5 +109,5 @@ void SkinnedMesh::boneTransform(size_t index, Vector3& target) {
         }
     }
 
-    target.applyMatrix4(*this->bindMatrixInverse);
+    target.applyMatrix4(this->bindMatrixInverse);
 }

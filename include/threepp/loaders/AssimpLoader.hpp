@@ -6,6 +6,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -13,6 +14,7 @@
 
 #include <filesystem>
 #include <sstream>
+#include <utility>
 
 namespace threepp {
 
@@ -27,8 +29,12 @@ namespace threepp {
                 throw std::runtime_error(importer_.GetErrorString());
             }
 
+            SceneInfo info(path);
+            preParse(info, aiScene, aiScene->mRootNode);
+
             auto group = Group::create();
-            parseNodes(path, aiScene, aiScene->mRootNode, *group);
+            group->name = path.filename().stem().string();
+            parseNodes(info, aiScene, aiScene->mRootNode, *group);
 
             return group;
         }
@@ -37,22 +43,58 @@ namespace threepp {
         TextureLoader texLoader_;
         Assimp::Importer importer_;
 
-        void parseNodes(const std::filesystem::path& path, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
+        struct SceneInfo;
 
-            auto group = Group::create();
-            group->name = aiNode->mName.C_Str();
+        void parseNodes(const SceneInfo& info, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
+
+            std::string nodeName(aiNode->mName.data);
+
+            std::shared_ptr<Object3D> group = info.getBone(nodeName);
+            if (!group) group = Group::create();
+            group->name = nodeName;
             setTransform(*group, aiNode->mTransformation);
             parent.add(group);
 
+            auto meshes = parseNodeMeshes(info, aiScene, aiNode);
+            for (const auto& mesh : meshes) group->add(mesh);
+
+            for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
+                parseNodes(info, aiScene, aiNode->mChildren[i], *group);
+            }
+        }
+
+        std::vector<std::shared_ptr<Mesh>> parseNodeMeshes(const SceneInfo& info, const aiScene* aiScene, const aiNode* aiNode) {
+
+            std::vector<std::shared_ptr<Mesh>> children;
+
             for (unsigned i = 0; i < aiNode->mNumMeshes; ++i) {
 
-                auto aiMesh = aiScene->mMeshes[aiNode->mMeshes[i]];
+                const auto meshIndex = aiNode->mMeshes[i];
+                const auto aiMesh = aiScene->mMeshes[meshIndex];
 
                 auto geometry = BufferGeometry::create();
                 auto material = MeshStandardMaterial::create();
-                setupMaterial(path, aiScene, aiMesh, *material);
+                setupMaterial(info.path, aiScene, aiMesh, *material);
 
-                auto mesh = Mesh::create(geometry, material);
+                std::shared_ptr<Mesh> mesh;
+                if (info.hasSkeleton(meshIndex)) {
+
+                    const auto boneData = info.boneData.at(meshIndex);
+
+                    geometry->setAttribute("skinIndex", FloatBufferAttribute::create(boneData.boneIndices, 4));
+                    geometry->setAttribute("skinWeight", FloatBufferAttribute::create(boneData.boneWeights, 4));
+
+                    auto skinnedMesh = SkinnedMesh::create(geometry, material);
+                    skinnedMesh->normalizeSkinWeights();
+
+                    auto skeleton = Skeleton::create(boneData.bones, boneData.boneInverses);
+                    skinnedMesh->bind(skeleton, Matrix4());
+
+                    mesh = skinnedMesh;
+                } else {
+
+                    mesh = Mesh::create(geometry, material);
+                }
                 mesh->name = aiMesh->mName.C_Str();
 
                 std::vector<unsigned int> indices;
@@ -117,12 +159,150 @@ namespace threepp {
                         mesh->morphTargetInfluences().emplace_back();
                     }
                 }
+                children.emplace_back(mesh);
+            }
 
-                group->add(mesh);
+            return children;
+        }
+
+        struct BoneData {
+
+            std::vector<float> boneIndices;
+            std::vector<float> boneWeights;
+
+            std::vector<Matrix4> boneInverses;
+            std::vector<std::shared_ptr<Bone>> bones;
+        };
+
+        struct SceneInfo {
+
+            std::filesystem::path path;
+            std::unordered_map<unsigned int, BoneData> boneData;
+
+            explicit SceneInfo(std::filesystem::path path): path(std::move(path)) {}
+
+            [[nodiscard]] bool hasSkeleton(unsigned int meshIndex) const {
+                return boneData.count(meshIndex);
+            }
+
+            [[nodiscard]] std::shared_ptr<Bone> getBone(const std::string& name) const {
+                for (const auto& [idx, data] : boneData) {
+                    for (const auto& bone : data.bones) {
+                        if (bone->name.substr(5) == name) {
+                            return bone;
+                        }
+                    }
+                }
+                return nullptr;
+            }
+        };
+
+        void preParse(SceneInfo& info, const aiScene* aiScene, aiNode* aiNode) {
+
+            for (unsigned i = 0; i < aiNode->mNumMeshes; ++i) {
+                auto meshIndex = aiNode->mMeshes[i];
+                auto aiMesh = aiScene->mMeshes[meshIndex];
+
+                if (aiMesh->HasBones()) {
+                    BoneData data;
+
+                    std::vector<std::vector<float>> boneIndices;
+                    std::vector<std::vector<float>> boneWeights;
+
+                    for (auto j = 0; j < aiMesh->mNumBones; j++) {
+
+                        const auto aiBone = aiMesh->mBones[j];
+                        std::string boneName(aiBone->mName.data);
+
+                        std::shared_ptr<Bone> bone;
+                        if (auto oldBone = info.getBone(boneName)) {
+                            bone = oldBone;
+                        } else {
+                            bone = Bone::create();
+                            bone->name = "Bone:" + boneName;
+                        }
+
+                        data.bones.emplace_back(bone);
+
+                        data.boneInverses.emplace_back(aiMatrixToMatrix4(aiBone->mOffsetMatrix));
+
+                        for (auto k = 0; k < aiBone->mNumWeights; k++) {
+                            const auto aiWeight = aiBone->mWeights[k];
+
+                            while (boneWeights.size() <= aiWeight.mVertexId) boneWeights.emplace_back();
+                            while (boneIndices.size() <= aiWeight.mVertexId) boneIndices.emplace_back();
+
+                            boneWeights[aiWeight.mVertexId].emplace_back(aiWeight.mWeight);
+                            boneIndices[aiWeight.mVertexId].emplace_back(static_cast<float>(j));
+                        }
+                    }
+
+                    for (unsigned j = 0; j < boneIndices.size(); j++) {
+
+                        sortWeights(boneIndices[j], boneWeights[j]);
+                    }
+
+                    for (unsigned j = 0; j < boneWeights.size(); j++) {
+
+                        for (unsigned k = 0; k < 4; k++) {
+
+                            if (!boneWeights[j].empty() && !boneIndices[j].empty()) {
+
+                                const auto weight = boneWeights[j][k];
+                                const auto index = boneIndices[j][k];
+
+                                data.boneWeights.emplace_back(weight);
+                                data.boneIndices.emplace_back(index);
+
+                            } else {
+
+                                data.boneWeights.emplace_back(0.f);
+                                data.boneIndices.emplace_back(0.f);
+                            }
+                        }
+                    }
+                    info.boneData[meshIndex] = data;
+                }
             }
 
             for (unsigned i = 0; i < aiNode->mNumChildren; ++i) {
-                parseNodes(path, aiScene, aiNode->mChildren[i], *group);
+                preParse(info, aiScene, aiNode->mChildren[i]);
+            }
+        }
+
+
+        static void sortWeights(std::vector<float>& indexes, std::vector<float>& weights) {
+
+            std::vector<std::pair<float, float>> pairs;
+
+            for (unsigned i = 0; i < indexes.size(); i++) {
+
+                pairs.emplace_back(indexes[i], weights[i]);
+            }
+
+            std::stable_sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) {
+                return b.second < a.second;
+            });
+
+            while (pairs.size() < 4) pairs.emplace_back(0.f, 0.f);
+            while (pairs.size() > 4) pairs.pop_back();
+
+            float sum = 0;
+            for (unsigned i = 0; i < 4; i++) {
+
+                sum += pairs[i].second * pairs[i].second;
+            }
+            sum = std::sqrt(sum);
+
+            for (unsigned i = 0; i < 4; i++) {
+
+                pairs[i].second = pairs[i].second / sum;
+
+                while (indexes.size() <= i) indexes.emplace_back();
+                while (weights.size() <= i) weights.emplace_back();
+
+                indexes[i] = pairs[i].first;
+                weights[i] = pairs[i].second;
             }
         }
 
@@ -227,6 +407,16 @@ namespace threepp {
             }
 
             return tex;
+        }
+
+        Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
+            Matrix4 m;
+            m.set(t.a1, t.a2, t.a3, t.a4,
+                  t.b1, t.b2, t.b3, t.b4,
+                  t.c1, t.c2, t.c3, t.c4,
+                  t.d1, t.d2, t.d3, t.d4);
+
+            return m;
         }
 
         void setTransform(Object3D& obj, const aiMatrix4x4& t) {

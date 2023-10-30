@@ -17,8 +17,8 @@ namespace threepp {
         };
 
         BindMode bindMode{BindMode::Attached};
-        Matrix4* bindMatrix = nullptr;
-        Matrix4* bindMatrixInverse = nullptr;
+        Matrix4 bindMatrix;
+        Matrix4 bindMatrixInverse;
 
         std::shared_ptr<Skeleton> skeleton = nullptr;
 
@@ -26,7 +26,7 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
-        void bind(const std::shared_ptr<Skeleton>& skeleton, Matrix4* bindMatrix = nullptr);
+        void bind(const std::shared_ptr<Skeleton>& skeleton, std::optional<Matrix4> bindMatrix = {});
 
         void pose() const;
 
@@ -40,10 +40,6 @@ namespace threepp {
 
             return std::make_shared<SkinnedMesh>(geometry, material);
         }
-
-    private:
-        Matrix4 _defaultBindMatrix;
-        Matrix4 _defaultBindMatrixInverse;
     };
 
 }// namespace threepp

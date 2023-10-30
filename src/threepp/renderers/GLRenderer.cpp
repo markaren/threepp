@@ -866,14 +866,11 @@ struct GLRenderer::Impl {
 
         if (auto skinned = object->as<SkinnedMesh>()) {
 
-            auto bindMatrix = skinned->bindMatrix;
-            auto bindMatrixInverse = skinned->bindMatrixInverse;
-            if (bindMatrix) {
-                p_uniforms->setValue("bindMatrix", bindMatrix);
-            }
-            if (bindMatrixInverse) {
-                p_uniforms->setValue("bindMatrixInverse", bindMatrixInverse);
-            }
+            const auto& bindMatrix = skinned->bindMatrix;
+            const auto& bindMatrixInverse = skinned->bindMatrixInverse;
+
+            p_uniforms->setValue("bindMatrix", bindMatrix);
+            p_uniforms->setValue("bindMatrixInverse", bindMatrixInverse);
 
             auto& skeleton = skinned->skeleton;
 
