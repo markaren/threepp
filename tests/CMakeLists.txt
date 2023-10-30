@@ -8,8 +8,6 @@ function(add_test_executable name)
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
-add_test_executable(constants_test)
-
 add_subdirectory(cameras)
 add_subdirectory(core)
 add_subdirectory(math)

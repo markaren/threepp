@@ -3,6 +3,8 @@
 #ifndef THREEPP_OBJECT3D_HPP
 #define THREEPP_OBJECT3D_HPP
 
+#include "threepp/animation/AnimationClip.hpp"
+
 #include "threepp/math/Euler.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -99,6 +101,8 @@ namespace threepp {
         // This value allows the default rendering order of scene graph objects to be overridden although opaque and transparent objects remain sorted independently.
         // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
         unsigned int renderOrder = 0;
+
+        std::vector<std::shared_ptr<AnimationClip>> animations;
 
         std::optional<RenderCallback> onBeforeRender;
         std::optional<RenderCallback> onAfterRender;
