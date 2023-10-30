@@ -306,6 +306,26 @@ namespace threepp {
             }
         }
 
+        void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
+
+            aiTextureMapMode wrapS;
+            if(AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
+                switch (wrapS) {
+                    case aiTextureMapMode_Wrap: tex.wrapS = TextureWrapping::Repeat; break;
+                    case aiTextureMapMode_Mirror: tex.wrapS = TextureWrapping::MirroredRepeat; break;
+                    case aiTextureMapMode_Clamp: tex.wrapS = TextureWrapping::ClampToEdge; break;
+                }
+            }
+            aiTextureMapMode wrapT;
+            if(AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_V(mode, 0), wrapT)) {
+                switch (wrapT) {
+                    case aiTextureMapMode_Wrap: tex.wrapT = TextureWrapping::Repeat; break;
+                    case aiTextureMapMode_Mirror: tex.wrapT = TextureWrapping::MirroredRepeat; break;
+                    case aiTextureMapMode_Clamp: tex.wrapT = TextureWrapping::ClampToEdge; break;
+                }
+            }
+        }
+
         void setupMaterial(const std::filesystem::path& path, const aiScene* aiScene, const aiMesh* aiMesh, MeshStandardMaterial& material) {
             if (aiScene->HasMaterials()) {
                 aiString p;
@@ -316,6 +336,9 @@ namespace threepp {
                     if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
                         material.map = tex;
+
+                        handleWrapping(mat, aiTextureType_DIFFUSE, *tex);
+
                     }
                 } else {
                     C_STRUCT aiColor4D diffuse;
@@ -328,12 +351,19 @@ namespace threepp {
                     if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
                         material.emissiveMap = tex;
+
+                        handleWrapping(mat, aiTextureType_EMISSIVE, *tex);
                     }
                 } else {
                     C_STRUCT aiColor4D emissive;
                     if (AI_SUCCESS == aiGetMaterialColor(mat, AI_MATKEY_COLOR_EMISSIVE, &emissive)) {
                         material.emissive.setRGB(emissive.r, emissive.g, emissive.b);
                     }
+                }
+
+                float emmisiveIntensity;
+                if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity)) {
+                    material.emissiveIntensity = emmisiveIntensity;
                 }
 
                 //                if (aiGetMaterialTextureCount(mat, aiTextureType_SPECULAR) > 0) {
@@ -353,10 +383,6 @@ namespace threepp {
                 //                    material.shininess = shininess;
                 //                }
 
-                float emmisiveIntensity;
-                if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_EMISSIVE_INTENSITY, &emmisiveIntensity)) {
-                    material.emissiveIntensity = emmisiveIntensity;
-                }
 
                 // should this be added?
                 //                C_STRUCT aiColor4D ambient;
