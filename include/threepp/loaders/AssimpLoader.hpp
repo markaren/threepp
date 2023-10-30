@@ -2,12 +2,13 @@
 #ifndef THREEPP_ASSIMPLOADER_HPP
 #define THREEPP_ASSIMPLOADER_HPP
 
+#include "threepp/animation/AnimationClip.hpp"
+#include "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
-#include "threepp/animation/AnimationClip.hpp"
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -44,9 +45,15 @@ namespace threepp {
                 std::string name(aiAnim->mName.data);
                 auto duration = static_cast<float>(aiAnim->mDuration);
 
+                std::vector<std::shared_ptr<KeyframeTrack>> tracks;
+                for (unsigned j = 0; j < aiAnim->mNumChannels; j++) {
 
+                    const auto aiNodeAnim = aiAnim->mChannels[j];
 
-                auto clip = std::make_shared<AnimationClip>(name, duration);
+                    if (auto track = loadRotationTrack(aiNodeAnim)) tracks.emplace_back(track);
+                }
+
+                auto clip = std::make_shared<AnimationClip>(name, duration, tracks);
                 group->animations.emplace_back(clip);
             }
 
@@ -58,6 +65,21 @@ namespace threepp {
         Assimp::Importer importer_;
 
         struct SceneInfo;
+
+        std::shared_ptr<QuaternionKeyframeTrack> loadRotationTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            for (auto k = 0; k < aiNodeAnim->mNumRotationKeys; k++) {
+
+                const auto key = aiNodeAnim->mRotationKeys[k];
+                times.emplace_back(float(key.mTime/1000));
+                values.insert(values.end(), {(float(key.mValue.x)), float(key.mValue.y),
+                                             float(key.mValue.z), float(key.mValue.w)});
+            }
+
+            return std::make_shared<QuaternionKeyframeTrack>(name, times, values);
+        }
 
         void parseNodes(const SceneInfo& info, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 
@@ -323,19 +345,31 @@ namespace threepp {
         void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
 
             aiTextureMapMode wrapS;
-            if(AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
+            if (AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
                 switch (wrapS) {
-                    case aiTextureMapMode_Wrap: tex.wrapS = TextureWrapping::Repeat; break;
-                    case aiTextureMapMode_Mirror: tex.wrapS = TextureWrapping::MirroredRepeat; break;
-                    case aiTextureMapMode_Clamp: tex.wrapS = TextureWrapping::ClampToEdge; break;
+                    case aiTextureMapMode_Wrap:
+                        tex.wrapS = TextureWrapping::Repeat;
+                        break;
+                    case aiTextureMapMode_Mirror:
+                        tex.wrapS = TextureWrapping::MirroredRepeat;
+                        break;
+                    case aiTextureMapMode_Clamp:
+                        tex.wrapS = TextureWrapping::ClampToEdge;
+                        break;
                 }
             }
             aiTextureMapMode wrapT;
-            if(AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_V(mode, 0), wrapT)) {
+            if (AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_V(mode, 0), wrapT)) {
                 switch (wrapT) {
-                    case aiTextureMapMode_Wrap: tex.wrapT = TextureWrapping::Repeat; break;
-                    case aiTextureMapMode_Mirror: tex.wrapT = TextureWrapping::MirroredRepeat; break;
-                    case aiTextureMapMode_Clamp: tex.wrapT = TextureWrapping::ClampToEdge; break;
+                    case aiTextureMapMode_Wrap:
+                        tex.wrapT = TextureWrapping::Repeat;
+                        break;
+                    case aiTextureMapMode_Mirror:
+                        tex.wrapT = TextureWrapping::MirroredRepeat;
+                        break;
+                    case aiTextureMapMode_Clamp:
+                        tex.wrapT = TextureWrapping::ClampToEdge;
+                        break;
                 }
             }
         }
@@ -352,7 +386,6 @@ namespace threepp {
                         material.map = tex;
 
                         handleWrapping(mat, aiTextureType_DIFFUSE, *tex);
-
                     }
                 } else {
                     C_STRUCT aiColor4D diffuse;

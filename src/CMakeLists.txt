@@ -13,6 +13,8 @@ set(publicHeaders
         "threepp/animation/PropertyBinding.hpp"
         "threepp/animation/PropertyMixer.hpp"
 
+        "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
+
         "threepp/canvas/Canvas.hpp"
         "threepp/canvas/WindowSize.hpp"
 

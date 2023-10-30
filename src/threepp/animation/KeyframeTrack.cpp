@@ -189,3 +189,7 @@ std::unique_ptr<Interpolant> KeyframeTrack::createInterpolant(std::vector<float>
 
     return nullptr;
 }
+
+void KeyframeTrack::setInterpolation(Interpolation interpolation) {
+
+}

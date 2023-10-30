@@ -21,11 +21,6 @@ namespace threepp {
     public:
         static Interpolation defaultInterpolation;
 
-        KeyframeTrack(std::string name,
-                      const std::vector<float>& times,
-                      const std::vector<float>& values,
-                      std::optional<Interpolation> interpolation);
-
         [[nodiscard]] std::string getName() const {
 
             return name_;
@@ -51,6 +46,8 @@ namespace threepp {
             return values_.size() / times_.size();
         }
 
+        void setInterpolation(Interpolation interpolation);
+
         KeyframeTrack& shift(float timeOffset);
 
         KeyframeTrack& scale(float timeScale);
@@ -60,6 +57,12 @@ namespace threepp {
         KeyframeTrack& optimize();
 
         std::unique_ptr<Interpolant> createInterpolant(std::vector<float>* result);
+
+    protected:
+        KeyframeTrack(std::string name,
+                      const std::vector<float>& times,
+                      const std::vector<float>& values,
+                      std::optional<Interpolation> interpolation);
 
     private:
         std::string name_;

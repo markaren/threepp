@@ -4,9 +4,9 @@
 using namespace threepp;
 
 Interpolant::Interpolant(Sample parameterPositions, Sample sampleValues, int sampleSize, Sample* resultBuffer)
-        : parameterPositions(std::move(parameterPositions)),
-          sampleValues(std::move(sampleValues)),
-          valueSize(sampleSize) {
+    : parameterPositions(std::move(parameterPositions)),
+      sampleValues(std::move(sampleValues)),
+      valueSize(sampleSize) {
 
     if (resultBuffer) {
         this->resultBuffer = resultBuffer;
@@ -21,18 +21,18 @@ Sample Interpolant::evaluate(float t) {
     auto& pp = this->parameterPositions;
     auto i1 = this->_cachedIndex;
     auto t1 = pp[i1];
-    auto t0 = pp[i1 - 1];
+    std::optional<float> t0;
+    if (static_cast<int>(i1) - 1 >= 0) t0 = pp[i1 - 1];
 
+validate_interval: {
 
-    validate_interval: {
+seek: {
 
-    seek: {
+    std::optional<size_t> right{};
 
-    size_t right;
+linear_scan: {
 
-    linear_scan: {
-
-    forward_scan:
+forward_scan:
     if (!(t < t1)) {
 
         for (auto giveUpAt = i1 + 2;;) {
@@ -64,13 +64,64 @@ Sample Interpolant::evaluate(float t) {
         right = pp.size();
         goto linear_scan;
     }// forward scan
-}    //linear scan
+
+    //- slower code:
+    if (t < t0 || !t0) {
+        //    if ( ! ( t >= t0 ) ) {
+
+        // looping?
+
+        const auto t1global = pp[1];
+
+        if (t < t1global) {
+
+            i1 = 2;// + 1, using the scan for the details
+            t0 = t1global;
+        }
+
+        // linear reverse scan
+
+        for (auto giveUpAt = i1 - 2;;) {
+
+            if (!t0) {
+
+                // before start
+
+                this->_cachedIndex = 0;
+                return this->copySampleValue_(0 /*, t, t1*/);
+            }
+
+            if (i1 == giveUpAt) break;// this loop
+
+            t1 = *t0;
+            t0 = std::nullopt;
+            --i1;
+            if (static_cast<int>(i1) - 1 >= 0) t0 = pp[i1 - 1];
+
+            if (t >= t0) {
+
+                // we have arrived at the sought interval
+                goto seek;
+            }
+        }
+
+        // prepare binary search on the left side of the index
+        right = i1;
+        i1 = 0;
+        goto linear_scan;
+    }
+
+    // the interval is valid
+
+    goto validate_interval;
+
+}//linear scan
 
     // binary search
 
     while (i1 < right) {
 
-        auto mid = (i1 + right) >> 1;
+        auto mid = (i1 + *right) >> 1;
 
         if (t < pp[mid]) {
 
@@ -87,7 +138,7 @@ Sample Interpolant::evaluate(float t) {
 
     // check boundary cases, again
 
-    if (std::isnan(t0)) {
+    if (!t0) {
 
         this->_cachedIndex = 0;
         return this->copySampleValue_(0 /*, t, t1*/);
@@ -104,11 +155,11 @@ Sample Interpolant::evaluate(float t) {
 
     this->_cachedIndex = i1;
 
-    this->intervalChanged_(i1, t0, t1);
+    this->intervalChanged_(i1, *t0, t1);
 
 }// validate_interval
 
-    return this->interpolate_(i1, t0, t, t1);
+    return this->interpolate_(i1, *t0, t, t1);
 }
 
 Sample Interpolant::copySampleValue_(size_t index) {
