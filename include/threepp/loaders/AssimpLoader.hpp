@@ -7,6 +7,7 @@
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
+#include "threepp/animation/AnimationClip.hpp"
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -35,6 +36,19 @@ namespace threepp {
             auto group = Group::create();
             group->name = path.filename().stem().string();
             parseNodes(info, aiScene, aiScene->mRootNode, *group);
+
+
+            for (unsigned i = 0; i < aiScene->mNumAnimations; i++) {
+                const auto aiAnim = aiScene->mAnimations[i];
+
+                std::string name(aiAnim->mName.data);
+                auto duration = static_cast<float>(aiAnim->mDuration);
+
+
+
+                auto clip = std::make_shared<AnimationClip>(name, duration);
+                group->animations.emplace_back(clip);
+            }
 
             return group;
         }

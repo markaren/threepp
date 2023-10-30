@@ -1,4 +1,3 @@
-#include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/AssimpLoader.hpp"
@@ -15,7 +14,7 @@ int main() {
     renderer.shadowMap().type = threepp::ShadowMap::PFCSoft;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1, 10000);
-    camera.position.set(18, 6, 18);
+    camera.position.set(0, 6, -10);
 
     Scene scene;
     scene.background = Color(0xa0a0a0);
@@ -30,13 +29,11 @@ int main() {
     auto ground = Mesh::create(geometry, material);
     ground->rotation.x = -math::PI / 2;
     ground->receiveShadow = true;
-    ground->position.y = -5;
     scene.add(ground);
 
     auto grid = GridHelper::create(500, 100, 0x000000, 0x000000);
     grid->material()->opacity = 0.2;
     grid->material()->transparent = true;
-    grid->position.y = -5;
     scene.add(grid);
 
     // lights
@@ -53,21 +50,45 @@ int main() {
     //
 
     AssimpLoader loader;
-    auto gltf = loader.load("data/models/gltf/SimpleSkinning.gltf");
-    gltf->traverseType<Mesh>([](Mesh& m) {
+
+    auto soldier = loader.load("data/models/gltf/Soldier.glb");
+    soldier->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
     });
-    scene.add(gltf);
+    scene.add(soldier);
+    soldier->scale *= 2;
+    soldier->position.x = -2;
+
+    auto skeletonHelperSoldier = SkeletonHelper::create(*soldier);
+    skeletonHelperSoldier->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene.add(skeletonHelperSoldier);
 
     //
 
-    AnimationMixer mixer(*gltf);
-    mixer.clipAction(gltf->animations[0])->play();
+    auto stormTropper = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
+    stormTropper->traverseType<Mesh>([](Mesh& m) {
+        m.receiveShadow = true;
+        m.castShadow = true;
+
+        if (auto mat = m.material()->as<MaterialWithMap>()) {
+            mat->map->wrapS = TextureWrapping::Repeat;
+            mat->map->wrapT = TextureWrapping::Repeat;
+        }
+    });
+    scene.add(stormTropper);
+    stormTropper->scale *= 0.6;
+    stormTropper->position.x = 2;
+
+    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTropper);
+    skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene.add(skeletonHelperTrooper);
+
+    //
 
     OrbitControls controls{camera, canvas};
-    controls.minDistance = 5;
-    controls.maxDistance = 50;
+    controls.minDistance = 2;
+    controls.maxDistance = 20;
 
     //
 
@@ -77,11 +98,19 @@ int main() {
         renderer.setSize(size);
     });
 
+    auto& soldierBones = skeletonHelperSoldier->getBones();
+    auto& trooperBones = skeletonHelperTrooper->getBones();
+
     Clock clock;
     canvas.animate([&] {
         renderer.render(scene, camera);
 
-        auto deltaTime = clock.getElapsedTime();
-        mixer.update(deltaTime);
+        auto time = clock.getElapsedTime();
+        for (auto i = 0; i < soldierBones.size(); i++) {
+            soldierBones[i]->rotation.y = std::sin(time) * 5 / float(soldierBones.size());
+        }
+        for (auto i = 0; i < trooperBones.size(); i++) {
+            trooperBones[i]->rotation.y = std::sin(time) * 5 / float(trooperBones.size());
+        }
     });
 }
