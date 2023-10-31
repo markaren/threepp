@@ -81,7 +81,7 @@ forward_scan:
 
         // linear reverse scan
 
-        for (auto giveUpAt = i1 - 2;;) {
+        for (auto giveUpAt = static_cast<int>(i1) - 2;;) {
 
             if (!t0) {
 
@@ -96,9 +96,11 @@ forward_scan:
             t1 = *t0;
             t0 = std::nullopt;
             --i1;
-            if (static_cast<int>(i1) - 1 >= 0) t0 = pp[i1 - 1];
+            if (static_cast<int>(i1) - 1 >= 0) {
+                t0 = pp[i1 - 1];
+            }
 
-            if (t >= t0) {
+            if (t0 && t >= *t0) {
 
                 // we have arrived at the sought interval
                 goto seek;
