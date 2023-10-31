@@ -15,6 +15,12 @@ namespace threepp {
     public:
         PropertyMixer(const PropertyBinding& binding, const std::string& typeName, int valueSize);
 
+        void accumulate(int accuIndex, float weight);
+
+        void accumulateAdditive(float weight);
+
+        void apply(int accuIndex);
+
         ~PropertyMixer();
 
     private:

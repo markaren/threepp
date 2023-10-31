@@ -57,10 +57,10 @@ struct AnimationMixer::Impl {
 
         for (auto i = 0; i != nTracks; ++i) {
 
-            //            const auto& track = tracks[i];
-            //            const auto trackName = track->getName();
+            const auto& track = tracks[i];
+            const auto trackName = track->getName();
             //
-            //            auto& binding = bindingsByName[trackName];
+            //                        auto& binding = bindingsByName[trackName];
             //
             //            if (binding != undefined) {
             //
@@ -95,7 +95,7 @@ struct AnimationMixer::Impl {
             //                bindings[i] = binding;
             //            }
 
-            //            interpolants[i].resultBuffer = binding.buffer;
+            //                        interpolants[i].resultBuffer = binding.buffer;
         }
     }
 
@@ -267,7 +267,7 @@ struct AnimationMixer::Impl {
         }
     }
 
-    void _activateAction(const std::shared_ptr<AnimationAction> action) {
+    void _activateAction(const std::shared_ptr<AnimationAction>& action) {
 
         if (!this->_isActiveAction(*action)) {
 
@@ -318,7 +318,7 @@ struct AnimationMixer::Impl {
 
                 const auto& binding = bindings[i];
 
-                //                if ( -- binding.useCount === 0 ) {
+                //                                if ( -- binding.useCount === 0 ) {
                 //
                 //                    binding.restoreOriginalState();
                 //                    this->_takeBackBinding( binding );

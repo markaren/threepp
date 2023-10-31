@@ -235,7 +235,7 @@ void AnimationAction::_update(float time, float deltaTime, int timeDirection, in
                 for (unsigned j = 0, m = interpolants.size(); j != m; ++j) {
 
                     interpolants[j]->evaluate(clipTime);
-                    //                                                        propertyMixers[ j ]->accumulateAdditive( weight );
+                    propertyMixers[j]->accumulateAdditive(weight);
                 }
 
                 break;
@@ -246,7 +246,7 @@ void AnimationAction::_update(float time, float deltaTime, int timeDirection, in
                 for (unsigned j = 0, m = interpolants.size(); j != m; ++j) {
 
                     interpolants[j]->evaluate(clipTime);
-                    //                                                        propertyMixers[ j ].accumulate( accuIndex, weight );
+                    propertyMixers[j]->accumulate(accuIndex, weight);
                 }
         }
     }
