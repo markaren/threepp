@@ -74,7 +74,7 @@ namespace threepp {
             Parameters& favicon(const std::filesystem::path& path);
 
         private:
-            WindowSize size_{640, 480};
+            std::optional<WindowSize> size_;
             int antialiasing_{2};
             std::string title_{"threepp"};
             bool vsync_{true};
