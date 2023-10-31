@@ -133,14 +133,22 @@ struct Canvas::Impl {
     std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
-
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
-        : scope(scope), size_(params.size_) {
+        : scope(scope) {
 
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
             exit(EXIT_FAILURE);
+        }
+
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+        if (params.size_) {
+            size_ = *params.size_;
+        } else {
+            size_ = {mode->width / 2, mode->height / 2};
         }
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -153,11 +161,12 @@ struct Canvas::Impl {
             glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
         }
 
-        window = glfwCreateWindow(params.size_.width, params.size_.height, params.title_.c_str(), nullptr, nullptr);
+        window = glfwCreateWindow(size_.width, size_.height, params.title_.c_str(), nullptr, nullptr);
         if (!window) {
             glfwTerminate();
             exit(EXIT_FAILURE);
         }
+        glfwSetWindowPos(window, (mode->width - size_.width) / 2, (mode->height - size_.height) / 2);
 
         setWindowIcon(window, params.favicon_);
 
