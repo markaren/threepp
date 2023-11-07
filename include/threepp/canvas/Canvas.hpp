@@ -27,7 +27,11 @@ namespace threepp {
 
         Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values);
 
-        [[nodiscard]] const WindowSize& size() const;
+        //the current size of the Canvas window
+        [[nodiscard]] WindowSize size() const;
+
+        //the size of the Monitor
+        [[nodiscard]] WindowSize monitorSize() const;
 
         [[nodiscard]] float aspect() const;
 

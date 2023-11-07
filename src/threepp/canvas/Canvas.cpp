@@ -118,6 +118,13 @@ namespace {
         // clang-format on
     }
 
+    WindowSize getMonitorSize() {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+        return {mode->width, mode->height};
+    }
+
 }// namespace
 
 struct Canvas::Impl {
@@ -142,13 +149,11 @@ struct Canvas::Impl {
             exit(EXIT_FAILURE);
         }
 
-        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-
         if (params.size_) {
             size_ = *params.size_;
         } else {
-            size_ = {mode->width / 2, mode->height / 2};
+            auto fullSize = getMonitorSize();
+            size_ = {fullSize.width/2, fullSize.height/2};
         }
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -166,7 +171,6 @@ struct Canvas::Impl {
             glfwTerminate();
             exit(EXIT_FAILURE);
         }
-        glfwSetWindowPos(window, (mode->width - size_.width) / 2, (mode->height - size_.height) / 2);
 
         setWindowIcon(window, params.favicon_);
 
@@ -337,9 +341,14 @@ bool Canvas::animateOnce(const std::function<void()>& f) {
     return pimpl_->animateOnce(f);
 }
 
-const WindowSize& Canvas::size() const {
+WindowSize Canvas::size() const {
 
     return pimpl_->getSize();
+}
+
+WindowSize Canvas::monitorSize() const {
+
+    return getMonitorSize();
 }
 
 float Canvas::aspect() const {
