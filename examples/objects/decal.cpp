@@ -61,7 +61,7 @@ namespace {
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
-            auto& size = canvas.size();
+            auto size = canvas.size();
             mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
             mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
         }
