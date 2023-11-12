@@ -290,7 +290,7 @@ void gl::StencilBuffer::reset() {
     currentStencilClear = std::nullopt;
 }
 
-gl::GLState::GLState(): maxTextures(glGetParameter(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)) {
+gl::GLState::GLState(): maxTextures(glGetParameteri(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)) {
 
     GLint scissorParam[4];
     GLint viewportParam[4];

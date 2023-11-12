@@ -60,6 +60,11 @@ void TextHandle::render() {
     gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, getValue(horizontalAlignment), getValue(verticalAlignment));
 }
 
+int threepp::TextHandle::getTextSize() const {
+
+    return static_cast<int>(gltGetTextHeight(pimpl_->text, scale));
+}
+
 TextHandle::~TextHandle() = default;
 
 TextRenderer::TextRenderer() {

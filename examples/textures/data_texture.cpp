@@ -40,7 +40,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     unsigned int textureSize = 128;
-    auto texture = DataTexture::create(textureSize * textureSize * 3, textureSize, textureSize);
+    auto texture = DataTexture::create(std::vector<unsigned char>(textureSize * textureSize * 3), textureSize, textureSize);
     texture->format = Format::RGB;
     texture->minFilter = Filter::Nearest;
     texture->magFilter = Filter::Nearest;

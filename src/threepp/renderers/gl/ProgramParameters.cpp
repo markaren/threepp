@@ -8,6 +8,7 @@
 
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <sstream>
@@ -155,9 +156,14 @@ ProgramParameters::ProgramParameters(
     auto sizeMaterial = material->as<MaterialWithSize>();
     sizeAttenuation = sizeMaterial ? sizeMaterial->sizeAttenuation : false;
 
-    skinning = false;// TODO
-    maxBones = 0;    // TODO
+    skinning = object->is<SkinnedMesh>();
+    maxBones = 64;    // TODO
     useVertexTexture = GLCapabilities::instance().floatVertexTextures;
+
+    if (auto m = material->as<MaterialWithMorphTargets>()) {
+        morphTargets = m->morphTargets;
+        morphNormals = m->morphNormals;
+    }
 
     numDirLights = lights.directional.size();
     numPointLights = lights.point.size();
@@ -257,6 +263,12 @@ std::string ProgramParameters::hash() const {
 
     s << std::to_string(sizeAttenuation) << '\n';
     s << std::to_string(logarithmicDepthBuffer) << '\n';
+
+    s << std::to_string(morphTargets) << '\n';
+    s << std::to_string(morphNormals) << '\n';
+
+    s << std::to_string(skinning) << '\n';
+    s << std::to_string(useVertexTexture) << '\n';
 
     s << std::to_string(numDirLights) << '\n';
     s << std::to_string(numPointLights) << '\n';

@@ -40,8 +40,12 @@ namespace threepp {
                 std::shared_ptr<Material> material,
                 size_t count);
 
+        ~InstancedMesh() override;
+
     private:
         Mesh _mesh;
+        bool disposed{false};
+
     };
 
 }// namespace threepp

@@ -9,6 +9,7 @@
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
+#include "threepp/renderers/gl/GLMorphTargets.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
@@ -28,6 +29,7 @@
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
 #include <glad/glad.h>
@@ -122,6 +124,7 @@ struct GLRenderer::Impl {
     gl::GLRenderStates renderStates;
     gl::GLRenderLists renderLists;
     gl::GLObjects objects;
+    gl::GLMorphTargets morphTargets;
     gl::GLPrograms programCache;
 
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
@@ -328,6 +331,12 @@ struct GLRenderer::Impl {
             rangeFactor = 2;
         }
 
+        if (auto m = material->as<MaterialWithMorphTargets>()) {
+            if (m->morphTargets || m->morphNormals) {
+                morphTargets.update(object, geometry, material, program);
+            }
+        }
+
         bindingStates.setup(object, material, program, geometry, index);
 
         gl::BufferRenderer* renderer = bufferRenderer.get();
@@ -462,6 +471,17 @@ struct GLRenderer::Impl {
                 }
 
             } else if (object->is<Mesh>() || object->is<Line>() || object->is<Points>()) {
+
+                if (auto skinned = object->as<SkinnedMesh>()) {
+
+                    // update skeleton only once in a frame
+
+                    if (skinned->skeleton->frame != _info.render.frame) {
+
+                        skinned->skeleton->update();
+                        skinned->skeleton->frame = _info.render.frame;
+                    }
+                }
 
                 if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
 
@@ -644,6 +664,7 @@ struct GLRenderer::Impl {
 
         materialProperties->outputEncoding = parameters.outputEncoding;
         materialProperties->instancing = parameters.instancing;
+        materialProperties->skinning = parameters.skinning;
         materialProperties->numClippingPlanes = parameters.numClippingPlanes;
         materialProperties->numIntersection = parameters.numClipIntersection;
         materialProperties->vertexAlphas = parameters.vertexAlphas;
@@ -696,6 +717,7 @@ struct GLRenderer::Impl {
 
         bool needsProgramChange = false;
         bool isInstancedMesh = object->type() == "InstancedMesh";
+        bool isSkinnedMesh = object->type() == "SkinnedMesh";
 
         if (material->version == materialProperties->version) {
 
@@ -712,6 +734,14 @@ struct GLRenderer::Impl {
                 needsProgramChange = true;
 
             } else if (!isInstancedMesh && materialProperties->instancing) {
+
+                needsProgramChange = true;
+
+            } else if (isSkinnedMesh && !materialProperties->skinning) {
+
+                needsProgramChange = true;
+
+            } else if (!isSkinnedMesh && materialProperties->skinning) {
 
                 needsProgramChange = true;
 
@@ -824,9 +854,43 @@ struct GLRenderer::Impl {
                 isMeshBasicMaterial ||
                 isMeshStandardMaterial ||
                 isShaderMaterial ||
-                isShadowMaterial) {
+                isShadowMaterial ||
+                object->is<SkinnedMesh>()) {
 
                 p_uniforms->setValue("viewMatrix", camera->matrixWorldInverse);
+            }
+        }
+
+        // skinning uniforms must be set even if material didn't change
+        // auto-setting of texture unit for bone texture must go before other textures
+        // otherwise textures used for skinning can take over texture units reserved for other material textures
+
+        if (auto skinned = object->as<SkinnedMesh>()) {
+
+            const auto& bindMatrix = skinned->bindMatrix;
+            const auto& bindMatrixInverse = skinned->bindMatrixInverse;
+
+            p_uniforms->setValue("bindMatrix", bindMatrix);
+            p_uniforms->setValue("bindMatrixInverse", bindMatrixInverse);
+
+            auto& skeleton = skinned->skeleton;
+
+            if (skeleton) {
+
+                if (gl::GLCapabilities::instance().floatVertexTextures) {
+
+                    if (!skeleton->boneTexture) skeleton->computeBoneTexture();
+
+                    p_uniforms->setValue("boneTexture", skeleton->boneTexture.get(), &textures);
+                    p_uniforms->setValue("boneTextureSize", skeleton->boneTextureSize);
+
+                } else {
+
+                    const auto& boneMatrices = skeleton->boneMatrices;
+                    if (!boneMatrices.empty()) {
+                        p_uniforms->setValue("boneMatrices", boneMatrices);
+                    }
+                }
             }
         }
 

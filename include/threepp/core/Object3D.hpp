@@ -144,10 +144,10 @@ namespace threepp {
 
         Object3D& translateZ(float distance);
 
-        void localToWorld(Vector3& vector) const;
+        void localToWorld(Vector3& vector);
 
         // Converts the vector from world space to this object's local space.
-        void worldToLocal(Vector3& vector) const;
+        void worldToLocal(Vector3& vector);
 
         // Rotates the object to face a point in world space.
         void lookAt(const Vector3& vector);

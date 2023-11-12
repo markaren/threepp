@@ -4,12 +4,16 @@
   "dependencies": [
     {
       "name": "glad",
-      "features": ["gl-api-41"]
+      "features": ["gl-api-41", "extensions"]
     },
     "glfw3",
     "stb"
   ],
   "features": {
+    "audio": {
+      "description": "Audio support",
+      "dependencies": ["miniaudio"]
+    },
     "json": {
       "description": "Enable JSON support in library. Required to use Fonts.",
       "dependencies":[
