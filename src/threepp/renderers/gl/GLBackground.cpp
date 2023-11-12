@@ -12,7 +12,10 @@ GLBackground::GLBackground(GLState& state, bool premultipliedAlpha): state(state
 void GLBackground::render(GLRenderer& renderer, Object3D* scene) {
 
     bool forceClear = false;
-    bool isScene = scene->as<Scene>();
+    bool isScene = scene->is<Scene>();
+
+    auto& background = scene->as<Scene>()->background;
+
     std::optional<Color> background = isScene ? scene->as<Scene>()->background : std::nullopt;
 
     if (!background) {

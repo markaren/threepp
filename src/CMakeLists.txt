@@ -94,6 +94,7 @@ set(publicHeaders
 
         "threepp/loaders/loaders.hpp"
         "threepp/loaders/AssimpLoader.hpp"
+        "threepp/loaders/CubeTextureLoader.hpp"
         "threepp/loaders/MTLLoader.hpp"
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
@@ -157,6 +158,7 @@ set(publicHeaders
         "threepp/objects/Reflector.hpp"
         "threepp/objects/Water.hpp"
 
+        "threepp/textures/CubeTexture.hpp"
         "threepp/textures/DataTexture.hpp"
         "threepp/textures/DataTexture3D.hpp"
         "threepp/textures/DepthTexture.hpp"
@@ -212,6 +214,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLBindingStates.hpp"
         "threepp/renderers/gl/GLBufferRenderer.hpp"
         "threepp/renderers/gl/GLCapabilities.hpp"
+        "threepp/renderers/gl/GLCubeMaps.hpp"
         "threepp/renderers/gl/GLClipping.hpp"
         "threepp/renderers/gl/GLGeometries.hpp"
         "threepp/renderers/gl/GLLights.hpp"

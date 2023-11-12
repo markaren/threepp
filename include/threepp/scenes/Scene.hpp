@@ -19,7 +19,7 @@ namespace threepp {
     class Scene: public Object3D {
 
     public:
-        std::optional<Color> background;
+        std::variant<Color, std::shared_ptr<Texture>> background;
         std::shared_ptr<Texture> environment;
         std::optional<FogVariant> fog;
 
