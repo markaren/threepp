@@ -12,7 +12,8 @@ namespace threepp {
     class CubeCamera: public Object3D {
 
     public:
-        CubeCamera(float near, float far, GLRenderTarget& renderTarget) {
+        CubeCamera(float near, float far, GLRenderTarget& renderTarget)
+            : renderTarget(&renderTarget) {
 
             const auto fov = 90, aspect = 1;
 
@@ -101,7 +102,7 @@ namespace threepp {
         }
 
     private:
-        std::shared_ptr<GLRenderTarget> renderTarget;
+        GLRenderTarget* renderTarget;
     };
 
 }// namespace threepp

@@ -23,8 +23,7 @@ namespace threepp {
     class Material;
     class Raycaster;
     struct Intersection;
-
-    class Scene;
+    class Object3D;
     class BufferGeometry;
 
     typedef std::function<void(void*, Object3D*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;

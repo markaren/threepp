@@ -13,7 +13,6 @@ namespace threepp {
 
     class GLCubeRenderTarget: public GLRenderTarget {
 
-
     public:
         explicit GLCubeRenderTarget(int size, const Options& options = {})
             : GLRenderTarget(size, size, options) {

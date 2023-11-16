@@ -12,6 +12,7 @@
 
 namespace threepp {
 
+    class Scene;
     class GLRenderer;
 
     namespace gl {
