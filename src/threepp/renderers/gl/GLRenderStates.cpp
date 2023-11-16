@@ -49,7 +49,7 @@ void GLRenderState::setupLightsView(Camera* camera) {
 }
 
 
-std::shared_ptr<GLRenderState> GLRenderStates::get(Scene* scene, size_t renderCallDepth) {
+std::shared_ptr<GLRenderState> GLRenderStates::get(Object3D* scene, size_t renderCallDepth) {
 
     if (renderCallDepth >= renderStates_[scene->uuid].size()) {
 

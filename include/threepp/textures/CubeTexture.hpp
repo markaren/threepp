@@ -9,19 +9,25 @@ namespace threepp {
     class CubeTexture: public Texture {
 
     public:
-        std::shared_ptr<CubeTexture> create(const std::array<Image, 6>& images) {
+        static std::shared_ptr<CubeTexture> create(const std::vector<Image>& images = {}) {
+
             return std::shared_ptr<CubeTexture>(new CubeTexture(images));
         }
 
-        const std::array<Image, 6>& getImages() const {
+        [[nodiscard]] const std::vector<Image>& getImages() const {
 
             return images_;
         }
 
     private:
-        std::array<Image, 6> images_;
+        bool _needsFlipEnvMap = true;
+        std::vector<Image> images_;
 
-        explicit CubeTexture(const std::array<Image, 6>& images): images_(images) {}
+        explicit CubeTexture(const std::vector<Image>& images): images_(images) {
+
+            this->mapping = Mapping::CubeReflection;
+            this->format = Format::RGB;
+        }
     };
 
 }// namespace threepp

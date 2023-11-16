@@ -33,7 +33,7 @@ namespace threepp {
         std::optional<Image> image;
         std::vector<Image> mipmaps;
 
-        std::optional<Mapping> mapping = Texture::DEFAULT_MAPPING;
+        Mapping mapping = Texture::DEFAULT_MAPPING;
 
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};
         TextureWrapping wrapT{TextureWrapping::ClampToEdge};

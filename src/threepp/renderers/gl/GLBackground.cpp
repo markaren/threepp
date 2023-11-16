@@ -1,5 +1,6 @@
 
 #include "threepp/renderers/gl/GLBackground.hpp"
+#include "threepp/renderers/gl/GLCubeMaps.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
@@ -7,30 +8,41 @@
 using namespace threepp;
 using namespace threepp::gl;
 
-GLBackground::GLBackground(GLState& state, bool premultipliedAlpha): state(state), premultipliedAlpha(premultipliedAlpha) {}
+GLBackground::GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& state, bool premultipliedAlpha)
+    : renderer(renderer), cubemaps(cubemaps), state(state), premultipliedAlpha(premultipliedAlpha) {}
 
-void GLBackground::render(GLRenderer& renderer, Object3D* scene) {
+void GLBackground::render(Object3D* scene) {
 
     bool forceClear = false;
     bool isScene = scene->is<Scene>();
 
-    auto& background = scene->as<Scene>()->background;
+    auto& _background = scene->as<Scene>()->background;
 
-    std::optional<Color> background = isScene ? scene->as<Scene>()->background : std::nullopt;
+    if (_background && _background.isTexture()) {
+    }
 
-    if (!background) {
+    //    std::optional<Color> background = isScene ? scene->as<Scene>()->background : std::nullopt;
+
+    if (!_background) {
 
         setClear(clearColor, clearAlpha);
 
-    } else {
+    } else if (_background && _background.isColor()) {
 
-        setClear(*background, 1);
+        setClear(_background.color(), 1);
         forceClear = true;
     }
 
     if (renderer.autoClear || forceClear) {
 
         renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
+    }
+
+    if (_background && _background.isTexture()) {
+
+        auto tex = _background.texture();
+        if (auto cubeTexture = std::dynamic_pointer_cast<CubeTexture>(tex)) {
+        }
     }
 }
 

@@ -2,22 +2,33 @@
 #ifndef THREEPP_GLCUBEMAPS_HPP
 #define THREEPP_GLCUBEMAPS_HPP
 
+#include "threepp/textures/CubeTexture.hpp"
+
 #include <unordered_map>
 
 namespace threepp {
 
     class GLRenderer;
+    class GLRenderTarget;
 
-    class GLCubeMaps {
+    namespace gl {
 
-    public:
-        GLCubeMaps(GLRenderer* renderer){}
+        class GLCubeMaps {
 
+        public:
+            GLCubeMaps(GLRenderer& renderer);
 
-    private:
+            std::shared_ptr<Texture> get(const std::shared_ptr<Texture>& texture);
 
-    };
+            void dispose();
 
-}
+        private:
+            GLRenderer& renderer;
+            std::unordered_map<std::shared_ptr<Texture>, std::shared_ptr<GLRenderTarget>> cubemaps;
+        };
+
+    }// namespace gl
+
+}// namespace threepp
 
 #endif//THREEPP_GLCUBEMAPS_HPP

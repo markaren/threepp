@@ -67,7 +67,7 @@ namespace threepp::gl {
 
         explicit GLRenderLists(GLProperties& properties);
 
-        std::shared_ptr<GLRenderList> get(Scene* scene, size_t renderCallDepth);
+        std::shared_ptr<GLRenderList> get(Object3D* scene, size_t renderCallDepth);
 
         void dispose();
 

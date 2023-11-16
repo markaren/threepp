@@ -28,6 +28,7 @@ set(publicHeaders
         "threepp/core/Uniform.hpp"
 
         "threepp/cameras/Camera.hpp"
+        "threepp/cameras/CubeCamera.hpp"
         "threepp/cameras/PerspectiveCamera.hpp"
         "threepp/cameras/OrthographicCamera.hpp"
 
@@ -207,6 +208,8 @@ set(privateHeaders
         "threepp/extras/quickhull.hpp"
 
         "threepp/materials/MeshDistanceMaterial.hpp"
+
+        "threepp/renderers/GLCubeRenderTarget.hpp"
 
         "threepp/renderers/gl/Buffer.hpp"
         "threepp/renderers/gl/GLAttributes.hpp"
@@ -394,6 +397,7 @@ set(sources
         "threepp/renderers/gl/GLBindingStates.cpp"
         "threepp/renderers/gl/GLBufferRenderer.cpp"
         "threepp/renderers/gl/GLClipping.cpp"
+        "threepp/renderers/gl/GLCubeMaps.cpp"
         "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"
         "threepp/renderers/gl/GLLights.cpp"

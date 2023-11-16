@@ -16,10 +16,34 @@ namespace threepp {
     class Texture;
     typedef std::variant<Fog, FogExp2> FogVariant;
 
+    class Background {
+
+    public:
+        Background();
+        Background(int color);
+        Background(const Color& color);
+        Background(const std::shared_ptr<Texture>& texture);
+
+        [[nodiscard]] bool isColor() const;
+
+        [[nodiscard]] bool isTexture() const;
+
+        [[nodiscard]] Color color() const;
+
+        [[nodiscard]] std::shared_ptr<Texture> texture() const;
+
+        operator bool() const;
+
+    private:
+        bool hasValue_{false};
+        std::optional<Color> color_;
+        std::shared_ptr<Texture> texture_;
+    };
+
     class Scene: public Object3D {
 
     public:
-        std::variant<Color, std::shared_ptr<Texture>> background;
+        Background background;
         std::shared_ptr<Texture> environment;
         std::optional<FogVariant> fog;
 

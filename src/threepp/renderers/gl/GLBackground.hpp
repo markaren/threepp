@@ -13,12 +13,13 @@ namespace threepp {
     namespace gl {
 
         class GLState;
+        class GLCubeMaps;
 
         struct GLBackground {
 
-            GLBackground(GLState& state, bool premultipliedAlpha);
+            GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& state, bool premultipliedAlpha);
 
-            void render(GLRenderer& renderer, Object3D* scene);
+            void render(Object3D* scene);
 
             [[nodiscard]] const Color& getClearColor() const;
 
@@ -30,6 +31,8 @@ namespace threepp {
 
 
         private:
+            GLRenderer& renderer;
+            GLCubeMaps& cubemaps;
             GLState& state;
 
             bool premultipliedAlpha;
