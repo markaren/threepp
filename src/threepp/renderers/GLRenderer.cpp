@@ -76,7 +76,7 @@ struct GLRenderer::Impl {
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
-    std::shared_ptr<GLRenderTarget> _currentRenderTarget = nullptr;
+    GLRenderTarget* _currentRenderTarget = nullptr;
     std::optional<unsigned int> _currentMaterialId;
 
     Camera* _currentCamera = nullptr;
@@ -989,7 +989,7 @@ struct GLRenderer::Impl {
                (isShaderMaterial && lights);
     }
 
-    void setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace, int activeMipmapLevel) {
+    void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
         _currentRenderTarget = renderTarget;
         _currentActiveCubeFace = activeCubeFace;
@@ -1274,7 +1274,7 @@ void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry
     pimpl_->renderBufferDirect(camera, scene, geometry, material, object, group);
 }
 
-void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace, int activeMipmapLevel) {
+void GLRenderer::setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     pimpl_->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
 }
@@ -1309,7 +1309,7 @@ int threepp::GLRenderer::getActiveMipmapLevel() const {
     return pimpl_->_currentActiveMipmapLevel;
 }
 
-std::shared_ptr<GLRenderTarget>& threepp::GLRenderer::getRenderTarget() {
+GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
 }

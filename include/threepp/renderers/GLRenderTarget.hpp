@@ -53,6 +53,8 @@ namespace threepp {
         bool stencilBuffer;
         std::shared_ptr<DepthTexture> depthTexture;
 
+        GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
+
         GLRenderTarget(const GLRenderTarget&) = delete;
         GLRenderTarget(const GLRenderTarget&&) = delete;
         GLRenderTarget operator=(const GLRenderTarget&) = delete;
@@ -63,13 +65,13 @@ namespace threepp {
 
         void dispose();
 
-        static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
+        static std::unique_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
         ~GLRenderTarget() override;
 
     protected:
         bool disposed = false;
-        GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
+
     };
 
 }// namespace threepp

@@ -340,7 +340,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
 
 void gl::GLTextures::setupFrameBufferTexture(
         unsigned int framebuffer,
-        const std::shared_ptr<GLRenderTarget>& renderTarget,
+        GLRenderTarget* renderTarget,
         Texture& texture, GLuint attachment, GLuint textureTarget) {
 
     const auto glFormat = toGLFormat(texture.format);
@@ -361,7 +361,7 @@ void gl::GLTextures::setupFrameBufferTexture(
     state.bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget) {
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
@@ -397,7 +397,7 @@ void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, const s
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
 }
 
-void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget) {
 
     state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
@@ -434,7 +434,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, const std::shar
     }
 }
 
-void gl::GLTextures::setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupDepthRenderbuffer(GLRenderTarget* renderTarget) {
 
     auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
 
@@ -454,7 +454,7 @@ void gl::GLTextures::setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget
     state.bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gl::GLTextures::setupRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
     const auto& texture = renderTarget->texture;
 
@@ -508,7 +508,7 @@ void gl::GLTextures::setupRenderTarget(const std::shared_ptr<GLRenderTarget>& re
     }
 }
 
-void gl::GLTextures::updateRenderTargetMipmap(const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
 
     const auto texture = renderTarget->texture;
 

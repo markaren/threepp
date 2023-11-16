@@ -110,7 +110,7 @@ struct GLShadowMap::Impl {
         shadowMaterialVertical->uniforms->operator[]("shadow_pass").setValue(shadow->map->texture.get());
         shadowMaterialVertical->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
         shadowMaterialVertical->uniforms->operator[]("radius").value<float>() = shadow->radius;
-        _renderer.setRenderTarget(shadow->mapPass);
+        _renderer.setRenderTarget(shadow->mapPass.get());
         _renderer.clear();
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialVertical.get(), fullScreenMesh.get(), std::nullopt);
 
@@ -119,7 +119,7 @@ struct GLShadowMap::Impl {
         shadowMaterialHorizontal->uniforms->operator[]("shadow_pass").setValue(shadow->mapPass->texture.get());
         shadowMaterialHorizontal->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
         shadowMaterialHorizontal->uniforms->operator[]("radius").value<float>() = shadow->radius;
-        _renderer.setRenderTarget(shadow->map);
+        _renderer.setRenderTarget(shadow->map.get());
         _renderer.clear();
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialHorizontal.get(), fullScreenMesh.get(), std::nullopt);
     }
@@ -366,10 +366,10 @@ struct GLShadowMap::Impl {
                 shadow->camera->updateProjectionMatrix();
             }
 
-            _renderer.setRenderTarget(shadow->map);
+            _renderer.setRenderTarget(shadow->map.get());
             _renderer.clear();
 
-            auto viewportCount = shadow->getViewportCount();
+            const auto viewportCount = shadow->getViewportCount();
 
             for (unsigned vp = 0; vp < viewportCount; vp++) {
 
@@ -383,8 +383,8 @@ struct GLShadowMap::Impl {
 
                 _state.viewport(_viewport);
 
-                if (std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
-                    std::dynamic_pointer_cast<PointLightShadow>(shadow)->updateMatrices(light->as<PointLight>(), vp);
+                if (auto pointLightShadow = std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
+                    pointLightShadow->updateMatrices(light->as<PointLight>(), vp);
                 } else {
                     shadow->updateMatrices(light);
                 }
