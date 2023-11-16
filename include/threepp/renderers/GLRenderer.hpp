@@ -142,9 +142,9 @@ namespace threepp {
 
         [[nodiscard]] int getActiveMipmapLevel() const;
 
-        std::shared_ptr<GLRenderTarget>& getRenderTarget();
+        GLRenderTarget* getRenderTarget();
 
-        void setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
+        void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 

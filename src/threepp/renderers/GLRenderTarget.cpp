@@ -6,9 +6,9 @@
 using namespace threepp;
 
 
-std::shared_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const GLRenderTarget::Options& options) {
+std::unique_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const GLRenderTarget::Options& options) {
 
-    return std::shared_ptr<GLRenderTarget>(new GLRenderTarget(width, height, options));
+    return std::make_unique<GLRenderTarget>(width, height, options);
 }
 
 GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GLRenderTarget::Options& options)

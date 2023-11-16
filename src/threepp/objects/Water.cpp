@@ -241,7 +241,7 @@ struct Water::Impl {
 
             _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
 
-            _renderer->setRenderTarget(renderTarget);
+            _renderer->setRenderTarget(renderTarget.get());
             _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
