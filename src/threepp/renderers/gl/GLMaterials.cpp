@@ -67,7 +67,7 @@ struct GLMaterials::Impl {
         auto envMap = properties.materialProperties.get(material->uuid())->envMap;
         if (envMap) {
 
-            uniforms.at("envMap").setValue(envMap.get());
+            uniforms.at("envMap").setValue(envMap);
             uniforms.at("flipEnvMap").value<bool>() = false;//TODO
 
             auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity*>(material);

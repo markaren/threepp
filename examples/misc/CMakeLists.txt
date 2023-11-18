@@ -5,6 +5,9 @@ target_link_libraries(mouse_key_listener PRIVATE threepp)
 add_executable(raycast raycast.cpp)
 target_link_libraries(raycast PRIVATE threepp)
 
+add_executable(cubemap cubemap.cpp)
+target_link_libraries(cubemap PRIVATE threepp)
+
 if (OpenCV_FOUND)
     add_executable(opencv_demo opencv_demo.cpp)
     target_link_libraries(opencv_demo PRIVATE threepp ${OpenCV_LIBRARIES})

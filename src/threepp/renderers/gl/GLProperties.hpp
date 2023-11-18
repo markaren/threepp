@@ -41,8 +41,8 @@ namespace threepp::gl {
         std::optional<int> numClippingPlanes;
         std::vector<float> clippingState;
 
-        std::shared_ptr<Texture> envMap;
-        std::shared_ptr<Texture> environment;
+        Texture* envMap;
+        Texture* environment;
 
         std::optional<Encoding> outputEncoding;
         bool instancing{};

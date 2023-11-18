@@ -3,7 +3,6 @@
 #define THREEPP_CUBETEXTURELOADER_HPP
 
 #include "threepp/textures/CubeTexture.hpp"
-
 #include "threepp/loaders/ImageLoader.hpp"
 
 #include <array>
@@ -18,12 +17,14 @@ namespace threepp {
 
             std::vector<Image> images;
             for (const auto& path: paths) {
-                const auto load = loader.load(path, false);
-                images.emplace_back(load);
+                const auto load = loader.load(path, 3, false);
+                images.emplace_back(*load);
             }
 
+            auto texture = CubeTexture::create(images);
+            texture->needsUpdate();
 
-
+            return texture;
         }
 
     private:

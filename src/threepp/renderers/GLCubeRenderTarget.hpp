@@ -22,13 +22,13 @@ namespace threepp {
             if (options.wrapS) this->texture->wrapS = *options.wrapS;
             if (options.wrapT) this->texture->wrapT = *options.wrapT;
             if (options.magFilter) this->texture->magFilter = *options.magFilter;
-            if (options.minFilter) this->texture->minFilter = *options.minFilter;
             if (options.format) this->texture->format = *options.format;
             if (options.type) this->texture->type = *options.type;
             if (options.anisotropy) this->texture->anisotropy = *options.anisotropy;
             if (options.encoding) this->texture->encoding = *options.encoding;
 
             this->texture->generateMipmaps = options.generateMipmaps;
+            this->texture->minFilter = options.minFilter.value_or(Filter::Linear);
         }
 
         void fromEquirectangularTexture(GLRenderer& renderer, Texture& texture) {
@@ -116,9 +116,9 @@ namespace threepp {
 
             const auto& currentRenderTarget = renderer.getRenderTarget();
 
-            for (unsigned i = 0; i < 6; i++) {
+            for (int i = 0; i < 6; i++) {
 
-                //                renderer.setRenderTarget( this, i );
+                renderer.setRenderTarget(this, i);
 
                 renderer.clear(color, depth, stencil);
             }

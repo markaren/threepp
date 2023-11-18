@@ -138,7 +138,6 @@ struct GLRenderer::Impl {
           _viewport(0, 0, _size.width, _size.height),
           _scissor(0, 0, _size.width, _size.height),
           cubemaps(scope),
-          background(scope, cubemaps, state, parameters.premultipliedAlpha),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
           indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
           clipping(properties),
@@ -146,6 +145,7 @@ struct GLRenderer::Impl {
           geometries(attributes, _info, bindingStates),
           textures(state, properties, _info),
           objects(geometries, attributes, _info),
+          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           renderLists(properties),
           shadowMap(objects),
           materials(properties),
@@ -234,7 +234,7 @@ struct GLRenderer::Impl {
 
         //
 
-        background.render(scene);
+        background.render(*currentRenderList, scene);
 
         // render scene
 
@@ -583,11 +583,11 @@ struct GLRenderer::Impl {
 
         // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
 
-        materialProperties->environment = material->is<MeshStandardMaterial>() ? scene->environment : nullptr;
+        materialProperties->environment = material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr;
         materialProperties->fog = scene->fog;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            materialProperties->envMap = cubemaps.get(materialWithEnvMap->envMap);
+            materialProperties->envMap = cubemaps.get(materialWithEnvMap->envMap.get());
         } else {
             materialProperties->envMap = cubemaps.get(materialProperties->environment);
         }
@@ -703,12 +703,12 @@ struct GLRenderer::Impl {
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
         Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
 
-        std::shared_ptr<Texture> envMap;
+        Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            envMap = cubemaps.get(materialWithEnvMap->envMap);
+            envMap = cubemaps.get(materialWithEnvMap->envMap.get());
         } else {
-            envMap = cubemaps.get(environment);
+            envMap = cubemaps.get(environment.get());
         }
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&

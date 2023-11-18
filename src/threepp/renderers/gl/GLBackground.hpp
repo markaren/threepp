@@ -8,18 +8,21 @@
 
 namespace threepp {
 
+    class Mesh;
     class GLRenderer;
 
     namespace gl {
 
         class GLState;
+        class GLObjects;
         class GLCubeMaps;
+        struct GLRenderList;
 
         struct GLBackground {
 
-            GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& state, bool premultipliedAlpha);
+            GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& state, GLObjects& objects, bool premultipliedAlpha);
 
-            void render(Object3D* scene);
+            void render(GLRenderList& renderList, Object3D* scene);
 
             [[nodiscard]] const Color& getClearColor() const;
 
@@ -34,11 +37,15 @@ namespace threepp {
             GLRenderer& renderer;
             GLCubeMaps& cubemaps;
             GLState& state;
+            GLObjects& objects;
 
             bool premultipliedAlpha;
 
             Color clearColor = Color(0x000000);
             float clearAlpha = 0;
+
+            std::shared_ptr<Mesh> boxMesh = nullptr;
+            std::shared_ptr<Mesh> planeMesh = nullptr;
 
             void setClear(const Color& color, float alpha);
         };

@@ -18,13 +18,13 @@ namespace threepp {
         public:
             GLCubeMaps(GLRenderer& renderer);
 
-            std::shared_ptr<Texture> get(const std::shared_ptr<Texture>& texture);
+            Texture* get(Texture* texture);
 
             void dispose();
 
         private:
             GLRenderer& renderer;
-            std::unordered_map<std::shared_ptr<Texture>, std::shared_ptr<GLRenderTarget>> cubemaps;
+            std::unordered_map<Texture*, std::shared_ptr<GLRenderTarget>> cubemaps;
         };
 
     }// namespace gl

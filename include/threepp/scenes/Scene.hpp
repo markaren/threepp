@@ -14,6 +14,7 @@
 namespace threepp {
 
     class Texture;
+    class CubeTexture;
     typedef std::variant<Fog, FogExp2> FogVariant;
 
     class Background {
@@ -23,6 +24,7 @@ namespace threepp {
         Background(int color);
         Background(const Color& color);
         Background(const std::shared_ptr<Texture>& texture);
+        Background(const std::shared_ptr<CubeTexture>& texture);
 
         [[nodiscard]] bool isColor() const;
 
@@ -30,7 +32,7 @@ namespace threepp {
 
         [[nodiscard]] Color color() const;
 
-        [[nodiscard]] std::shared_ptr<Texture> texture() const;
+        [[nodiscard]] Texture* texture() const;
 
         operator bool() const;
 

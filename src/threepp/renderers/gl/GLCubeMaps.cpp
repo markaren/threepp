@@ -1,8 +1,8 @@
 
 #include "GLCubeMaps.hpp"
 
-#include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
 
 #include "threepp/renderers/GLCubeRenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -29,7 +29,7 @@ namespace {
 GLCubeMaps::GLCubeMaps(GLRenderer& renderer)
     : renderer(renderer) {}
 
-std::shared_ptr<Texture> GLCubeMaps::get(const std::shared_ptr<Texture>& texture) {
+Texture* GLCubeMaps::get(Texture* texture) {
 
     if (texture) {
 
@@ -41,7 +41,7 @@ std::shared_ptr<Texture> GLCubeMaps::get(const std::shared_ptr<Texture>& texture
 
                 const auto cubemap = cubemaps.at(texture)->texture;
                 mapTextureMapping(*cubemap, texture->mapping);
-                return cubemap;
+                return cubemap.get();
 
             } else {
 
@@ -49,20 +49,14 @@ std::shared_ptr<Texture> GLCubeMaps::get(const std::shared_ptr<Texture>& texture
 
                 if (image && image->height > 0) {
 
-
                     const auto& currentRenderTarget = renderer.getRenderTarget();
 
-                    const auto renderTarget = std::make_shared<GLCubeRenderTarget>( image->height / 2 );
-                    renderTarget->fromEquirectangularTexture( renderer, *texture );
+                    const auto renderTarget = std::make_shared<GLCubeRenderTarget>(image->height / 2);
+                    renderTarget->fromEquirectangularTexture(renderer, *texture);
                     cubemaps[texture] = renderTarget;
-
-
                 }
-
             }
-
         }
-
     }
 
     return texture;
@@ -72,4 +66,3 @@ void GLCubeMaps::dispose() {
 
     cubemaps.clear();
 }
-
