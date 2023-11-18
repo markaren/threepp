@@ -6,6 +6,7 @@
 
 #include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/textures/DepthTexture.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -335,7 +336,24 @@ void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
 }
 
 void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Texture& texture, GLuint slot) {
-    // TODO
+    initTexture(textureProperties, texture);
+    state.activeTexture(GL_TEXTURE0 + slot);
+    state.bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties->glTexture);
+
+    GLuint glFormat = toGLFormat(texture.format);
+    GLuint glType = toGLType(texture.type);
+    auto glInternalFormat = getInternalFormat(glFormat, glType);
+    setTextureParameters(GL_TEXTURE_CUBE_MAP, texture);
+
+
+    for (int i = 0; i < 6; i++) {
+        auto& image = dynamic_cast<CubeTexture*>(&texture)->getImages()[i];
+        state.texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
+    }
+
+    textureProperties->version = texture.version();
+    if (texture.onUpdate)
+        texture.onUpdate.value()(texture);
 }
 
 void gl::GLTextures::setupFrameBufferTexture(

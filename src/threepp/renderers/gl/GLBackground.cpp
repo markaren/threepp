@@ -82,7 +82,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
 
         auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
         shaderMaterial->uniforms->at("envMap").setValue(_background->texture());
-//        shaderMaterial->uniforms->at("flipEnvMap").setValue(false);
+        shaderMaterial->uniforms->at("flipEnvMap").setValue(true);
         shaderMaterial->needsUpdate();
 
         renderList.unshift(boxMesh.get(), boxMesh->geometry(), boxMesh->material(), 0, 0, std::nullopt);

@@ -14,7 +14,7 @@ namespace threepp {
             return std::shared_ptr<CubeTexture>(new CubeTexture(images));
         }
 
-        [[nodiscard]] const std::vector<Image>& getImages() const {
+        [[nodiscard]] std::vector<Image>& getImages() {
 
             return images_;
         }
