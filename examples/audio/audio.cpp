@@ -14,7 +14,7 @@ int main() {
 
     Scene scene;
 
-    PerspectiveCamera camera;
+    PerspectiveCamera camera(50, canvas.aspect());
     camera.position.z = -5;
 
     AudioListener listener;
