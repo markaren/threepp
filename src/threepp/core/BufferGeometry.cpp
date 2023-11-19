@@ -113,7 +113,7 @@ void BufferGeometry::deleteAttribute(const std::string& name) {
 
 bool BufferGeometry::hasAttribute(const std::string& name) const {
 
-    return attributes_.count(name);
+    return attributes_.contains(name);
 }
 
 void BufferGeometry::addGroup(int start, int count, unsigned int materialIndex) {

@@ -426,7 +426,7 @@ namespace {
 
             } else {
 
-                if (!container->map.count(id)) {
+                if (!container->map.contains(id)) {
                     addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo));
                 }
 
@@ -457,7 +457,7 @@ GLUniforms::GLUniforms(unsigned int program) {
 
 void GLUniforms::setValue(const std::string& name, const UniformValue& value, GLTextures* textures) {
 
-    if (map.count(name)) {
+    if (map.contains(name)) {
 
         map.at(name)->setValue(value, textures);
     }
@@ -483,7 +483,7 @@ std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector
 
     for (const auto& u : seq) {
 
-        if (values.count(u->id)) r.emplace_back(u);
+        if (values.contains(u->id)) r.emplace_back(u);
     }
 
     return r;

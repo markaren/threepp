@@ -10,19 +10,31 @@ using namespace threepp;
 PlaneHelper::PlaneHelper(const Plane& plane, float size, const Color& color)
     : Line(BufferGeometry::create(), LineBasicMaterial::create()), plane(plane), size(size) {
 
-    std::vector<float> positions{1, -1, 1, -1, 1, 1, -1, -1, 1, 1, 1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0};
-
-    geometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+    geometry_->setAttribute("position", FloatBufferAttribute::create({1, -1, 1,
+                                                                      -1, 1, 1,
+                                                                      -1, -1, 1,
+                                                                      1, 1, 1,
+                                                                      -1, 1, 1,
+                                                                      -1, -1, 1,
+                                                                      1, -1, 1,
+                                                                      1, 1, 1,
+                                                                      0, 0, 1,
+                                                                      0, 0, 0},
+                                                                     3));
     geometry_->computeBoundingSphere();
 
-    auto material = dynamic_cast<LineBasicMaterial*>(material_.get());
+    auto material = material_->as<LineBasicMaterial>();
     material->color.copy(color);
     material->toneMapped = false;
 
-    std::vector<float> positions2{1, 1, 1, -1, 1, 1, -1, -1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1};
-
     auto geometry2 = BufferGeometry::create();
-    geometry2->setAttribute("position", FloatBufferAttribute::create(positions2, 3));
+    geometry2->setAttribute("position", FloatBufferAttribute::create({1, 1, 1,
+                                                                      -1, 1, 1,
+                                                                      -1, -1, 1,
+                                                                      1, 1, 1,
+                                                                      -1, -1, 1,
+                                                                      1, -1, 1},
+                                                                     3));
     geometry2->computeBoundingSphere();
 
     auto material2 = MeshBasicMaterial::create();

@@ -13,7 +13,7 @@ void EventDispatcher::addEventListener(const std::string& type, EventListener* l
 
 bool EventDispatcher::hasEventListener(const std::string& type, const EventListener* listener) {
 
-    if (!listeners_.count(type)) return false;
+    if (!listeners_.contains(type)) return false;
 
     auto& listenerArray = listeners_.at(type);
     return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
@@ -21,7 +21,7 @@ bool EventDispatcher::hasEventListener(const std::string& type, const EventListe
 
 void EventDispatcher::removeEventListener(const std::string& type, const EventListener* listener) {
 
-    if (!listeners_.count(type)) return;
+    if (!listeners_.contains(type)) return;
 
     auto& listenerArray = listeners_.at(type);
     if (listenerArray.empty()) return;
@@ -34,7 +34,7 @@ void EventDispatcher::removeEventListener(const std::string& type, const EventLi
 
 void EventDispatcher::dispatchEvent(const std::string& type, void* target) {
 
-    if (listeners_.count(type)) {
+    if (listeners_.contains(type)) {
 
         Event e{type, target};
 

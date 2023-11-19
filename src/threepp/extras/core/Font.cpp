@@ -17,7 +17,7 @@ namespace {
 
     FontPath createPath(char c, float scale, float offsetX, float offsetY, const FontData& data) {
 
-        const auto glyph = data.glyphs.count(c) ? data.glyphs.at(c) : data.glyphs.at('?');
+        const auto glyph = data.glyphs.contains(c) ? data.glyphs.at(c) : data.glyphs.at('?');
 
         ShapePath path;
 

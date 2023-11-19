@@ -159,7 +159,7 @@ struct CameraHelper::Impl {
         Vector3 _vector;
         _vector.set(x, y, z).unproject(_camera);
 
-        if (pointMap.count(point)) {
+        if (pointMap.contains(point)) {
 
             auto& points = pointMap.at(point);
             auto position = scope.geometry()->getAttribute<float>("position");
