@@ -1,11 +1,7 @@
 
 #include "GLCubeMaps.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
-
 #include "threepp/renderers/GLCubeRenderTarget.hpp"
-#include "threepp/textures/Texture.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -29,7 +25,7 @@ namespace {
 GLCubeMaps::GLCubeMaps(GLRenderer& renderer)
     : renderer(renderer) {}
 
-Texture* GLCubeMaps::get(Texture* texture) {
+void GLCubeMaps::get(Texture* texture) {
 
     if (texture) {
 
@@ -41,7 +37,6 @@ Texture* GLCubeMaps::get(Texture* texture) {
 
                 const auto cubemap = cubemaps.at(texture)->texture;
                 mapTextureMapping(*cubemap, texture->mapping);
-                return cubemap.get();
 
             } else {
 
@@ -51,15 +46,14 @@ Texture* GLCubeMaps::get(Texture* texture) {
 
                     const auto& currentRenderTarget = renderer.getRenderTarget();
 
-                    const auto renderTarget = std::make_shared<GLCubeRenderTarget>(image->height / 2);
+                    auto renderTarget = std::make_unique<GLCubeRenderTarget>(image->height / 2);
                     renderTarget->fromEquirectangularTexture(renderer, *texture);
-                    cubemaps[texture] = renderTarget;
+                    cubemaps[texture] = std::move(renderTarget);
                 }
             }
         }
     }
 
-    return texture;
 }
 
 void GLCubeMaps::dispose() {

@@ -44,8 +44,7 @@ namespace threepp {
             Color clearColor = Color(0x000000);
             float clearAlpha = 0;
 
-            std::shared_ptr<Mesh> boxMesh = nullptr;
-            std::shared_ptr<Mesh> planeMesh = nullptr;
+            std::unique_ptr<Mesh> boxMesh = nullptr;
 
             void setClear(const Color& color, float alpha);
         };

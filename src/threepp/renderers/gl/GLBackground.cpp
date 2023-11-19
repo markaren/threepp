@@ -70,7 +70,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
                 geometry->deleteAttribute("normal");
                 geometry->deleteAttribute("uv");
 
-                boxMesh = Mesh::create(geometry, shaderMaterial);
+                boxMesh = std::make_unique<Mesh>(geometry, shaderMaterial);
 
                 boxMesh->onBeforeRender = [&](void*, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
                     boxMesh->matrixWorld->copyPosition(*camera->matrixWorld);

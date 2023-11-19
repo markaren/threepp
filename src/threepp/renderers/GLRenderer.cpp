@@ -146,14 +146,13 @@ struct GLRenderer::Impl {
           geometries(attributes, _info, bindingStates),
           textures(state, properties, _info),
           objects(geometries, attributes, _info),
-          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           renderLists(properties),
           shadowMap(objects),
           materials(properties),
+          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           programCache(bindingStates, clipping),
           _currentDrawBuffers(GL_BACK),
           _emptyScene(Scene::create()),
-          _currentDrawBuffers(GL_BACK),
           onMaterialDispose(this) {}
 
     void deallocateMaterial(Material* material) {
@@ -588,9 +587,11 @@ struct GLRenderer::Impl {
         materialProperties->fog = scene->fog;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            materialProperties->envMap = cubemaps.get(materialWithEnvMap->envMap.get());
+            cubemaps.get(materialWithEnvMap->envMap.get());
+            materialProperties->envMap = materialWithEnvMap->envMap.get();
         } else {
-            materialProperties->envMap = cubemaps.get(materialProperties->environment);
+            cubemaps.get(materialProperties->environment);
+            materialProperties->envMap = materialProperties->environment;
         }
 
         if (programs.empty()) {
@@ -707,9 +708,11 @@ struct GLRenderer::Impl {
         Texture* envMap;
         auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
         if (materialWithEnvMap && materialWithEnvMap->envMap) {
-            envMap = cubemaps.get(materialWithEnvMap->envMap.get());
+            cubemaps.get(materialWithEnvMap->envMap.get());
+            envMap = materialWithEnvMap->envMap.get();
         } else {
-            envMap = cubemaps.get(environment.get());
+            cubemaps.get(environment.get());
+            envMap = environment.get();
         }
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
@@ -764,7 +767,7 @@ struct GLRenderer::Impl {
 
                 needsProgramChange = true;
 
-            } else if (false /*materialProperties.envMap != envMap*/) {
+            } else if (materialProperties->envMap != envMap) {
 
                 needsProgramChange = true;
 
