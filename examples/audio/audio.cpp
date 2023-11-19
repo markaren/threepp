@@ -8,6 +8,48 @@
 
 using namespace threepp;
 
+namespace {
+
+    auto createSmiley() {
+
+        Shape smileyShape;
+        smileyShape.moveTo(80, 40)
+                .absarc(40, 40, 40, 0, math::PI * 2, false);
+
+        auto smileyEye1Path = std::make_shared<Path>();
+        smileyEye1Path->moveTo(35, 20)
+                .absellipse(25, 20, 10, 10, 0, math::PI * 2, true);
+
+        auto smileyEye2Path = std::make_shared<Path>();
+        smileyEye2Path->moveTo(65, 20)
+                .absarc(55, 20, 10, 0, math::PI * 2, true);
+
+        auto smileyMouthPath = std::make_shared<Path>();
+        smileyMouthPath->moveTo(20, 40)
+                .quadraticCurveTo(40, 60, 60, 40)
+                .bezierCurveTo(70, 45, 70, 50, 60, 60)
+                .quadraticCurveTo(40, 80, 20, 60)
+                .quadraticCurveTo(5, 50, 20, 40);
+
+        smileyShape.holes.emplace_back(smileyEye1Path);
+        smileyShape.holes.emplace_back(smileyEye2Path);
+        smileyShape.holes.emplace_back(smileyMouthPath);
+
+        auto shapeGeometry = ShapeGeometry::create(smileyShape);
+        shapeGeometry->center();
+        shapeGeometry->scale(0.02f, 0.02f, 0.02f);
+
+        auto material = MeshBasicMaterial::create({{"color", Color::orange},
+                                                   {"side", Side::Double}});
+
+        auto mesh = Mesh::create(shapeGeometry, material);
+        mesh->rotateZ(math::PI);
+
+        return mesh;
+    }
+
+}// namespace
+
 int main() {
     Canvas canvas("Audio demo");
     GLRenderer renderer(canvas.size());
@@ -22,7 +64,7 @@ int main() {
     audio.setLooping(true);
     audio.play();
 
-    auto audioNode = Mesh::create(SphereGeometry::create());
+    auto audioNode = createSmiley();
     audioNode->add(audio);
     scene.add(audioNode);
 
@@ -57,6 +99,12 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
+
+    canvas.onWindowResize([&](WindowSize size) {
+        camera.aspect = size.aspect();
+        camera.updateProjectionMatrix();
+        renderer.setSize(size);
+    });
 
     canvas.animate([&] {
         renderer.render(scene, camera);
