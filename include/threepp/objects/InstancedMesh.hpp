@@ -43,7 +43,9 @@ namespace threepp {
         ~InstancedMesh() override;
 
     private:
+        Mesh _mesh;
         bool disposed{false};
+
     };
 
 }// namespace threepp

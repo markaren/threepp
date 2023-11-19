@@ -14,8 +14,6 @@ namespace {
 
     std::vector<Intersection> _instanceIntersects;
 
-    auto _mesh = Mesh::create();
-
 }// namespace
 
 
@@ -73,10 +71,10 @@ void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& int
     const auto& matrixWorld = this->matrixWorld;
     const auto raycastTimes = this->count;
 
-    _mesh->setGeometry(geometry_);
-    _mesh->setMaterials(materials_);
+    _mesh.setGeometry(geometry_);
+    _mesh.setMaterials(materials_);
 
-    if (!_mesh->material()) return;
+    if (!_mesh.material()) return;
 
     for (int instanceId = 0; instanceId < raycastTimes; instanceId++) {
 
@@ -88,9 +86,9 @@ void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& int
 
         // the mesh represents this single instance
 
-        _mesh->matrixWorld->copy(_instanceWorldMatrix);
+        _mesh.matrixWorld->copy(_instanceWorldMatrix);
 
-        _mesh->raycast(raycaster, _instanceIntersects);
+        _mesh.raycast(raycaster, _instanceIntersects);
 
         // process the result of raycast
 
