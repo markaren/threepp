@@ -63,11 +63,11 @@ struct GLRenderer::Impl {
     GLRenderer& scope;
 
     gl::GLState state;
-    gl::GLShadowMap shadowMap;
+
 
     std::shared_ptr<Scene> _emptyScene;
 
-    std::shared_ptr<OnMaterialDispose> onMaterialDispose;
+    OnMaterialDispose onMaterialDispose;
 
     std::shared_ptr<gl::GLRenderList> currentRenderList;
     std::shared_ptr<gl::GLRenderState> currentRenderState;
@@ -132,6 +132,7 @@ struct GLRenderer::Impl {
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
+    gl::GLShadowMap shadowMap;
 
     Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
         : scope(scope), _size(size),
@@ -150,10 +151,10 @@ struct GLRenderer::Impl {
           shadowMap(objects),
           materials(properties),
           programCache(bindingStates, clipping),
+          _currentDrawBuffers(GL_BACK),
           _emptyScene(Scene::create()),
-
-          onMaterialDispose(std::make_shared<OnMaterialDispose>(this)),
-          _currentDrawBuffers(GL_BACK) {}
+          _currentDrawBuffers(GL_BACK),
+          onMaterialDispose(this) {}
 
     void deallocateMaterial(Material* material) {
 
@@ -596,7 +597,7 @@ struct GLRenderer::Impl {
 
             // new material
 
-            material->addEventListener("dispose", onMaterialDispose);
+            material->addEventListener("dispose", &onMaterialDispose);
         }
 
         std::shared_ptr<gl::GLProgram> program = nullptr;

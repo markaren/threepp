@@ -83,8 +83,8 @@ gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl:
       maxCubemapSize(GLCapabilities::instance().maxCubemapSize),
       maxTextureSize(GLCapabilities::instance().maxTextureSize),
       maxSamples(GLCapabilities::instance().maxSamples),
-      onTextureDispose_(std::make_shared<TextureEventListener>(this)),
-      onRenderTargetDispose_(std::make_shared<RenderTargetEventListener>(this)) {}
+      onTextureDispose_(this),
+      onRenderTargetDispose_(this) {}
 
 void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuint width, GLuint height) {
 
@@ -202,7 +202,7 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
 
         textureProperties->glInit = true;
 
-        texture.addEventListener("dispose", onTextureDispose_);
+        texture.addEventListener("dispose", &onTextureDispose_);
 
         GLuint glTexture;
         glGenTextures(1, &glTexture);
@@ -479,7 +479,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
     auto textureProperties = properties.textureProperties.get(texture->uuid);
 
-    renderTarget->addEventListener("dispose", onRenderTargetDispose_);
+    renderTarget->addEventListener("dispose", &onRenderTargetDispose_);
 
     GLuint glTexture;
     glGenTextures(1, &glTexture);
