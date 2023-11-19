@@ -24,7 +24,7 @@ namespace {
     std::shared_ptr<Mesh> createMesh(const SphereGeometry::Params& params) {
 
         auto geometry = SphereGeometry::create(params);
-        auto material = MeshBasicMaterial::create({{"side", DoubleSide}});
+        auto material = MeshBasicMaterial::create({{"side", Side::Double}});
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
@@ -36,12 +36,12 @@ namespace {
 
 int main() {
 
-    Canvas canvas("SphereGeometry", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("SphereGeometry", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = Color::blue;
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.z = 5;
 
     SphereGeometry::Params params{};
@@ -50,7 +50,7 @@ int main() {
     scene->add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -79,13 +79,12 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         mesh->rotation.y += 0.8f * dt;
         mesh->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         ui.render();
 

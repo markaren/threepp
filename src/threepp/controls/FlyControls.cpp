@@ -1,7 +1,7 @@
 
 #include "threepp/controls/FlyControls.hpp"
 
-#include "threepp/Canvas.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Spherical.hpp"
 
@@ -105,41 +105,43 @@ struct FlyControls::Impl {
             }
 
             switch (evt.key) {
-                case 87:
-                    scope.pimpl_->moveState.forward = 1;// w
+                case Key::W:
+                    scope.pimpl_->moveState.forward = 1;
                     break;
-                case 83:
-                    scope.pimpl_->moveState.back = 1;// s
+                case Key::S:
+                    scope.pimpl_->moveState.back = 1;
                     break;
-                case 65:
-                    scope.pimpl_->moveState.left = 1;// a
+                case Key::A:
+                    scope.pimpl_->moveState.left = 1;
                     break;
-                case 68:
-                    scope.pimpl_->moveState.right = 1;// d
+                case Key::D:
+                    scope.pimpl_->moveState.right = 1;
                     break;
-                case 82:
-                    scope.pimpl_->moveState.up = 1;// r
+                case Key::R:
+                    scope.pimpl_->moveState.up = 1;
                     break;
-                case 70:
-                    scope.pimpl_->moveState.down = 1;// f
+                case Key::F:
+                    scope.pimpl_->moveState.down = 1;
                     break;
-                case 265:
-                    scope.pimpl_->moveState.pitchUp = 1;// arrowup
+                case Key::UP:
+                    scope.pimpl_->moveState.pitchUp = 1;
                     break;
-                case 264:
-                    scope.pimpl_->moveState.pitchDown = 1;// arrowdown
+                case Key::DOWN:
+                    scope.pimpl_->moveState.pitchDown = 1;
                     break;
-                case 263:
-                    scope.pimpl_->moveState.yawLeft = 1;// arrowleft
+                case Key::LEFT:
+                    scope.pimpl_->moveState.yawLeft = 1;
                     break;
-                case 262:
-                    scope.pimpl_->moveState.yawRight = 1;// arrowright
+                case Key::RIGHT:
+                    scope.pimpl_->moveState.yawRight = 1;
                     break;
-                case 81:
-                    scope.pimpl_->moveState.rollLeft = 1;// q
+                case Key::Q:
+                    scope.pimpl_->moveState.rollLeft = 1;
                     break;
-                case 69:
-                    scope.pimpl_->moveState.rollRight = 1;// e
+                case Key::E:
+                    scope.pimpl_->moveState.rollRight = 1;
+                    break;
+                default:
                     break;
             }
 
@@ -157,41 +159,43 @@ struct FlyControls::Impl {
         void onKeyReleased(KeyEvent evt) override {
 
             switch (evt.key) {
-                case 87:
-                    scope.pimpl_->moveState.forward = 0;// w
+                case Key::W:
+                    scope.pimpl_->moveState.forward = 0;
                     break;
-                case 83:
-                    scope.pimpl_->moveState.back = 0;// s
+                case Key::S:
+                    scope.pimpl_->moveState.back = 0;
                     break;
-                case 65:
-                    scope.pimpl_->moveState.left = 0;// a
+                case Key::A:
+                    scope.pimpl_->moveState.left = 0;
                     break;
-                case 68:
-                    scope.pimpl_->moveState.right = 0;// d
+                case Key::D:
+                    scope.pimpl_->moveState.right = 0;
                     break;
-                case 82:
-                    scope.pimpl_->moveState.up = 0;// r
+                case Key::R:
+                    scope.pimpl_->moveState.up = 0;
                     break;
-                case 70:
-                    scope.pimpl_->moveState.down = 0;// f
+                case Key::F:
+                    scope.pimpl_->moveState.down = 0;
                     break;
-                case 265:
-                    scope.pimpl_->moveState.pitchUp = 0;// arrowup
+                case Key::UP:
+                    scope.pimpl_->moveState.pitchUp = 0;
                     break;
-                case 264:
-                    scope.pimpl_->moveState.pitchDown = 0;// arrowdown
+                case Key::DOWN:
+                    scope.pimpl_->moveState.pitchDown = 0;
                     break;
-                case 263:
-                    scope.pimpl_->moveState.yawLeft = 0;// arrowleft
+                case Key::LEFT:
+                    scope.pimpl_->moveState.yawLeft = 0;
                     break;
-                case 262:
-                    scope.pimpl_->moveState.yawRight = 0;// arrowright
+                case Key::RIGHT:
+                    scope.pimpl_->moveState.yawRight = 0;
                     break;
-                case 81:
-                    scope.pimpl_->moveState.rollLeft = 0;// q
+                case Key::Q:
+                    scope.pimpl_->moveState.rollLeft = 0;
                     break;
-                case 69:
-                    scope.pimpl_->moveState.rollRight = 0;// e
+                case Key::E:
+                    scope.pimpl_->moveState.rollRight = 0;
+                    break;
+                default:
                     break;
             }
 
@@ -239,8 +243,8 @@ struct FlyControls::Impl {
 
             if (!scope.dragToLook || scope.pimpl_->mouseStatus > 0) {
 
-                const float halfWidth = static_cast<float>(scope.pimpl_->canvas.getSize().width) / 2;
-                const float halfHeight = static_cast<float>(scope.pimpl_->canvas.getSize().height) / 2;
+                const float halfWidth = static_cast<float>(scope.pimpl_->canvas.size().width) / 2;
+                const float halfHeight = static_cast<float>(scope.pimpl_->canvas.size().height) / 2;
 
                 scope.pimpl_->moveState.yawLeft = -((pos.x) - halfWidth) / halfWidth;
                 scope.pimpl_->moveState.pitchDown = ((pos.y) - halfHeight) / halfHeight;

@@ -22,7 +22,7 @@ namespace threepp {
     class Texture: public EventDispatcher {
 
     public:
-        inline static int DEFAULT_MAPPING = UVMapping;
+        inline static Mapping DEFAULT_MAPPING = Mapping::UV;
 
         unsigned int id = textureId++;
 
@@ -33,19 +33,19 @@ namespace threepp {
         std::optional<Image> image;
         std::vector<Image> mipmaps;
 
-        std::optional<int> mapping = Texture::DEFAULT_MAPPING;
+        std::optional<Mapping> mapping = Texture::DEFAULT_MAPPING;
 
-        int wrapS = ClampToEdgeWrapping;
-        int wrapT = ClampToEdgeWrapping;
+        TextureWrapping wrapS{TextureWrapping::ClampToEdge};
+        TextureWrapping wrapT{TextureWrapping::ClampToEdge};
 
-        int magFilter = LinearFilter;
-        int minFilter = LinearMipmapLinearFilter;
+        Filter magFilter{Filter::Linear};
+        Filter minFilter{Filter::LinearMipmapLinear};
 
         int anisotropy = 1;
 
-        int format = RGBAFormat;
+        Format format{Format::RGBA};
         std::optional<std::string> internalFormat;
-        int type = UnsignedByteType;
+        Type type{Type::UnsignedByte};
 
         Vector2 offset = Vector2(0, 0);
         Vector2 repeat = Vector2(1, 1);
@@ -63,7 +63,7 @@ namespace threepp {
         //
         // Also changing the encoding after already used by a Material will not automatically make the Material
         // update. You need to explicitly call Material.needsUpdate to trigger it to recompile.
-        int encoding = LinearEncoding;
+        Encoding encoding{Encoding::Linear};
 
         Texture(const Texture&) = delete;
         Texture operator=(const Texture&) = delete;

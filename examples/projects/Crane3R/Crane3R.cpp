@@ -65,8 +65,11 @@ namespace {
             auto house = cylinder.first;
             auto rod = cylinder.second;
 
-            house->lookAt(rod->getWorldPosition(tmp));
-            rod->lookAt(house->getWorldPosition(tmp));
+            rod->getWorldPosition(tmp);
+            house->lookAt(tmp);
+
+            house->getWorldPosition(tmp);
+            rod->lookAt(tmp);
         }
     }
 
@@ -86,7 +89,6 @@ Crane3R::Crane3R(const std::shared_ptr<threepp::Group>& obj) {
             obj->getObjectByName("house2"),
             obj->getObjectByName("rod2")};
 
-
     add(obj);
 
     controller_ = std::make_unique<Controller>(*this);
@@ -96,10 +98,10 @@ Crane3R::Crane3R(const std::shared_ptr<threepp::Group>& obj) {
 
 std::shared_ptr<Crane3R> Crane3R::create() {
 
-    threepp::OBJLoader loader;
 
     auto parent = Group::create();
 
+    OBJLoader loader;
     auto part1 = loader.load("data/models/obj/Crane3R/4200/4200.obj");
     auto part2 = loader.load("data/models/obj/Crane3R/7000/7000.obj");
     part2->position.set(0, 0, 4.2);

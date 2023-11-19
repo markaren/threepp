@@ -77,7 +77,7 @@ public:
         return gridSize_;
     }
 
-    [[nodiscard]] const Snake &snake() const {
+    [[nodiscard]] const Snake& snake() const {
         return snake_;
     }
 
@@ -102,8 +102,8 @@ private:
 
     void spawnFood() {
         do {
-            auto x = static_cast<float>(math::randomInRange(0, gridSize_ - 1));
-            auto y = static_cast<float>(math::randomInRange(0, gridSize_ - 1));
+            auto x = static_cast<float>(math::randInt(0, gridSize_ - 1));
+            auto y = static_cast<float>(math::randInt(0, gridSize_ - 1));
             foodPos_.set(x, y);
         } while (snake_.checkSelfCollision(foodPos_));
     }

@@ -32,7 +32,7 @@ void Texture::dispose() {
 
 void Texture::transformUv(Vector2& uv) const {
 
-    if (this->mapping != UVMapping) return;
+    if (this->mapping != Mapping::UV) return;
 
     uv.applyMatrix3(this->matrix);
 
@@ -40,17 +40,17 @@ void Texture::transformUv(Vector2& uv) const {
 
         switch (this->wrapS) {
 
-            case RepeatWrapping:
+            case TextureWrapping::Repeat:
 
                 uv.x = uv.x - std::floor(uv.x);
                 break;
 
-            case ClampToEdgeWrapping:
+            case TextureWrapping::ClampToEdge:
 
                 uv.x = uv.x < 0 ? 0.f : 1.f;
                 break;
 
-            case MirroredRepeatWrapping:
+            case TextureWrapping::MirroredRepeat:
 
                 if (std::abs((int) std::floor(uv.x) % 2) == 1) {
 
@@ -69,17 +69,17 @@ void Texture::transformUv(Vector2& uv) const {
 
         switch (this->wrapT) {
 
-            case RepeatWrapping:
+            case TextureWrapping::Repeat:
 
                 uv.y = uv.y - std::floor(uv.y);
                 break;
 
-            case ClampToEdgeWrapping:
+            case TextureWrapping::ClampToEdge:
 
                 uv.y = uv.y < 0 ? 0.f : 1.f;
                 break;
 
-            case MirroredRepeatWrapping:
+            case TextureWrapping::MirroredRepeat:
 
                 if (std::abs((int) std::floor(uv.y) % 2) == 1) {
 

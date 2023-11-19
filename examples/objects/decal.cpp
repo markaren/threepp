@@ -61,7 +61,7 @@ namespace {
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
-            auto& size = canvas.getSize();
+            auto size = canvas.size();
             mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
             mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
         }
@@ -73,7 +73,6 @@ namespace {
     struct MyGui: public ImguiContext {
 
         bool clear = false;
-        bool mouseHover = false;
 
         explicit MyGui(const Canvas& canvas): ImguiContext(canvas.windowPtr()) {}
 
@@ -84,8 +83,6 @@ namespace {
 
             ImGui::Begin("Options");
             ImGui::Checkbox("Clear", &clear);
-
-            mouseHover = ImGui::IsWindowHovered();
 
             ImGui::End();
         }
@@ -110,16 +107,16 @@ namespace {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(8)};
-    GLRenderer renderer(canvas);
+    Canvas canvas{"Decals", {{"aa", 8}}};
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.set(0, 1, 10);
 
     addLights(*scene);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     TextureLoader tl;
     AssimpLoader loader;
@@ -147,7 +144,7 @@ int main() {
     canvas.addMouseListener(&mouseListener);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -171,9 +168,8 @@ int main() {
 
     Raycaster raycaster;
     canvas.animate([&]() {
-
-        raycaster.setFromCamera(mouseListener.mouse, camera);
-        auto intersects = raycaster.intersectObject(mesh, false);
+        raycaster.setFromCamera(mouseListener.mouse, *camera);
+        auto intersects = raycaster.intersectObject(*mesh, false);
 
         bool click = mouseListener.mouseClick();
 
@@ -194,18 +190,18 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES() * math::randomInRange(0.6f, 1.2f);
+                Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
                 auto mat = decalMat->clone()->as<MeshPhongMaterial>();
                 mat->color.randomize();
-                orientation.z = math::PI * math::random();
+                orientation.z = math::PI * math::randFloat();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
                 decals.emplace_back(m.get());
                 scene->add(m);
             }
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
 #ifdef HAS_IMGUI
 

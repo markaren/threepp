@@ -8,6 +8,7 @@
 
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 #include <sstream>
@@ -17,9 +18,9 @@ using namespace threepp::gl;
 
 namespace {
 
-    int getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
+    Encoding getTextureEncodingFromMap(const std::shared_ptr<Texture>& map) {
 
-        return map ? map->encoding : LinearEncoding;
+        return map ? map->encoding : Encoding::Linear;
     }
 
 }// namespace
@@ -33,8 +34,6 @@ ProgramParameters::ProgramParameters(
         Scene* scene,
         Material* material,
         const std::unordered_map<std::string, std::string>& shaderIDs) {
-
-    auto& shadowMap = renderer.shadowMap();
 
     auto mapMaterial = dynamic_cast<MaterialWithMap*>(material);
     auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
@@ -98,11 +97,13 @@ ProgramParameters::ProgramParameters(
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
     envMap = envmapMaterial && envmapMaterial->envMap;
-    envMapMode = envMap && envmapMaterial->envMap->mapping;
+    if (envMap && envmapMaterial->envMap->mapping){
+        envMapMode = as_integer(*envmapMaterial->envMap->mapping);
+    }
     envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
     envMapCubeUV = envMapMode != 0 &&
-                   (envmapMaterial->envMap->mapping.value_or(-1) == CubeReflectionMapping ||
-                    envmapMaterial->envMap->mapping.value_or(-1) == CubeRefractionMapping);
+                   (envmapMaterial->envMap->mapping == Mapping::CubeReflection ||
+                    envmapMaterial->envMap->mapping == Mapping::CubeRefraction);
     lightMap = lightmapMaterial && lightmapMaterial->lightMap;
     lightMapEncoding = getTextureEncodingFromMap(lightMap ? lightmapMaterial->lightMap : nullptr);
     aoMap = aomapMaterial && aomapMaterial->aoMap;
@@ -152,11 +153,17 @@ ProgramParameters::ProgramParameters(
         flatShading = flatshadeMaterial->flatShading;
     }
 
-    sizeAttenuation = material->is<MaterialWithSize>();
+    auto sizeMaterial = material->as<MaterialWithSize>();
+    sizeAttenuation = sizeMaterial ? sizeMaterial->sizeAttenuation : false;
 
-    skinning = false;// TODO
-    maxBones = 0;    // TODO
+    skinning = object->is<SkinnedMesh>();
+    maxBones = 64;    // TODO
     useVertexTexture = GLCapabilities::instance().floatVertexTextures;
+
+    if (auto m = material->as<MaterialWithMorphTargets>()) {
+        morphTargets = m->morphTargets;
+        morphNormals = m->morphNormals;
+    }
 
     numDirLights = lights.directional.size();
     numPointLights = lights.point.size();
@@ -176,16 +183,16 @@ ProgramParameters::ProgramParameters(
     shadowMapEnabled = renderer.shadowMap().enabled && numShadows > 0;
     shadowMapType = renderer.shadowMap().type;
 
-    toneMapping = material->toneMapped ? renderer.toneMapping : NoToneMapping;
+    toneMapping = material->toneMapped ? renderer.toneMapping : ToneMapping::None;
     physicallyCorrectLights = renderer.physicallyCorrectLights;
 
     premultipliedAlpha = material->premultipliedAlpha;
 
     alphaTest = material->alphaTest;
-    doubleSided = material->side == DoubleSide;
-    flipSided = material->side == BackSide;
+    doubleSided = material->side == Side::Double;
+    flipSided = material->side == Side::Back;
 
-    depthPacking = depthpackMaterial ? depthpackMaterial->depthPacking : 0;
+    depthPacking = depthpackMaterial ? as_integer(depthpackMaterial->depthPacking) : 0;
 
     if (shaderMaterial) {
         index0AttributeName = shaderMaterial->index0AttributeName;
@@ -200,21 +207,21 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(instancingColor) << '\n';
 
     s << std::to_string(supportsVertexTextures) << '\n';
-    s << std::to_string(outputEncoding) << '\n';
+    s << std::to_string(as_integer(outputEncoding)) << '\n';
     s << std::to_string(map) << '\n';
-    s << std::to_string(mapEncoding) << '\n';
+    s << std::to_string(as_integer(mapEncoding)) << '\n';
     s << std::to_string(matcap) << '\n';
-    s << std::to_string(matcapEncoding) << '\n';
+    s << std::to_string(as_integer(matcapEncoding)) << '\n';
     s << std::to_string(envMap) << '\n';
-    s << std::to_string(envMapEncoding) << '\n';
+    s << std::to_string(as_integer(envMapEncoding)) << '\n';
     s << std::to_string(envMapMode) << '\n';
-    s << std::to_string(envMapEncoding) << '\n';
+    s << std::to_string(as_integer(envMapEncoding)) << '\n';
     s << std::to_string(envMapCubeUV) << '\n';
     s << std::to_string(lightMap) << '\n';
-    s << std::to_string(lightMapEncoding) << '\n';
+    s << std::to_string(as_integer(lightMapEncoding)) << '\n';
     s << std::to_string(aoMap) << '\n';
     s << std::to_string(emissiveMap) << '\n';
-    s << std::to_string(emissiveMapEncoding) << '\n';
+    s << std::to_string(as_integer(emissiveMapEncoding)) << '\n';
     s << std::to_string(bumpMap) << '\n';
     s << std::to_string(normalMap) << '\n';
     s << std::to_string(objectSpaceNormalMap) << '\n';
@@ -240,7 +247,7 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(transmissionMap) << '\n';
     s << std::to_string(thicknessMap) << '\n';
 
-    s << (combine.has_value() ? std::to_string(*combine) : std::string("undefined")) << '\n';
+    s << (combine.has_value() ? std::to_string(as_integer(*combine)) : std::string("undefined")) << '\n';
 
     s << std::to_string(vertexTangents) << '\n';
     s << std::to_string(vertexColors) << '\n';
@@ -256,6 +263,12 @@ std::string ProgramParameters::hash() const {
 
     s << std::to_string(sizeAttenuation) << '\n';
     s << std::to_string(logarithmicDepthBuffer) << '\n';
+
+    s << std::to_string(morphTargets) << '\n';
+    s << std::to_string(morphNormals) << '\n';
+
+    s << std::to_string(skinning) << '\n';
+    s << std::to_string(useVertexTexture) << '\n';
 
     s << std::to_string(numDirLights) << '\n';
     s << std::to_string(numPointLights) << '\n';
@@ -273,9 +286,9 @@ std::string ProgramParameters::hash() const {
     s << std::to_string(dithering) << '\n';
 
     s << std::to_string(shadowMapEnabled) << '\n';
-    s << std::to_string(shadowMapType) << '\n';
+    s << std::to_string(as_integer(shadowMapType)) << '\n';
 
-    s << std::to_string(toneMapping) << '\n';
+    s << std::to_string(as_integer(toneMapping)) << '\n';
     s << std::to_string(physicallyCorrectLights) << '\n';
 
     s << std::to_string(premultipliedAlpha) << '\n';

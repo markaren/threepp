@@ -51,7 +51,7 @@ namespace threepp {
 
     protected:
         MeshDepthMaterial()
-            : MaterialWithDepthPacking(BasicDepthPacking),
+            : MaterialWithDepthPacking(DepthPacking::Basic),
               MaterialWithDisplacementMap(1, 0),
               MaterialWithWireframe(false, 1) {
 

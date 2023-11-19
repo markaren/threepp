@@ -1,9 +1,9 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#include "threepp/math/Vector3.hpp"
 #include "threepp/math/MathUtils.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <array>
 #include <vector>
@@ -66,23 +66,22 @@ TEST_CASE("dot") {
 }
 
 TEST_CASE("angleTo") {
-    
-    Vector3 a ( 0, - 0.18851655680720186f, 0.9820700116639124f );
-    Vector3 b ( 0, 0.18851655680720186f, - 0.9820700116639124f );
-    
-    CHECK( a.angleTo( a ) == 0 );
-    CHECK( a.angleTo( b ) == Approx(math::PI) );
 
-    Vector3 _x ( 1, 0, 0 );
-    Vector3 _y ( 0, 1, 0 );
-    Vector3 _z ( 0, 0, 1 );
+    Vector3 a(0, -0.18851655680720186f, 0.9820700116639124f);
+    Vector3 b(0, 0.18851655680720186f, -0.9820700116639124f);
 
-    CHECK( _x.angleTo( _y ) == Approx(math::PI / 2) );
-    CHECK( _x.angleTo( _z ) == Approx(math::PI / 2) );
-    CHECK( _z.angleTo( _x ) == Approx(math::PI / 2) );
+    CHECK(a.angleTo(a) == 0);
+    CHECK_THAT(a.angleTo(b), Catch::Matchers::WithinRel(math::PI));
 
-    CHECK(std::abs( _x.angleTo( Vector3( 1, 1, 0 ) ) - ( math::PI / 4 ) ) < 0.0000001 );
-    
+    Vector3 _x(1, 0, 0);
+    Vector3 _y(0, 1, 0);
+    Vector3 _z(0, 0, 1);
+
+    CHECK_THAT(_x.angleTo(_y), Catch::Matchers::WithinRel(math::PI / 2));
+    CHECK_THAT(_x.angleTo(_z), Catch::Matchers::WithinRel(math::PI / 2));
+    CHECK_THAT(_z.angleTo(_x), Catch::Matchers::WithinRel(math::PI / 2));
+
+    CHECK(std::abs(_x.angleTo(Vector3(1, 1, 0)) - (math::PI / 4)) < 0.0000001);
 }
 
 TEST_CASE("from arraylike") {

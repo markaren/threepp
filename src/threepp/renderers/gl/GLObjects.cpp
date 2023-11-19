@@ -36,14 +36,14 @@ struct GLObjects::Impl {
     GLGeometries& geometries_;
     GLAttributes& attributes_;
 
-    std::shared_ptr<OnInstancedMeshDispose> onInstancedMeshDispose;
+    OnInstancedMeshDispose onInstancedMeshDispose;
 
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
         : attributes_(attributes),
           geometries_(geometries), info_(info),
-          onInstancedMeshDispose(std::make_shared<OnInstancedMeshDispose>(this)) {}
+          onInstancedMeshDispose(this) {}
 
     BufferGeometry* update(Object3D* object) {
 
@@ -61,12 +61,11 @@ struct GLObjects::Impl {
             updateMap_[geometry] = frame;
         }
 
-        auto instancedMesh = object->as<InstancedMesh>();
-        if (instancedMesh) {
+        if (auto instancedMesh = object->as<InstancedMesh>()) {
 
-            if (!object->hasEventListener("dispose", onInstancedMeshDispose.get())) {
+            if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
 
-                object->addEventListener("dispose", onInstancedMeshDispose);
+                object->addEventListener("dispose", &onInstancedMeshDispose);
             }
 
             attributes_.update(instancedMesh->instanceMatrix.get(), GL_ARRAY_BUFFER);

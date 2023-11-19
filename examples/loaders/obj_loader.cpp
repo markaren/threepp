@@ -19,11 +19,11 @@ void createAndAddLights(Scene& scene) {
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().antialiasing(8)};
-    GLRenderer renderer(canvas);
+    Canvas canvas{"OBJ loader", {{"aa", 8}}};
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(0, 100, 150);
 
     OBJLoader loader;
@@ -45,19 +45,18 @@ int main() {
     createAndAddLights(*scene);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         obj1->rotation.y += 1 * dt;
         obj2->rotation.y += 1 * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

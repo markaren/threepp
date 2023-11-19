@@ -22,7 +22,7 @@ namespace threepp {
 
         std::vector<std::shared_ptr<Path>> holes;
 
-        explicit Shape(const std::optional<std::vector<Vector2>>& points = {});
+        explicit Shape(const std::vector<Vector2>& points = {});
 
         std::vector<std::vector<Vector2>> getPointsHoles(unsigned int divisions) const;
 

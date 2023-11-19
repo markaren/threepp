@@ -41,7 +41,7 @@ namespace threepp {
                 unsigned int heightSegments = 1,
                 bool openEnded = false,
                 float thetaStart = 0,
-                float thetaLength = math::PI * 2);
+                float thetaLength = math::TWO_PI);
 
     protected:
         explicit ConeGeometry(const Params& params);

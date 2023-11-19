@@ -21,7 +21,7 @@ namespace threepp {
     class FontLoader {
 
     public:
-        std::optional<FontData> load(const std::filesystem::path& path);
+        std::optional<Font> load(const std::filesystem::path& path);
 
     private:
 #if __has_include(<nlohmann/json.hpp>)
@@ -59,7 +59,7 @@ namespace threepp {
 
 #if __has_include(<nlohmann/json.hpp>)
 
-std::optional<threepp::FontData> threepp::FontLoader::load(const std::filesystem::path& path) {
+std::optional<threepp::Font> threepp::FontLoader::load(const std::filesystem::path& path) {
 
     if (!std::filesystem::exists(path)) {
         std::cerr << "[FontLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
@@ -69,12 +69,12 @@ std::optional<threepp::FontData> threepp::FontLoader::load(const std::filesystem
     std::ifstream file(path);
     auto json = nlohmann::json::parse(file);
 
-    return toFontData(json);
+    return Font(toFontData(json));
 }
 
 #else
 
-std::optional<threepp::FontData> threepp::FontLoader::load(const std::filesystem::path& path) {
+std::optional<threepp::Font> threepp::FontLoader::load(const std::filesystem::path& path) {
 
     std::cerr << "[FontLoader] JSON library not found. No loading will occour." << std::endl;
 

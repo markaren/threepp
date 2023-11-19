@@ -30,7 +30,7 @@ namespace {
         const auto planeGeometry = PlaneGeometry::create(100, 100);
         const auto planeMaterial = MeshLambertMaterial::create();
         planeMaterial->color = Color::gray;
-        planeMaterial->side = DoubleSide;
+        planeMaterial->side = Side::Double;
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->rotateX(math::degToRad(90));
         plane->receiveShadow = true;
@@ -57,14 +57,14 @@ namespace {
 
 int main() {
 
-    Canvas canvas("DirectionalLight", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("DirectionalLight", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = PCFSoftShadowMap;
-    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.shadowMap().type = ShadowMap::PFCSoft;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(-5, 2, -5);
 
     auto light = DirectionalLight::create();
@@ -75,7 +75,7 @@ int main() {
     auto sky = createSky(light->position);
     scene->add(sky);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto helper = DirectionalLightHelper::create(*light);
     scene->add(helper);
@@ -87,14 +87,13 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         torusKnot->rotation.y -= 0.5f * dt;
@@ -107,6 +106,6 @@ int main() {
         light->updateMatrixWorld();
         helper->update();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

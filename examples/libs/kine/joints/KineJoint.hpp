@@ -6,8 +6,8 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector3.hpp"
 
-#include "../KineLimit.hpp"
 #include "../KineComponent.hpp"
+#include "../KineLimit.hpp"
 
 namespace kine {
 

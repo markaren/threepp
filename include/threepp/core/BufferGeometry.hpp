@@ -18,11 +18,13 @@ namespace threepp {
     class BufferGeometry: public EventDispatcher {
 
     public:
-        const unsigned int id = ++_id;
+        const unsigned int id{++_id};
 
         const std::string uuid;
 
         std::string name;
+
+        bool morphTargetsRelative{false};
 
         std::vector<GeometryGroup> groups;
 
@@ -52,6 +54,8 @@ namespace threepp {
             return *this;
         }
 
+        BufferAttribute* getAttribute(const std::string& name);
+
         template<class T>
         TypedBufferAttribute<T>* getAttribute(const std::string& name) {
 
@@ -68,11 +72,21 @@ namespace threepp {
             return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
         }
 
-        [[nodiscard]] const std::unordered_map<std::string, std::unique_ptr<BufferAttribute>>& getAttributes() const;
+        bool hasMorphAttribute(const std::string& name);
 
-        void setAttribute(const std::string& name, std::unique_ptr<BufferAttribute> attribute);
+        std::vector<std::shared_ptr<BufferAttribute>>* getMorphAttribute(const std::string& name);
+
+        std::vector<std::shared_ptr<BufferAttribute>>* getOrCreateMorphAttribute(const std::string& name);
+
+        [[nodiscard]] const std::unordered_map<std::string, std::shared_ptr<BufferAttribute>>& getAttributes() const;
+
+        void setAttribute(const std::string& name, std::shared_ptr<BufferAttribute> attribute);
+
+        void deleteAttribute(const std::string& name);
 
         [[nodiscard]] bool hasAttribute(const std::string& name) const;
+
+        [[nodiscard]] const std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>>& getMorphAttributes() const;
 
         void addGroup(int start, int count, unsigned int materialIndex = 0);
 
@@ -114,25 +128,17 @@ namespace threepp {
 
         void copy(const BufferGeometry& source);
 
-        [[nodiscard]] std::shared_ptr<BufferGeometry> clone() const {
-            auto g = std::make_shared<BufferGeometry>();
-            g->copy(*this);
-            return g;
-        }
+        [[nodiscard]] std::shared_ptr<BufferGeometry> clone() const;
 
-        static std::shared_ptr<BufferGeometry> create() {
+        ~BufferGeometry() override;
 
-            return std::make_shared<BufferGeometry>();
-        }
-
-        ~BufferGeometry() override {
-            dispose();
-        };
+        static std::shared_ptr<BufferGeometry> create();
 
     private:
         bool disposed_ = false;
         std::unique_ptr<IntBufferAttribute> index_;
-        std::unordered_map<std::string, std::unique_ptr<BufferAttribute>> attributes_;
+        std::unordered_map<std::string, std::shared_ptr<BufferAttribute>> attributes_;
+        std::unordered_map<std::string, std::vector<std::shared_ptr<BufferAttribute>>> morphAttributes_;
 
         inline static unsigned int _id{0};
     };

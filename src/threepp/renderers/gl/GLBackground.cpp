@@ -9,11 +9,10 @@ using namespace threepp::gl;
 
 GLBackground::GLBackground(GLState& state, bool premultipliedAlpha): state(state), premultipliedAlpha(premultipliedAlpha) {}
 
-void GLBackground::render(GLRenderer& renderer, Object3D* scene) {
+void GLBackground::render(GLRenderer& renderer, Scene* scene) {
 
     bool forceClear = false;
-    bool isScene = scene->as<Scene>();
-    std::optional<Color> background = isScene ? scene->as<Scene>()->background : std::nullopt;
+    auto& background = scene->background;
 
     if (!background) {
 

@@ -3,20 +3,19 @@
 #ifndef THREEPP_GLRENDERER_HPP
 #define THREEPP_GLRENDERER_HPP
 
+#include "threepp/constants.hpp"
+
 #include "threepp/math/Color.hpp"
 #include "threepp/math/Plane.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector4.hpp"
 
-#include "threepp/Canvas.hpp"
-#include "threepp/constants.hpp"
+#include "threepp/canvas/Canvas.hpp"
 #include "threepp/core/misc.hpp"
 
 #include "threepp/renderers/gl/GLInfo.hpp"
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
-
-#include "TextHandle.hpp"
 
 #include <memory>
 #include <vector>
@@ -60,7 +59,7 @@ namespace threepp {
         // physically based shading
 
         float gammaFactor = 2.0f;// for backwards compatibility
-        int outputEncoding = LinearEncoding;
+        Encoding outputEncoding{Encoding::Linear};
 
         // physical lights
 
@@ -68,12 +67,16 @@ namespace threepp {
 
         // tone mapping
 
-        int toneMapping = NoToneMapping;
+        ToneMapping toneMapping{ToneMapping::None};
         float toneMappingExposure = 1.0f;
 
         bool checkShaderErrors = false;
 
-        explicit GLRenderer(Canvas& canvas, const Parameters& parameters = {});
+        explicit GLRenderer(WindowSize size, const Parameters& parameters = {});
+
+        GLRenderer(GLRenderer&&) = delete;
+        GLRenderer(const GLRenderer&) = delete;
+        GLRenderer& operator=(const GLRenderer&) = delete;
 
         const gl::GLInfo& info();
 
@@ -131,9 +134,7 @@ namespace threepp {
 
         void dispose();
 
-        void render(Scene* scene, Camera* camera);
-
-        void render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera);
+        void render(Scene& scene, Camera& camera);
 
         void renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group);
 
@@ -141,15 +142,15 @@ namespace threepp {
 
         [[nodiscard]] int getActiveMipmapLevel() const;
 
-        std::shared_ptr<GLRenderTarget>& getRenderTarget();
+        GLRenderTarget* getRenderTarget();
 
-        void setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
+        void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
-        void enableTextRendering();
+        void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
 
-        TextHandle& textHandle(const std::string& str = "");
+        void resetState();
 
         [[nodiscard]] const gl::GLInfo& info() const;
 

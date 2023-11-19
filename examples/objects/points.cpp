@@ -5,17 +5,17 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(8));
-    GLRenderer renderer(canvas);
+    Canvas canvas("Points", {{"aa", 8}});
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = 0x050505;
     scene->fog = Fog(0x050505, 2000, 3500);
-    auto camera = PerspectiveCamera::create(27, canvas.getAspect(), 5, 3500);
+    auto camera = PerspectiveCamera::create(27, canvas.aspect(), 5, 3500);
     camera->position.z = 2750;
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -28,9 +28,9 @@ int main() {
     const float n2 = n / 2;
 
     for (int i = 0; i < numParticles; i += 3) {
-        positions[i] = (math::random() * n - n2);
-        positions[i + 1] = (math::random() * n - n2);
-        positions[i + 2] = (math::random() * n - n2);
+        positions[i] = (math::randFloat() * n - n2);
+        positions[i + 1] = (math::randFloat() * n - n2);
+        positions[i + 2] = (math::randFloat() * n - n2);
 
         colors[i] = ((positions[i] / n) + 0.5f);
         colors[i + 1] = ((positions[i + 1] / n) + 0.5f);
@@ -52,12 +52,11 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         points->rotation.x = t * 0.25f;
         points->rotation.y = t * 0.5f;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

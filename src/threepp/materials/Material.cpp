@@ -120,12 +120,12 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "blending") {
 
-            blending = std::get<int>(value);
+            blending = std::get<Blending>(value);
             used = true;
 
         } else if (key == "side") {
 
-            side = std::get<int>(value);
+            side = std::get<Side>(value);
             used = true;
 
         } else if (key == "vertexColors") {
@@ -145,36 +145,36 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "blendSrc") {
 
-            blendSrc = std::get<int>(value);
+            blendSrc = std::get<BlendFactor>(value);
             used = true;
 
         } else if (key == "blendDst") {
 
-            blendDst = std::get<int>(value);
+            blendDst = std::get<BlendFactor>(value);
             used = true;
 
         } else if (key == "blendEquation") {
 
-            blendEquation = std::get<int>(value);
+            blendEquation = std::get<BlendEquation>(value);
             used = true;
 
         } else if (key == "blendSrcAlpha") {
 
-            blendSrcAlpha = std::get<int>(value);
+            blendSrcAlpha = std::get<BlendFactor>(value);
             used = true;
 
         } else if (key == "blendDstAlpha") {
 
-            blendDstAlpha = std::get<int>(value);
+            blendDstAlpha = std::get<BlendFactor>(value);
 
         } else if (key == "blendEquationAlpha") {
 
-            blendEquationAlpha = std::get<int>(value);
+            blendEquationAlpha = std::get<BlendEquation>(value);
             used = true;
 
         } else if (key == "depthFunc") {
 
-            depthFunc = std::get<int>(value);
+            depthFunc = std::get<DepthFunc>(value);
             used = true;
 
         } else if (key == "depthTest") {
@@ -194,7 +194,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "stencilFunc") {
 
-            stencilFunc = std::get<int>(value);
+            stencilFunc = std::get<StencilFunc>(value);
             used = true;
 
         } else if (key == "stencilRef") {
@@ -209,17 +209,17 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "stencilFail") {
 
-            stencilFail = std::get<int>(value);
+            stencilFail = std::get<StencilOp>(value);
             used = true;
 
         } else if (key == "stencilZFail") {
 
-            stencilZFail = std::get<int>(value);
+            stencilZFail = std::get<StencilOp>(value);
             used = true;
 
         } else if (key == "stencilZPass") {
 
-            stencilZPass = std::get<int>(value);
+            stencilZPass = std::get<StencilOp>(value);
             used = true;
 
         } else if (key == "stencilWrite") {
@@ -229,7 +229,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "shadowSide") {
 
-            shadowSide = std::get<int>(value);
+            shadowSide = std::get<Side>(value);
             used = true;
 
         } else if (key == "colorWrite") {

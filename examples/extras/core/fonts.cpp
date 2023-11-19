@@ -1,6 +1,5 @@
-#include "threepp/extras/core/Font.hpp"
 #include "threepp/geometries/EdgesGeometry.hpp"
-#include "threepp/geometries/ExtrudeGeometry.hpp"
+#include "threepp/geometries/TextGeometry.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/threepp.hpp"
@@ -9,14 +8,14 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Fonts", {{"antialiasing", 8}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("Fonts", {{"aa", 8}});
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = PCFSoftShadowMap;
+    renderer.shadowMap().type = ShadowMap::PFCSoft;
 
     auto scene = Scene::create();
     scene->background = Color::black;
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 10000);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
     camera->position.set(0, 5, 40);
 
     auto light = DirectionalLight::create();
@@ -33,27 +32,30 @@ int main() {
     pointLight->position.set(0, 2, 10);
     scene->add(pointLight);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     FontLoader loader;
-    auto data = loader.load("data/fonts/optimer_bold.typeface.json");
-    Font font(*data);
-    auto shapes = font.generateShapes("threepp!", 10);
+    auto font = loader.load("data/fonts/optimer_bold.typeface.json");
 
-    auto material = MeshStandardMaterial::create();
-    material->color = Color::orange;
-    auto extrude = ExtrudeGeometry::create(shapes);
-    extrude->center();
-    extrude->computeVertexNormals();
-    auto mesh = Mesh::create(extrude, material);
-    mesh->castShadow = true;
-    scene->add(mesh);
+    if (font) {
+        TextGeometry::Options opts(*font, 10);
+        opts.height = 1;
+        auto geometry = TextGeometry::create("threepp!", opts);
+        geometry->center();
 
-    auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
-    lineMaterial->color = Color::black;
-    lineMaterial->linewidth = 20000;
-    auto edges = LineSegments::create(EdgesGeometry::create(*extrude, 10), lineMaterial);
-    mesh->add(edges);
+        auto material = MeshPhongMaterial::create();
+        material->color = Color::orange;
+
+        auto mesh = Mesh::create(geometry, material);
+        mesh->castShadow = true;
+        scene->add(mesh);
+
+        auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
+        lineMaterial->color = Color::black;
+        lineMaterial->linewidth = 20000;
+        auto edges = LineSegments::create(EdgesGeometry::create(*geometry, 10), lineMaterial);
+        mesh->add(edges);
+    }
 
     auto planeMaterial = MeshPhongMaterial::create();
     planeMaterial->color = Color::gray;
@@ -64,13 +66,12 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     canvas.animate([&]() {
-
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

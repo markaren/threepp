@@ -20,14 +20,14 @@ namespace {
 
 int main() {
 
-    Canvas canvas("threepp demo", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("threepp demo", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create();
     camera->position.z = 5;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto scene = Scene::create();
 
@@ -36,15 +36,17 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    renderer.enableTextRendering();
-    auto& textHandle = renderer.textHandle("Hello World");
-    textHandle.setPosition(0, canvas.getSize().height - 30);
+    TextRenderer textRenderer;
+    auto& textHandle = textRenderer.createHandle("Hello World");
+    textHandle.verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
+    textHandle.setPosition(0, canvas.size().height);
     textHandle.scale = 2;
 
     std::array<float, 3> posBuf{};
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
+
         ImGui::Begin("Demo");
         ImGui::SliderFloat3("position", posBuf.data(), -1.f, 1.f);
         controls.enabled = !ImGui::IsWindowHovered();
@@ -52,14 +54,22 @@ int main() {
     });
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        textHandle.setPosition(0, size.height - 500);
+        textHandle.setPosition(0, size.height);
     });
 
+    Clock clock;
+    float rotationSpeed = 1;
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        auto dt = clock.getDelta();
+        group->rotation.y += rotationSpeed * dt;
+
+        renderer.render(*scene, *camera);
+
+        renderer.resetState();// needed when using TextRenderer
+        textRenderer.render();
 
         ui.render();
         group->position.fromArray(posBuf);

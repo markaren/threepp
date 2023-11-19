@@ -7,15 +7,15 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(8));
-    GLRenderer renderer(canvas);
+    Canvas canvas("CubicBezierCurve", {{"aa", 8}});
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.set(0, 5, 20);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     const auto material = LineBasicMaterial::create();
     material->color = 0xff0000;
@@ -36,7 +36,6 @@ int main() {
         geometry->setFromPoints(curve2Points);
         const auto curveObject = Line::create(geometry, material);
         scene->add(curveObject);
-
     }
 
     //3D
@@ -53,7 +52,6 @@ int main() {
 
         const auto curveObject = Line::create(geometry, material);
         scene->add(curveObject);
-
     }
 
     Matrix4 tmp;
@@ -73,13 +71,12 @@ int main() {
 
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     canvas.animate([&]() {
-
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

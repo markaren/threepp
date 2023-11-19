@@ -16,7 +16,7 @@ namespace {
 
     std::shared_ptr<Mesh> createLathe() {
         auto geometry = LatheGeometry::create(generateLathePoints());
-        auto material = MeshNormalMaterial::create({{"side", DoubleSide}});
+        auto material = MeshNormalMaterial::create({{"side", Side::Double}});
         auto mesh = Mesh::create(geometry, material);
 
         auto line = LineSegments::create(WireframeGeometry::create(*geometry));
@@ -41,15 +41,15 @@ namespace {
 
 int main() {
 
-    Canvas canvas("LatheGeometry", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("LatheGeometry", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = Color::gray;
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto lathe = createLathe();
     lathe->scale *= 0.1;
@@ -61,14 +61,13 @@ int main() {
     scene->add(capsule);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         lathe->rotation.y += 0.8f * dt;
@@ -77,6 +76,6 @@ int main() {
         capsule->rotation.y += 0.8f * dt;
         capsule->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

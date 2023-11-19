@@ -6,23 +6,23 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(8));
-    GLRenderer renderer(canvas);
+    Canvas canvas("CatmullRoomCurve", {{"aa", 8}});
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.set(5, 10, 20);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto curve = CatmullRomCurve3();
     curve.points.insert(curve.points.end(),
-                         {Vector3(-10, 0, 10),
-                          Vector3(-5, 5, 5),
-                          Vector3(0, 0, 0),
-                          Vector3(5, -5, 5),
-                          Vector3(10, 0, 10)});
+                        {Vector3(-10, 0, 10),
+                         Vector3(-5, 5, 5),
+                         Vector3(0, 0, 0),
+                         Vector3(5, -5, 5),
+                         Vector3(10, 0, 10)});
 
 
     const auto points = curve.getPoints(50);
@@ -45,13 +45,12 @@ int main() {
 
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     canvas.animate([&]() {
-
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

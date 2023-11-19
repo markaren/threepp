@@ -4,9 +4,12 @@
 
 #include <memory>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace threepp {
+
+    typedef std::variant<std::vector<unsigned char>, std::vector<float>> ImageData;
 
     class Image {
 
@@ -15,10 +18,10 @@ namespace threepp {
         unsigned int height;
         unsigned int depth;
 
-        Image(std::shared_ptr<unsigned char> data, unsigned int width, unsigned int height, bool flipped = true)
+        Image(ImageData data, unsigned int width, unsigned int height, bool flipped = true)
             : data_(std::move(data)), width(width), height(height), depth(0), flipped_(flipped){};
 
-        Image(std::shared_ptr<unsigned char> data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
+        Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
             : data_(std::move(data)), width(width), height(height), depth(depth), flipped_(flipped){};
 
         [[nodiscard]] bool flipped() const {
@@ -26,19 +29,20 @@ namespace threepp {
             return flipped_;
         }
 
-        [[nodiscard]] unsigned char* getData() {
+        void setData(ImageData data) {
 
-            return data_.get();
+            data_ = std::move(data);
         }
 
-        [[nodiscard]] const unsigned char* getData() const {
+        template<class T = unsigned char>
+        [[nodiscard]] std::vector<T>& data() {
 
-            return data_.get();
+            return std::get<std::vector<T>>(data_);
         }
 
     private:
         bool flipped_;
-        std::shared_ptr<unsigned char> data_{};
+        ImageData data_;
     };
 
 }// namespace threepp

@@ -28,7 +28,7 @@ namespace {
         const auto planeGeometry = PlaneGeometry::create(105, 105);
         const auto planeMaterial = MeshPhongMaterial::create();
         planeMaterial->color.setHex(Color::white);
-        planeMaterial->side = DoubleSide;
+        planeMaterial->side = Side::Double;
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->receiveShadow = true;
         plane->rotateX(math::degToRad(-90));
@@ -40,15 +40,15 @@ namespace {
 
 int main() {
 
-    Canvas canvas("PointLight", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("PointLight", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
-    camera->position.set(5, 3, 5);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
+    camera->position.set(5, 4, 6);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light1 = PointLight::create(Color::yellow);
     light1->castShadow = true;
@@ -74,17 +74,17 @@ int main() {
     scene->add(knot);
 
     auto plane = createPlane();
+    plane->position.y = -1;
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         float t = clock.elapsedTime;
 
@@ -96,6 +96,6 @@ int main() {
         light2->position.x = 5 * std::sin(t);
         light2->position.z = 1 * std::sin(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

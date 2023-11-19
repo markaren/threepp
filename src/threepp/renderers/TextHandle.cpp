@@ -1,8 +1,7 @@
 
-#include "threepp/renderers/TextHandle.hpp"
+#include "threepp/renderers/TextRenderer.hpp"
 
 #define GLT_IMPLEMENTATION
-#define GLT_MANUAL_VIEWPORT
 #include <glad/glad.h>
 #include <gltext.h>
 
@@ -52,10 +51,6 @@ TextHandle::TextHandle(const std::string& str)
     setText(str);
 }
 
-bool TextHandle::init() {
-    return gltInit();
-}
-
 void TextHandle::setText(const std::string& str) {
     gltSetText(pimpl_->text, str.c_str());
 }
@@ -65,30 +60,45 @@ void TextHandle::render() {
     gltDrawText2DAligned(pimpl_->text, static_cast<float>(x), static_cast<float>(y), scale, getValue(horizontalAlignment), getValue(verticalAlignment));
 }
 
-void TextHandle::setViewport(int width, int height) {
+int threepp::TextHandle::getTextSize() const {
+
+    return static_cast<int>(gltGetTextHeight(pimpl_->text, scale));
+}
+
+TextHandle::~TextHandle() = default;
+
+TextRenderer::TextRenderer() {
+    gltInit();
+}
+
+TextRenderer::~TextRenderer() {
+    gltTerminate();
+}
+
+void TextRenderer::setViewport(int width, int height) {
     if (width > 0 && height > 0) {
         gltViewport(width, height);
     }
 }
 
-void TextHandle::terminate() {
-    gltTerminate();
-}
+void TextRenderer::render() {
 
-void TextHandle::beginDraw(bool blendingEnabled) {
-    if (!blendingEnabled) {
-        glEnable(GL_BLEND);
-    }
-    glDisable(GL_DEPTH_TEST);
+    if (textHandles_.empty()) return;
+
+    glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     gltBeginDraw();
-}
 
-void TextHandle::endDraw(bool blendingEnabled) {
-    gltEndDraw();
-    if (!blendingEnabled) {
-        glDisable(GL_BLEND);
+    auto it = textHandles_.begin();
+    while (it != textHandles_.end()) {
+
+        if ((*it)->invalidate_) {
+            it = textHandles_.erase(it);
+        } else {
+            (*it)->render();
+            ++it;
+        }
     }
-    glEnable(GL_DEPTH_TEST);
-}
 
-TextHandle::~TextHandle() = default;
+    gltEndDraw();
+    glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+}

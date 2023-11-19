@@ -6,16 +6,29 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 
 namespace threepp {
 
-    class Mesh: public Object3D {
+    // Class representing triangular polygon mesh based objects.
+    class Mesh: public Object3D, public ObjectWithMorphTargetInfluences {
 
     public:
+
+        explicit Mesh(std::shared_ptr<BufferGeometry> geometry = nullptr, std::shared_ptr<Material> material = nullptr);
+        Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
+
+        Mesh(Mesh&& other) noexcept;
+
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
+
+        std::shared_ptr<BufferGeometry> shared_geometry() {
+
+            return geometry_;
+        }
 
         [[nodiscard]] const BufferGeometry* geometry() const;
 
@@ -48,9 +61,6 @@ namespace threepp {
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
         std::vector<std::shared_ptr<Material>> materials_;
-
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
     };
 
 }// namespace threepp

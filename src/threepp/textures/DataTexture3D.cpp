@@ -4,7 +4,8 @@
 using namespace threepp;
 
 
-DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data, unsigned int width, unsigned int height, unsigned int depth)
+DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data,
+                             unsigned int width, unsigned int height, unsigned int depth)
     : Texture(std::nullopt) {
 
     // We're going to add .setXXX() methods for setting properties later.
@@ -15,17 +16,12 @@ DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data, unsigned in
     //
     // See #14839
 
-    auto tmp = static_cast<unsigned char*>(malloc(sizeof(unsigned char) * data.size()));
-    for (unsigned i = 0; i < data.size(); i++) {
-        tmp[i] = data[i];
-    }
+    this->image = Image{data, width, height, depth};
 
-    this->image = Image{std::shared_ptr<unsigned char>(tmp, free), width, height, depth};
+    this->magFilter = Filter::Nearest;
+    this->minFilter = Filter::Nearest;
 
-    this->magFilter = NearestFilter;
-    this->minFilter = NearestFilter;
-
-    this->wrapR = ClampToEdgeWrapping;
+    this->wrapR = TextureWrapping::ClampToEdge;
 
     this->generateMipmaps = false;
     this->unpackAlignment = 1;
@@ -33,7 +29,9 @@ DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data, unsigned in
     this->needsUpdate();
 }
 
-std::shared_ptr<DataTexture3D> DataTexture3D::create(const std::vector<unsigned char>& data, unsigned int width, unsigned int height, unsigned int depth) {
+std::shared_ptr<DataTexture3D> DataTexture3D::create(
+        const std::vector<unsigned char>& data,
+        unsigned int width, unsigned int height, unsigned int depth) {
 
     return std::shared_ptr<DataTexture3D>(new DataTexture3D(data, width, height, depth));
 }

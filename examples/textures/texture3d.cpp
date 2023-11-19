@@ -19,7 +19,7 @@ namespace {
         auto m = RawShaderMaterial::create();
         m->vertexShader = vertexSource();
         m->fragmentShader = fragmentSource();
-        m->side = BackSide;
+        m->side = Side::Back;
         m->transparent = true;
 
         UniformMap uniforms{
@@ -62,44 +62,43 @@ namespace {
 
 int main() {
 
-    Canvas canvas("DataTexture3D", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("DataTexture3D", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
     renderer.setClearColor(Color::blue);
 
-    auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
-    camera->position.z = 1.5f;
+    Scene scene;
+    PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 100);
+    camera.position.z = 1.5f;
 
     OrbitControls controls{camera, canvas};
 
     unsigned int size = 128;
     auto data = createTextureData(size);
     auto texture = DataTexture3D::create(data, size, size, size);
-    texture->format = RedFormat;
-    texture->minFilter = LinearFilter;
-    texture->magFilter = LinearFilter;
+    texture->format = Format::Red;
+    texture->minFilter = Filter::Linear;
+    texture->magFilter = Filter::Linear;
     texture->unpackAlignment = 1;
 
     auto material = createMaterial(texture.get());
     auto geometry = BoxGeometry::create(1, 1, 1);
 
     auto mesh = Mesh::create(geometry, material);
-    scene->add(mesh);
+    scene.add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
+        camera.aspect = size.aspect();
+        camera.updateProjectionMatrix();
         renderer.setSize(size);
     });
 
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
-        material->uniforms->at("cameraPos").value<Vector3>().copy(camera->position);
+        material->uniforms->at("cameraPos").value<Vector3>().copy(camera.position);
         material->uniforms->at("frame").value<int>()++;
 
         int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t) + 50);

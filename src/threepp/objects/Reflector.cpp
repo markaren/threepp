@@ -1,4 +1,5 @@
 
+#include <memory>
 #include <utility>
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -67,11 +68,11 @@ struct Reflector::Impl {
         Shader shader = options.shader.value_or(reflectorShader());
 
         GLRenderTarget::Options parameters;
-        parameters.minFilter = LinearFilter;
-        parameters.magFilter = LinearFilter;
-        parameters.format = RGBAFormat;
+        parameters.minFilter = Filter::Linear;
+        parameters.magFilter = Filter::Linear;
+        parameters.format = Format::RGBA;
 
-        renderTarget = GLRenderTarget::create(textureWidth, textureHeight, parameters);
+        renderTarget = std::make_unique<GLRenderTarget>(textureWidth, textureHeight, parameters);
 
         if (!math::isPowerOfTwo((int) textureWidth) || !math::isPowerOfTwo((int) textureHeight)) {
 
@@ -105,29 +106,29 @@ struct Reflector::Impl {
             target.subVectors(reflectorWorldPosition, lookAtPosition);
             target.reflect(normal).negate();
             target.add(reflectorWorldPosition);
-            virtualCamera->position.copy(view);
-            virtualCamera->up.set(0, 1, 0);
-            virtualCamera->up.applyMatrix4(rotationMatrix);
-            virtualCamera->up.reflect(normal);
-            virtualCamera->lookAt(target);
-            virtualCamera->far = camera->far;// Used in WebGLBackground
+            virtualCamera.position.copy(view);
+            virtualCamera.up.set(0, 1, 0);
+            virtualCamera.up.applyMatrix4(rotationMatrix);
+            virtualCamera.up.reflect(normal);
+            virtualCamera.lookAt(target);
+            virtualCamera.far = camera->far;// Used in WebGLBackground
 
-            virtualCamera->updateMatrixWorld();
-            virtualCamera->projectionMatrix.copy(camera->projectionMatrix);// Update the texture matrix
+            virtualCamera.updateMatrixWorld();
+            virtualCamera.projectionMatrix.copy(camera->projectionMatrix);// Update the texture matrix
 
             textureMatrix.set(0.5f, 0.f, 0.f, 0.5f,
                               0.f, 0.5f, 0.f, 0.5f,
                               0.f, 0.f, 0.5f, 0.5f,
                               0.f, 0.f, 0.f, 1.f);
-            textureMatrix.multiply(virtualCamera->projectionMatrix);
-            textureMatrix.multiply(virtualCamera->matrixWorldInverse);
+            textureMatrix.multiply(virtualCamera.projectionMatrix);
+            textureMatrix.multiply(virtualCamera.matrixWorldInverse);
             textureMatrix.multiply(*reflector_.matrixWorld);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
             // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
 
             reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition);
-            reflectorPlane.applyMatrix4(virtualCamera->matrixWorldInverse);
+            reflectorPlane.applyMatrix4(virtualCamera.matrixWorldInverse);
             clipPlane.set(reflectorPlane.normal.x, reflectorPlane.normal.y, reflectorPlane.normal.z, reflectorPlane.constant);
-            auto& projectionMatrix = virtualCamera->projectionMatrix;
+            auto& projectionMatrix = virtualCamera.projectionMatrix;
             q.x = (static_cast<float>(math::sgn(clipPlane.x)) + projectionMatrix.elements[8]) / projectionMatrix.elements[0];
             q.y = (static_cast<float>(math::sgn(clipPlane.y)) + projectionMatrix.elements[9]) / projectionMatrix.elements[5];
             q.z = -1.f;
@@ -149,11 +150,11 @@ struct Reflector::Impl {
 
             _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
 
-            _renderer->setRenderTarget(renderTarget);
+            _renderer->setRenderTarget(renderTarget.get());
             _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
-            _renderer->render(scene, virtualCamera.get());
+            _renderer->render(*scene, virtualCamera);
             _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
 
@@ -182,8 +183,8 @@ private:
     Vector4 q;
     Matrix4 textureMatrix;
 
-    std::shared_ptr<PerspectiveCamera> virtualCamera = PerspectiveCamera::create();
-    std::shared_ptr<GLRenderTarget> renderTarget;
+    PerspectiveCamera virtualCamera;
+    std::unique_ptr<GLRenderTarget> renderTarget;
 };
 
 Reflector::Reflector(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options)
@@ -197,7 +198,7 @@ std::string threepp::Reflector::type() const {
 
 std::shared_ptr<Reflector> Reflector::create(const std::shared_ptr<BufferGeometry>& geometry, Reflector::Options options) {
 
-    return std::shared_ptr<Reflector>(new Reflector(geometry, std::move(options)));
+    return std::make_shared<Reflector>(geometry, std::move(options));
 }
 
 Reflector::~Reflector() = default;

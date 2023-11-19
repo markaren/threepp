@@ -69,7 +69,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
     shapeGeometry->scale(scale, scale, scale);
 
     auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create({{"color", Color::orange},
-                                                                            {"side", DoubleSide}}));
+                                                                            {"side", Side::Double}}));
     auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
     wireframe->position.z = -5;
     shapeMesh->add(wireframe);
@@ -80,7 +80,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
 
     ExtrudeGeometry::Options opts;
     opts.depth = 3;
-    auto extrudeGeometry = ExtrudeGeometry::create(shape, opts);
+    auto extrudeGeometry = ExtrudeGeometry::create({shape}, opts);
     extrudeGeometry->center();
     extrudeGeometry->scale(scale, scale, scale);
     auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create({{"color", Color::orange}, {"flatShading", true}}));
@@ -93,12 +93,12 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
 
 int main() {
 
-    Canvas canvas("ShapeGeometry", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("ShapeGeometry", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
     scene->background = Color::blue;
-    auto camera = PerspectiveCamera::create(65, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(65, canvas.aspect(), 0.1f, 1000);
     camera->position.set(0, 0, 60);
 
     auto light1 = DirectionalLight::create(0xffffff, 0.7f);
@@ -109,7 +109,7 @@ int main() {
     light2->intensity = 0.2f;
     scene->add(light2);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto group = Group::create();
     group->rotateX(-math::PI);
@@ -128,18 +128,17 @@ int main() {
     scene->add(group);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         group->rotation.y += 0.8f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

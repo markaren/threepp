@@ -26,7 +26,7 @@ namespace {
 
     auto createPlane() {
         const auto planeGeometry = PlaneGeometry::create(150, 150);
-        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", DoubleSide}});
+        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", Side::Double}});
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->position.setY(-1);
         plane->rotateX(math::degToRad(-90));
@@ -39,15 +39,15 @@ namespace {
 
 int main() {
 
-    Canvas canvas("SpotLight", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("SpotLight", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.set(0, 10, 25);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light = SpotLight::create(Color::peachpuff);
     light->distance = 30;
@@ -72,14 +72,13 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         float t = clock.elapsedTime;
 
@@ -90,6 +89,6 @@ int main() {
 
         helper->update();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

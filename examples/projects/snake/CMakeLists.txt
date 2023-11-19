@@ -1,3 +1,3 @@
 
 add_executable(snake main.cpp)
-target_link_libraries(snake PUBLIC threepp)
+target_link_libraries(snake PRIVATE threepp)

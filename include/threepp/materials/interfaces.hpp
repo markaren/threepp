@@ -193,16 +193,16 @@ namespace threepp {
 
     struct MaterialWithCombine: virtual Material {
 
-        int combine;
+        CombineOperation combine;
 
-        explicit MaterialWithCombine(int combine): combine(combine) {}
+        explicit MaterialWithCombine(CombineOperation combine): combine(combine) {}
     };
 
     struct MaterialWithDepthPacking: virtual Material {
 
-        int depthPacking;
+        DepthPacking depthPacking;
 
-        explicit MaterialWithDepthPacking(int depthPacking): depthPacking(depthPacking) {}
+        explicit MaterialWithDepthPacking(DepthPacking depthPacking): depthPacking(depthPacking) {}
     };
 
     struct MaterialWithFlatShading: virtual Material {
@@ -222,6 +222,12 @@ namespace threepp {
     struct MaterialWithDefines: virtual Material {
 
         std::unordered_map<std::string, std::string> defines;
+    };
+
+    struct MaterialWithMorphTargets: virtual Material {
+
+        bool morphTargets = false;
+        bool morphNormals = false;
     };
 
 }// namespace threepp

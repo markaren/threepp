@@ -39,7 +39,7 @@ namespace threepp {
             return normalized_;
         }
 
-        [[nodiscard]] int getUsage() const {
+        [[nodiscard]] DrawUsage getUsage() const {
 
             return usage_;
         }
@@ -49,7 +49,7 @@ namespace threepp {
             ++version;
         }
 
-        void setUsage(int value) {
+        void setUsage(DrawUsage value) {
 
             this->usage_ = value;
         }
@@ -66,7 +66,7 @@ namespace threepp {
         int itemSize_{};
         bool normalized_{};
 
-        int usage_{StaticDrawUsage};
+        DrawUsage usage_{DrawUsage::Static};
 
         BufferAttribute() = default;
 
@@ -250,55 +250,55 @@ namespace threepp {
             return *this;
         }
 
-        [[nodiscard]] T getX(size_t index) const {
+        [[nodiscard]] virtual T getX(size_t index) const {
 
             return this->array_[index * this->itemSize_];
         }
 
-        TypedBufferAttribute<T>& setX(size_t index, T x) {
+        virtual TypedBufferAttribute<T>& setX(size_t index, T x) {
 
             this->array_[index * this->itemSize_] = x;
 
             return *this;
         }
 
-        [[nodiscard]] T getY(size_t index) const {
+        [[nodiscard]] virtual T getY(size_t index) const {
 
             return this->array_[index * this->itemSize_ + 1];
         }
 
-        TypedBufferAttribute<T>& setY(size_t index, T y) {
+        virtual TypedBufferAttribute<T>& setY(size_t index, T y) {
 
             this->array_[index * this->itemSize_ + 1] = y;
 
             return *this;
         }
 
-        [[nodiscard]] T getZ(size_t index) const {
+        [[nodiscard]] virtual T getZ(size_t index) const {
 
             return this->array_[index * this->itemSize_ + 2];
         }
 
-        TypedBufferAttribute<T>& setZ(size_t index, T z) {
+        virtual TypedBufferAttribute<T>& setZ(size_t index, T z) {
 
             this->array_[index * this->itemSize_ + 2] = z;
 
             return *this;
         }
 
-        [[nodiscard]] T getW(size_t index) const {
+        [[nodiscard]] virtual T getW(size_t index) const {
 
             return this->array_[index * this->itemSize_ + 3];
         }
 
-        TypedBufferAttribute<T>& setW(size_t index, T w) {
+        virtual TypedBufferAttribute<T>& setW(size_t index, T w) {
 
             this->array_[index * this->itemSize_ + 3] = w;
 
             return *this;
         }
 
-        TypedBufferAttribute<T>& setXY(size_t index, T x, T y) {
+        virtual TypedBufferAttribute<T>& setXY(size_t index, T x, T y) {
 
             index *= this->itemSize_;
 
@@ -308,7 +308,7 @@ namespace threepp {
             return *this;
         }
 
-        TypedBufferAttribute<T>& setXYZ(size_t index, T x, T y, T z) {
+        virtual TypedBufferAttribute<T>& setXYZ(size_t index, T x, T y, T z) {
 
             index *= this->itemSize_;
 
@@ -319,7 +319,7 @@ namespace threepp {
             return *this;
         }
 
-        TypedBufferAttribute<T>& setXYZW(size_t index, T x, T y, T z, T w) {
+        virtual TypedBufferAttribute<T>& setXYZW(size_t index, T x, T y, T z, T w) {
 
             index *= this->itemSize_;
 
@@ -384,7 +384,7 @@ namespace threepp {
             BufferAttribute::copy(source);
 
             this->count_ = source.count_;
-            this->array_ = array_;
+            this->array_ = source.array_;
         }
 
         [[nodiscard]] std::unique_ptr<TypedBufferAttribute<T>> clone() const {

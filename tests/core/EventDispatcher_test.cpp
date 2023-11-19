@@ -2,8 +2,7 @@
 #include "threepp/core/EventDispatcher.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 using namespace threepp;
 
@@ -45,37 +44,37 @@ TEST_CASE("Test events") {
 
     EventDispatcher evt;
 
-    auto l = std::make_shared<MyEventListener>();
+    MyEventListener l;
 
     bool l1Called = false;
-    auto l1 = std::make_shared<LambdaEventListener>([&l1Called](Event& e) {
+    LambdaEventListener l1([&l1Called](Event& e) {
         l1Called = true;
     });
 
-    evt.addEventListener("test1", l);
-    evt.addEventListener("test2", l1);
+    evt.addEventListener("test1", &l);
+    evt.addEventListener("test2", &l1);
 
     evt.dispatchEvent("test1");
     evt.dispatchEvent("test1");
 
-    REQUIRE(2 == l->numCalled);
+    REQUIRE(2 == l.numCalled);
 
-    evt.removeEventListener("test1", l.get());
+    evt.removeEventListener("test1", &l);
 
     evt.dispatchEvent("test1");
     evt.dispatchEvent("test2");
 
-    REQUIRE(2 == l->numCalled);
+    REQUIRE(2 == l.numCalled);
     REQUIRE(l1Called);
 
-    REQUIRE(!evt.hasEventListener("test1", l.get()));
-    REQUIRE(evt.hasEventListener("test2", l1.get()));
+    REQUIRE(!evt.hasEventListener("test1", &l));
+    REQUIRE(evt.hasEventListener("test2", &l1));
 
-    auto onDispose = std::make_shared<OnMaterialDispose>();
+    OnMaterialDispose onDispose;
     auto material = MeshBasicMaterial::create();
-    material->addEventListener("dispose", onDispose);
+    material->addEventListener("dispose", &onDispose);
 
-    REQUIRE(material->hasEventListener("dispose", onDispose.get()));
+    REQUIRE(material->hasEventListener("dispose", &onDispose));
     material->dispose();
-    REQUIRE(!material->hasEventListener("dispose", onDispose.get()));
+    REQUIRE(!material->hasEventListener("dispose", &onDispose));
 }

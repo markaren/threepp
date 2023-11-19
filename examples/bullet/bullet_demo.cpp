@@ -79,18 +79,17 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
-
-    auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
-    camera->position.set(-10, 10, 10);
-
-    OrbitControls controls{camera, canvas};
-
-    GLRenderer renderer(canvas);
+    Canvas canvas("Bullet demo", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
+    auto scene = Scene::create();
     scene->add(HemisphereLight::create());
+
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
+    camera->position.set(-10, 10, 10);
+
+    OrbitControls controls{*camera, canvas};
 
     TextureLoader tl;
     auto box = createBox(tl);
@@ -119,7 +118,7 @@ int main() {
     scene->add(trimesh);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -137,11 +136,11 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        if (evt.key == 32) {// space
-            auto geom = SphereGeometry::create(0.1);
+        if (evt.key == Key::SPACE) {
+            auto geom = SphereGeometry::create(0.1f);
             auto mesh = Mesh::create(geom, tennisBallMaterial->clone());
             mesh->position.copy(camera->position);
-            mesh->rotation.set(math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI), math::randomInRange(0.f, math::TWO_PI));
+            mesh->rotation.set(math::randFloat(0, math::TWO_PI), math::randFloat(0, math::TWO_PI), math::randFloat(0, math::TWO_PI));
             Vector3 dir;
             camera->getWorldDirection(dir);
             bullet.addMesh(*mesh, 1);
@@ -153,19 +152,21 @@ int main() {
     });
     canvas.addKeyListener(&keyListener);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         bullet.step(dt);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
+        renderer.resetState();
 
         std::stringstream ss;
         ss << renderer.info();
         handle.setText(ss.str());
+
+        textRenderer.render();
     });
 }

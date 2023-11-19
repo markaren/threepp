@@ -9,6 +9,7 @@
 #include "threepp/math/Triangle.hpp"
 
 #include <cmath>
+#include <memory>
 
 using namespace threepp;
 
@@ -89,7 +90,7 @@ BufferGeometry* Sprite::geometry() {
 
 std::shared_ptr<Sprite> Sprite::create(const std::shared_ptr<SpriteMaterial>& material) {
 
-    return std::shared_ptr<Sprite>(new Sprite(material));
+    return std::make_shared<Sprite>(material);
 }
 
 void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {

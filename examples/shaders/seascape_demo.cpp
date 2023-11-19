@@ -14,22 +14,23 @@ int main() {
 
     Canvas canvas("Seascape demo", {{"antialiasing", 4}});
 
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
+
     auto scene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 1, 1000000);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 1, 1000000);
     camera->position.y = 100;
 
     auto geometry = BoxGeometry::create(1000, 1000, 1000);
 
-    auto size = canvas.getSize();
+    auto size = canvas.size();
     auto material = RawShaderMaterial::create();
     (*material->uniforms)["iTime"] = Uniform();
     (*material->uniforms)["iResolution"] = Uniform(Vector2(size.width, size.height));
     material->vertexShader = vertexSource();
     material->fragmentShader = fragmentSource();
-    material->side = DoubleSide;
+    material->side = Side::Double;
 
     auto mesh = Mesh::create(geometry, material);
     scene->add(mesh);
@@ -41,13 +42,12 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         mesh->rotation.y = t;
         material->uniforms->at("iTime").setValue(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }
 

@@ -1,4 +1,6 @@
 
+#include <memory>
+
 #include "threepp/objects/Sky.hpp"
 
 #include "threepp/geometries/BoxGeometry.hpp"
@@ -180,7 +182,7 @@ Sky::Sky(): Mesh(BoxGeometry::create(1, 1, 1), ShaderMaterial::create()) {
     m->fragmentShader = fragmentShader;
     m->vertexShader = vertexShader;
     m->uniforms = std::make_shared<UniformMap>(uniforms);
-    m->side = BackSide;
+    m->side = Side::Back;
     m->depthWrite = false;
 }
 
@@ -191,5 +193,5 @@ std::string Sky::type() const {
 
 std::shared_ptr<Sky> Sky::create() {
 
-    return std::shared_ptr<Sky>(new Sky());
+    return std::make_shared<Sky>();
 }

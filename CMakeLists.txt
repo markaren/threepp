@@ -63,7 +63,7 @@ if (THREEPP_BUILD_TESTS)
     FetchContent_Declare(
             Catch2
             GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-            GIT_TAG v2.13.8
+            GIT_TAG v3.4.0
     )
     FetchContent_MakeAvailable(Catch2)
 
@@ -80,6 +80,7 @@ endif ()
 file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/models" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/textures" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/fonts" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
+file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/sounds" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 
 
 # ==============================================================================

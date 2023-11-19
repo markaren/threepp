@@ -6,6 +6,6 @@ if (imgui_FOUND)
 
     add_executable(Youbot_kine youbot_kine.cpp)
     target_link_libraries(Youbot_kine PRIVATE threepp imgui::imgui assimp::assimp)
-    target_include_directories(Youbot_kine PRIVATE "${CMAKE_SOURCE_DIR}/examples/libs")
+    target_include_directories(Youbot_kine PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
 
-endif()
+endif ()

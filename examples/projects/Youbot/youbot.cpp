@@ -10,16 +10,16 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas{Canvas::Parameters().size({1280, 720}).antialiasing(8)};
-    GLRenderer renderer{canvas};
+    Canvas canvas{Canvas::Parameters().title("Youbot").size({1280, 720}).antialiasing(8)};
+    GLRenderer renderer{canvas.size()};
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
 
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
 
-    OrbitControls controls(camera, canvas);
+    OrbitControls controls(*camera, canvas);
 
     auto grid = GridHelper::create(20, 10, Color::yellowgreen);
     scene->add(grid);
@@ -31,7 +31,8 @@ int main() {
     auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    auto& handle = renderer.textHandle("Loading model..");
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Loading model..");
     handle.scale = 2;
 
     utils::ThreadPool pool;
@@ -46,17 +47,19 @@ int main() {
     });
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
+        renderer.resetState();
+
+        textRenderer.render();
 
         if (youbot) youbot->update(dt);
     });

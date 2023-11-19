@@ -22,14 +22,14 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
         bytesPerElement = sizeof(unsigned int);
         auto attr = attribute->typed<unsigned int>();
         const auto& array = attr->array();
-        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
+        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), as_integer(usage));
 
     } else if (attribute->typed<float>()) {
         type = GL_FLOAT;
         bytesPerElement = sizeof(float);
         auto attr = attribute->typed<float>();
         const auto& array = attr->array();
-        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), usage);
+        glBufferData(bufferType, (GLsizei) (array.size() * bytesPerElement), array.data(), as_integer(usage));
     } else {
 
         throw std::runtime_error("TODO");
@@ -88,8 +88,8 @@ void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenu
 
 Buffer GLAttributes::get(BufferAttribute* attribute) {
 
-    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
-        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
+    if (auto attr = dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
+        attribute = attr->data.get();
     }
 
     return buffers_.at(attribute);
@@ -97,8 +97,8 @@ Buffer GLAttributes::get(BufferAttribute* attribute) {
 
 void GLAttributes::remove(BufferAttribute* attribute) {
 
-    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
-        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
+    if (auto attr = dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
+        attribute = attr->data.get();
     }
 
     if (buffers_.count(attribute)) {
@@ -113,8 +113,8 @@ void GLAttributes::remove(BufferAttribute* attribute) {
 
 void GLAttributes::update(BufferAttribute* attribute, GLenum bufferType) {
 
-    if (dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
-        attribute = dynamic_cast<InterleavedBufferAttribute*>(attribute)->data.get();
+    if (auto attr = dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
+        attribute = attr->data.get();
     }
 
     if (!buffers_.count(attribute)) {

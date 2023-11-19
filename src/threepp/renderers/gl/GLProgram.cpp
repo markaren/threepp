@@ -32,28 +32,28 @@ namespace {
         return shader;
     }
 
-    std::pair<std::string, std::string> getEncodingComponents(int encoding) {
+    std::pair<std::string, std::string> getEncodingComponents(Encoding encoding) {
 
         switch (encoding) {
 
-            case LinearEncoding:
+            case Encoding::Linear:
                 return {"Linear", "( value )"};
-            case sRGBEncoding:
+            case Encoding::sRGB:
                 return {"sRGB", "( value )"};
-            case RGBEEncoding:
+            case Encoding::RGBE:
                 return {"RGBE", "( value )"};
-            case RGBM7Encoding:
+            case Encoding::RGBM7:
                 return {"RGBM", "( value, 7.0 )"};
-            case RGBM16Encoding:
+            case Encoding::RGBM16:
                 return {"RGBM", "( value, 16.0 )"};
-            case RGBDEncoding:
+            case Encoding::RGBD:
                 return {"RGBD", "( value, 256.0 )"};
-            case GammaEncoding:
+            case Encoding::Gamma:
                 return {"Gamma", "( value, float( GAMMA_FACTOR ) )"};
-            case LogLuvEncoding:
+            case Encoding::LogLuv:
                 return {"LogLuv", "( value )"};
             default:
-                std::cerr << "THREE.WebGLProgram: Unsupported encoding:" << encoding << std::endl;
+                std::cerr << "THREE.GLProgram: Unsupported encoding:" << as_integer(encoding) << std::endl;
                 return {"Linear", "( value )"};
         }
     }
@@ -63,8 +63,8 @@ namespace {
         static std::regex reg1(R"(\[\s*i\s*\])");
         static std::regex reg2("UNROLLED_LOOP_INDEX");
 
-        auto start = std::stoi(match[1].str());
-        auto end = std::stoi(match[2].str());
+        auto start = utils::parseInt(match[1].str());
+        auto end = utils::parseInt(match[2].str());
 
         std::stringstream ss;
         for (int i = start; i < end; ++i) {
@@ -76,46 +76,46 @@ namespace {
         return ss.str();
     }
 
-    std::string getTexelDecodingFunction(const std::string& functionName, int encoding) {
+    std::string getTexelDecodingFunction(const std::string& functionName, Encoding encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return " + components.first + "ToLinear" + components.second + "; }";
     }
 
-    std::string getTexelEncodingFunction(const std::string& functionName, int encoding) {
+    std::string getTexelEncodingFunction(const std::string& functionName, Encoding encoding) {
 
         const auto components = getEncodingComponents(encoding);
         return "vec4 " + functionName + "( vec4 value ) { return LinearTo" + components.first + components.second + "; }";
     }
 
-    std::string getToneMappingFunction(const std::string& functionName, int toneMapping) {
+    std::string getToneMappingFunction(const std::string& functionName, ToneMapping toneMapping) {
 
         std::string toneMappingName;
 
         switch (toneMapping) {
 
-            case LinearToneMapping:
+            case ToneMapping::Linear:
                 toneMappingName = "Linear";
                 break;
 
-            case ReinhardToneMapping:
+            case ToneMapping::Reinhard:
                 toneMappingName = "Reinhard";
                 break;
 
-            case CineonToneMapping:
+            case ToneMapping::Cineon:
                 toneMappingName = "OptimizedCineon";
                 break;
 
-            case ACESFilmicToneMapping:
+            case ToneMapping::ACESFilmic:
                 toneMappingName = "ACESFilmic";
                 break;
 
-            case CustomToneMapping:
+            case ToneMapping::Custom:
                 toneMappingName = "Custom";
                 break;
 
             default:
-                std::cerr << "THREE.WebGLProgram: Unsupported toneMapping:" << toneMapping << std::endl;
+                std::cerr << "THREE.GLProgram: Unsupported toneMapping " << std::endl;
                 toneMappingName = "Linear";
         }
 
@@ -237,15 +237,15 @@ namespace {
 
         std::string shadowMapTypeDefine = "SHADOWMAP_TYPE_BASIC";
 
-        if (parameters->shadowMapType == PCFShadowMap) {
+        if (parameters->shadowMapType == ShadowMap::PFC) {
 
             shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF";
 
-        } else if (parameters->shadowMapType == PCFSoftShadowMap) {
+        } else if (parameters->shadowMapType == ShadowMap::PFCSoft) {
 
             shadowMapTypeDefine = "SHADOWMAP_TYPE_PCF_SOFT";
 
-        } else if (parameters->shadowMapType == VSMShadowMap) {
+        } else if (parameters->shadowMapType == ShadowMap::VSM) {
 
             shadowMapTypeDefine = "SHADOWMAP_TYPE_VSM";
         }
@@ -261,13 +261,13 @@ namespace {
 
             switch (parameters->envMapMode) {
 
-                case CubeReflectionMapping:
-                case CubeRefractionMapping:
+                case as_integer(Mapping::CubeReflection):
+                case as_integer(Mapping::CubeRefraction):
                     envMapTypeDefine = "ENVMAP_TYPE_CUBE";
                     break;
 
-                case CubeUVReflectionMapping:
-                case CubeUVRefractionMapping:
+                case as_integer(Mapping::CubeUVReflection):
+                case as_integer(Mapping::CubeUVRefraction):
                     envMapTypeDefine = "ENVMAP_TYPE_CUBE_UV";
                     break;
             }
@@ -284,8 +284,8 @@ namespace {
 
             switch (parameters->envMapMode) {
 
-                case CubeRefractionMapping:
-                case CubeUVRefractionMapping:
+                case as_integer(Mapping::CubeRefraction):
+                case as_integer(Mapping::CubeUVRefraction):
 
                     envMapModeDefine = "ENVMAP_MODE_REFRACTION";
                     break;
@@ -303,15 +303,15 @@ namespace {
 
             switch (*parameters->combine) {
 
-                case MultiplyOperation:
+                case CombineOperation::Multiply:
                     envMapBlendingDefine = "ENVMAP_BLENDING_MULTIPLY";
                     break;
 
-                case MixOperation:
+                case CombineOperation::Mix:
                     envMapBlendingDefine = "ENVMAP_BLENDING_MIX";
                     break;
 
-                case AddOperation:
+                case CombineOperation::Add:
                     envMapBlendingDefine = "ENVMAP_BLENDING_ADD";
                     break;
             }
@@ -490,6 +490,38 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
                     "#endif",
 
+                    "#ifdef USE_MORPHTARGETS",
+
+                    "	attribute vec3 morphTarget0;",
+                    "	attribute vec3 morphTarget1;",
+                    "	attribute vec3 morphTarget2;",
+                    "	attribute vec3 morphTarget3;",
+
+                    "	#ifdef USE_MORPHNORMALS",
+
+                    "		attribute vec3 morphNormal0;",
+                    "		attribute vec3 morphNormal1;",
+                    "		attribute vec3 morphNormal2;",
+                    "		attribute vec3 morphNormal3;",
+
+                    "	#else",
+
+                    "		attribute vec3 morphTarget4;",
+                    "		attribute vec3 morphTarget5;",
+                    "		attribute vec3 morphTarget6;",
+                    "		attribute vec3 morphTarget7;",
+
+                    "	#endif",
+
+                    "#endif",
+
+                    "#ifdef USE_SKINNING",
+
+                    "	attribute vec4 skinIndex;",
+                    "	attribute vec4 skinWeight;",
+
+                    "#endif",
+
                     "\n"
 
             };
@@ -570,9 +602,9 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
                     "uniform vec3 cameraPosition;",
                     "uniform bool isOrthographic;",
 
-                    (parameters->toneMapping != NoToneMapping) ? "#define TONE_MAPPING" : "",
-                    (parameters->toneMapping != NoToneMapping) ? shaders::ShaderChunk::instance().tonemapping_pars_fragment() : "",// this code is required here because it is used by the toneMapping() function defined below
-                    (parameters->toneMapping != NoToneMapping) ? getToneMappingFunction("toneMapping", parameters->toneMapping) : "",
+                    (parameters->toneMapping != ToneMapping::None) ? "#define TONE_MAPPING" : "",
+                    (parameters->toneMapping != ToneMapping::None) ? shaders::ShaderChunk::instance().tonemapping_pars_fragment() : "",// this code is required here because it is used by the toneMapping() function defined below
+                    (parameters->toneMapping != ToneMapping::None) ? getToneMappingFunction("toneMapping", parameters->toneMapping) : "",
 
                     parameters->dithering ? "#define DITHERING" : "",
 
@@ -663,6 +695,11 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     if (parameters->index0AttributeName) {
 
         glBindAttribLocation(program, 0, parameters->index0AttributeName.value().c_str());
+
+    } else if (parameters->morphTargets) {
+
+        // programs with morphTargets displace position out of attribute 0
+        glBindAttribLocation(program, 0, "position");
     }
 
     glLinkProgram(program);

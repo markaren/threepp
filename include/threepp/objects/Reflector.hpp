@@ -22,6 +22,8 @@ namespace threepp {
             std::optional<Shader> shader;
         };
 
+        Reflector(const std::shared_ptr<BufferGeometry>& geometry, Options options);
+
         [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<Reflector> create(const std::shared_ptr<BufferGeometry>& geometry, Options options = Options());
@@ -31,8 +33,6 @@ namespace threepp {
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
-
-        Reflector(const std::shared_ptr<BufferGeometry>& geometry, Options options);
     };
 
 }// namespace threepp

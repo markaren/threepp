@@ -26,13 +26,17 @@ namespace threepp {
 
         Vector2 mapSize{512, 512};
 
-        std::shared_ptr<GLRenderTarget> map;
-        std::shared_ptr<GLRenderTarget> mapPass;
+        std::unique_ptr<GLRenderTarget> map;
+        std::unique_ptr<GLRenderTarget> mapPass;
 
         Matrix4 matrix;
 
         bool autoUpdate = true;
         bool needsUpdate = false;
+
+        LightShadow(LightShadow&&) = delete;
+        LightShadow(const LightShadow&) = delete;
+        LightShadow& operator=(const LightShadow&) = delete;
 
         [[nodiscard]] size_t getViewportCount() const;
 
@@ -46,7 +50,7 @@ namespace threepp {
 
         void dispose();
 
-        virtual ~LightShadow() = default;
+        virtual ~LightShadow();
 
     protected:
         Frustum _frustum;

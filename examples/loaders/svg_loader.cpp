@@ -80,7 +80,7 @@ namespace {
                         {{"color", data.path.color},
                          {"opacity", data.style.fillOpacity},
                          {"transparent", true},
-                         {"side", DoubleSide},
+                         {"side", Side::Double},
                          {"depthWrite", false}});
 
                 const auto shapes = SVGLoader::createShapes(data);
@@ -98,7 +98,7 @@ namespace {
                         {{"color", Color().setStyle(*data.style.stroke)},
                          {"opacity", data.style.strokeOpacity},
                          {"transparent", true},
-                         {"side", DoubleSide},
+                         {"side", Side::Double},
                          {"depthWrite", false}});
 
                 for (const auto& subPath : data.path.subPaths) {
@@ -136,13 +136,12 @@ namespace {
 int main() {
 
     Canvas canvas("SVGLoader", {{"antialiasing", 4}});
+    GLRenderer renderer(canvas.size());
+    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 100;
-
-    GLRenderer renderer(canvas);
-    renderer.setClearColor(Color::aliceblue);
 
     auto gridHelper = GridHelper::create(160, 10);
     gridHelper->rotation.x = math::PI / 2;
@@ -151,12 +150,12 @@ int main() {
     std::shared_ptr<Object3D> svg;
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
 #ifdef HAS_IMGUI
     MyUI ui(canvas.windowPtr());
@@ -184,7 +183,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
 #ifdef HAS_IMGUI
 

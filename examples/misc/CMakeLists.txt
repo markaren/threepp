@@ -1,18 +1,25 @@
 
-add_executable(key_listener key_listener.cpp)
-target_link_libraries(key_listener PUBLIC threepp)
-
-add_executable(mouse_listener mouse_listener.cpp)
-target_link_libraries(mouse_listener PUBLIC threepp)
+add_executable(mouse_key_listener mouse_key_listener.cpp)
+target_link_libraries(mouse_key_listener PRIVATE threepp)
 
 add_executable(raycast raycast.cpp)
-target_link_libraries(raycast PUBLIC threepp)
+target_link_libraries(raycast PRIVATE threepp)
 
-add_executable(test_capabilites test_capabilites.cpp)
-target_include_directories(test_capabilites PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(test_capabilites
-        PUBLIC
-        threepp
-        PRIVATE
-        glfw::glfw
-        glad::glad)
+if (OpenCV_FOUND)
+    add_executable(opencv_demo opencv_demo.cpp)
+    target_link_libraries(opencv_demo PRIVATE threepp ${OpenCV_LIBRARIES})
+    target_include_directories(opencv_demo PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
+endif ()
+
+if (imgui_FOUND)
+    add_executable(clipping clipping.cpp)
+    target_link_libraries(clipping PRIVATE threepp imgui::imgui)
+
+    add_executable(morphtargets morphtargets.cpp)
+    target_link_libraries(morphtargets PRIVATE threepp imgui::imgui)
+endif ()
+
+if (assimp_FOUND)
+    add_executable(morphtargets_sphere morphtargets_sphere.cpp)
+    target_link_libraries(morphtargets_sphere PRIVATE threepp assimp::assimp)
+endif ()

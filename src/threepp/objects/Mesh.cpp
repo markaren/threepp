@@ -1,6 +1,8 @@
 
 #include "threepp/objects/Mesh.hpp"
 
+#include "threepp/objects/SkinnedMesh.hpp"
+
 #include "threepp/core/Face3.hpp"
 #include "threepp/core/Raycaster.hpp"
 
@@ -9,23 +11,26 @@
 #include "threepp/math/Triangle.hpp"
 
 #include <algorithm>
+#include <memory>
 
 
 using namespace threepp;
 
 namespace {
 
-    std::optional<Intersection> checkIntersection(Object3D* object, Material* material, Raycaster& raycaster, Ray& ray, const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
+    std::optional<Intersection> checkIntersection(
+            Object3D* object, Material* material, Raycaster& raycaster, Ray& ray,
+            const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
         static Vector3 _intersectionPointWorld{};
 
-        if (material->side == BackSide) {
+        if (material->side == Side::Back) {
 
             ray.intersectTriangle(pC, pB, pA, true, point);
 
         } else {
 
-            ray.intersectTriangle(pA, pB, pC, material->side != DoubleSide, point);
+            ray.intersectTriangle(pA, pB, pC, material->side != Side::Double, point);
         }
 
         if (point.isNan()) return std::nullopt;
@@ -46,8 +51,13 @@ namespace {
     }
 
     std::optional<Intersection> checkBufferGeometryIntersection(
-            Object3D* object, Material* material, Raycaster& raycaster, Ray& ray,
-            const FloatBufferAttribute& position, const FloatBufferAttribute* uv, const FloatBufferAttribute* uv2,
+            Object3D* object, Material* material,
+            Raycaster& raycaster, Ray& ray,
+            const FloatBufferAttribute& position,
+            const std::vector<std::shared_ptr<BufferAttribute>>* morphPosition,
+            bool morphTargetsRelative,
+            const FloatBufferAttribute* uv,
+            const FloatBufferAttribute* uv2,
             unsigned int a, unsigned int b, unsigned int c) {
 
         static Vector3 _vA{};
@@ -58,6 +68,66 @@ namespace {
         position.setFromBufferAttribute(_vA, a);
         position.setFromBufferAttribute(_vB, b);
         position.setFromBufferAttribute(_vC, c);
+
+        if (morphPosition) {
+
+            if (auto morphObject = object->as<ObjectWithMorphTargetInfluences>()) {
+
+                if (auto morphMaterial = material->as<MaterialWithMorphTargets>()) {
+
+                    if (morphMaterial->morphTargets) {
+
+                        const auto& morphInfluences = morphObject->morphTargetInfluences();
+
+                        if (!morphInfluences.empty()) {
+
+                            Vector3 _morphA;
+                            Vector3 _morphB;
+                            Vector3 _morphC;
+                            Vector3 _tempA;
+                            Vector3 _tempB;
+                            Vector3 _tempC;
+
+                            for (unsigned i = 0, il = morphPosition->size(); i < il; i++) {
+
+                                float influence = morphInfluences[i];
+
+                                if (influence == 0) continue;
+
+                                auto morphAttribute = morphPosition->at(i)->typed<float>();
+
+                                morphAttribute->setFromBufferAttribute(_tempA, a);
+                                morphAttribute->setFromBufferAttribute(_tempB, b);
+                                morphAttribute->setFromBufferAttribute(_tempC, c);
+
+                                if (morphTargetsRelative) {
+
+                                    _morphA.addScaledVector(_tempA, influence);
+                                    _morphB.addScaledVector(_tempB, influence);
+                                    _morphC.addScaledVector(_tempC, influence);
+
+                                } else {
+
+                                    _morphA.addScaledVector(_tempA.sub(_vA), influence);
+                                    _morphB.addScaledVector(_tempB.sub(_vB), influence);
+                                    _morphC.addScaledVector(_tempC.sub(_vC), influence);
+                                }
+                            }
+
+                            _vA.add(_morphA);
+                            _vB.add(_morphB);
+                            _vC.add(_morphC);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (auto skinned = object->as<SkinnedMesh>()) {
+            skinned->boneTransform(a, _vA);
+            skinned->boneTransform(b, _vB);
+            skinned->boneTransform(c, _vC);
+        }
 
         auto intersection = checkIntersection(object, material, raycaster, ray, _vA, _vB, _vC, _intersectionPoint);
 
@@ -111,6 +181,11 @@ Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr
     : geometry_(std::move(geometry)), materials_{std::move(materials)} {
 }
 
+Mesh::Mesh(Mesh&& other) noexcept: Object3D(std::move(other)) {
+    geometry_ = std::move(other.geometry_);
+    materials_ = std::move(other.materials_);
+}
+
 std::vector<Material*> Mesh::materials() {
 
     std::vector<Material*> res(materials_.size());
@@ -153,6 +228,8 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
 
     const auto index = geometry_->getIndex();
     const auto position = geometry_->getAttribute<float>("position");
+    const auto morphPosition = geometry_->getMorphAttribute("position");
+    const auto morphTargetsRelative = geometry_->morphTargetsRelative;
     const auto uv = geometry_->getAttribute<float>("uv");
     const auto uv2 = geometry_->getAttribute<float>("uv2");
     const auto groups = geometry_->groups;
@@ -177,7 +254,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                     const auto b = index->getX(j + 1);
                     const auto c = index->getX(j + 2);
 
-                    intersection = checkBufferGeometryIntersection(this, groupMaterial, raycaster, _ray, *position, uv, uv2, a, b, c);
+                    intersection = checkBufferGeometryIntersection(
+                            this, groupMaterial, raycaster, _ray, *position,
+                            morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                     if (intersection) {
 
@@ -199,7 +278,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                 const auto b = index->getX(i + 1);
                 const auto c = index->getX(i + 2);
 
-                intersection = checkBufferGeometryIntersection(this, material(), raycaster, _ray, *position, uv, uv2, a, b, c);
+                intersection = checkBufferGeometryIntersection(
+                        this, material(), raycaster, _ray, *position,
+                        morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                 if (intersection) {
 
@@ -228,7 +309,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                     const auto b = j + 1;
                     const auto c = j + 2;
 
-                    intersection = checkBufferGeometryIntersection(this, groupMaterial, raycaster, _ray, *position, uv, uv2, a, b, c);
+                    intersection = checkBufferGeometryIntersection(
+                            this, groupMaterial, raycaster, _ray, *position,
+                            morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                     if (intersection) {
 
@@ -250,7 +333,9 @@ void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
                 const int b = i + 1;
                 const int c = i + 2;
 
-                intersection = checkBufferGeometryIntersection(this, material(), raycaster, _ray, *position, uv, uv2, a, b, c);
+                intersection = checkBufferGeometryIntersection(
+                        this, material(), raycaster, _ray, *position,
+                        morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                 if (intersection) {
 
@@ -312,10 +397,10 @@ size_t Mesh::numMaterials() const {
 
 std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
 
-    return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(material)));
+    return std::make_shared<Mesh>(std::move(geometry), std::move(material));
 }
 
 std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials) {
 
-    return std::shared_ptr<Mesh>(new Mesh(std::move(geometry), std::move(materials)));
+    return std::make_shared<Mesh>(std::move(geometry), std::move(materials));
 }

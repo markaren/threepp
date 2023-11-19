@@ -20,15 +20,15 @@ namespace threepp {
     public:
         struct Options {
 
-            std::optional<int> mapping;
-            std::optional<int> wrapS;
-            std::optional<int> wrapT;
-            std::optional<int> magFilter;
-            std::optional<int> minFilter;
-            std::optional<int> format;
-            std::optional<int> type;
+            std::optional<Mapping> mapping;
+            std::optional<TextureWrapping> wrapS;
+            std::optional<TextureWrapping> wrapT;
+            std::optional<Filter> magFilter;
+            std::optional<Filter> minFilter;
+            std::optional<Format> format;
+            std::optional<Type> type;
             std::optional<int> anisotropy;
-            std::optional<int> encoding;
+            std::optional<Encoding> encoding;
 
             bool generateMipmaps = false;
             bool depthBuffer = true;
@@ -53,11 +53,11 @@ namespace threepp {
         bool stencilBuffer;
         std::shared_ptr<DepthTexture> depthTexture;
 
+        GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
+
         GLRenderTarget(const GLRenderTarget&) = delete;
         GLRenderTarget(const GLRenderTarget&&) = delete;
         GLRenderTarget operator=(const GLRenderTarget&) = delete;
-
-        void setTexture(const std::shared_ptr<Texture>& tex);
 
         void setSize(unsigned int width, unsigned int height, unsigned int depth = 1);
 
@@ -65,13 +65,13 @@ namespace threepp {
 
         void dispose();
 
-        static std::shared_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
+        static std::unique_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
         ~GLRenderTarget() override;
 
     protected:
         bool disposed = false;
-        GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
+
     };
 
 }// namespace threepp

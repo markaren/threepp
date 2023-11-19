@@ -188,7 +188,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("bumpMap").setValue(material->bumpMap.get());
             uniforms.at("bumpScale").setValue(material->bumpScale);
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("bumpScale").value<float>() *= -1;
             }
         }
@@ -197,7 +197,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("normalMap").setValue(material->normalMap.get());
             uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("normalScale").value<Vector2>().negate();
             }
         }
@@ -234,7 +234,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("bumpMap").setValue(material->bumpMap.get());
             uniforms.at("bumpScale").setValue(material->bumpScale);
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("bumpScale").value<float>() *= -1;
             }
         }
@@ -243,7 +243,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("normalMap").setValue(material->normalMap.get());
             uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("normalScale").value<Vector2>().negate();
             }
         }
@@ -269,7 +269,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("bumpMap").setValue(material->bumpMap.get());
             uniforms.at("bumpScale").setValue(material->bumpScale);
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("bumpScale").value<float>() *= -1;
             }
         }
@@ -278,7 +278,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("normalMap").setValue(material->normalMap.get());
             uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("normalScale").value<Vector2>().negate();
             }
         }
@@ -334,7 +334,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("bumpMap").setValue(bumpMap.get());
             uniforms.at("bumpScale").value<float>() = material->bumpScale;
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("bumpScale").value<float>() *= -1;
             }
         }
@@ -344,7 +344,7 @@ struct GLMaterials::Impl {
 
             uniforms.at("normalMap").setValue(normalMap.get());
             uniforms.at("normalScale").value<Vector2>().copy(material->normalScale);
-            if (material->side == BackSide) {
+            if (material->side == Side::Back) {
                 uniforms.at("normalScale").value<Vector2>().negate();
             }
         }

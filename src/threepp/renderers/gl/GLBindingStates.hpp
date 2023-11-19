@@ -42,7 +42,7 @@ namespace threepp::gl {
 
         explicit GLBindingStates(GLAttributes& attributes);
 
-        void setup(Object3D* object, Material* material, std::shared_ptr<GLProgram>& program, BufferGeometry* geometry, BufferAttribute* index);
+        void setup(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry, BufferAttribute* index);
 
         [[nodiscard]] unsigned int createVertexArrayObject() const;
 
@@ -50,7 +50,7 @@ namespace threepp::gl {
 
         void deleteVertexArrayObject(unsigned int vao);
 
-        std::shared_ptr<GLBindingState> getBindingState(BufferGeometry* geometry, std::shared_ptr<GLProgram>& program, Material* material);
+        std::shared_ptr<GLBindingState> getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material);
 
         [[nodiscard]] std::shared_ptr<GLBindingState> createBindingState(std::optional<unsigned int> vao) const;
 
@@ -68,7 +68,7 @@ namespace threepp::gl {
 
         void vertexAttribPointer(unsigned int index, int size, unsigned int type, bool normalized, int stride, size_t offset);
 
-        void setupVertexAttributes(Object3D* object, Material* material, std::shared_ptr<GLProgram>& program, BufferGeometry* geometry);
+        void setupVertexAttributes(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry);
 
         void dispose();
 

@@ -10,15 +10,15 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas;
-    GLRenderer renderer(canvas);
+    Canvas canvas("Helpers");
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 2;
     camera->position.y = 1;
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     const auto arrow = ArrowHelper::create({0, 1, 0}, {0, 0, 0}, 0.5f, 0xff0000);
     arrow->position.setX(0.5f);
@@ -50,14 +50,13 @@ int main() {
     scene->add(polar);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         arrow->rotation.z += 0.5f * dt;
@@ -68,6 +67,6 @@ int main() {
 
         boxHelper->update();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

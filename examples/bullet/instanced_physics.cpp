@@ -1,6 +1,6 @@
 
-#include "threepp/threepp.hpp"
 #include "threepp/extras/physics/BulletPhysics.hpp"
+#include "threepp/threepp.hpp"
 
 #include "threepp/lights/LightShadow.hpp"
 
@@ -48,7 +48,7 @@ namespace {
     }
 
     inline Vector3 randomPosition() {
-        return {math::randomInRange(-5.f, 5.f), math::randomInRange(5.f, 15.f), math::randomInRange(-5.f, 5.f)};
+        return {math::randFloat(-5.f, 5.f), math::randFloat(5.f, 15.f), math::randFloat(-5.f, 5.f)};
     }
 
     void initPositions(InstancedMesh& m) {
@@ -77,17 +77,17 @@ namespace {
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
-    GLRenderer renderer(canvas);
+    Canvas canvas("Instanced physics", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = PCFSoftShadowMap;
+    renderer.shadowMap().type = ShadowMap::PFCSoft;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(-20, 10, 20);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     scene->add(AmbientLight::create(0xffffff, 0.1f));
     scene->add(createShadowLight());
@@ -95,13 +95,13 @@ int main() {
     TextureLoader tl;
     unsigned int count = 250;
     auto spheres = createSpheres(tl, count);
-    spheres->instanceMatrix->setUsage(DynamicDrawUsage);
+    spheres->instanceMatrix->setUsage(DrawUsage::Dynamic);
     spheres->castShadow = true;
     auto capsules = createCapsules(tl, count);
-    capsules->instanceMatrix->setUsage(DynamicDrawUsage);
+    capsules->instanceMatrix->setUsage(DrawUsage::Dynamic);
     capsules->castShadow = true;
     auto boxes = createBoxes(tl, count);
-    boxes->instanceMatrix->setUsage(DynamicDrawUsage);
+    boxes->instanceMatrix->setUsage(DrawUsage::Dynamic);
     boxes->castShadow = true;
     auto plane = createPlane(tl);
     plane->receiveShadow = true;
@@ -116,7 +116,7 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
@@ -132,12 +132,12 @@ int main() {
     auto tennisBallMaterial = createTennisBallMaterial(tl);
 
     KeyAdapter keyListener(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        if (evt.key == 32) {// space
+        if (evt.key == Key::SPACE) {
 
             auto mesh = Mesh::create(tennisBallGeom, tennisBallMaterial);
             mesh->castShadow = true;
             mesh->position.copy(camera->position);
-            mesh->rotation.set(math::random() * math::TWO_PI, math::random() * math::TWO_PI, math::random() * math::TWO_PI);
+            mesh->rotation.set(math::randFloat() * math::TWO_PI, math::randFloat() * math::TWO_PI, math::randFloat() * math::TWO_PI);
             Vector3 dir;
             camera->getWorldDirection(dir);
             bullet.addMesh(*mesh, 1);
@@ -145,7 +145,7 @@ int main() {
             scene->add(mesh);
 
             canvas.invokeLater([mesh] { mesh->removeFromParent(); }, 2);
-        } else if (evt.key == 82) {// r
+        } else if (evt.key == Key::R) {
 
             for (unsigned i = 0; i < count; i++) {
 
@@ -157,19 +157,21 @@ int main() {
     });
     canvas.addKeyListener(&keyListener);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         bullet.step(dt);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
+        renderer.resetState();
 
         std::stringstream ss;
         ss << renderer.info();
         handle.setText(ss.str());
+
+        textRenderer.render();
     });
 }

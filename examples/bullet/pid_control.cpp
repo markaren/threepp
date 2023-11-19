@@ -5,12 +5,6 @@
 
 #include "utility/PID.hpp"
 
-#ifdef HAS_MATPLOTLIB
-#include "matplotlibcpp.h"
-namespace plt = matplotlibcpp;
-#endif
-
-
 using namespace threepp;
 
 namespace {
@@ -96,8 +90,8 @@ namespace {
 
 int main() {
 
-    Canvas canvas;
-    GLRenderer renderer(canvas);
+    Canvas canvas("PID control");
+    GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
@@ -128,32 +122,8 @@ int main() {
     ControllableOptions opt(0, 5);
     MyUI ui(canvas, pid, opt);
 
-#ifdef HAS_MATPLOTLIB
-
-    plt::ion();
-
-    auto fig = plt::figure();
-    plt::Plot plot("PID error");
-
-    plt::ylim(-4, 4);
-    plt::ylabel("Error [rad]");
-    plt::xlabel("Time[s]");
-
-    plt::legend();
-
-    size_t i = 0;
-    float timer = 0;
-    float updateInterval = 0.1f;
-
-    const float plotLen = 10.f;
-    std::vector<float> errors;
-    std::vector<float> time;
-
-#endif
-
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
         bullet.step(dt);
 
@@ -162,32 +132,7 @@ int main() {
 
         target->rotation.z = opt.targetAngle * math::DEG2RAD;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
         ui.render();
-
-#ifdef HAS_MATPLOTLIB
-        if (plt::fignum_exists(fig)) {
-
-            if (i % 2 == 0) {
-
-                errors.emplace_back(pid.error());
-                time.emplace_back(clock.elapsedTime);
-
-                while (time.back() - time.front() > plotLen) {
-                    errors.erase(errors.begin(), errors.begin() + 1);
-                    time.erase(time.begin(), time.begin() + 1);
-                }
-            }
-
-            if ((timer += dt) > updateInterval) {
-                plot.update(time, errors);
-                plt::xlim(time.front(), time.back());
-                plt::pause(0.001);
-                timer = 0;
-            }
-
-            ++i;
-        }
-#endif
     });
 }

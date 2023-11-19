@@ -19,6 +19,10 @@ public:
         ImGui_ImplOpenGL3_Init("#version 330");
     }
 
+    ImguiContext(ImguiContext&&) = delete;
+    ImguiContext(const ImguiContext&) = delete;
+    ImguiContext& operator=(const ImguiContext&) = delete;
+
     void render() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();

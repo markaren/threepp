@@ -3,6 +3,7 @@
 
 #include "threepp/extras/core/Font.hpp"
 #include "threepp/extras/core/ShapePath.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 using namespace threepp;
 
@@ -10,7 +11,7 @@ namespace {
 
     struct FontPath {
 
-        float offsetX;
+        float offsetX{};
         ShapePath path;
     };
 
@@ -31,34 +32,34 @@ namespace {
                 const auto& action = outline[i++];
 
                 if (action == "m") {// moveTo
-                    x = std::stof(outline[i++]) * scale + offsetX;
-                    y = std::stof(outline[i++]) * scale + offsetY;
+                    x = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    y = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.moveTo(x, y);
                 } else if (action == "l") {// lineTo
 
-                    x = std::stof(outline[i++]) * scale + offsetX;
-                    y = std::stof(outline[i++]) * scale + offsetY;
+                    x = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    y = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.lineTo(x, y);
 
                 } else if (action == "q") {// quadraticCurveTo
 
-                    cpx = std::stof(outline[i++]) * scale + offsetX;
-                    cpy = std::stof(outline[i++]) * scale + offsetY;
-                    cpx1 = std::stof(outline[i++]) * scale + offsetX;
-                    cpy1 = std::stof(outline[i++]) * scale + offsetY;
+                    cpx = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy = utils::parseFloat(outline[i++]) * scale + offsetY;
+                    cpx1 = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy1 = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.quadraticCurveTo(cpx1, cpy1, cpx, cpy);
 
                 } else if (action == "b") {// bezierCurveTo
 
-                    cpx = std::stof(outline[i++]) * scale + offsetX;
-                    cpy = std::stof(outline[i++]) * scale + offsetY;
-                    cpx1 = std::stof(outline[i++]) * scale + offsetX;
-                    cpy1 = std::stof(outline[i++]) * scale + offsetY;
-                    cpx2 = std::stof(outline[i++]) * scale + offsetX;
-                    cpy2 = std::stof(outline[i++]) * scale + offsetY;
+                    cpx = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy = utils::parseFloat(outline[i++]) * scale + offsetY;
+                    cpx1 = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy1 = utils::parseFloat(outline[i++]) * scale + offsetY;
+                    cpx2 = utils::parseFloat(outline[i++]) * scale + offsetX;
+                    cpy2 = utils::parseFloat(outline[i++]) * scale + offsetY;
 
                     path.bezierCurveTo(cpx1, cpy1, cpx2, cpy2, cpx, cpy);
                 }
@@ -97,18 +98,29 @@ namespace {
 
 }// namespace
 
-Font::Font(FontData data): data(std::move(data)) {}
+Font::Font(FontData data): data_(std::move(data)) {}
 
+FontData& Font::data() {
 
-std::vector<std::shared_ptr<Shape>> Font::generateShapes(const std::string& text, unsigned int size) {
+    return data_;
+}
 
-    std::vector<std::shared_ptr<Shape>> shapes;
-    auto paths = createPaths(text, size, data);
+const FontData& Font::data() const{
+
+    return data_;
+}
+
+std::vector<Shape> Font::generateShapes(const std::string& text, unsigned int size) const {
+
+    std::vector<Shape> shapes;
+    auto paths = createPaths(text, size, data_);
 
     for (const auto& path : paths) {
 
         auto pathShapes = path.toShapes();
-        shapes.insert(shapes.end(), pathShapes.begin(), pathShapes.end());
+        for (auto& s : pathShapes) {
+            shapes.emplace_back(*s);
+        }
     }
 
     return shapes;

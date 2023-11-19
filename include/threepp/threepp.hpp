@@ -2,9 +2,10 @@
 #ifndef THREEPP_THREEPP_HPP
 #define THREEPP_THREEPP_HPP
 
-#include "threepp/Canvas.hpp"
 
 #include "threepp/constants.hpp"
+
+#include "threepp/canvas/Canvas.hpp"
 
 #include "threepp/lights/lights.hpp"
 
@@ -19,9 +20,9 @@
 
 #include "threepp/helpers/helpers.hpp"
 
+#include "threepp/core/Clock.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/core/Raycaster.hpp"
-#include "threepp/core/Clock.hpp"
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -33,6 +34,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/TextRenderer.hpp"
 
 #include "threepp/loaders/loaders.hpp"
 

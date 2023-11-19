@@ -6,12 +6,15 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
+#include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 namespace threepp {
 
-    class Points: public Object3D {
+    class Points: public Object3D, public ObjectWithMorphTargetInfluences {
 
     public:
+        Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
+
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
@@ -31,8 +34,6 @@ namespace threepp {
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
         std::shared_ptr<Material> material_;
-
-        Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
     };
 
 }// namespace threepp

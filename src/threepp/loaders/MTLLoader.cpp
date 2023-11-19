@@ -65,7 +65,7 @@ namespace {
 
         if (pos != items.end()) {
 
-            params.bumpScale = std::stof(*(pos + 1));
+            params.bumpScale = utils::parseFloat(*(pos + 1));
             items.erase(pos, pos + 2);
         }
 
@@ -73,7 +73,7 @@ namespace {
 
         if (pos != items.end()) {
 
-            texParams.scale.set(std::stof(*(pos + 1)), std::stof(*(pos + 2)));
+            texParams.scale.set(utils::parseFloat(*(pos + 1)), utils::parseFloat(*(pos + 2)));
             items.erase(pos, pos + 4);
         }
 
@@ -81,7 +81,7 @@ namespace {
 
         if (pos != items.end()) {
 
-            texParams.offset.set(std::stof(*(pos + 1)), std::stof(*(pos + 2)));
+            texParams.offset.set(utils::parseFloat(*(pos + 1)), utils::parseFloat(*(pos + 2)));
             items.erase(pos, pos + 4);
         }
 
@@ -125,7 +125,7 @@ std::shared_ptr<MaterialCreator> MTLLoader::load(const std::filesystem::path& pa
             if (key == "ka" || key == "kd" || key == "ks" || key == "ke") {
 
                 auto ss = utils::split(value, ' ');
-                (*info)[key] = std::vector<float>{std::stof(ss[0]), std::stof(ss[1]), std::stof(ss[2])};
+                (*info)[key] = std::vector<float>{utils::parseFloat(ss[0]), utils::parseFloat(ss[1]), utils::parseFloat(ss[2])};
 
             } else {
 
@@ -191,7 +191,7 @@ MaterialsInfo MaterialCreator::convert(const MaterialsInfo& mi) {
     return converted;
 }
 
-std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path& path, std::optional<int> mapping) {
+std::shared_ptr<Texture> MaterialCreator::loadTexture(const std::filesystem::path& path, std::optional<Mapping> mapping) {
 
     auto texture = TextureLoader().load(path);
     if (mapping) {
@@ -267,11 +267,11 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
 
         } else if (lower == "ns") {
 
-            params->shininess = std::stof(std::get<std::string>(value));
+            params->shininess = utils::parseFloat(std::get<std::string>(value));
 
         } else if (lower == "d") {
 
-            auto n = std::stof(std::get<std::string>(value));
+            auto n = utils::parseFloat(std::get<std::string>(value));
 
             if (n < 1) {
 
@@ -281,7 +281,7 @@ void MaterialCreator::createMaterial(const std::string& materialName) {
 
         } else if (lower == "tr") {
 
-            auto n = std::stof(std::get<std::string>(value));
+            auto n = utils::parseFloat(std::get<std::string>(value));
 
             if (options && options->invertTrProperty) {
                 n = 1 - n;

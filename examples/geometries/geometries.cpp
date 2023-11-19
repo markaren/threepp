@@ -109,17 +109,17 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Geometries", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("Geometries", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.z = 8;
 
     TextureLoader tl;
     auto material = MeshBasicMaterial::create();
     material->map = tl.load("data/textures/uv_grid_opengl.jpg");
-    material->side = DoubleSide;
+    material->side = Side::Double;
 
     auto lineMaterial = LineBasicMaterial::create();
     lineMaterial->color = Color::black;
@@ -160,20 +160,19 @@ int main() {
     camera->position.y = center.y;
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         for (auto& m : meshes) {
             m->rotation.y += 1 * dt;
         }
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

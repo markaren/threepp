@@ -21,8 +21,8 @@ namespace threepp {
     struct MaterialOptions {
 
         std::string name;
-        int side = FrontSide;
-        int wrap = RepeatWrapping;
+        Side side{Side::Front};
+        TextureWrapping wrap{TextureWrapping::Repeat};
         bool normalizeRGB = false;
         bool ignoreZeroRGBs = false;
         bool invertTrProperty = false;
@@ -40,8 +40,8 @@ namespace threepp {
             : baseUrl(std::move(baseUrl)),
               options(std::move(options)) {
 
-            side = this->options ? this->options->side : FrontSide;
-            wrap = this->options ? this->options->wrap : RepeatWrapping;
+            side = this->options ? this->options->side : Side::Front;
+            wrap = this->options ? this->options->wrap : TextureWrapping::Repeat;
         }
 
         MaterialsInfo convert(const MaterialsInfo& mi);
@@ -69,8 +69,8 @@ namespace threepp {
         std::filesystem::path baseUrl;
         std::optional<MaterialOptions> options;
 
-        int side;
-        int wrap;
+        Side side;
+        TextureWrapping wrap;
 
         std::unordered_map<std::string, std::shared_ptr<Material>> materials;
         std::vector<std::shared_ptr<Material>> materialsArray;
@@ -79,7 +79,7 @@ namespace threepp {
 
         void createMaterial(const std::string& materialName);
 
-        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<int> mapping = std::nullopt);
+        std::shared_ptr<Texture> loadTexture(const std::filesystem::path& path, std::optional<Mapping> mapping = std::nullopt);
     };
 
 

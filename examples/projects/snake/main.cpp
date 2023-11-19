@@ -6,30 +6,31 @@ int main() {
     SnakeGame game(10);
 
     Canvas canvas("Snake");
-    GLRenderer renderer(canvas);
+    GLRenderer renderer(canvas.size());
 
-    auto scene = std::make_shared<SnakeScene>(game);
-    canvas.addKeyListener(scene.get());
+    auto scene = SnakeScene(game);
+    canvas.addKeyListener(&scene);
 
     canvas.onWindowResize([&](WindowSize size) {
-        scene->camera().updateProjectionMatrix();
+        scene.camera().updateProjectionMatrix();
         renderer.setSize(size);
     });
 
-    renderer.enableTextRendering();
-    renderer.textHandle("Press \"r\" to reset");
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Press \"r\" to reset");
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         if (game.isRunning()) {
 
             game.update(dt);
-            scene->update();
-
+            scene.update();
         }
-        renderer.render(scene.get(), &scene->camera());
+        renderer.render(scene, scene.camera());
+        renderer.resetState();
+
+        textRenderer.render();
     });
 }

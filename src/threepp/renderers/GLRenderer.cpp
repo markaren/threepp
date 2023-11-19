@@ -9,6 +9,7 @@
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
+#include "threepp/renderers/gl/GLMorphTargets.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLPrograms.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
@@ -28,6 +29,7 @@
 #include "threepp/objects/LineLoop.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Points.hpp"
+#include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
 #include <glad/glad.h>
@@ -57,18 +59,14 @@ struct GLRenderer::Impl {
         GLRenderer::Impl* scope_;
     };
 
-    Canvas& canvas_;
     GLRenderer& scope;
 
     gl::GLState state;
-    gl::GLShadowMap shadowMap;
+
 
     Scene _emptyScene;
 
-    bool textEnabled_ = false;
-    std::vector<std::shared_ptr<TextHandle>> textHandles_;
-
-    std::shared_ptr<OnMaterialDispose> onMaterialDispose;
+    OnMaterialDispose onMaterialDispose;
 
     std::shared_ptr<gl::GLRenderList> currentRenderList;
     std::shared_ptr<gl::GLRenderState> currentRenderState;
@@ -78,7 +76,7 @@ struct GLRenderer::Impl {
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
-    std::shared_ptr<GLRenderTarget> _currentRenderTarget = nullptr;
+    GLRenderTarget* _currentRenderTarget = nullptr;
     std::optional<unsigned int> _currentMaterialId;
 
     Camera* _currentCamera = nullptr;
@@ -126,19 +124,21 @@ struct GLRenderer::Impl {
     gl::GLRenderStates renderStates;
     gl::GLRenderLists renderLists;
     gl::GLObjects objects;
+    gl::GLMorphTargets morphTargets;
     gl::GLPrograms programCache;
 
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
+    gl::GLShadowMap shadowMap;
 
-    Impl(GLRenderer& scope, Canvas& canvas, const GLRenderer::Parameters& parameters)
-        : scope(scope), canvas_(canvas), _size(canvas.getSize()),
+    Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
+        : scope(scope), _size(size),
           _viewport(0, 0, _size.width, _size.height),
           _scissor(0, 0, _size.width, _size.height),
           background(state, parameters.premultipliedAlpha),
-          bufferRenderer(new gl::GLBufferRenderer(_info)),
-          indexedBufferRenderer(new gl::GLIndexedBufferRenderer(_info)),
+          bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
+          indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
           clipping(properties),
           bindingStates(attributes),
           geometries(attributes, _info, bindingStates),
@@ -148,8 +148,8 @@ struct GLRenderer::Impl {
           shadowMap(objects),
           materials(properties),
           programCache(bindingStates, clipping),
-          onMaterialDispose(std::make_shared<OnMaterialDispose>(this)),
-          _currentDrawBuffers(GL_BACK) {}
+          _currentDrawBuffers(GL_BACK),
+          onMaterialDispose(this) {}
 
     void deallocateMaterial(Material* material) {
 
@@ -285,8 +285,6 @@ struct GLRenderer::Impl {
 
             currentRenderList = nullptr;
         }
-
-        renderText();
     }
 
     void renderBufferDirect(Camera* camera, Scene* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
@@ -331,6 +329,12 @@ struct GLRenderer::Impl {
 
             index = geometries.getWireframeAttribute(geometry);
             rangeFactor = 2;
+        }
+
+        if (auto m = material->as<MaterialWithMorphTargets>()) {
+            if (m->morphTargets || m->morphNormals) {
+                morphTargets.update(object, geometry, material, program);
+            }
         }
 
         bindingStates.setup(object, material, program, geometry, index);
@@ -436,7 +440,7 @@ struct GLRenderer::Impl {
 
             } else if (auto lod = object->as<LOD>()) {
 
-                if (lod->autoUpdate) lod->update(camera);
+                if (lod->autoUpdate) lod->update(*camera);
 
             } else if (auto light = object->as<Light>()) {
 
@@ -467,6 +471,17 @@ struct GLRenderer::Impl {
                 }
 
             } else if (object->is<Mesh>() || object->is<Line>() || object->is<Points>()) {
+
+                if (auto skinned = object->as<SkinnedMesh>()) {
+
+                    // update skeleton only once in a frame
+
+                    if (skinned->skeleton->frame != _info.render.frame) {
+
+                        skinned->skeleton->update();
+                        skinned->skeleton->frame = _info.render.frame;
+                    }
+                }
 
                 if (!object->frustumCulled || _frustum.intersectsObject(*object)) {
 
@@ -503,7 +518,7 @@ struct GLRenderer::Impl {
 
         for (const auto& child : object->children) {
 
-            projectObject(child.get(), camera, groupOrder, sortObjects);
+            projectObject(child, camera, groupOrder, sortObjects);
         }
     }
 
@@ -540,7 +555,7 @@ struct GLRenderer::Impl {
         }
     }
 
-    std::shared_ptr<gl::GLProgram> getProgram(Material* material, Scene* scene, Object3D* object) {
+    gl::GLProgram* getProgram(Material* material, Scene* scene, Object3D* object) {
 
         //    bool isScene = instanceof <Scene>(scene);
         //
@@ -568,7 +583,7 @@ struct GLRenderer::Impl {
 
             // new material
 
-            material->addEventListener("dispose", onMaterialDispose);
+            material->addEventListener("dispose", &onMaterialDispose);
         }
 
         std::shared_ptr<gl::GLProgram> program = nullptr;
@@ -581,7 +596,7 @@ struct GLRenderer::Impl {
 
                 updateCommonMaterialProperties(material, parameters);
 
-                return program;
+                return program.get();
             }
 
         } else {
@@ -640,7 +655,7 @@ struct GLRenderer::Impl {
         materialProperties->currentProgram = program;
         materialProperties->uniformsList = uniformsList;
 
-        return materialProperties->currentProgram;
+        return materialProperties->currentProgram.get();
     }
 
     void updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
@@ -649,12 +664,13 @@ struct GLRenderer::Impl {
 
         materialProperties->outputEncoding = parameters.outputEncoding;
         materialProperties->instancing = parameters.instancing;
+        materialProperties->skinning = parameters.skinning;
         materialProperties->numClippingPlanes = parameters.numClippingPlanes;
         materialProperties->numIntersection = parameters.numClipIntersection;
         materialProperties->vertexAlphas = parameters.vertexAlphas;
     }
 
-    std::shared_ptr<gl::GLProgram> setProgram(Camera* camera, Scene* scene, Material* material, Object3D* object) {
+    gl::GLProgram* setProgram(Camera* camera, Scene* scene, Material* material, Object3D* object) {
 
         //    bool isScene = instanceof <Scene>(scene);
 
@@ -674,7 +690,7 @@ struct GLRenderer::Impl {
 
         auto fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
-        int encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
+        Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
         //                const envMap = cubemaps.get(material.envMap || environment);
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
@@ -701,6 +717,7 @@ struct GLRenderer::Impl {
 
         bool needsProgramChange = false;
         bool isInstancedMesh = object->type() == "InstancedMesh";
+        bool isSkinnedMesh = object->type() == "SkinnedMesh";
 
         if (material->version == materialProperties->version) {
 
@@ -717,6 +734,14 @@ struct GLRenderer::Impl {
                 needsProgramChange = true;
 
             } else if (!isInstancedMesh && materialProperties->instancing) {
+
+                needsProgramChange = true;
+
+            } else if (isSkinnedMesh && !materialProperties->skinning) {
+
+                needsProgramChange = true;
+
+            } else if (!isSkinnedMesh && materialProperties->skinning) {
 
                 needsProgramChange = true;
 
@@ -747,7 +772,7 @@ struct GLRenderer::Impl {
 
         //
 
-        auto program = materialProperties->currentProgram;
+        gl::GLProgram* program = materialProperties->currentProgram.get();
 
         if (needsProgramChange) {
 
@@ -759,9 +784,9 @@ struct GLRenderer::Impl {
         bool refreshLights = false;
 
         auto p_uniforms = program->getUniforms();
-        auto& m_uniforms = materialProperties->uniforms;
+        auto& m_uniforms = *materialProperties->uniforms;
 
-        if (state.useProgram(program->program, textEnabled_)) {
+        if (state.useProgram(program->program)) {
 
             refreshProgram = true;
             refreshMaterial = true;
@@ -829,9 +854,43 @@ struct GLRenderer::Impl {
                 isMeshBasicMaterial ||
                 isMeshStandardMaterial ||
                 isShaderMaterial ||
-                isShadowMaterial) {
+                isShadowMaterial ||
+                object->is<SkinnedMesh>()) {
 
                 p_uniforms->setValue("viewMatrix", camera->matrixWorldInverse);
+            }
+        }
+
+        // skinning uniforms must be set even if material didn't change
+        // auto-setting of texture unit for bone texture must go before other textures
+        // otherwise textures used for skinning can take over texture units reserved for other material textures
+
+        if (auto skinned = object->as<SkinnedMesh>()) {
+
+            const auto& bindMatrix = skinned->bindMatrix;
+            const auto& bindMatrixInverse = skinned->bindMatrixInverse;
+
+            p_uniforms->setValue("bindMatrix", bindMatrix);
+            p_uniforms->setValue("bindMatrixInverse", bindMatrixInverse);
+
+            auto& skeleton = skinned->skeleton;
+
+            if (skeleton) {
+
+                if (gl::GLCapabilities::instance().floatVertexTextures) {
+
+                    if (!skeleton->boneTexture) skeleton->computeBoneTexture();
+
+                    p_uniforms->setValue("boneTexture", skeleton->boneTexture.get(), &textures);
+                    p_uniforms->setValue("boneTextureSize", skeleton->boneTextureSize);
+
+                } else {
+
+                    const auto& boneMatrices = skeleton->boneMatrices;
+                    if (!boneMatrices.empty()) {
+                        p_uniforms->setValue("boneMatrices", boneMatrices);
+                    }
+                }
             }
         }
 
@@ -845,6 +904,11 @@ struct GLRenderer::Impl {
 
             p_uniforms->setValue("toneMappingExposure", scope.toneMappingExposure);
 
+            // [threepp] hack to solve #162
+            if (_clippingEnabled) {
+                m_uniforms["clippingPlanes"] = clipping.uniform;
+            }
+
             if (materialProperties->needsLights) {
 
                 // the current material requires lighting info
@@ -856,19 +920,19 @@ struct GLRenderer::Impl {
                 // use the current material's .needsUpdate flags to set
                 // the GL state when required
 
-                markUniformsLightsNeedsUpdate(*m_uniforms, refreshLights);
+                markUniformsLightsNeedsUpdate(m_uniforms, refreshLights);
             }
 
             // refresh uniforms common to several materials
 
             if (fog && material->fog) {
 
-                materials.refreshFogUniforms(*m_uniforms, *fog);
+                materials.refreshFogUniforms(m_uniforms, *fog);
             }
 
-            materials.refreshMaterialUniforms(*m_uniforms, material, _pixelRatio, _size.height);
+            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height);
 
-            gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
+            gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
 
         if (isShaderMaterial) {
@@ -876,7 +940,7 @@ struct GLRenderer::Impl {
             auto m = dynamic_cast<ShaderMaterial*>(material);
             if (m->uniformsNeedUpdate) {
 
-                gl::GLUniforms::upload(materialProperties->uniformsList, *m_uniforms, &textures);
+                gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
                 m->uniformsNeedUpdate = false;
             }
         }
@@ -926,7 +990,7 @@ struct GLRenderer::Impl {
                (isShaderMaterial && lights);
     }
 
-    void setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace, int activeMipmapLevel) {
+    void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
         _currentRenderTarget = renderTarget;
         _currentActiveCubeFace = activeCubeFace;
@@ -1000,19 +1064,18 @@ struct GLRenderer::Impl {
         const auto width = static_cast<int>(texture.image->width * levelScale);
         const auto height = static_cast<int>(texture.image->height * levelScale);
 
-        auto glFormat = gl::convert(texture.format);
-
-        // Workaround for https://bugs.chromium.org/p/chromium/issues/detail?id=1120100
-
-        if (glFormat == GL_RGB) glFormat = GL_RGB8;
-        if (glFormat == GL_RGBA) glFormat = GL_RGBA8;
-
-
         textures.setTexture2D(texture, 0);
 
-        glCopyTexImage2D(GL_TEXTURE_2D, level, glFormat, static_cast<int>(position.x), static_cast<int>(position.y), width, height, 0);
+        glCopyTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, static_cast<int>(position.x), static_cast<int>(position.y), width, height);
 
         state.unbindTexture();
+    }
+
+    void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
+
+        auto glFormat = gl::toGLFormat(format);
+
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, glFormat, GL_UNSIGNED_BYTE, data);
     }
 
     void setViewport(int x, int y, int width, int height) {
@@ -1020,10 +1083,6 @@ struct GLRenderer::Impl {
         _viewport.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
 
         state.viewport(_currentViewport.copy(_viewport).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
-
-        if (textEnabled_) {
-            TextHandle::setViewport(width, height);
-        }
     }
 
     void setScissor(int x, int y, int width, int height) {
@@ -1043,51 +1102,20 @@ struct GLRenderer::Impl {
         bindingStates.dispose();
     }
 
-    void enableTextRendering() {
-        if (!textEnabled_) {
-            textEnabled_ = TextHandle::init();
-            TextHandle::setViewport(static_cast<int>(_viewport.z), static_cast<int>(_viewport.w));
-        }
+    void reset() {
+        state.reset(_size.width, _size.height);
+        bindingStates.reset();
     }
 
-    TextHandle& textHandle(const std::string& str) {
-        if (!textEnabled_) enableTextRendering();
-        textHandles_.emplace_back(std::make_unique<TextHandle>(str));
-        return *textHandles_.back();
-    }
-
-    void renderText() {
-        if (textEnabled_ && !textHandles_.empty()) {
-
-            TextHandle::beginDraw(state.currentBlendingEnabled);
-            auto it = textHandles_.begin();
-            while (it != textHandles_.end()) {
-
-                if ((*it)->invalidate_) {
-                    it = textHandles_.erase(it);
-                } else {
-                    (*it)->render();
-                    ++it;
-                }
-            }
-            TextHandle::endDraw(state.currentBlendingEnabled);
-            bindingStates.reset();
-        }
-    }
-
-    ~Impl() {
-        if (textEnabled_) {
-            TextHandle::terminate();
-        }
-    }
+    ~Impl() = default;
 
     friend struct gl::ProgramParameters;
     friend struct gl::GLShadowMap;
 };
 
 
-GLRenderer::GLRenderer(Canvas& canvas, const GLRenderer::Parameters& parameters)
-    : pimpl_(std::make_unique<Impl>(*this, canvas, parameters)) {}
+GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters)
+    : pimpl_(std::make_unique<Impl>(*this, size, parameters)) {}
 
 
 const gl::GLInfo& threepp::GLRenderer::info() {
@@ -1130,11 +1158,6 @@ void GLRenderer::setSize(WindowSize size) {
 
     pimpl_->_size = size;
 
-    int canvasWidth = pimpl_->_size.width * pimpl_->_pixelRatio;
-    int canvasHeight = pimpl_->_size.height * pimpl_->_pixelRatio;
-
-    pimpl_->canvas_.setSize({canvasWidth, canvasHeight});
-
     this->setViewport(0, 0, size.width, size.height);
 }
 
@@ -1149,8 +1172,6 @@ void GLRenderer::setDrawingBufferSize(int width, int height, int pixelRatio) {
     pimpl_->_size.height = height;
 
     pimpl_->_pixelRatio = pixelRatio;
-
-    pimpl_->canvas_.setSize({width * pixelRatio, height * pixelRatio});
 
     this->setViewport(0, 0, width, height);
 }
@@ -1244,14 +1265,9 @@ void GLRenderer::dispose() {
     pimpl_->dispose();
 }
 
-void GLRenderer::render(Scene* scene, Camera* camera) {
+void GLRenderer::render(Scene& scene, Camera& camera) {
 
-    pimpl_->render(scene, camera);
-}
-
-void threepp::GLRenderer::render(const std::shared_ptr<Scene>& scene, const std::shared_ptr<Camera>& camera) {
-
-    render(scene.get(), camera.get());
+    pimpl_->render(&scene, &camera);
 }
 
 void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
@@ -1259,7 +1275,7 @@ void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry
     pimpl_->renderBufferDirect(camera, scene, geometry, material, object, group);
 }
 
-void GLRenderer::setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace, int activeMipmapLevel) {
+void GLRenderer::setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     pimpl_->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
 }
@@ -1269,14 +1285,14 @@ void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& text
     pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
-void GLRenderer::enableTextRendering() {
+void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
 
-    pimpl_->enableTextRendering();
+    pimpl_->readPixels(position, size, format, data);
 }
 
-TextHandle& GLRenderer::textHandle(const std::string& str) {
+void GLRenderer::resetState() {
 
-    return pimpl_->textHandle(str);
+    pimpl_->reset();
 }
 
 const gl::GLInfo& threepp::GLRenderer::info() const {
@@ -1294,7 +1310,7 @@ int threepp::GLRenderer::getActiveMipmapLevel() const {
     return pimpl_->_currentActiveMipmapLevel;
 }
 
-std::shared_ptr<GLRenderTarget>& threepp::GLRenderer::getRenderTarget() {
+GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
 }

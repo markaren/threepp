@@ -68,13 +68,13 @@ struct MyUI: ImguiContext {
 int main() {
 
     Canvas canvas{"Crane3R", {{"size", WindowSize{1280, 720}}, {"antialiasing", 8}}};
-    GLRenderer renderer{canvas};
+    GLRenderer renderer{canvas.size()};
     renderer.setClearColor(Color::aliceblue);
 
-    auto camera = PerspectiveCamera::create(60, canvas.getAspect(), 0.01, 100);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
 
-    OrbitControls controls(camera, canvas);
+    OrbitControls controls(*camera, canvas);
 
     auto scene = Scene::create();
 
@@ -88,26 +88,30 @@ int main() {
     auto light = AmbientLight::create(Color::white);
     scene->add(light);
 
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle("Loading Crane3R..");
+    handle.scale = 2;
+
     utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
     pool.submit([&] {
         crane = Crane3R::create();
         canvas.invokeLater([&, crane] {
+            handle.invalidate();
             scene->add(crane);
             endEffectorHelper->visible = true;
         });
     });
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
-
 #ifdef HAS_IMGUI
 
-    IOCapture capture {};
+    IOCapture capture{};
     capture.preventMouseEvent = [] {
         return ImGui::GetIO().WantCaptureMouse;
     };
@@ -132,10 +136,9 @@ int main() {
 #endif
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
 
         if (crane) {
 
@@ -161,7 +164,10 @@ int main() {
 #endif
 
             crane->update(dt);
+        } else {
+
+            renderer.resetState();
+            textRenderer.render();
         }
     });
-
 }

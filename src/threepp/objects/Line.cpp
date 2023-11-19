@@ -5,6 +5,7 @@
 #include "threepp/core/Raycaster.hpp"
 
 #include <iostream>
+#include <memory>
 
 using namespace threepp;
 
@@ -50,7 +51,7 @@ std::shared_ptr<Object3D> Line::clone(bool recursive) {
 
 std::shared_ptr<Line> Line::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {
 
-    return std::shared_ptr<Line>(new Line(geometry, (material)));
+    return std::make_shared<Line>(geometry, (material));
 }
 
 void Line::computeLineDistances() {

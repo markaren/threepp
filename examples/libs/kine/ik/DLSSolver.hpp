@@ -12,7 +12,7 @@ namespace kine {
 
     public:
         explicit DLSSolver(double lambda = 0.5)
-            : lambdaSq_(lambda*lambda) {}
+            : lambdaSq_(lambda * lambda) {}
 
         std::vector<float> solveIK(const Kine& kine, const threepp::Vector3& target, const std::vector<float>& startValues) override {
 
@@ -44,13 +44,12 @@ namespace kine {
             }
 
             return vals;
-
         }
 
     private:
         double lambdaSq_;
 
-        Eigen::MatrixX<double> DLS(const Eigen::MatrixX<double> &j) {
+        Eigen::MatrixX<double> DLS(const Eigen::MatrixX<double>& j) {
 
             Eigen::MatrixX<double> I(j.rows(), j.rows());
             I.setIdentity();
@@ -62,7 +61,7 @@ namespace kine {
             return jt * ((jjt + plus).inverse());
         }
 
-        [[nodiscard]] Eigen::MatrixX<double> computeJacobian(const Kine& kine, const std::vector<float> &values) const {
+        [[nodiscard]] Eigen::MatrixX<double> computeJacobian(const Kine& kine, const std::vector<float>& values) const {
 
             constexpr double h = 0.0001;// some low value
 
@@ -80,10 +79,8 @@ namespace kine {
             }
             return jacobian;
         }
-
-
     };
 
-}
+}// namespace kine
 
 #endif//THREEPP_DLSSOLVER_HPP

@@ -2,6 +2,7 @@
 #include "threepp/renderers/gl/GLUniforms.hpp"
 
 #include "threepp/renderers/gl/UniformUtils.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <glad/glad.h>
 
@@ -101,6 +102,8 @@ namespace {
                     };
             }
         }
+
+        // Single texture (2D / Cube)
 
         void setValueT1(const UniformValue& value, GLTextures* textures) const {
             const auto unit = textures->allocateTextureUnit();
@@ -284,7 +287,7 @@ namespace {
                 case 0x1406:// FLOAT
                     return [&](const UniformValue& value, GLTextures*) {
                         auto& data = std::get<std::vector<float>>(value);
-                        glUniform2fv(addr, activeInfo.size, data.data());
+                        glUniform1fv(addr, activeInfo.size, data.data());
                     };
                 case 0x8b50:// VEC2
                     return [&](const UniformValue& value, GLTextures*) {
@@ -296,6 +299,11 @@ namespace {
                         auto& data = std::get<std::vector<Vector3>>(value);
                         glUniform3fv(addr, activeInfo.size, flatten(data, activeInfo.size, 3).data());
                     };
+                case 0x8b52:// VEC4
+                    return [&](const UniformValue& value, GLTextures*) {
+                        auto& data = std::get<std::vector<float>>(value);
+                        glUniform4fv(addr, activeInfo.size, data.data());
+                    };
 
                 case 0x8b5b:// MAT3
                     return [&](const UniformValue& value, GLTextures*) {
@@ -306,6 +314,7 @@ namespace {
                     return [&](const UniformValue& value, GLTextures*) {
                         std::visit(overloaded{
                                            [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                                           [&](std::vector<float> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, arg.data()); },
                                            [&](std::vector<Matrix4> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
                                            [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
                                    value);
@@ -367,7 +376,7 @@ namespace {
                             },
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
-                                    int index = std::stoi(u->id);
+                                    int index = utils::parseInt(u->id);
                                     u->setValue(*arg[index], textures);
                                 }
                             }},
@@ -403,7 +412,7 @@ namespace {
             bool isIndex = match[2] == "]";
             std::string subscript = match[3];
 
-            if (isIndex) id = std::to_string(std::stoi(id) | 0);
+            if (isIndex) id = std::to_string(utils::parseInt(id) | 0);
 
             if (!match[3].matched || subscript == "[" && matchEnd + 2 == pathLength) {
 

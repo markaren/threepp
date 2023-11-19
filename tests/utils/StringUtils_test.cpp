@@ -1,6 +1,6 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/utils/StringUtils.hpp"
 
@@ -81,5 +81,19 @@ TEST_CASE("trim") {
         str = "    hello    ";
         trim = utils::trim(str);
         REQUIRE(trim == std::string{str.begin() + 4, str.end() - 4});
+    }
+}
+
+TEST_CASE("parseNumber successfully parses numbers from strings", "[parseNumber]") {
+    SECTION("Integer parsing") {
+        std::string strInt = "123";
+        auto intResult = utils::parseInt(strInt);
+        REQUIRE(intResult == 123);
+    }
+
+    SECTION("Float parsing") {
+        std::string strFloat = "456.789";
+        auto floatResult = utils::parseFloat(strFloat);
+        REQUIRE_THAT(floatResult, Catch::Matchers::WithinRel(456.789f));
     }
 }

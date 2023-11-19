@@ -21,76 +21,74 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Data texture", {{"antialiasing", 4}});
-    GLRenderer renderer{canvas};
+    Canvas canvas("Data texture", {{"aa", 4}});
+    GLRenderer renderer{canvas.size()};
     renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
 
-    const auto& size = canvas.getSize();
+    const auto& size = canvas.size();
 
-    auto scene = Scene::create();
-    auto orthoScene = Scene::create();
+    Scene scene;
+    Scene orthoScene;
 
-    auto camera = PerspectiveCamera::create(70, canvas.getAspect(), 0.1f, 1000);
-    camera->position.z = 10;
+    PerspectiveCamera camera(70, canvas.aspect(), 0.1f, 1000);
+    camera.position.z = 10;
 
-    auto orthoCamera = OrthographicCamera::create(-size.width / 2, size.width / 2, size.height / 2, -size.height / 2, 1, 10);
-    orthoCamera->position.z = 10;
+    OrthographicCamera orthoCamera(-size.width / 2, size.width / 2, size.height / 2, -size.height / 2, 1, 10);
+    orthoCamera.position.z = 10;
 
     OrbitControls controls{camera, canvas};
 
     unsigned int textureSize = 128;
-    std::vector<unsigned char> data(textureSize * textureSize * 3);
-    auto texture = DataTexture::create(data, textureSize, textureSize);
-    texture->format = RGBFormat;
-    texture->minFilter = NearestFilter;
-    texture->magFilter = NearestFilter;
+    auto texture = DataTexture::create(std::vector<unsigned char>(textureSize * textureSize * 3), textureSize, textureSize);
+    texture->format = Format::RGB;
+    texture->minFilter = Filter::Nearest;
+    texture->magFilter = Filter::Nearest;
 
     auto spriteMaterial = SpriteMaterial::create({{"map", texture}});
     spriteMaterial->map->offset.set(0.5, 0.5);
-    auto sprite = Sprite::create(spriteMaterial);
-    sprite->scale.set(textureSize, textureSize, 1);
-    orthoScene->add(sprite);
+    Sprite sprite(spriteMaterial);
+    sprite.scale.set(textureSize, textureSize, 1);
+    orthoScene.add(sprite);
 
-    updateSpritePosition(*sprite, size, textureSize);
+    updateSpritePosition(sprite, size, textureSize);
 
     TextureLoader tl;
 
     const auto sphereGeometry = SphereGeometry::create(0.5f, 16, 16);
     const auto sphereMaterial = MeshBasicMaterial::create({{"map", tl.load("data/textures/checker.png")}});
-    auto sphere = Mesh::create(sphereGeometry, sphereMaterial);
-    sphere->position.x = 1;
-    scene->add(sphere);
+    Mesh sphere(sphereGeometry, sphereMaterial);
+    sphere.position.x = 1;
+    scene.add(sphere);
 
     const auto boxGeometry = BoxGeometry::create(1, 1, 1);
     const auto boxMaterial = MeshBasicMaterial::create({{"map", tl.load("data/textures/crate.gif")}});
-    auto box = Mesh::create(boxGeometry, boxMaterial);
-    box->position.x = -1;
-    scene->add(box);
+    Mesh box(boxGeometry, boxMaterial);
+    box.position.x = -1;
+    scene.add(box);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
-        camera->updateProjectionMatrix();
+        camera.aspect = size.aspect();
+        camera.updateProjectionMatrix();
 
-        orthoCamera->left = -size.width / 2;
-        orthoCamera->right = size.width / 2;
-        orthoCamera->top = size.height / 2;
-        orthoCamera->bottom = -size.height / 2;
-        orthoCamera->updateProjectionMatrix();
+        orthoCamera.left = -size.width / 2;
+        orthoCamera.right = size.width / 2;
+        orthoCamera.top = size.height / 2;
+        orthoCamera.bottom = -size.height / 2;
+        orthoCamera.updateProjectionMatrix();
 
         renderer.setSize(size);
 
-        updateSpritePosition(*sprite, size, textureSize);
+        updateSpritePosition(sprite, size, textureSize);
     });
 
     Clock clock;
     Vector2 vector;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
-        box->rotation.y += 0.5f * dt;
-        sphere->rotation.x += 0.5f * dt;
+        box.rotation.y += 0.5f * dt;
+        sphere.rotation.x += 0.5f * dt;
 
         renderer.clear();
         renderer.render(scene, camera);

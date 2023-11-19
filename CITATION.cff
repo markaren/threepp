@@ -1,0 +1,20 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: threepp
+message: >-
+  If you publish papers using this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Lars Ivar
+    family-names: Hatledal
+    email: laht@ntnu.no
+    affiliation: NTNU
+    orcid: 'https://orcid.org/0000-0001-6436-7213'
+repository-code: 'https://github.com/markaren/threepp'
+abstract: >-
+  Cross-platform C++ port of the popular Javascript 3D
+  library three.js
+license: MIT

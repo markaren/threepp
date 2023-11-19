@@ -17,7 +17,7 @@ namespace {
 
     auto createPlane() {
         const auto planeGeometry = PlaneGeometry::create(5, 5);
-        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", DoubleSide}});
+        const auto planeMaterial = MeshPhongMaterial::create({{"color", Color::gray}, {"side", Side::Double}});
         auto plane = Mesh::create(planeGeometry, planeMaterial);
         plane->position.y = -1;
         plane->rotateX(math::degToRad(90));
@@ -29,14 +29,14 @@ namespace {
 
 int main() {
 
-    Canvas canvas("HemisphereLight", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas);
+    Canvas canvas("HemisphereLight", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 100);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
     camera->position.set(5, 2, 5);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
 
     auto light = HemisphereLight::create(0xffffbb, 0x082820);
     light->position.y = 2;
@@ -54,18 +54,17 @@ int main() {
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float dt = clock.getDelta();
 
         group->rotation.y += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

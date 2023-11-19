@@ -10,13 +10,16 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas(Canvas::Parameters().antialiasing(4));
+    Canvas canvas("Water", {{"aa", 4}});
+    GLRenderer renderer(canvas.size());
+    renderer.checkShaderErrors = true;
+    renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(55, canvas.getAspect(), 1, 2000);
+    auto camera = PerspectiveCamera::create(55, canvas.aspect(), 1, 2000);
     camera->position.set(-300, 120, -150);
 
-    OrbitControls controls{camera, canvas};
+    OrbitControls controls{*camera, canvas};
     controls.maxPolarAngle = math::PI * 0.495f;
     controls.target.set(0, 10, 0);
     controls.minDistance = 40;
@@ -27,10 +30,6 @@ int main() {
     light->position.set(100, 10, 100);
     scene->add(light);
 
-    GLRenderer renderer(canvas);
-    renderer.checkShaderErrors = true;
-    renderer.toneMapping = ACESFilmicToneMapping;
-
     const auto sphereGeometry = SphereGeometry::create(30);
     const auto sphereMaterial = MeshBasicMaterial::create();
     sphereMaterial->color.setHex(0x0000ff);
@@ -40,8 +39,8 @@ int main() {
 
     TextureLoader textureLoader{};
     auto texture = textureLoader.load("data/textures/waternormals.jpg");
-    texture->wrapS = RepeatWrapping;
-    texture->wrapT = RepeatWrapping;
+    texture->wrapS = TextureWrapping::Repeat;
+    texture->wrapT = TextureWrapping::Repeat;
 
     Water::Options opt;
     opt.textureHeight = 512;
@@ -71,14 +70,13 @@ int main() {
     scene->add(sky);
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
-
         float t = clock.getElapsedTime();
 
         sphere->position.y = std::sin(t) * 20 + 5;
@@ -87,6 +85,6 @@ int main() {
 
         water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
     });
 }

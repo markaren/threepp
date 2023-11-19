@@ -34,30 +34,30 @@ namespace threepp {
             bool instancingColor{};
 
             bool supportsVertexTextures;
-            int outputEncoding{};
+            Encoding outputEncoding{};
             bool map{};
-            int mapEncoding{};
+            Encoding mapEncoding{};
             bool matcap{};
-            int matcapEncoding{};
+            Encoding matcapEncoding{};
             bool envMap{};
             int envMapMode{};
-            int envMapEncoding{};
+            Encoding envMapEncoding{};
             bool envMapCubeUV{};
             bool lightMap{};
-            int lightMapEncoding{};
+            Encoding lightMapEncoding{};
             bool aoMap{};
             bool emissiveMap{};
-            int emissiveMapEncoding{};
+            Encoding emissiveMapEncoding{};
             bool bumpMap{};
             bool normalMap{};
             bool objectSpaceNormalMap{};
             bool tangentSpaceNormalMap{};
-            bool clearcoatMap;
-            bool clearcoatRoughnessMap;
-            bool clearcoatNormalMap;
+            bool clearcoatMap{};
+            bool clearcoatRoughnessMap{};
+            bool clearcoatNormalMap{};
             bool displacementMap{};
-            bool roughnessMap;
-            bool metalnessMap;
+            bool roughnessMap{};
+            bool metalnessMap{};
             bool specularMap{};
             bool alphaMap{};
 
@@ -65,19 +65,19 @@ namespace threepp {
 
             std::optional<Color> sheen;
 
-            bool transmission;
-            bool transmissionMap;
-            bool thicknessMap;
+            bool transmission{};
+            bool transmissionMap{};
+            bool thicknessMap{};
 
-            std::optional<int> combine;
+            std::optional<CombineOperation> combine;
 
             bool vertexTangents{};
             bool vertexColors{};
             bool vertexAlphas{};
-            bool vertexUvs;
-            bool uvsVertexOnly;
+            bool vertexUvs{};
+            bool uvsVertexOnly{};
 
-            bool fog;
+            bool fog{};
             bool useFog{};
             bool fogExp2{};
 
@@ -86,32 +86,32 @@ namespace threepp {
             bool sizeAttenuation{};
             bool logarithmicDepthBuffer{};
 
-            bool skinning;
-            size_t maxBones;
+            bool skinning{};
+            size_t maxBones{};
             bool useVertexTexture{};
 
             bool morphTargets{};
             bool morphNormals{};
 
-            size_t numDirLights;
-            size_t numPointLights;
-            size_t numSpotLights;
-            size_t numRectAreaLights;
-            size_t numHemiLights;
+            size_t numDirLights{};
+            size_t numPointLights{};
+            size_t numSpotLights{};
+            size_t numRectAreaLights{};
+            size_t numHemiLights{};
 
-            size_t numDirLightShadows;
-            size_t numPointLightShadows;
-            size_t numSpotLightShadows;
+            size_t numDirLightShadows{};
+            size_t numPointLightShadows{};
+            size_t numSpotLightShadows{};
 
-            int numClippingPlanes;
+            int numClippingPlanes{};
             int numClipIntersection{};
 
             bool dithering{};
 
             bool shadowMapEnabled{};
-            int shadowMapType{};
+            ShadowMap shadowMapType{};
 
-            int toneMapping{};
+            ToneMapping toneMapping{};
             bool physicallyCorrectLights{};
 
             bool premultipliedAlpha{};

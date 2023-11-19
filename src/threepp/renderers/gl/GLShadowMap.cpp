@@ -33,10 +33,10 @@ using namespace threepp::gl;
 
 namespace {
 
-    inline std::unordered_map<int, int> shadowSide{
-            {0, BackSide},
-            {1, FrontSide},
-            {2, DoubleSide}};
+    inline std::unordered_map<Side, Side> shadowSide{
+            {Side::Front, Side::Back},
+            {Side::Back, Side::Front},
+            {Side::Double, Side::Double}};
 
     std::shared_ptr<ShaderMaterial> createShadowMaterialVertical() {
 
@@ -110,7 +110,7 @@ struct GLShadowMap::Impl {
         shadowMaterialVertical->uniforms->operator[]("shadow_pass").setValue(shadow->map->texture.get());
         shadowMaterialVertical->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
         shadowMaterialVertical->uniforms->operator[]("radius").value<float>() = shadow->radius;
-        _renderer.setRenderTarget(shadow->mapPass);
+        _renderer.setRenderTarget(shadow->mapPass.get());
         _renderer.clear();
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialVertical.get(), fullScreenMesh.get(), std::nullopt);
 
@@ -119,7 +119,7 @@ struct GLShadowMap::Impl {
         shadowMaterialHorizontal->uniforms->operator[]("shadow_pass").setValue(shadow->mapPass->texture.get());
         shadowMaterialHorizontal->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
         shadowMaterialHorizontal->uniforms->operator[]("radius").value<float>() = shadow->radius;
-        _renderer.setRenderTarget(shadow->map);
+        _renderer.setRenderTarget(shadow->map.get());
         _renderer.clear();
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialHorizontal.get(), fullScreenMesh.get(), std::nullopt);
     }
@@ -130,7 +130,7 @@ struct GLShadowMap::Impl {
         if (index >= _depthMaterials.size()) {
 
             auto material = MeshDepthMaterial::create();
-            material->depthPacking = RGBADepthPacking;
+            material->depthPacking = DepthPacking::RGBA;
 
             _depthMaterials.emplace_back(material);
 
@@ -178,9 +178,9 @@ struct GLShadowMap::Impl {
 
             auto keyA = result->uuid(), keyB = material->uuid();
 
-            auto materialsForVariant = _materialCache[keyA];
+            auto& materialsForVariant = _materialCache[keyA];
 
-            auto cachedMaterial = materialsForVariant[keyB];
+            auto& cachedMaterial = materialsForVariant[keyB];
 
             if (!cachedMaterial) {
 
@@ -200,7 +200,7 @@ struct GLShadowMap::Impl {
         }
 
 
-        if (scope->type == VSMShadowMap) {
+        if (scope->type == ShadowMap::VSM) {
 
             result->side = (material->shadowSide) ? *material->shadowSide : material->side;
 
@@ -238,7 +238,7 @@ struct GLShadowMap::Impl {
 
         if (visible && (object->is<Mesh>() || object->is<Line>() || object->is<Points>())) {
 
-            if ((object->castShadow || (object->receiveShadow && scope->type == VSMShadowMap)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
+            if ((object->castShadow || (object->receiveShadow && scope->type == ShadowMap::VSM)) && (!object->frustumCulled || _frustum->intersectsObject(*object))) {
 
                 object->modelViewMatrix.multiplyMatrices(shadowCamera->matrixWorldInverse, *object->matrixWorld);
 
@@ -274,7 +274,7 @@ struct GLShadowMap::Impl {
 
         for (auto& child : object->children) {
 
-            renderObject(_renderer, child.get(), camera, shadowCamera, light);
+            renderObject(_renderer, child, camera, shadowCamera, light);
         }
     }
 
@@ -292,7 +292,7 @@ struct GLShadowMap::Impl {
         auto& _state = _renderer.state();
 
         // Set GL state for depth map.
-        _state.setBlending(NoBlending);
+        _state.setBlending(Blending::None);
         _state.colorBuffer.setClear(1, 1, 1, 1);
         _state.depthBuffer.setTest(true);
         _state.setScissorTest(false);
@@ -338,12 +338,12 @@ struct GLShadowMap::Impl {
                 }
             }
 
-            if (!shadow->map && !std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == VSMShadowMap) {
+            if (!shadow->map && !std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == ShadowMap::VSM) {
 
                 GLRenderTarget::Options pars{};
-                pars.minFilter = LinearFilter;
-                pars.magFilter = LinearFilter;
-                pars.format = RGBAFormat;
+                pars.minFilter = Filter::Linear;
+                pars.magFilter = Filter::Linear;
+                pars.format = Format::RGBA;
 
                 shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                 shadow->map->texture->name = light->name + ".shadowMap";
@@ -356,9 +356,9 @@ struct GLShadowMap::Impl {
             if (!shadow->map) {
 
                 GLRenderTarget::Options pars{};
-                pars.minFilter = NearestFilter;
-                pars.magFilter = NearestFilter;
-                pars.format = RGBAFormat;
+                pars.minFilter = Filter::Nearest;
+                pars.magFilter = Filter::Nearest;
+                pars.format = Format::RGBA;
 
                 shadow->map = GLRenderTarget::create(static_cast<int>(_shadowMapSize.x), static_cast<int>(_shadowMapSize.y), pars);
                 shadow->map->texture->name = light->name + ".shadowMap";
@@ -366,10 +366,10 @@ struct GLShadowMap::Impl {
                 shadow->camera->updateProjectionMatrix();
             }
 
-            _renderer.setRenderTarget(shadow->map);
+            _renderer.setRenderTarget(shadow->map.get());
             _renderer.clear();
 
-            auto viewportCount = shadow->getViewportCount();
+            const auto viewportCount = shadow->getViewportCount();
 
             for (unsigned vp = 0; vp < viewportCount; vp++) {
 
@@ -383,8 +383,8 @@ struct GLShadowMap::Impl {
 
                 _state.viewport(_viewport);
 
-                if (std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
-                    std::dynamic_pointer_cast<PointLightShadow>(shadow)->updateMatrices(light->as<PointLight>(), vp);
+                if (auto pointLightShadow = std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
+                    pointLightShadow->updateMatrices(light->as<PointLight>(), vp);
                 } else {
                     shadow->updateMatrices(light);
                 }
@@ -396,7 +396,7 @@ struct GLShadowMap::Impl {
 
             // do blur pass for VSM
 
-            if (!std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == VSMShadowMap) {
+            if (!std::dynamic_pointer_cast<PointLightShadow>(shadow) && scope->type == ShadowMap::VSM) {
 
                 VSMPass(_renderer, shadow.get(), camera);
             }
@@ -411,7 +411,7 @@ struct GLShadowMap::Impl {
 };
 
 GLShadowMap::GLShadowMap(GLObjects& objects)
-    : type(PCFShadowMap), pimpl_(std::make_unique<Impl>(this, objects)) {}
+    : type(ShadowMap::PFC), pimpl_(std::make_unique<Impl>(this, objects)) {}
 
 
 void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {

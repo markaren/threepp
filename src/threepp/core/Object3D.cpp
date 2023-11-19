@@ -25,6 +25,11 @@ Object3D::Object3D()
     });
 }
 
+std::string Object3D::type() const {
+
+    return "Object3D";
+}
+
 void Object3D::applyMatrix4(const Matrix4& m) {
 
     if (this->matrixAutoUpdate) this->updateMatrix();
@@ -140,12 +145,16 @@ Object3D& Object3D::translateZ(float distance) {
     return this->translateOnAxis(Vector3::Z(), distance);
 }
 
-void Object3D::localToWorld(Vector3& vector) const {
+void Object3D::localToWorld(Vector3& vector) {
+
+    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
 
     vector.applyMatrix4(*this->matrixWorld);
 }
 
-void Object3D::worldToLocal(Vector3& vector) const {
+void Object3D::worldToLocal(Vector3& vector) {
+
+    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
 
     Matrix4 _m1{};
 
@@ -191,52 +200,67 @@ void Object3D::lookAt(float x, float y, float z) {
     }
 }
 
-Object3D& Object3D::add(const std::shared_ptr<Object3D>& object) {
+void Object3D::add(const std::shared_ptr<Object3D>& object) {
 
     if (object->parent) {
 
-        object->parent->remove(object);
+        object->parent->remove(*object);
     }
 
     object->parent = this;
-    this->children.emplace_back(object);
+    this->children_.emplace_back(object);
+    this->children.emplace_back(object.get());
 
     object->dispatchEvent("added");
-
-    return *this;
 }
 
-Object3D& Object3D::remove(const std::shared_ptr<Object3D>& object) {
+void Object3D::add(Object3D& object) {
 
-    return remove(object.get());
-}
+    if (object.parent) {
 
-Object3D& Object3D::remove(Object3D* object) {
-
-    auto find = find_if(children.begin(), children.end(), [&object](const auto& obj) {
-        return obj.get() == object;
-    });
-    if (find != children.end()) {
-        std::shared_ptr<Object3D> child = *find;
-        children.erase(find);
-        child->parent = nullptr;
-        child->dispatchEvent("remove", child.get());
+        object.parent->remove(object);
     }
 
-    return *this;
+    object.parent = this;
+    this->children.emplace_back(&object);
+
+    object.dispatchEvent("added");
 }
 
-Object3D& Object3D::removeFromParent() {
+void Object3D::remove(Object3D& object) {
+
+    {// non-owning (all children should be represented here)
+        auto find = std::find_if(children.begin(), children.end(), [&object](const auto& obj) {
+            return obj == &object;
+        });
+        if (find != children.end()) {
+            Object3D* child = *find;
+            children.erase(find);
+
+            child->parent = nullptr;
+            child->dispatchEvent("remove", child);
+        }
+    }
+    {// owning
+        auto find = std::find_if(children_.begin(), children_.end(), [&object](const auto& obj) {
+            return obj.get() == &object;
+        });
+        if (find != children_.end()) {
+
+            children_.erase(find);
+        }
+    }
+}
+
+void Object3D::removeFromParent() {
 
     if (parent) {
 
-        parent->remove(this);
+        parent->remove(*this);
     }
-
-    return *this;
 }
 
-Object3D& Object3D::clear() {
+void Object3D::clear() {
 
     for (auto& object : this->children) {
 
@@ -246,8 +270,7 @@ Object3D& Object3D::clear() {
     }
 
     this->children.clear();
-
-    return *this;
+    this->children_.clear();
 }
 
 Object3D* Object3D::getObjectByName(const std::string& name) {
@@ -267,14 +290,14 @@ Object3D* Object3D::getObjectByName(const std::string& name) {
     return nullptr;
 }
 
-Vector3& Object3D::getWorldPosition(Vector3& target) {
+void Object3D::getWorldPosition(Vector3& target) {
 
     this->updateWorldMatrix(true, false);
 
-    return target.setFromMatrixPosition(*this->matrixWorld);
+    target.setFromMatrixPosition(*this->matrixWorld);
 }
 
-Quaternion& Object3D::getWorldQuaternion(Quaternion& target) {
+void Object3D::getWorldQuaternion(Quaternion& target) {
 
     Vector3 _position{};
     Vector3 _scale{};
@@ -282,11 +305,9 @@ Quaternion& Object3D::getWorldQuaternion(Quaternion& target) {
     this->updateWorldMatrix(true, false);
 
     this->matrixWorld->decompose(_position, target, _scale);
-
-    return target;
 }
 
-Vector3& Object3D::getWorldScale(Vector3& target) {
+void Object3D::getWorldScale(Vector3& target) {
 
     Vector3 _position{};
     Quaternion _quaternion{};
@@ -294,8 +315,6 @@ Vector3& Object3D::getWorldScale(Vector3& target) {
     this->updateWorldMatrix(true, false);
 
     this->matrixWorld->decompose(_position, _quaternion, target);
-
-    return target;
 }
 
 void Object3D::getWorldDirection(Vector3& target) {
@@ -445,6 +464,55 @@ std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
     clone->copy(*this, recursive);
 
     return clone;
+}
+
+Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
+
+    this->name = std::move(source.name);
+
+    this->up = source.up;
+    source.up = defaultUp;
+
+    this->parent = source.parent;
+    source.parent = nullptr;
+
+    this->scale.copy(source.scale);
+    this->position.copy(source.position);
+
+    this->rotation = std::move(source.rotation);
+    this->quaternion = std::move(source.quaternion);
+
+    this->matrix = std::move(source.matrix);
+    this->matrixWorld = std::move(source.matrixWorld);
+
+    this->matrixAutoUpdate = source.matrixAutoUpdate;
+    this->matrixWorldNeedsUpdate = source.matrixWorldNeedsUpdate;
+
+    this->layers.mask_ = source.layers.mask_;
+    this->visible = source.visible;
+
+    this->castShadow = source.castShadow;
+    this->receiveShadow = source.receiveShadow;
+
+    this->frustumCulled = source.frustumCulled;
+    this->renderOrder = source.renderOrder;
+
+    this->onAfterRender = std::move(onAfterRender);
+    this->onBeforeRender = std::move(onBeforeRender);
+
+    this->rotation._onChange([this] {
+        quaternion.setFromEuler(rotation, false);
+    });
+    this->quaternion._onChange([this] {
+        rotation.setFromQuaternion(quaternion, std::nullopt, false);
+    });
+
+    this->children = std::move(source.children);
+    this->children_ = std::move(source.children_);
+
+    for (auto& c : children) {
+        c->parent = this;
+    }
 }
 
 Object3D::~Object3D() = default;

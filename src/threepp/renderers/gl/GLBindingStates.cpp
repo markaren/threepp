@@ -27,13 +27,13 @@ struct GLBindingStates::Impl {
     std::unordered_map<unsigned int, ProgramMap> bindingStates;
 
     explicit Impl(GLAttributes& attributes)
-        : maxVertexAttributes_(glGetParameter(GL_MAX_VERTEX_ATTRIBS)),
+        : maxVertexAttributes_(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
           attributes_(attributes),
           defaultState_(createBindingState(std::nullopt)),
           currentState_(defaultState_) {}
 
 
-    void setup(Object3D* object, Material* material, std::shared_ptr<GLProgram>& program, BufferGeometry* geometry, BufferAttribute* index) {
+    void setup(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry, BufferAttribute* index) {
 
         auto state = getBindingState(geometry, program, material);
 
@@ -87,7 +87,7 @@ struct GLBindingStates::Impl {
         glDeleteVertexArrays(1, &vao);
     }
 
-    std::shared_ptr<GLBindingState> getBindingState(BufferGeometry* geometry, std::shared_ptr<GLProgram>& program, Material* material) {
+    std::shared_ptr<GLBindingState> getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
 
         bool wireframe = false;
 
@@ -231,7 +231,7 @@ struct GLBindingStates::Impl {
         }
     }
 
-    void setupVertexAttributes(Object3D* object, Material* material, std::shared_ptr<GLProgram>& program, BufferGeometry* geometry) {
+    void setupVertexAttributes(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry) {
 
         initAttributes();
 
@@ -428,7 +428,7 @@ GLBindingStates::GLBindingStates(GLAttributes& attributes)
     : pimpl_(std::make_unique<Impl>(attributes)) {
 }
 
-void GLBindingStates::setup(Object3D* object, Material* material, std::shared_ptr<GLProgram>& program, BufferGeometry* geometry, BufferAttribute* index) {
+void GLBindingStates::setup(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry, BufferAttribute* index) {
 
     pimpl_->setup(object, material, program, geometry, index);
 }
@@ -448,7 +448,7 @@ void GLBindingStates::deleteVertexArrayObject(GLuint vao) {
     pimpl_->deleteVertexArrayObject(vao);
 }
 
-std::shared_ptr<GLBindingState> GLBindingStates::getBindingState(BufferGeometry* geometry, std::shared_ptr<GLProgram>& program, Material* material) {
+std::shared_ptr<GLBindingState> GLBindingStates::getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
 
     return pimpl_->getBindingState(geometry, program, material);
 }
@@ -493,7 +493,7 @@ void GLBindingStates::vertexAttribPointer(GLuint index, GLint size, GLenum type,
     pimpl_->vertexAttribPointer(index, size, type, normalized, stride, offset);
 }
 
-void GLBindingStates::setupVertexAttributes(Object3D* object, Material* material, std::shared_ptr<GLProgram>& program, BufferGeometry* geometry) {
+void GLBindingStates::setupVertexAttributes(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry) {
 
     pimpl_->setupVertexAttributes(object, material, program, geometry);
 }

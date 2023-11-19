@@ -3,6 +3,7 @@
 #ifndef THREEPP_GLSTATE_HPP
 #define THREEPP_GLSTATE_HPP
 
+#include "threepp/constants.hpp"
 #include "threepp/math/Vector4.hpp"
 
 #include <functional>
@@ -44,7 +45,7 @@ namespace threepp {
             bool locked = false;
 
             std::optional<bool> currentDepthMask;
-            std::optional<int> currentDepthFunc;
+            std::optional<DepthFunc> currentDepthFunc;
             std::optional<float> currentDepthClear;
 
             std::function<void(int)> enable;
@@ -56,7 +57,7 @@ namespace threepp {
 
             void setMask(bool depthMask);
 
-            void setFunc(int depthFunc);
+            void setFunc(DepthFunc depthFunc);
 
             void setLocked(bool lock);
 
@@ -70,12 +71,12 @@ namespace threepp {
             bool locked = false;
 
             std::optional<int> currentStencilMask;
-            std::optional<int> currentStencilFunc;
+            std::optional<StencilFunc> currentStencilFunc;
             std::optional<int> currentStencilRef;
             std::optional<int> currentStencilFuncMask;
-            std::optional<int> currentStencilFail;
-            std::optional<int> currentStencilZFail;
-            std::optional<int> currentStencilZPass;
+            std::optional<StencilOp> currentStencilFail;
+            std::optional<StencilOp> currentStencilZFail;
+            std::optional<StencilOp> currentStencilZPass;
             std::optional<int> currentStencilClear;
 
             std::function<void(int)> enable;
@@ -87,9 +88,9 @@ namespace threepp {
 
             void setMask(int stencilMask);
 
-            void setFunc(int stencilFunc, int stencilRef, int stencilMask);
+            void setFunc(StencilFunc stencilFunc, int stencilRef, int stencilMask);
 
-            void setOp(int stencilFail, int stencilZFail, int stencilZPass);
+            void setOp(StencilOp stencilFail, StencilOp stencilZFail, StencilOp stencilZPass);
 
             void setLocked(bool lock);
 
@@ -111,17 +112,17 @@ namespace threepp {
             std::optional<int> currentProgram;
 
             bool currentBlendingEnabled = false;
-            std::optional<int> currentBlending;
-            std::optional<int> currentBlendEquation;
-            std::optional<int> currentBlendSrc;
-            std::optional<int> currentBlendDst;
-            std::optional<int> currentBlendEquationAlpha;
-            std::optional<int> currentBlendSrcAlpha;
-            std::optional<int> currentBlendDstAlpha;
+            std::optional<Blending> currentBlending;
+            std::optional<BlendEquation> currentBlendEquation;
+            std::optional<BlendFactor> currentBlendSrc;
+            std::optional<BlendFactor> currentBlendDst;
+            std::optional<BlendEquation> currentBlendEquationAlpha;
+            std::optional<BlendFactor> currentBlendSrcAlpha;
+            std::optional<BlendFactor> currentBlendDstAlpha;
             std::optional<bool> currentPremultipledAlpha = false;
 
             std::optional<bool> currentFlipSided;
-            std::optional<int> currentCullFace;
+            std::optional<CullFace> currentCullFace;
 
             std::optional<float> currentLineWidth;
 
@@ -149,16 +150,16 @@ namespace threepp {
 
             bool bindFramebuffer(int target, unsigned int framebuffer);
 
-            bool useProgram(unsigned int program, bool force);
+            bool useProgram(unsigned int program);
 
             void setBlending(
-                    int blending,
-                    std::optional<int> blendEquation = std::nullopt,
-                    std::optional<int> blendSrc = std::nullopt,
-                    std::optional<int> blendDst = std::nullopt,
-                    std::optional<int> blendEquationAlpha = std::nullopt,
-                    std::optional<int> blendSrcAlpha = std::nullopt,
-                    std::optional<int> blendDstAlpha = std::nullopt,
+                    Blending blending,
+                    std::optional<BlendEquation> blendEquation = std::nullopt,
+                    std::optional<BlendFactor> blendSrc = std::nullopt,
+                    std::optional<BlendFactor> blendDst = std::nullopt,
+                    std::optional<BlendEquation> blendEquationAlpha = std::nullopt,
+                    std::optional<BlendFactor> blendSrcAlpha = std::nullopt,
+                    std::optional<BlendFactor> blendDstAlpha = std::nullopt,
                     std::optional<bool> premultipliedAlpha = std::nullopt);
 
 
@@ -166,7 +167,7 @@ namespace threepp {
 
             void setFlipSided(bool flipSided);
 
-            void setCullFace(int cullFace);
+            void setCullFace(CullFace cullFace);
 
             void setLineWidth(float width);
 

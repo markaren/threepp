@@ -90,7 +90,7 @@ auto createPlane() {
     planeMaterial->color.setHex(Color::yellow);
     planeMaterial->transparent = true;
     planeMaterial->opacity = 0.5f;
-    planeMaterial->side = DoubleSide;
+    planeMaterial->side = Side::Double;
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-2);
 
@@ -100,13 +100,12 @@ auto createPlane() {
 int main() {
 
     Canvas canvas("threepp demo");
+    GLRenderer renderer(canvas.size());
+    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
-    auto camera = PerspectiveCamera::create(75, canvas.getAspect(), 0.1f, 1000);
+    auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
-
-    GLRenderer renderer(canvas);
-    renderer.setClearColor(Color::aliceblue);
 
     auto box = createBox();
     scene->add(box);
@@ -118,16 +117,23 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    renderer.enableTextRendering();
-    auto& handle = renderer.textHandle();
-    handle.setPosition(canvas.getSize().width - 130, 0);
+    TextRenderer textRenderer;
+    auto& handle = textRenderer.createHandle();
+    handle.setPosition(canvas.size().width - 130, 0);
     handle.color = Color::red;
 
+    auto& handle2 = textRenderer.createHandle("Hello world!");
+    handle2.verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
+    handle2.setPosition(0, canvas.size().height);
+    handle2.color = Color::white;
+    handle2.scale = 2;
+
     canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.getAspect();
+        camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        handle.setPosition(canvas.getSize().width - 130, 0);
+        handle.setPosition(canvas.size().width - 130, 0);
+        handle2.setPosition(0, canvas.size().height);
     });
 
 #ifdef HAS_IMGUI
@@ -140,7 +146,9 @@ int main() {
         box->rotation.y += 0.5f * dt;
         handle.setText("Delta=" + std::to_string(dt));
 
-        renderer.render(scene, camera);
+        renderer.render(*scene, *camera);
+        renderer.resetState();
+        textRenderer.render();
 
 #ifdef HAS_IMGUI
         ui.render();

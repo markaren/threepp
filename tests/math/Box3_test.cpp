@@ -1,12 +1,14 @@
 
-#define CATCH_CONFIG_MAIN
-#include <catch2/catch.hpp>
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "threepp/core/BufferAttribute.hpp"
-#include "threepp/math/Sphere.hpp"
-#include "threepp/math/Plane.hpp"
-#include "threepp/math/Triangle.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Plane.hpp"
+#include "threepp/math/Sphere.hpp"
+#include "threepp/math/Triangle.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 
@@ -231,15 +233,15 @@ TEST_CASE("distanceToPoint") {
     Box3 a(zero3, zero3);
     Box3 b(one3.clone().negate(), one3);
 
-    CHECK(a.distanceToPoint(Vector3(0, 0, 0)) == 0);
-    CHECK(a.distanceToPoint(Vector3(1, 1, 1)) == Approx(std::sqrt(3)));
-    CHECK(a.distanceToPoint(Vector3(-1, -1, -1)) == Approx(std::sqrt(3)));
+    CHECK_THAT(a.distanceToPoint(Vector3(0, 0, 0)), Catch::Matchers::WithinRel(0.f));
+    CHECK_THAT(a.distanceToPoint(Vector3(1, 1, 1)), Catch::Matchers::WithinRel(std::sqrt(3.f)));
+    CHECK_THAT(a.distanceToPoint(Vector3(-1, -1, -1)), Catch::Matchers::WithinRel(std::sqrt(3.f)));
 
-    CHECK(b.distanceToPoint(Vector3(2, 2, 2)) == Approx(std::sqrt(3)));
-    CHECK(b.distanceToPoint(Vector3(1, 1, 1)) == 0);
-    CHECK(b.distanceToPoint(Vector3(0, 0, 0)) == 0);
-    CHECK(b.distanceToPoint(Vector3(-1, -1, -1)) == 0);
-    CHECK(b.distanceToPoint(Vector3(-2, -2, -2)) == Approx(std::sqrt(3)));
+    CHECK_THAT(b.distanceToPoint(Vector3(2, 2, 2)), Catch::Matchers::WithinRel(std::sqrt(3.f)));
+    CHECK_THAT(b.distanceToPoint(Vector3(1, 1, 1)), Catch::Matchers::WithinRel(0.f));
+    CHECK_THAT(b.distanceToPoint(Vector3(0, 0, 0)), Catch::Matchers::WithinRel(0.f));
+    CHECK_THAT(b.distanceToPoint(Vector3(-1, -1, -1)), Catch::Matchers::WithinRel(0.f));
+    CHECK_THAT(b.distanceToPoint(Vector3(-2, -2, -2)), Catch::Matchers::WithinRel(std::sqrt(3.f)));
 }
 
 TEST_CASE("getBoundingSphere") {

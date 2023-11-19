@@ -1,4 +1,6 @@
 
+#include <memory>
+
 #include "threepp/objects/Water.hpp"
 
 #include "threepp/cameras/PerspectiveCamera.hpp"
@@ -125,7 +127,7 @@ namespace {
 
 struct Water::Impl {
 
-    Impl(Water& water, Water::Options options)
+    Impl(Water& water, const Water::Options& options)
         : water_(water),
           clipBias(options.clipBias.value_or(0.f)),
           eye(options.eye.value_or(Vector3{0, 0, 0})) {
@@ -142,12 +144,14 @@ struct Water::Impl {
         Color sunColor{options.sunColor.value_or(0xffffff)};
         Color waterColor{options.waterColor.value_or(0x7f7f7f)};
 
+        waterNormals = options.waterNormals;
+
         Shader shader = mirrorShader();
 
         GLRenderTarget::Options parameters;
-        parameters.minFilter = LinearFilter;
-        parameters.magFilter = LinearFilter;
-        parameters.format = RGBFormat;
+        parameters.minFilter = Filter::Linear;
+        parameters.magFilter = Filter::Linear;
+        parameters.format = Format::RGB;
 
         renderTarget = GLRenderTarget::create(textureWidth, textureHeight, parameters);
 
@@ -162,14 +166,14 @@ struct Water::Impl {
         material->vertexShader = shader.vertexShader;
         material->lights = true;
         material->transparent = true;
-        material->side = options.side.value_or(FrontSide);
+        material->side = options.side.value_or(Side::Front);
         material->fog = options.fog.value_or(false);
 
         (*material->uniforms)["mirrorSampler"].setValue(renderTarget->texture.get());
         (*material->uniforms)["textureMatrix"].setValue(&textureMatrix);
         (*material->uniforms)["alpha"].setValue(alpha);
         (*material->uniforms)["time"].setValue(time);
-        (*material->uniforms)["normalSampler"].setValue(options.waterNormals.get());
+        (*material->uniforms)["normalSampler"].setValue(waterNormals.get());
         (*material->uniforms)["sunColor"].setValue(sunColor);
         (*material->uniforms)["waterColor"].setValue(waterColor);
         (*material->uniforms)["sunDirection"].setValue(sunDirection);
@@ -237,11 +241,11 @@ struct Water::Impl {
 
             _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
 
-            _renderer->setRenderTarget(renderTarget);
+            _renderer->setRenderTarget(renderTarget.get());
             _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
-            _renderer->render(scene, mirrorCamera.get());
+            _renderer->render(*scene, *mirrorCamera);
             water_.visible = true;
             _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
@@ -269,22 +273,25 @@ private:
     Vector3 target;
     Vector4 q;
     Matrix4 textureMatrix;
+    std::shared_ptr<Texture> waterNormals;
 
     std::shared_ptr<PerspectiveCamera> mirrorCamera = PerspectiveCamera::create();
     std::shared_ptr<GLRenderTarget> renderTarget;
 };
 
-Water::Water(const std::shared_ptr<BufferGeometry>& geometry, Water::Options options)
-    : Mesh(geometry, nullptr), pimpl_(new Impl(*this, std::move(options))) {}
+Water::Water(const std::shared_ptr<BufferGeometry>& geometry, const Water::Options& options)
+    : Mesh(geometry, nullptr), pimpl_(std::make_unique<Impl>(*this, options)) {}
 
 std::string threepp::Water::type() const {
 
     return "Water";
 }
 
-std::shared_ptr<Water> threepp::Water::create(const std::shared_ptr<BufferGeometry>& geometry, Water::Options options) {
+std::shared_ptr<Water> threepp::Water::create(
+        const std::shared_ptr<BufferGeometry>& geometry,
+        const Water::Options& options) {
 
-    return std::shared_ptr<Water>(new Water(geometry, std::move(options)));
+    return std::make_shared<Water>(geometry, options);
 }
 
 threepp::Water::~Water() = default;
