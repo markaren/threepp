@@ -17,7 +17,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <type_traits>
 
 namespace threepp {
 
@@ -241,14 +240,12 @@ namespace threepp {
         }
 
         template<class T>
-            requires std::derived_from<T, Object3D>
         T* as() {
 
             return dynamic_cast<T*>(this);
         }
 
         template<class T>
-            requires std::derived_from<T, Object3D>
         [[nodiscard]]bool is() const{
 
             return dynamic_cast<const T*>(this) != nullptr;
