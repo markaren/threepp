@@ -17,7 +17,7 @@ int main() {
     });
 
     TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle("Press \"r\" to reset");
+    auto handle = textRenderer.createHandle("Press \"r\" to reset");
 
     Clock clock;
     canvas.animate([&]() {

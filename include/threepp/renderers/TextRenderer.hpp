@@ -47,10 +47,6 @@ namespace threepp {
             invalidate_ = true;
         }
 
-        [[nodiscard]] bool isValid() const {
-            return !invalidate_;
-        }
-
         ~TextHandle();
 
     private:
@@ -76,17 +72,11 @@ namespace threepp {
         TextRenderer(const TextRenderer&) = delete;
         TextRenderer& operator=(const TextRenderer&) = delete;
 
-        void setViewport(int width, int height);
-
-        TextHandle& createHandle(const std::string& text = "") {
-
-            auto handle = std::unique_ptr<TextHandle>(new TextHandle(text));
-            textHandles_.emplace_back(std::move(handle));
-
-            return *textHandles_.back();
-        }
+        TextHandle* createHandle(const std::string& text = "");
 
         void render();
+
+        void clear();
 
         ~TextRenderer();
 

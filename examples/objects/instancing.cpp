@@ -62,7 +62,7 @@ int main() {
     canvas.addMouseListener(&l);
 
     TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle();
+    auto handle = textRenderer.createHandle();
 
     Clock clock;
     FPSCounter counter;
@@ -82,7 +82,7 @@ int main() {
         }
 
         counter.update(clock.getElapsedTime());
-        handle.setText("FPS: " + std::to_string(counter.fps));
+        handle->setText("FPS: " + std::to_string(counter.fps));
 
         renderer.render(*scene, *camera);
         renderer.resetState();

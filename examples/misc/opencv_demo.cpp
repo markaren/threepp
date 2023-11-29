@@ -74,11 +74,11 @@ int main() {
     cv::Scalar upper_hsv_range(120, 255, 255);
 
     TextRenderer textRenderer;
-    auto& handle1 = textRenderer.createHandle("+");
-    handle1.verticalAlignment = TextHandle::VerticalAlignment::CENTER;
-    handle1.horizontalAlignment = TextHandle::HorizontalAlignment::CENTER;
-    handle1.scale = 2;
-    auto& handle2 = textRenderer.createHandle();
+    auto handle1 = textRenderer.createHandle("+");
+    handle1->verticalAlignment = TextHandle::VerticalAlignment::CENTER;
+    handle1->horizontalAlignment = TextHandle::HorizontalAlignment::CENTER;
+    handle1->scale = 2;
+    auto handle2 = textRenderer.createHandle();
 
     // simulate a pan-tilt mechanism with camera attached
     Object3D yRot;
@@ -129,8 +129,8 @@ int main() {
             std::stringstream ss;
             ss << "Detected ball at pos (" << xZeroed << ", " << yZeroed << ")";
 
-            handle2.setText(ss.str());
-            handle1.setPosition(pos->x, pos->y);
+            handle2->setText(ss.str());
+            handle1->setPosition(pos->x, pos->y);
 
             renderer.resetState();
             textRenderer.render();

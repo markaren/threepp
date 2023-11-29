@@ -92,8 +92,8 @@ int main() {
     targetHelper->visible = false;
 
     TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle("Loading model..");
-    handle.scale = 2;
+    auto handle = textRenderer.createHandle("Loading model..");
+    handle->scale = 2;
 
     utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
@@ -105,7 +105,7 @@ int main() {
         canvas.invokeLater([&] {
             canvas.addKeyListener(youbot.get());
             scene->add(youbot);
-            handle.invalidate();
+            handle->invalidate();
         });
     });
 
