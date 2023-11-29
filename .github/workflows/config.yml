@@ -33,7 +33,7 @@ jobs:
       id: runvcpkg
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-        vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+        vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
         vcpkgJsonGlob: 'vcpkg.json'
         appendedCacheKey: vcpkginstall
 
@@ -64,7 +64,7 @@ jobs:
         id: runvcpkg
         with:
           vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
           vcpkgJsonGlob: 'vcpkg.json'
           appendedCacheKey: vcpkginstall
 
@@ -95,7 +95,7 @@ jobs:
         id: runvcpkg
         with:
           vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
           vcpkgJsonGlob: 'vcpkg.json'
           appendedCacheKey: vcpkginstall
 
