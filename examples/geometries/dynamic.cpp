@@ -7,7 +7,6 @@ using namespace threepp;
 
 namespace {
 
-
     auto createPlane() {
 
         auto geometry = PlaneGeometry::create(200, 200, 50, 50);
