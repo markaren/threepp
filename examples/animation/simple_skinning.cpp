@@ -66,8 +66,8 @@ int main() {
 
     //
 
-    auto stormTropper = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
-    stormTropper->traverseType<Mesh>([](Mesh& m) {
+    auto stormTrooper = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
+    stormTrooper->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
 
@@ -76,11 +76,11 @@ int main() {
             mat->map->wrapT = TextureWrapping::Repeat;
         }
     });
-    scene.add(stormTropper);
-    stormTropper->scale *= 0.6;
-    stormTropper->position.x = 2;
+    scene.add(stormTrooper);
+    stormTrooper->scale *= 0.6;
+    stormTrooper->position.x = 2;
 
-    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTropper);
+    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTrooper);
     skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
     scene.add(skeletonHelperTrooper);
 
