@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
