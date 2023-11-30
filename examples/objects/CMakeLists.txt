@@ -18,6 +18,8 @@ target_link_libraries(points PRIVATE threepp)
 if (imgui_FOUND)
     add_executable(bones bones.cpp)
     target_link_libraries(bones PRIVATE threepp imgui::imgui)
+
+    target_link_libraries(water PRIVATE imgui::imgui)
 endif ()
 
 if (assimp_FOUND)
