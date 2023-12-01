@@ -2,6 +2,9 @@
 add_executable(instancing instancing.cpp)
 target_link_libraries(instancing PRIVATE threepp)
 target_include_directories(instancing PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
+if (imgui_FOUND)
+    target_link_libraries(instancing PRIVATE imgui::imgui)
+endif ()
 
 add_executable(lod lod.cpp)
 target_link_libraries(lod PRIVATE threepp)
