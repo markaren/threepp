@@ -140,8 +140,8 @@ namespace threepp {
         explicit BulletPhysics(const Vector3& gravity = {0, -9.81f, 0})
             : dispatcher(&collisionConfiguration),
               world(&dispatcher, &broadphase, &solver, &collisionConfiguration),
-              onMeshRemovedListener(std::make_shared<MeshRemovedListener>(this)),
-              onInstancedMeshRemovedListener(std::make_shared<InstancedMeshRemovedListener>(this)) {
+              onMeshRemovedListener(this),
+              onInstancedMeshRemovedListener(this) {
 
             world.setGravity(tobtVector(gravity));
         }
@@ -196,7 +196,7 @@ namespace threepp {
                 body->setActivationState(DISABLE_DEACTIVATION);
             }
 
-            mesh->addEventListener("remove", onMeshRemovedListener);
+            mesh->addEventListener("remove", &onMeshRemovedListener);
 
             meshMap[mesh] = std::make_unique<RigidBodyConstructionInfo>(std::move(shape), std::move(motionState), std::move(body));
         }
@@ -226,7 +226,7 @@ namespace threepp {
                 instancedMeshMap[mesh].emplace_back(std::make_unique<RigidBodyConstructionInfo>(shape, std::move(motionState), std::move(body)));
             }
 
-            mesh->addEventListener("remove", onInstancedMeshRemovedListener);
+            mesh->addEventListener("remove", &onInstancedMeshRemovedListener);
         }
 
         void setMeshPosition(Mesh& mesh, const Vector3& position, unsigned int index = 0) {
@@ -357,8 +357,8 @@ namespace threepp {
             BulletPhysics* scope;
         };
 
-        std::shared_ptr<MeshRemovedListener> onMeshRemovedListener;
-        std::shared_ptr<InstancedMeshRemovedListener> onInstancedMeshRemovedListener;
+        MeshRemovedListener onMeshRemovedListener;
+        InstancedMeshRemovedListener onInstancedMeshRemovedListener;
     };
 
 }// namespace threepp

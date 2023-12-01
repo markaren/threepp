@@ -118,6 +118,13 @@ namespace {
         // clang-format on
     }
 
+    WindowSize getMonitorSize() {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+        return {mode->width, mode->height};
+    }
+
 }// namespace
 
 struct Canvas::Impl {
@@ -133,14 +140,20 @@ struct Canvas::Impl {
     std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
-
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
-        : scope(scope), size_(params.size_) {
+        : scope(scope) {
 
         glfwSetErrorCallback(error_callback);
 
         if (!glfwInit()) {
             exit(EXIT_FAILURE);
+        }
+
+        if (params.size_) {
+            size_ = *params.size_;
+        } else {
+            auto fullSize = getMonitorSize();
+            size_ = {fullSize.width/2, fullSize.height/2};
         }
 
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -153,7 +166,7 @@ struct Canvas::Impl {
             glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
         }
 
-        window = glfwCreateWindow(params.size_.width, params.size_.height, params.title_.c_str(), nullptr, nullptr);
+        window = glfwCreateWindow(size_.width, size_.height, params.title_.c_str(), nullptr, nullptr);
         if (!window) {
             glfwTerminate();
             exit(EXIT_FAILURE);
@@ -328,9 +341,14 @@ bool Canvas::animateOnce(const std::function<void()>& f) {
     return pimpl_->animateOnce(f);
 }
 
-const WindowSize& Canvas::size() const {
+WindowSize Canvas::size() const {
 
     return pimpl_->getSize();
+}
+
+WindowSize Canvas::monitorSize() const {
+
+    return getMonitorSize();
 }
 
 float Canvas::aspect() const {

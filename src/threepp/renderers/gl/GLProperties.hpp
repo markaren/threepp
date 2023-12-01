@@ -46,6 +46,7 @@ namespace threepp::gl {
 
         std::optional<Encoding> outputEncoding;
         bool instancing{};
+        bool skinning{};
         bool vertexAlphas{};
 
         bool needsLights{};

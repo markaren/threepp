@@ -52,20 +52,20 @@ namespace threepp::gl {
         void setTextureCube(Texture& texture, unsigned int slot);
 
         // Setup storage for target texture and bind it to correct framebuffer
-        void setupFrameBufferTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget>& renderTarget, Texture& texture, unsigned int attachment, unsigned int textureTarget);
+        void setupFrameBufferTexture(unsigned int framebuffer, GLRenderTarget* renderTarget, Texture& texture, unsigned int attachment, unsigned int textureTarget);
 
-        void setupRenderBufferStorage(unsigned int renderbuffer, const std::shared_ptr<GLRenderTarget>& renderTarget);
+        void setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget);
 
         // Setup resources for a Depth Texture for a FBO (needs an extension)
-        void setupDepthTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget>& renderTarget);
+        void setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget);
 
         // Setup GL resources for a non-texture depth buffer
-        void setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget>& renderTarget);
+        void setupDepthRenderbuffer(GLRenderTarget* renderTarget);
 
         // Set up GL resources for the render target
-        void setupRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget);
+        void setupRenderTarget(GLRenderTarget* renderTarget);
 
-        void updateRenderTargetMipmap(const std::shared_ptr<GLRenderTarget>& renderTarget);
+        void updateRenderTargetMipmap(GLRenderTarget* renderTarget);
 
     private:
         struct TextureEventListener: EventListener {
@@ -92,8 +92,8 @@ namespace threepp::gl {
         GLState& state;
         GLProperties& properties;
 
-        std::shared_ptr<TextureEventListener> onTextureDispose_;
-        std::shared_ptr<RenderTargetEventListener> onRenderTargetDispose_;
+        TextureEventListener onTextureDispose_;
+        RenderTargetEventListener onRenderTargetDispose_;
 
         int textureUnits = 0;
     };

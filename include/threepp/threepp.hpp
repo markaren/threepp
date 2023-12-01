@@ -9,6 +9,7 @@
 
 #include "threepp/lights/lights.hpp"
 
+#include "threepp/controls/FlyControls.hpp"
 #include "threepp/controls/OrbitControls.hpp"
 
 #include "threepp/geometries/geometries.hpp"

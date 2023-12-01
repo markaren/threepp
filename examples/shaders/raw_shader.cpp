@@ -4,51 +4,14 @@
 
 #include <string>
 
-namespace {
-
-    std::string vertexSource() {
-
-        return R"(
-               #version 330 core
-               #define attribute in
-               #define varying out
-               uniform mat4 modelViewMatrix; // optional
-               uniform mat4 projectionMatrix; // optional
-               attribute vec3 position;
-               attribute vec4 color;
-               varying vec3 vPosition;
-               varying vec4 vColor;
-               void main() {
-                   vPosition = position;
-                   vColor = color;
-                   gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-               })";
-    }
-
-    std::string fragmentSource() {
-
-        return R"(
-                #version 330 core
-                #define varying in
-                out highp vec4 pc_fragColor;
-                #define gl_FragColor pc_fragColor
-                uniform float time;
-                varying vec3 vPosition;
-                varying vec4 vColor;
-                void main() {
-                   vec4 color = vec4( vColor );
-                   color.r += sin( vPosition.x * 10.0 + time ) * 0.5;
-                   gl_FragColor = color;
-                })";
-    }
-
-}// namespace
-
 using namespace threepp;
+
+std::string vertexSource();
+std::string fragmentSource();
 
 int main() {
 
-    Canvas canvas("Raw Shader demo", {{"antialiasing", 4}});
+    Canvas canvas("Raw Shader demo");
 
     GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
@@ -104,4 +67,40 @@ int main() {
 
         renderer.render(*scene, *camera);
     });
+}
+
+std::string vertexSource() {
+
+    return R"(
+               #version 330 core
+               #define attribute in
+               #define varying out
+               uniform mat4 modelViewMatrix; // optional
+               uniform mat4 projectionMatrix; // optional
+               attribute vec3 position;
+               attribute vec4 color;
+               varying vec3 vPosition;
+               varying vec4 vColor;
+               void main() {
+                   vPosition = position;
+                   vColor = color;
+                   gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+               })";
+}
+
+std::string fragmentSource() {
+
+    return R"(
+                #version 330 core
+                #define varying in
+                out highp vec4 pc_fragColor;
+                #define gl_FragColor pc_fragColor
+                uniform float time;
+                varying vec3 vPosition;
+                varying vec4 vColor;
+                void main() {
+                   vec4 color = vec4( vColor );
+                   color.r += sin( vPosition.x * 10.0 + time ) * 0.5;
+                   gl_FragColor = color;
+                })";
 }

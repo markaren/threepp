@@ -4,9 +4,106 @@
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/threepp.hpp"
 
+#ifdef HAS_IMGUI
+#include "threepp/extras/imgui/ImguiContext.hpp"
+#endif
+
 using namespace threepp;
 
+namespace {
+
+#ifdef HAS_IMGUI
+
+    struct MyUI: public ImguiContext {
+
+    public:
+        explicit MyUI(void* ptr): ImguiContext(ptr) {}
+
+        [[nodiscard]] bool newSelection() const {
+            return lastSelectedIndex != selectedIndex;
+        }
+
+        [[nodiscard]] std::string selected() const {
+            return names[selectedIndex];
+        }
+
+    protected:
+        void onRender() override {
+
+            lastSelectedIndex = selectedIndex;
+
+            ImGui::SetNextWindowPos({}, 0, {});
+            ImGui::SetNextWindowSize({250, 0}, 0);
+
+            ImGui::Begin("Font");
+
+            if (ImGui::BeginCombo("Select Font", names[selectedIndex].c_str())) {
+                for (int i = 0; i < names.size(); ++i) {
+                    const bool isSelected = (selectedIndex == i);
+                    if (ImGui::Selectable(names[i].c_str(), isSelected)) {
+                        selectedIndex = i;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::End();
+        }
+
+    private:
+        int lastSelectedIndex = -1;
+        int selectedIndex = 4;
+        std::vector<std::string> names{
+                "gentilis_bold", "gentilis_regular", "helvetiker_bold",
+                "helvetiker_regular", "optimer_bold", "optimer_regular"};
+    };
+
+#endif
+
+    auto createTextGeometry(const Font& font, const std::string& text, int size = 10) {
+        TextGeometry::Options opts(font, size);
+        opts.height = 1;
+        auto geometry = TextGeometry::create(text, opts);
+        geometry->center();
+
+        return geometry;
+    }
+
+    auto createPlane() {
+
+        auto planeMaterial = MeshPhongMaterial::create();
+        planeMaterial->color = Color::gray;
+        auto plane = Mesh::create(PlaneGeometry::create(1000, 1000), planeMaterial);
+        plane->position.y = -8;
+        plane->rotateX(math::degToRad(-90));
+        plane->receiveShadow = true;
+
+        return plane;
+    }
+
+    auto createAndAddLights(Scene& scene) {
+
+        auto light = DirectionalLight::create();
+        light->position.set(10, 5, 10);
+        light->lookAt(Vector3::ZEROS());
+        light->castShadow = true;
+        auto shadowCamera = light->shadow->camera->as<OrthographicCamera>();
+        shadowCamera->left = shadowCamera->bottom = -20;
+        shadowCamera->right = shadowCamera->top = 20;
+        scene.add(light);
+
+        auto pointLight = PointLight::create();
+        pointLight->intensity = 0.2f;
+        pointLight->position.set(0, 2, 10);
+        scene.add(pointLight);
+    }
+
+}// namespace
+
 int main() {
+
+    std::string displayText = "threepp!";
+    std::filesystem::path fontPath{"data/fonts"};
 
     Canvas canvas("Fonts", {{"aa", 8}});
     GLRenderer renderer(canvas.size());
@@ -18,52 +115,26 @@ int main() {
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
     camera->position.set(0, 5, 40);
 
-    auto light = DirectionalLight::create();
-    light->position.set(10, 5, 10);
-    light->lookAt(Vector3::ZEROS());
-    light->castShadow = true;
-    auto shadowCamera = light->shadow->camera->as<OrthographicCamera>();
-    shadowCamera->left = shadowCamera->bottom = -20;
-    shadowCamera->right = shadowCamera->top = 20;
-    scene->add(light);
-
-    auto pointLight = PointLight::create();
-    pointLight->intensity = 0.2f;
-    pointLight->position.set(0, 2, 10);
-    scene->add(pointLight);
+    createAndAddLights(*scene);
 
     OrbitControls controls{*camera, canvas};
 
     FontLoader loader;
-    auto font = loader.load("data/fonts/optimer_bold.typeface.json");
+    auto font = loader.load(fontPath / "optimer_bold.typeface.json");
 
+    std::shared_ptr<Mesh> textMesh;
     if (font) {
-        TextGeometry::Options opts(*font, 10);
-        opts.height = 1;
-        auto geometry = TextGeometry::create("threepp!", opts);
-        geometry->center();
-
         auto material = MeshPhongMaterial::create();
         material->color = Color::orange;
 
-        auto mesh = Mesh::create(geometry, material);
-        mesh->castShadow = true;
-        scene->add(mesh);
+        auto geometry = createTextGeometry(*font, displayText, 10);
 
-        auto lineMaterial = LineBasicMaterial::create({{"color", Color::black}});
-        lineMaterial->color = Color::black;
-        lineMaterial->linewidth = 20000;
-        auto edges = LineSegments::create(EdgesGeometry::create(*geometry, 10), lineMaterial);
-        mesh->add(edges);
+        textMesh = Mesh::create(geometry, material);
+        textMesh->castShadow = true;
+        scene->add(textMesh);
     }
 
-    auto planeMaterial = MeshPhongMaterial::create();
-    planeMaterial->color = Color::gray;
-    auto plane = Mesh::create(PlaneGeometry::create(1000, 1000), planeMaterial);
-    plane->position.y = -8;
-    plane->rotateX(math::degToRad(-90));
-    plane->receiveShadow = true;
-    scene->add(plane);
+    scene->add(createPlane());
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -71,7 +142,23 @@ int main() {
         renderer.setSize(size);
     });
 
+#ifdef HAS_IMGUI
+    MyUI ui(canvas.windowPtr());
+#endif
+
     canvas.animate([&]() {
         renderer.render(*scene, *camera);
+
+#ifdef HAS_IMGUI
+        ui.render();
+
+        if (ui.newSelection()) {
+            font = loader.load(fontPath / std::string(ui.selected() + ".typeface.json"));
+            if (font) {
+                auto geometry = createTextGeometry(*font, displayText);
+                textMesh->setGeometry(geometry);
+            }
+        }
+#endif
     });
 }

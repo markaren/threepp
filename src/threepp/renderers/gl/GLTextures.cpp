@@ -82,8 +82,8 @@ gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl:
       maxCubemapSize(GLCapabilities::instance().maxCubemapSize),
       maxTextureSize(GLCapabilities::instance().maxTextureSize),
       maxSamples(GLCapabilities::instance().maxSamples),
-      onTextureDispose_(std::make_shared<TextureEventListener>(this)),
-      onRenderTargetDispose_(std::make_shared<RenderTargetEventListener>(this)) {}
+      onTextureDispose_(this),
+      onRenderTargetDispose_(this) {}
 
 void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuint width, GLuint height) {
 
@@ -169,9 +169,18 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         } else {
 
-            state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                             static_cast<int>(image.width), static_cast<int>(image.height),
-                             glFormat, glType, texture.image->data().data());
+            if (glType == GL_UNSIGNED_BYTE) {
+                state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                                 static_cast<int>(image.width), static_cast<int>(image.height),
+                                 glFormat, glType, texture.image->data().data());
+            } else if (glType == GL_FLOAT) {
+                state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                                 static_cast<int>(image.width), static_cast<int>(image.height),
+                                 glFormat, glType, texture.image->data<float>().data());
+            } else {
+
+                std::cerr << "Unnsupported gltype=" << glType << std::endl;
+            }
             textureProperties->maxMipLevel = 0;
         }
     }
@@ -192,7 +201,7 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
 
         textureProperties->glInit = true;
 
-        texture.addEventListener("dispose", onTextureDispose_);
+        texture.addEventListener("dispose", &onTextureDispose_);
 
         GLuint glTexture;
         glGenTextures(1, &glTexture);
@@ -331,7 +340,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
 
 void gl::GLTextures::setupFrameBufferTexture(
         unsigned int framebuffer,
-        const std::shared_ptr<GLRenderTarget>& renderTarget,
+        GLRenderTarget* renderTarget,
         Texture& texture, GLuint attachment, GLuint textureTarget) {
 
     const auto glFormat = toGLFormat(texture.format);
@@ -352,7 +361,7 @@ void gl::GLTextures::setupFrameBufferTexture(
     state.bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget) {
 
     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
 
@@ -388,7 +397,7 @@ void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, const s
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
 }
 
-void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget) {
 
     state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
@@ -425,7 +434,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, const std::shar
     }
 }
 
-void gl::GLTextures::setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupDepthRenderbuffer(GLRenderTarget* renderTarget) {
 
     auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
 
@@ -445,14 +454,14 @@ void gl::GLTextures::setupDepthRenderbuffer(const std::shared_ptr<GLRenderTarget
     state.bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gl::GLTextures::setupRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
     const auto& texture = renderTarget->texture;
 
     auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
     auto textureProperties = properties.textureProperties.get(texture->uuid);
 
-    renderTarget->addEventListener("dispose", onRenderTargetDispose_);
+    renderTarget->addEventListener("dispose", &onRenderTargetDispose_);
 
     GLuint glTexture;
     glGenTextures(1, &glTexture);
@@ -499,7 +508,7 @@ void gl::GLTextures::setupRenderTarget(const std::shared_ptr<GLRenderTarget>& re
     }
 }
 
-void gl::GLTextures::updateRenderTargetMipmap(const std::shared_ptr<GLRenderTarget>& renderTarget) {
+void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
 
     const auto texture = renderTarget->texture;
 

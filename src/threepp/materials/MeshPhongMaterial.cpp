@@ -89,7 +89,25 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
         } else {
             color.copy(std::get<Color>(value));
         }
+        return true;
 
+    } else if (key == "emissive") {
+
+        if (std::holds_alternative<int>(value)) {
+            emissive = std::get<int>(value);
+        } else {
+            emissive.copy(std::get<Color>(value));
+        }
+        return true;
+
+    } else if (key == "emissiveIntensity") {
+
+        emissiveIntensity = std::get<float>(value);
+        return true;
+
+    } else if (key == "emissiveMap") {
+
+        emissiveMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
     } else if (key == "wireframe") {
@@ -162,6 +180,15 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
         specularMap = std::get<std::shared_ptr<Texture>>(value);
         return true;
 
+    } else if (key == "specular") {
+
+        if (std::holds_alternative<int>(value)) {
+            specular = std::get<int>(value);
+        } else {
+            specular.copy(std::get<Color>(value));
+        }
+        return true;
+
     } else if (key == "displacementMap") {
 
         displacementMap = std::get<std::shared_ptr<Texture>>(value);
@@ -200,6 +227,10 @@ bool MeshPhongMaterial::setValue(const std::string& key, const MaterialValue& va
     } else if (key == "refractionRatio") {
 
         refractionRatio = std::get<float>(value);
+        return true;
+    } else if (key == "normalScale") {
+
+        normalScale = std::get<Vector2>(value);
         return true;
     }
 

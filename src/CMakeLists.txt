@@ -89,6 +89,7 @@ set(publicHeaders
         "threepp/helpers/PlaneHelper.hpp"
         "threepp/helpers/PointLightHelper.hpp"
         "threepp/helpers/PolarGridHelper.hpp"
+        "threepp/helpers/SkeletonHelper.hpp"
         "threepp/helpers/SpotLightHelper.hpp"
 
         "threepp/loaders/loaders.hpp"
@@ -139,6 +140,7 @@ set(publicHeaders
         "threepp/math/Vector4.hpp"
         "threepp/math/Quaternion.hpp"
 
+        "threepp/objects/Bone.hpp"
         "threepp/objects/Group.hpp"
         "threepp/objects/InstancedMesh.hpp"
         "threepp/objects/Line.hpp"
@@ -148,6 +150,8 @@ set(publicHeaders
         "threepp/objects/Mesh.hpp"
         "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
         "threepp/objects/Sky.hpp"
+        "threepp/objects/Skeleton.hpp"
+        "threepp/objects/SkinnedMesh.hpp"
         "threepp/objects/Sprite.hpp"
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
@@ -296,6 +300,7 @@ set(sources
         "threepp/helpers/PlaneHelper.cpp"
         "threepp/helpers/PointLightHelper.cpp"
         "threepp/helpers/PolarGridHelper.cpp"
+        "threepp/helpers/SkeletonHelper.cpp"
         "threepp/helpers/SpotLightHelper.cpp"
 
         "threepp/input/PeripheralsEventSource.cpp"
@@ -363,13 +368,14 @@ set(sources
         "threepp/objects/InstancedMesh.cpp"
         "threepp/objects/Mesh.cpp"
         "threepp/objects/Points.cpp"
+        "threepp/objects/Skeleton.cpp"
+        "threepp/objects/SkinnedMesh.cpp"
         "threepp/objects/Sky.cpp"
         "threepp/objects/Sprite.cpp"
         "threepp/objects/Reflector.cpp"
         "threepp/objects/Water.cpp"
 
         "threepp/textures/Texture.cpp"
-        "threepp/textures/DataTexture.cpp"
         "threepp/textures/DataTexture3D.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
@@ -384,7 +390,6 @@ set(sources
         "threepp/renderers/gl/GLBackground.cpp"
         "threepp/renderers/gl/GLBindingStates.cpp"
         "threepp/renderers/gl/GLBufferRenderer.cpp"
-        "threepp/renderers/gl/GLCapabilities.cpp"
         "threepp/renderers/gl/GLClipping.cpp"
         "threepp/renderers/gl/GLGeometries.cpp"
         "threepp/renderers/gl/GLInfo.cpp"

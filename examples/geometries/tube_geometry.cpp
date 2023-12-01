@@ -9,8 +9,6 @@ namespace {
 
     struct CustomSineCurve: Curve3 {
 
-        float scale;
-
         explicit CustomSineCurve(float scale): scale(scale) {}
 
         void getPoint(float t, Vector3& target) const override {
@@ -20,6 +18,9 @@ namespace {
 
             target.set(tx, ty, tz).multiplyScalar(scale);
         }
+
+    private:
+        float scale;
     };
 
 }// namespace

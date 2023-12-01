@@ -18,7 +18,7 @@ namespace threepp {
 
             GLBackground(GLState& state, bool premultipliedAlpha);
 
-            void render(GLRenderer& renderer, Object3D* scene);
+            void render(GLRenderer& renderer, Scene* scene);
 
             [[nodiscard]] const Color& getClearColor() const;
 

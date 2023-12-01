@@ -145,12 +145,16 @@ Object3D& Object3D::translateZ(float distance) {
     return this->translateOnAxis(Vector3::Z(), distance);
 }
 
-void Object3D::localToWorld(Vector3& vector) const {
+void Object3D::localToWorld(Vector3& vector) {
+
+    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
 
     vector.applyMatrix4(*this->matrixWorld);
 }
 
-void Object3D::worldToLocal(Vector3& vector) const {
+void Object3D::worldToLocal(Vector3& vector) {
+
+    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
 
     Matrix4 _m1{};
 

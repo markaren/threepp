@@ -4,7 +4,7 @@
   "dependencies": [
     {
       "name": "glad",
-      "features": ["gl-api-41"]
+      "features": ["gl-api-41", "extensions"]
     },
     "glfw3",
     "stb"

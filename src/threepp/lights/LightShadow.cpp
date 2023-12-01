@@ -75,3 +75,8 @@ void LightShadow::dispose() {
         this->mapPass->dispose();
     }
 }
+
+LightShadow::~LightShadow() {
+
+    dispose();
+}
