@@ -13,7 +13,7 @@ using namespace threepp;
 
 namespace {
 
-    void setupInstancedMesh(InstancedMesh* mesh, int amount) {
+    void setupInstancedMesh(InstancedMesh& mesh, int amount) {
 
         Matrix4 matrix;
         Color color;
@@ -23,8 +23,8 @@ namespace {
             for (int y = 0; y < amount; y++) {
                 for (int z = 0; z < amount; z++) {
                     matrix.setPosition(offset - float(x), offset - float(y), offset - float(z));
-                    mesh->setMatrixAt(index, matrix);
-                    mesh->setColorAt(index, color);
+                    mesh.setMatrixAt(index, matrix);
+                    mesh.setColorAt(index, color);
                     ++index;
                 }
             }
@@ -55,7 +55,7 @@ int main() {
     auto geometry = IcosahedronGeometry::create(0.5f, 2);
     auto mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(amount, 3)));
 
-    setupInstancedMesh(mesh.get(), amount);
+    setupInstancedMesh(*mesh, amount);
     scene->add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -81,12 +81,12 @@ int main() {
         ImGui::SetNextWindowSize({width, 0}, 0);
 
         ImGui::Begin("Settings");
-        ImGui::SliderInt("Amount", &amount, 1, 50);
+        ImGui::SliderInt("Amount", &amount, 2, 25);
         if (ImGui::IsItemEdited()) {
             colorMap.clear();
             mesh->removeFromParent();
             mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(amount, 3)));
-            setupInstancedMesh(mesh.get(), amount);
+            setupInstancedMesh(*mesh, amount);
             scene->add(mesh);
             camera->position.set(float(amount), float(amount), float(amount));
         }
