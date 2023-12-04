@@ -24,7 +24,7 @@ namespace threepp {
         float normalBias = 0;
         float radius = 1;
 
-        Vector2 mapSize{512, 512};
+        Vector2 mapSize{1024, 1024};
 
         std::unique_ptr<GLRenderTarget> map;
         std::unique_ptr<GLRenderTarget> mapPass;
