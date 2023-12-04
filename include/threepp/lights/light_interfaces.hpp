@@ -2,10 +2,9 @@
 #ifndef THREEPP_LIGHT_INTERFACES_HPP
 #define THREEPP_LIGHT_INTERFACES_HPP
 
+#include "threepp/lights/LightShadow.hpp"
 
 namespace threepp {
-
-    class LightShadow;
 
     class LightWithShadow {
 

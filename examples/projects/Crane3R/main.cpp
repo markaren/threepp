@@ -3,7 +3,6 @@
 
 #include "threepp/threepp.hpp"
 #include "threepp/utils/ThreadPool.hpp"
-#include "threepp/lights/DirectionalLightShadow.hpp"
 
 using namespace threepp;
 

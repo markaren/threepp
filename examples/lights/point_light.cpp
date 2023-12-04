@@ -1,7 +1,6 @@
 
 #include "threepp/geometries/TorusKnotGeometry.hpp"
 #include "threepp/helpers/PointLightHelper.hpp"
-#include "threepp/lights/LightShadow.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>

@@ -5,7 +5,6 @@
 
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/lights/Light.hpp"
-#include "threepp/lights/light_interfaces.hpp"
 
 #include "threepp/math/Frustum.hpp"
 #include "threepp/math/Vector2.hpp"
@@ -55,6 +54,10 @@ namespace threepp {
     protected:
         Frustum _frustum;
         Vector2 _frameExtents{1, 1};
+
+        Vector3 _lightPositionWorld;
+        Vector3 _lookTarget;
+        Matrix4 _projScreenMatrix;
 
         std::vector<Vector4> _viewports{Vector4(0, 0, 1, 1)};
 
