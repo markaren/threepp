@@ -6,6 +6,8 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Vector3.hpp"
 
+#include <cmath>
+
 using namespace threepp;
 
 namespace {
