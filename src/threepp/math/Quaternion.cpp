@@ -323,6 +323,11 @@ Quaternion& Quaternion::slerp(const Quaternion& qb, float t) {
     return *this;
 }
 
+void Quaternion::slerpQuaternions(const Quaternion& qa, const Quaternion& qb, float t) {
+
+    copy(qa).slerp(qb, t);
+}
+
 Quaternion& Quaternion::identity() {
 
     return this->set(0, 0, 0, 1);
@@ -444,3 +449,4 @@ bool Quaternion::operator!=(const Quaternion& other) const {
 
     return !equals(other);
 }
+
