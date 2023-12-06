@@ -59,6 +59,10 @@ namespace threepp {
 
         Box2& translate(const Vector2& offset);
 
+        [[nodiscard]] Box2 clone() const;
+
+        [[nodiscard]] bool equals(const Box2& box) const;
+
         friend std::ostream& operator<<(std::ostream& os, const Box2& v) {
             os << "Box2(min=" << v.min_ << ", max=" << v.max_ << ")";
             return os;
