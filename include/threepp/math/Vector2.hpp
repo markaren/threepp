@@ -140,16 +140,18 @@ namespace threepp {
         [[nodiscard]] bool equals(const Vector2& v) const;
 
         bool operator==(const Vector2& other) const;
-
         bool operator!=(const Vector2& other) const;
 
         Vector2 operator+(const Vector2& other) const;
-
         Vector2& operator+=(const Vector2& other);
 
         Vector2 operator-(const Vector2& other) const;
-
         Vector2& operator-=(const Vector2& other);
+
+        Vector2 operator+(float value) const;
+        Vector2 operator-(float value) const;
+        Vector2 operator*(float value) const;
+        Vector2 operator/(float value) const;
 
         template<class ArrayLike>
         Vector2& fromArray(const ArrayLike& array, unsigned int offset = 0) {
