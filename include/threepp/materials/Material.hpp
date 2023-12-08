@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
@@ -111,6 +111,22 @@ namespace threepp {
         Material();
 
         void copyInto(Material* m) const;
+
+        Color extractColor(const MaterialValue& value) {
+            if (std::holds_alternative<int>(value)) {
+                return std::get<int>(value);
+            } else {
+                return std::get<Color>(value);
+            }
+        }
+
+        float extractFloat(const MaterialValue& value) {
+            if (std::holds_alternative<int>(value)) {
+                return std::get<int>(value);
+            } else {
+                return std::get<float>(value);
+            }
+        }
 
         virtual bool setValue(const std::string& key, const MaterialValue& value);
 

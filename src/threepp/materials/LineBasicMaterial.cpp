@@ -37,13 +37,9 @@ bool LineBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
     if (key == "color") {
 
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
-
+        color.copy(extractColor(value));
         return true;
+
     } else if (key == "linewidth") {
 
         linewidth = std::get<float>(value);

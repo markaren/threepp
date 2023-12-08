@@ -188,8 +188,10 @@ namespace threepp {
         RGBA = 3201
     };
 
-    const int TangentSpaceNormalMap = 0;
-    const int ObjectSpaceNormalMap = 1;
+    enum class NormalMapType {
+        TangentSpace = 0,
+        ObjectSpace = 1
+    };
 
     enum class StencilOp {
         Zero = 0,

@@ -66,7 +66,7 @@ namespace threepp {
               MaterialWithFlatShading(false),
               MaterialWithBumpMap(1),
               MaterialWithDisplacementMap(1, 0),
-              MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}) {
+              MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}) {
 
             this->defines["MATCAP"] = "";
         }
