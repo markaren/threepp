@@ -80,7 +80,7 @@ namespace threepp {
               MaterialWithDisplacementMap(1, 0),
               MaterialWithEmissive(0x000000, 1),
               MaterialWithWireframe(false, 1),
-              MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}) {
+              MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}) {
 
             this->defines["TOON"] = "";
         }

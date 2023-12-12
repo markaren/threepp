@@ -33,8 +33,8 @@ public:
         snake_.emplace_back(Mesh::create(boxGeometry_, snakeMaterial_));
         add(snake_.back());
 
-        camera_ = OrthographicCamera::create(-size / 2, size / 2, -size / 2, size / 2);
-        camera_->position.set(static_cast<float>(size) / 2, static_cast<float>(size) / 2, static_cast<float>(size));
+        camera_ = OrthographicCamera::create(0, size, 0, size);
+        camera_->position.z = 1;
         add(camera_);
     }
 
@@ -108,7 +108,7 @@ public:
         snakeMaterial_->color = Color::white;
     }
 
-    [[nodiscard]] OrthographicCamera& camera() const {
+    [[nodiscard]] Camera& camera() const {
         return *camera_;
     }
 

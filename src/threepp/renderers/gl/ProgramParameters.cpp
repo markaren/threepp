@@ -111,8 +111,8 @@ ProgramParameters::ProgramParameters(
     emissiveMapEncoding = getTextureEncodingFromMap(emissiveMap ? emissiveMaterial->emissiveMap : nullptr);
     bumpMap = bumpmapMaterial && bumpmapMaterial->bumpMap;
     normalMap = normalMaterial && normalMaterial->normalMap;
-    objectSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == ObjectSpaceNormalMap;
-    tangentSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == TangentSpaceNormalMap;
+    objectSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == NormalMapType::ObjectSpace;
+    tangentSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == NormalMapType::TangentSpace;
     clearcoatMap = false;         //TODO
     clearcoatRoughnessMap = false;//TODO
     clearcoatNormalMap = false;   //TODO

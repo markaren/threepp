@@ -7,7 +7,7 @@ MeshNormalMaterial::MeshNormalMaterial()
     : MaterialWithFlatShading(false),
       MaterialWithWireframe(false, 1),
       MaterialWithDisplacementMap(1, 0),
-      MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
+      MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithBumpMap(1) {
 
     this->fog = false;
@@ -57,7 +57,7 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
 
     } else if (key == "wireframeLinewidth") {
 
-        wireframeLinewidth = std::get<float>(value);
+        wireframeLinewidth = extractFloat(value);
         return true;
 
     } else if (key == "flatShading") {
@@ -72,7 +72,7 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
 
     } else if (key == "normalMapType") {
 
-        normalMapType = std::get<int>(value);
+        normalMapType = std::get<NormalMapType>(value);
         return true;
 
     } else if (key == "displacementMap") {
@@ -82,12 +82,12 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
 
     } else if (key == "displacementBias") {
 
-        displacementBias = std::get<float>(value);
+        displacementBias = extractFloat(value);
         return true;
 
     } else if (key == "displacementScale") {
 
-        displacementScale = std::get<float>(value);
+        displacementScale = extractFloat(value);
         return true;
     }
 

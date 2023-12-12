@@ -154,10 +154,10 @@ namespace threepp {
     struct MaterialWithNormalMap: virtual Material {
 
         std::shared_ptr<Texture> normalMap;
-        int normalMapType;
+        NormalMapType normalMapType;
         Vector2 normalScale;
 
-        MaterialWithNormalMap(int normalMapType, Vector2 normalScale): normalMapType(normalMapType), normalScale(normalScale) {}
+        MaterialWithNormalMap(NormalMapType normalMapType, Vector2 normalScale): normalMapType(normalMapType), normalScale(normalScale) {}
     };
 
     struct MaterialWithMatCap: virtual Material {
