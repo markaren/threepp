@@ -523,6 +523,13 @@ void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
     }
 }
 
+std::optional<unsigned int> gl::GLTextures::getGlTexture(const Texture& texture) const {
+
+    const auto textureProperties = properties.textureProperties.get(texture.uuid);
+
+    return textureProperties->glTexture;
+}
+
 void gl::GLTextures::TextureEventListener::onEvent(Event& event) {
 
     auto texture = static_cast<Texture*>(event.target);

@@ -67,6 +67,8 @@ namespace threepp::gl {
 
         void updateRenderTargetMipmap(GLRenderTarget* renderTarget);
 
+        [[nodiscard]] std::optional<unsigned int> getGlTexture(const Texture& texture) const;
+
     private:
         struct TextureEventListener: EventListener {
 
