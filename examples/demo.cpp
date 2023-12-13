@@ -118,22 +118,22 @@ int main() {
     scene->add(plane);
 
     TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle();
-    handle.setPosition(canvas.size().width - 130, 0);
-    handle.color = Color::red;
+    auto handle = textRenderer.createHandle();
+    handle->setPosition(canvas.size().width - 130, 0);
+    handle->color = Color::red;
 
-    auto& handle2 = textRenderer.createHandle("Hello world!");
-    handle2.verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
-    handle2.setPosition(0, canvas.size().height);
-    handle2.color = Color::white;
-    handle2.scale = 2;
+    auto handle2 = textRenderer.createHandle("Hello world!");
+    handle2->verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
+    handle2->setPosition(0, canvas.size().height);
+    handle2->color = Color::white;
+    handle2->scale = 2;
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        handle.setPosition(canvas.size().width - 130, 0);
-        handle2.setPosition(0, canvas.size().height);
+        handle->setPosition(canvas.size().width - 130, 0);
+        handle2->setPosition(0, canvas.size().height);
     });
 
 #ifdef HAS_IMGUI
@@ -144,7 +144,7 @@ int main() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
-        handle.setText("Delta=" + std::to_string(dt));
+        handle->setText("Delta=" + std::to_string(dt));
 
         renderer.render(*scene, *camera);
         renderer.resetState();

@@ -75,12 +75,6 @@ TextRenderer::~TextRenderer() {
     gltTerminate();
 }
 
-void TextRenderer::setViewport(int width, int height) {
-    if (width > 0 && height > 0) {
-        gltViewport(width, height);
-    }
-}
-
 void TextRenderer::render() {
 
     if (textHandles_.empty()) return;
@@ -101,4 +95,17 @@ void TextRenderer::render() {
 
     gltEndDraw();
     glDisable(GL_SAMPLE_ALPHA_TO_COVERAGE);
+}
+
+void TextRenderer::clear() {
+
+    textHandles_.clear();
+}
+
+TextHandle* TextRenderer::createHandle(const std::string& text) {
+
+    auto handle = std::unique_ptr<TextHandle>(new TextHandle(text));
+    textHandles_.emplace_back(std::move(handle));
+
+    return textHandles_.back().get();
 }

@@ -153,7 +153,7 @@ int main() {
     canvas.addKeyListener(&keyListener);
 
     TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle();
+    auto handle = textRenderer.createHandle();
 
     Clock clock;
     canvas.animate([&]() {
@@ -165,7 +165,7 @@ int main() {
 
         std::stringstream ss;
         ss << renderer.info();
-        handle.setText(ss.str());
+        handle->setText(ss.str());
 
         textRenderer.render();
     });

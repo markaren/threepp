@@ -113,8 +113,8 @@ int main() {
     scene->add(light2);
 
     TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle("Loading Crane3R..");
-    handle.scale = 2;
+    auto handle = textRenderer.createHandle("Loading Crane3R..");
+    handle->scale = 2;
 
     utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
@@ -125,7 +125,7 @@ int main() {
         });
 
         canvas.invokeLater([&, crane] {
-            handle.invalidate();
+            handle->invalidate();
             scene->add(crane);
             endEffectorHelper->visible = true;
         });
