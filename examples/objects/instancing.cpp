@@ -5,16 +5,41 @@
 
 #include <cmath>
 
+#ifdef HAS_IMGUI
+#include "threepp/extras/imgui/ImguiContext.hpp"
+#endif
+
 using namespace threepp;
 
+namespace {
+
+    void setupInstancedMesh(InstancedMesh& mesh, int amount) {
+
+        Matrix4 matrix;
+        Color color;
+        size_t index = 0;
+        float offset = static_cast<float>(amount - 1) / 2;
+        for (int x = 0; x < amount; x++) {
+            for (int y = 0; y < amount; y++) {
+                for (int z = 0; z < amount; z++) {
+                    matrix.setPosition(offset - float(x), offset - float(y), offset - float(z));
+                    mesh.setMatrixAt(index, matrix);
+                    mesh.setColorAt(index, color);
+                    ++index;
+                }
+            }
+        }
+    }
+
+}// namespace
+
 int main() {
+
+    int amount = 10;
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
     GLRenderer renderer(canvas.size());
     renderer.setClearColor(Color::aliceblue);
-
-    int amount = 10;
-    int count = static_cast<int>(std::pow(amount, 3));
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
@@ -28,23 +53,9 @@ int main() {
 
     auto material = MeshPhongMaterial::create();
     auto geometry = IcosahedronGeometry::create(0.5f, 2);
-    auto mesh = InstancedMesh::create(geometry, material, count);
+    auto mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(amount, 3)));
 
-    Matrix4 matrix;
-    Color color;
-    size_t index = 0;
-    float offset = static_cast<float>(amount - 1) / 2;
-    for (int x = 0; x < amount; x++) {
-        for (int y = 0; y < amount; y++) {
-            for (int z = 0; z < amount; z++) {
-                matrix.setPosition(offset - float(x), offset - float(y), offset - float(z));
-                mesh->setMatrixAt(index, matrix);
-                mesh->setColorAt(index, color);
-                ++index;
-            }
-        }
-    }
-
+    setupInstancedMesh(*mesh, amount);
     scene->add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -61,23 +72,51 @@ int main() {
     });
     canvas.addMouseListener(&l);
 
+    std::unordered_map<int, bool> colorMap;
+
+#ifdef HAS_IMGUI
+    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+        float width = 230;
+        ImGui::SetNextWindowPos({float(canvas.size().width)-width, 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({width, 0}, 0);
+
+        ImGui::Begin("Settings");
+        ImGui::SliderInt("Amount", &amount, 2, 25);
+        if (ImGui::IsItemEdited()) {
+            colorMap.clear();
+            mesh->removeFromParent();
+            mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(amount, 3)));
+            setupInstancedMesh(*mesh, amount);
+            scene->add(mesh);
+            camera->position.set(float(amount), float(amount), float(amount));
+        }
+
+        ImGui::End();
+    });
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
+#endif
+
     TextRenderer textRenderer;
     auto handle = textRenderer.createHandle();
 
     Clock clock;
     FPSCounter counter;
     Raycaster raycaster;
-    std::unordered_map<int, bool> map;
     canvas.animate([&]() {
         raycaster.setFromCamera(mouse, *camera);
         auto intersects = raycaster.intersectObject(*mesh);
 
         if (!intersects.empty()) {
             auto instanceId = intersects.front().instanceId;
-            if (instanceId && !map[*instanceId]) {
-                mesh->setColorAt(*instanceId, color.randomize());
+            if (instanceId && !colorMap[*instanceId]) {
+                mesh->setColorAt(*instanceId, Color().randomize());
                 mesh->instanceColor->needsUpdate();
-                map[*instanceId] = true;
+                colorMap[*instanceId] = true;
             }
         }
 
@@ -87,5 +126,9 @@ int main() {
         renderer.render(*scene, *camera);
         renderer.resetState();
         textRenderer.render();
+
+#ifdef HAS_IMGUI
+        ui.render();
+#endif
     });
 }

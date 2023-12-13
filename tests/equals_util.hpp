@@ -4,6 +4,9 @@
 
 #include "threepp/math/Euler.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/math/Quaternion.hpp"
+
+#include <cmath>
 
 namespace {
 
@@ -21,6 +24,13 @@ namespace {
         }
 
         return true;
+    }
+
+    bool quatEquals(const threepp::Quaternion& a, const threepp::Quaternion& b, double tolerance = eps) {
+
+        float diff = std::abs(a.x - b.x) + std::abs(a.y - b.y) + std::abs(a.z - b.z) + std::abs(a.w - b.w);
+
+        return (diff < tolerance);
     }
 
     bool eulerEquals(const threepp::Euler& a, const threepp::Euler& b, float tolerance = eps) {

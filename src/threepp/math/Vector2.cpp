@@ -376,3 +376,23 @@ Vector2& Vector2::rotateAround(const Vector2& center, float angle) {
 
     return *this;
 }
+
+Vector2 Vector2::operator+(float value) const {
+
+    return Vector2(x, y).addScalar(value);
+}
+
+Vector2 Vector2::operator-(float value) const {
+
+    return Vector2(x, y).subScalar(value);
+}
+
+Vector2 Vector2::operator*(float value) const {
+
+    return Vector2(x, y).multiplyScalar(value);
+}
+
+Vector2 Vector2::operator/(float value) const {
+
+    return Vector2(x, y).divideScalar(value);
+}

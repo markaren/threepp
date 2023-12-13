@@ -64,21 +64,13 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     if (key == "color") {
 
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
+        color.copy(extractColor(value));
 
         return true;
 
     } else if (key == "emissive") {
 
-        if (std::holds_alternative<int>(value)) {
-            emissive = std::get<int>(value);
-        } else {
-            emissive.copy(std::get<Color>(value));
-        }
+        emissive.copy(extractColor(value));
 
         return true;
 
@@ -94,7 +86,7 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "aoMapIntensity") {
 
-        aoMapIntensity = std::get<float>(value);
+        aoMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "alphaMap") {
@@ -114,7 +106,7 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "lightMapIntensity") {
 
-        lightMapIntensity = std::get<float>(value);
+        lightMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "wireframe") {
@@ -124,7 +116,7 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "wireframeLinewidth") {
 
-        wireframeLinewidth = std::get<float>(value);
+        wireframeLinewidth = extractFloat(value);
         return true;
 
     } else if (key == "envMap") {
@@ -139,12 +131,12 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "reflectivity") {
 
-        reflectivity = std::get<float>(value);
+        reflectivity = extractFloat(value);
         return true;
 
     } else if (key == "refractionRatio") {
 
-        refractionRatio = std::get<float>(value);
+        refractionRatio = extractFloat(value);
         return true;
     }
 

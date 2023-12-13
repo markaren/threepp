@@ -42,10 +42,6 @@ public:
         return false;
     }
 
-    void grow(const Vector2& pos) {
-        positions_.insert(positions_.begin(), pos);
-    }
-
     void reset() {
         positions_.clear();
         positions_.emplace_back(xStart_, yStart_);
@@ -65,6 +61,10 @@ public:
 private:
     int xStart_, yStart_;
     std::vector<Vector2> positions_;
+
+    void grow(const Vector2& pos) {
+        positions_.insert(positions_.begin(), pos);
+    }
 };
 
 

@@ -469,69 +469,80 @@ struct GLMaterials::Impl {
 
     void refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height) {
 
-        if (material->is<MeshBasicMaterial>()) {
+        const auto type = material->type();
+
+        if (type == "MeshBasicMaterial") {
 
             refreshUniformsCommon(uniforms, material);
 
-        } else if (material->is<MeshLambertMaterial>()) {
+        } else if (type == "MeshLambertMaterial") {
 
             auto m = material->as<MeshLambertMaterial>().get();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsLambert(uniforms, m);
 
-        } else if (material->is<MeshToonMaterial>()) {
+        } else if (type == "MeshToonMaterial") {
 
             auto m = material->as<MeshToonMaterial>().get();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsToon(uniforms, m);
 
-        } else if (material->is<MeshPhongMaterial>()) {
+        } else if (type == "MeshPhongMaterial") {
 
             auto m = material->as<MeshPhongMaterial>().get();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsPhong(uniforms, m);
 
-        } else if (material->is<MeshStandardMaterial>()) {
+        } else if (type == "MeshStandardMaterial") {
 
             auto m = material->as<MeshStandardMaterial>().get();
             refreshUniformsCommon(uniforms, material);
             refreshUniformsStandard(uniforms, m);
 
-        } else if (material->is<MeshMatcapMaterial>()) {
+        } else if (type == "MeshMatcapMaterial") {
 
             auto m = material->as<MeshMatcapMaterial>().get();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsMatcap(uniforms, m);
 
-        } else if (material->is<MeshDepthMaterial>()) {
+        } else if (type == "MeshDepthMaterial") {
 
             auto m = material->as<MeshDepthMaterial>().get();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsDepth(uniforms, m);
 
-        } else if (material->is<MeshDistanceMaterial>()) {
+        } else if (type == "MeshDistanceMaterial") {
 
-            auto m = material->as<MeshDistanceMaterial>().get();
-            refreshUniformsCommon(uniforms, m);
-            refreshUniformsDistance(uniforms, m);
+            auto m = material->as<MeshDistanceMaterial>();
+            refreshUniformsCommon(uniforms, m.get());
+            refreshUniformsDistance(uniforms, m.get());
 
-        } else if (material->is<LineBasicMaterial>()) {
+        } else if (type == "LineBasicMaterial") {
 
-            refreshUniformsLine(uniforms, material->as<LineBasicMaterial>().get());
+            auto m = material->as<LineBasicMaterial>();
+            refreshUniformsLine(uniforms, m.get());
 
-        } else if (material->is<PointsMaterial>()) {
+        } else if (type == "PointsMaterial") {
 
             auto m = material->as<PointsMaterial>().get();
             refreshUniformsPoints(uniforms, m, pixelRatio, static_cast<float>(height));
 
-        } else if (material->is<SpriteMaterial>()) {
+        } else if (type == "ShadowMaterial") {
+
+            auto m = material->as<ShadowMaterial>();
+            uniforms.at("color").value<Color>().copy(m->color);
+            uniforms.at("opacity").value<float>() = material->opacity;
+
+        } else if (type == "SpriteMaterial") {
 
             auto m = material->as<SpriteMaterial>();
-            refreshUniformsSprites(uniforms, material->as<SpriteMaterial>().get());
+            refreshUniformsSprites(uniforms, m.get());
 
-        } else if (material->is<ShaderMaterial>()) {
 
-            material->as<ShaderMaterial>()->uniformsNeedUpdate = false;
+        } else if (type == "ShaderMaterial") {
+
+            auto m = material->as<ShaderMaterial>();
+            m->uniformsNeedUpdate = false;
         }
     }
 };

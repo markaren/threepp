@@ -16,7 +16,7 @@ MeshStandardMaterial::MeshStandardMaterial()
       MaterialWithEnvMap(1.f),
       MaterialWithDisplacementMap(1, 0),
       MaterialWithReflectivityRatio(0.98),
-      MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
+      MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithVertexTangents(false),
       MaterialWithFlatShading(false) {
 
@@ -96,12 +96,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     if (key == "color") {
 
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
-
+        color.copy(extractColor(value));
         return true;
 
     } else if (key == "map") {
@@ -111,17 +106,12 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "emissive") {
 
-        if (std::holds_alternative<int>(value)) {
-            emissive = std::get<int>(value);
-        } else {
-            emissive.copy(std::get<Color>(value));
-        }
-
+        emissive.copy(extractColor(value));
         return true;
 
     } else if (key == "emissiveIntensity") {
 
-        emissiveIntensity = std::get<float>(value);
+        emissiveIntensity = extractFloat(value);
         return true;
 
     } else if (key == "emissiveMap") {
@@ -136,7 +126,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "bumpScale") {
 
-        bumpScale = std::get<float>(value);
+        bumpScale = extractFloat(value);
         return true;
 
     } else if (key == "lightMap") {
@@ -146,7 +136,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "lightMapIntensity") {
 
-        lightMapIntensity = std::get<float>(value);
+        lightMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "aoMap") {
@@ -156,7 +146,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "aoMapIntensity") {
 
-        aoMapIntensity = std::get<float>(value);
+        aoMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "normalMap") {
@@ -166,7 +156,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "normalMapType") {
 
-        normalMapType = std::get<int>(value);
+        normalMapType = std::get<NormalMapType>(value);
         return true;
 
     } else if (key == "displacementMap") {
@@ -176,12 +166,12 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "displacementScale") {
 
-        displacementScale = std::get<float>(value);
+        displacementScale = extractFloat(value);
         return true;
 
     } else if (key == "displacementBias") {
 
-        displacementBias = std::get<float>(value);
+        displacementBias = extractFloat(value);
         return true;
 
     } else if (key == "alphaMap") {
@@ -196,7 +186,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "roughness") {
 
-        roughness = std::get<float>(value);
+        roughness = extractFloat(value);
         return true;
 
     } else if (key == "metalnessMap") {
@@ -206,7 +196,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "metalness") {
 
-        metalness = std::get<float>(value);
+        metalness = extractFloat(value);
         return true;
 
     } else if (key == "envMap") {
@@ -216,12 +206,12 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "envMapIntensity") {
 
-        envMapIntensity = std::get<float>(value);
+        envMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "refractionRatio") {
 
-        refractionRatio = std::get<float>(value);
+        refractionRatio = extractFloat(value);
         return true;
 
     } else if (key == "wireframe") {
@@ -231,7 +221,7 @@ bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue&
 
     } else if (key == "wireframeLinewidth") {
 
-        wireframeLinewidth = std::get<float>(value);
+        wireframeLinewidth = extractFloat(value);
         return true;
 
     } else if (key == "flatShading") {

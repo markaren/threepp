@@ -55,15 +55,12 @@ std::shared_ptr<MeshBasicMaterial> MeshBasicMaterial::create(const std::unordere
     return m;
 }
 
+
 bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {
 
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
+        color.copy(extractColor(value));
 
         return true;
 
@@ -74,7 +71,7 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
     } else if (key == "wireframeLinewidth") {
 
-        wireframeLinewidth = std::get<float>(value);
+        wireframeLinewidth = extractFloat(value);
         return true;
 
     } else if (key == "map") {
@@ -99,7 +96,7 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
     } else if (key == "aoMapIntensity") {
 
-        aoMapIntensity = std::get<float>(value);
+        aoMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "lightMap") {
@@ -109,7 +106,7 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
     } else if (key == "lightMapIntensity") {
 
-        lightMapIntensity = std::get<float>(value);
+        lightMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "envMap") {
@@ -124,12 +121,12 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
     } else if (key == "reflectivity") {
 
-        reflectivity = std::get<float>(value);
+        reflectivity = extractFloat(value);
         return true;
 
     } else if (key == "refractionRatio") {
 
-        refractionRatio = std::get<float>(value);
+        refractionRatio = extractFloat(value);
         return true;
     }
 

@@ -44,13 +44,9 @@ bool SpriteMaterial::setValue(const std::string& key, const MaterialValue& value
 
     if (key == "color") {
 
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
-
+        color.copy(extractColor(value));
         return true;
+
     } else if (key == "map") {
 
         map = std::get<std::shared_ptr<Texture>>(value);
@@ -63,7 +59,7 @@ bool SpriteMaterial::setValue(const std::string& key, const MaterialValue& value
 
     } else if (key == "rotation") {
 
-        rotation = std::get<float>(value);
+        rotation = extractFloat(value);
         return true;
 
     } else if (key == "sizeAttenuation") {

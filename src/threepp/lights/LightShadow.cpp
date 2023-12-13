@@ -2,16 +2,10 @@
 #include "threepp/lights/LightShadow.hpp"
 
 #include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/lights/light_interfaces.hpp"
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _lightPositionWorld;
-    Vector3 _lookTarget;
-    Matrix4 _projScreenMatrix;
-
-}// namespace
 
 LightShadow::LightShadow(std::shared_ptr<Camera> camera)
     : camera(std::move(camera)) {}

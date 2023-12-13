@@ -135,7 +135,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "opacity") {
 
-            opacity = std::get<float>(value);
+            opacity = extractFloat(value);
             used = true;
 
         } else if (key == "transparent") {
@@ -244,12 +244,12 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "polygonOffsetFactor") {
 
-            polygonOffsetFactor = std::get<float>(value);
+            polygonOffsetFactor = extractFloat(value);
             used = true;
 
         } else if (key == "polygonOffsetUnits") {
 
-            polygonOffsetUnits = std::get<float>(value);
+            polygonOffsetUnits = extractFloat(value);
             used = true;
 
         } else if (key == "dithering") {
@@ -259,7 +259,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "alphaTest") {
 
-            alphaTest = std::get<float>(value);
+            alphaTest = extractFloat(value);
             used = true;
 
         } else if (key == "alphaToCoverage") {
