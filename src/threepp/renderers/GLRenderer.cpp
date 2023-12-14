@@ -151,6 +151,11 @@ struct GLRenderer::Impl {
           _currentDrawBuffers(GL_BACK),
           onMaterialDispose(this) {}
 
+    [[nodiscard]] std::optional<unsigned int> getGlTextureId(const Texture& texture) const {
+
+        return textures.getGlTexture(texture);
+    }
+
     void deallocateMaterial(Material* material) {
 
         releaseMaterialProgramReferences(material);
@@ -1313,6 +1318,11 @@ int threepp::GLRenderer::getActiveMipmapLevel() const {
 GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
+}
+
+std::optional<unsigned int> GLRenderer::getGlTextureId(const Texture& texture) const {
+
+    return pimpl_->getGlTextureId(texture);
 }
 
 GLRenderer::~GLRenderer() = default;

@@ -154,6 +154,8 @@ namespace threepp {
 
         [[nodiscard]] const gl::GLInfo& info() const;
 
+        [[nodiscard]] std::optional<unsigned int> getGlTextureId(const Texture& texture) const;
+
         ~GLRenderer();
 
     private:
