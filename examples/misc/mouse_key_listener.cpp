@@ -60,20 +60,20 @@ int main() {
 
     MyMouseListener ml{clock.elapsedTime};
     MyKeyListener kl{clock.elapsedTime};
-    canvas.addMouseListener(&ml);
-    canvas.addKeyListener(&kl);
+    canvas.addMouseListener(ml);
+    canvas.addKeyListener(kl);
 
     bool finish = false;
     canvas.animate([&]() {
         clock.getElapsedTime();
 
         if (clock.elapsedTime > 2 && clock.elapsedTime < 4) {
-            if (canvas.removeKeyListener(&kl)) {
+            if (canvas.removeKeyListener(kl)) {
                 std::cout << "removed key listener" << std::endl;
             }
         } else if (!finish && clock.elapsedTime > 5) {
             std::cout << "re-added key listener" << std::endl;
-            canvas.addKeyListener(&kl);
+            canvas.addKeyListener(kl);
             finish = true;
         }
     });

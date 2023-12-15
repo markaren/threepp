@@ -103,7 +103,7 @@ int main() {
         youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
         canvas.invokeLater([&] {
-            canvas.addKeyListener(youbot.get());
+            canvas.addKeyListener(*youbot);
             scene->add(youbot);
             handle->invalidate();
         });

@@ -155,7 +155,7 @@ int main() {
             }
         }
     });
-    canvas.addKeyListener(&keyListener);
+    canvas.addKeyListener(keyListener);
 
     TextRenderer textRenderer;
     auto handle = textRenderer.createHandle();

@@ -15,13 +15,13 @@ namespace threepp {
     public:
         void setIOCapture(IOCapture* capture);
 
-        void addKeyListener(KeyListener* listener);
+        void addKeyListener(KeyListener& listener);
 
-        bool removeKeyListener(const KeyListener* listener);
+        bool removeKeyListener(const KeyListener& listener);
 
-        void addMouseListener(MouseListener* listener);
+        void addMouseListener(MouseListener& listener);
 
-        bool removeMouseListener(const MouseListener* listener);
+        bool removeMouseListener(const MouseListener& listener);
 
         virtual ~PeripheralsEventSource() = default;
 

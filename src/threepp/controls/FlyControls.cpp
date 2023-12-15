@@ -36,12 +36,12 @@ struct FlyControls::Impl {
           keyUp(scope), keydown(scope),
           mouseDown(scope), mouseMove(scope), mouseUp(scope) {
 
-        canvas.addKeyListener(&keydown);
-        canvas.addKeyListener(&keyUp);
+        canvas.addKeyListener(keydown);
+        canvas.addKeyListener(keyUp);
 
-        canvas.addMouseListener(&mouseDown);
-        canvas.addMouseListener(&mouseMove);
-        canvas.addMouseListener(&mouseUp);
+        canvas.addMouseListener(mouseDown);
+        canvas.addMouseListener(mouseMove);
+        canvas.addMouseListener(mouseUp);
     }
 
     void update(float delta) {
@@ -83,12 +83,12 @@ struct FlyControls::Impl {
 
     ~Impl() {
 
-        canvas.removeKeyListener(&keydown);
-        canvas.removeKeyListener(&keyUp);
+        canvas.removeKeyListener(keydown);
+        canvas.removeKeyListener(keyUp);
 
-        canvas.removeMouseListener(&mouseDown);
-        canvas.removeMouseListener(&mouseMove);
-        canvas.removeMouseListener(&mouseUp);
+        canvas.removeMouseListener(mouseDown);
+        canvas.removeMouseListener(mouseMove);
+        canvas.removeMouseListener(mouseUp);
     }
 
     struct KeyDownListener: KeyListener {

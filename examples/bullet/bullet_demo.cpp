@@ -150,7 +150,7 @@ int main() {
             canvas.invokeLater([mesh] { mesh->removeFromParent(); }, 2);
         }
     });
-    canvas.addKeyListener(&keyListener);
+    canvas.addKeyListener(keyListener);
 
     TextRenderer textRenderer;
     auto handle = textRenderer.createHandle();

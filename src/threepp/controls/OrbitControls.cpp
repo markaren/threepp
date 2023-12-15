@@ -64,8 +64,8 @@ struct OrbitControls::Impl {
           keyListener(std::make_unique<MyKeyListener>(scope)),
           mouseListener(std::make_unique<MyMouseListener>(scope)) {
 
-        canvas.addMouseListener(mouseListener.get());
-        canvas.addKeyListener(keyListener.get());
+        canvas.addMouseListener(*mouseListener);
+        canvas.addKeyListener(*keyListener);
 
         update();
     }
@@ -392,8 +392,8 @@ struct OrbitControls::Impl {
 
     ~Impl() {
 
-        canvas.removeMouseListener(mouseListener.get());
-        canvas.removeKeyListener(keyListener.get());
+        canvas.removeMouseListener(*mouseListener);
+        canvas.removeKeyListener(*keyListener);
     }
 
     struct MyKeyListener: KeyListener {
@@ -461,8 +461,8 @@ struct OrbitControls::Impl {
         void onMouseUp(int button, const Vector2& pos) override {
             if (scope.enabled) {
 
-                scope.pimpl_->canvas.removeMouseListener(mouseMoveListener);
-                scope.pimpl_->canvas.removeMouseListener(this);
+                scope.pimpl_->canvas.removeMouseListener(*mouseMoveListener);
+                scope.pimpl_->canvas.removeMouseListener(*this);
                 scope.pimpl_->state = State::NONE;
             }
         }
@@ -504,8 +504,8 @@ struct OrbitControls::Impl {
 
             if (scope.pimpl_->state != State::NONE) {
 
-                scope.pimpl_->canvas.addMouseListener(&mouseMoveListener);
-                scope.pimpl_->canvas.addMouseListener(&mouseUpListener);
+                scope.pimpl_->canvas.addMouseListener(mouseMoveListener);
+                scope.pimpl_->canvas.addMouseListener(mouseUpListener);
             }
         }
 

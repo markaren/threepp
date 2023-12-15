@@ -60,7 +60,7 @@ int main() {
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
     });
-    canvas.addMouseListener(&l);
+    canvas.addMouseListener(l);
 
     Raycaster raycaster;
     raycaster.params.lineThreshold = 0.1f;
