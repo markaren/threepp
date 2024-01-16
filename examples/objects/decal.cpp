@@ -141,7 +141,7 @@ int main() {
     scene->add(line);
 
     MyMouseListener mouseListener(canvas);
-    canvas.addMouseListener(&mouseListener);
+    canvas.addMouseListener(mouseListener);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();

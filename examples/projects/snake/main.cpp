@@ -11,7 +11,7 @@ int main() {
     GLRenderer renderer(canvas.size());
 
     auto scene = SnakeScene(game);
-    canvas.addKeyListener(&scene);
+    canvas.addKeyListener(scene);
 
     canvas.onWindowResize([&](WindowSize size) {
         scene.camera().updateProjectionMatrix();
