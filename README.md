@@ -22,7 +22,6 @@ however much remains to be done..
 * Loaders [Binary STL, OBJ/MTL, SVG]
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
-* Easy integration with [Bullet](https://github.com/bulletphysics/bullet3)
 * Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
 Builds on Windows, Linux, MacOS and MinGW.
@@ -63,7 +62,6 @@ some headers will require additional dependencies in order to compile.
 | FontLoader     | nlohmann-json  | Import fonts to be used for 3D text           |
 | SVGLoader      | pugixml        | Import SVG files                              |
 | ImguiContext   | imgui          | ImGUI utility                                 |
-| BulletPhysics  | bullet3        | Bullet utility                                |
 
 
 ### Implementation notes
