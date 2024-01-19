@@ -24,7 +24,7 @@ however much remains to be done..
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
 * Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
-Builds on Windows, Linux, MacOS and MinGW.
+Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
 ### But, but why?
 
