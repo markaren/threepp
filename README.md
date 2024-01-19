@@ -16,7 +16,7 @@ however much remains to be done..
 * Raycasting [Mesh, Line, Points]
 * 2D/3D Textures, 3D text, Sprites, RenderTarget
 * Transparency, Shadows
-* Morphtargets
+* Morphtargets, Bones
 * OrbitControls, FlyControls
 * Water and Sky shaders
 * Loaders [Binary STL, OBJ/MTL, SVG]
