@@ -26,17 +26,29 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 # Dependencies
 # ==============================================================================
 
-find_package(glfw3 CONFIG REQUIRED)
-find_package(glad CONFIG REQUIRED)
-find_package(stb CONFIG QUIET)
 
-if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
-    add_library(glfw::glfw ALIAS glfw)
-endif()
+find_package(stb CONFIG QUIET)
 
 if (NOT stb_INCLUDE_DIR)
     find_path(stb_INCLUDE_DIR "stb_c_lexer.h" REQUIRED)
-endif()
+endif ()
+if (DEFINED EMSCRIPTEN)
+    if ("${CMAKE_SYSTEM}" MATCHES "Linux" OR "${CMAKE_SYSTEM}" MATCHES "Darwin-*")
+
+        find_package(OpenGL REQUIRED)
+
+    endif ()
+
+else ()
+
+    find_package(glad CONFIG REQUIRED)
+    find_package(glfw3 CONFIG REQUIRED)
+
+    if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+        add_library(glfw::glfw ALIAS glfw)
+    endif()
+
+endif ()
 
 include(FetchContent)
 FetchContent_Declare(
@@ -58,7 +70,7 @@ if (THREEPP_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif ()
 
-if (THREEPP_BUILD_TESTS)
+if (NOT DEFINED EMSCRIPTEN AND THREEPP_BUILD_TESTS)
 
     FetchContent_Declare(
             Catch2

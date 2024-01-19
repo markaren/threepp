@@ -4,6 +4,7 @@
 
 #include <cmath>
 
+
 using namespace threepp;
 
 namespace {
@@ -110,7 +111,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Geometries", {{"aa", 4}});
+    Canvas canvas("Geometries", {{"aa", 4}, {"size", WindowSize(800, 600)}});
     GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();

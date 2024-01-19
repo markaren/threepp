@@ -2,7 +2,11 @@
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GLES3/gl3.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;

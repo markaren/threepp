@@ -2,6 +2,12 @@
 add_executable(geometries geometries.cpp)
 target_link_libraries(geometries PRIVATE threepp)
 
+if (DEFINED EMSCRIPTEN)
+    set_target_properties(geometries
+            PROPERTIES SUFFIX ".html"
+            LINK_FLAGS " --bind -s USE_GLFW=3 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 -s FULL_ES3 -s -s WASM=1 --embed-file ${CMAKE_SOURCE_DIR}/data/textures/uv_grid_opengl.jpg@/data/textures/uv_grid_opengl.jpg")
+endif (DEFINED EMSCRIPTEN)
+
 add_executable(lathe_geometry lathe_geometry.cpp)
 target_link_libraries(lathe_geometry PRIVATE threepp)
 

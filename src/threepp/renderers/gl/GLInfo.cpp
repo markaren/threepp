@@ -3,7 +3,11 @@
 
 #include <iostream>
 
+#if EMSCRIPTEN
+#include <GL/gl.h>
+#else
 #include <glad/glad.h>
+#endif
 
 using namespace threepp;
 

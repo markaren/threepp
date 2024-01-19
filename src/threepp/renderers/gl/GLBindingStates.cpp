@@ -9,6 +9,9 @@
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 
+#if EMSCRIPTEN
+#include <GLES3/gl32.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;

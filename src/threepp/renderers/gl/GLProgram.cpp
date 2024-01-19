@@ -15,7 +15,11 @@
 #include <list>
 #include <vector>
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GLES3/gl32.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -648,7 +652,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
         {
             std::vector<std::string> v{
-                    "#version 330 core\n",
+                    "#version 300 es\n",
                     "#define attribute in",
                     "#define varying out",
                     "#define texture2D texture"
@@ -660,7 +664,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
         {
             std::vector<std::string> v{
-                    "#version 330 core\n",
+                    "#version 300 es\n",
                     "#define varying in",
                     "out highp vec4 pc_fragColor;",
                     "#define gl_FragColor pc_fragColor",
