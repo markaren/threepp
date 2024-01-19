@@ -58,10 +58,12 @@ namespace threepp {
         }
 
         void setLooping(bool flag) {
+
             ma_sound_set_looping(&sound_, flag);
         }
 
         ~Audio() {
+
             ma_sound_uninit(&sound_);
         }
 
