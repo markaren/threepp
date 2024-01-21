@@ -1,3 +1,2 @@
 
-add_executable(snake main.cpp)
-target_link_libraries(snake PRIVATE threepp)
+add_example(NAME "snake" SOURCES main.cpp)

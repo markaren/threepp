@@ -1,11 +1,8 @@
 
+include(AddExample.cmake)
 include(LibConfig.cmake)
 
-add_executable(demo demo.cpp)
-target_link_libraries(demo PRIVATE threepp)
-if (imgui_FOUND)
-    target_link_libraries(demo PRIVATE imgui::imgui)
-endif ()
+add_example(NAME "demo" TRY_LINK_IMGUI)
 
 add_subdirectory(animation)
 add_subdirectory(audio)
