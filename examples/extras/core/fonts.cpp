@@ -107,10 +107,8 @@ int main() {
 
     Canvas canvas("Fonts", {{"aa", 8}});
     GLRenderer renderer(canvas.size());
-#ifndef EMSCRIPTEN
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
-#endif
 
     auto scene = Scene::create();
     scene->background = Color::black;
