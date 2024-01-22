@@ -1,3 +1,2 @@
 
-add_executable(fly fly.cpp)
-target_link_libraries(fly PRIVATE threepp)
+add_example(NAME "fly")
