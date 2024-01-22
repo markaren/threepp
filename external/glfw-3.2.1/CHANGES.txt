@@ -1,2 +1,0 @@
-This is an adapted version of glfw-3.2.1 with all files
-except include/ COPYING and README removed for use with Emscripten.

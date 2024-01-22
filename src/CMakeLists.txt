@@ -423,7 +423,7 @@ if (NOT DEFINED EMSCRIPTEN)
     )
 endif ()
 
-if (UNIX)
+if (UNIX OR DEFINED EMSCRIPTEN)
     target_link_libraries(threepp PRIVATE pthread)
 endif ()
 target_include_directories(threepp
@@ -435,9 +435,3 @@ target_include_directories(threepp
         "${gltext_INCLUDE_DIR}"
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}")
-if (EMSCRIPTEN)
-    target_include_directories(threepp
-        PRIVATE
-        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../external/glfw-3.2.1/include"
-    )
-endif ()
