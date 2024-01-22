@@ -74,7 +74,7 @@ namespace {
         for (int i = start; i < end; ++i) {
 
             ss << std::regex_replace(match[3].str(), reg1, "[ " + std::to_string(i) + " ]");
-            ss.str() = std::regex_replace(ss.str(), reg2, std::to_string(i));
+            ss.str(std::regex_replace(ss.str(), reg2, std::to_string(i)));
         }
 
         return ss.str();
