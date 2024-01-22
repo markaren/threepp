@@ -1,7 +1,7 @@
 
 function(add_example)
 
-    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_JSON LINK_XML)
+    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_JSON LINK_XML WEB)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES EMSCRIPTEN_EMBED)
 
@@ -52,10 +52,10 @@ function(add_example)
         target_link_libraries("${arg_NAME}" PRIVATE pugixml::pugixml)
     endif ()
 
-    if (DEFINED EMSCRIPTEN)
+    if (arg_WEB AND EMSCRIPTEN)
         set_target_properties("${arg_NAME}"
                 PROPERTIES SUFFIX ".html"
-                LINK_FLAGS " --bind -s USE_GLFW=3 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 -s FULL_ES3 -s -s WASM=1 --embed-file ${EMSCRIPTEN_EMBED}")
-    endif (DEFINED EMSCRIPTEN)
+                LINK_FLAGS " --bind -s USE_GLFW=3 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 -s FULL_ES3 -s -s WASM=1")
+    endif ()
 
 endfunction()
