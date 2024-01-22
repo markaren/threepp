@@ -1,17 +1,8 @@
 
+include(AddExample.cmake)
 include(LibConfig.cmake)
 
-add_executable(demo demo.cpp)
-target_link_libraries(demo PRIVATE threepp)
-if (NOT DEFINED EMSCRIPTEN AND imgui_FOUND)
-    target_link_libraries(demo PRIVATE imgui::imgui)
-endif ()
-
-if (DEFINED EMSCRIPTEN)
-    set_target_properties(demo
-            PROPERTIES SUFFIX ".html"
-            LINK_FLAGS " --bind -s USE_GLFW=3 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 -s FULL_ES3 -s GL_DEBUG=1 -s WASM=1")
-endif (DEFINED EMSCRIPTEN)
+add_example(NAME "demo" TRY_LINK_IMGUI)
 
 add_subdirectory(animation)
 add_subdirectory(audio)

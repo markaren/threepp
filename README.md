@@ -20,6 +20,7 @@ however much remains to be done..
 * OrbitControls, FlyControls
 * Water and Sky shaders
 * Loaders [Binary STL, OBJ/MTL, SVG]
+* Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
 * Easy to use text rendering using [glText](https://github.com/vallentin/glText)
@@ -56,12 +57,13 @@ Under MinGW you'll need to specify the vcpkg triplet:
 When consuming `threepp` in your own application, 
 some headers will require additional dependencies in order to compile.
 
-| **Header**     | **Dependency** | **Description**                               |
-|----------------|----------------|-----------------------------------------------|
-| AssimpLoader   | assimp         | Import a wide variety of different 3D formats |
-| FontLoader     | nlohmann-json  | Import fonts to be used for 3D text           |
-| SVGLoader      | pugixml        | Import SVG files                              |
-| ImguiContext   | imgui          | ImGUI utility                                 |
+| **Header**   | **Dependency** | **Description**                               |
+|--------------|----------------|-----------------------------------------------|
+| AssimpLoader | assimp         | Import a wide variety of different 3D formats |
+| FontLoader   | nlohmann-json  | Import fonts to be used for 3D text           |
+| SVGLoader    | pugixml        | Import SVG files                              |
+| ImguiContext | imgui          | ImGUI utility                                 |
+| Audio*       | miniaudio      | Audio playback                                |
 
 
 ### Implementation notes
