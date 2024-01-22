@@ -1,7 +1,7 @@
 
 function(add_example)
 
-    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_JSON LINK_XML)
+    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_JSON LINK_XML AUDIO)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES)
 
@@ -24,6 +24,11 @@ function(add_example)
 
     if (arg_LINK_XML AND NOT pugixml_FOUND)
         message(AUTHOR_WARNING "pugixml not found, skipping '${arg_NAME}' example..")
+        return()
+    endif ()
+
+    if (arg_AUDIO AND NOT MINIAUDIO_INCLUDE_DIRS)
+        message(AUTHOR_WARNING "miniaudio not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
@@ -50,6 +55,10 @@ function(add_example)
 
     if (arg_LINK_XML AND pugixml_FOUND)
         target_link_libraries("${arg_NAME}" PRIVATE pugixml::pugixml)
+    endif ()
+
+    if (arg_AUDIO AND MINIAUDIO_INCLUDE_DIRS)
+        target_include_directories("${arg_NAME}" PRIVATE "${MINIAUDIO_INCLUDE_DIRS}")
     endif ()
 
 endfunction()
