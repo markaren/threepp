@@ -1,3 +1,3 @@
 
-add_example(NAME "helpers")
-add_example(NAME "camera_helper")
+add_example(NAME "helpers" WEB)
+add_example(NAME "camera_helper" WEB)

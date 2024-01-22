@@ -99,9 +99,8 @@ auto createPlane() {
 
 int main() {
 
-    Canvas canvas("threepp demo", {{"size", WindowSize(800, 600)}});
+    Canvas canvas("threepp demo");
     GLRenderer renderer(canvas.size());
-    //    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;

@@ -29,7 +29,6 @@ namespace {
     };
 
 #if EMSCRIPTEN
-
     struct FunctionWrapper {
         std::function<void()> loopFunction;
 
@@ -143,10 +142,22 @@ namespace {
     }
 
     WindowSize getMonitorSize() {
+#if EMSCRIPTEN
+        int width = EM_ASM_INT({
+            return window.innerWidth;
+        });
+
+        int height = EM_ASM_INT({
+            return window.innerHeight;
+        });
+
+        return {width, height};
+#else
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
 
         return {mode->width, mode->height};
+#endif
     }
 
 }// namespace
@@ -202,13 +213,13 @@ struct Canvas::Impl {
 
 #ifndef EMSCRIPTEN
         setWindowIcon(window, params.favicon_);
+#endif
 
         glfwSetKeyCallback(window, key_callback);
         glfwSetMouseButtonCallback(window, mouse_callback);
         glfwSetCursorPosCallback(window, cursor_callback);
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
-#endif
 
         glfwMakeContextCurrent(window);
 
