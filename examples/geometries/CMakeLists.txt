@@ -1,5 +1,5 @@
 
-add_example(NAME "geometries" EMSCRIPTEN_EMBED "${CMAKE_SOURCE_DIR}/data/textures/uv_grid_opengl.jpg@/data/textures/uv_grid_opengl.jpg")
+add_example(NAME "geometries" WEB WEB_EMBED "${CMAKE_SOURCE_DIR}/data/textures/uv_grid_opengl.jpg@/data/textures/uv_grid_opengl.jpg")
 add_example(NAME "lathe_geometry")
 add_example(NAME "tube_geometry")
 add_example(NAME "shape_geometry")

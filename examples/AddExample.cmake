@@ -3,9 +3,13 @@ function(add_example)
 
     set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_JSON LINK_XML WEB)
     set(oneValueArgs NAME)
-    set(multiValueArgs SOURCES EMSCRIPTEN_EMBED)
+    set(multiValueArgs SOURCES WEB_EMBED)
 
     cmake_parse_arguments(arg "${flags}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if (EMSCRIPTEN AND NOT arg_WEB)
+        return()
+    endif ()
 
     if (arg_LINK_IMGUI AND NOT imgui_FOUND)
         message(AUTHOR_WARNING "imgui not found, skipping '${arg_NAME}' example..")
@@ -52,10 +56,17 @@ function(add_example)
         target_link_libraries("${arg_NAME}" PRIVATE pugixml::pugixml)
     endif ()
 
-    if (arg_WEB AND EMSCRIPTEN)
+    if (DEFINED EMSCRIPTEN)
+
+        set(LINK_FLAGS " --bind -s USE_GLFW=3 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 -s FULL_ES3 -s -s WASM=1")
+        if (arg_WEB_EMBED)
+            set(LINK_FLAGS "${LINK_FLAGS} --embed-file ${arg_WEB_EMBED}")
+        endif ()
+
         set_target_properties("${arg_NAME}"
                 PROPERTIES SUFFIX ".html"
-                LINK_FLAGS " --bind -s USE_GLFW=3 -s MIN_WEBGL_VERSION=2 -s MAX_WEBGL_VERSION=2 -s FULL_ES3 -s -s WASM=1")
-    endif ()
+                LINK_FLAGS "${LINK_FLAGS}")
+
+    endif (DEFINED EMSCRIPTEN)
 
 endfunction()
