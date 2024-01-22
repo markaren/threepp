@@ -1,6 +1,8 @@
 
-add_example(NAME "instancing" LINK_IMGUI)
-target_include_directories(instancing PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
+add_example(NAME "instancing" TRY_LINK_IMGUI)
+if (TARGET "instancing")
+    target_include_directories("instancing" PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
+endif ()
 
 add_example(NAME "lod")
 add_example(NAME "sprite")

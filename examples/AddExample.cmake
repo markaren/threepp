@@ -8,22 +8,22 @@ function(add_example)
     cmake_parse_arguments(arg "${flags}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if (arg_LINK_IMGUI AND NOT imgui_FOUND)
-        message(WARNING "imgui not found, skipping '${arg_NAME}' example..")
+        message(AUTHOR_WARNING "imgui not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
     if (arg_LINK_ASSIMP AND NOT assimp_FOUND)
-        message(WARNING "assimp not found, skipping '${arg_NAME}' example..")
+        message(AUTHOR_WARNING "assimp not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
     if (arg_LINK_JSON AND NOT nlohmann_json_FOUND)
-        message(WARNING "nlohmann_json not found, skipping '${arg_NAME}' example..")
+        message(AUTHOR_WARNING "nlohmann_json not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
     if (arg_LINK_XML AND NOT pugixml_FOUND)
-        message(WARNING "pugixml not found, skipping '${arg_NAME}' example..")
+        message(AUTHOR_WARNING "pugixml not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
