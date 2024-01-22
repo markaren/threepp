@@ -209,6 +209,10 @@ struct Canvas::Impl {
             exit(EXIT_FAILURE);
         }
 
+#if EMSCRIPTEN
+        EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
+#endif
+
         glfwSetWindowUserPointer(window, this);
 
 #ifndef EMSCRIPTEN
