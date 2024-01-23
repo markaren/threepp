@@ -69,8 +69,9 @@ namespace {
         std::stringstream ss;
         for (int i = start; i < end; ++i) {
 
-            ss << std::regex_replace(match[3].str(), reg1, "[ " + std::to_string(i) + " ]");
-            ss.str(std::regex_replace(ss.str(), reg2, std::to_string(i)));
+            auto str = std::regex_replace(match[3].str(), reg1, "[ " + std::to_string(i) + " ]");
+            utils::replaceAll(str, "UNROLLED_LOOP_INDEX", std::to_string(i));
+            ss << str;
         }
 
         return ss.str();
