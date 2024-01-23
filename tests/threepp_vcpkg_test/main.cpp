@@ -1,6 +1,9 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
+
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
 
 using namespace threepp;
 
@@ -42,17 +45,6 @@ int main() {
     textHandle.setPosition(0, canvas.size().height);
     textHandle.scale = 2;
 
-    std::array<float, 3> posBuf{};
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-
-        ImGui::Begin("Demo");
-        ImGui::SliderFloat3("position", posBuf.data(), -1.f, 1.f);
-        controls.enabled = !ImGui::IsWindowHovered();
-        ImGui::End();
-    });
-
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
@@ -62,7 +54,7 @@ int main() {
 
     Clock clock;
     float rotationSpeed = 1;
-    canvas.animate([&] {
+    auto loop = [&] {
         auto dt = clock.getDelta();
         group->rotation.y += rotationSpeed * dt;
 
@@ -71,7 +63,11 @@ int main() {
         renderer.resetState();// needed when using TextRenderer
         textRenderer.render();
 
-        ui.render();
-        group->position.fromArray(posBuf);
-    });
+    };
+
+#ifdef EMSCRIPTEN
+    emscripten_set_main_loop(&loop, 0, 1);
+#else
+    canvas.animateOnce(loop);
+#endif
 }

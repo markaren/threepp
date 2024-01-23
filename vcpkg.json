@@ -4,9 +4,13 @@
   "dependencies": [
     {
       "name": "glad",
-      "features": ["gl-api-41", "extensions"]
+      "features": ["gl-api-41", "extensions"],
+      "platform": "!wasm32"
     },
-    "glfw3",
+    {
+      "name": "glfw3",
+      "platform": "!wasm32"
+    },
     "stb"
   ],
   "features": {

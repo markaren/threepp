@@ -7,6 +7,10 @@
 #include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 
+#if EMSCRIPTEN
+#include <GLES3/gl32.h>
+#endif
+
 #include <cmath>
 #include <iostream>
 

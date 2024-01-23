@@ -25,7 +25,7 @@ however much remains to be done..
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
 * Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
-Builds on Windows, Linux, MacOS and MinGW.
+Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
 ### But, but why?
 
@@ -51,6 +51,14 @@ Under MinGW you'll need to specify the vcpkg triplet:
 -DVCPKG_TARGET_TRIPLET=x64-mingw-[static|dynamic]  # choose either `static` or `dynamic`.
 -DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
 ```
+
+###### Building examples with Emscripten
+
+Additionally pass:
+```shell
+-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
+```
+to CMake. This will generate .html versions of a subset of the examples to be loaded in a browser.
 
 ##### Optional downstream dependencies
 

@@ -101,9 +101,9 @@ int main() {
 
     Canvas canvas("threepp demo");
     GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
@@ -132,6 +132,7 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
         handle->setPosition(canvas.size().width - 130, 0);
         handle2->setPosition(0, canvas.size().height);
     });
@@ -140,7 +141,7 @@ int main() {
     MyGui ui(canvas, *planeMaterial);
 #endif
     Clock clock;
-    auto loop = [&]() {
+    canvas.animate([&]() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
@@ -162,9 +163,6 @@ int main() {
             planeMaterial->opacity = c[3];
             planeMaterial->transparent = c[3] != 1;
         }
-
 #endif
-    };
-
-    while (canvas.animateOnce(loop)) {}
+    });
 }

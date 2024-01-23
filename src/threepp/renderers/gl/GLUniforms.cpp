@@ -4,7 +4,11 @@
 #include "threepp/renderers/gl/UniformUtils.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GL/glew.h>
+#endif
 
 #include <iostream>
 #include <regex>

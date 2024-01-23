@@ -7,7 +7,11 @@
 
 #include "threepp/core/InstancedBufferGeometry.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GL/glew.h>
+#endif
 
 #include <unordered_map>
 

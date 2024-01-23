@@ -2,7 +2,7 @@
 include(AddExample.cmake)
 include(LibConfig.cmake)
 
-add_example(NAME "demo" TRY_LINK_IMGUI)
+add_example(NAME "demo" TRY_LINK_IMGUI WEB)
 
 add_subdirectory(animation)
 add_subdirectory(audio)

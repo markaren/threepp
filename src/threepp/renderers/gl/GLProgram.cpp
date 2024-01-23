@@ -15,7 +15,11 @@
 #include <list>
 #include <vector>
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GLES3/gl32.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -645,11 +649,16 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     vertexShader = unrollLoops(vertexShader);
     fragmentShader = unrollLoops(fragmentShader);
 
+    std::string glslVersion{"330 core"};
+#if EMSCRIPTEN
+    glslVersion = "300 es";
+#endif
+
     if (!parameters->isRawShaderMaterial) {
 
         {
             std::vector<std::string> v{
-                    "#version 330 core\n",
+                    "#version " + glslVersion + "\n",
                     "#define attribute in",
                     "#define varying out",
                     "#define texture2D texture"
@@ -661,7 +670,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
         {
             std::vector<std::string> v{
-                    "#version 330 core\n",
+                    "#version " + glslVersion + "\n",
                     "#define varying in",
                     "out highp vec4 pc_fragColor;",
                     "#define gl_FragColor pc_fragColor",
