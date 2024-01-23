@@ -320,7 +320,7 @@ struct OBJLoader::Impl {
 
         std::string line;
         while (std::getline(in, line)) {
-            utils::trimStartInplace(line);
+            utils::trimInplace(line);
 
             auto lineLength = line.size();
 
@@ -412,7 +412,7 @@ struct OBJLoader::Impl {
                 }
 
             } else {
-                static std::regex r("^[og]\\s*(.+)?");
+                static std::regex r("^[og]\\s+(.*)");
                 std::smatch match;
                 if (std::regex_match(line, match, r)) {
                     std::string name = utils::trim(match[1]);
@@ -431,7 +431,7 @@ struct OBJLoader::Impl {
 
                 if (line == "\\0") continue;
 
-                throw std::runtime_error("[OBJLoader] Unexpected line: " + line);
+                std::cerr << "[OBJLoader] Unexpected line: " << line << ":" << line.size() << std::endl;
             }
         }
 
