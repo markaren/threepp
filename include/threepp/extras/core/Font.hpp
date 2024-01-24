@@ -35,6 +35,12 @@ namespace threepp {
         int underlineThickness{};
 
         std::unordered_map<char, Glyph> glyphs;
+
+        [[nodiscard]] float fontHeight(unsigned int size) const {
+            const auto scale = static_cast<float>(size) / static_cast<float>(resolution);
+            return (boundingBox.yMax - boundingBox.yMin + static_cast<float>(underlineThickness)) * scale;
+        }
+
     };
 
 

@@ -8,7 +8,7 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #endif
 
-#include "threepp/objects/Hud.hpp"
+#include "threepp/objects/HUD.hpp"
 
 using namespace threepp;
 
@@ -109,7 +109,7 @@ int main() {
 
     Canvas canvas("Fonts", {{"aa", 8}});
     GLRenderer renderer(canvas.size());
-    renderer.autoClear = false; //hud
+    renderer.autoClear = false;//hud
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
 
@@ -146,12 +146,14 @@ int main() {
     });
 
     HUD hud;
-    auto handle = hud.addText(fontPath / "optimer_bold.typeface.json");
-    handle->setText("Hello World");
-    handle->setColor(Color::green);
-    handle->setVerticalAlignment(threepp::TextRef::VerticalAlignment::TOP);
-    handle->setHorizontalAlignment(threepp::TextRef::HorizontallAlignment::RIGHT);
-    handle->setPosition(1, 1); // [0,1]
+    auto hudText = HudText(fontPath / "helvetiker_bold.typeface.json", 2);
+    hudText.setText("Hello World");
+    hudText.setPosition(1, 1);// [0,1]
+    hudText.setColor(Color::gray);
+    hudText.setVerticalAlignment(HudText::VerticalAlignment::TOP);
+    hudText.setHorizontalAlignment(HudText::HorizontallAlignment::RIGHT);
+
+    hud.addText(hudText);
 
 #ifdef HAS_IMGUI
     MyUI ui(canvas.windowPtr());
@@ -159,13 +161,9 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        handle->setText(std::to_string(clock.getElapsedTime()));
-
         renderer.clear();
-
         renderer.render(*scene, *camera);
-        renderer.clearDepth();
-        renderer.render(hud.scene(), hud.camera());
+        hud.apply(renderer);
 
 #ifdef HAS_IMGUI
         ui.render();

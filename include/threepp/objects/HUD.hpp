@@ -4,17 +4,18 @@
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/canvas/WindowSize.hpp"
-#include "threepp/geometries/TextGeometry.hpp"
+#include "threepp/extras/core/Font.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
-#include "threepp/geometries/SphereGeometry.hpp"
 
-#include <string>
 #include <filesystem>
+#include <string>
 
 namespace threepp {
 
-    struct TextRef {
+    class GLRenderer;
+
+    struct HudText {
 
         enum class VerticalAlignment {
             TOP,
@@ -28,18 +29,25 @@ namespace threepp {
             CENTER
         };
 
-        explicit TextRef(const std::filesystem::path& fontPath, unsigned int size = 5);
+        explicit HudText(const std::filesystem::path& fontPath, unsigned int size = 5);
 
         void setText(const std::string& str);
 
         void setColor(const Color& color);
 
-        void setSize(unsigned int size);
+        void scale(float scale);
 
         void setPosition(float x, float y);
 
         void setVerticalAlignment(VerticalAlignment verticalAlignment);
         void setHorizontalAlignment(HorizontallAlignment horizontalAlignment);
+
+        void setMargin(const Vector2& margin);
+
+        static std::shared_ptr<HudText> create(const std::filesystem::path& fontPath, unsigned int size = 5) {
+
+            return std::make_shared<HudText>(fontPath, size);
+        }
 
     private:
         Font font_;
@@ -49,40 +57,41 @@ namespace threepp {
         VerticalAlignment verticalAlignment_ = VerticalAlignment::BOTTOM;
         HorizontallAlignment horizontalAlignment_ = HorizontallAlignment::LEFT;
 
+        Vector2 margin_{2, 2};
         Vector2 offset_;
         Vector2 pos_;
+
+        float scale_{1};
+
+        void updateSettings();
 
         friend class HUD;
     };
 
-    class HUD {
+    class HUD: public Scene {
 
     public:
         HUD(): camera_(0, 100, 100, 0) {}
 
-        TextRef* addText(const std::filesystem::path& fontPath) {
+        void addText(HudText& text) {
 
-            auto& text = refs_.emplace_back(fontPath);
-            scene_.add(text.mesh_);
-
-            return &text;
+            add(text.mesh_);
         }
 
-        Scene& scene() {
+        void addText(std::shared_ptr<HudText>& text) {
 
-            return scene_;
+            add(text->mesh_);
         }
 
-        Camera& camera() {
+        void removeText(HudText& text) {
 
-            return camera_;
+            remove(*text.mesh_);
         }
+
+        void apply(GLRenderer& renderer);
 
     private:
-        Scene scene_;
         OrthographicCamera camera_;
-
-        std::vector<TextRef> refs_;
     };
 
 }// namespace threepp

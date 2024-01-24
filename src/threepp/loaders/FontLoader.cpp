@@ -18,6 +18,7 @@ namespace {
         FontData data;
         data.familyName = json["familyName"];
         data.resolution = json["resolution"];
+        data.lineHeight = json["lineHeight"];
         data.boundingBox = FontData::BoundingBox{
                 json["boundingBox"]["xMin"].get<float>(),
                 json["boundingBox"]["xMax"].get<float>(),

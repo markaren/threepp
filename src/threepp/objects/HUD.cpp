@@ -1,8 +1,10 @@
 
 #include "threepp/objects/HUD.hpp"
 
+#include "threepp/geometries/TextGeometry.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
 
 using namespace threepp;
 
@@ -15,22 +17,54 @@ namespace {
 
 }// namespace
 
-TextRef::TextRef(const std::filesystem::path& fontPath, unsigned int size)
+HudText::HudText(const std::filesystem::path& fontPath, unsigned int size)
     : font_(*loadFont(fontPath)), size_(size), mesh_(std::make_shared<Mesh>(BufferGeometry::create(), SpriteMaterial::create())) {
 
     mesh_->position.set(0, 0, -1);
 }
 
-void TextRef::setSize(unsigned int size) {
-    size_ = size;
+void HudText::scale(float scale) {
+    scale_ = scale;
+    mesh_->geometry()->scale(scale, scale, scale);
+
+    updateSettings();
 }
 
-void TextRef::setText(const std::string& str) {
+void HudText::setText(const std::string& str) {
 
     TextGeometry::Options opts(font_, size_);
     opts.height = 1;
     auto geometry = TextGeometry::create(str, opts);
+    geometry->scale(scale_, scale_, scale_);
     mesh_->setGeometry(geometry);
+
+    updateSettings();
+}
+
+void HudText::setColor(const Color& color) {
+    mesh_->material()->as<SpriteMaterial>()->color.copy(color);
+}
+
+void HudText::setPosition(float x, float y) {
+
+    updateSettings();
+
+    pos_.set(x, y);
+}
+
+void HudText::setVerticalAlignment(VerticalAlignment verticalAlignment) {
+    verticalAlignment_ = verticalAlignment;
+
+
+    updateSettings();
+}
+
+void HudText::setHorizontalAlignment(HorizontallAlignment horizontalAlignment) {
+    horizontalAlignment_ = horizontalAlignment;
+
+    updateSettings();
+}
+void HudText::updateSettings() {
 
     if (verticalAlignment_ == VerticalAlignment::CENTER) {
         offset_.y = float(size_) / 2;
@@ -40,37 +74,32 @@ void TextRef::setText(const std::string& str) {
         offset_.y = 0;
     }
 
-    Vector3 size;
     if (horizontalAlignment_ != HorizontallAlignment::LEFT) {
-        if (!mesh_->geometry()->boundingBox) {
-            mesh_->geometry()->computeBoundingBox();
-            auto bb = mesh_->geometry()->boundingBox;
-            bb->getSize(size);
-            if (horizontalAlignment_ == HorizontallAlignment::CENTER) {
-                offset_.x = size.x / 2;
-            } else {
-                offset_.x = size.x;
-            }
+
+        mesh_->geometry()->computeBoundingBox();
+        const auto& bb = mesh_->geometry()->boundingBox;
+        Vector3 size;
+        bb->getSize(size);
+
+        if (horizontalAlignment_ == HorizontallAlignment::CENTER) {
+            offset_.x = size.x / 2;
+        } else if (horizontalAlignment_ == HorizontallAlignment::RIGHT) {
+            offset_.x = size.x;
         }
+    } else {
+        offset_.x = 0;
     }
 
-    setPosition(pos_.x, pos_.y);
+    mesh_->position.x = pos_.x * 100 - offset_.x - (margin_.x * ((0.5 > pos_.x) ? -1.f : 1.f));
+    mesh_->position.y = pos_.y * 100 - offset_.y - (margin_.y * ((0.5 > pos_.y) ? -1.f : 1.f));
 }
 
-void TextRef::setColor(const Color& color) {
-    mesh_->material()->as<SpriteMaterial>()->color.copy(color);
-}
+void HudText::setMargin(const Vector2& margin) {
+    margin_.copy(margin);
 
-void TextRef::setPosition(float x, float y) {
-    mesh_->position.x = x * 100 - offset_.x;
-    mesh_->position.y = y * 100 - offset_.y;
-    pos_.set(x, y);
+    updateSettings();
 }
-
-void TextRef::setVerticalAlignment(VerticalAlignment verticalAlignment) {
-    verticalAlignment_ = verticalAlignment;
-}
-
-void TextRef::setHorizontalAlignment(HorizontallAlignment horizontalAlignment) {
-    horizontalAlignment_ = horizontalAlignment;
+void HUD::apply(GLRenderer& renderer) {
+    renderer.clearDepth();
+    renderer.render(*this, camera_);
 }
