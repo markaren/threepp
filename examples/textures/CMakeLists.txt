@@ -1,5 +1,5 @@
 
-add_example(NAME "texture3d" WEB)
+add_example(NAME "texture3d")
 add_example(NAME "texture2d" WEB WEB_EMBED
         "../data/textures/crate.gif@data/textures/crate.gif"
         "../data/textures/checker.png@data/textures/checker.png"
