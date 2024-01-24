@@ -137,7 +137,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.scale(size);
+        renderer.setSize(size);
     });
     
     Clock clock;
