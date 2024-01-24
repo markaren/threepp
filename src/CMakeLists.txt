@@ -183,6 +183,7 @@ set(publicHeaders
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
         "threepp/renderers/TextRenderer.hpp"
+        "threepp/renderers/HUD.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLShadowMap.hpp"
@@ -382,9 +383,10 @@ set(sources
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/ThreadPool.cpp"
 
-        "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/GLRenderTarget.cpp"
+        "threepp/renderers/HUD.cpp"
+        "threepp/renderers/TextHandle.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
