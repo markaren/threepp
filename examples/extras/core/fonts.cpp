@@ -8,8 +8,6 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #endif
 
-#include "threepp/objects/HUD.hpp"
-
 using namespace threepp;
 
 namespace {
@@ -109,7 +107,6 @@ int main() {
 
     Canvas canvas("Fonts", {{"aa", 8}});
     GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;//hud
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFCSoft;
 
@@ -145,25 +142,12 @@ int main() {
         renderer.setSize(size);
     });
 
-    HUD hud;
-    auto hudText = HudText(fontPath / "helvetiker_bold.typeface.json", 2);
-    hudText.setText("Hello World");
-    hudText.setPosition(1, 1);// [0,1]
-    hudText.setColor(Color::gray);
-    hudText.setVerticalAlignment(HudText::VerticalAlignment::TOP);
-    hudText.setHorizontalAlignment(HudText::HorizontallAlignment::RIGHT);
-
-    hud.addText(hudText);
-
 #ifdef HAS_IMGUI
     MyUI ui(canvas.windowPtr());
 #endif
 
-    Clock clock;
     canvas.animate([&]() {
-        renderer.clear();
         renderer.render(*scene, *camera);
-        hud.apply(renderer);
 
 #ifdef HAS_IMGUI
         ui.render();
