@@ -73,6 +73,8 @@ int main() {
     scene->add(light);
 
     auto sky = createSky(light->position);
+    auto shaderMaterial = sky->material()->as<ShaderMaterial>();
+    auto& sunPositionUniform = shaderMaterial->uniforms->at("sunPosition").value<Vector3>();
     scene->add(sky);
 
     OrbitControls controls{*camera, canvas};
@@ -101,7 +103,7 @@ int main() {
         light->position.x = 100 * std::sin(clock.elapsedTime);
         light->position.z = 100 * std::cos(clock.elapsedTime);
 
-        sky->material()->as<ShaderMaterial>()->uniforms->at("sunPosition").value<Vector3>().copy(light->position);
+        sunPositionUniform.copy(light->position);
 
         light->updateMatrixWorld();
         helper->update();

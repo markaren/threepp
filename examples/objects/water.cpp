@@ -117,6 +117,7 @@ int main() {
 #endif
 
     Clock clock;
+    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms->at("time");
     canvas.animate([&]() {
         float t = clock.getElapsedTime();
 
@@ -124,7 +125,7 @@ int main() {
         sphere->rotation.x = t * 0.05f;
         sphere->rotation.z = t * 0.051f;
 
-        water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
+        timeUniform.setValue(t);
 
         renderer.render(*scene, *camera);
 

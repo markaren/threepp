@@ -147,9 +147,10 @@ int main() {
     });
 
     Clock clock;
+    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms->at("time");
     canvas.animate([&]() {
         float t = clock.getElapsedTime();
-        water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
+        timeUniform.setValue(t);
 
         renderer.render(*scene, *camera);
     });
