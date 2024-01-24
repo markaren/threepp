@@ -142,6 +142,7 @@ set(publicHeaders
 
         "threepp/objects/Bone.hpp"
         "threepp/objects/Group.hpp"
+        "threepp/objects/HUD.hpp"
         "threepp/objects/InstancedMesh.hpp"
         "threepp/objects/Line.hpp"
         "threepp/objects/LineLoop.hpp"
@@ -183,7 +184,6 @@ set(publicHeaders
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
         "threepp/renderers/TextRenderer.hpp"
-        "threepp/renderers/HUD.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLShadowMap.hpp"
@@ -306,6 +306,7 @@ set(sources
 
         "threepp/input/PeripheralsEventSource.cpp"
 
+        "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/MTLLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
@@ -362,6 +363,7 @@ set(sources
         "threepp/scenes/FogExp2.cpp"
 
         "threepp/objects/Group.cpp"
+        "threepp/objects/HUD.cpp"
         "threepp/objects/Line.cpp"
         "threepp/objects/LineLoop.cpp"
         "threepp/objects/LineSegments.cpp"
@@ -385,7 +387,6 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/GLRenderTarget.cpp"
-        "threepp/renderers/HUD.cpp"
         "threepp/renderers/TextHandle.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
@@ -422,6 +423,7 @@ if (NOT DEFINED EMSCRIPTEN)
             PRIVATE
             glad::glad
             glfw::glfw
+            nlohmann_json::nlohmann_json
     )
 endif ()
 

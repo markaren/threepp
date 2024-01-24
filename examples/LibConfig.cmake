@@ -1,7 +1,6 @@
 find_package(imgui CONFIG)
 find_package(assimp CONFIG QUIET)
 find_package(pugixml CONFIG QUIET)
-find_package(nlohmann_json CONFIG QUIET)
 
 find_path(MINIAUDIO_INCLUDE_DIRS "miniaudio.h")
 

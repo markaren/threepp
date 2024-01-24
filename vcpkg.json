@@ -11,18 +11,13 @@
       "name": "glfw3",
       "platform": "!wasm32"
     },
-    "stb"
+    "stb",
+    "nlohmann-json"
   ],
   "features": {
     "audio": {
       "description": "Audio support",
       "dependencies": ["miniaudio"]
-    },
-    "json": {
-      "description": "Enable JSON support in library. Required to use Fonts.",
-      "dependencies":[
-        "nlohmann-json"
-      ]
     },
     "assimp": {
       "description": "Enable assimp model importer",
