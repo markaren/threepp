@@ -1,4 +1,5 @@
 
+#include "threepp/objects/HUD.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -99,8 +100,9 @@ auto createPlane() {
 
 int main() {
 
-    Canvas canvas("threepp demo");
+    Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
+    renderer.autoClear = false;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -117,16 +119,16 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
+    HUD hud;
+    auto hudText = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
+    hudText.setText("Hello World!");
+    hudText.setColor(Color::black);
+    hud.addText(hudText);
+
     TextRenderer textRenderer;
     auto handle = textRenderer.createHandle();
     handle->setPosition(canvas.size().width - 130, 0);
     handle->color = Color::red;
-
-    auto handle2 = textRenderer.createHandle("Hello world!");
-    handle2->verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
-    handle2->setPosition(0, canvas.size().height);
-    handle2->color = Color::white;
-    handle2->scale = 2;
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -134,12 +136,12 @@ int main() {
         renderer.setSize(size);
 
         handle->setPosition(canvas.size().width - 130, 0);
-        handle2->setPosition(0, canvas.size().height);
     });
 
 #ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
 #endif
+
     Clock clock;
     canvas.animate([&]() {
         float dt = clock.getDelta();
@@ -147,7 +149,10 @@ int main() {
         box->rotation.y += 0.5f * dt;
         handle->setText("Delta=" + std::to_string(dt));
 
+        renderer.clear();
         renderer.render(*scene, *camera);
+        hud.apply(renderer);
+
         renderer.resetState();
         textRenderer.render();
 
