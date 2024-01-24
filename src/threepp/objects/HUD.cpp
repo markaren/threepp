@@ -1,7 +1,7 @@
 
 #include "threepp/objects/HUD.hpp"
 
-#include "threepp/geometries/TextGeometry.hpp"
+#include "threepp/geometries/ShapeGeometry.hpp"
 #include "threepp/loaders/FontLoader.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
@@ -32,9 +32,13 @@ void HudText::scale(float scale) {
 
 void HudText::setText(const std::string& str) {
 
-    TextGeometry::Options opts(font_, size_);
-    opts.height = 1;
-    auto geometry = TextGeometry::create(str, opts);
+    auto shapes = font_.generateShapes(str, size_);
+    std::vector<const Shape*> ss;
+    ss.reserve(shapes.size());
+    for (const auto& s : shapes) {
+        ss.emplace_back(&s);
+    }
+    auto geometry = ShapeGeometry::create(ss, 5);
     geometry->scale(scale_, scale_, scale_);
     mesh_->setGeometry(geometry);
 

@@ -120,22 +120,22 @@ int main() {
     scene->add(plane);
 
     HUD hud;
-    auto hudText = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
-    hudText.setText("Hello World!");
-    hudText.setColor(Color::black);
-    hud.addText(hudText);
+    auto hudText1 = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
+    hudText1.setText("Hello World!");
+    hudText1.setColor(Color::black);
+    hud.addText(hudText1);
 
-    TextRenderer textRenderer;
-    auto handle = textRenderer.createHandle();
-    handle->setPosition(canvas.size().width - 130, 0);
-    handle->color = Color::red;
+    auto hudText2 = HudText("data/fonts/helvetiker_regular.typeface.json", 2);
+    hudText2.setColor(Color::red);
+    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
+    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
+    hudText2.setPosition(1, 1);
+    hud.addText(hudText2);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        handle->setPosition(canvas.size().width - 130, 0);
     });
 
 #ifdef HAS_IMGUI
@@ -147,14 +147,11 @@ int main() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
-        handle->setText("Delta=" + std::to_string(dt));
+        hudText2.setText("Delta=" + std::to_string(dt));
 
         renderer.clear();
         renderer.render(*scene, *camera);
         hud.apply(renderer);
-
-        renderer.resetState();
-        textRenderer.render();
 
 #ifdef HAS_IMGUI
         ui.render();
