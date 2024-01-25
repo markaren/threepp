@@ -40,6 +40,9 @@ int main() {
     HUD hud;
     auto textHandle = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
     textHandle.setText("Hello World!");
+    textHandle.setPosition(1,1);
+    textHandle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
+    textHandle.setHorizontalAlignment(HudText::HorizontallAlignment::RIGHT);
     hud.addText(textHandle);
 
     std::array<float, 3> posBuf{};
