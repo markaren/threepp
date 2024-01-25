@@ -94,8 +94,8 @@ void HudText::updateSettings() {
         offset_.x = 0;
     }
 
-    mesh_->position.x = pos_.x - offset_.x * 0.01f - (margin_.x * 0.01f * ((0.5 > pos_.x) ? -1.f : 1.f));
-    mesh_->position.y = pos_.y - offset_.y * 0.01f - (margin_.y * 0.01f * ((0.5 > pos_.y) ? -1.f : 1.f));
+    mesh_->position.x = pos_.x - offset_.x - (margin_.x * 0.01f * ((0.5 > pos_.x) ? -1.f : 1.f));
+    mesh_->position.y = pos_.y - (offset_.y * 0.01f) - (margin_.y * 0.01f * ((0.5 > pos_.y) ? -1.f : 1.f));
 
 }
 
