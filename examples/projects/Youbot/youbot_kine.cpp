@@ -66,6 +66,7 @@ int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot-kine").size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas.size()};
+    renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
@@ -91,9 +92,10 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    TextRenderer textRenderer;
-    auto handle = textRenderer.createHandle("Loading model..");
-    handle->scale = 2;
+    HUD hud;
+    auto handle = HudText("data/fonts/helvetiker_regular.typeface.json");
+    handle.setText("Loading model..");
+    hud.addText(handle);
 
     utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
@@ -105,7 +107,7 @@ int main() {
         canvas.invokeLater([&] {
             canvas.addKeyListener(*youbot);
             scene->add(youbot);
-            handle->invalidate();
+            hud.removeText(handle);
         });
     });
 
@@ -142,6 +144,7 @@ int main() {
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
+        renderer.clear();
         renderer.render(*scene, *camera);
 
         if (youbot) {
@@ -170,8 +173,7 @@ int main() {
             youbot->update(dt);
         } else {
 
-            renderer.resetState();
-            textRenderer.render();
+            hud.apply(renderer);
         }
     });
 }

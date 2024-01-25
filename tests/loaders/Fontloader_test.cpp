@@ -13,7 +13,7 @@ TEST_CASE("Test FontLoader") {
 
     REQUIRE(font);
 
-    auto o = data.glyphs['o'];
+    const auto& o = data.glyphs.at('o');
 
     CHECK(data.familyName == "Optimer");
     CHECK_THAT(data.boundingBox.xMin, Catch::Matchers::WithinRel(-71.));

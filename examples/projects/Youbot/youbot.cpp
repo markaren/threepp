@@ -12,9 +12,10 @@ int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot").size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas.size()};
-    renderer.setClearColor(Color::aliceblue);
+    renderer.autoClear = false;
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
@@ -31,9 +32,13 @@ int main() {
     auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    TextRenderer textRenderer;
-    auto handle = textRenderer.createHandle("Loading model..");
-    handle->scale = 2;
+    HUD hud;
+    auto handle = HudText("data/fonts/helvetiker_regular.typeface.json", 2);
+    handle.setText("Loading model...");
+    handle.setPosition(0, 1);
+    handle.setColor(Color::black);
+    handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
+    hud.addText(handle);
 
     utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
@@ -42,7 +47,7 @@ int main() {
         canvas.invokeLater([&] {
             canvas.addKeyListener(*youbot);
             scene->add(youbot);
-            handle->setText("Use WASD keys to steer robot");
+            handle.setText("Use WASD keys to steer robot");
         });
     });
 
@@ -56,10 +61,9 @@ int main() {
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
+        renderer.clear();
         renderer.render(*scene, *camera);
-        renderer.resetState();
-
-        textRenderer.render();
+        hud.apply(renderer);
 
         if (youbot) youbot->update(dt);
     });

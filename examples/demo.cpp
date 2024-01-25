@@ -1,4 +1,5 @@
 
+#include "threepp/objects/HUD.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -99,8 +100,9 @@ auto createPlane() {
 
 int main() {
 
-    Canvas canvas("threepp demo");
+    Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
+    renderer.autoClear = false;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -117,39 +119,39 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    TextRenderer textRenderer;
-    auto handle = textRenderer.createHandle();
-    handle->setPosition(canvas.size().width - 130, 0);
-    handle->color = Color::red;
+    HUD hud;
+    auto hudText1 = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
+    hudText1.setText("Hello World!");
+    hudText1.setColor(Color::black);
+    hud.addText(hudText1);
 
-    auto handle2 = textRenderer.createHandle("Hello world!");
-    handle2->verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
-    handle2->setPosition(0, canvas.size().height);
-    handle2->color = Color::white;
-    handle2->scale = 2;
+    auto hudText2 = HudText("data/fonts/helvetiker_regular.typeface.json", 2);
+    hudText2.setColor(Color::red);
+    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
+    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
+    hudText2.setPosition(1, 1);
+    hud.addText(hudText2);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        handle->setPosition(canvas.size().width - 130, 0);
-        handle2->setPosition(0, canvas.size().height);
     });
 
 #ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
 #endif
+
     Clock clock;
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
-        handle->setText("Delta=" + std::to_string(dt));
+        hudText2.setText("Delta=" + std::to_string(dt));
 
+        renderer.clear();
         renderer.render(*scene, *camera);
-        renderer.resetState();
-        textRenderer.render();
+        hud.apply(renderer);
 
 #ifdef HAS_IMGUI
         ui.render();

@@ -1,7 +1,7 @@
 
 function(add_example)
 
-    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_JSON LINK_XML AUDIO WEB)
+    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_XML AUDIO WEB)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES WEB_EMBED)
 
@@ -18,11 +18,6 @@ function(add_example)
 
     if (arg_LINK_ASSIMP AND NOT assimp_FOUND)
         message(AUTHOR_WARNING "assimp not found, skipping '${arg_NAME}' example..")
-        return()
-    endif ()
-
-    if (arg_LINK_JSON AND NOT nlohmann_json_FOUND)
-        message(AUTHOR_WARNING "nlohmann_json not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
@@ -51,10 +46,6 @@ function(add_example)
 
     if (arg_LINK_ASSIMP AND assimp_FOUND)
         target_link_libraries("${arg_NAME}" PRIVATE assimp::assimp)
-    endif ()
-
-    if (arg_LINK_JSON AND nlohmann_json_FOUND)
-        target_link_libraries("${arg_NAME}" PRIVATE nlohmann_json::nlohmann_json)
     endif ()
 
     if (arg_LINK_XML AND pugixml_FOUND)

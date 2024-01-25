@@ -9,6 +9,8 @@ int main() {
     int height = canvas.monitorSize().height / 2;
     canvas.setSize({height, height});
     GLRenderer renderer(canvas.size());
+//    renderer.setSize(canvas.size());
+    renderer.autoClear = false;
 
     auto scene = SnakeScene(game);
     canvas.addKeyListener(scene);
@@ -18,8 +20,13 @@ int main() {
         renderer.setSize(size);
     });
 
-    TextRenderer textRenderer;
-    textRenderer.createHandle("Press \"r\" to reset");
+    HUD hud;
+    HudText text("data/fonts/helvetiker_regular.typeface.json");
+    text.setText("Press 'r' to reset");
+    text.setColor(Color::red);
+    text.setPosition(0, 1);
+    text.setVerticalAlignment(HudText::VerticalAlignment::TOP);
+    hud.addText(text);
 
     Clock clock;
     canvas.animate([&]() {
@@ -30,9 +37,9 @@ int main() {
             game.update(dt);
             scene.update();
         }
-        renderer.render(scene, scene.camera());
-        renderer.resetState();
 
-        textRenderer.render();
+        renderer.clear();
+        renderer.render(scene, scene.camera());
+        hud.apply(renderer);
     });
 }

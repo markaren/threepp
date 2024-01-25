@@ -70,11 +70,11 @@ auto createGrid() {
     unsigned int size = 30;
     auto material = ShadowMaterial::create();
     auto plane = Mesh::create(PlaneGeometry::create(size, size), material);
-    plane->rotation.x = -math::PI/2;
+    plane->rotation.x = -math::PI / 2;
     plane->receiveShadow = true;
 
     auto grid = GridHelper::create(size, size, Color::yellowgreen);
-    grid->rotation.x = math::PI/2;
+    grid->rotation.x = math::PI / 2;
     plane->add(grid);
 
     return plane;
@@ -84,6 +84,7 @@ int main() {
 
     Canvas canvas{"Crane3R", {{"size", WindowSize{1280, 720}}, {"antialiasing", 8}}};
     GLRenderer renderer{canvas.size()};
+    renderer.autoClear = false;
     renderer.shadowMap().enabled = true;
     renderer.setClearColor(Color::aliceblue);
 
@@ -112,20 +113,23 @@ int main() {
     scene->add(light1);
     scene->add(light2);
 
-    TextRenderer textRenderer;
-    auto handle = textRenderer.createHandle("Loading Crane3R..");
-    handle->scale = 2;
+    HUD hud;
+    auto handle = HudText("data/fonts/helvetiker_regular.typeface.json");
+    handle.setText("Loading Crane3R..");
+    handle.setPosition(0, 1);
+    handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
+    hud.addText(handle);
 
     utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
     pool.submit([&] {
         crane = Crane3R::create();
-        crane->traverseType<Mesh>([](Mesh& m){
+        crane->traverseType<Mesh>([](Mesh& m) {
             m.castShadow = true;
         });
 
         canvas.invokeLater([&, crane] {
-            handle->invalidate();
+            hud.removeText(handle);
             scene->add(crane);
             endEffectorHelper->visible = true;
         });
@@ -166,6 +170,7 @@ int main() {
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
+        renderer.clear();
         renderer.render(*scene, *camera);
 
         if (crane) {
@@ -194,8 +199,7 @@ int main() {
             crane->update(dt);
         } else {
 
-            renderer.resetState();
-            textRenderer.render();
+            hud.apply(renderer);
         }
     });
 }

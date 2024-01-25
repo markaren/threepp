@@ -100,11 +100,6 @@ namespace {
 
 Font::Font(FontData data): data_(std::move(data)) {}
 
-FontData& Font::data() {
-
-    return data_;
-}
-
 const FontData& Font::data() const{
 
     return data_;

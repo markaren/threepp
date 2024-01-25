@@ -28,17 +28,16 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 
 
 find_package(stb CONFIG QUIET)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 if (NOT stb_INCLUDE_DIR)
     find_path(stb_INCLUDE_DIR "stb_c_lexer.h" REQUIRED)
 endif ()
+
 if (DEFINED EMSCRIPTEN)
     if ("${CMAKE_SYSTEM}" MATCHES "Linux" OR "${CMAKE_SYSTEM}" MATCHES "Darwin-*")
-
         find_package(OpenGL REQUIRED)
-
     endif ()
-
 else ()
 
     find_package(glad CONFIG REQUIRED)
@@ -49,15 +48,6 @@ else ()
     endif()
 
 endif ()
-
-include(FetchContent)
-FetchContent_Declare(
-        glText
-        GIT_REPOSITORY https://github.com/vallentin/glText.git
-        GIT_TAG 8200fa70e32acec0a3cd777d404f41ee0c203ca4
-)
-FetchContent_Populate(glText)
-set(gltext_INCLUDE_DIR "${gltext_SOURCE_DIR}")
 
 
 # ==============================================================================
@@ -72,6 +62,7 @@ endif ()
 
 if (NOT DEFINED EMSCRIPTEN AND THREEPP_BUILD_TESTS)
 
+    include(FetchContent)
     FetchContent_Declare(
             Catch2
             GIT_REPOSITORY https://github.com/catchorg/Catch2.git
