@@ -23,7 +23,6 @@ however much remains to be done..
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
-* Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
 Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
