@@ -421,9 +421,13 @@ if (NOT DEFINED EMSCRIPTEN)
             PRIVATE
             glad::glad
             glfw::glfw
-            nlohmann_json::nlohmann_json
     )
 endif ()
+
+target_link_libraries(threepp
+        PRIVATE
+        nlohmann_json::nlohmann_json
+)
 
 if (UNIX OR DEFINED EMSCRIPTEN)
     target_link_libraries(threepp PRIVATE pthread)
@@ -434,6 +438,5 @@ target_include_directories(threepp
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
         "${stb_INCLUDE_DIR}"
-        "${gltext_INCLUDE_DIR}"
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}")
