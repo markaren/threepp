@@ -20,13 +20,12 @@ namespace {
 HudText::HudText(const std::filesystem::path& fontPath, unsigned int size)
     : font_(*loadFont(fontPath)), size_(size), mesh_(std::make_shared<Mesh>(BufferGeometry::create(), SpriteMaterial::create())) {
 
-    mesh_->position.set(0, 0, -1);
     setColor(Color::gray);
 }
 
 void HudText::scale(float scale) {
-    scale_ = scale;
-    mesh_->geometry()->scale(scale, scale, scale);
+    scale_ = scale / 100;
+    mesh_->geometry()->scale(scale_, scale_, scale_);
 
     updateSettings();
 }
@@ -60,7 +59,6 @@ void HudText::setPosition(float x, float y) {
 void HudText::setVerticalAlignment(VerticalAlignment verticalAlignment) {
     verticalAlignment_ = verticalAlignment;
 
-
     updateSettings();
 }
 
@@ -69,10 +67,11 @@ void HudText::setHorizontalAlignment(HorizontallAlignment horizontalAlignment) {
 
     updateSettings();
 }
+
 void HudText::updateSettings() {
 
     if (verticalAlignment_ == VerticalAlignment::CENTER) {
-        offset_.y = float(size_) / 2;
+        offset_.y = (float(size_) / 2);
     } else if (verticalAlignment_ == VerticalAlignment::TOP) {
         offset_.y = float(size_);
     } else {
@@ -87,7 +86,7 @@ void HudText::updateSettings() {
         bb->getSize(size);
 
         if (horizontalAlignment_ == HorizontallAlignment::CENTER) {
-            offset_.x = size.x / 2;
+            offset_.x = (size.x / 2);
         } else if (horizontalAlignment_ == HorizontallAlignment::RIGHT) {
             offset_.x = size.x;
         }
@@ -95,8 +94,9 @@ void HudText::updateSettings() {
         offset_.x = 0;
     }
 
-    mesh_->position.x = pos_.x * 100 - offset_.x - (margin_.x * ((0.5 > pos_.x) ? -1.f : 1.f));
-    mesh_->position.y = pos_.y * 100 - offset_.y - (margin_.y * ((0.5 > pos_.y) ? -1.f : 1.f));
+    mesh_->position.x = pos_.x - offset_.x * 0.01f - (margin_.x * 0.01f * ((0.5 > pos_.x) ? -1.f : 1.f));
+    mesh_->position.y = pos_.y - offset_.y * 0.01f - (margin_.y * 0.01f * ((0.5 > pos_.y) ? -1.f : 1.f));
+
 }
 
 void HudText::setMargin(const Vector2& margin) {
@@ -104,6 +104,7 @@ void HudText::setMargin(const Vector2& margin) {
 
     updateSettings();
 }
+
 void HUD::apply(GLRenderer& renderer) {
     renderer.clearDepth();
     renderer.render(*this, camera_);

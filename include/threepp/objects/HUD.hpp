@@ -61,7 +61,7 @@ namespace threepp {
         Vector2 offset_;
         Vector2 pos_;
 
-        float scale_{1};
+        float scale_{0.01};
 
         void updateSettings();
 
@@ -71,7 +71,10 @@ namespace threepp {
     class HUD: public Scene {
 
     public:
-        HUD(): camera_(0, 100, 100, 0) {}
+        HUD(): camera_(0, 1, 1, 0, 0.1, 10) {
+
+            camera_.position.z = 1;
+        }
 
         void addText(HudText& text) {
 
