@@ -138,8 +138,6 @@ struct GLRenderer::Impl {
 
     Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
         : scope(scope), _size(size),
-          _viewport(0, 0, _size.width, _size.height),
-          _scissor(0, 0, _size.width, _size.height),
           background(state, parameters.premultipliedAlpha),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
           indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
@@ -153,7 +151,11 @@ struct GLRenderer::Impl {
           materials(properties),
           programCache(bindingStates, clipping),
           _currentDrawBuffers(GL_BACK),
-          onMaterialDispose(this) {}
+          onMaterialDispose(this) {
+
+        this->setViewport(0, 0, size.width, size.height);
+        this->setScissor(0, 0, _size.width, _size.height);
+    }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(const Texture& texture) const {
 
