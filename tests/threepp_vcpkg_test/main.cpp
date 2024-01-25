@@ -22,7 +22,7 @@ int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    renderer.autoClear = false; // hud
 
     auto camera = PerspectiveCamera::create();
     camera->position.z = 5;
@@ -30,17 +30,17 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
 
     auto group = Group::create();
     group->add(createBox({-1, 0, 0}, Color::green));
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    TextRenderer textRenderer;
-    auto& textHandle = textRenderer.createHandle("Hello World");
-    textHandle.verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
-    textHandle.setPosition(0, canvas.size().height);
-    textHandle.scale = 2;
+    HUD hud;
+    auto textHandle = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
+    textHandle.setText("Hello World!");
+    hud.addText(textHandle);
 
     std::array<float, 3> posBuf{};
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
@@ -57,7 +57,6 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        textHandle.setPosition(0, size.height);
     });
 
     Clock clock;
@@ -66,10 +65,9 @@ int main() {
         auto dt = clock.getDelta();
         group->rotation.y += rotationSpeed * dt;
 
+        renderer.clear(); //autoClear is false
         renderer.render(*scene, *camera);
-
-        renderer.resetState();// needed when using TextRenderer
-        textRenderer.render();
+        hud.apply(renderer);
 
         ui.render();
         group->position.fromArray(posBuf);
