@@ -120,6 +120,7 @@ int main() {
     handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
     hud.addText(handle);
 
+#ifndef EMSCRIPTEN
     utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
     pool.submit([&] {
@@ -134,6 +135,16 @@ int main() {
             endEffectorHelper->visible = true;
         });
     });
+#else
+    auto crane = Crane3R::create();
+    crane->traverseType<Mesh>([](Mesh& m) {
+        m.castShadow = true;
+    });
+
+    hud.removeText(handle);
+    scene->add(crane);
+    endEffectorHelper->visible = true;
+#endif
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
