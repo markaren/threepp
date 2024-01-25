@@ -39,6 +39,7 @@ int main() {
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
     GLRenderer renderer(canvas.size());
+    renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
@@ -77,7 +78,7 @@ int main() {
 #ifdef HAS_IMGUI
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         float width = 230;
-        ImGui::SetNextWindowPos({float(canvas.size().width)-width, 0}, 0, {0, 0});
+        ImGui::SetNextWindowPos({float(canvas.size().width) - width, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({width, 0}, 0);
 
         ImGui::Begin("Settings");
@@ -101,12 +102,16 @@ int main() {
     canvas.setIOCapture(&capture);
 #endif
 
-    TextRenderer textRenderer;
-    auto handle = textRenderer.createHandle();
+    HUD hud;
+    auto handle = HudText("data/fonts/helvetiker_regular.typeface.json");
+    handle.setPosition(0, 1);
+    handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
+    hud.addText(handle);
 
     Clock clock;
     FPSCounter counter;
     Raycaster raycaster;
+    long long it{0};
     canvas.animate([&]() {
         raycaster.setFromCamera(mouse, *camera);
         auto intersects = raycaster.intersectObject(*mesh);
@@ -121,11 +126,12 @@ int main() {
         }
 
         counter.update(clock.getElapsedTime());
-        handle->setText("FPS: " + std::to_string(counter.fps));
+        if (it++ % 60 == 0) handle.setText("FPS: " + std::to_string(counter.fps));
 
+        renderer.clear();
         renderer.render(*scene, *camera);
-        renderer.resetState();
-        textRenderer.render();
+        hud.apply(renderer);
+
 
 #ifdef HAS_IMGUI
         ui.render();

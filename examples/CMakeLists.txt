@@ -3,7 +3,7 @@ include(AddExample.cmake)
 include(LibConfig.cmake)
 
 add_example(NAME "demo" TRY_LINK_IMGUI WEB WEB_EMBED
-        "../data/fonts/helvetiker_bold.typeface.json@data/fonts/helvetiker_bold.typeface.json"
+        "../data/fonts@data/fonts"
 )
 
 add_subdirectory(animation)

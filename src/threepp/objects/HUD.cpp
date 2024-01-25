@@ -21,6 +21,7 @@ HudText::HudText(const std::filesystem::path& fontPath, unsigned int size)
     : font_(*loadFont(fontPath)), size_(size), mesh_(std::make_shared<Mesh>(BufferGeometry::create(), SpriteMaterial::create())) {
 
     mesh_->position.set(0, 0, -1);
+    setColor(Color::gray);
 }
 
 void HudText::scale(float scale) {

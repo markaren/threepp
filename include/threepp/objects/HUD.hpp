@@ -29,7 +29,7 @@ namespace threepp {
             CENTER
         };
 
-        explicit HudText(const std::filesystem::path& fontPath, unsigned int size = 5);
+        explicit HudText(const std::filesystem::path& fontPath, unsigned int size = 2);
 
         void setText(const std::string& str);
 
