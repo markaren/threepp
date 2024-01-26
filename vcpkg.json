@@ -32,12 +32,6 @@
           "features": ["glfw-binding", "opengl3-binding"]
         }
       ]
-    },
-    "pugixml": {
-      "description": "Enable SVGLoader",
-      "dependencies": [
-        "pugixml"
-      ]
     }
   }
 }
