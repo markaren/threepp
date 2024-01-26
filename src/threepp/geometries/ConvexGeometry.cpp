@@ -1,7 +1,7 @@
 
 #include "threepp/geometries/ConvexGeometry.hpp"
 
-#include <quickhull/quickhull.hpp>
+#include "external/quickhull/quickhull.hpp"
 
 #include <array>
 

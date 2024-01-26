@@ -1,7 +1,7 @@
 
 #include "threepp/extras/ShapeUtils.hpp"
 
-#include <earcut/earcut.hpp>
+#include "external/earcut/earcut.hpp"
 
 #include <array>
 

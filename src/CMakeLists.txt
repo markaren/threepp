@@ -435,5 +435,4 @@ target_include_directories(threepp
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
         "${generatedSourcesDir}"
-        "${PROJECT_SOURCE_DIR}/external"
         "${CMAKE_CURRENT_SOURCE_DIR}")
