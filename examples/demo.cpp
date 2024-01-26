@@ -121,7 +121,7 @@ int main() {
 
     HUD hud;
     FontLoader fontLoader;
-    const auto font1 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
+    const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
 
     auto hudText1 = HudText(font1, 4);

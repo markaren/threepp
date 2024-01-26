@@ -430,7 +430,13 @@ endif ()
 
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 
-add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
+add_library(threepp
+        "${sources}"
+        "${privateHeaders}"
+        "${publicHeadersFull}"
+        "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp"
+        "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
+)
 add_library(threepp::threepp ALIAS threepp)
 target_compile_features(threepp PUBLIC cxx_std_17)
 if (NOT DEFINED EMSCRIPTEN)

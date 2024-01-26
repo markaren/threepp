@@ -12,7 +12,13 @@ namespace threepp {
     class FontLoader {
 
     public:
+
+        Font defaultFont();
+
         std::optional<Font> load(const std::filesystem::path& path);
+
+    private:
+        std::optional<Font> parse(const std::vector<unsigned char>& data);
 
     };
 }// namespace threepp
