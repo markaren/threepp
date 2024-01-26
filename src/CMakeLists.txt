@@ -201,9 +201,6 @@ endforeach ()
 
 set(privateHeaders
 
-        "threepp/extras/earcut.hpp"
-        "threepp/extras/quickhull.hpp"
-
         "threepp/materials/MeshDistanceMaterial.hpp"
 
         "threepp/renderers/gl/Buffer.hpp"
@@ -437,6 +434,6 @@ target_include_directories(threepp
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
-        "${stb_INCLUDE_DIR}"
         "${generatedSourcesDir}"
+        "${PROJECT_SOURCE_DIR}/external"
         "${CMAKE_CURRENT_SOURCE_DIR}")

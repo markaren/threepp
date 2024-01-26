@@ -26,13 +26,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 # Dependencies
 # ==============================================================================
 
-
-find_package(stb CONFIG QUIET)
 find_package(nlohmann_json CONFIG REQUIRED)
-
-if (NOT stb_INCLUDE_DIR)
-    find_path(stb_INCLUDE_DIR "stb_c_lexer.h" REQUIRED)
-endif ()
 
 if (DEFINED EMSCRIPTEN)
     if ("${CMAKE_SYSTEM}" MATCHES "Linux" OR "${CMAKE_SYSTEM}" MATCHES "Darwin-*")
