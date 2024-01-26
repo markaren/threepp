@@ -21,11 +21,6 @@ function(add_example)
         return()
     endif ()
 
-    if (arg_LINK_XML AND NOT pugixml_FOUND)
-        message(AUTHOR_WARNING "pugixml not found, skipping '${arg_NAME}' example..")
-        return()
-    endif ()
-
     if (arg_AUDIO AND NOT MINIAUDIO_INCLUDE_DIRS)
         message(AUTHOR_WARNING "miniaudio not found, skipping '${arg_NAME}' example..")
         return()
@@ -46,10 +41,6 @@ function(add_example)
 
     if (arg_LINK_ASSIMP AND assimp_FOUND)
         target_link_libraries("${arg_NAME}" PRIVATE assimp::assimp)
-    endif ()
-
-    if (arg_LINK_XML AND pugixml_FOUND)
-        target_link_libraries("${arg_NAME}" PRIVATE pugixml::pugixml)
     endif ()
 
     if (arg_AUDIO AND MINIAUDIO_INCLUDE_DIRS)
