@@ -408,7 +408,6 @@ set(sources
 )
 
 if (THREEPP_WITH_SVG)
-
     list(APPEND publicHeaders
             "threepp/loaders/SVGLoader.hpp"
     )
@@ -417,7 +416,16 @@ if (THREEPP_WITH_SVG)
             "threepp/loaders/SVGLoader.cpp"
             "external/pugixml/pugixml.cpp"
     )
+endif ()
 
+if (THREEPP_WITH_AUDIO)
+    list(APPEND publicHeaders
+            "threepp/audio/Audio.hpp"
+    )
+
+    list(APPEND sources
+            "threepp/audio/Audio.cpp"
+    )
 endif ()
 
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")

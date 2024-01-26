@@ -68,7 +68,6 @@ some headers will require additional dependencies in order to compile.
 |--------------|----------------|-----------------------------------------------|
 | AssimpLoader | assimp         | Import a wide variety of different 3D formats |
 | ImguiContext | imgui          | ImGUI utility                                 |
-| Audio*       | miniaudio      | Audio playback                                |
 
 
 ### Implementation notes
