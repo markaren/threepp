@@ -14,10 +14,6 @@
     "nlohmann-json"
   ],
   "features": {
-    "audio": {
-      "description": "Audio support",
-      "dependencies": ["miniaudio"]
-    },
     "assimp": {
       "description": "Enable assimp model importer",
       "dependencies": [
