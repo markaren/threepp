@@ -98,7 +98,6 @@ set(publicHeaders
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
-        "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
@@ -192,7 +191,7 @@ set(publicHeaders
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
 
-        )
+)
 
 set(publicHeadersFull)
 foreach (header IN LISTS publicHeaders)
@@ -227,7 +226,7 @@ set(privateHeaders
 
         "threepp/utils/RegexUtil.hpp"
 
-        )
+)
 
 set(sources
 
@@ -406,7 +405,20 @@ set(sources
 
         "threepp/renderers/shaders/ShaderLib.cpp"
 
-        )
+)
+
+if (THREEPP_WITH_SVG)
+
+    list(APPEND publicHeaders
+            "threepp/loaders/SVGLoader.hpp"
+    )
+
+    list(APPEND sources
+            "threepp/loaders/SVGLoader.cpp"
+            "external/pugixml/pugixml.cpp"
+    )
+
+endif ()
 
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 

@@ -7,4 +7,7 @@ add_example(NAME "obj_loader" WEB WEB_EMBED
         "../data/textures/uv_grid_opengl.jpg@data/textures/uv_grid_opengl.jpg"
 )
 add_example(NAME "assimp_loader" LINK_ASSIMP)
-add_example(NAME "svg_loader" TRY_LINK_IMGUI LINK_XML)
+
+if (THREEPP_WITH_SVG)
+    add_example(NAME "svg_loader" TRY_LINK_IMGUI)
+endif ()
