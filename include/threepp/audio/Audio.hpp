@@ -15,9 +15,9 @@ namespace threepp {
     class Audio {
 
     public:
-        Audio(AudioListener& ctx, const std::filesystem::path& file): ctx_(ctx) {
+        Audio(AudioListener& ctx, const std::filesystem::path& file){
 
-            ma_result result = ma_sound_init_from_file(&ctx_.engine, file.string().c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, nullptr, &sound_);
+            ma_result result = ma_sound_init_from_file(&ctx.engine, file.string().c_str(), MA_SOUND_FLAG_NO_SPATIALIZATION, nullptr, nullptr, &sound_);
             if (result != MA_SUCCESS) {
                 throw std::runtime_error("[Audio] Failed to load audio file");
             }
@@ -68,7 +68,6 @@ namespace threepp {
         }
 
     protected:
-        AudioListener& ctx_;
         ma_sound sound_;
     };
 
