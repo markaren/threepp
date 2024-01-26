@@ -1,24 +1,16 @@
 
+#include <utility>
+
 #include "threepp/objects/HUD.hpp"
 
 #include "threepp/geometries/ShapeGeometry.hpp"
-#include "threepp/loaders/FontLoader.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 
 using namespace threepp;
 
-namespace {
-
-    std::optional<Font> loadFont(const std::filesystem::path& fontPath) {
-        FontLoader loader;
-        return loader.load(fontPath);
-    }
-
-}// namespace
-
-HudText::HudText(const std::filesystem::path& fontPath, unsigned int size)
-    : font_(*loadFont(fontPath)), size_(size), mesh_(std::make_shared<Mesh>(BufferGeometry::create(), SpriteMaterial::create())) {
+HudText::HudText(Font font, std::optional<unsigned int> size)
+    : font_(std::move(font)), size_(size.value_or(2)), mesh_(std::make_shared<Mesh>(BufferGeometry::create(), SpriteMaterial::create())) {
 
     setColor(Color::gray);
 }

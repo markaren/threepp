@@ -34,7 +34,10 @@ int main() {
     });
 
     HUD hud;
-    auto handle = HudText("data/fonts/gentilis_bold.typeface.json");
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/gentilis_bold.typeface.json");
+
+    auto handle = HudText(font, 4);
     hud.addText(handle);
 
     canvas.animate([&]() {
@@ -43,6 +46,5 @@ int main() {
         renderer.clear();
         renderer.render(scene, camera);
         hud.apply(renderer);
-
     });
 }

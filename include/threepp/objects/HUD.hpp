@@ -7,9 +7,10 @@
 #include "threepp/extras/core/Font.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
+#include "threepp/extras/core/Font.hpp"
 
-#include <filesystem>
 #include <string>
+#include <optional>
 
 namespace threepp {
 
@@ -29,7 +30,7 @@ namespace threepp {
             CENTER
         };
 
-        explicit HudText(const std::filesystem::path& fontPath, unsigned int size = 2);
+        explicit HudText(Font font, std::optional<unsigned int> size = std::nullopt);
 
         void setText(const std::string& str);
 
@@ -44,9 +45,9 @@ namespace threepp {
 
         void setMargin(const Vector2& margin);
 
-        static std::shared_ptr<HudText> create(const std::filesystem::path& fontPath, unsigned int size = 5) {
+        static std::shared_ptr<HudText> create(const Font& font, std::optional<unsigned int> size = std::nullopt) {
 
-            return std::make_shared<HudText>(fontPath, size);
+            return std::make_shared<HudText>(font, size);
         }
 
     private:

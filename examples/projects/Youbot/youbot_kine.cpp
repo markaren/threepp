@@ -93,7 +93,10 @@ int main() {
     targetHelper->visible = false;
 
     HUD hud;
-    auto handle = HudText("data/fonts/helvetiker_regular.typeface.json");
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
+
+    auto handle = HudText(font, 4);
     handle.setText("Loading model..");
     hud.addText(handle);
 

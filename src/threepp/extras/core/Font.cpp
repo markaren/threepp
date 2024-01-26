@@ -1,6 +1,4 @@
 
-#include <utility>
-
 #include "threepp/extras/core/Font.hpp"
 #include "threepp/extras/core/ShapePath.hpp"
 #include "threepp/utils/StringUtils.hpp"
@@ -15,7 +13,7 @@ namespace {
         ShapePath path;
     };
 
-    FontPath createPath(char c, float scale, float offsetX, float offsetY, const FontData& data) {
+    FontPath createPath(char c, float scale, float offsetX, float offsetY, const Font& data) {
 
         const auto glyph = data.glyphs.count(c) ? data.glyphs.at(c) : data.glyphs.at('?');
 
@@ -69,7 +67,7 @@ namespace {
         return FontPath{static_cast<float>(glyph.ha) * scale, path};
     }
 
-    std::vector<ShapePath> createPaths(const std::string& text, unsigned int size, const FontData& data) {
+    std::vector<ShapePath> createPaths(const std::string& text, unsigned int size, const Font& data) {
 
         const auto scale = static_cast<float>(size) / static_cast<float>(data.resolution);
         const auto line_height = (data.boundingBox.yMax - data.boundingBox.yMin + static_cast<float>(data.underlineThickness)) * scale;
@@ -98,17 +96,10 @@ namespace {
 
 }// namespace
 
-Font::Font(FontData data): data_(std::move(data)) {}
-
-const FontData& Font::data() const{
-
-    return data_;
-}
-
 std::vector<Shape> Font::generateShapes(const std::string& text, unsigned int size) const {
 
     std::vector<Shape> shapes;
-    auto paths = createPaths(text, size, data_);
+    auto paths = createPaths(text, size, *this);
 
     for (const auto& path : paths) {
 

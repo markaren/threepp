@@ -13,13 +13,13 @@ using namespace threepp;
 
 namespace {
 
-    FontData toFontData(const nlohmann::json& json) {
+    Font toFont(const nlohmann::json& json) {
 
-        FontData data;
+        Font data;
         data.familyName = json["familyName"];
         data.resolution = json["resolution"];
         data.lineHeight = json["lineHeight"];
-        data.boundingBox = FontData::BoundingBox{
+        data.boundingBox = Font::BoundingBox{
                 json["boundingBox"]["xMin"].get<float>(),
                 json["boundingBox"]["xMax"].get<float>(),
                 json["boundingBox"]["yMin"].get<float>(),
@@ -29,7 +29,7 @@ namespace {
         auto& glyphs = data.glyphs;
         for (auto& [str_key, value] : json["glyphs"].items()) {
             char key = str_key[0];
-            glyphs[key] = FontData::Glyph{
+            glyphs[key] = Font::Glyph{
                     value["x_min"].get<float>(),
                     value["x_max"].get<float>(),
                     value["ha"]};
@@ -45,7 +45,7 @@ namespace {
 }// namespace
 
 
-std::optional<threepp::Font> FontLoader::load(const std::filesystem::path& path) {
+std::optional<Font> FontLoader::load(const std::filesystem::path& path) {
 
     if (!std::filesystem::exists(path)) {
         std::cerr << "[FontLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
@@ -55,5 +55,5 @@ std::optional<threepp::Font> FontLoader::load(const std::filesystem::path& path)
     std::ifstream file(path);
     auto json = nlohmann::json::parse(file);
 
-    return Font(toFontData(json));
+    return toFont(json);
 }

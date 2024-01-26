@@ -120,12 +120,16 @@ int main() {
     scene->add(plane);
 
     HUD hud;
-    auto hudText1 = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
+    FontLoader fontLoader;
+    const auto font1 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
+    const auto font2 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
+
+    auto hudText1 = HudText(font1, 4);
     hudText1.setText("Hello World!");
     hudText1.setColor(Color::black);
     hud.addText(hudText1);
 
-    auto hudText2 = HudText("data/fonts/helvetiker_regular.typeface.json", 2);
+    auto hudText2 = HudText(font2, 2);
     hudText2.setColor(Color::red);
     hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
     hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);

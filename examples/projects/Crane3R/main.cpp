@@ -114,7 +114,10 @@ int main() {
     scene->add(light2);
 
     HUD hud;
-    auto handle = HudText("data/fonts/helvetiker_regular.typeface.json");
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
+
+    auto handle = HudText(font, 4);
     handle.setText("Loading Crane3R..");
     handle.setPosition(0, 1);
     handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);

@@ -9,7 +9,6 @@ int main() {
     int height = canvas.monitorSize().height / 2;
     canvas.setSize({height, height});
     GLRenderer renderer(canvas.size());
-//    renderer.setSize(canvas.size());
     renderer.autoClear = false;
 
     auto scene = SnakeScene(game);
@@ -21,7 +20,10 @@ int main() {
     });
 
     HUD hud;
-    HudText text("data/fonts/helvetiker_regular.typeface.json");
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
+
+    HudText text(font);
     text.setText("Press 'r' to reset");
     text.setColor(Color::red);
     text.setPosition(0, 1);

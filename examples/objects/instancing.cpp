@@ -103,7 +103,10 @@ int main() {
 #endif
 
     HUD hud;
-    auto handle = HudText("data/fonts/helvetiker_regular.typeface.json");
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
+
+    auto handle = HudText(font);
     handle.setPosition(0, 1);
     handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
     hud.addText(handle);
