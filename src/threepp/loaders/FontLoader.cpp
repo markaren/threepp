@@ -53,7 +53,13 @@ std::optional<Font> FontLoader::load(const std::filesystem::path& path) {
     }
 
     std::ifstream file(path);
-    auto json = nlohmann::json::parse(file);
+    const auto json = nlohmann::json::parse(file);
+
+    return toFont(json);
+}
+
+std::optional<Font> FontLoader::load(const std::vector<unsigned char>& data) {
+    const auto json = nlohmann::json::parse(data);
 
     return toFont(json);
 }
