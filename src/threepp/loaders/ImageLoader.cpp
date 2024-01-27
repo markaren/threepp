@@ -4,7 +4,7 @@
 #ifndef STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_IMPLEMENTATION
 #endif
-#include "external/stb/stb_image.h"
+#include "stb_image.h"
 
 using namespace threepp;
 

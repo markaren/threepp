@@ -2,7 +2,7 @@
 #include "threepp/audio/Audio.hpp"
 
 #define MINIAUDIO_IMPLEMENTATION
-#include "external/miniaudio/miniaudio.h"
+#include "miniaudio.h"
 
 #include <stdexcept>
 

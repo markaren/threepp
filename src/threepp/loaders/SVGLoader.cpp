@@ -4,7 +4,7 @@
 #include "threepp/extras/ShapeUtils.hpp"
 #include "threepp/loaders/svg/SVGFunctions.hpp"
 
-#include "external/pugixml/pugixml.hpp"
+#include "pugixml.hpp"
 
 #include <algorithm>
 

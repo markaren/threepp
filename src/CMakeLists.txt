@@ -455,4 +455,10 @@ target_include_directories(threepp
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
         "${generatedSourcesDir}"
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/earcut"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
+)
