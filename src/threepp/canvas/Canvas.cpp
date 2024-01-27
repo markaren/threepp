@@ -171,12 +171,13 @@ struct Canvas::Impl {
     Vector2 lastMousePos_;
 
     bool close_{false};
+    bool exitOnKeyEscape_{false};
 
     std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
-        : scope(scope) {
+        : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
 
         glfwSetErrorCallback(error_callback);
 
@@ -343,13 +344,14 @@ struct Canvas::Impl {
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
 
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->exitOnKeyEscape_) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
 
         KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         switch (action) {
             case GLFW_PRESS: {
                 p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::PRESS);
@@ -461,10 +463,16 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
             auto _size = std::get<WindowSize>(value);
             size(_size);
             used = true;
+
         } else if (key == "favicon") {
 
             auto path = std::get<std::string>(value);
             favicon(path);
+            used = true;
+
+        } else if (key == "exitOnKeyEscape") {
+
+            exitOnKeyEscape(std::get<bool>(value));
             used = true;
         }
 
@@ -527,6 +535,12 @@ Canvas::Parameters& threepp::Canvas::Parameters::favicon(const std::filesystem::
     } else {
         std::cerr << "Invalid favicon path: " << std::filesystem::absolute(path) << std::endl;
     }
+
+    return *this;
+}
+Canvas::Parameters& threepp::Canvas::Parameters::exitOnKeyEscape(bool flag) {
+
+    exitOnKeyEscape_ = flag;
 
     return *this;
 }
