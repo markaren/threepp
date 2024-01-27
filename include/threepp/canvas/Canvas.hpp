@@ -77,12 +77,15 @@ namespace threepp {
 
             Parameters& favicon(const std::filesystem::path& path);
 
+            Parameters& exitOnKeyEscape(bool flag);
+
         private:
             std::optional<WindowSize> size_;
             int antialiasing_{2};
             std::string title_{"threepp"};
             bool vsync_{true};
             bool resizable_{true};
+            bool exitOnKeyEscape_{true};
             std::optional<std::filesystem::path> favicon_;
 
             friend struct Canvas::Impl;
