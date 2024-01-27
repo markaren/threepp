@@ -538,6 +538,7 @@ Canvas::Parameters& threepp::Canvas::Parameters::favicon(const std::filesystem::
 
     return *this;
 }
+
 Canvas::Parameters& threepp::Canvas::Parameters::exitOnKeyEscape(bool flag) {
 
     exitOnKeyEscape_ = flag;
