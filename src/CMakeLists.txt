@@ -441,11 +441,6 @@ if (NOT DEFINED EMSCRIPTEN)
     )
 endif ()
 
-target_link_libraries(threepp
-        PRIVATE
-        nlohmann_json::nlohmann_json
-)
-
 if (UNIX OR DEFINED EMSCRIPTEN)
     target_link_libraries(threepp PRIVATE pthread)
 endif ()
@@ -456,6 +451,7 @@ target_include_directories(threepp
         PRIVATE
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/earcut"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"

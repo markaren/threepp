@@ -3,7 +3,7 @@
 
 #include "threepp/utils/StringUtils.hpp"
 
-#include <nlohmann/json.hpp>
+#include "nlohmann/json.hpp"
 
 #include <fstream>
 #include <iostream>

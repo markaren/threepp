@@ -28,7 +28,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 # Dependencies
 # ==============================================================================
 
-find_package(nlohmann_json CONFIG REQUIRED)
 
 if (DEFINED EMSCRIPTEN)
     if ("${CMAKE_SYSTEM}" MATCHES "Linux" OR "${CMAKE_SYSTEM}" MATCHES "Darwin-*")

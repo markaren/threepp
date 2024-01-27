@@ -10,8 +10,7 @@
     {
       "name": "glfw3",
       "platform": "!wasm32"
-    },
-    "nlohmann-json"
+    }
   ],
   "features": {
     "assimp": {

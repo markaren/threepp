@@ -2,8 +2,6 @@
 
 include(CMakeFindDependencyMacro)
 
-find_dependency(nlohmann_json CONFIG)
-
 if (NOT DEFINED EMSCRIPTEN)
     find_dependency(glfw3 CONFIG)
     find_dependency(glad CONFIG)
