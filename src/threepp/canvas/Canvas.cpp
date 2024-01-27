@@ -171,7 +171,7 @@ struct Canvas::Impl {
     Vector2 lastMousePos_;
 
     bool close_{false};
-    bool exitOnKeyEscape_{false};
+    bool exitOnKeyEscape_;
 
     std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
