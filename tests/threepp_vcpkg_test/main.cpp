@@ -38,7 +38,9 @@ int main() {
     scene->add(group);
 
     HUD hud;
-    auto textHandle = HudText("data/fonts/helvetiker_bold.typeface.json", 4);
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
+    auto textHandle = HudText(font, 4);
     textHandle.setText("Hello World!");
     textHandle.setPosition(1,1);
     textHandle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
