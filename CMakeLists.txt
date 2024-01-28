@@ -35,7 +35,6 @@ if (DEFINED EMSCRIPTEN)
     endif ()
 else ()
 
-    find_package(glad CONFIG REQUIRED)
     find_package(glfw3 CONFIG REQUIRED)
 
     if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
