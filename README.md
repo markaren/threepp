@@ -33,7 +33,23 @@ Because fun.
 
 ### How to build
 
-`threepp` is easiest built in conjunction with [vcpkg](https://vcpkg.io/en/index.html).
+The only strict dependency is `glfw3`, so if this is available on the system you may go ahead and 
+build like any other CMake based project:
+
+###### Windows
+```shell
+cmake . -A x64 -B build -DCMAKE_BUILD_TYPE="Release"
+cmake --build build --config "Release"
+```
+
+###### Unix
+```shell
+cmake . -B build -DCMAKE_BUILD_TYPE="Release"
+cmake --build build
+```
+
+However, using [vcpkg](https://vcpkg.io/en/index.html) is the preferred approach, especially if building the 
+examples (many og whom require additional dependencies).
 
 #### vcpkg (using manifest mode)
 
@@ -43,7 +59,7 @@ Add optional features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;f
 
 See [vcpkg.json](vcpkg.json) for available features.
 
-###### Building under MinGW
+##### Building under MinGW
 
 Under MinGW you'll need to specify the vcpkg triplet:
 ```shell
@@ -51,13 +67,18 @@ Under MinGW you'll need to specify the vcpkg triplet:
 -DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
 ```
 
-###### Building examples with Emscripten
+##### Building examples with Emscripten
 
-Additionally pass:
+Pass to CMake:
+```shell
+-DCMAKE_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
+```
+When using vcpkg, however, do:
 ```shell
 -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
 ```
-to CMake. This will generate .html versions of a subset of the examples to be loaded in a browser.
+This will generate .html versions of a subset of the examples to be loaded in a browser.
+
 
 ##### Optional downstream dependencies
 
