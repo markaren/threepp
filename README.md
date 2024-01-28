@@ -33,7 +33,7 @@ Because fun.
 
 ### How to build
 
-The only strict dependency is `glfw3`, so if this is available on the system you may go ahead and 
+The only strict _external_ dependency is `glfw3`, so if this is available on the system you may go ahead and 
 build like any other CMake based project:
 
 ###### Windows
@@ -49,7 +49,7 @@ cmake --build build
 ```
 
 However, using [vcpkg](https://vcpkg.io/en/index.html) is the preferred approach, especially if building the 
-examples (many og whom require additional dependencies).
+examples (many of whom require additional dependencies).
 
 #### vcpkg (using manifest mode)
 
