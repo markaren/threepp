@@ -405,6 +405,8 @@ set(sources
 
         "threepp/renderers/shaders/ShaderLib.cpp"
 
+        "external/glad/glad.c"
+
 )
 
 if (THREEPP_WITH_SVG)
@@ -436,7 +438,6 @@ target_compile_features(threepp PUBLIC cxx_std_17)
 if (NOT DEFINED EMSCRIPTEN)
     target_link_libraries(threepp
             PRIVATE
-            glad::glad
             glfw::glfw
     )
 endif ()
@@ -453,6 +454,7 @@ target_include_directories(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/external"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/earcut"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/glad"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
