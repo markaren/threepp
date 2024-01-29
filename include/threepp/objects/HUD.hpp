@@ -50,8 +50,8 @@ namespace threepp {
                 return *this;
             }
 
-            Options& setNormalizedPosition(float x, float y) {
-                this->pos.set(x, y);
+            Options& setMargin(const Vector2& margin) {
+                this->margin.copy(margin);
 
                 return *this;
             }
@@ -80,6 +80,8 @@ namespace threepp {
         void remove(Object3D& object) override;
 
         void setSize(WindowSize size);
+
+        void needsUpdate(Object3D& o);
 
     private:
         WindowSize size_;

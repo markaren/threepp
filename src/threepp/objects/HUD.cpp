@@ -76,3 +76,10 @@ void HUD::add(const std::shared_ptr<Object3D>& object, HUD::Options opts) {
 
     map_[object.get()] = opts;
 }
+
+void HUD::needsUpdate(Object3D& o) {
+
+    if (map_.count(&o)) {
+        map_.at(&o).updateElement(o, size_);
+    }
+}

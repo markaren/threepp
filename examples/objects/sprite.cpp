@@ -28,11 +28,10 @@ namespace {
         hudSprite4->center.set(1, 0);
         hudSprite4->scale.set(75, 75, 1);
 
-        hud.add(hudSprite1, HUD::Options().setNormalizedPosition(0,1));
-        hud.add(hudSprite2, HUD::Options().setNormalizedPosition(1,1));
-        hud.add(hudSprite3, HUD::Options().setNormalizedPosition(0,0));
-        hud.add(hudSprite4, HUD::Options().setNormalizedPosition(1,0));
-
+        hud.add(hudSprite1, HUD::Options().setNormalizedPosition({0, 1}).setMargin({}));
+        hud.add(hudSprite2, HUD::Options().setNormalizedPosition({1, 1}).setMargin({}));
+        hud.add(hudSprite3, HUD::Options().setNormalizedPosition({0, 0}).setMargin({}));
+        hud.add(hudSprite4, HUD::Options().setNormalizedPosition({1, 0}).setMargin({}));
     }
 
     auto createSprites(const std::shared_ptr<SpriteMaterial>& material) {
@@ -54,7 +53,7 @@ int main() {
 
     Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", "data/textures/three.png"s}}};
     auto size = canvas.size();
-    GLRenderer renderer(canvas.size());
+    GLRenderer renderer(size);
     renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
 

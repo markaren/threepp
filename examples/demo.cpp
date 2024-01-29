@@ -124,23 +124,16 @@ int main() {
     HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font1 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
-    const auto font2 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
+    const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto hudText1 = Mesh(TextGeometry::create("Hello World!", TextGeometry::Options(font1).setSize(20)), MeshBasicMaterial::create({{"color", Color::black}}));
+    auto hudText1 = Mesh(TextGeometry::create("Hello World!", TextGeometry::Options(font1).setSize(40)), MeshBasicMaterial::create({{"color", Color::black}}));
     hud.add(hudText1, HUD::Options());
 
     auto hudText2 = Mesh(TextGeometry::create("", TextGeometry::Options(font1).setSize(10)), MeshBasicMaterial::create({{"color", Color::red}}));
     hud.add(hudText2, HUD::Options()
-                              .setNormalizedPosition({1.f,1.f})
+                              .setNormalizedPosition({1, 1})
                               .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
                               .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
-
-//    auto hudText2 = HudText(font2, 2);
-//    hudText2.setColor(Color::red);
-////    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
-////    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
-//    hudText2.setPosition(0.5, 0.5);
-//    hud.addText(hudText2);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -161,6 +154,7 @@ int main() {
         box->rotation.y += 0.5f * dt;
 
         hudText2.setGeometry(TextGeometry::create("Delta=" + std::to_string(dt), TextGeometry::Options(font1).setSize(10)));
+        hud.needsUpdate(hudText2);
 
         renderer.clear();
         renderer.render(*scene, *camera);
