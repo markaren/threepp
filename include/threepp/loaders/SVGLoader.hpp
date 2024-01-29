@@ -46,7 +46,7 @@ namespace threepp {
 
         std::vector<SVGData> parse(const std::string& text);
 
-        static std::vector<std::shared_ptr<Shape>> createShapes(const SVGData& data);
+        static std::vector<Shape> createShapes(const SVGData& data);
 
         static std::shared_ptr<BufferGeometry> pointsToStroke(
                 const std::vector<Vector2>& points,

@@ -7,7 +7,7 @@
 using namespace threepp;
 
 
-ShapeGeometry::ShapeGeometry(const std::vector<const Shape*>& shapes, unsigned int curveSegments) {
+ShapeGeometry::ShapeGeometry(const std::vector<Shape>& shapes, unsigned int curveSegments) {
 
     // buffers
 
@@ -76,13 +76,13 @@ ShapeGeometry::ShapeGeometry(const std::vector<const Shape*>& shapes, unsigned i
 
     if (shapes.size() == 1) {
 
-        addShape(*shapes.front());
+        addShape(shapes.front());
 
     } else {
 
         for (unsigned i = 0; i < shapes.size(); i++) {
 
-            addShape(*shapes[i]);
+            addShape(shapes[i]);
 
             this->addGroup(groupStart, groupCount, i);// enables MultiMaterial support
 
@@ -99,18 +99,10 @@ ShapeGeometry::ShapeGeometry(const std::vector<const Shape*>& shapes, unsigned i
 
 std::shared_ptr<ShapeGeometry> ShapeGeometry::create(const Shape& shape, unsigned int curveSegments) {
 
-    return std::shared_ptr<ShapeGeometry>(new ShapeGeometry({&shape}, curveSegments));
+    return std::shared_ptr<ShapeGeometry>(new ShapeGeometry({shape}, curveSegments));
 }
 
-std::shared_ptr<ShapeGeometry> ShapeGeometry::create(const std::vector<std::shared_ptr<Shape>>& shapes, unsigned int curveSegments) {
-
-    std::vector<const Shape*> ptrs(shapes.size());
-    std::transform(shapes.begin(), shapes.end(), ptrs.begin(), [&](auto& shape) { return shape.get(); });
-
-    return std::shared_ptr<ShapeGeometry>(new ShapeGeometry(ptrs, curveSegments));
-}
-
-std::shared_ptr<ShapeGeometry> ShapeGeometry::create(const std::vector<const Shape*>& shapes, unsigned int curveSegments) {
+std::shared_ptr<ShapeGeometry> ShapeGeometry::create(const std::vector<Shape>& shapes, unsigned int curveSegments) {
 
     return std::shared_ptr<ShapeGeometry>(new ShapeGeometry(shapes, curveSegments));
 }
