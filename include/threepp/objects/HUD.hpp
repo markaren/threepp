@@ -58,11 +58,11 @@ namespace threepp {
         VerticalAlignment verticalAlignment_ = VerticalAlignment::BOTTOM;
         HorizontallAlignment horizontalAlignment_ = HorizontallAlignment::LEFT;
 
-        Vector2 margin_{2, 2};
+        Vector2 margin_{20, 20};
         Vector2 offset_;
         Vector2 pos_;
 
-        float scale_{0.01};
+        float scale_{10};
 
         void updateSettings();
 
@@ -72,19 +72,17 @@ namespace threepp {
     class HUD: public Scene {
 
     public:
-        HUD(): camera_(0, 1, 1, 0, 0.1, 10) {
+        explicit HUD(WindowSize size): camera_(0, size.width, size.height, 0, 0.1, 10) {
 
             camera_.position.z = 1;
         }
 
         void addText(HudText& text) {
-
-            add(text.mesh_);
+            Object3D::add(text.mesh_);
         }
 
         void addText(std::shared_ptr<HudText>& text) {
-
-            add(text->mesh_);
+            Object3D::add(text->mesh_);
         }
 
         void removeText(HudText& text) {
@@ -94,7 +92,14 @@ namespace threepp {
 
         void apply(GLRenderer& renderer);
 
+        void add(Object3D& object) override;
+
+        void remove(Object3D& object) override;
+
+        void setSize(WindowSize size);
+
     private:
+        WindowSize size_;
         OrthographicCamera camera_;
     };
 

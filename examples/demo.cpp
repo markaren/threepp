@@ -119,7 +119,7 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud;
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font1 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
@@ -131,9 +131,9 @@ int main() {
 
     auto hudText2 = HudText(font2, 2);
     hudText2.setColor(Color::red);
-    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
-    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
-    hudText2.setPosition(1, 1);
+//    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
+//    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
+    hudText2.setPosition(0.5, 0.5);
     hud.addText(hudText2);
 
     canvas.onWindowResize([&](WindowSize size) {

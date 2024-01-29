@@ -113,7 +113,7 @@ int main() {
     scene->add(light1);
     scene->add(light2);
 
-    HUD hud;
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 

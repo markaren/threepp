@@ -6,7 +6,7 @@ using namespace std::string_literals;
 
 namespace {
 
-    auto createHudSprites() {
+    void createHudSprites(HUD& hud) {
         TextureLoader tl;
         auto hudMaterial = SpriteMaterial::create();
         hudMaterial->map = tl.load("data/textures/sprite0.png");
@@ -33,13 +33,12 @@ namespace {
         hudSprite3->position.set(0, 0, 0);// bottom left
         hudSprite4->position.set(1, 0, 0);// bottom right
 
-        auto group = Group::create();
-        group->add(hudSprite1);
-        group->add(hudSprite2);
-        group->add(hudSprite3);
-        group->add(hudSprite4);
 
-        return group;
+//        hud.add(hudSprite1);
+//        hud.add(hudSprite2);
+//        hud.add(hudSprite3);
+//        hud.add(hudSprite4);
+
     }
 
     auto createSprites(const std::shared_ptr<SpriteMaterial>& material) {
@@ -84,8 +83,8 @@ int main() {
     auto helper = Mesh::create(SphereGeometry::create(0.1));
     scene->add(helper);
 
-    HUD hud;
-    hud.add(createHudSprites());
+    HUD hud(canvas.size());
+    createHudSprites(hud);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
