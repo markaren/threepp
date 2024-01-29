@@ -117,7 +117,7 @@ std::vector<SVGLoader::SVGData> SVGLoader::parse(const std::string& text) {
     return pimpl_->load(doc);
 }
 
-std::vector<std::shared_ptr<Shape>> SVGLoader::createShapes(const SVGData& data) {
+std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
 
     const auto& shapePath = data.path;
 
@@ -195,15 +195,15 @@ std::vector<std::shared_ptr<Shape>> SVGLoader::createShapes(const SVGData& data)
         return isHoleTo(p, simplePaths, scanlineMinX, scanlineMaxX, data.style.fillRule);
     });
 
-    std::vector<std::shared_ptr<Shape>> shapesToReturn;
+    std::vector<Shape> shapesToReturn;
     for (const auto& p : simplePaths) {
 
         const auto amIAHole = isAHole[p.identifier];
 
         if (amIAHole && !amIAHole->isHole) {
 
-            auto shape = std::make_shared<Shape>();
-            shape->curves = p.curves;
+            Shape& shape = shapesToReturn.emplace_back();
+            shape.curves = p.curves;
 
             for (const auto& h : isAHole) {
 
@@ -212,10 +212,9 @@ std::vector<std::shared_ptr<Shape>> SVGLoader::createShapes(const SVGData& data)
                     const auto& hole = simplePaths[h->identifier];
                     auto path = std::make_shared<Path>();
                     path->curves = hole.curves;
-                    shape->holes.emplace_back(path);
+                    shape.holes.emplace_back(path);
                 }
             }
-            shapesToReturn.emplace_back(shape);
         }
     }
 
