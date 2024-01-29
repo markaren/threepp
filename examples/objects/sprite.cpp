@@ -14,30 +14,24 @@ namespace {
 
         auto hudSprite1 = Sprite::create(hudMaterial);
         hudSprite1->center.set(0, 1);
-        hudSprite1->scale.set(0.1, 0.1, 1);
+        hudSprite1->scale.set(75, 75, 1);
 
         auto hudSprite2 = Sprite::create(hudMaterial);
         hudSprite2->center.set(1, 1);
-        hudSprite2->scale.set(0.1, 0.1, 1);
+        hudSprite2->scale.set(75, 75, 1);
 
         auto hudSprite3 = Sprite::create(hudMaterial);
         hudSprite3->center.set(0, 0);
-        hudSprite3->scale.set(0.1, 0.1, 1);
+        hudSprite3->scale.set(75, 75, 1);
 
         auto hudSprite4 = Sprite::create(hudMaterial);
         hudSprite4->center.set(1, 0);
-        hudSprite4->scale.set(0.1, 0.1, 1);
+        hudSprite4->scale.set(75, 75, 1);
 
-        hudSprite1->position.set(0, 1, 0);// top left
-        hudSprite2->position.set(1, 1, 0);// top right
-        hudSprite3->position.set(0, 0, 0);// bottom left
-        hudSprite4->position.set(1, 0, 0);// bottom right
-
-
-//        hud.add(hudSprite1);
-//        hud.add(hudSprite2);
-//        hud.add(hudSprite3);
-//        hud.add(hudSprite4);
+        hud.add(hudSprite1, HUD::Options().setNormalizedPosition(0,1));
+        hud.add(hudSprite2, HUD::Options().setNormalizedPosition(1,1));
+        hud.add(hudSprite3, HUD::Options().setNormalizedPosition(0,0));
+        hud.add(hudSprite4, HUD::Options().setNormalizedPosition(1,0));
 
     }
 
@@ -90,6 +84,8 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};

@@ -2,6 +2,8 @@
 #include "threepp/objects/HUD.hpp"
 #include "threepp/threepp.hpp"
 
+#include "threepp/geometries/TextGeometry.hpp"
+
 using namespace threepp;
 
 #ifdef HAS_IMGUI
@@ -124,22 +126,28 @@ int main() {
     const auto font1 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
 
-    auto hudText1 = HudText(font1, 4);
-    hudText1.setText("Hello World!");
-    hudText1.setColor(Color::black);
-    hud.addText(hudText1);
+    auto hudText1 = Mesh(TextGeometry::create("Hello World!", TextGeometry::Options(font1).setSize(20)), MeshBasicMaterial::create({{"color", Color::black}}));
+    hud.add(hudText1, HUD::Options());
 
-    auto hudText2 = HudText(font2, 2);
-    hudText2.setColor(Color::red);
-//    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
-//    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
-    hudText2.setPosition(0.5, 0.5);
-    hud.addText(hudText2);
+    auto hudText2 = Mesh(TextGeometry::create("", TextGeometry::Options(font1).setSize(10)), MeshBasicMaterial::create({{"color", Color::red}}));
+    hud.add(hudText2, HUD::Options()
+                              .setNormalizedPosition({1.f,1.f})
+                              .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
+                              .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
+
+//    auto hudText2 = HudText(font2, 2);
+//    hudText2.setColor(Color::red);
+////    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
+////    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
+//    hudText2.setPosition(0.5, 0.5);
+//    hud.addText(hudText2);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
 #ifdef HAS_IMGUI
@@ -151,7 +159,8 @@ int main() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
-        hudText2.setText("Delta=" + std::to_string(dt));
+
+        hudText2.setGeometry(TextGeometry::create("Delta=" + std::to_string(dt), TextGeometry::Options(font1).setSize(10)));
 
         renderer.clear();
         renderer.render(*scene, *camera);

@@ -16,6 +16,12 @@ namespace threepp {
             unsigned int curveSegments = 2;
 
             explicit Options(Font font);
+
+            Options& setSize(unsigned int size) {
+                this->size = size;
+
+                return *this;
+            }
         };
 
         static std::shared_ptr<TextGeometry> create(const std::string& text, const TextGeometry::Options& opts);
