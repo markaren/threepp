@@ -6,7 +6,7 @@ using namespace std::string_literals;
 
 namespace {
 
-    auto createHudSprites() {
+    void createHudSprites(HUD& hud) {
         TextureLoader tl;
         auto hudMaterial = SpriteMaterial::create();
         hudMaterial->map = tl.load("data/textures/sprite0.png");
@@ -14,32 +14,24 @@ namespace {
 
         auto hudSprite1 = Sprite::create(hudMaterial);
         hudSprite1->center.set(0, 1);
-        hudSprite1->scale.set(0.1, 0.1, 1);
+        hudSprite1->scale.set(75, 75, 1);
 
         auto hudSprite2 = Sprite::create(hudMaterial);
         hudSprite2->center.set(1, 1);
-        hudSprite2->scale.set(0.1, 0.1, 1);
+        hudSprite2->scale.set(75, 75, 1);
 
         auto hudSprite3 = Sprite::create(hudMaterial);
         hudSprite3->center.set(0, 0);
-        hudSprite3->scale.set(0.1, 0.1, 1);
+        hudSprite3->scale.set(75, 75, 1);
 
         auto hudSprite4 = Sprite::create(hudMaterial);
         hudSprite4->center.set(1, 0);
-        hudSprite4->scale.set(0.1, 0.1, 1);
+        hudSprite4->scale.set(75, 75, 1);
 
-        hudSprite1->position.set(0, 1, 0);// top left
-        hudSprite2->position.set(1, 1, 0);// top right
-        hudSprite3->position.set(0, 0, 0);// bottom left
-        hudSprite4->position.set(1, 0, 0);// bottom right
-
-        auto group = Group::create();
-        group->add(hudSprite1);
-        group->add(hudSprite2);
-        group->add(hudSprite3);
-        group->add(hudSprite4);
-
-        return group;
+        hud.add(hudSprite1, HUD::Options().setNormalizedPosition({0, 1}).setMargin({}));
+        hud.add(hudSprite2, HUD::Options().setNormalizedPosition({1, 1}).setMargin({}));
+        hud.add(hudSprite3, HUD::Options().setNormalizedPosition({0, 0}).setMargin({}));
+        hud.add(hudSprite4, HUD::Options().setNormalizedPosition({1, 0}).setMargin({}));
     }
 
     auto createSprites(const std::shared_ptr<SpriteMaterial>& material) {
@@ -61,7 +53,7 @@ int main() {
 
     Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", "data/textures/three.png"s}}};
     auto size = canvas.size();
-    GLRenderer renderer(canvas.size());
+    GLRenderer renderer(size);
     renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
 
@@ -84,13 +76,15 @@ int main() {
     auto helper = Mesh::create(SphereGeometry::create(0.1));
     scene->add(helper);
 
-    HUD hud;
-    hud.add(createHudSprites());
+    HUD hud(canvas.size());
+    createHudSprites(hud);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};

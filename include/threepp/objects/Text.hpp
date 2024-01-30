@@ -16,6 +16,13 @@ namespace threepp {
         Text2D(const TextGeometry::Options& opts, const std::string& str, std::shared_ptr<Material> material = nullptr)
             : Mesh(TextGeometry::create(str, opts), material ? material : SpriteMaterial::create()) {}
 
+        void setColor(const Color& color) {
+
+            if (auto m = materials_.front()->as<MaterialWithColor>()) {
+                m->color = color;
+            }
+        }
+
         void setText(const std::string& str, const TextGeometry::Options& opts) {
 
             auto geometry = TextGeometry::create(str, opts);
@@ -33,6 +40,13 @@ namespace threepp {
     public:
         Text3D(const ExtrudeTextGeometry::Options& opts, const std::string& str, std::shared_ptr<Material> material = nullptr)
             : Mesh(ExtrudeTextGeometry::create(str, opts), material ? material : MeshBasicMaterial::create()) {}
+
+        void setColor(const Color& color) {
+
+            if (auto m = materials_.front()->as<MaterialWithColor>()) {
+                m->color = color;
+            }
+        }
 
         void setText(const std::string& str, const ExtrudeTextGeometry::Options& opts) {
 

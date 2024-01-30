@@ -33,6 +33,8 @@ namespace threepp {
 
         Vector2(float x, float y);
 
+        Vector2(double x, double y);
+
         Vector2& set(float x, float y);
 
         Vector2& setScalar(float value);

@@ -113,15 +113,17 @@ int main() {
     scene->add(light1);
     scene->add(light2);
 
-    HUD hud;
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto handle = HudText(font, 4);
-    handle.setText("Loading Crane3R..");
-    handle.setPosition(0, 1);
-    handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
-    hud.addText(handle);
+    TextGeometry::Options opts(font, 40, 2);
+    auto handle = Text2D(opts, "Loading Crane3R..");
+    handle.setColor(Color::black);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0.5, 0.5})
+                            .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
+                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
 
 #ifndef EMSCRIPTEN
     utils::ThreadPool pool;
@@ -133,7 +135,7 @@ int main() {
         });
 
         canvas.invokeLater([&, crane] {
-            hud.removeText(handle);
+            hud.remove(handle);
             scene->add(crane);
             endEffectorHelper->visible = true;
         });
@@ -153,6 +155,8 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
 #ifdef HAS_IMGUI

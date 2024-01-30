@@ -1,99 +1,85 @@
 
-#include <utility>
-
 #include "threepp/objects/HUD.hpp"
 
-#include "threepp/geometries/TextGeometry.hpp"
-#include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 
 using namespace threepp;
 
-HudText::HudText(Font font, std::optional<unsigned int> size)
-    : font_(std::move(font)), size_(size.value_or(2)), mesh_(std::make_shared<Mesh>(BufferGeometry::create(), SpriteMaterial::create())) {
 
-    setColor(Color::gray);
-}
+void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
 
-void HudText::scale(float scale) {
-    scale_ = scale / 100;
-    mesh_->geometry()->scale(scale_, scale_, scale_);
+    static Box3 bb;
+    bb.setFromObject(o);
+    Vector3 size;
+    bb.getSize(size);
 
-    updateSettings();
-}
-
-void HudText::setText(const std::string& str) {
-
-    TextGeometry::Options opts(font_);
-    opts.size = size_;
-    auto geometry = TextGeometry::create(str, opts);
-    geometry->scale(scale_, scale_, scale_);
-    mesh_->setGeometry(geometry);
-
-    updateSettings();
-}
-
-void HudText::setColor(const Color& color) {
-    mesh_->material()->as<SpriteMaterial>()->color.copy(color);
-}
-
-void HudText::setPosition(float x, float y) {
-
-    updateSettings();
-
-    pos_.set(x, y);
-}
-
-void HudText::setVerticalAlignment(VerticalAlignment verticalAlignment) {
-    verticalAlignment_ = verticalAlignment;
-
-    updateSettings();
-}
-
-void HudText::setHorizontalAlignment(HorizontallAlignment horizontalAlignment) {
-    horizontalAlignment_ = horizontalAlignment;
-
-    updateSettings();
-}
-
-void HudText::updateSettings() {
-
-    if (verticalAlignment_ == VerticalAlignment::CENTER) {
-        offset_.y = (float(size_) / 2);
-    } else if (verticalAlignment_ == VerticalAlignment::TOP) {
-        offset_.y = float(size_);
+    Vector2 offset;
+    if (verticalAlignment == VerticalAlignment::CENTER) {
+        offset.y = (float(size.y) / 2);
+    } else if (verticalAlignment == VerticalAlignment::TOP) {
+        offset.y = float(size.y);
     } else {
-        offset_.y = 0;
+        offset.y = 0;
     }
 
-    if (horizontalAlignment_ != HorizontallAlignment::LEFT) {
+    if (horizontalAlignment != HorizontalAlignment::LEFT) {
 
-        mesh_->geometry()->computeBoundingBox();
-        const auto& bb = mesh_->geometry()->boundingBox;
-        Vector3 size;
-        bb->getSize(size);
-
-        if (horizontalAlignment_ == HorizontallAlignment::CENTER) {
-            offset_.x = (size.x / 2);
-        } else if (horizontalAlignment_ == HorizontallAlignment::RIGHT) {
-            offset_.x = size.x;
+        if (horizontalAlignment == HorizontalAlignment::CENTER) {
+            offset.x = (size.x / 2);
+        } else if (horizontalAlignment == HorizontalAlignment::RIGHT) {
+            offset.x = size.x;
         }
     } else {
-        offset_.x = 0;
+        offset.x = 0;
     }
 
-    mesh_->position.x = pos_.x - offset_.x - (margin_.x * 0.01f * ((0.5 > pos_.x) ? -1.f : 1.f));
-    mesh_->position.y = pos_.y - (offset_.y * 0.01f) - (margin_.y * 0.01f * ((0.5 > pos_.y) ? -1.f : 1.f));
-
-}
-
-void HudText::setMargin(const Vector2& margin) {
-    margin_.copy(margin);
-
-    updateSettings();
+    o.position.x = pos.x * float(windowSize.width) - offset.x - (margin.x * ((0.5 > pos.x) ? -1.f : 1.f));
+    o.position.y = pos.y * float(windowSize.height) - (offset.y) - (margin.y * ((0.5 > pos.y) ? -1.f : 1.f));
 }
 
 void HUD::apply(GLRenderer& renderer) {
     renderer.clearDepth();
     renderer.render(*this, camera_);
+}
+
+void HUD::remove(Object3D& object) {
+    Object3D::remove(object);
+
+    map_.erase(&object);
+}
+
+void HUD::setSize(WindowSize size) {
+    camera_.right = size.width;
+    camera_.top = size.height;
+
+    for (auto [obj, opts] : map_) {
+        opts.updateElement(*obj, size);
+    }
+
+    camera_.updateProjectionMatrix();
+
+    size_ = size;
+}
+
+void HUD::add(Object3D& object, HUD::Options opts) {
+    Object3D::add(object);
+
+    opts.updateElement(object, size_);
+
+    map_[&object] = opts;
+}
+
+void HUD::add(const std::shared_ptr<Object3D>& object, HUD::Options opts) {
+    Object3D::add(object);
+
+    opts.updateElement(*object, size_);
+
+    map_[object.get()] = opts;
+}
+
+void HUD::needsUpdate(Object3D& o) {
+
+    if (map_.count(&o)) {
+        map_.at(&o).updateElement(o, size_);
+    }
 }

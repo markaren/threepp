@@ -7,95 +7,91 @@
 #include "threepp/extras/core/Font.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
-#include "threepp/extras/core/Font.hpp"
 
-#include <string>
 #include <optional>
+#include <string>
 
 namespace threepp {
 
     class GLRenderer;
 
-    struct HudText {
+    class HUD: public Scene {
 
+    public:
         enum class VerticalAlignment {
             TOP,
             BOTTOM,
             CENTER
         };
 
-        enum class HorizontallAlignment {
+        enum class HorizontalAlignment {
             LEFT,
             RIGHT,
             CENTER
         };
 
-        explicit HudText(Font font, std::optional<unsigned int> size = std::nullopt);
+        struct Options {
 
-        void setText(const std::string& str);
+            Options(): margin(5, 5),
+                       verticalAlignment(VerticalAlignment::BOTTOM),
+                       horizontalAlignment(HorizontalAlignment::RIGHT) {}
 
-        void setColor(const Color& color);
+            Options& setVerticalAlignment(VerticalAlignment va) {
+                this->verticalAlignment = va;
 
-        void scale(float scale);
+                return *this;
+            }
 
-        void setPosition(float x, float y);
+            Options& setHorizontalAlignment(HorizontalAlignment ha) {
+                this->horizontalAlignment = ha;
 
-        void setVerticalAlignment(VerticalAlignment verticalAlignment);
-        void setHorizontalAlignment(HorizontallAlignment horizontalAlignment);
+                return *this;
+            }
 
-        void setMargin(const Vector2& margin);
+            Options& setNormalizedPosition(const Vector2& pos) {
+                this->pos.copy(pos);
 
-        static std::shared_ptr<HudText> create(const Font& font, std::optional<unsigned int> size = std::nullopt) {
+                return *this;
+            }
 
-            return std::make_shared<HudText>(font, size);
-        }
+            Options& setMargin(const Vector2& margin) {
+                this->margin.copy(margin);
 
-    private:
-        Font font_;
-        unsigned int size_ = 1;
-        std::shared_ptr<Mesh> mesh_;
+                return *this;
+            }
 
-        VerticalAlignment verticalAlignment_ = VerticalAlignment::BOTTOM;
-        HorizontallAlignment horizontalAlignment_ = HorizontallAlignment::LEFT;
+            void updateElement(Object3D& o, WindowSize size);
 
-        Vector2 margin_{2, 2};
-        Vector2 offset_;
-        Vector2 pos_;
+        private:
+            Vector2 pos;
+            Vector2 margin{5, 5};
 
-        float scale_{0.01};
+            VerticalAlignment verticalAlignment;
+            HorizontalAlignment horizontalAlignment;
+        };
 
-        void updateSettings();
-
-        friend class HUD;
-    };
-
-    class HUD: public Scene {
-
-    public:
-        HUD(): camera_(0, 1, 1, 0, 0.1, 10) {
+        explicit HUD(WindowSize size): size_(size), camera_(0, size.width, size.height, 0, 0.1, 10) {
 
             camera_.position.z = 1;
         }
 
-        void addText(HudText& text) {
-
-            add(text.mesh_);
-        }
-
-        void addText(std::shared_ptr<HudText>& text) {
-
-            add(text->mesh_);
-        }
-
-        void removeText(HudText& text) {
-
-            remove(*text.mesh_);
-        }
-
         void apply(GLRenderer& renderer);
 
+        void add(Object3D& object, Options opts = {});
+
+        void add(const std::shared_ptr<Object3D>& object, Options opts);
+
+        void remove(Object3D& object) override;
+
+        void setSize(WindowSize size);
+
+        void needsUpdate(Object3D& o);
+
     private:
+        WindowSize size_;
         OrthographicCamera camera_;
+
+        std::unordered_map<Object3D*, Options> map_;
     };
 
 }// namespace threepp

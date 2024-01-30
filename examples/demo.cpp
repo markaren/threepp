@@ -1,5 +1,4 @@
 
-#include "threepp/objects/HUD.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -119,27 +118,31 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud;
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto hudText1 = HudText(font1, 4);
-    hudText1.setText("Hello World!");
+    TextGeometry::Options opts1(font1, 40);
+    auto hudText1 = Text2D(opts1, "Hello World!");
     hudText1.setColor(Color::black);
-    hud.addText(hudText1);
+    hud.add(hudText1, HUD::Options());
 
-    auto hudText2 = HudText(font2, 2);
+    TextGeometry::Options opts2(font2, 10, 1);
+    auto hudText2 = Text2D(opts1, "");
     hudText2.setColor(Color::red);
-    hudText2.setVerticalAlignment(threepp::HudText::VerticalAlignment::TOP);
-    hudText2.setHorizontalAlignment(threepp::HudText::HorizontallAlignment::RIGHT);
-    hudText2.setPosition(1, 1);
-    hud.addText(hudText2);
+    hud.add(hudText2, HUD::Options()
+                              .setNormalizedPosition({1, 1})
+                              .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
+                              .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
+
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
 #ifdef HAS_IMGUI
@@ -151,7 +154,9 @@ int main() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
-        hudText2.setText("Delta=" + std::to_string(dt));
+
+        hudText2.setText("Delta=" + std::to_string(dt), opts2);
+        hud.needsUpdate(hudText2);
 
         renderer.clear();
         renderer.render(*scene, *camera);

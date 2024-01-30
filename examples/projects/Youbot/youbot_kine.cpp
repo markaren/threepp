@@ -92,13 +92,17 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    HUD hud;
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto handle = HudText(font, 4);
-    handle.setText("Loading model..");
-    hud.addText(handle);
+    TextGeometry::Options opts(font, 30, 5);
+    auto handle = Text2D(opts, "Loading model..");
+    handle.setColor(Color::black);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0.5, 0.5})
+                            .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::CENTER)
+                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
 
     utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
@@ -110,7 +114,7 @@ int main() {
         canvas.invokeLater([&] {
             canvas.addKeyListener(*youbot);
             scene->add(youbot);
-            hud.removeText(handle);
+            hud.remove(handle);
         });
     });
 
@@ -118,6 +122,8 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
     auto ikSolver = CCDSolver(1, 0.001f, 0.00001f);

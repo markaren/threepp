@@ -1,6 +1,7 @@
 
 #include "SnakeScene.hpp"
 
+
 int main() {
 
     SnakeGame game(10);
@@ -14,21 +15,23 @@ int main() {
     auto scene = SnakeScene(game);
     canvas.addKeyListener(scene);
 
+    HUD hud(canvas.size());
+    FontLoader fontLoader;
+    const auto font = fontLoader.defaultFont();
+
+    TextGeometry::Options opts(font, 15, 5);
+    auto handle = Text2D(opts, "Press 'r' to reset");
+    handle.setColor(Color::red);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0, 1})
+                            .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+
     canvas.onWindowResize([&](WindowSize size) {
         scene.camera().updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
-
-    HUD hud;
-    FontLoader fontLoader;
-    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
-
-    HudText text(font);
-    text.setText("Press 'r' to reset");
-    text.setColor(Color::red);
-    text.setPosition(0, 1);
-    text.setVerticalAlignment(HudText::VerticalAlignment::TOP);
-    hud.addText(text);
 
     Clock clock;
     canvas.animate([&]() {

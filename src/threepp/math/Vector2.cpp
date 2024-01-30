@@ -13,6 +13,8 @@ Vector2::Vector2(int x, int y): Vector2(static_cast<float>(x), static_cast<float
 
 Vector2::Vector2(float x, float y): x(x), y(y) {}
 
+Vector2::Vector2(double x, double y): x(x), y(y) {}
+
 Vector2& Vector2::set(float x, float y) {
 
     this->x = x;
