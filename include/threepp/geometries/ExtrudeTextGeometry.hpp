@@ -16,13 +16,13 @@ namespace threepp {
         struct Options {
             const Font& font;
             unsigned int size;
-            float height = 50;
+            float height;
             bool bevelEnabled = false;
             float bevelThickness = 10;
             float bevelSize = 8;
 
-            Options(const Font& font, unsigned int size)
-                : font(font), size(size) {}
+            Options(const Font& font, unsigned int size, float height = 50)
+                : font(font), size(size), height(height) {}
 
         private:
             friend ExtrudeTextGeometry;
