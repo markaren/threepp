@@ -32,6 +32,10 @@ namespace threepp {
 
         struct Options {
 
+            Options(): margin(5, 5),
+                       verticalAlignment(VerticalAlignment::BOTTOM),
+                       horizontalAlignment(HorizontalAlignment::RIGHT) {}
+
             Options& setVerticalAlignment(VerticalAlignment va) {
                 this->verticalAlignment = va;
 
@@ -59,11 +63,11 @@ namespace threepp {
             void updateElement(Object3D& o, WindowSize size);
 
         private:
-            VerticalAlignment verticalAlignment{VerticalAlignment::BOTTOM};
-            HorizontalAlignment horizontalAlignment{HorizontalAlignment::LEFT};
-
-            Vector2 margin{5, 5};
             Vector2 pos;
+            Vector2 margin{5, 5};
+
+            VerticalAlignment verticalAlignment;
+            HorizontalAlignment horizontalAlignment;
         };
 
         explicit HUD(WindowSize size): size_(size), camera_(0, size.width, size.height, 0, 0.1, 10) {
