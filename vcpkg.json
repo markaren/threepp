@@ -3,11 +3,6 @@
   "name": "threepp",
   "dependencies": [
     {
-      "name": "glad",
-      "features": ["gl-api-41", "extensions"],
-      "platform": "!wasm32"
-    },
-    {
       "name": "glfw3",
       "platform": "!wasm32"
     }

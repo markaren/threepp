@@ -464,10 +464,11 @@ target_include_directories(threepp
         PRIVATE
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/external"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/glad"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/earcut"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/nlohmann"
 )
