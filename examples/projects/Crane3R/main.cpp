@@ -146,7 +146,7 @@ int main() {
         m.castShadow = true;
     });
 
-    hud.removeText(handle);
+    hud.remove(handle);
     scene->add(crane);
     endEffectorHelper->visible = true;
 #endif
