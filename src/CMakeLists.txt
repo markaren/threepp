@@ -156,6 +156,7 @@ set(publicHeaders
         "threepp/objects/Sprite.hpp"
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
+        "threepp/objects/Text.hpp"
         "threepp/objects/Water.hpp"
 
         "threepp/textures/DataTexture.hpp"
