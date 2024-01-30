@@ -156,6 +156,7 @@ set(publicHeaders
         "threepp/objects/Sprite.hpp"
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
+        "threepp/objects/Text.hpp"
         "threepp/objects/Water.hpp"
 
         "threepp/textures/DataTexture.hpp"
@@ -438,9 +439,14 @@ endif ()
 
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 
-add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
+list(APPEND sources
+        "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp"
+        "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
+)
+
+add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
-target_compile_features(threepp PUBLIC cxx_std_17)
+target_compile_features(threepp PUBLIC "cxx_std_17")
 if (NOT DEFINED EMSCRIPTEN)
     target_link_libraries(threepp
             PRIVATE

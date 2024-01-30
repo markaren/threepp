@@ -2,8 +2,6 @@
 #include "threepp/objects/HUD.hpp"
 #include "threepp/threepp.hpp"
 
-#include "threepp/geometries/TextGeometry.hpp"
-
 using namespace threepp;
 
 #ifdef HAS_IMGUI
@@ -123,7 +121,7 @@ int main() {
 
     HUD hud(canvas.size());
     FontLoader fontLoader;
-    const auto font1 = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
+    const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
     auto hudText1 = Mesh(TextGeometry::create("Hello World!", TextGeometry::Options(font1).setSize(40)), MeshBasicMaterial::create({{"color", Color::black}}));
