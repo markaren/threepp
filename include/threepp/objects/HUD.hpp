@@ -34,7 +34,7 @@ namespace threepp {
 
             Options(): margin(5, 5),
                        verticalAlignment(VerticalAlignment::BOTTOM),
-                       horizontalAlignment(HorizontalAlignment::RIGHT) {}
+                       horizontalAlignment(HorizontalAlignment::LEFT) {}
 
             Options& setVerticalAlignment(VerticalAlignment va) {
                 this->verticalAlignment = va;
