@@ -37,15 +37,16 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    HUD hud;
+    HUD hud(canvas.size());
     FontLoader fontLoader;
-    const auto font = *fontLoader.load("data/fonts/helvetiker_bold.typeface.json");
-    auto textHandle = HudText(font, 4);
-    textHandle.setText("Hello World!");
-    textHandle.setPosition(1,1);
-    textHandle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
-    textHandle.setHorizontalAlignment(HudText::HorizontallAlignment::RIGHT);
-    hud.addText(textHandle);
+    const auto font = fontLoader.defaultFont();
+    TextGeometry::Options opts(font, 20, 5);
+    auto hudText2 = Text2D(opts, "Hello World!");
+    hudText2.setColor(Color::gray);
+    hud.add(hudText2, HUD::Options()
+                              .setNormalizedPosition({1, 1})
+                              .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
+                              .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
 
     std::array<float, 3> posBuf{};
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
@@ -62,6 +63,8 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
     Clock clock;
