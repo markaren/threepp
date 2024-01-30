@@ -31,6 +31,7 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
 #include "threepp/objects/HUD.hpp"
+#include "threepp/objects/Text.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"

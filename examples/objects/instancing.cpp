@@ -59,20 +59,6 @@ int main() {
     setupInstancedMesh(*mesh, amount);
     scene->add(mesh);
 
-    canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.aspect();
-        camera->updateProjectionMatrix();
-        renderer.setSize(size);
-    });
-
-    Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    MouseMoveListener l([&](auto& pos) {
-        auto size = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
-    });
-    canvas.addMouseListener(l);
-
     std::unordered_map<int, bool> colorMap;
 
 #ifdef HAS_IMGUI
@@ -106,10 +92,29 @@ int main() {
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto handle = HudText(font);
-    handle.setPosition(0, 1);
-    handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
-    hud.addText(handle);
+    TextGeometry::Options opts(font, 20, 2);
+    auto handle = Text2D(opts, "");
+    handle.setColor(Color::black);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0, 1})
+                            .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.aspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+
+        hud.setSize(size);
+    });
+
+    Vector2 mouse{-Infinity<float>, -Infinity<float>};
+    MouseMoveListener l([&](auto& pos) {
+        auto size = canvas.size();
+        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+    });
+    canvas.addMouseListener(l);
+
 
     Clock clock;
     FPSCounter counter;
@@ -129,7 +134,10 @@ int main() {
         }
 
         counter.update(clock.getElapsedTime());
-        if (it++ % 60 == 0) handle.setText("FPS: " + std::to_string(counter.fps));
+        if (it++ % 60 == 0) {
+            handle.setText("FPS: " + std::to_string(counter.fps), opts);
+            hud.needsUpdate(handle);
+        }
 
         renderer.clear();
         renderer.render(*scene, *camera);

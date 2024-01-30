@@ -1,5 +1,4 @@
 
-#include "threepp/objects/HUD.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -124,14 +123,19 @@ int main() {
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto hudText1 = Mesh(TextGeometry::create("Hello World!", TextGeometry::Options(font1).setSize(40)), MeshBasicMaterial::create({{"color", Color::black}}));
+    TextGeometry::Options opts1(font1, 40);
+    auto hudText1 = Text2D(opts1, "Hello World!");
+    hudText1.setColor(Color::black);
     hud.add(hudText1, HUD::Options());
 
-    auto hudText2 = Mesh(TextGeometry::create("", TextGeometry::Options(font1).setSize(10)), MeshBasicMaterial::create({{"color", Color::red}}));
+    TextGeometry::Options opts2(font2, 10, 1);
+    auto hudText2 = Text2D(opts1, "");
+    hudText2.setColor(Color::red);
     hud.add(hudText2, HUD::Options()
                               .setNormalizedPosition({1, 1})
                               .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
                               .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
+
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -151,7 +155,7 @@ int main() {
 
         box->rotation.y += 0.5f * dt;
 
-        hudText2.setGeometry(TextGeometry::create("Delta=" + std::to_string(dt), TextGeometry::Options(font1).setSize(10)));
+        hudText2.setText("Delta=" + std::to_string(dt), opts2);
         hud.needsUpdate(hudText2);
 
         renderer.clear();

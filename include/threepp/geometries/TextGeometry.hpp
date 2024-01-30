@@ -13,9 +13,9 @@ namespace threepp {
         struct Options {
             Font font;
             unsigned int size;
-            unsigned int curveSegments = 2;
+            unsigned int curveSegments;
 
-            explicit Options(Font font, unsigned int size = 1);
+            explicit Options(Font font, unsigned int size = 1, unsigned int curveSegments = 3);
         };
 
         static std::shared_ptr<TextGeometry> create(const std::string& text, const TextGeometry::Options& opts);

@@ -73,7 +73,7 @@ namespace threepp {
 
         void apply(GLRenderer& renderer);
 
-        void add(Object3D& object, Options opts);
+        void add(Object3D& object, Options opts = {});
 
         void add(const std::shared_ptr<Object3D>& object, Options opts);
 

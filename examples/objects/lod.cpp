@@ -37,11 +37,13 @@ int main() {
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/gentilis_bold.typeface.json");
 
-    auto handle = HudText(font, 4);
-    hud.addText(handle);
+    TextGeometry::Options opts(font, 20, 5);
+    auto handle = Text2D(opts, "");
+    handle.setColor(Color::gray);
+    hud.add(handle);
 
     canvas.animate([&]() {
-        handle.setText("LOD level: " + std::to_string(lod.getCurrentLevel()));
+        handle.setText("LOD level: " + std::to_string(lod.getCurrentLevel()), opts);
 
         renderer.clear();
         renderer.render(scene, camera);

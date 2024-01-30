@@ -4,7 +4,6 @@
 
 #include "Youbot.hpp"
 
-
 using namespace threepp;
 
 
@@ -36,12 +35,12 @@ int main() {
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto handle = HudText(font, 4);
-    handle.setText("Loading model...");
-    handle.setPosition(0, 1);
+    TextGeometry::Options opts(font, 20, 5);
+    auto handle = Text2D(opts, "Loading model..");
     handle.setColor(Color::black);
-    handle.setVerticalAlignment(HudText::VerticalAlignment::TOP);
-    hud.addText(handle);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0, 1})
+                            .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
     utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
@@ -50,7 +49,7 @@ int main() {
         canvas.invokeLater([&] {
             canvas.addKeyListener(*youbot);
             scene->add(youbot);
-            handle.setText("Use WASD keys to steer robot");
+            handle.setText("Use WASD keys to steer robot", opts);
         });
     });
 
@@ -58,6 +57,8 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
     Clock clock;
