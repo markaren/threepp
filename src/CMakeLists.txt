@@ -5,7 +5,6 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
-        "threepp/canvas/Canvas.hpp"
         "threepp/canvas/WindowSize.hpp"
 
         "threepp/controls/FlyControls.hpp"
@@ -232,8 +231,6 @@ set(privateHeaders
 
 set(sources
 
-        "threepp/canvas/Canvas.cpp"
-
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
         "threepp/cameras/OrthographicCamera.cpp"
@@ -447,12 +444,6 @@ list(APPEND sources
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
 target_compile_features(threepp PUBLIC "cxx_std_17")
-if (NOT DEFINED EMSCRIPTEN)
-    target_link_libraries(threepp
-            PRIVATE
-            glfw::glfw
-    )
-endif ()
 
 if (UNIX OR DEFINED EMSCRIPTEN)
     target_link_libraries(threepp PRIVATE pthread)
@@ -472,3 +463,39 @@ target_include_directories(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/nlohmann"
 )
+
+if (THREEPP_WITH_GLFW)
+
+    add_library(threepp-glfw
+            "${publicHeaderDir}/threepp/canvas/Canvas.hpp"
+            "threepp/canvas/Canvas.cpp"
+    )
+    target_link_libraries(threepp-glfw
+            PUBLIC
+            threepp
+    )
+    target_include_directories(threepp-glfw
+            PRIVATE
+            "${generatedSourcesDir}"
+    )
+
+endif ()
+
+if (NOT DEFINED EMSCRIPTEN)
+
+    target_include_directories(threepp
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/external/glad"
+    )
+
+    target_include_directories(threepp-glfw
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/external/glad"
+    )
+
+    target_link_libraries(threepp-glfw
+            PRIVATE
+            glfw::glfw
+    )
+
+endif ()

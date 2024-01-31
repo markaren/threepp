@@ -1,7 +1,7 @@
 
 #include "threepp/controls/OrbitControls.hpp"
 
-#include "threepp/canvas/Canvas.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
 #include "threepp/math/Spherical.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -30,7 +30,7 @@ namespace {
 
 struct OrbitControls::Impl {
 
-    Canvas& canvas;
+    PeripheralsEventSource& canvas;
     OrbitControls& scope;
     Camera& camera;
 
@@ -59,7 +59,7 @@ struct OrbitControls::Impl {
     Vector2 dollyEnd;
     Vector2 dollyDelta;
 
-    Impl(OrbitControls& scope, Canvas& canvas, Camera& camera)
+    Impl(OrbitControls& scope, PeripheralsEventSource& canvas, Camera& camera)
         : scope(scope), canvas(canvas), camera(camera),
           keyListener(std::make_unique<MyKeyListener>(scope)),
           mouseListener(std::make_unique<MyMouseListener>(scope)) {
@@ -517,8 +517,8 @@ struct OrbitControls::Impl {
     };
 };
 
-OrbitControls::OrbitControls(Camera& camera, Canvas& canvas)
-    : pimpl_(std::make_unique<Impl>(*this, canvas, camera)) {}
+OrbitControls::OrbitControls(Camera& camera, PeripheralsEventSource& inputSource)
+    : pimpl_(std::make_unique<Impl>(*this, inputSource, camera)) {}
 
 
 bool OrbitControls::update() {

@@ -31,8 +31,8 @@ namespace {
 
 struct FlyControls::Impl {
 
-    Impl(FlyControls& scope, Canvas& canvas, Object3D* object)
-        : canvas(canvas), scope(scope), object(object),
+    Impl(FlyControls& scope, PeripheralsEventSource& canvas, Object3D* object)
+        : eventSource(canvas), scope(scope), object(object),
           keyUp(scope), keydown(scope),
           mouseDown(scope), mouseMove(scope), mouseUp(scope) {
 
@@ -83,12 +83,12 @@ struct FlyControls::Impl {
 
     ~Impl() {
 
-        canvas.removeKeyListener(keydown);
-        canvas.removeKeyListener(keyUp);
+        eventSource.removeKeyListener(keydown);
+        eventSource.removeKeyListener(keyUp);
 
-        canvas.removeMouseListener(mouseDown);
-        canvas.removeMouseListener(mouseMove);
-        canvas.removeMouseListener(mouseUp);
+        eventSource.removeMouseListener(mouseDown);
+        eventSource.removeMouseListener(mouseMove);
+        eventSource.removeMouseListener(mouseUp);
     }
 
     struct KeyDownListener: KeyListener {
@@ -243,8 +243,8 @@ struct FlyControls::Impl {
 
             if (!scope.dragToLook || scope.pimpl_->mouseStatus > 0) {
 
-                const float halfWidth = static_cast<float>(scope.pimpl_->canvas.size().width) / 2;
-                const float halfHeight = static_cast<float>(scope.pimpl_->canvas.size().height) / 2;
+                const float halfWidth = static_cast<float>(scope.pimpl_->eventSource.size().width) / 2;
+                const float halfHeight = static_cast<float>(scope.pimpl_->eventSource.size().height) / 2;
 
                 scope.pimpl_->moveState.yawLeft = -((pos.x) - halfWidth) / halfWidth;
                 scope.pimpl_->moveState.pitchDown = ((pos.y) - halfHeight) / halfHeight;
@@ -288,7 +288,7 @@ struct FlyControls::Impl {
     };
 
 private:
-    Canvas& canvas;
+    PeripheralsEventSource& eventSource;
     FlyControls& scope;
     Object3D* object;
 
@@ -311,7 +311,7 @@ private:
     MouseUpListener mouseUp;
 };
 
-FlyControls::FlyControls(Object3D& object, Canvas& canvas)
+FlyControls::FlyControls(Object3D& object, PeripheralsEventSource& canvas)
     : pimpl_(std::make_unique<Impl>(*this, canvas, &object)) {}
 
 void threepp::FlyControls::update(float delta) {

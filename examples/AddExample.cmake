@@ -28,7 +28,7 @@ function(add_example)
         add_executable("${arg_NAME}" "${arg_SOURCES}")
     endif ()
 
-    target_link_libraries("${arg_NAME}" PRIVATE threepp)
+    target_link_libraries("${arg_NAME}" PRIVATE threepp-glfw)
 
     if ((arg_TRY_LINK_IMGUI OR arg_LINK_IMGUI) AND imgui_FOUND)
         target_link_libraries("${arg_NAME}" PRIVATE imgui::imgui)

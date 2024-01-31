@@ -6,6 +6,8 @@
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/input/MouseListener.hpp"
 
+#include "threepp/canvas/WindowSize.hpp"
+
 #include <vector>
 
 namespace threepp {
@@ -13,6 +15,8 @@ namespace threepp {
     class PeripheralsEventSource {
 
     public:
+        [[nodiscard]] virtual WindowSize size() const = 0;
+
         void setIOCapture(IOCapture* capture);
 
         void addKeyListener(KeyListener& listener);

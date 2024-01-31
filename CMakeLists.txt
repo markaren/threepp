@@ -8,6 +8,7 @@ option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" OFF)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
+option(THREEPP_WITH_GLFW "Build GLFW frontend" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 
@@ -35,11 +36,13 @@ if (DEFINED EMSCRIPTEN)
     endif ()
 else ()
 
-    find_package(glfw3 CONFIG REQUIRED)
+    if (THREEPP_WITH_GLFW)
+        find_package(glfw3 CONFIG REQUIRED)
 
-    if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
-        add_library(glfw::glfw ALIAS glfw)
-    endif()
+        if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+            add_library(glfw::glfw ALIAS glfw)
+        endif ()
+    endif ()
 
 endif ()
 
@@ -105,4 +108,8 @@ install(TARGETS threepp EXPORT threepp-targets)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT threepp-targets
         NAMESPACE threepp::
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/threepp)
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/threepp")
+
+if (THREEPP_WITH_GLFW)
+    install(TARGETS threepp-glfw EXPORT threepp-targets)
+endif ()
