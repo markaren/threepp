@@ -61,7 +61,7 @@ namespace threepp {
         // Set to false to disable use of the keys
         bool enableKeys = true;
 
-        OrbitControls(Camera& camera, PeripheralsEventSource& inputSource);
+        OrbitControls(Camera& camera, PeripheralsEventSource& eventSource);
 
         bool update();
 

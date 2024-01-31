@@ -517,8 +517,8 @@ struct OrbitControls::Impl {
     };
 };
 
-OrbitControls::OrbitControls(Camera& camera, PeripheralsEventSource& inputSource)
-    : pimpl_(std::make_unique<Impl>(*this, inputSource, camera)) {}
+OrbitControls::OrbitControls(Camera& camera, PeripheralsEventSource& eventSource)
+    : pimpl_(std::make_unique<Impl>(*this, eventSource, camera)) {}
 
 
 bool OrbitControls::update() {

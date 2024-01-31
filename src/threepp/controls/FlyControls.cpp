@@ -311,12 +311,12 @@ private:
     MouseUpListener mouseUp;
 };
 
-FlyControls::FlyControls(Object3D& object, PeripheralsEventSource& canvas)
-    : pimpl_(std::make_unique<Impl>(*this, canvas, &object)) {}
+FlyControls::FlyControls(Object3D& object, PeripheralsEventSource& eventSource)
+    : pimpl_(std::make_unique<Impl>(*this, eventSource, &object)) {}
 
-void threepp::FlyControls::update(float delta) {
+void FlyControls::update(float delta) {
 
     pimpl_->update(delta);
 }
 
-threepp::FlyControls::~FlyControls() = default;
+FlyControls::~FlyControls() = default;
