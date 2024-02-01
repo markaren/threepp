@@ -33,8 +33,9 @@ Because fun.
 
 ### How to build
 
-The only strict _external_ dependency is `glfw3`, so if this is available on the system you may go ahead and 
-build like any other CMake based project:
+`threepp` comes bundled with all necessary dependencies. 
+
+Use CMake for project configuration and building.
 
 ###### Windows
 ```shell
@@ -48,8 +49,8 @@ cmake . -B build -DCMAKE_BUILD_TYPE="Release"
 cmake --build build
 ```
 
-However, using [vcpkg](https://vcpkg.io/en/index.html) is the preferred approach, especially if building the 
-examples (many of whom require additional dependencies).
+However, some of the examples (and headers) require additional dependencies. 
+To make use of all features and to build all examples, the use of [vcpkg](https://vcpkg.io/en/index.html) is encouraged.
 
 #### vcpkg (using manifest mode)
 

@@ -436,6 +436,26 @@ if (THREEPP_WITH_GLFW)
     list(APPEND sources
             "threepp/canvas/Canvas.cpp"
     )
+    if (NOT DEFINED EMSCRIPTEN AND NOT THREEPP_USE_EXTERNAL_GLFW)
+
+        message("Using threepp's GLFW")
+
+        #https://github.com/raysan5/raylib/blob/master/cmake/GlfwImport.cmake
+        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+        set(GLFW_USE_WAYLAND ${USE_WAYLAND} CACHE BOOL "" FORCE)
+        set(GLFW_LIBRARY_TYPE "OBJECT" CACHE STRING "" FORCE)
+        add_subdirectory("external/glfw")
+
+        # Hide glfw's symbols when building a shared lib
+        if (BUILD_SHARED_LIBS)
+            set_property(TARGET glfw PROPERTY C_VISIBILITY_PRESET hidden)
+        endif ()
+
+        list(APPEND sources $<TARGET_OBJECTS:glfw>)
+    endif ()
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
@@ -481,10 +501,11 @@ if (NOT DEFINED EMSCRIPTEN)
     )
 
     if (THREEPP_WITH_GLFW)
-        target_link_libraries(threepp
-                PRIVATE
-                glfw::glfw
-        )
+        if (THREPP_USE_EXTERNAL_GLFW)
+            target_link_libraries(threepp PRIVATE glfw::glfw)
+        else ()
+            target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")
+        endif ()
     endif ()
 
 endif ()
