@@ -169,10 +169,31 @@ int main() {
 
 ```
 
-## Consuming threepp using a custom vcpkg-registry
+## Consuming threepp
 
-See [here](tests/threepp_vcpkg_test) for an example of how `threepp` may be consumed 
-as a library in a separate project using `vcpkg`.
+#### CMake FetchContent
+
+`threepp` is compatible with CMakes `FetchContent`:
+
+```cmake
+include(FetchContent)
+set(THREEPP_BUILD_TESTS OFF)
+set(THREEPP_BUILD_EXAMPLES OFF)
+FetchContent_Declare(
+        threepp
+        GIT_REPOSITORY https://github.com/markaren/threepp.git
+        GIT_TAG tag_or_commit_hash
+)
+FetchContent_MakeAvailable(threepp)
+#...
+target_link_libraries(main PUBLIC threepp::threepp)
+```
+
+#### vcpkg
+
+`threpp` is available for use with vcpkg through a custom vcpkg-registry.
+
+An example is provided [here](tests/threepp_vcpkg_test).
 
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
