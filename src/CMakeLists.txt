@@ -503,7 +503,7 @@ if (NOT DEFINED EMSCRIPTEN)
     )
 
     if (THREEPP_WITH_GLFW)
-        if (THREPP_USE_EXTERNAL_GLFW)
+        if (THREEPP_USE_EXTERNAL_GLFW)
             target_link_libraries(threepp PRIVATE glfw::glfw)
         else ()
             target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")

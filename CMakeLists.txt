@@ -9,7 +9,7 @@ option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 option(THREEPP_WITH_GLFW "Build GLFW frontend" ON)
-option(THREPP_USE_EXTERNAL_GLFW OFF)
+option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" OFF)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 
@@ -37,7 +37,7 @@ if (DEFINED EMSCRIPTEN)
     endif ()
 else ()
 
-    if (THREPP_USE_EXTERNAL_GLFW AND THREEPP_WITH_GLFW)
+    if (THREEPP_USE_EXTERNAL_GLFW AND THREEPP_WITH_GLFW)
         find_package(glfw3 CONFIG REQUIRED)
 
         if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
