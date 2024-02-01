@@ -2,11 +2,8 @@
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
   "name": "threepp",
   "dependencies": [],
-  "default-features": [
-    "glfw"
-  ],
   "features": {
-    "glfw": {
+    "external-glfw": {
       "description": "Build with GLFW front-end",
       "dependencies": [
         {

@@ -33,8 +33,9 @@ Because fun.
 
 ### How to build
 
-The only strict _external_ dependency is `glfw3`, so if this is available on the system you may go ahead and 
-build like any other CMake based project:
+`threepp` comes bundled with all necessary dependencies. 
+
+Use CMake for project configuration and building.
 
 ###### Windows
 ```shell
@@ -48,8 +49,8 @@ cmake . -B build -DCMAKE_BUILD_TYPE="Release"
 cmake --build build
 ```
 
-However, using [vcpkg](https://vcpkg.io/en/index.html) is the preferred approach, especially if building the 
-examples (many of whom require additional dependencies).
+However, some of the examples (and headers) require additional dependencies. 
+To make use of all features and to build all examples, the use of [vcpkg](https://vcpkg.io/en/index.html) is encouraged.
 
 #### vcpkg (using manifest mode)
 
@@ -59,9 +60,7 @@ Add optional features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;f
 
 See [vcpkg.json](vcpkg.json) for available features.
 
-##### Building under MinGW
-
-Under MinGW you'll need to specify the vcpkg triplet:
+Note, however, that under MinGW you'll need to specify the vcpkg triplet:
 ```shell
 -DVCPKG_TARGET_TRIPLET=x64-mingw-[static|dynamic]  # choose either `static` or `dynamic`.
 -DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
