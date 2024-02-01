@@ -108,8 +108,4 @@ install(TARGETS threepp EXPORT threepp-targets)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT threepp-targets
         NAMESPACE threepp::
-        DESTINATION "${CMAKE_INSTALL_DATADIR}/threepp")
-
-if (THREEPP_WITH_GLFW)
-    install(TARGETS threepp-glfw EXPORT threepp-targets)
-endif ()
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/threepp)
