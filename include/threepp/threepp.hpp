@@ -5,7 +5,9 @@
 
 #include "threepp/constants.hpp"
 
+#if __has_include("threepp/canvas/Canvas.hpp")
 #include "threepp/canvas/Canvas.hpp"
+#endif
 
 #include "threepp/lights/lights.hpp"
 

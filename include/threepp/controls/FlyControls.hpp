@@ -8,7 +8,7 @@
 namespace threepp {
 
     class Object3D;
-    class Canvas;
+    class PeripheralsEventSource;
 
     class FlyControls {
 
@@ -19,7 +19,7 @@ namespace threepp {
         bool dragToLook = false;
         bool autoForward = false;
 
-        FlyControls(Object3D& object, Canvas& canvas);
+        FlyControls(Object3D& object, PeripheralsEventSource& eventSource);
 
         void update(float delta);
 

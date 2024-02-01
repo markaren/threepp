@@ -1,13 +1,20 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
   "name": "threepp",
-  "dependencies": [
-    {
-      "name": "glfw3",
-      "platform": "!wasm32"
-    }
+  "dependencies": [],
+  "default-features": [
+    "glfw"
   ],
   "features": {
+    "glfw": {
+      "description": "Build with GLFW front-end",
+      "dependencies": [
+        {
+          "name": "glfw3",
+          "platform": "!wasm32"
+        }
+      ]
+    },
     "assimp": {
       "description": "Enable assimp model importer",
       "dependencies": [
@@ -19,7 +26,10 @@
       "dependencies": [
         {
           "name": "imgui",
-          "features": ["glfw-binding", "opengl3-binding"]
+          "features": [
+            "glfw-binding",
+            "opengl3-binding"
+          ]
         }
       ]
     }
