@@ -1128,8 +1128,10 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(WindowSize size, bool loadGL) {
+GLRenderer::GLRenderer(WindowSize size) {
+#ifndef EMSCRIPTEN
     initializeOpenGL();
+#endif
 
     pimpl_ = std::make_unique<Impl>(*this, size);
 }

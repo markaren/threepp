@@ -461,7 +461,7 @@ if (THREEPP_WITH_GLFW)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
-    list(APPEND privateSources "load_glad.hpp")
+    list(APPEND privateHeaders "threepp/load_glad.hpp")
     list(APPEND sources "external/glad/glad.c")
 endif ()
 

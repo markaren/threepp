@@ -2,11 +2,11 @@
 #include "threepp/canvas/Canvas.hpp"
 
 #include "threepp/favicon.hpp"
-#include "threepp/load_glad.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #ifndef EMSCRIPTEN
+#include "threepp/load_glad.hpp"
 #define GLFW_INCLUDE_NONE
 #else
 #include <emscripten.h>

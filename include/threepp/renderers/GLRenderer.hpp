@@ -66,7 +66,7 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
-        explicit GLRenderer(WindowSize size, bool loadGL = true);
+        explicit GLRenderer(WindowSize size);
 
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
