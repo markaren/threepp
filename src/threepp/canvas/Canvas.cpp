@@ -2,11 +2,11 @@
 #include "threepp/canvas/Canvas.hpp"
 
 #include "threepp/favicon.hpp"
+#include "threepp/load_glad.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #ifndef EMSCRIPTEN
-#include <glad/glad.h>
 #define GLFW_INCLUDE_NONE
 #else
 #include <emscripten.h>
@@ -195,7 +195,7 @@ struct Canvas::Impl {
 #ifndef EMSCRIPTEN
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, 1);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
 #endif
@@ -210,14 +210,13 @@ struct Canvas::Impl {
             exit(EXIT_FAILURE);
         }
 
-#if EMSCRIPTEN
-        EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
-#endif
-
         glfwSetWindowUserPointer(window, this);
+
 
 #ifndef EMSCRIPTEN
         setWindowIcon(window, params.favicon_);
+#else
+        EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
 #endif
 
         glfwSetKeyCallback(window, key_callback);
@@ -229,14 +228,8 @@ struct Canvas::Impl {
         glfwMakeContextCurrent(window);
 
 #ifndef EMSCRIPTEN
-        gladLoadGL();
+        initializeOpenGL();
         glfwSwapInterval(params.vsync_ ? 1 : 0);
-
-        if (params.antialiasing_ > 0) {
-            glEnable(GL_MULTISAMPLE);
-        }
-
-        glEnable(GL_PROGRAM_POINT_SIZE);
 #endif
     }
 

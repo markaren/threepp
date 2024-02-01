@@ -33,7 +33,7 @@
 #include "threepp/objects/Sprite.hpp"
 
 #ifndef EMSCRIPTEN
-#include <glad/glad.h>
+#include "threepp/load_glad.hpp"
 #else
 #include <GLES3/gl32.h>
 #endif
@@ -136,9 +136,9 @@ struct GLRenderer::Impl {
 
     gl::GLShadowMap shadowMap;
 
-    Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
+    Impl(GLRenderer& scope, WindowSize size)
         : scope(scope), _size(size),
-          background(state, parameters.premultipliedAlpha),
+          background(state, false),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
           indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
           clipping(properties),
@@ -155,6 +155,9 @@ struct GLRenderer::Impl {
 
         this->setViewport(0, 0, size.width, size.height);
         this->setScissor(0, 0, _size.width, _size.height);
+
+        glEnable(GL_MULTISAMPLE);
+        glEnable(GL_PROGRAM_POINT_SIZE);
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(const Texture& texture) const {
@@ -1125,8 +1128,11 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters)
-    : pimpl_(std::make_unique<Impl>(*this, size, parameters)) {}
+GLRenderer::GLRenderer(WindowSize size, bool loadGL) {
+    initializeOpenGL();
+
+    pimpl_ = std::make_unique<Impl>(*this, size);
+}
 
 
 const gl::GLInfo& threepp::GLRenderer::info() {

@@ -461,9 +461,8 @@ if (THREEPP_WITH_GLFW)
 endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
-    list(APPEND sources
-            "external/glad/glad.c"
-    )
+    list(APPEND privateSources "load_glad.hpp")
+    list(APPEND sources "external/glad/glad.c")
 endif ()
 
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
