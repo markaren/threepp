@@ -15,13 +15,13 @@ namespace threepp {
     public:
         struct Options {
             const Font& font;
-            unsigned int size;
+            float size;
             float height;
             bool bevelEnabled = false;
             float bevelThickness = 10;
             float bevelSize = 8;
 
-            Options(const Font& font, unsigned int size, float height = 50)
+            Options(const Font& font, float size, float height = 50)
                 : font(font), size(size), height(height) {}
 
         private:

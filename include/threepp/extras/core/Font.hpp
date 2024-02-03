@@ -36,7 +36,7 @@ namespace threepp {
 
         std::unordered_map<char, Glyph> glyphs;
 
-        [[nodiscard]] std::vector<Shape> generateShapes(const std::string& text, unsigned int size = 100) const;
+        [[nodiscard]] std::vector<Shape> generateShapes(const std::string& text, float size = 100) const;
 
     };
 

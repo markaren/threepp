@@ -67,9 +67,9 @@ namespace {
         return FontPath{static_cast<float>(glyph.ha) * scale, path};
     }
 
-    std::vector<ShapePath> createPaths(const std::string& text, unsigned int size, const Font& data) {
+    std::vector<ShapePath> createPaths(const std::string& text, float size, const Font& data) {
 
-        const auto scale = static_cast<float>(size) / static_cast<float>(data.resolution);
+        const auto scale = size / static_cast<float>(data.resolution);
         const auto line_height = (data.boundingBox.yMax - data.boundingBox.yMin + static_cast<float>(data.underlineThickness)) * scale;
 
         std::vector<ShapePath> paths;
@@ -96,7 +96,7 @@ namespace {
 
 }// namespace
 
-std::vector<Shape> Font::generateShapes(const std::string& text, unsigned int size) const {
+std::vector<Shape> Font::generateShapes(const std::string& text, float size) const {
 
     std::vector<Shape> shapes;
     auto paths = createPaths(text, size, *this);
