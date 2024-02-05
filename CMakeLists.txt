@@ -99,6 +99,7 @@ endif ()
 configure_package_config_file(cmake/config.cmake.in
         ${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake
         INSTALL_DESTINATION ${CMAKE_INSTALL_DATADIR}/threepp
+        PATH_VARS THREEPP_USE_EXTERNAL_GLFW
         NO_SET_AND_CHECK_MACRO)
 write_basic_package_version_file(
         ${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake
