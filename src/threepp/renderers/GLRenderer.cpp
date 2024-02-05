@@ -33,7 +33,7 @@
 #include "threepp/objects/Sprite.hpp"
 
 #ifndef EMSCRIPTEN
-#include <glad/glad.h>
+#include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
 #endif
@@ -1125,8 +1125,14 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters)
-    : pimpl_(std::make_unique<Impl>(*this, size, parameters)) {}
+GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters) {
+
+#ifndef EMSCRIPTEN
+    loadGlad(); // if Glad has yet to be loaded, do it now
+#endif
+
+    pimpl_ = std::make_unique<Impl>(*this, size, parameters);
+}
 
 
 const gl::GLInfo& threepp::GLRenderer::info() {

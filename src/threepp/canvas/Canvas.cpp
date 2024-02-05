@@ -6,7 +6,7 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #ifndef EMSCRIPTEN
-#include <glad/glad.h>
+#include "threepp/utils/LoadGlad.hpp"
 #define GLFW_INCLUDE_NONE
 #else
 #include <emscripten.h>
@@ -229,7 +229,7 @@ struct Canvas::Impl {
         glfwMakeContextCurrent(window);
 
 #ifndef EMSCRIPTEN
-        gladLoadGL();
+        loadGlad();
         glfwSwapInterval(params.vsync_ ? 1 : 0);
 
         if (params.antialiasing_ > 0) {
