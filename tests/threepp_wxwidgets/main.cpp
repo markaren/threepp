@@ -69,14 +69,19 @@ private:
     OpenGLCanvas *openGLCanvas{nullptr};
 };
 
-class OpenGLCanvas : public wxGLCanvas {
+class OpenGLCanvas : public wxGLCanvas, public PeripheralsEventSource {
 public:
     OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs);
 
     void OnPaint(wxPaintEvent &event);
     void OnSize(wxSizeEvent &event);
+    void OnMouseMove(wxMouseEvent &event);
+    void OnMousePress(wxMouseEvent &event);
+    void OnMouseRelease(wxMouseEvent &event);
+    void OnMouseWheel(wxMouseEvent &event);
 
-    wxColour triangleColor{wxColour(255, 128, 51)};
+    [[nodiscard]] virtual WindowSize size() const override;
+
 
 private:
     std::unique_ptr<wxGLContext> openGLContext;
@@ -85,6 +90,7 @@ private:
     std::shared_ptr<GLRenderer> renderer;
     std::shared_ptr<Scene> scene;
     std::shared_ptr<PerspectiveCamera> camera;
+    std::unique_ptr<OrbitControls> orbitControls;
 
     //////////////////////////////////////////////////////////////////////////////
 };
@@ -95,7 +101,7 @@ bool MyApp::OnInit() {
     if (!wxApp::OnInit())
         return false;
 
-    MyFrame *frame = new MyFrame("Hello ThreePP + wxWidgets");
+    auto frame = new MyFrame("Hello ThreePP + wxWidgets");
     frame->Show(true);
 
     return true;
@@ -128,6 +134,13 @@ OpenGLCanvas::OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs)
     Bind(wxEVT_PAINT, &OpenGLCanvas::OnPaint, this);
     Bind(wxEVT_SIZE, &OpenGLCanvas::OnSize, this);
 
+    Bind(wxEVT_MOTION, &OpenGLCanvas::OnMouseMove, this);
+    Bind(wxEVT_LEFT_DOWN, &OpenGLCanvas::OnMousePress, this);
+    Bind(wxEVT_RIGHT_DOWN, &OpenGLCanvas::OnMousePress, this);
+    Bind(wxEVT_LEFT_UP, &OpenGLCanvas::OnMouseRelease, this);
+    Bind(wxEVT_RIGHT_UP, &OpenGLCanvas::OnMouseRelease, this);
+    Bind(wxEVT_MOUSEWHEEL, &OpenGLCanvas::OnMouseWheel, this);
+
     SetCurrent(*openGLContext);
 
     //////////////////////////////////////////////////////////////////////////////////////
@@ -150,6 +163,8 @@ OpenGLCanvas::OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs)
     auto plane = createPlane();
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
+
+    orbitControls = std::make_unique<OrbitControls>(*camera, *this);
 }
 
 
@@ -163,8 +178,12 @@ void OpenGLCanvas::OnPaint(wxPaintEvent &WXUNUSED(event)) {
     SwapBuffers();
 }
 
-void OpenGLCanvas::OnSize(wxSizeEvent &event) {
+WindowSize OpenGLCanvas::size() const {
+    auto viewPortSize = GetSize() * GetContentScaleFactor();
+    return {viewPortSize.x, viewPortSize.y};
+}
 
+void OpenGLCanvas::OnSize(wxSizeEvent &event) {
 
     auto viewPortSize = event.GetSize() * GetContentScaleFactor();
     glViewport(0, 0, viewPortSize.x, viewPortSize.y);
@@ -175,5 +194,53 @@ void OpenGLCanvas::OnSize(wxSizeEvent &event) {
     camera->updateProjectionMatrix();
     renderer->setSize(size);
 
+    event.Skip();
+}
+
+void OpenGLCanvas::OnMouseMove(wxMouseEvent &event) {
+    wxPoint pos = event.GetPosition();
+    Vector2 mousePos(static_cast<float>(pos.x), static_cast<float>(pos.y));
+    onMouseMoveEvent(mousePos);
+    Refresh(false);
+    event.Skip();
+}
+
+void OpenGLCanvas::OnMousePress(wxMouseEvent &event) {
+    int buttonFlag = event.GetButton();
+    wxPoint pos = event.GetPosition();
+    int button = 0;
+    if (wxMOUSE_BTN_LEFT == buttonFlag)
+        button = 0;
+    else if (wxMOUSE_BTN_RIGHT == buttonFlag)
+        button = 1;
+    Vector2 p{pos.x, pos.y};
+    onMousePressedEvent(button, p, PeripheralsEventSource::MouseAction::PRESS);
+    Refresh(false);
+    event.Skip();
+}
+
+void OpenGLCanvas::OnMouseRelease(wxMouseEvent &event) {
+    int buttonFlag = event.GetButton();
+    wxPoint pos = event.GetPosition();
+    int button = 0;
+    if (wxMOUSE_BTN_LEFT == buttonFlag)
+        button = 0;
+    else if (wxMOUSE_BTN_RIGHT == buttonFlag)
+        button = 1;
+    Vector2 p{pos.x, pos.y};
+    onMousePressedEvent(button, p, PeripheralsEventSource::MouseAction::RELEASE);
+    Refresh(false);
+    event.Skip();
+}
+
+void OpenGLCanvas::OnMouseWheel(wxMouseEvent &event) {
+    int direction = event.GetWheelRotation() / 120;// 1 or -1
+    int xoffset = 0;
+    int yoffset = direction;
+
+    // call the PeripheralsEventSource's member function
+    onMouseWheelEvent({static_cast<float>(xoffset), static_cast<float>(yoffset)});
+
+    Refresh(false);
     event.Skip();
 }
