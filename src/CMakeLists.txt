@@ -436,7 +436,7 @@ if (THREEPP_WITH_GLFW)
     list(APPEND sources
             "threepp/canvas/Canvas.cpp"
     )
-    if (NOT DEFINED EMSCRIPTEN AND NOT THREEPP_USE_EXTERNAL_GLFW)
+    if (NOT THREEPP_USE_EXTERNAL_GLFW)
 
         message("Using threepp's GLFW")
 
@@ -502,12 +502,10 @@ if (NOT DEFINED EMSCRIPTEN)
             "${CMAKE_CURRENT_SOURCE_DIR}/external/glad"
     )
 
-    if (THREEPP_WITH_GLFW)
-        if (THREEPP_USE_EXTERNAL_GLFW)
-            target_link_libraries(threepp PRIVATE glfw::glfw)
-        else ()
-            target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")
-        endif ()
+    if (THREEPP_USE_EXTERNAL_GLFW)
+        target_link_libraries(threepp PRIVATE glfw::glfw)
+    else ()
+        target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")
     endif ()
 
 endif ()
