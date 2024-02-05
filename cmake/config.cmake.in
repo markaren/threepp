@@ -1,4 +1,5 @@
 @PACKAGE_INIT@
+include ("@PACKAGE_targetsFile@")
 
 include(CMakeFindDependencyMacro)
 
