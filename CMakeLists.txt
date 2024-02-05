@@ -3,6 +3,8 @@ file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/version.txt" projectVersion)
 project(threepp VERSION ${projectVersion})
 message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
 
+include(CMakeDependentOption)
+
 option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
