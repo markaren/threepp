@@ -25,7 +25,7 @@ set(THREEPP_WITH_GLFW OFF)
 FetchContent_Declare(
         threepp
         GIT_REPOSITORY https://github.com/markaren/threepp.git
-        GIT_TAG 276002d3dad0b71217a2cd7246a6f450122f2b55
+        GIT_TAG ced58a22f670524c5ee6639452e690a62807ee6d
 )
 FetchContent_MakeAvailable(threepp)
 
