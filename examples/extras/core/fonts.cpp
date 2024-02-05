@@ -33,7 +33,7 @@ namespace {
             lastSelectedIndex = selectedIndex;
 
             ImGui::SetNextWindowPos({}, 0, {});
-            ImGui::SetNextWindowSize({250, 0}, 0);
+            ImGui::SetNextWindowSize({270, 0}, 0);
 
             ImGui::Begin("Font");
 
