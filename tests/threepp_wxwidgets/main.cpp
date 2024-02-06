@@ -53,11 +53,56 @@ namespace {
 }// namespace
 
 
+class ThreeppContext {
+
+public:
+    explicit ThreeppContext(PeripheralsEventSource &evt)
+        : renderer(evt.size()), camera(PerspectiveCamera(75, evt.size().aspect())), orbitControls(camera, evt) {
+
+        scene.background = Color::aliceblue;
+        camera.position.z = 5;
+
+        auto box = createBox();
+        scene.add(box);
+
+        auto sphere = createSphere();
+        box->add(sphere);
+
+        auto plane = createPlane();
+        auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
+        scene.add(plane);
+    }
+
+    void loop() {
+        static Clock clock;
+        float dt = clock.getDelta();
+
+        scene.children[0]->rotation.y += 1.f * dt;
+
+        renderer.render(scene, camera);
+    }
+
+    void onWindowResize(WindowSize size) {
+        camera.aspect = size.aspect();
+        camera.updateProjectionMatrix();
+        renderer.setSize(size);
+    }
+
+    void OnButtonClick(wxCommandEvent &) {
+
+        scene.children[1]->material()->as<MaterialWithColor>()->color.randomize();
+    }
+
+private:
+    GLRenderer renderer;
+    Scene scene;
+    PerspectiveCamera camera;
+    OrbitControls orbitControls;
+};
+
 class OpenGLCanvas : public wxGLCanvas, public PeripheralsEventSource {
 public:
     OpenGLCanvas(wxFrame *parent, const wxGLAttributes &canvasAttrs);
-
-    void setup();
 
     void OnPaint(wxPaintEvent &event);
     void OnSize(wxSizeEvent &event);
@@ -67,16 +112,11 @@ public:
     void OnMouseWheel(wxMouseEvent &event);
 
     [[nodiscard]] WindowSize size() const override;
+    void OnInternalIdle() override;
 
 private:
+    std::unique_ptr<ThreeppContext> threeppContext;
     std::unique_ptr<wxGLContext> openGLContext;
-
-    //////////////////////////////////////////////////////////////////////////////
-    std::shared_ptr<GLRenderer> renderer;
-    std::shared_ptr<Scene> scene;
-    std::shared_ptr<PerspectiveCamera> camera;
-    std::unique_ptr<OrbitControls> orbitControls;
-    //////////////////////////////////////////////////////////////////////////////
 };
 
 
@@ -98,36 +138,25 @@ OpenGLCanvas::OpenGLCanvas(wxFrame *parent, const wxGLAttributes &canvasAttrs)
     Bind(wxEVT_MOUSEWHEEL, &OpenGLCanvas::OnMouseWheel, this);
 
     SetCurrent(*openGLContext);
-}
 
-void OpenGLCanvas::setup() {
-    const auto viewPortSize = GetSize() * GetContentScaleFactor();
-    WindowSize size(viewPortSize.x, viewPortSize.y);
-    renderer = std::make_shared<GLRenderer>(size);
+    threeppContext = std::make_unique<ThreeppContext>(*this);
 
-    scene = Scene::create();
-    scene->background = Color::aliceblue;
-    camera = PerspectiveCamera::create(75, size.aspect(), 0.1f, 1000);
-    camera->position.z = 5;
+    // Create a button
+    auto button = new wxButton(this, wxID_ANY, "Click Me", wxPoint(10, 10), wxSize(150, 30));
 
-    auto box = createBox();
-    scene->add(box);
-
-    auto sphere = createSphere();
-    box->add(sphere);
-
-    auto plane = createPlane();
-    auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
-    scene->add(plane);
-
-    orbitControls = std::make_unique<OrbitControls>(*camera, *this);
+    // Bind the button click event
+    button->Bind(wxEVT_BUTTON, &ThreeppContext::OnButtonClick, threeppContext.get());
 }
 
 void OpenGLCanvas::OnPaint(wxPaintEvent &WXUNUSED(event)) {
-
-    renderer->render(*scene, *camera);
-
+    wxPaintDC dc(this);
+    threeppContext->loop();
     SwapBuffers();
+}
+
+void OpenGLCanvas::OnInternalIdle() {
+    wxWindow::OnInternalIdle();
+    Refresh(false);
 }
 
 WindowSize OpenGLCanvas::size() const {
@@ -139,10 +168,7 @@ void OpenGLCanvas::OnSize(wxSizeEvent &event) {
 
     auto viewPortSize = event.GetSize() * GetContentScaleFactor();
     WindowSize size{viewPortSize.x, viewPortSize.y};
-
-    camera->aspect = size.aspect();
-    camera->updateProjectionMatrix();
-    renderer->setSize(size);
+    threeppContext->onWindowResize(size);
 
     event.Skip();
 }
@@ -151,7 +177,7 @@ void OpenGLCanvas::OnMouseMove(wxMouseEvent &event) {
     wxPoint pos = event.GetPosition();
     Vector2 mousePos(static_cast<float>(pos.x), static_cast<float>(pos.y));
     onMouseMoveEvent(mousePos);
-    Refresh(false);
+
     event.Skip();
 }
 
@@ -166,7 +192,7 @@ void OpenGLCanvas::OnMousePress(wxMouseEvent &event) {
     }
     Vector2 p{pos.x, pos.y};
     onMousePressedEvent(button, p, PeripheralsEventSource::MouseAction::PRESS);
-    Refresh(false);
+
     event.Skip();
 }
 
@@ -181,7 +207,7 @@ void OpenGLCanvas::OnMouseRelease(wxMouseEvent &event) {
     }
     Vector2 p{pos.x, pos.y};
     onMousePressedEvent(button, p, PeripheralsEventSource::MouseAction::RELEASE);
-    Refresh(false);
+
     event.Skip();
 }
 
@@ -190,10 +216,8 @@ void OpenGLCanvas::OnMouseWheel(wxMouseEvent &event) {
     int xoffset = 0;
     int yoffset = direction;
 
-    // call the PeripheralsEventSource's member function
     onMouseWheelEvent({static_cast<float>(xoffset), static_cast<float>(yoffset)});
 
-    Refresh(false);
     event.Skip();
 }
 
@@ -209,7 +233,6 @@ public:
             openGLCanvas = std::make_unique<OpenGLCanvas>(this, vAttrs);
             openGLCanvas->SetMinSize(FromDIP(wxSize(640, 480)));
             sizer->Add(openGLCanvas.get(), 1, wxEXPAND);
-            openGLCanvas->setup();
         }
 
         SetSizerAndFit(sizer);
