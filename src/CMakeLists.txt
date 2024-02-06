@@ -436,7 +436,7 @@ if (THREEPP_WITH_GLFW)
     list(APPEND sources
             "threepp/canvas/Canvas.cpp"
     )
-    if (NOT THREEPP_USE_EXTERNAL_GLFW)
+    if (NOT EMSCRIPTEN AND NOT THREEPP_USE_EXTERNAL_GLFW)
 
         message("Using threepp's GLFW")
 
