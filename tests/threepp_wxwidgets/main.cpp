@@ -52,29 +52,10 @@ namespace {
 
 }// namespace
 
-class MyFrame;
-
-class MyApp : public wxApp {
-public:
-    bool OnInit() wxOVERRIDE;
-
-private:
-    std::unique_ptr<MyFrame> frame;
-};
-
-class OpenGLCanvas;
-
-class MyFrame : public wxFrame {
-public:
-    explicit MyFrame(const wxString &title);
-
-private:
-    std::unique_ptr<OpenGLCanvas> openGLCanvas;
-};
 
 class OpenGLCanvas : public wxGLCanvas, public PeripheralsEventSource {
 public:
-    OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs);
+    OpenGLCanvas(wxFrame *parent, const wxGLAttributes &canvasAttrs);
 
     void setup();
 
@@ -85,7 +66,7 @@ public:
     void OnMouseRelease(wxMouseEvent &event);
     void OnMouseWheel(wxMouseEvent &event);
 
-    [[nodiscard]] virtual WindowSize size() const override;
+    [[nodiscard]] WindowSize size() const override;
 
 private:
     std::unique_ptr<wxGLContext> openGLContext;
@@ -99,38 +80,7 @@ private:
 };
 
 
-wxIMPLEMENT_APP(MyApp);
-
-bool MyApp::OnInit() {
-    if (!wxApp::OnInit()) {
-        return false;
-    }
-
-    frame = std::make_unique<MyFrame>("Hello ThreePP + wxWidgets");
-    frame->Show(true);
-
-    return true;
-}
-
-
-MyFrame::MyFrame(const wxString &title)
-    : wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxDefaultSize) {
-    auto sizer = new wxBoxSizer(wxVERTICAL); // deleted by window
-
-    wxGLAttributes vAttrs;
-    vAttrs.PlatformDefaults().Defaults().EndList();
-
-    if (wxGLCanvas::IsDisplaySupported(vAttrs)) {
-        openGLCanvas = std::make_unique<OpenGLCanvas>(this, vAttrs);
-        openGLCanvas->SetMinSize(FromDIP(wxSize(640, 480)));
-        sizer->Add(openGLCanvas.get(), 1, wxEXPAND);
-        openGLCanvas->setup();
-    }
-
-    SetSizerAndFit(sizer);
-}
-
-OpenGLCanvas::OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs)
+OpenGLCanvas::OpenGLCanvas(wxFrame *parent, const wxGLAttributes &canvasAttrs)
     : wxGLCanvas(parent, canvasAttrs) {
 
     wxGLContextAttrs ctxAttrs;
@@ -245,4 +195,59 @@ void OpenGLCanvas::OnMouseWheel(wxMouseEvent &event) {
 
     Refresh(false);
     event.Skip();
+}
+
+class MyFrame : public wxFrame {
+public:
+    explicit MyFrame(const wxString &title) : wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxDefaultSize) {
+        auto sizer = new wxBoxSizer(wxVERTICAL);// deleted by window
+
+        wxGLAttributes vAttrs;
+        vAttrs.PlatformDefaults().Defaults().EndList();
+
+        if (wxGLCanvas::IsDisplaySupported(vAttrs)) {
+            openGLCanvas = std::make_unique<OpenGLCanvas>(this, vAttrs);
+            openGLCanvas->SetMinSize(FromDIP(wxSize(640, 480)));
+            sizer->Add(openGLCanvas.get(), 1, wxEXPAND);
+            openGLCanvas->setup();
+        }
+
+        SetSizerAndFit(sizer);
+    }
+
+private:
+    std::unique_ptr<OpenGLCanvas> openGLCanvas;
+};
+
+
+class MyApp : public wxApp {
+public:
+    bool OnInit() override {
+        if (!wxApp::OnInit()) {
+            return false;
+        }
+
+        // yes raw pointer
+        auto frame = new MyFrame("Hello ThreePP + wxWidgets");
+        frame->Show(true);
+
+        return true;
+    }
+};
+
+
+int main(int argc, char **argv) {
+    // yes, raw pointer
+    auto app = new MyApp();
+
+    // Initialize wxWidgets
+    wxApp::SetInstance(app);
+    wxEntryStart(argc, argv);
+
+    // Run the application
+    int exitCode = wxEntry(argc, argv);
+
+    // Cleanup
+    wxEntryCleanup();
+    return exitCode;
 }

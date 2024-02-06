@@ -29,6 +29,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(threepp)
 
-add_executable(wxthree WIN32 main.cpp) # I guess this is Windows specific ?
+add_executable(wxthree main.cpp)
 target_include_directories(wxthree PRIVATE ${wxWidgets_SOURCE_DIR}/include)
 target_link_libraries(wxthree PRIVATE threepp::threepp wx::base wx::core wx::gl)
