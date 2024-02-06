@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/version.txt" projectVersion)
 project(threepp VERSION ${projectVersion})
-message("Current ${PROJECT_NAME} version: ${CMAKE_PROJECT_VERSION}\n")
+message("Current ${PROJECT_NAME} version: ${projectVersion}\n")
 
 include(CMakeDependentOption)
 
