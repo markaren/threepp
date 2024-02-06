@@ -52,26 +52,31 @@ namespace {
 
 }// namespace
 
+class MyFrame;
 
 class MyApp : public wxApp {
 public:
-    MyApp() {}
     bool OnInit() wxOVERRIDE;
+
+private:
+    std::unique_ptr<MyFrame> frame;
 };
 
 class OpenGLCanvas;
 
 class MyFrame : public wxFrame {
 public:
-    MyFrame(const wxString &title);
+    explicit MyFrame(const wxString &title);
 
 private:
-    OpenGLCanvas *openGLCanvas{nullptr};
+    std::unique_ptr<OpenGLCanvas> openGLCanvas;
 };
 
 class OpenGLCanvas : public wxGLCanvas, public PeripheralsEventSource {
 public:
     OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs);
+
+    void setup();
 
     void OnPaint(wxPaintEvent &event);
     void OnSize(wxSizeEvent &event);
@@ -82,7 +87,6 @@ public:
 
     [[nodiscard]] virtual WindowSize size() const override;
 
-
 private:
     std::unique_ptr<wxGLContext> openGLContext;
 
@@ -91,33 +95,36 @@ private:
     std::shared_ptr<Scene> scene;
     std::shared_ptr<PerspectiveCamera> camera;
     std::unique_ptr<OrbitControls> orbitControls;
-
     //////////////////////////////////////////////////////////////////////////////
 };
+
 
 wxIMPLEMENT_APP(MyApp);
 
 bool MyApp::OnInit() {
-    if (!wxApp::OnInit())
+    if (!wxApp::OnInit()) {
         return false;
+    }
 
-    auto frame = new MyFrame("Hello ThreePP + wxWidgets");
+    frame = std::make_unique<MyFrame>("Hello ThreePP + wxWidgets");
     frame->Show(true);
 
     return true;
 }
 
+
 MyFrame::MyFrame(const wxString &title)
     : wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxDefaultSize) {
-    auto sizer = new wxBoxSizer(wxVERTICAL);
+    auto sizer = new wxBoxSizer(wxVERTICAL); // deleted by window
 
     wxGLAttributes vAttrs;
     vAttrs.PlatformDefaults().Defaults().EndList();
 
     if (wxGLCanvas::IsDisplaySupported(vAttrs)) {
-        openGLCanvas = new OpenGLCanvas(this, vAttrs);
+        openGLCanvas = std::make_unique<OpenGLCanvas>(this, vAttrs);
         openGLCanvas->SetMinSize(FromDIP(wxSize(640, 480)));
-        sizer->Add(openGLCanvas, 1, wxEXPAND);
+        sizer->Add(openGLCanvas.get(), 1, wxEXPAND);
+        openGLCanvas->setup();
     }
 
     SetSizerAndFit(sizer);
@@ -130,7 +137,6 @@ OpenGLCanvas::OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs)
     ctxAttrs.PlatformDefaults().CoreProfile().OGLVersion(3, 3).EndList();
     openGLContext = std::make_unique<wxGLContext>(this, nullptr, &ctxAttrs);
 
-
     Bind(wxEVT_PAINT, &OpenGLCanvas::OnPaint, this);
     Bind(wxEVT_SIZE, &OpenGLCanvas::OnSize, this);
 
@@ -142,11 +148,11 @@ OpenGLCanvas::OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs)
     Bind(wxEVT_MOUSEWHEEL, &OpenGLCanvas::OnMouseWheel, this);
 
     SetCurrent(*openGLContext);
+}
 
-    //////////////////////////////////////////////////////////////////////////////////////
-
-    auto viewPortSize = GetSize() * GetContentScaleFactor();
-    WindowSize size{viewPortSize.x, viewPortSize.y};
+void OpenGLCanvas::setup() {
+    const auto viewPortSize = GetSize() * GetContentScaleFactor();
+    WindowSize size(viewPortSize.x, viewPortSize.y);
     renderer = std::make_shared<GLRenderer>(size);
 
     scene = Scene::create();
@@ -167,12 +173,8 @@ OpenGLCanvas::OpenGLCanvas(MyFrame *parent, const wxGLAttributes &canvasAttrs)
     orbitControls = std::make_unique<OrbitControls>(*camera, *this);
 }
 
-
 void OpenGLCanvas::OnPaint(wxPaintEvent &WXUNUSED(event)) {
-    wxPaintDC dc(this);
-    SetCurrent(*openGLContext);
 
-    renderer->clear();
     renderer->render(*scene, *camera);
 
     SwapBuffers();
@@ -186,8 +188,6 @@ WindowSize OpenGLCanvas::size() const {
 void OpenGLCanvas::OnSize(wxSizeEvent &event) {
 
     auto viewPortSize = event.GetSize() * GetContentScaleFactor();
-    glViewport(0, 0, viewPortSize.x, viewPortSize.y);
-
     WindowSize size{viewPortSize.x, viewPortSize.y};
 
     camera->aspect = size.aspect();
@@ -209,10 +209,11 @@ void OpenGLCanvas::OnMousePress(wxMouseEvent &event) {
     int buttonFlag = event.GetButton();
     wxPoint pos = event.GetPosition();
     int button = 0;
-    if (wxMOUSE_BTN_LEFT == buttonFlag)
+    if (wxMOUSE_BTN_LEFT == buttonFlag) {
         button = 0;
-    else if (wxMOUSE_BTN_RIGHT == buttonFlag)
+    } else if (wxMOUSE_BTN_RIGHT == buttonFlag) {
         button = 1;
+    }
     Vector2 p{pos.x, pos.y};
     onMousePressedEvent(button, p, PeripheralsEventSource::MouseAction::PRESS);
     Refresh(false);
@@ -223,10 +224,11 @@ void OpenGLCanvas::OnMouseRelease(wxMouseEvent &event) {
     int buttonFlag = event.GetButton();
     wxPoint pos = event.GetPosition();
     int button = 0;
-    if (wxMOUSE_BTN_LEFT == buttonFlag)
+    if (wxMOUSE_BTN_LEFT == buttonFlag) {
         button = 0;
-    else if (wxMOUSE_BTN_RIGHT == buttonFlag)
+    } else if (wxMOUSE_BTN_RIGHT == buttonFlag) {
         button = 1;
+    }
     Vector2 p{pos.x, pos.y};
     onMousePressedEvent(button, p, PeripheralsEventSource::MouseAction::RELEASE);
     Refresh(false);
