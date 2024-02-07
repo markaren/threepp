@@ -482,7 +482,7 @@ add_library(threepp::threepp ALIAS threepp)
 target_compile_features(threepp PUBLIC "cxx_std_17")
 
 if (UNIX)
-    target_link_libraries(threepp PRIVATE pthread)
+    target_link_libraries(threepp PRIVATE pthread dl)
 endif ()
 target_include_directories(threepp
         PUBLIC
