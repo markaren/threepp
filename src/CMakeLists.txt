@@ -481,7 +481,7 @@ add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
 target_compile_features(threepp PUBLIC "cxx_std_17")
 
-if (UNIX OR DEFINED EMSCRIPTEN)
+if (UNIX)
     target_link_libraries(threepp PRIVATE pthread)
 endif ()
 target_include_directories(threepp
