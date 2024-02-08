@@ -104,15 +104,17 @@ class OpenGLCanvas : public wxGLCanvas, public PeripheralsEventSource {
 public:
     OpenGLCanvas(wxFrame *parent, const wxGLAttributes &canvasAttrs);
 
+    void init();
+
     void OnPaint(wxPaintEvent &event);
     void OnSize(wxSizeEvent &event);
     void OnMouseMove(wxMouseEvent &event);
     void OnMousePress(wxMouseEvent &event);
     void OnMouseRelease(wxMouseEvent &event);
     void OnMouseWheel(wxMouseEvent &event);
+    void OnInternalIdle() override;
 
     [[nodiscard]] WindowSize size() const override;
-    void OnInternalIdle() override;
 
 private:
     std::unique_ptr<ThreeppContext> threeppContext;
@@ -121,8 +123,9 @@ private:
 
 
 OpenGLCanvas::OpenGLCanvas(wxFrame *parent, const wxGLAttributes &canvasAttrs)
-    : wxGLCanvas(parent, canvasAttrs) {
+    : wxGLCanvas(parent, canvasAttrs){}
 
+void OpenGLCanvas::init() {
     wxGLContextAttrs ctxAttrs;
     ctxAttrs.PlatformDefaults().CoreProfile().OGLVersion(3, 3).EndList();
     openGLContext = std::make_unique<wxGLContext>(this, nullptr, &ctxAttrs);
@@ -141,10 +144,8 @@ OpenGLCanvas::OpenGLCanvas(wxFrame *parent, const wxGLAttributes &canvasAttrs)
 
     threeppContext = std::make_unique<ThreeppContext>(*this);
 
-    // Create a button
+    //yes, raw pointer
     auto button = new wxButton(this, wxID_ANY, "Click Me", wxPoint(10, 10), wxSize(150, 30));
-
-    // Bind the button click event
     button->Bind(wxEVT_BUTTON, &ThreeppContext::OnButtonClick, threeppContext.get());
 }
 
@@ -165,7 +166,6 @@ WindowSize OpenGLCanvas::size() const {
 }
 
 void OpenGLCanvas::OnSize(wxSizeEvent &event) {
-
     auto viewPortSize = event.GetSize() * GetContentScaleFactor();
     WindowSize size{viewPortSize.x, viewPortSize.y};
     threeppContext->onWindowResize(size);
@@ -224,7 +224,7 @@ void OpenGLCanvas::OnMouseWheel(wxMouseEvent &event) {
 class MyFrame : public wxFrame {
 public:
     explicit MyFrame(const wxString &title) : wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxDefaultSize) {
-        auto sizer = new wxBoxSizer(wxVERTICAL);// deleted by window
+        auto sizer = std::make_unique<wxBoxSizer>(wxVERTICAL);// deleted by window
 
         wxGLAttributes vAttrs;
         vAttrs.PlatformDefaults().Defaults().EndList();
@@ -235,7 +235,13 @@ public:
             sizer->Add(openGLCanvas.get(), 1, wxEXPAND);
         }
 
-        SetSizerAndFit(sizer);
+        SetSizerAndFit(sizer.release());
+    }
+
+    bool Show(bool show) override {
+        auto status = wxFrame::Show(show);
+        openGLCanvas->init();
+        return status;
     }
 
 private:
@@ -250,7 +256,7 @@ public:
             return false;
         }
 
-        // yes raw pointer
+        // yes, raw pointer
         auto frame = new MyFrame("Hello ThreePP + wxWidgets");
         frame->Show(true);
 
