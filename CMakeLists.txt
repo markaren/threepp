@@ -11,9 +11,11 @@ option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
-cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON " NOT DEFINED EMSCRIPTEN" ON)
+cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFINED EMSCRIPTEN" ON)
 # Force THREEPP_USE_EXTERNAL_GLFW OFF if NOT THREEPP_WITH_GLFW
 cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" OFF "THREEPP_WITH_GLFW" OFF)
+# Build embedded GLFW with X11 support on UNIX systems
+cmake_dependent_option(THREEPP_EMBEDDED_GLFW_WITH_X11 "Build GLFW with X11 support" OFF "NOT THREEPP_USE_EXTERNAL_GLFW;UNIX;NOT APPLE" OFF)
 # Force THREEPP_BUILD_EXAMPLE_PROJECTS OFF if NOT THREEPP_BUILD_EXAMPLES
 cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" OFF "THREEPP_BUILD_EXAMPLES" OFF)
 
