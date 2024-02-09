@@ -4,6 +4,8 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #include "nlohmann/json.hpp"
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
 
 #include <fstream>
 #include <iostream>
@@ -42,6 +44,74 @@ namespace {
         return data;
     }
 
+    std::optional<Font> loadFromTTF(const std::string& ttfFile) {
+
+        Font font;
+
+        std::ifstream file(ttfFile, std::ios::binary);
+        if (!file.is_open()) return {};
+
+        file.seekg(0, std::ios::end);
+        std::streampos fileSize = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        // Read the file contents into a vector
+        std::vector<char> fontData(fileSize);
+        file.read(fontData.data(), fileSize);
+        file.close();
+
+        stbtt_fontinfo fontInfo;
+        if (!stbtt_InitFont(&fontInfo, reinterpret_cast<const unsigned char*>(fontData.data()), 0)) {
+            return {};
+        }
+
+        stbtt_GetFontVMetrics(&fontInfo, &font.lineHeight, 0, 0);
+
+        int width, height, xOffset, yOffset;
+        float scale = stbtt_ScaleForPixelHeight(&fontInfo, 16);
+
+        for (int ch = 32; ch < 128; ++ch) {
+            Font::Glyph glyph;
+
+            int glyphIndex = stbtt_FindGlyphIndex(&fontInfo, ch);
+            if (glyphIndex == 0) continue;
+
+            stbtt_GetGlyphHMetrics(&fontInfo, glyphIndex, &glyph.ha, 0);
+            stbtt_GetGlyphBitmapBox(&fontInfo, glyphIndex, scale, scale, &xOffset, &yOffset, &width, &height);
+            glyph.x_min = static_cast<float>(xOffset);
+            glyph.x_max = static_cast<float>(xOffset + width);
+
+            // Get glyph shape
+            stbtt_vertex* vertices;
+            int numVertices = stbtt_GetGlyphShape(&fontInfo, glyphIndex, &vertices);
+
+            for (int j = 0; j < numVertices; ++j) {
+                const auto type = vertices[j].type;
+                if (type == STBTT_vcurve) {
+                    glyph.o.emplace_back("q");
+                    glyph.o.emplace_back(std::to_string(vertices[j].cx));
+                    glyph.o.emplace_back(std::to_string(vertices[j].cy));
+                    glyph.o.emplace_back(std::to_string(vertices[j - 1].x));
+                    glyph.o.emplace_back(std::to_string(vertices[j - 1].y));
+
+                } else if (type == STBTT_vline) {
+                    glyph.o.emplace_back("l");
+                    glyph.o.emplace_back(std::to_string(vertices[j].x));
+                    glyph.o.emplace_back(std::to_string(vertices[j].y));
+                } else if (type == STBTT_vmove) {
+                    glyph.o.emplace_back("m");
+                    glyph.o.emplace_back(std::to_string(vertices[j].x));
+                    glyph.o.emplace_back(std::to_string(vertices[j].y));
+                }
+            }
+
+            font.glyphs[static_cast<char>(ch)] = glyph;
+        }
+
+        return font;
+    }
+
+
 }// namespace
 
 
@@ -50,6 +120,11 @@ std::optional<Font> FontLoader::load(const std::filesystem::path& path) {
     if (!std::filesystem::exists(path)) {
         std::cerr << "[FontLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
         return std::nullopt;
+    }
+
+    const auto ext = path.extension();
+    if (path.extension() == ".ttf" || path.extension() == ".TTF") {
+        return loadFromTTF(path.string());
     }
 
     std::ifstream file(path);
