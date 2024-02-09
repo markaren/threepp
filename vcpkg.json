@@ -4,7 +4,7 @@
   "dependencies": [],
   "features": {
     "external-glfw": {
-      "description": "Build with GLFW front-end",
+      "description": "Install external GLFW",
       "dependencies": [
         {
           "name": "glfw3",
@@ -13,7 +13,7 @@
       ]
     },
     "assimp": {
-      "description": "Enable assimp model importer",
+      "description": "Enable assimp model importer in examples",
       "dependencies": [
         "assimp"
       ]
