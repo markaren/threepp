@@ -30,7 +30,7 @@ namespace threepp {
         std::string familyName;
         BoundingBox boundingBox;
 
-        int resolution{1500};
+        int resolution{};
         int lineHeight{};
         int underlineThickness{};
 

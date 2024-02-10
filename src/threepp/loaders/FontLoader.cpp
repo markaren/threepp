@@ -44,7 +44,7 @@ namespace {
         return data;
     }
 
-    std::optional<Font> loadFromTTF(const std::string& ttfFile) {
+    std::optional<Font> loadFromTTF(const std::filesystem::path& ttfFile) {
 
         std::ifstream file(ttfFile, std::ios::binary);
         if (!file.is_open()) {
@@ -60,30 +60,32 @@ namespace {
         file.read(fontData.data(), fileSize);
         file.close();
 
-        stbtt_fontinfo fontInfo;
-        if (!stbtt_InitFont(&fontInfo, reinterpret_cast<const unsigned char*>(fontData.data()), 0)) {
+        stbtt_fontinfo info;
+        if (!stbtt_InitFont(&info, reinterpret_cast<const unsigned char*>(fontData.data()), 0)) {
             return std::nullopt;
         }
 
         Font font;
-        stbtt_GetFontVMetrics(&fontInfo, &font.lineHeight, nullptr, nullptr);
+        font.familyName = ttfFile.stem().string();
+        font.resolution = ttUSHORT(info.data + info.head + 18);
+        stbtt_GetFontVMetrics(&info, &font.lineHeight, nullptr, nullptr);
 
         int width, height, xOffset, yOffset;
-        float scale = stbtt_ScaleForPixelHeight(&fontInfo, 16);
+        float scale = stbtt_ScaleForPixelHeight(&info, 16);
 
         stbtt_vertex* vertices;
         for (int ch = 32; ch < 128; ++ch) {
             Font::Glyph glyph;
 
-            int glyphIndex = stbtt_FindGlyphIndex(&fontInfo, ch);
+            int glyphIndex = stbtt_FindGlyphIndex(&info, ch);
             if (glyphIndex == 0) continue;
 
-            stbtt_GetGlyphHMetrics(&fontInfo, glyphIndex, &glyph.ha, nullptr);
-            stbtt_GetGlyphBitmapBox(&fontInfo, glyphIndex, scale, scale, &xOffset, &yOffset, &width, &height);
+            stbtt_GetGlyphHMetrics(&info, glyphIndex, &glyph.ha, nullptr);
+            stbtt_GetGlyphBitmapBox(&info, glyphIndex, scale, scale, &xOffset, &yOffset, &width, &height);
             glyph.x_min = static_cast<float>(xOffset);
             glyph.x_max = static_cast<float>(xOffset + width);
 
-            int numVertices = stbtt_GetGlyphShape(&fontInfo, glyphIndex, &vertices);
+            int numVertices = stbtt_GetGlyphShape(&info, glyphIndex, &vertices);
 
             for (int j = 0; j < numVertices; ++j) {
                 const auto type = vertices[j].type;
@@ -109,7 +111,7 @@ namespace {
             font.glyphs[static_cast<char>(ch)] = glyph;
         }
 
-        STBTT_free(vertices, fontInfo);
+        STBTT_free(vertices, info);
 
         return font;
     }
@@ -127,7 +129,7 @@ std::optional<Font> FontLoader::load(const std::filesystem::path& path) {
 
     const auto ext = path.extension();
     if (path.extension() == ".ttf" || path.extension() == ".TTF") {
-        return loadFromTTF(path.string());
+        return loadFromTTF(path);
     }
 
     std::ifstream file(path);
