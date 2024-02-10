@@ -46,10 +46,10 @@ namespace {
 
     std::optional<Font> loadFromTTF(const std::string& ttfFile) {
 
-        Font font;
-
         std::ifstream file(ttfFile, std::ios::binary);
-        if (!file.is_open()) return {};
+        if (!file.is_open()) {
+            return std::nullopt;
+        }
 
         file.seekg(0, std::ios::end);
         std::streampos fileSize = file.tellg();
@@ -62,27 +62,27 @@ namespace {
 
         stbtt_fontinfo fontInfo;
         if (!stbtt_InitFont(&fontInfo, reinterpret_cast<const unsigned char*>(fontData.data()), 0)) {
-            return {};
+            return std::nullopt;
         }
 
-        stbtt_GetFontVMetrics(&fontInfo, &font.lineHeight, 0, 0);
+        Font font;
+        stbtt_GetFontVMetrics(&fontInfo, &font.lineHeight, nullptr, nullptr);
 
         int width, height, xOffset, yOffset;
         float scale = stbtt_ScaleForPixelHeight(&fontInfo, 16);
 
+        stbtt_vertex* vertices;
         for (int ch = 32; ch < 128; ++ch) {
             Font::Glyph glyph;
 
             int glyphIndex = stbtt_FindGlyphIndex(&fontInfo, ch);
             if (glyphIndex == 0) continue;
 
-            stbtt_GetGlyphHMetrics(&fontInfo, glyphIndex, &glyph.ha, 0);
+            stbtt_GetGlyphHMetrics(&fontInfo, glyphIndex, &glyph.ha, nullptr);
             stbtt_GetGlyphBitmapBox(&fontInfo, glyphIndex, scale, scale, &xOffset, &yOffset, &width, &height);
             glyph.x_min = static_cast<float>(xOffset);
             glyph.x_max = static_cast<float>(xOffset + width);
 
-            // Get glyph shape
-            stbtt_vertex* vertices;
             int numVertices = stbtt_GetGlyphShape(&fontInfo, glyphIndex, &vertices);
 
             for (int j = 0; j < numVertices; ++j) {
@@ -98,6 +98,7 @@ namespace {
                     glyph.o.emplace_back("l");
                     glyph.o.emplace_back(std::to_string(vertices[j].x));
                     glyph.o.emplace_back(std::to_string(vertices[j].y));
+
                 } else if (type == STBTT_vmove) {
                     glyph.o.emplace_back("m");
                     glyph.o.emplace_back(std::to_string(vertices[j].x));
@@ -107,6 +108,8 @@ namespace {
 
             font.glyphs[static_cast<char>(ch)] = glyph;
         }
+
+        STBTT_free(vertices, fontInfo);
 
         return font;
     }
