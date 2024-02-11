@@ -174,7 +174,7 @@ int main() {
 
 #### CMake FetchContent
 
-`threepp` is compatible with CMakes `FetchContent`:
+`threepp` is compatible with CMake's `FetchContent`:
 
 ```cmake
 include(FetchContent)
@@ -189,6 +189,8 @@ FetchContent_MakeAvailable(threepp)
 #...
 target_link_libraries(main PUBLIC threepp::threepp)
 ```
+
+An example is provided [here](tests/threepp_wxwidgets):
 
 #### vcpkg
 
