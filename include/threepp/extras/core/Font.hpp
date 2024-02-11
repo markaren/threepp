@@ -30,14 +30,13 @@ namespace threepp {
         std::string familyName;
         BoundingBox boundingBox;
 
-        unsigned int resolution{};
+        int resolution{};
         int lineHeight{};
         int underlineThickness{};
 
         std::unordered_map<char, Glyph> glyphs;
 
         [[nodiscard]] std::vector<Shape> generateShapes(const std::string& text, float size = 100) const;
-
     };
 
 }// namespace threepp

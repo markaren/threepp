@@ -19,7 +19,7 @@ however much remains to be done..
 * Morphtargets, Bones
 * OrbitControls, FlyControls
 * Water and Sky shaders
-* Built-in text rendering
+* Built-in text rendering and font loading [typeface.json, TTF]
 * Loaders [Binary STL, OBJ/MTL, SVG]
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
