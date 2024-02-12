@@ -15,6 +15,9 @@ int main() {
     auto scene = SnakeScene(game);
     canvas.addKeyListener(scene);
 
+    auto camera = OrthographicCamera::create(0, game.gridSize(), 0, game.gridSize());
+    camera->position.z = 1;
+
     HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
@@ -27,7 +30,8 @@ int main() {
                             .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
     canvas.onWindowResize([&](WindowSize size) {
-        scene.camera().updateProjectionMatrix();
+        camera->right = game.gridSize() * size.aspect();
+        camera->updateProjectionMatrix();
         renderer.setSize(size);
 
         hud.setSize(size);
@@ -44,7 +48,7 @@ int main() {
         }
 
         renderer.clear();
-        renderer.render(scene, scene.camera());
+        renderer.render(scene, *camera);
         hud.apply(renderer);
     });
 }

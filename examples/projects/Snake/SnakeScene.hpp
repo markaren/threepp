@@ -20,7 +20,7 @@ public:
         grid->position.set(static_cast<float>(size) / 2, static_cast<float>(size) / 2, 0);
         add(grid);
 
-        boxGeometry_ = BoxGeometry::create();
+        boxGeometry_ = BoxGeometry::create(0.95, 0.95, 0.1);
         boxGeometry_->translate(0.5, 0.5, 0);
 
         auto foodMaterial = MeshBasicMaterial::create();
@@ -32,10 +32,6 @@ public:
         snakeMaterial_ = MeshBasicMaterial::create();
         snake_.emplace_back(Mesh::create(boxGeometry_, snakeMaterial_));
         add(snake_.back());
-
-        camera_ = OrthographicCamera::create(0, size, 0, size);
-        camera_->position.z = 1;
-        add(camera_);
     }
 
     void onKeyPressed(KeyEvent evt) override {
@@ -108,14 +104,9 @@ public:
         snakeMaterial_->color = Color::white;
     }
 
-    [[nodiscard]] Camera& camera() const {
-        return *camera_;
-    }
-
 private:
     SnakeGame& game_;
     std::shared_ptr<Mesh> food_;
-    std::shared_ptr<OrthographicCamera> camera_;
 
     std::shared_ptr<BoxGeometry> boxGeometry_;
     std::shared_ptr<MeshBasicMaterial> snakeMaterial_;
