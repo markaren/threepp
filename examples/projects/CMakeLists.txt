@@ -3,6 +3,7 @@ if (THREEPP_BUILD_EXAMPLE_PROJECTS)
 
     add_subdirectory(snake)
     add_subdirectory(Crane3R)
+    add_subdirectory(MotorControl)
 
     if (assimp_FOUND)
         add_subdirectory(Youbot)
