@@ -20,8 +20,7 @@ namespace {
         material->transparent = true;
         material->opacity = 0.9f;
 
-        auto target = Mesh::create(geom, material);
-        return target;
+        return Mesh::create(geom, material);
     }
 
     std::shared_ptr<Mesh> createObject() {
@@ -38,6 +37,7 @@ namespace {
         auto box = Mesh::create(boxGeometry, material);
 
         cylinder->add(box);
+
         return cylinder;
     }
 
@@ -46,14 +46,16 @@ namespace {
 int main() {
 
     Canvas canvas("MotorController");
-    GLRenderer renderer(canvas.size());
+    const auto size = canvas.size();
+    GLRenderer renderer(size);
     renderer.autoClear = false;
 
     Scene scene;
     scene.background = Color::white;
 
-    PerspectiveCamera camera(50, canvas.size().aspect(), 0.1, 100);
-    camera.position.z = 2;
+    const float frustumSize = 2;
+    OrthographicCamera camera(-frustumSize * size.aspect() / 2, frustumSize * size.aspect() / 2, -frustumSize / 2, frustumSize / 2);
+    camera.position.z = 1;
 
     // motor parameters
     double resistance = 2.0;   // Ohms
@@ -76,6 +78,13 @@ int main() {
     auto target = createTarget();
     scene.add(target);
 
+    auto ringGeometry = RingGeometry::create(0.5f, 0.75f, 16, 1, math::PI / 2, math::PI);
+    auto mat = MeshBasicMaterial::create({{"color", Color::red}, {"side", Side::Double}});
+    mat->opacity = 0.1f;
+    mat->transparent = true;
+    auto ring = Mesh::create(ringGeometry, mat);
+    scene.add(ring);
+
     HUD hud(canvas.size());
     TextGeometry::Options opts(font, 20);
     auto targetText = Text2D::create(opts, "Target position: " + std::to_string(targetPosition));
@@ -86,7 +95,10 @@ int main() {
     hud.add(measuredText, HUD::Options());
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera.aspect = size.aspect();
+        camera.left = -frustumSize * size.aspect() / 2;
+        camera.right = frustumSize * size.aspect() / 2;
+        camera.top = frustumSize / 2;
+        camera.bottom = -frustumSize / 2;
         camera.updateProjectionMatrix();
         renderer.setSize(size);
     });
