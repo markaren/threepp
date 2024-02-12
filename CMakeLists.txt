@@ -16,8 +16,6 @@ cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFI
 cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" OFF "THREEPP_WITH_GLFW" OFF)
 # Build embedded GLFW with X11 support on UNIX systems
 cmake_dependent_option(THREEPP_EMBEDDED_GLFW_WITH_X11 "Build GLFW with X11 support" OFF "NOT THREEPP_USE_EXTERNAL_GLFW;UNIX;NOT APPLE" OFF)
-# Force THREEPP_BUILD_EXAMPLE_PROJECTS OFF if NOT THREEPP_BUILD_EXAMPLES
-cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" OFF "THREEPP_BUILD_EXAMPLES" OFF)
 
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
