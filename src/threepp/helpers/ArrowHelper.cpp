@@ -9,28 +9,16 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _axis;
-
-    std::shared_ptr<BufferGeometry> _lineGeometry = nullptr;
-    std::shared_ptr<CylinderGeometry> _coneGeometry = nullptr;
-
-}// namespace
-
 ArrowHelper::ArrowHelper(Vector3 dir, Vector3 origin, float length, const Color& color, std::optional<float> headLength_, std::optional<float> headWidth_) {
 
     float headLength = headLength_.value_or(length * 0.2f);
     float headWidth = headWidth_.value_or(headLength * 0.2f);
 
-    if (!_lineGeometry) {
+    auto _lineGeometry = std::make_shared<BufferGeometry>();
+    _lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 1, 0}, 3));
 
-        _lineGeometry = std::make_shared<BufferGeometry>();
-        _lineGeometry->setAttribute("position", FloatBufferAttribute::create({0, 0, 0, 0, 1, 0}, 3));
-
-        _coneGeometry = CylinderGeometry::create(0, 0.5f, 1, 5, 1);
-        _coneGeometry->translate(0, -0.5f, 0);
-    }
+    auto _coneGeometry = CylinderGeometry::create(0, 0.5f, 1, 5, 1);
+    _coneGeometry->translate(0, -0.5f, 0);
 
     this->position.copy(origin);
 
@@ -68,6 +56,7 @@ void ArrowHelper::setDirection(const Vector3& dir) {
 
     } else {
 
+        Vector3 _axis;
         _axis.set(dir.z, 0, -dir.x).normalize();
 
         float radians = std::acos(dir.y);
