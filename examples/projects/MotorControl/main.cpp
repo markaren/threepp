@@ -10,36 +10,73 @@ using namespace threepp;
 
 namespace {
 
-    std::shared_ptr<Object3D> createTarget() {
+    class VisualisationObject: public Object3D {
 
-        auto geom = BoxGeometry::create(0.1, 0.25, 0.1);
-        geom->translate(0, 0.625, 0);
+    public:
+        VisualisationObject() {
 
-        auto material = MeshBasicMaterial::create();
-        material->color = Color::green;
-        material->transparent = true;
-        material->opacity = 0.9f;
+            target = createTarget();
+            add(target);
 
-        return Mesh::create(geom, material);
-    }
+            motor = createMotor();
+            add(motor);
 
-    std::shared_ptr<Mesh> createObject() {
+            auto ring = createRing();
+            add(ring);
+        }
 
-        auto cylinderGeometry = CylinderGeometry::create(0.2, 0.2, 0.1);
-        cylinderGeometry->rotateX(math::DEG2RAD * 90);
+        void setTargetPos(float pos) {
+            this->target->rotation.z = pos;
+        }
 
-        auto boxGeometry = BoxGeometry::create(0.1, 0.5, 0.1);
-        boxGeometry->translate(0, boxGeometry->height / 2, 0);
+        void setMotorPos(float pos) {
+            this->motor->rotation.z = pos;
+        }
 
-        auto material = MeshBasicMaterial::create({{"color", 0x000000}});
+    private:
+        std::shared_ptr<Object3D> target;
+        std::shared_ptr<Object3D> motor;
 
-        auto cylinder = Mesh::create(cylinderGeometry, material);
-        auto box = Mesh::create(boxGeometry, material);
+        static std::shared_ptr<Object3D> createTarget() {
 
-        cylinder->add(box);
+            auto geom = BoxGeometry::create(0.1, 0.25, 0.1);
+            geom->translate(0, 0.625, 0);
 
-        return cylinder;
-    }
+            auto material = MeshBasicMaterial::create();
+            material->color = Color::green;
+            material->transparent = true;
+            material->opacity = 0.9f;
+
+            return Mesh::create(geom, material);
+        }
+
+        static std::shared_ptr<Mesh> createMotor() {
+
+            auto cylinderGeometry = CylinderGeometry::create(0.2, 0.2, 0.1);
+            cylinderGeometry->rotateX(math::DEG2RAD * 90);
+
+            auto boxGeometry = BoxGeometry::create(0.1, 0.5, 0.1);
+            boxGeometry->translate(0, boxGeometry->height / 2, 0);
+
+            auto material = MeshBasicMaterial::create({{"color", 0x000000}});
+
+            auto cylinder = Mesh::create(cylinderGeometry, material);
+            auto box = Mesh::create(boxGeometry, material);
+
+            cylinder->add(box);
+
+            return cylinder;
+        }
+
+        static std::shared_ptr<Mesh> createRing() {
+            auto ringGeometry = RingGeometry::create(0.5f, 0.75f, 16, 1, math::PI / 2, math::PI);
+            auto mat = MeshBasicMaterial::create({{"color", Color::red}});
+            mat->opacity = 0.1f;
+            mat->transparent = true;
+
+            return Mesh::create(ringGeometry, mat);
+        }
+    };
 
 }// namespace
 
@@ -54,7 +91,7 @@ int main() {
     scene.background = Color::white;
 
     const float frustumSize = 2;
-    OrthographicCamera camera(-frustumSize * size.aspect() / 2, frustumSize * size.aspect() / 2, -frustumSize / 2, frustumSize / 2);
+    OrthographicCamera camera(-frustumSize * size.aspect() / 2, frustumSize * size.aspect() / 2, frustumSize / 2, -frustumSize / 2);
     camera.position.z = 1;
 
     // motor parameters
@@ -69,27 +106,19 @@ int main() {
     // Create a PID controller object
     PID controller(1.0, 0.1, 0.2);// Adjust PID gains as needed
 
-    FontLoader fontLoader;
-    auto font = fontLoader.defaultFont();
-
-    auto object = createObject();
-    scene.add(object);
-
-    auto target = createTarget();
-    scene.add(target);
-
-    auto ringGeometry = RingGeometry::create(0.5f, 0.75f, 16, 1, math::PI / 2, math::PI);
-    auto mat = MeshBasicMaterial::create({{"color", Color::red}, {"side", Side::Double}});
-    mat->opacity = 0.1f;
-    mat->transparent = true;
-    auto ring = Mesh::create(ringGeometry, mat);
-    scene.add(ring);
+    auto motorVisuals = VisualisationObject();
+    scene.add(motorVisuals);
 
     HUD hud(canvas.size());
+
+    FontLoader fontLoader;
+    auto font = fontLoader.defaultFont();
     TextGeometry::Options opts(font, 20);
+
     auto targetText = Text2D::create(opts, "Target position: " + std::to_string(targetPosition));
     targetText->setColor(Color::black);
     hud.add(targetText, HUD::Options().setNormalizedPosition({0.f, 0.05f}));
+
     auto measuredText = Text2D::create(opts, "Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
     measuredText->setColor(Color::black);
     hud.add(measuredText, HUD::Options());
@@ -140,7 +169,7 @@ int main() {
         hud.apply(renderer);
         ui.render();
 
-        target->rotation.z = math::degToRad(targetPosition);
-        object->rotation.z = static_cast<float>(motor.getPosition());
+        motorVisuals.setTargetPos(math::degToRad(targetPosition));
+        motorVisuals.setMotorPos(static_cast<float>(motor.getPosition()));
     });
 }
