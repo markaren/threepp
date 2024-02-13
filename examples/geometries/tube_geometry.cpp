@@ -56,10 +56,9 @@ int main() {
         renderer.setSize(size);
     });
 
-    const auto count = geometry->getIndex()->count();
 
     Clock clock;
-    bool reverse{false};
+    const auto count = geometry->getIndex()->count();
     canvas.animate([&]() {
         mesh->rotation.y += 1 * clock.getDelta();
 
