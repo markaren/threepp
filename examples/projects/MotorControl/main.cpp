@@ -69,7 +69,7 @@ namespace {
         }
 
         static std::shared_ptr<Mesh> createRing() {
-            auto ringGeometry = RingGeometry::create(0.5f, 0.75f, 16, 1, math::PI / 2, math::PI);
+            auto ringGeometry = RingGeometry::create(0.5f, 0.75f, 32, 8, math::PI / 2, math::PI);
             auto mat = MeshBasicMaterial::create({{"color", Color::red}});
             mat->opacity = 0.1f;
             mat->transparent = true;
@@ -82,7 +82,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("MotorController");
+    Canvas canvas("MotorController", {{"aa", 6}});
     const auto size = canvas.size();
     GLRenderer renderer(size);
     renderer.autoClear = false;
@@ -142,8 +142,8 @@ int main() {
         ImGui::SliderFloat("deg", &targetPosition, 0, 180);
         ImGui::Text("PID gains");
         ImGui::SliderFloat("kp", &params.kp, 0.01f, 10.f);
-        ImGui::SliderFloat("ti", &params.ti, 0.001f, 1.f);
-        ImGui::SliderFloat("td", &params.td, 0.001f, 1.f);
+        ImGui::SliderFloat("ti", &params.ti, 0.001f, 2.f);
+        ImGui::SliderFloat("td", &params.td, 0.001f, 2.f);
 
         ImGui::End();
     });
