@@ -75,7 +75,7 @@ namespace {
     auto createAndAddLights(Scene& scene) {
 
         auto light = DirectionalLight::create();
-        light->position.set(10, 5, 10);
+        light->position.set(15, 5, 15);
         light->lookAt(Vector3::ZEROS());
         light->castShadow = true;
         auto shadowCamera = light->shadow->camera->as<OrthographicCamera>();
