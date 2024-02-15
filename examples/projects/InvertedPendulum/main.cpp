@@ -17,17 +17,17 @@ int main() {
     Scene scene;
 
     float frustumSize = 5;
-    OrthographicCamera camera(-frustumSize * canvas.aspect() / 2, frustumSize * canvas.aspect() / 2, frustumSize / 2, -frustumSize / 2, 0.1, 100);
+    OrthographicCamera camera(-(frustumSize * canvas.aspect()) / 2, (frustumSize * canvas.aspect()) / 2, frustumSize / 2, -frustumSize / 2, 0.1, 100);
     camera.position.z = 1;
 
-    InvertedPendulum ip(50, 2);
+    InvertedPendulum ip(100, 5);
 
-    auto cart = Mesh::create(BoxGeometry::create(1, 0.2, 0.1), MeshBasicMaterial::create({{"color", 0x00ff00}}));
-//    cart->position.y = -frustumSize / 2 + 0.25f;
+    auto cartGeometry = BoxGeometry::create(1, 0.2, 0.1);
+    auto cart = Mesh::create(cartGeometry, MeshBasicMaterial::create({{"color", 0x00ff00}}));
     scene.add(cart);
 
     auto pendulum = Mesh::create(CylinderGeometry::create(0.05, 0.05, ip.getPendulumLength()), MeshBasicMaterial::create({{"color", 0xff0000}}));
-    pendulum->geometry()->translate(0, ip.getPendulumLength() / 2 + 0.1f, 0);
+    pendulum->geometry()->translate(0, ip.getPendulumLength() / 2 + cartGeometry->height / 2, 0);
     cart->add(pendulum);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -41,9 +41,21 @@ int main() {
 
     float externalForce = 0;
 #if HAS_IMGUI
+    bool applyControl = ip.isControl();
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+        externalForce = 0;
+
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("Inverted Pendulum");
-        ImGui::SliderFloat("ExternalForce", &externalForce, -10, 10);
+        if(ImGui::Checkbox("Apply control", &applyControl)) {
+            ip.setControl(applyControl);
+        }
+        if (ImGui::Button("Push left")) {
+            externalForce = -500;
+        } else if (ImGui::Button("Push right")) {
+            externalForce = 500;
+        }
         ImGui::End();
     });
 #endif
