@@ -1,10 +1,11 @@
 
 #include "DCMotor.hpp"
-#include "utility/PID.hpp"
-
-#include "threepp/threepp.hpp"
+#include "utility/Regulator.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/threepp.hpp"
+
+#include <cmath>
 
 using namespace threepp;
 
@@ -104,7 +105,7 @@ int main() {
     DCMotor motor(resistance, inertia, damping);
 
     // Create a PID controller object
-    PID controller(1.0, 0.1, 0.2);// Adjust PID gains as needed
+    PIDRegulator controller(1.0, 0.1, 0.2);// Adjust PID gains as needed
 
     auto motorVisuals = VisualisationObject();
     scene.add(motorVisuals);
@@ -139,7 +140,9 @@ int main() {
         ImGui::Begin("Motor Controller");
 
         ImGui::Text("Target position");
-        ImGui::SliderFloat("deg", &targetPosition, 0, 180);
+        if(ImGui::SliderFloat("deg", &targetPosition, 0, 180)) {
+            targetText->setText("Target position: " + std::to_string(targetPosition), opts);
+        }
         ImGui::Text("PID gains");
         ImGui::SliderFloat("kp", &params.kp, 0.01f, 10.f);
         ImGui::SliderFloat("ti", &params.ti, 0.001f, 2.f);
@@ -156,11 +159,11 @@ int main() {
         double measuredPosition = motor.getPosition();
 
         if (it++ % 10 == 2) {
-            targetText->setText("Target position: " + std::to_string(targetPosition), opts);
             measuredText->setText("Measured position: " + std::to_string(math::radToDeg(measuredPosition)), opts);
         }
 
-        double gain = controller.regulate(math::degToRad(targetPosition), measuredPosition, dt);
+        double error = math::degToRad(targetPosition) - measuredPosition;
+        double gain = controller.regulate(error, dt);
 
         motor.update(gain, dt);
 

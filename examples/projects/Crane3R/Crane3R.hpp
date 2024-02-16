@@ -6,6 +6,7 @@
 
 #include "Actuator.hpp"
 #include "utility/Angle.hpp"
+#include "utility/Regulator.hpp"
 
 #include <array>
 #include <utility>
@@ -44,7 +45,7 @@ private:
     private:
         ControlMode mode_{DIRECT};
 
-        std::array<PID, 3> pids_{};
+        std::array<PIDRegulator, 3> pids_{};
         std::array<float, 3> targetValues{};
         std::array<std::unique_ptr<Actuator>, 3> actuators_{};
     };
