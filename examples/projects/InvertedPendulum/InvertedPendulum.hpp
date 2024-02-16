@@ -4,23 +4,19 @@
 
 #include <cmath>
 
+#include "utility/Regulator.hpp"
+
 #include "threepp/math/MathUtils.hpp"
 
 class InvertedPendulum {
 
 public:
-    InvertedPendulum(double kp, double kd): kp(kp), kd(kd) {
-        cartPosition = 0.0;
-        pendulumAngle = threepp::math::degToRad(5);// Initial angle (upright position)
-        cartVelocity = 0.0;
-        pendulumAngularVelocity = 0.0;
-    }
 
     // Function to simulate the system for a certain duration
-    void simulate(double duration, double externalForce) {
+    void simulate(double duration, double externalForce, Regulator* regulator = nullptr) {
         int steps = static_cast<int>(duration / internalTimeStep);
         for (int i = 0; i < steps; ++i) {
-            double controlSignal = control_ ? control() : 0;
+            double controlSignal = regulator ? control(*regulator) : 0;
             update(controlSignal + externalForce);
         }
     }
@@ -37,35 +33,22 @@ public:
         return pendulumLength;
     }
 
-    [[nodiscard]] bool isControl() const {
-        return control_;
-    }
-
-    void setControl(bool control) {
-        control_ = control;
-    }
-
 private:
-    bool control_ = true;
 
-    double cartPosition;           // Position of the cart
-    double pendulumAngle;          // Angle of the pendulum
-    double cartVelocity;           // Velocity of the cart
-    double pendulumAngularVelocity;// Angular velocity of the pendulum
+    double cartPosition{0};                          // Position of the cart
+    double pendulumAngle{threepp::math::degToRad(5)};// Angle of the pendulum
+    double cartVelocity{0};                          // Velocity of the cart
+    double pendulumAngularVelocity{0};               // Angular velocity of the pendulum
 
     const double g = 9.81;            // Acceleration due to gravity
-    const double cartMass = 2;      // Mass of the cart
-    const double pendulumMass = 0.1;    // Mass of the pendulum
+    const double cartMass = 2;        // Mass of the cart
+    const double pendulumMass = 0.1;  // Mass of the pendulum
     const double pendulumLength = 1.5;// Length of the pendulum
 
     double internalTimeStep = 0.01;// Internal time step for the simulation
 
     double minPendulumAngle = threepp::math::degToRad(-60);
     double maxPendulumAngle = threepp::math::degToRad(60);
-
-    // Controller gains
-    double kp;// Proportional gain
-    double kd;// Derivative gain
 
     // Boundary limits for the cart's position
     double minX = -4.0;
@@ -98,17 +81,17 @@ private:
         // Limit pendulum angle to prevent it from falling below the cart
         if (pendulumAngle < minPendulumAngle) {
             pendulumAngle = minPendulumAngle;
-            pendulumAngularVelocity = 0; // Stop pendulum motion if it reaches the limit
+            pendulumAngularVelocity = 0;// Stop pendulum motion if it reaches the limit
         } else if (pendulumAngle > maxPendulumAngle) {
             pendulumAngle = maxPendulumAngle;
-            pendulumAngularVelocity = 0; // Stop pendulum motion if it reaches the limit
+            pendulumAngularVelocity = 0;// Stop pendulum motion if it reaches the limit
         }
     }
 
     static double shortestAngularDistance(double angle1, double angle2) {
         // Normalize angles to be within the range of -pi to pi radians
-        angle1 = fmod(angle1 + threepp::math::PI, 2 * threepp::math::PI) - threepp::math::PI;
-        angle2 = fmod(angle2 + threepp::math::PI, 2 * threepp::math::PI) - threepp::math::PI;
+        angle1 = std::fmod(angle1 + threepp::math::PI, 2 * threepp::math::PI) - threepp::math::PI;
+        angle2 = std::fmod(angle2 + threepp::math::PI, 2 * threepp::math::PI) - threepp::math::PI;
 
         // Calculate the signed angular distance
         double delta = angle2 - angle1;
@@ -124,10 +107,10 @@ private:
     }
 
     // Function to control the pendulum using PD control
-    [[nodiscard]] double control() const {
+    [[nodiscard]] double control(Regulator& regulator) const {
         double desiredAngle = 0;
         double error = shortestAngularDistance(desiredAngle, pendulumAngle);
-        double controlSignal = kp * error + kd * pendulumAngularVelocity;
+        double controlSignal = regulator.regulate(error, internalTimeStep);
         return controlSignal;
     }
 };

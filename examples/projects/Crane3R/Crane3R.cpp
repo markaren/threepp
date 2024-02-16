@@ -184,9 +184,10 @@ void Crane3R::Controller::update(float dt) {
     if (mode_ == POSITION) {
         for (unsigned i = 0; i < 3; ++i) {
             auto& pid = pids_[i];
-            auto& act = actuators_[i];
-            auto v = pid.regulate(targetValues[i], act->getProcessOutput(), dt);
-            act->setGain(v);
+            const auto& act = actuators_[i];
+            float error = targetValues[i] - act->getProcessOutput();
+            auto gain = std::clamp(pid.regulate(error, dt), -1.f, 1.f);
+            act->setGain(gain);
         }
     } else {
         for (unsigned i = 0; i < 3; ++i) {

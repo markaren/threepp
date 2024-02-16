@@ -1,5 +1,6 @@
 
 #include "threepp/threepp.hpp"
+#include "utility/Regulator.hpp"
 
 #include "InvertedPendulum.hpp"
 
@@ -20,7 +21,12 @@ int main() {
     OrthographicCamera camera(-(frustumSize * canvas.aspect()) / 2, (frustumSize * canvas.aspect()) / 2, frustumSize / 2, -frustumSize / 2, 0.1, 100);
     camera.position.z = 1;
 
-    InvertedPendulum ip(100, 5);
+    InvertedPendulum ip;
+    float externalForce = 0;
+
+    PIDRegulator regulator(50, 2, 10);
+    regulator.setWindupGuard(2.f);
+
 
     auto cartGeometry = BoxGeometry::create(1, 0.2, 0.1);
     auto cart = Mesh::create(cartGeometry, MeshBasicMaterial::create({{"color", 0x00ff00}}));
@@ -39,18 +45,15 @@ int main() {
         renderer.setSize(size);
     });
 
-    float externalForce = 0;
 #if HAS_IMGUI
-    bool applyControl = ip.isControl();
+    bool applyControl = true;
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         externalForce = 0;
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("Inverted Pendulum");
-        if(ImGui::Checkbox("Apply control", &applyControl)) {
-            ip.setControl(applyControl);
-        }
+        ImGui::Checkbox("Apply control", &applyControl);
         if (ImGui::Button("Push left")) {
             externalForce = -500;
         } else if (ImGui::Button("Push right")) {
@@ -65,7 +68,7 @@ int main() {
         cart->position.x = static_cast<float>(ip.getCartPosition());
         pendulum->rotation.z = static_cast<float>(ip.getPendulumAngle());
 
-        ip.simulate(clock.getDelta(), externalForce);
+        ip.simulate(clock.getDelta(), externalForce, applyControl ? &regulator : nullptr);
 
         renderer.render(scene, camera);
 
