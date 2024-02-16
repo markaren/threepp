@@ -23,10 +23,10 @@ int main() {
 
     InvertedPendulum ip;
     float externalForce = 0;
+    bool applyControl = true;
 
     PIDRegulator regulator(50, 2, 10);
     regulator.setWindupGuard(2.f);
-
 
     auto cartGeometry = BoxGeometry::create(1, 0.2, 0.1);
     auto cart = Mesh::create(cartGeometry, MeshBasicMaterial::create({{"color", 0x00ff00}}));
@@ -46,7 +46,6 @@ int main() {
     });
 
 #if HAS_IMGUI
-    bool applyControl = true;
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         externalForce = 0;
 
