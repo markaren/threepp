@@ -6,6 +6,7 @@
 #include "threepp/constants.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Vector3.hpp"
+#include "threepp/textures/Texture.hpp"
 
 namespace threepp {
 
@@ -54,13 +55,15 @@ namespace threepp {
 
         Blending blendStyle = Blending::Normal;// false;
 
-        float particlesPerSecond = 100;
+        int particlesPerSecond = 100;
         float particleDeathAge = 1.0;
 
         ////////////////////////
         // EMITTER PROPERTIES //
         ////////////////////////
         float emitterDeathAge = 60;// time (seconds) at which to stop creating particles.
+
+        std::shared_ptr<Texture> texture;
 
         ParticleSystem();
 

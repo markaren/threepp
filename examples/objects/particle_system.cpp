@@ -8,6 +8,7 @@ int main() {
 
     Canvas canvas("Particle system", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
+    renderer.checkShaderErrors = true;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -29,10 +30,10 @@ int main() {
     engine.angleBase = 0;
     engine.angleSpread = 180;
     engine.angleVelocityBase = 0;
-    engine.angleVelocitySpread = 360*4;
+    engine.angleVelocitySpread = 360 * 4;
 
     engine.particlesPerSecond = 500;
-    engine.particleDeathAge = 3.0;
+    engine.particleDeathAge = 5.0;
     engine.emitterDeathAge = 60;
 
     engine.setColorTween({0.5, 2}, {{0, 1, 0.5}, {0.8, 1, 0.5}})
@@ -41,6 +42,9 @@ int main() {
 
     engine.initialize();
     scene->add(engine);
+
+    auto grid = GridHelper::create();
+    scene->add(grid);
 
     OrbitControls controls{*camera, canvas};
 

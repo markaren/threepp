@@ -33,13 +33,13 @@ namespace {
     std::string particleVertexShader =
 
             R"(
-                attribute vec3  customColor;
-                attribute float customOpacity;
-                attribute float customSize;
-                attribute float customAngle;
-                attribute float customVisible;  // float used as boolean (0 = false, 1 = true)
-                varying vec4  vColor;
-                varying float vAngle;
+                in vec3  customColor;
+                in float customOpacity;
+                in float customSize;
+                in float customAngle;
+                in float customVisible;  // float used as boolean (0 = false, 1 = true)
+                out vec4  vColor;
+                out float vAngle;
                 void main()
                 {
                     if ( customVisible > 0.5) 				// true
@@ -56,9 +56,9 @@ namespace {
 
     std::string particleFragmentShader =
             R"(
-                uniform sampler2D texture;
-                varying vec4 vColor;
-                varying float vAngle;
+                uniform sampler2D tex;
+                in vec4 vColor;
+                in float vAngle;
                 void main()
                 {
                     gl_FragColor = vColor;
@@ -67,7 +67,7 @@ namespace {
                     float s = sin(vAngle);
                     vec2 rotatedUV = vec2(c * (gl_PointCoord.x - 0.5) + s * (gl_PointCoord.y - 0.5) + 0.5,
                     c * (gl_PointCoord.y - 0.5) - s * (gl_PointCoord.x - 0.5) + 0.5);  // rotate UV coordinates to rotate texture
-                    vec4 rotatedTexture = texture2D( texture,  rotatedUV );
+                    vec4 rotatedTexture = texture2D( tex,  rotatedUV );
                     gl_FragColor = gl_FragColor * rotatedTexture;    // sets an otherwise white particle texture to desired color
                 })";
 
@@ -88,7 +88,7 @@ namespace {
         explicit Tween(const std::vector<float>& vectimeArray = {}, const std::vector<T>& valueArray = {})
             : times(vectimeArray), values(valueArray) {}
 
-        T lerp(float t) const {
+        [[nodiscard]] T lerp(float t) const {
             int i = 0;
             auto n = this->times.size();
             while (i < n && t > this->times[i]) {
@@ -160,7 +160,6 @@ namespace {
         }
     };
 
-
 }// namespace
 
 
@@ -178,24 +177,19 @@ struct ParticleSystem::Impl {
     size_t particleCount{};
 
     std::shared_ptr<BufferGeometry> particleGeometry;
-    std::shared_ptr<Texture> particleTexture;
     std::shared_ptr<ShaderMaterial> particleMaterial;
     std::shared_ptr<Object3D> particleMesh;
 
     ParticleSystem& scope;
 
-    explicit Impl(ParticleSystem& scope): scope(scope) {
+    explicit Impl(ParticleSystem& scope)
+        : scope(scope),
+          particleMaterial(ShaderMaterial::create()),
+          particleGeometry(BufferGeometry::create()) {
 
-        particleMaterial = ShaderMaterial::create();
-        //        particleMaterial->uniforms = std::make_shared<UniformMap>(uniforms);
-        //        particleMaterial->uniforms["texture"] = Uniform(particleTexture);
         particleMaterial->vertexShader = particleVertexShader;
         particleMaterial->fragmentShader = particleFragmentShader;
         particleMaterial->transparent = true;
-        particleMaterial->blending = Blending::Normal;
-        particleMaterial->depthTest = true;
-
-        particleGeometry = BufferGeometry::create();
     }
 
     [[nodiscard]] Particle createParticle() {
@@ -253,6 +247,11 @@ struct ParticleSystem::Impl {
         particleGeometry->setAttribute("customSize", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
         particleGeometry->setAttribute("customColor", FloatBufferAttribute::create(std::vector<float>(particleCount * 3), 3));
         particleGeometry->setAttribute("customOpacity", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
+
+        if (scope.texture) {
+            particleMaterial->uniforms->operator[]("tex").setValue(scope.texture.get());
+            particleMaterial->depthWrite = false;
+        }
 
         // link particle data with geometry/material data
         for (auto i = 0; i < particleCount; i++) {
