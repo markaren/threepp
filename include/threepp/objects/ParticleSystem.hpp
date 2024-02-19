@@ -1,7 +1,7 @@
 // https://stemkoski.github.io/Three.js/Particle-Engine.html
 
-#ifndef THREEPP_PARTICLEENGINE_HPP
-#define THREEPP_PARTICLEENGINE_HPP
+#ifndef THREEPP_PARTICLESYSTEM_HPP
+#define THREEPP_PARTICLESYSTEM_HPP
 
 #include "threepp/constants.hpp"
 #include "threepp/core/Object3D.hpp"
@@ -9,11 +9,12 @@
 
 namespace threepp {
 
-    class ParticleEngine : public Object3D {
+    class ParticleSystem: public Object3D {
 
     public:
         enum class Type {
-            BOX, SPHERE
+            BOX,
+            SPHERE
         };
 
         Type positionStyle = Type::BOX;
@@ -53,7 +54,7 @@ namespace threepp {
 
         Blending blendStyle = Blending::Normal;// false;
 
-        int particlesPerSecond = 100;
+        float particlesPerSecond = 100;
         float particleDeathAge = 1.0;
 
         ////////////////////////
@@ -61,23 +62,23 @@ namespace threepp {
         ////////////////////////
         float emitterDeathAge = 60;// time (seconds) at which to stop creating particles.
 
-        ParticleEngine();
+        ParticleSystem();
+
+        ParticleSystem& setSizeTween(const std::vector<float>& times, const std::vector<float>& values);
+        ParticleSystem& setColorTween(const std::vector<float>& times, const std::vector<Vector3>& values);
+        ParticleSystem& setOpacityTween(const std::vector<float>& times, const std::vector<float>& values);
 
         void initialize();
 
         void update(float dt);
 
-        void setValues();
-
-        ~ParticleEngine();
+        ~ParticleSystem() override;
 
     private:
-
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
-
     };
 
-}
+}// namespace threepp
 
-#endif//THREEPP_PARTICLEENGINE_HPP
+#endif//THREEPP_PARTICLESYSTEM_HPP
