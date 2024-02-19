@@ -9,9 +9,10 @@
 using namespace threepp;
 
 
-void initFountain(ParticleSystem& engine);
-
-void initSmoke(ParticleSystem& engine);
+void initFountain(ParticleSystem::Settings& settings);
+void initSmoke(ParticleSystem::Settings& settings);
+void initFireball(ParticleSystem::Settings& settings);
+void initFirework(ParticleSystem::Settings& settings);
 
 
 int main() {
@@ -21,13 +22,13 @@ int main() {
     renderer.checkShaderErrors = true;
 
     Scene scene;
-    scene.background = Color::aliceblue;
+    scene.background = Color::gray;
     PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
     camera.position.set(0, 10, 35);
 
     ParticleSystem engine;
 
-    initFountain(engine);
+    initFountain(engine.settings());
 
     engine.initialize();
     scene.add(engine);
@@ -46,9 +47,11 @@ int main() {
 #if HAS_IMGUI
 
     int selectedIndex = 0;
-    std::vector<std::pair<std::string, std::function<void(ParticleSystem&)>>> demos{
+    std::vector<std::pair<std::string, std::function<void(ParticleSystem::Settings&)>>> demos{
             {"fountain", initFountain},
-            {"smoke", initSmoke}};
+            {"smoke", initSmoke},
+            {"fireball", initFireball},
+            {"firework", initFirework}};
 
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
@@ -60,7 +63,7 @@ int main() {
                 if (ImGui::Selectable(demos[index].first.c_str(), isSelected)) {
                     selectedIndex = index;
 
-                    demos[index].second(engine);
+                    demos[index].second(engine.settings());
                     engine.initialize();
                 }
             }
@@ -83,57 +86,118 @@ int main() {
     });
 }
 
-void initFountain(ParticleSystem& engine) {
-    engine.positionStyle = ParticleSystem::Type::BOX;
-    engine.positionBase = {0, 0, 0};
-    engine.positionSpread = {1, 0, 1};
+void initFountain(ParticleSystem::Settings& settings) {
 
-    engine.positionStyle = ParticleSystem::Type::BOX;
-    engine.velocityBase = {0, 16, 0};
-    engine.velocitySpread = {10, 2, 10};
+    settings.makeDefault();
 
-    engine.accelerationBase = {0, -10, 0};
+    settings.positionStyle = ParticleSystem::Type::BOX;
+    settings.positionBase = {0, 0, 0};
+    settings.positionSpread = {1, 0, 1};
 
-    engine.angleBase = 0;
-    engine.angleSpread = 18;
-    engine.angleVelocityBase = 0;
-    engine.angleVelocitySpread = 36 * 4;
+    settings.velocityStyle = ParticleSystem::Type::BOX;
+    settings.velocityBase = {0, 16, 0};
+    settings.velocitySpread = {10, 2, 10};
 
-    engine.particlesPerSecond = 200;
-    engine.particleDeathAge = 3.0;
-    engine.emitterDeathAge = 60;
+    settings.accelerationBase = {0, -10, 0};
 
-    engine.setColorTween({0.5, 2}, {{0, 1, 0.5}, {0.8, 1, 0.5}})
+    settings.angleBase = 0;
+    settings.angleSpread = 18;
+    settings.angleVelocityBase = 0;
+    settings.angleVelocitySpread = 36 * 4;
+
+    settings.particlesPerSecond = 200;
+    settings.particleDeathAge = 3.0;
+    settings.emitterDeathAge = 60;
+
+    settings.setColorTween({0.5, 2}, {{0, 1, 0.5}, {0.8, 1, 0.5}})
             .setOpacityTween({2, 3}, {1, 0})
             .setSizeTween({0, 1}, {0.1, 2});
 
     TextureLoader tl;
-    engine.texture = tl.load("data/textures/star.png");
+    settings.texture = tl.load("data/textures/star.png");
 }
 
-void initSmoke(ParticleSystem& engine) {
-    engine.positionStyle = ParticleSystem::Type::BOX;
-    engine.positionBase = {0, 0, 0};
-    engine.positionSpread = {1, 0, 1};
+void initSmoke(ParticleSystem::Settings& settings) {
 
-    engine.positionStyle = ParticleSystem::Type::BOX;
-    engine.velocityBase = {0, 15, 0};
-    engine.velocitySpread = {8, 5, 8};
-    engine.accelerationBase = {0, -1, 0};
+    settings.makeDefault();
 
-    engine.angleBase = 0;
-    engine.angleSpread = 72;
-    engine.angleVelocityBase = 0;
-    engine.angleVelocitySpread = 72;
+    settings.positionStyle = ParticleSystem::Type::BOX;
+    settings.positionBase = {0, 0, 0};
+    settings.positionSpread = {1, 0, 1};
 
-    engine.particlesPerSecond = 200;
-    engine.particleDeathAge = 2.0;
-    engine.emitterDeathAge = 60;
+    settings.velocityStyle = ParticleSystem::Type::BOX;
+    settings.velocityBase = {0, 15, 0};
+    settings.velocitySpread = {8, 5, 8};
+    settings.accelerationBase = {0, -1, 0};
 
-    engine.setColorTween({0.4, 1}, {{0, 0, 0.2}, {0, 0, 0.5}})
+    settings.angleBase = 0;
+    settings.angleSpread = 72;
+    settings.angleVelocityBase = 0;
+    settings.angleVelocitySpread = 72;
+
+    settings.particlesPerSecond = 200;
+    settings.particleDeathAge = 2.0;
+    settings.emitterDeathAge = 60;
+
+    settings.setColorTween({0.4, 1}, {{0, 0, 0.2}, {0, 0, 0.5}})
             .setOpacityTween({0.8, 2}, {0.5, 0})
             .setSizeTween({0, 1}, {1, 10});
 
     TextureLoader tl;
-    engine.texture = tl.load("data/textures/smokeparticle.png");
+    settings.texture = tl.load("data/textures/smokeparticle.png");
+}
+
+void initFireball(ParticleSystem::Settings& settings) {
+
+    settings.makeDefault();
+
+    settings.positionStyle = ParticleSystem::Type::SPHERE;
+    settings.positionBase = {0, 5, 0};
+    settings.positionRadius = 2;
+
+    settings.velocityStyle = ParticleSystem::Type::BOX;
+    settings.speedBase = 4;
+    settings.speedSpread = 0.8;
+
+    settings.particlesPerSecond = 60;
+    settings.particleDeathAge = 1.5;
+    settings.emitterDeathAge = 60;
+
+    settings.colorBase = {0.02, 1, 0.2};
+    settings.blendStyle = Blending::Additive;
+
+    settings.setOpacityTween({0.7, 1}, {1, 0})
+            .setSizeTween({0, 1}, {0.1, 15});
+
+    TextureLoader tl;
+    settings.texture = tl.load("data/textures/smokeparticle.png");
+}
+
+void initFirework(ParticleSystem::Settings& settings) {
+
+    settings.makeDefault();
+
+    settings.positionStyle = ParticleSystem::Type::SPHERE;
+    settings.positionBase = {0, 10, 0};
+    settings.positionRadius = 10;
+
+    settings.velocityStyle = ParticleSystem::Type::SPHERE;
+    settings.speedBase = 9;
+    settings.speedSpread = 10;
+
+    settings.accelerationBase = {0, -8, 0};
+
+    settings.particlesPerSecond = 3000;
+    settings.particleDeathAge = 2.5;
+    settings.emitterDeathAge = 0.2;
+
+    settings.colorBase = {0.02, 1, 0.2};
+    settings.blendStyle = Blending::Additive;
+
+    settings.setColorTween({0.4, 0.8, 1}, {{0, 1, 1}, {0, 1, 0.6}, {0.8, 1, 0.6}})
+            .setOpacityTween({0.2, 0.7, 2.5}, {0.75, 1, 0})
+            .setSizeTween({0.3, 0.6, 1.3}, {0.5, 4, 0.1});
+
+    TextureLoader tl;
+    settings.texture = tl.load("data/textures/spark.png");
 }

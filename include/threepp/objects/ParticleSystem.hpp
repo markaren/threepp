@@ -18,58 +18,74 @@ namespace threepp {
             SPHERE
         };
 
-        Type positionStyle = Type::BOX;
-        Vector3 positionBase;
-        Vector3 positionSpread;
-        float positionRadius = 0;// distance from base at which particles start
+        struct Settings {
 
-        Type velocityStyle = Type::BOX;
-        // cube movement data
-        Vector3 velocityBase;
-        Vector3 velocitySpread;
-        // sphere movement data
-        // direction vector calculated using initial position
-        float speedBase = 0;
-        float speedSpread = 0;
+            Type positionStyle;
+            Vector3 positionBase;
+            Vector3 positionSpread;
+            float positionRadius{};// distance from base at which particles start
 
-        Vector3 accelerationBase;
-        Vector3 accelerationSpread;
+            Type velocityStyle;
+            // cube movement data
+            Vector3 velocityBase;
+            Vector3 velocitySpread;
+            // sphere movement data
+            // direction vector calculated using initial position
+            float speedBase{};
+            float speedSpread{};
 
-        float angleBase = 0;
-        float angleSpread = 0;
-        float angleVelocityBase = 0;
-        float angleVelocitySpread = 0;
-        float angleAccelerationBase = 0;
-        float angleAccelerationSpread = 0;
+            Vector3 accelerationBase;
+            Vector3 accelerationSpread;
 
-        float sizeBase = 0.0;
-        float sizeSpread = 0.0;
+            float angleBase{};
+            float angleSpread{};
+            float angleVelocityBase{};
+            float angleVelocitySpread{};
+            float angleAccelerationBase{};
+            float angleAccelerationSpread{};
 
-        // store colors in HSL format in a THREE.Vector3 object
-        // http://en.wikipedia.org/wiki/HSL_and_HSV
-        Vector3 colorBase = Vector3(0.0f, 1.0f, 0.5f);
-        Vector3 colorSpread = Vector3(0.0f, 0.0f, 0.0f);
+            float sizeBase{};
+            float sizeSpread{};
 
-        float opacityBase = 1.0;
-        float opacitySpread = 0.0;
+            // store colors in HSL format in a THREE.Vector3 object
+            // http://en.wikipedia.org/wiki/HSL_and_HSV
+            Vector3 colorBase;
+            Vector3 colorSpread;
 
-        Blending blendStyle = Blending::Normal;// false;
+            float opacityBase{};
+            float opacitySpread{};
 
-        int particlesPerSecond = 100;
-        float particleDeathAge = 1.0;
+            Blending blendStyle;
 
-        ////////////////////////
-        // EMITTER PROPERTIES //
-        ////////////////////////
-        float emitterDeathAge = 60;// time (seconds) at which to stop creating particles.
+            int particlesPerSecond{};
+            float particleDeathAge{};
 
-        std::shared_ptr<Texture> texture;
+            ////////////////////////
+            // EMITTER PROPERTIES //
+            ////////////////////////
+            float emitterDeathAge{};// time (seconds) at which to stop creating particles.
+
+            std::shared_ptr<Texture> texture;
+
+            Settings& setSizeTween(const std::vector<float>& times, const std::vector<float>& values);
+            Settings& setColorTween(const std::vector<float>& times, const std::vector<Vector3>& values);
+            Settings& setOpacityTween(const std::vector<float>& times, const std::vector<float>& values);
+
+            void makeDefault();
+
+        private:
+            friend class ParticleSystem;
+
+            Settings();
+
+            std::pair<std::vector<float>, std::vector<float>> size;
+            std::pair<std::vector<float>, std::vector<float>> opacity;
+            std::pair<std::vector<float>, std::vector<Vector3>> color;
+        };
 
         ParticleSystem();
 
-        ParticleSystem& setSizeTween(const std::vector<float>& times, const std::vector<float>& values);
-        ParticleSystem& setColorTween(const std::vector<float>& times, const std::vector<Vector3>& values);
-        ParticleSystem& setOpacityTween(const std::vector<float>& times, const std::vector<float>& values);
+        Settings& settings();
 
         void initialize();
 

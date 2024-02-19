@@ -165,6 +165,8 @@ namespace {
 
 struct ParticleSystem::Impl {
 
+    Settings settings;
+
     Tween<float> sizeTween;
     Tween<Vector3> colorTween;
     Tween<float> opacityTween;
@@ -192,37 +194,37 @@ struct ParticleSystem::Impl {
         particle.colorTween = &colorTween;
         particle.opacityTween = &opacityTween;
 
-        if (scope.positionStyle == Type::BOX)
-            particle.position = randomVector3(scope.positionBase, scope.positionSpread);
-        if (scope.positionStyle == Type::SPHERE) {
+        if (settings.positionStyle == Type::BOX)
+            particle.position = randomVector3(settings.positionBase, settings.positionSpread);
+        if (settings.positionStyle == Type::SPHERE) {
             auto z = 2 * math::randFloat() - 1;
             auto t = 6.2832f * math::randFloat();
             auto r = std::sqrt(1 - z * z);
             Vector3 vec3(r * std::cos(t), r * std::sin(t), z);
-            particle.position = Vector3().addVectors(scope.positionBase, vec3.multiplyScalar(scope.positionRadius));
+            particle.position = Vector3().addVectors(settings.positionBase, vec3.multiplyScalar(settings.positionRadius));
         }
 
-        if (scope.velocityStyle == Type::BOX) {
-            particle.velocity = randomVector3(scope.velocityBase, scope.velocitySpread);
+        if (settings.velocityStyle == Type::BOX) {
+            particle.velocity = randomVector3(settings.velocityBase, settings.velocitySpread);
         }
-        if (scope.velocityStyle == Type::SPHERE) {
-            auto direction = Vector3().subVectors(particle.position, scope.positionBase);
-            auto speed = randomValue(scope.speedBase, scope.speedSpread);
+        if (settings.velocityStyle == Type::SPHERE) {
+            auto direction = Vector3().subVectors(particle.position, settings.positionBase);
+            auto speed = randomValue(settings.speedBase, settings.speedSpread);
             particle.velocity = direction.normalize().multiplyScalar(speed);
         }
 
-        particle.acceleration = randomVector3(scope.accelerationBase, scope.accelerationSpread);
+        particle.acceleration = randomVector3(settings.accelerationBase, settings.accelerationSpread);
 
-        particle.angle = randomValue(scope.angleBase, scope.angleSpread);
-        particle.angleVelocity = randomValue(scope.angleVelocityBase, scope.angleVelocitySpread);
-        particle.angleAcceleration = randomValue(scope.angleAccelerationBase, scope.angleAccelerationSpread);
+        particle.angle = randomValue(settings.angleBase, settings.angleSpread);
+        particle.angleVelocity = randomValue(settings.angleVelocityBase, settings.angleVelocitySpread);
+        particle.angleAcceleration = randomValue(settings.angleAccelerationBase, settings.angleAccelerationSpread);
 
-        particle.size = randomValue(scope.sizeBase, scope.sizeSpread);
+        particle.size = randomValue(settings.sizeBase, settings.sizeSpread);
 
-        auto color = randomVector3(scope.colorBase, scope.colorSpread);
+        auto color = randomVector3(settings.colorBase, settings.colorSpread);
         particle.color = Color().setHSL(color.x, color.y, color.z);
 
-        particle.opacity = randomValue(scope.opacityBase, scope.opacitySpread);
+        particle.opacity = randomValue(settings.opacityBase, settings.opacitySpread);
 
         particle.age = 0;
         particle.alive = false;// particles initialize as inactive
@@ -244,7 +246,11 @@ struct ParticleSystem::Impl {
 
         reset();
 
-        particleCount = scope.particlesPerSecond * std::min(scope.particleDeathAge, scope.emitterDeathAge);
+        sizeTween = Tween<float>(settings.size.first, settings.size.second);
+        opacityTween = Tween<float>(settings.opacity.first, settings.opacity.second);
+        colorTween = Tween<Vector3>(settings.color.first, settings.color.second);
+
+        particleCount = settings.particlesPerSecond * std::min(settings.particleDeathAge, settings.emitterDeathAge);
 
         particleMaterial = ShaderMaterial::create();
         particleMaterial->vertexShader = particleVertexShader;
@@ -259,8 +265,8 @@ struct ParticleSystem::Impl {
         particleGeometry->setAttribute("customColor", FloatBufferAttribute::create(std::vector<float>(particleCount * 3), 3));
         particleGeometry->setAttribute("customOpacity", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
 
-        if (scope.texture) {
-            particleMaterial->uniforms->operator[]("tex").setValue(scope.texture.get());
+        if (settings.texture) {
+            particleMaterial->uniforms->operator[]("tex").setValue(settings.texture.get());
             particleMaterial->depthWrite = false;
         }
 
@@ -288,8 +294,8 @@ struct ParticleSystem::Impl {
             customAngle->setX(i, this->particleArray[i].angle);
         }
 
-        this->particleMaterial->blending = scope.blendStyle;
-        if (scope.blendStyle != Blending::Normal) {
+        this->particleMaterial->blending = settings.blendStyle;
+        if (settings.blendStyle != Blending::Normal) {
             this->particleMaterial->depthTest = false;
         }
 
@@ -314,7 +320,7 @@ struct ParticleSystem::Impl {
 
                 // check if particle should expire
                 // could also use: death by size<0 or alpha<0.
-                if (this->particleArray[i].age > scope.particleDeathAge) {
+                if (this->particleArray[i].age > settings.particleDeathAge) {
                     this->particleArray[i].alive = false;
                     recycleIndices.emplace_back(i);
                 }
@@ -339,10 +345,10 @@ struct ParticleSystem::Impl {
         if (!this->emitterAlive) return;
 
         // if no particles have died yet, then there are still particles to activate
-        if (this->emitterAge < scope.particleDeathAge) {
+        if (this->emitterAge < settings.particleDeathAge) {
             // determine indices of particles to activate
-            const auto startIndex = static_cast<int>(std::round(scope.particlesPerSecond * (this->emitterAge + 0)));
-            auto endIndex = static_cast<int>(std::round(scope.particlesPerSecond * (this->emitterAge + dt)));
+            const auto startIndex = static_cast<int>(std::round(settings.particlesPerSecond * (this->emitterAge + 0)));
+            auto endIndex = static_cast<int>(std::round(settings.particlesPerSecond * (this->emitterAge + dt)));
             if (endIndex > this->particleCount) {
                 endIndex = this->particleCount;
             }
@@ -361,7 +367,7 @@ struct ParticleSystem::Impl {
 
         // stop emitter?
         this->emitterAge += dt;
-        if (this->emitterAge > scope.emitterDeathAge) {
+        if (this->emitterAge > settings.emitterDeathAge) {
             this->emitterAlive = false;
         }
     }
@@ -378,20 +384,80 @@ void ParticleSystem::update(float dt) {
     pimpl_->update(dt);
 }
 
-ParticleSystem& ParticleSystem::setSizeTween(const std::vector<float>& times, const std::vector<float>& values) {
-    pimpl_->sizeTween = Tween<float>(times, values);
-    return *this;
+ParticleSystem::Settings& threepp::ParticleSystem::settings() {
+    return pimpl_->settings;
 }
-
-ParticleSystem& ParticleSystem::setOpacityTween(const std::vector<float>& times, const std::vector<float>& values) {
-    pimpl_->opacityTween = Tween<float>(times, values);
-    return *this;
-}
-
-ParticleSystem& ParticleSystem::setColorTween(const std::vector<float>& times, const std::vector<Vector3>& values) {
-    pimpl_->colorTween = Tween<Vector3>(times, values);
-    return *this;
-}
-
 
 ParticleSystem::~ParticleSystem() = default;
+
+
+ParticleSystem::Settings::Settings() {
+    makeDefault();
+}
+
+ParticleSystem::Settings& ParticleSystem::Settings::setSizeTween(const std::vector<float>& times, const std::vector<float>& values) {
+    size = {times, values};
+    return *this;
+}
+
+ParticleSystem::Settings& ParticleSystem::Settings::setOpacityTween(const std::vector<float>& times, const std::vector<float>& values) {
+    opacity = {times, values};
+    return *this;
+}
+
+ParticleSystem::Settings& ParticleSystem::Settings::setColorTween(const std::vector<float>& times, const std::vector<Vector3>& values) {
+    color = {times, values};
+    return *this;
+}
+
+void ParticleSystem::Settings::makeDefault() {
+    positionStyle = Type::BOX;
+    positionBase = {};
+    positionSpread = {};
+    positionRadius = 0;// distance from base at which particles start
+
+    velocityStyle = Type::BOX;
+
+    velocityBase = {};
+    velocitySpread = {};
+
+    speedBase = 0;
+    speedSpread = 0;
+
+    accelerationBase = {};
+    accelerationSpread = {};
+
+    angleBase = 0;
+    angleSpread = 0;
+    angleVelocityBase = 0;
+    angleVelocitySpread = 0;
+    angleAccelerationBase = 0;
+    angleAccelerationSpread = 0;
+
+    sizeBase = 0.0;
+    sizeSpread = 0.0;
+
+    // store colors in HSL format in a THREE.Vector3 object
+    // http://en.wikipedia.org/wiki/HSL_and_HSV
+    colorBase = Vector3(0.0f, 1.0f, 0.5f);
+    colorSpread = Vector3(0.0f, 0.0f, 0.0f);
+
+    opacityBase = 1.0;
+    opacitySpread = 0.0;
+
+    blendStyle = Blending::Normal;// false;
+
+    particlesPerSecond = 100;
+    particleDeathAge = 1.0;
+
+    ////////////////////////
+    // EMITTER PROPERTIES //
+    ////////////////////////
+    emitterDeathAge = 60;// time (seconds) at which to stop creating particles.
+
+    texture = nullptr;
+
+    size = {};
+    opacity = {};
+    color = {};
+}
