@@ -134,8 +134,8 @@ namespace {
         std::optional<float> opacity;
 
         void update(float dt) {
-            this->position.add(this->velocity.clone().multiplyScalar(dt));
-            this->velocity.add(this->acceleration.clone().multiplyScalar(dt));
+            this->position.addScaledVector(this->velocity, dt);
+            this->velocity.addScaledVector(this->acceleration, dt);
 
             // convert from degrees to radians: 0.01745329251 = Math.PI/180
             this->angle += angleVelocity * 0.01745329251f * dt;
@@ -176,21 +176,14 @@ struct ParticleSystem::Impl {
     // How many particles could be active at any time?
     size_t particleCount{};
 
-    std::shared_ptr<BufferGeometry> particleGeometry;
-    std::shared_ptr<ShaderMaterial> particleMaterial;
+    std::shared_ptr<BufferGeometry> particleGeometry = nullptr;
+    std::shared_ptr<ShaderMaterial> particleMaterial = nullptr;
     std::shared_ptr<Object3D> particleMesh;
 
     ParticleSystem& scope;
 
     explicit Impl(ParticleSystem& scope)
-        : scope(scope),
-          particleMaterial(ShaderMaterial::create()),
-          particleGeometry(BufferGeometry::create()) {
-
-        particleMaterial->vertexShader = particleVertexShader;
-        particleMaterial->fragmentShader = particleFragmentShader;
-        particleMaterial->transparent = true;
-    }
+        : scope(scope) {}
 
     [[nodiscard]] Particle createParticle() {
         Particle particle;
@@ -237,10 +230,28 @@ struct ParticleSystem::Impl {
         return particle;
     }
 
+    void reset() {
+        particleArray = {};
+        emitterAge = 0.0;
+        emitterAlive = true;
+
+        if (particleMesh) {
+            scope.remove(*particleMesh);
+        }
+    }
+
     void initialize() {
+
+        reset();
 
         particleCount = scope.particlesPerSecond * std::min(scope.particleDeathAge, scope.emitterDeathAge);
 
+        particleMaterial = ShaderMaterial::create();
+        particleMaterial->vertexShader = particleVertexShader;
+        particleMaterial->fragmentShader = particleFragmentShader;
+        particleMaterial->transparent = true;
+
+        particleGeometry = BufferGeometry::create();
         particleGeometry->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(particleCount * 3), 3));
         particleGeometry->setAttribute("customVisible", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
         particleGeometry->setAttribute("customAngle", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));

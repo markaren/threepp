@@ -18,5 +18,4 @@ add_example(NAME "water" TRY_LINK_IMGUI WEB WEB_EMBED
         "../data/textures/waternormals.jpg@data/textures/waternormals.jpg"
 )
 
-add_example(NAME "particle_system")
-
+add_example(NAME "particle_system" TRY_LINK_IMGUI)
