@@ -1,6 +1,7 @@
 
 set(headers
-    "${CMAKE_CURRENT_SOURCE_DIR}/Coordinate.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/Coordinate.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/GameMap.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Heuristic.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Path.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/Pathfinder.hpp"

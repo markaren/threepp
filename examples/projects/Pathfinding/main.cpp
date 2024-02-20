@@ -1,7 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
-#include "TileBasedMap.hpp"
+#include "GameMap.hpp"
 #include "astar/AStar.hpp"
 #include "heuristics/ClosestHeuristic.hpp"
 
@@ -12,62 +12,9 @@
 using namespace threepp;
 
 
-class GameMap: public TileBasedMap {
-
-public:
-    explicit GameMap(std::vector<std::string> data): data_(std::move(data)) {
-
-        height_ = data_.size();
-
-        // check that width is consistent
-        unsigned width = data_[0].size();
-        for (int i = 1; i < data_.size(); i++) {
-            if (data_[i].size() != width) {
-                throw std::runtime_error("Input breadth mismatch!");
-            }
-        }
-        width_ = width;
-    }
-
-    [[nodiscard]] unsigned int width() const override {
-
-        return width_;
-    }
-
-    [[nodiscard]] unsigned int height() const override {
-
-        return height_;
-    }
-
-    [[nodiscard]] char get(int x, int y) const {
-
-        return data_[y][x];
-    }
-
-    [[nodiscard]] bool blocked(const Coordinate& v) const override {
-
-        char c = get(v.x, v.y);
-        bool blocked = (c == '1');
-        return blocked;
-    }
-
-    float getCost(const Coordinate& start, const Coordinate& target) override {
-
-        return 1;
-    }
-
-    [[nodiscard]] std::vector<std::string> data() const {
-        return data_;
-    }
-
-private:
-    unsigned int width_, height_;
-    std::vector<std::string> data_;
-};
-
-
 int main() {
 
+    // 10x10 map
     std::vector<std::string> data{"1001111100",
                                   "1100011110",
                                   "0111001101",
@@ -96,7 +43,7 @@ int main() {
         for (unsigned i = 0; i < path->length(); i++) {
             auto c = (*path)[i];
             auto& value = data[c.y][c.x];
-            if (value != 's' || value != 'g') {
+            if (!(value == 's' || value == 'g')) {
                 value = 'x';
             }
         }
@@ -117,25 +64,36 @@ int main() {
     grid->rotateX(math::PI / 2);
     scene.add(grid);
 
-    auto boxGeometry = BoxGeometry::create(0.95, 0.95, 0.1);
+    std::shared_ptr<BufferGeometry> boxGeometry = BoxGeometry::create(0.95, 0.95, 0.1);
     boxGeometry->translate(0.5, 0.5, 0);
 
+    std::shared_ptr<BufferGeometry> sphereGeometry = SphereGeometry::create(0.45);
+    sphereGeometry->translate(0.5, 0.5, 0);
+
     std::unordered_map<char, Color> colors = {{'0', Color::black},
-                                              {'1', Color::white},
+                                              {'1', Color::gray},
                                               {'s', Color::blue},
                                               {'g', Color::green},
                                               {'x', Color::yellow}};
 
-    for (unsigned i = 0; i < 10; i++) {
-        for (unsigned j = 0; j < 10; j++) {
+    for (unsigned i = 0; i < size; i++) {
+        for (unsigned j = 0; j < size; j++) {
             auto value = data[i][j];
 
             auto material = MeshBasicMaterial::create({{"color", colors[value]}});
-            auto box = Mesh::create(boxGeometry, material);
-            box->position.set(static_cast<float>(j) - 5, static_cast<float>(i) - 5, 0);
+            auto geometry = (value == 's' || value == 'g') ? sphereGeometry : boxGeometry;
+            auto box = Mesh::create(geometry, material);
+            box->position.set(static_cast<float>(j) - size/2, static_cast<float>(i) - size/2, 0);
             scene.add(box);
         }
     }
+
+    canvas.onWindowResize([&](WindowSize s){
+        camera.left = -size * s.aspect() / 2;
+        camera.right = size * s.aspect() / 2;
+        camera.updateProjectionMatrix();
+        renderer.setSize(s);
+    });
 
     canvas.animate([&] {
         renderer.render(scene, camera);
