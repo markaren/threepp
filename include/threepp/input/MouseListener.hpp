@@ -9,16 +9,6 @@
 
 namespace threepp {
 
-    struct MouseEvent {
-
-        const int button;
-        const int action;
-        const int mods;
-
-        MouseEvent(const int button, const int action, const int mods)
-            : button(button), action(action), mods(mods) {}
-    };
-
     struct MouseListener {
 
         virtual void onMouseDown(int button, const Vector2& pos) {}
