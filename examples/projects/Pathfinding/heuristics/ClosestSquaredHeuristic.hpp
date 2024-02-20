@@ -1,7 +1,7 @@
 // https://cokeandcode.com/tutorials/tilemap2.html
 
-#ifndef PATHFINDING_CLOSESTHEURISTIC_HPP
-#define PATHFINDING_CLOSESTHEURISTIC_HPP
+#ifndef PATHFINDING_CLOSESTSQHEURISTIC_HPP
+#define PATHFINDING_CLOSESTSQHEURISTIC_HPP
 
 #include "Heuristic.hpp"
 
@@ -13,7 +13,7 @@
 class ClosestSquaredHeuristic: public Heuristic {
 
 public:
-    float getCost(TileBasedMap* map, const Coordinate& start, const Coordinate& target) override {
+    float getCost(TileBasedMap& map, const Coordinate& start, const Coordinate& target) override {
         auto dx = static_cast<float>(target.x - start.x);
         auto dy = static_cast<float>(target.y - start.y);
 
@@ -22,4 +22,4 @@ public:
     }
 };
 
-#endif//PATHFINDING_CLOSESTHEURISTIC_HPP
+#endif//PATHFINDING_CLOSESTSQHEURISTIC_HPP
