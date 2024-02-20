@@ -51,7 +51,7 @@ int main() {
     auto scene = Scene::create();
     scene->background = Color(0x8FBCD4);
 
-    auto camera = PerspectiveCamera::create();
+    auto camera = PerspectiveCamera::create(60, canvas.aspect());
     camera->layers.enableAll();
     camera->position.z = 10;
     scene->add(camera);
