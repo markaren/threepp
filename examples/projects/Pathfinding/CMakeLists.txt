@@ -13,4 +13,6 @@ set(headers
 )
 
 add_example(NAME "Pathfinding" SOURCES main.cpp ${headers})
-target_include_directories(Pathfinding PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if (TARGET "Pathfinding")
+    target_include_directories(Pathfinding PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+endif ()
