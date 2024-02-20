@@ -83,12 +83,12 @@ int main() {
             auto material = MeshBasicMaterial::create({{"color", colors[value]}});
             auto geometry = (value == 's' || value == 'g') ? sphereGeometry : boxGeometry;
             auto box = Mesh::create(geometry, material);
-            box->position.set(static_cast<float>(j) - size/2, static_cast<float>(i) - size/2, 0);
+            box->position.set(static_cast<float>(j) - size / 2, static_cast<float>(i) - size / 2, 0);
             scene.add(box);
         }
     }
 
-    canvas.onWindowResize([&](WindowSize s){
+    canvas.onWindowResize([&](WindowSize s) {
         camera.left = -size * s.aspect() / 2;
         camera.right = size * s.aspect() / 2;
         camera.updateProjectionMatrix();

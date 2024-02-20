@@ -12,34 +12,34 @@ class Coordinate {
 public:
     int x, y;
 
-    Coordinate() : Coordinate(0, 0) {}
-    Coordinate(int x, int y) : x(x), y(y) {}
+    Coordinate(): Coordinate(0, 0) {}
+    Coordinate(int x, int y): x(x), y(y) {}
 
-    Coordinate operator+(const Coordinate &other) const {
+    Coordinate operator+(const Coordinate& other) const {
         return {x + other.x, y + other.y};
     }
 
-    Coordinate operator-(const Coordinate &other) const {
+    Coordinate operator-(const Coordinate& other) const {
         return {x - other.x, y - other.y};
     }
 
-    Coordinate &operator+=(const Coordinate &other) {
+    Coordinate& operator+=(const Coordinate& other) {
         x += other.x;
         y += other.y;
         return *this;
     }
 
-    Coordinate &operator-=(const Coordinate &other) {
+    Coordinate& operator-=(const Coordinate& other) {
         x -= other.x;
         y -= other.y;
         return *this;
     }
 
-    bool operator==(const Coordinate &other) const {
+    bool operator==(const Coordinate& other) const {
         return x == other.x && y == other.y;
     }
 
-    friend std::ostream &operator<<(std::ostream &os, const Coordinate &v) {
+    friend std::ostream& operator<<(std::ostream& os, const Coordinate& v) {
         os << "[" << v.x << ", " << v.y << "]";
         return os;
     }

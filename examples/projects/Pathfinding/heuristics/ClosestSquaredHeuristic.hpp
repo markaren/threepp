@@ -10,10 +10,10 @@
  * as the next best tile. In this case the sqrt is removed
  * and the distance squared is used instead
  */
-class ClosestSquaredHeuristic : public Heuristic {
+class ClosestSquaredHeuristic: public Heuristic {
 
 public:
-    float getCost(TileBasedMap *map, const Coordinate &start, const Coordinate &target) override {
+    float getCost(TileBasedMap* map, const Coordinate& start, const Coordinate& target) override {
         auto dx = static_cast<float>(target.x - start.x);
         auto dy = static_cast<float>(target.y - start.y);
 

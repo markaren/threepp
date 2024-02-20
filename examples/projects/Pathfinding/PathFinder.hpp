@@ -20,7 +20,7 @@ public:
      *
 	 * @return The path found from start to end, or null if no path can be found.
 	 */
-    [[nodiscard]] virtual std::optional<Path> findPath(const Coordinate &start, const Coordinate &target) = 0;
+    [[nodiscard]] virtual std::optional<Path> findPath(const Coordinate& start, const Coordinate& target) = 0;
 
     virtual ~Pathfinder() = default;
 };

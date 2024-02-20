@@ -27,7 +27,7 @@ public:
      *
 	 * @return The cost associated with the given tile
 	 */
-    virtual float getCost(TileBasedMap *map, const Coordinate &start, const Coordinate &target) = 0;
+    virtual float getCost(TileBasedMap* map, const Coordinate& start, const Coordinate& target) = 0;
 
     virtual ~Heuristic() = default;
 };

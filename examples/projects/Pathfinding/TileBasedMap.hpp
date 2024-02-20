@@ -34,7 +34,7 @@ public:
      *
      * @return True if the location is blocked
      */
-    [[nodiscard]] virtual bool blocked(const Coordinate &c) const = 0;
+    [[nodiscard]] virtual bool blocked(const Coordinate& c) const = 0;
 
     /**
 	 * Get the cost of moving through the given tile. This can be used to
@@ -46,7 +46,7 @@ public:
      *
 	 * @return The relative cost of moving across the given tile
 	 */
-    virtual float getCost(const Coordinate &start, const Coordinate &target) = 0;
+    virtual float getCost(const Coordinate& start, const Coordinate& target) = 0;
 
     virtual ~TileBasedMap() = default;
 };

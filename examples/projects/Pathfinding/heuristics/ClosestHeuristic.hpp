@@ -11,10 +11,10 @@
  * A heuristic that uses the tile that is closest to the target
  * as the next best tile.
  */
-class ClosestHeuristic : public Heuristic {
+class ClosestHeuristic: public Heuristic {
 
 public:
-    float getCost(TileBasedMap *map, const Coordinate &start, const Coordinate &target) override {
+    float getCost(TileBasedMap* map, const Coordinate& start, const Coordinate& target) override {
         auto dx = static_cast<float>(target.x - start.x);
         auto dy = static_cast<float>(target.y - start.y);
 

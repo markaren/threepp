@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-class AStar : public Pathfinder {
+class AStar: public Pathfinder {
 
 private:
     struct Node;// forward declaration
@@ -30,19 +30,19 @@ public:
         }
     }
 
-    AStar &setMaxSearchDistance(int distance) {
+    AStar& setMaxSearchDistance(int distance) {
         maxSearchDistance = distance;
         return *this;
     }
-    AStar &setAllowDiagMovement(bool allow) {
+    AStar& setAllowDiagMovement(bool allow) {
         allowDiagMovement = allow;
         return *this;
     }
 
-    std::optional<Path> findPath(const Coordinate &s, const Coordinate &t) override {
+    std::optional<Path> findPath(const Coordinate& s, const Coordinate& t) override {
 
-        std::vector<Node *> closed;
-        std::vector<Node *> open;
+        std::vector<Node*> closed;
+        std::vector<Node*> open;
 
         // easy first check, if the destination is blocked, we can't get there
         if (map->blocked(t)) {
@@ -63,7 +63,7 @@ public:
         while ((maxDepth < maxSearchDistance) && (!open.empty())) {
             // pull out the first node in our open list, this is determined to
             // be the most likely to be the next step based on our heuristic
-            Node *current = open.front();
+            Node* current = open.front();
             if (current == &nodes[t.x][t.y]) {
                 break;
             }
@@ -96,7 +96,7 @@ public:
                         // movement cost to reach this node. Note that the heuristic value
                         // is only used in the sorted open list
                         float nextStepCost = current->cost + getMovementCost(current->xy, p);
-                        Node *neighbour = &nodes[p.x][p.y];
+                        Node* neighbour = &nodes[p.x][p.y];
 
                         // if the new cost we've determined for this node is lower than
                         // it has been previously makes sure the node hasn't been discarded.
@@ -136,7 +136,7 @@ public:
         // references of the nodes to find out way from the target location back
         // to the start recording the nodes on the way.
         Path path;
-        Node *target = &nodes[t.x][t.y];
+        Node* target = &nodes[t.x][t.y];
         while (target != &nodes[s.x][s.y]) {
             path.prependStep(target->xy);
             target = target->parent;
@@ -159,15 +159,15 @@ private:
 
         float cost = 0;
         /** The parent of this node, how we reached it in the search */
-        Node *parent = nullptr;
+        Node* parent = nullptr;
         /** The heuristic cost of this node */
         float heuristic = 0;
         /** The search depth of this node */
         int depth = 0;
 
-        explicit Node(const Coordinate &c) : xy(c) {}
+        explicit Node(const Coordinate& c): xy(c) {}
 
-        int setParent(Node *p) {
+        int setParent(Node* p) {
             depth = p->depth + 1;
             this->parent = p;
 
@@ -175,7 +175,7 @@ private:
         }
 
         // used for sorting
-        bool operator<(const Node &other) const {
+        bool operator<(const Node& other) const {
             float f = heuristic + cost;
             float of = other.heuristic + other.cost;
 
@@ -193,12 +193,12 @@ private:
     int maxSearchDistance = 100;
     bool allowDiagMovement = true;
 
-    static bool contains(const std::vector<Node *> &list, Node *node) {
+    static bool contains(const std::vector<Node*>& list, Node* node) {
 
         return std::find(list.begin(), list.end(), node) != std::end(list);
     }
 
-    static void removeFrom(std::vector<Node *> &list, Node *node) {
+    static void removeFrom(std::vector<Node*>& list, Node* node) {
 
         list.erase(std::remove(list.begin(), list.end(), node), list.end());
     }
@@ -211,7 +211,7 @@ private:
      *
 	 * @return True if the location is valid
 	 */
-    [[nodiscard]] bool isValidLocation(const Coordinate &c1, const Coordinate &c2) const {
+    [[nodiscard]] bool isValidLocation(const Coordinate& c1, const Coordinate& c2) const {
 
         bool invalid = (c2.x < 0) || (c2.y < 0) || (c2.x >= map->width()) ||
                        (c2.y >= map->height());
@@ -231,7 +231,7 @@ private:
      *
 	 * @return The cost of movement through the given tile
 	 */
-    [[nodiscard]] float getMovementCost(const Coordinate &s, const Coordinate &t) const {
+    [[nodiscard]] float getMovementCost(const Coordinate& s, const Coordinate& t) const {
 
         return map->getCost(s, t);
     }
@@ -245,7 +245,7 @@ private:
      *
 	 * @return The heuristic cost assigned to the tile
 	 */
-    float getHeuristicCost(const Coordinate &s, const Coordinate &t) {
+    float getHeuristicCost(const Coordinate& s, const Coordinate& t) {
 
         return heuristic->getCost(map.get(), s, t);
     }
