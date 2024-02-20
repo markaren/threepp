@@ -14,7 +14,7 @@
 class ClosestHeuristic: public Heuristic {
 
 public:
-    float getCost(TileBasedMap* map, const Coordinate& start, const Coordinate& target) override {
+    float getCost(TileBasedMap& map, const Coordinate& start, const Coordinate& target) override {
         auto dx = static_cast<float>(target.x - start.x);
         auto dy = static_cast<float>(target.y - start.y);
 

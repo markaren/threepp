@@ -49,7 +49,17 @@ public:
 
     float getCost(const Coordinate& start, const Coordinate& target) override {
 
-        return 1;
+        // Calculate the absolute difference in x and y coordinates
+        int dx = abs(target.x - start.x);
+        int dy = abs(target.y - start.y);
+
+        // Higher cost for diagonal movements
+        float cost = 1.0f;
+        if (dx > 0 && dy > 0) {
+            cost = 1.5f; // Adjust this value as needed
+        }
+
+        return cost;
     }
 
     [[nodiscard]] std::vector<std::string> data() const {

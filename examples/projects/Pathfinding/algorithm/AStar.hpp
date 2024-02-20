@@ -19,7 +19,7 @@ private:
     struct Node;// forward declaration
 
 public:
-    AStar(std::unique_ptr<TileBasedMap> map, std::unique_ptr<Heuristic> heuristic)
+    explicit AStar(std::unique_ptr<TileBasedMap> map, std::unique_ptr<Heuristic> heuristic = nullptr)
         : map(std::move(map)), heuristic(std::move(heuristic)) {
 
         for (int x = 0; x < this->map->width(); x++) {
@@ -45,7 +45,7 @@ public:
         std::vector<Node*> open;
 
         // easy first check, if the destination is blocked, we can't get there
-        if (map->blocked(t)) {
+        if (map->blocked(s) || map->blocked(t)) {
             return std::nullopt;
         }
 
@@ -147,7 +147,6 @@ public:
         return path;
     }
 
-
 private:
     /**
 	 * A single node in the search graph
@@ -247,7 +246,9 @@ private:
 	 */
     float getHeuristicCost(const Coordinate& s, const Coordinate& t) {
 
-        return heuristic->getCost(map.get(), s, t);
+        if (!heuristic) return 0; // Dijkstra's
+
+        return heuristic->getCost(*map, s, t);
     }
 };
 

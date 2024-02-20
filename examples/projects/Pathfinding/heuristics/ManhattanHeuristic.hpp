@@ -11,12 +11,12 @@
  * A heuristic that drives the search based on the Manhattan distance
  * between the current location and the target
  */
-class ManhattanHeuristic : public Heuristic {
+class ManhattanHeuristic: public Heuristic {
 
 public:
-    explicit ManhattanHeuristic(int minimumCost) : minimumCost_(minimumCost) {}
+    explicit ManhattanHeuristic(int minimumCost): minimumCost_(minimumCost) {}
 
-    float getCost(TileBasedMap *map, const Coordinate &start, const Coordinate &target) override {
+    float getCost(TileBasedMap& map, const Coordinate& start, const Coordinate& target) override {
         return minimumCost_ * (std::abs(start.x - target.x) + std::abs(start.y - target.y));
     }
 
