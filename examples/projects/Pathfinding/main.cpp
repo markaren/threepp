@@ -48,7 +48,7 @@ int main() {
             }
         }
     } else {
-        std::cout << "no path" << std::endl;
+        std::cerr << "Unable to find path between " << start << " and " << target << std::endl;
     }
 
     Canvas canvas("AStar pathfinding");

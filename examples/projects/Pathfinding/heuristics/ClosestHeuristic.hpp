@@ -3,7 +3,7 @@
 #ifndef PATHFINDING_CLOSESTHEURISTIC_HPP
 #define PATHFINDING_CLOSESTHEURISTIC_HPP
 
-#include "../Heuristic.hpp"
+#include "Heuristic.hpp"
 
 #include <cmath>
 

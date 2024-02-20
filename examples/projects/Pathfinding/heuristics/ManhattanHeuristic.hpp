@@ -3,9 +3,9 @@
 #ifndef PATHFINDING_MANHATTANHEURISTIC_HPP
 #define PATHFINDING_MANHATTANHEURISTIC_HPP
 
-#include "../Heuristic.hpp"
+#include "Heuristic.hpp"
 
-#include <cstdlib>
+#include <cmath>
 
 /**
  * A heuristic that drives the search based on the Manhattan distance

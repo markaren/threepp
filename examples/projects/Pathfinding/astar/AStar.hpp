@@ -2,9 +2,9 @@
 #ifndef PATHFINDING_ASTAR_HPP
 #define PATHFINDING_ASTAR_HPP
 
-#include "../Heuristic.hpp"
-#include "../PathFinder.hpp"
-#include "../TileBasedMap.hpp"
+#include "Heuristic.hpp"
+#include "PathFinder.hpp"
+#include "TileBasedMap.hpp"
 
 #include <algorithm>
 #include <cmath>
