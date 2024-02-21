@@ -3,7 +3,7 @@
 #ifndef PATHFINDING_MANHATTANHEURISTIC_HPP
 #define PATHFINDING_MANHATTANHEURISTIC_HPP
 
-#include "Heuristic.hpp"
+#include "pathfinding/Heuristic.hpp"
 
 #include <cmath>
 
