@@ -30,16 +30,16 @@ namespace {
         hudSprite4->center.set(1, 0);
         hudSprite4->scale.set(75, 75, 1);
 
-        hud.add(hudSprite1, HUD::Options().setNormalizedPosition({0, 1}).setMargin({}).onClick([](int) {
+        hud.add(hudSprite1, HUD::Options().setNormalizedPosition({0, 1}).setMargin({}).onMouseUp([hudSprite1](int) {
             std::cout << "Clicked on sprite 1" << std::endl;
         }));
-        hud.add(hudSprite2, HUD::Options().setNormalizedPosition({1, 1}).setMargin({}).onClick([](int) {
+        hud.add(hudSprite2, HUD::Options().setNormalizedPosition({1, 1}).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 2" << std::endl;
         }));
-        hud.add(hudSprite3, HUD::Options().setNormalizedPosition({0, 0}).setMargin({}).onClick([](int) {
+        hud.add(hudSprite3, HUD::Options().setNormalizedPosition({0, 0}).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 3" << std::endl;
         }));
-        hud.add(hudSprite4, HUD::Options().setNormalizedPosition({1, 0}).setMargin({}).onClick([](int) {
+        hud.add(hudSprite4, HUD::Options().setNormalizedPosition({1, 0}).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 4" << std::endl;
         }));
     }

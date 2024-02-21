@@ -93,6 +93,19 @@ void HUD::needsUpdate(Object3D& o) {
     }
 }
 
+void HUD::onMouseDown(int button, const Vector2& pos) {
+
+    raycaster_.setFromCamera(mouse_, camera_);
+
+    auto intersects = raycaster_.intersectObjects(children, false);
+    if (!intersects.empty()) {
+        auto front = intersects.front();
+        if (map_.count(front.object)) {
+            map_.at(front.object).onMouseDown_(button);
+        }
+    }
+}
+
 void HUD::onMouseUp(int button, const Vector2& pos) {
 
     raycaster_.setFromCamera(mouse_, camera_);
@@ -101,7 +114,7 @@ void HUD::onMouseUp(int button, const Vector2& pos) {
     if (!intersects.empty()) {
         auto front = intersects.front();
         if (map_.count(front.object)) {
-            map_.at(front.object).onClick_(button);
+            map_.at(front.object).onMouseUp_(button);
         }
     }
 }

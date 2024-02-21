@@ -62,8 +62,14 @@ namespace threepp {
                 return *this;
             }
 
-            Options& onClick(const std::function<void(int)>& onClick) {
-                this->onClick_ = onClick;
+            Options& onMouseUp(const std::function<void(int)>& callback) {
+                this->onMouseUp_ = callback;
+
+                return *this;
+            }
+
+            Options& onMouseDown(const std::function<void(int)>& callback) {
+                this->onMouseDown_ = callback;
 
                 return *this;
             }
@@ -75,7 +81,8 @@ namespace threepp {
 
             Vector2 pos;
             Vector2 margin_{5, 5};
-            std::function<void(int)> onClick_ = [](int){};
+            std::function<void(int)> onMouseDown_ = [](int){};
+            std::function<void(int)> onMouseUp_ = [](int){};
 
             VerticalAlignment verticalAlignment_;
             HorizontalAlignment horizontalAlignment_;
@@ -95,6 +102,7 @@ namespace threepp {
 
         void needsUpdate(Object3D& o);
 
+        void onMouseDown(int button, const Vector2& pos) override;
         void onMouseUp(int button, const Vector2& pos) override;
         void onMouseMove(const Vector2& pos) override;
 
