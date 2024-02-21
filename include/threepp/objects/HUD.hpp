@@ -7,6 +7,8 @@
 #include "threepp/extras/core/Font.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
+#include "threepp/core/Raycaster.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
 
 #include <optional>
 #include <string>
@@ -15,7 +17,7 @@ namespace threepp {
 
     class GLRenderer;
 
-    class HUD: public Scene {
+    class HUD: public Scene, public MouseListener {
 
     public:
         enum class VerticalAlignment {
@@ -32,18 +34,18 @@ namespace threepp {
 
         struct Options {
 
-            Options(): margin(5, 5),
-                       verticalAlignment(VerticalAlignment::BOTTOM),
-                       horizontalAlignment(HorizontalAlignment::LEFT) {}
+            Options(): margin_(5, 5),
+                       verticalAlignment_(VerticalAlignment::BOTTOM),
+                       horizontalAlignment_(HorizontalAlignment::LEFT) {}
 
             Options& setVerticalAlignment(VerticalAlignment va) {
-                this->verticalAlignment = va;
+                this->verticalAlignment_ = va;
 
                 return *this;
             }
 
             Options& setHorizontalAlignment(HorizontalAlignment ha) {
-                this->horizontalAlignment = ha;
+                this->horizontalAlignment_ = ha;
 
                 return *this;
             }
@@ -55,7 +57,19 @@ namespace threepp {
             }
 
             Options& setMargin(const Vector2& margin) {
-                this->margin.copy(margin);
+                this->margin_.copy(margin);
+
+                return *this;
+            }
+
+            Options& onMouseUp(const std::function<void(int)>& callback) {
+                this->onMouseUp_ = callback;
+
+                return *this;
+            }
+
+            Options& onMouseDown(const std::function<void(int)>& callback) {
+                this->onMouseDown_ = callback;
 
                 return *this;
             }
@@ -63,17 +77,18 @@ namespace threepp {
             void updateElement(Object3D& o, WindowSize size);
 
         private:
-            Vector2 pos;
-            Vector2 margin{5, 5};
+            friend class HUD;
 
-            VerticalAlignment verticalAlignment;
-            HorizontalAlignment horizontalAlignment;
+            Vector2 pos;
+            Vector2 margin_{5, 5};
+            std::function<void(int)> onMouseDown_ = [](int){};
+            std::function<void(int)> onMouseUp_ = [](int){};
+
+            VerticalAlignment verticalAlignment_;
+            HorizontalAlignment horizontalAlignment_;
         };
 
-        explicit HUD(WindowSize size): size_(size), camera_(0, size.width, size.height, 0, 0.1, 10) {
-
-            camera_.position.z = 1;
-        }
+        explicit HUD(PeripheralsEventSource& eventSource);
 
         void apply(GLRenderer& renderer);
 
@@ -87,9 +102,16 @@ namespace threepp {
 
         void needsUpdate(Object3D& o);
 
+        void onMouseDown(int button, const Vector2& pos) override;
+        void onMouseUp(int button, const Vector2& pos) override;
+        void onMouseMove(const Vector2& pos) override;
+
     private:
         WindowSize size_;
         OrthographicCamera camera_;
+
+        Raycaster raycaster_;
+        Vector2 mouse_{-Infinity<float>, -Infinity<float>};
 
         std::unordered_map<Object3D*, Options> map_;
     };

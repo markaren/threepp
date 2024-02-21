@@ -118,7 +118,7 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud(canvas.size());
+    HUD hud(canvas);
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");

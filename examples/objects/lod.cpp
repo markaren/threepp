@@ -33,7 +33,7 @@ int main() {
         renderer.setSize(size);
     });
 
-    HUD hud(canvas.size());
+    HUD hud(canvas);
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/gentilis_bold.typeface.json");
 
