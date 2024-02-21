@@ -2,10 +2,10 @@
 #include "threepp/threepp.hpp"
 
 #include "GameMap.hpp"
-#include "algorithm/AStar.hpp"
-#include "heuristics/ClosestHeuristic.hpp"
-#include "heuristics/ClosestSquaredHeuristic.hpp"
-#include "heuristics/ManhattanHeuristic.hpp"
+#include "pathfinding/algorithm/AStar.hpp"
+#include "pathfinding/heuristics/ClosestHeuristic.hpp"
+#include "pathfinding/heuristics/ClosestSquaredHeuristic.hpp"
+#include "pathfinding/heuristics/ManhattanHeuristic.hpp"
 
 #include <stdexcept>
 #include <vector>

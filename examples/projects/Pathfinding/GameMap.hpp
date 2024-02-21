@@ -2,7 +2,7 @@
 #ifndef THREEPP_GAMEMAP_HPP
 #define THREEPP_GAMEMAP_HPP
 
-#include "TileBasedMap.hpp"
+#include "pathfinding/TileBasedMap.hpp"
 
 #include <string>
 #include <utility>
@@ -56,7 +56,7 @@ public:
         // Higher cost for diagonal movements
         float cost = 1.0f;
         if (dx > 0 && dy > 0) {
-            cost = 1.5f; // Adjust this value as needed
+            cost = 1.5f;// Adjust this value as needed
         }
 
         return cost;
