@@ -31,7 +31,7 @@ namespace threepp {
 
             std::unordered_map<std::string, int> getAttributes();
 
-            void destroy();
+            ~GLProgram();
 
         private:
             GLBindingStates* bindingStates;

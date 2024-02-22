@@ -752,7 +752,7 @@ std::unordered_map<std::string, int> GLProgram::getAttributes() {
     return cachedAttributes;
 }
 
-void GLProgram::destroy() {
+GLProgram::~GLProgram() {
 
     bindingStates->releaseStatesOfProgram(*this);
 

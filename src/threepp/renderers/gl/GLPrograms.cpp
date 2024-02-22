@@ -110,16 +110,16 @@ UniformMap* GLPrograms::getUniforms(Material& material) {
     return nullptr;
 }
 
-std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey) {
+GLProgram* GLPrograms::acquireProgram(const GLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey) {
 
-    std::shared_ptr<GLProgram> program = nullptr;
+    GLProgram* program = nullptr;
 
     // Check if code has been already compiled
     for (auto& preexistingProgram : programs) {
 
         if (preexistingProgram->cacheKey == cacheKey) {
 
-            program = preexistingProgram;
+            program = preexistingProgram.get();
             ++(program->usedTimes);
 
             break;
@@ -128,24 +128,23 @@ std::shared_ptr<GLProgram> GLPrograms::acquireProgram(const GLRenderer& renderer
 
     if (!program) {
 
-        program = programs.emplace_back(std::make_shared<GLProgram>(&renderer, cacheKey, &parameters, &bindingStates));
+        programs.emplace_back(std::make_unique<GLProgram>(&renderer, cacheKey, &parameters, &bindingStates));
+        program = programs.back().get();
     }
 
     return program;
 }
 
-void GLPrograms::releaseProgram(const std::shared_ptr<GLProgram>& program) {
+void GLPrograms::releaseProgram(GLProgram* program) {
 
     if (--(program->usedTimes) == 0) {
 
-        auto it = find(programs.begin(), programs.end(), program);
-        auto i = it - programs.begin();
+        auto it = find_if(programs.begin(), programs.end(), [program](auto& p) {
+            return p->id == program->id;
+        });
 
-        // Remove from unordered set
-        programs[i] = programs[programs.size() - 1];
-        programs.pop_back();
-
-        // Free WebGL resources
-        program->destroy();
+        if (it != programs.end()) {
+            programs.erase(it);// Remove the element from the vector
+        }
     }
 }

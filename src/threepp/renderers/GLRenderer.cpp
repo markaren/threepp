@@ -597,7 +597,7 @@ struct GLRenderer::Impl {
             material->addEventListener("dispose", &onMaterialDispose);
         }
 
-        std::shared_ptr<gl::GLProgram> program = nullptr;
+        gl::GLProgram* program = nullptr;
 
         if (programs.count(programCacheKey)) {
 
@@ -607,7 +607,7 @@ struct GLRenderer::Impl {
 
                 updateCommonMaterialProperties(material, parameters);
 
-                return program.get();
+                return program;
             }
 
         } else {
@@ -666,7 +666,7 @@ struct GLRenderer::Impl {
         materialProperties->currentProgram = program;
         materialProperties->uniformsList = uniformsList;
 
-        return materialProperties->currentProgram.get();
+        return materialProperties->currentProgram;
     }
 
     void updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
@@ -783,7 +783,7 @@ struct GLRenderer::Impl {
 
         //
 
-        gl::GLProgram* program = materialProperties->currentProgram.get();
+        gl::GLProgram* program = materialProperties->currentProgram;
 
         if (needsProgramChange) {
 
