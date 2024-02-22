@@ -16,11 +16,11 @@ namespace {
         auto sky = Sky::create();
         sky->scale.setScalar(1000);
         auto& skyUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
-        skyUniforms->at("turbidity").value<float>() = 10;
-        skyUniforms->at("rayleigh").value<float>() = 1;
-        skyUniforms->at("mieCoefficient").value<float>() = 0.005f;
-        skyUniforms->at("mieDirectionalG").value<float>() = 0.8f;
-        skyUniforms->at("sunPosition").value<Vector3>().copy(lightPosition);
+        skyUniforms.at("turbidity").value<float>() = 10;
+        skyUniforms.at("rayleigh").value<float>() = 1;
+        skyUniforms.at("mieCoefficient").value<float>() = 0.005f;
+        skyUniforms.at("mieDirectionalG").value<float>() = 0.8f;
+        skyUniforms.at("sunPosition").value<Vector3>().copy(lightPosition);
 
         return sky;
     }
@@ -74,7 +74,7 @@ int main() {
 
     auto sky = createSky(light->position);
     auto shaderMaterial = sky->material()->as<ShaderMaterial>();
-    auto& sunPositionUniform = shaderMaterial->uniforms->at("sunPosition").value<Vector3>();
+    auto& sunPositionUniform = shaderMaterial->uniforms.at("sunPosition").value<Vector3>();
     scene->add(sky);
 
     OrbitControls controls{*camera, canvas};

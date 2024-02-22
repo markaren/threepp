@@ -612,7 +612,7 @@ struct GLRenderer::Impl {
 
         } else {
 
-            parameters.uniforms = gl::GLPrograms::getUniforms(material);
+            parameters.uniforms = gl::GLPrograms::getUniforms(*material);
 
             // material.onBuild( parameters, this );
 

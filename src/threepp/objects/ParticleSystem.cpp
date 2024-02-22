@@ -266,7 +266,7 @@ struct ParticleSystem::Impl {
         particleGeometry->setAttribute("customOpacity", FloatBufferAttribute::create(std::vector<float>(particleCount), 1));
 
         if (settings.texture) {
-            particleMaterial->uniforms->operator[]("tex").setValue(settings.texture.get());
+            particleMaterial->uniforms.at("tex").setValue(settings.texture.get());
             particleMaterial->depthWrite = false;
         }
 

@@ -43,7 +43,6 @@ int main() {
     geometry->setAttribute("color", FloatBufferAttribute::create(colors, 4));
 
     auto material = RawShaderMaterial::create();
-    (*material->uniforms)["time"] = Uniform();
     material->vertexShader = vertexSource();
     material->fragmentShader = fragmentSource();
     material->side = Side::Double;
@@ -63,7 +62,7 @@ int main() {
         float t = clock.getElapsedTime();
 
         mesh->rotation.y = t * 0.5f;
-        material->uniforms->at("time").setValue(t * 5);
+        material->uniforms["time"].setValue(t * 5);
 
         renderer.render(*scene, *camera);
     });
