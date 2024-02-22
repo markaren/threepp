@@ -64,11 +64,11 @@ int main() {
 
     auto sky = Sky::create();
     sky->scale.setScalar(10000);
-    auto shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
-    shaderUniforms->at("turbidity").value<float>() = 10;
-    shaderUniforms->at("rayleigh").value<float>() = 1;
-    shaderUniforms->at("mieCoefficient").value<float>() = 0.005;
-    shaderUniforms->at("mieDirectionalG").value<float>() = 0.8;
+    auto& shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+    shaderUniforms.at("turbidity").value<float>() = 10;
+    shaderUniforms.at("rayleigh").value<float>() = 1;
+    shaderUniforms.at("mieCoefficient").value<float>() = 0.005;
+    shaderUniforms.at("mieDirectionalG").value<float>() = 0.8;
     scene->add(sky);
 
     Vector3 sun;
@@ -80,7 +80,7 @@ int main() {
         float theta = math::degToRad(azimuth);
 
         light->position.setFromSphericalCoords(1, phi, theta);
-        shaderUniforms->at("sunPosition").value<Vector3>().copy(light->position);
+        shaderUniforms.at("sunPosition").value<Vector3>().copy(light->position);
     };
     computeSunPosition();
 
@@ -96,10 +96,10 @@ int main() {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("Controls");
-        ImGui::SliderFloat("turbidity", &shaderUniforms->at("turbidity").value<float>(), 0, 20);
-        ImGui::SliderFloat("rayleigh", &shaderUniforms->at("rayleigh").value<float>(), 0, 4);
-        ImGui::SliderFloat("mieCoefficient", &shaderUniforms->at("mieCoefficient").value<float>(), 0, 0.1);
-        ImGui::SliderFloat("mieDirectionalG", &shaderUniforms->at("mieDirectionalG").value<float>(), 0, 1);
+        ImGui::SliderFloat("turbidity", &shaderUniforms.at("turbidity").value<float>(), 0, 20);
+        ImGui::SliderFloat("rayleigh", &shaderUniforms.at("rayleigh").value<float>(), 0, 4);
+        ImGui::SliderFloat("mieCoefficient", &shaderUniforms.at("mieCoefficient").value<float>(), 0, 0.1);
+        ImGui::SliderFloat("mieDirectionalG", &shaderUniforms.at("mieDirectionalG").value<float>(), 0, 1);
         if (ImGui::SliderFloat("elevation", &elevation, 0, 90)) {
             computeSunPosition();
         }
@@ -117,7 +117,7 @@ int main() {
 #endif
 
     Clock clock;
-    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms->at("time");
+    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
         float t = clock.getElapsedTime();
 

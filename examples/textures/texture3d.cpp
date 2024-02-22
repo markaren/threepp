@@ -22,7 +22,7 @@ namespace {
         m->side = Side::Back;
         m->transparent = true;
 
-        UniformMap uniforms{
+        m->uniforms = {
                 {"base", Uniform(Color(0x798aa0))},
                 {"map", Uniform(texture)},
                 {"cameraPos", Uniform(Vector3())},
@@ -31,8 +31,6 @@ namespace {
                 {"range", Uniform(0.1f)},
                 {"steps", Uniform(100)},
                 {"frame", Uniform(1)}};
-
-        m->uniforms = std::make_shared<UniformMap>(uniforms);
 
         return m;
     }
@@ -98,11 +96,11 @@ int main() {
     canvas.animate([&]() {
         float t = clock.getElapsedTime();
 
-        material->uniforms->at("cameraPos").value<Vector3>().copy(camera.position);
-        material->uniforms->at("frame").value<int>()++;
+        material->uniforms.at("cameraPos").value<Vector3>().copy(camera.position);
+        material->uniforms.at("frame").value<int>()++;
 
         int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t) + 50);
-        material->uniforms->at("steps").value<int>() = std::max(1, step);
+        material->uniforms.at("steps").value<int>() = std::max(1, step);
 
         renderer.render(scene, camera);
     });

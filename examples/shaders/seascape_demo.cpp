@@ -26,8 +26,8 @@ int main() {
 
     auto size = canvas.size();
     auto material = RawShaderMaterial::create();
-    (*material->uniforms)["iTime"] = Uniform();
-    (*material->uniforms)["iResolution"] = Uniform(Vector2(size.width, size.height));
+    (material->uniforms)["iTime"] = Uniform();
+    (material->uniforms)["iResolution"] = Uniform(Vector2(size.width, size.height));
     material->vertexShader = vertexSource();
     material->fragmentShader = fragmentSource();
     material->side = Side::Double;
@@ -37,7 +37,7 @@ int main() {
 
     canvas.onWindowResize([&](WindowSize size) {
         renderer.setSize(size);
-        material->uniforms->at("iResolution").value<Vector2>().set(size.width, size.height);
+        material->uniforms.at("iResolution").value<Vector2>().set(size.width, size.height);
     });
 
     Clock clock;
@@ -45,7 +45,7 @@ int main() {
         float t = clock.getElapsedTime();
 
         mesh->rotation.y = t;
-        material->uniforms->at("iTime").setValue(t);
+        material->uniforms.at("iTime").setValue(t);
 
         renderer.render(*scene, *camera);
     });

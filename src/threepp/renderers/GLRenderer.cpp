@@ -72,11 +72,11 @@ struct GLRenderer::Impl {
 
     OnMaterialDispose onMaterialDispose;
 
-    std::shared_ptr<gl::GLRenderList> currentRenderList;
-    std::shared_ptr<gl::GLRenderState> currentRenderState;
+    gl::GLRenderList* currentRenderList = nullptr;
+    gl::GLRenderState* currentRenderState = nullptr;
 
-    std::vector<std::shared_ptr<gl::GLRenderList>> renderListStack;
-    std::vector<std::shared_ptr<gl::GLRenderState>> renderStateStack;
+    std::vector<gl::GLRenderList*> renderListStack;
+    std::vector<gl::GLRenderState*> renderStateStack;
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
@@ -597,7 +597,7 @@ struct GLRenderer::Impl {
             material->addEventListener("dispose", &onMaterialDispose);
         }
 
-        std::shared_ptr<gl::GLProgram> program = nullptr;
+        gl::GLProgram* program = nullptr;
 
         if (programs.count(programCacheKey)) {
 
@@ -607,12 +607,12 @@ struct GLRenderer::Impl {
 
                 updateCommonMaterialProperties(material, parameters);
 
-                return program.get();
+                return program;
             }
 
         } else {
 
-            parameters.uniforms = gl::GLPrograms::getUniforms(material);
+            parameters.uniforms = gl::GLPrograms::getUniforms(*material);
 
             // material.onBuild( parameters, this );
 
@@ -666,7 +666,7 @@ struct GLRenderer::Impl {
         materialProperties->currentProgram = program;
         materialProperties->uniformsList = uniformsList;
 
-        return materialProperties->currentProgram.get();
+        return materialProperties->currentProgram;
     }
 
     void updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
@@ -783,7 +783,7 @@ struct GLRenderer::Impl {
 
         //
 
-        gl::GLProgram* program = materialProperties->currentProgram.get();
+        gl::GLProgram* program = materialProperties->currentProgram;
 
         if (needsProgramChange) {
 

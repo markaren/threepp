@@ -391,10 +391,11 @@ namespace {
         ActiveUniformInfo activeInfo;
     };
 
-    void addUniform(Container* container, const std::shared_ptr<UniformObject>& uniformObject) {
+    void addUniform(Container* container, std::unique_ptr<UniformObject> uniformObject) {
 
-        container->seq.emplace_back(uniformObject);
-        container->map[uniformObject->id] = uniformObject;
+        const auto id = uniformObject->id;
+        container->seq.emplace_back(std::move(uniformObject));
+        container->map[id] = container->seq.back().get();
     }
 
     void parseUniform(ActiveUniformInfo& activeInfo, int addr, Container* container) {
@@ -422,19 +423,19 @@ namespace {
 
                 // bare name or "pure" bottom-level array "[0]" suffix
                 if (!match[3].matched) {
-                    addUniform(container, std::make_shared<SingleUniform>(id, activeInfo, addr));
+                    addUniform(container, std::make_unique<SingleUniform>(id, activeInfo, addr));
                 } else {
-                    addUniform(container, std::make_shared<PureArrayUniform>(id, activeInfo, addr));
+                    addUniform(container, std::make_unique<PureArrayUniform>(id, activeInfo, addr));
                 }
                 break;
 
             } else {
 
                 if (!container->map.count(id)) {
-                    addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo));
+                    addUniform(container, std::make_unique<StructuredUniform>(id, activeInfo));
                 }
 
-                container = dynamic_cast<Container*>(container->map.at(id).get());
+                container = dynamic_cast<Container*>(container->map.at(id));
             }
 
             ++rex_it;
@@ -467,7 +468,7 @@ void GLUniforms::setValue(const std::string& name, const UniformValue& value, GL
     }
 }
 
-void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values, GLTextures* textures) {
+void GLUniforms::upload(std::vector<UniformObject*>& seq, UniformMap& values, GLTextures* textures) {
 
     for (const auto& u : seq) {
 
@@ -481,13 +482,13 @@ void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>>& seq, Unifor
     }
 }
 
-std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values) {
+std::vector<UniformObject*> GLUniforms::seqWithValue(const std::vector<std::unique_ptr<UniformObject>>& seq, UniformMap& values) {
 
-    std::vector<std::shared_ptr<UniformObject>> r;
+    std::vector<UniformObject*> r;
 
     for (const auto& u : seq) {
 
-        if (values.count(u->id)) r.emplace_back(u);
+        if (values.count(u->id)) r.emplace_back(u.get());
     }
 
     return r;
