@@ -3,6 +3,7 @@
 #ifndef THREEPP_GLPROGRAM_HPP
 #define THREEPP_GLPROGRAM_HPP
 
+#include "GLUniforms.hpp"
 #include "ProgramParameters.hpp"
 
 #include <memory>
@@ -15,7 +16,6 @@ namespace threepp {
     namespace gl {
 
         struct GLBindingStates;
-        struct GLUniforms;
 
         struct GLProgram {
 
@@ -27,7 +27,7 @@ namespace threepp {
 
             GLProgram(const GLRenderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates);
 
-            std::shared_ptr<GLUniforms> getUniforms();
+            GLUniforms* getUniforms();
 
             std::unordered_map<std::string, int> getAttributes();
 
@@ -35,7 +35,7 @@ namespace threepp {
 
         private:
             GLBindingStates* bindingStates;
-            std::shared_ptr<GLUniforms> cachedUniforms;
+            std::unique_ptr<GLUniforms> cachedUniforms;
             std::unordered_map<std::string, int> cachedAttributes;
 
             GLProgram() = default;

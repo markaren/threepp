@@ -733,13 +733,13 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     glDeleteShader(glFragmentShader);
 }
 
-std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
+GLUniforms* GLProgram::getUniforms() {
 
     if (!cachedUniforms) {
-        cachedUniforms = std::make_shared<GLUniforms>(program);
+        cachedUniforms = std::make_unique<GLUniforms>(program);
     }
 
-    return cachedUniforms;
+    return cachedUniforms.get();
 }
 
 std::unordered_map<std::string, int> GLProgram::getAttributes() {
