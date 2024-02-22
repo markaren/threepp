@@ -1,18 +1,18 @@
 
 #include "Crane3R.hpp"
 
+#include "kine/Kine.hpp"
 #include "threepp/threepp.hpp"
 #include "threepp/utils/ThreadPool.hpp"
+#include "utility/Angle.hpp"
 
 using namespace threepp;
+using namespace kine;
 
 #ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
 
-#include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
-
-using namespace kine;
+#include "threepp/extras/imgui/ImguiContext.hpp"
 
 struct MyUI: ImguiContext {
 
@@ -125,11 +125,22 @@ int main() {
                             .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
                             .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
 
+    Kine kine = KineBuilder()
+                        .addRevoluteJoint(Vector3::Y(), {-90.f, 90.f})
+                        .addLink(Vector3::Y() * 4.2)
+                        .addRevoluteJoint(Vector3::X(), {-80.f, 0.f})
+                        .addLink(Vector3::Z() * 7)
+                        .addRevoluteJoint(Vector3::X(), {40.f, 140.f})
+                        .addLink(Vector3::Z() * 5.2)
+                        .build();
+
+
 #ifndef EMSCRIPTEN
     utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
     pool.submit([&] {
         crane = Crane3R::create();
+        crane->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
         crane->traverseType<Mesh>([](Mesh& m) {
             m.castShadow = true;
         });
@@ -142,6 +153,7 @@ int main() {
     });
 #else
     auto crane = Crane3R::create();
+    crane->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
     crane->traverseType<Mesh>([](Mesh& m) {
         m.castShadow = true;
     });
@@ -159,6 +171,7 @@ int main() {
         hud.setSize(size);
     });
 
+
 #ifdef HAS_IMGUI
 
     IOCapture capture{};
@@ -168,14 +181,6 @@ int main() {
     canvas.setIOCapture(&capture);
 
     auto ikSolver = std::make_unique<CCDSolver>();
-    Kine kine = KineBuilder()
-                        .addRevoluteJoint(Vector3::Y(), {-90.f, 90.f})
-                        .addLink(Vector3::Y() * 4.2)
-                        .addRevoluteJoint(Vector3::X(), {-80.f, 0.f})
-                        .addLink(Vector3::Z() * 7)
-                        .addRevoluteJoint(Vector3::X(), {40.f, 140.f})
-                        .addLink(Vector3::Z() * 5.2)
-                        .build();
 
     MyUI ui(canvas, kine);
 
@@ -184,6 +189,7 @@ int main() {
     scene->add(targetHelper);
 
 #endif
+
     Clock clock;
     canvas.animate([&]() {
         float dt = clock.getDelta();
@@ -192,7 +198,6 @@ int main() {
         renderer.render(*scene, *camera);
 
         if (crane) {
-
 #ifdef HAS_IMGUI
             ui.render();
 
@@ -215,6 +220,7 @@ int main() {
 #endif
 
             crane->update(dt);
+
         } else {
 
             hud.apply(renderer);
