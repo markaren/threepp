@@ -26,8 +26,8 @@ namespace threepp::gl {
 
     struct Container {
 
-        std::vector<std::shared_ptr<UniformObject>> seq;
-        std::unordered_map<std::string, std::shared_ptr<UniformObject>> map;
+        std::vector<std::unique_ptr<UniformObject>> seq;
+        std::unordered_map<std::string, UniformObject*> map;
 
         virtual ~Container() = default;
     };
@@ -38,9 +38,9 @@ namespace threepp::gl {
 
         void setValue(const std::string& name, const UniformValue& value, GLTextures* textures = nullptr);
 
-        static void upload(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values, GLTextures* textures);
+        static void upload(std::vector<UniformObject*>& seq, UniformMap& values, GLTextures* textures);
 
-        static std::vector<std::shared_ptr<UniformObject>> seqWithValue(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values);
+        static std::vector<UniformObject*> seqWithValue(const std::vector<std::unique_ptr<UniformObject>>& seq, UniformMap& values);
     };
 
 }// namespace threepp::gl
