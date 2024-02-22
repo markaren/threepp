@@ -144,6 +144,7 @@ void GLPrograms::releaseProgram(GLProgram* program) {
         });
 
         if (it != programs.end()) {
+            program->destroy();
             programs.erase(it);// Remove the element from the vector
         }
     }
