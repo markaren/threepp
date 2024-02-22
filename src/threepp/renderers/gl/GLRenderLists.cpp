@@ -69,7 +69,7 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
                                                          object,
                                                          geometry,
                                                          material,
-                                                         materialProperties->program.get(),
+                                                         materialProperties->program,
                                                          groupOrder,
                                                          object->renderOrder,
                                                          z,
@@ -86,7 +86,7 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
         renderItem->geometry = geometry;
         renderItem->material = material;
         if (materialProperties->program) {
-            renderItem->program = materialProperties->program.get();
+            renderItem->program = materialProperties->program;
         }
         renderItem->groupOrder = groupOrder;
         renderItem->renderOrder = object->renderOrder;

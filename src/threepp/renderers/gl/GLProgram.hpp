@@ -23,9 +23,14 @@ namespace threepp {
             int id = programIdCount++;
             std::string cacheKey;
             int usedTimes = 1;
-            unsigned int program = -1;
+            int program = -1;
 
             GLProgram(const GLRenderer* renderer, std::string cacheKey, const ProgramParameters* parameters, GLBindingStates* bindingStates);
+
+            GLProgram(const GLProgram&) = delete;
+            GLProgram(GLProgram&&) = delete;
+            GLProgram& operator=(const GLProgram&) = delete;
+            GLProgram& operator=(GLProgram&&) = delete;
 
             GLUniforms* getUniforms();
 
@@ -34,7 +39,7 @@ namespace threepp {
             void destroy();
 
         private:
-            GLBindingStates* bindingStates;
+            GLBindingStates* bindingStates = nullptr;
             std::unique_ptr<GLUniforms> cachedUniforms;
             std::unordered_map<std::string, int> cachedAttributes;
 
