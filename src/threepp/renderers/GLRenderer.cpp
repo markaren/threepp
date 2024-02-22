@@ -72,11 +72,11 @@ struct GLRenderer::Impl {
 
     OnMaterialDispose onMaterialDispose;
 
-    std::shared_ptr<gl::GLRenderList> currentRenderList;
-    std::shared_ptr<gl::GLRenderState> currentRenderState;
+    gl::GLRenderList* currentRenderList = nullptr;
+    gl::GLRenderState* currentRenderState = nullptr;
 
-    std::vector<std::shared_ptr<gl::GLRenderList>> renderListStack;
-    std::vector<std::shared_ptr<gl::GLRenderState>> renderStateStack;
+    std::vector<gl::GLRenderList*> renderListStack;
+    std::vector<gl::GLRenderState*> renderStateStack;
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
