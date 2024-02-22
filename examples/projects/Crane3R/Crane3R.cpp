@@ -10,7 +10,7 @@ using namespace threepp;
 
 namespace {
 
-    std::shared_ptr<Group> make_house_attachment(int i, float len, const Vector3& p) {
+    std::shared_ptr<Group> make_house_attachment(int i, float len, float sep, const Vector3& p) {
 
         auto material = MeshPhongMaterial::create();
         material->color = Color::gray;
@@ -26,15 +26,15 @@ namespace {
 
         auto cyl1 = Mesh::create(geometry, material);
         auto cyl2 = Mesh::create(geometry, material);
-        cyl1->position.x = 0.34f;
-        cyl2->position.x = -0.34f;
+        cyl1->position.x = sep/2;
+        cyl2->position.x = -sep/2;
         group->add(cyl1);
         group->add(cyl2);
 
         return group;
     }
 
-    std::shared_ptr<Group> make_rod_attachment(int i, float len, const Vector3& p) {
+    std::shared_ptr<Group> make_rod_attachment(int i, float len, float sep, const Vector3& p) {
 
         auto material = MeshPhongMaterial::create();
         material->color = Color::grey;
@@ -50,8 +50,8 @@ namespace {
 
         auto cyl1 = Mesh::create(geometry, material);
         auto cyl2 = Mesh::create(geometry, material);
-        cyl1->position.x = 0.34f;
-        cyl2->position.x = -0.34f;
+        cyl1->position.x = sep/2;
+        cyl2->position.x = -sep/2;
         group->add(cyl1);
         group->add(cyl2);
 
@@ -114,11 +114,11 @@ std::shared_ptr<Crane3R> Crane3R::create() {
     part2->name = "part2";
     part3->name = "part3";
 
-    part1->add(make_house_attachment(1, 2.05f, {0.68, 0, 2.85}));
-    part2->add(make_house_attachment(2, 2.05f, {4.2, 0, -0.78}));
+    part1->add(make_house_attachment(1, 2.05f, 0.64f, {0.68, 0, 2.85}));
+    part2->add(make_house_attachment(2, 2.05f, 0.5f, {4.2, 0, -0.78}));
 
-    part2->add(make_rod_attachment(1, 2.05f, {2.695, 0, -0.85}));
-    part3->add(make_rod_attachment(2, 2.05f, {0.98, 0, 0.2}));
+    part2->add(make_rod_attachment(1, 2.05f, 0.64f, {2.695, 0, -0.85}));
+    part3->add(make_rod_attachment(2, 2.05f, 0.5f, {0.98, 0, 0.2}));
 
     parent->add(part1);
     parent->rotateY(-math::PI / 2);
