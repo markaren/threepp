@@ -202,6 +202,8 @@ An example is provided [here](tests/threepp_vcpkg_test).
 ![Fonts](doc/screenshots/fonts.png)
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
 ![Shadows](doc/screenshots/Shadows.PNG)
+![FlyControls](doc/screenshots/fly.PNG)
 ![Crane](doc/screenshots/crane.png)
 ![Physics](doc/screenshots/instanced_physics.PNG)
 ![Water](doc/screenshots/OlympicOctopus.PNG)
+![MotorController](doc/screenshots/motor_controller.PNG)
