@@ -340,15 +340,18 @@ void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
 }
 
 void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Texture& texture, GLuint slot) {
+
     initTexture(textureProperties, texture);
+
     state.activeTexture(GL_TEXTURE0 + slot);
     state.bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties->glTexture);
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
     GLuint glFormat = toGLFormat(texture.format);
     GLuint glType = toGLType(texture.type);
     auto glInternalFormat = getInternalFormat(glFormat, glType);
     setTextureParameters(GL_TEXTURE_CUBE_MAP, texture);
-
 
     for (int i = 0; i < 6; i++) {
         auto& image = dynamic_cast<CubeTexture*>(&texture)->getImages()[i];
@@ -356,8 +359,10 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
     }
 
     textureProperties->version = texture.version();
-    if (texture.onUpdate)
+    if (texture.onUpdate) {
         texture.onUpdate.value()(texture);
+    }
+
 }
 
 void gl::GLTextures::setupFrameBufferTexture(
