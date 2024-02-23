@@ -9,6 +9,7 @@
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/materials.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -67,8 +68,10 @@ struct GLMaterials::Impl {
         auto envMap = properties.materialProperties.get(material->uuid())->envMap;
         if (envMap) {
 
+            auto cubeTexture = dynamic_cast<CubeTexture*>(envMap);
+
             uniforms.at("envMap").setValue(envMap);
-            uniforms.at("flipEnvMap").value<bool>() = false;//TODO
+            uniforms.at("flipEnvMap").value<bool>() = cubeTexture && cubeTexture->_needsFlipEnvMap;
 
             auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity*>(material);
             if (reflectiveMaterial) {
@@ -76,7 +79,7 @@ struct GLMaterials::Impl {
                 uniforms.at("refractionRatio").value<float>() = reflectiveMaterial->refractionRatio;
             }
 
-            const auto& maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
+            const auto maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
             if (maxMipMapLevel) {
                 uniforms.at("maxMipLevel").value<int>() = *maxMipMapLevel;
             }
