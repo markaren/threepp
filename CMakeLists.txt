@@ -5,7 +5,7 @@ message("Current ${PROJECT_NAME} version: ${projectVersion}\n")
 
 include(CMakeDependentOption)
 
-option(THREEPP_BUILD_EXAMPLES "Build examples" ON)
+option(THREEPP_BUILD_EXAMPLES "Build examples" OFF)
 option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
