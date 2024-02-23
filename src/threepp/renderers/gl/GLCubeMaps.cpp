@@ -40,13 +40,13 @@ void GLCubeMaps::get(Texture* texture) {
 
             } else {
 
-                const auto& image = texture->image;
+                const auto& image = texture->image.front();
 
-                if (image && image->height > 0) {
+                if (image.height > 0) {
 
                     const auto& currentRenderTarget = renderer.getRenderTarget();
 
-                    auto renderTarget = std::make_unique<GLCubeRenderTarget>(image->height / 2);
+                    auto renderTarget = std::make_unique<GLCubeRenderTarget>(image.height / 2);
                     renderTarget->fromEquirectangularTexture(renderer, *texture);
                     cubemaps[texture] = std::move(renderTarget);
                 }

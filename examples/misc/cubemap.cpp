@@ -1,47 +1,104 @@
 
 #include "threepp/loaders/CubeTextureLoader.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/renderers/shaders/ShaderLib.hpp"
 #include "threepp/threepp.hpp"
+#include <iostream>
 
 using namespace threepp;
 
-namespace {
+std::string vertexSource() {
 
-    auto loadWalt() {
-        OBJLoader loader;
-        auto walt = loader.load("data/models/obj/walt/WaltHead.obj");
-        walt->scale *= 15;
-        walt->position.y = -500;
+    return R"(
+            // Output to fragment shader
+            out vec3 FragPos;
 
-        return walt;
-    }
+            void main()
+            {
+                // Transform the vertex position
+                FragPos = position;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            })";
+}
+std::string fragmentSource() {
 
-}// namespace
+    return R"(
+
+            // Input from vertex shader
+            in vec3 FragPos;
+
+
+            // Uniform variables
+            uniform samplerCube skybox;
+
+            void main()
+            {
+                // Perform the texture lookup in the cube map
+                 gl_FragColor = texture2D(skybox, FragPos);
+            })";
+}
 
 int main() {
 
     Canvas canvas("Cubemap");
     GLRenderer renderer(canvas.size());
+    renderer.checkShaderErrors = true;
 
-    PerspectiveCamera camera(50, canvas.aspect(), 1, 50000);
-    camera.position.z = 2000;
+    PerspectiveCamera camera(50, canvas.aspect(), 0.1, 1000);
+    camera.position.z = 10;
 
-    std::filesystem::path path("data/textures/cube/SwedishRoyalCastle");
+    std::filesystem::path path("data/textures");
     std::array<std::filesystem::path, 6> urls{
             // clang-format off
-            path / "px.jpg", path / "nx.jpg",
-            path / "py.jpg", path / "ny.jpg",
-            path / "pz.jpg", path / "nz.jpg"
+            path / "crate.gif", path / "crate.gif",
+            path / "crate.gif", path / "crate.gif",
+            path / "crate.gif", path / "crate.gif"
             // clang-format on
     };
 
     CubeTextureLoader loader{};
     auto reflectionCube = loader.load(urls);
 
-    Scene scene;
-    scene.background = reflectionCube;
+    auto im = reflectionCube->image[5];
+    auto tex = Texture::create(im);
+    tex->needsUpdate();
 
-    auto walt = loadWalt();
-    scene.add(walt);
+    Scene scene;
+    scene.background = Color::aliceblue;
+
+    auto material = MeshLambertMaterial::create();
+    material->map = tex;
+    auto mesh = Mesh::create(SphereGeometry::create(0.5), material);
+    mesh->position.x = 2;
+    scene.add(mesh);
+
+    auto shaderMaterial = ShaderMaterial::create();
+    shaderMaterial->name = "BackgroundCubeMaterial";
+    shaderMaterial->uniforms = {
+            {"skybox", Uniform()},
+    };
+    shaderMaterial->vertexShader = vertexSource();
+    shaderMaterial->fragmentShader = fragmentSource();
+    shaderMaterial->side = Side::Front;
+    shaderMaterial->depthTest = false;
+    shaderMaterial->depthWrite = false;
+    shaderMaterial->fog = false;
+
+    shaderMaterial->uniforms["skybox"].setValue(reflectionCube.get());
+    //    shaderMaterial->uniforms["flipEnvMap"].setValue(true);
+
+    shaderMaterial->uniformsNeedUpdate = true;
+
+    auto geometry = BoxGeometry::create(1, 1, 1);
+    geometry->deleteAttribute("normal");
+    geometry->deleteAttribute("uv");
+
+    auto boxMesh = Mesh::create(geometry, shaderMaterial);
+    scene.add(boxMesh);
+
+    boxMesh->onBeforeRender = [&](void*, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
+//        boxMesh->matrixWorld->copyPosition(*camera->matrixWorld);
+    };
 
     OrbitControls controls{camera, canvas};
 
@@ -49,8 +106,9 @@ int main() {
     const auto ambient = AmbientLight::create(0xffffff);
     scene.add(ambient);
 
-    const auto pointLight = PointLight::create(0xffffff, 2.f);
-    scene.add(pointLight);
+    const auto directionalLight = DirectionalLight::create(0xffffff);
+    directionalLight->position.set(1, 1, 1);
+    scene.add(directionalLight);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();

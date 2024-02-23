@@ -36,7 +36,8 @@ int main() {
 
     const auto planeGeometry = PlaneGeometry::create(5, 5);
     const auto planeMaterial = MeshBasicMaterial::create({{"side", Side::Double},
-                                                          {"map", tl.load("data/textures/brick_bump.jpg")}});
+                                                          {"map", Texture::create(boxMaterial->map->image)}});
+    planeMaterial->map->needsUpdate();
     auto plane = Mesh::create(planeGeometry, planeMaterial);
     plane->position.setZ(-1);
     scene.add(plane);

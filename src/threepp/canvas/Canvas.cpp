@@ -237,6 +237,7 @@ struct Canvas::Impl {
         }
 
         glEnable(GL_PROGRAM_POINT_SIZE);
+        glEnable(GL_TEXTURE_CUBE_MAP);
 #endif
     }
 

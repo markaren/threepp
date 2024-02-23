@@ -9,21 +9,16 @@ namespace threepp {
     class CubeTexture: public Texture {
 
     public:
+        bool _needsFlipEnvMap = true;
+
         static std::shared_ptr<CubeTexture> create(const std::vector<Image>& images = {}) {
 
             return std::shared_ptr<CubeTexture>(new CubeTexture(images));
         }
 
-        [[nodiscard]] std::vector<Image>& getImages() {
-
-            return images_;
-        }
-
     private:
-        bool _needsFlipEnvMap = true;
-        std::vector<Image> images_;
 
-        explicit CubeTexture(const std::vector<Image>& images): images_(images) {
+        explicit CubeTexture(const std::vector<Image>& images): Texture(images) {
 
             this->mapping = Mapping::CubeReflection;
             this->format = Format::RGB;

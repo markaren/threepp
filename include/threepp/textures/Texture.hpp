@@ -30,7 +30,7 @@ namespace threepp {
 
         std::string name;
 
-        std::optional<Image> image;
+        std::vector<Image> image;
         std::vector<Image> mipmaps;
 
         Mapping mapping = Texture::DEFAULT_MAPPING;
@@ -86,10 +86,12 @@ namespace threepp {
 
         ~Texture() override;
 
-        static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt);
+        static std::shared_ptr<Texture> create(const Image& image);
+
+        static std::shared_ptr<Texture> create(std::vector<Image> image = {});
 
     protected:
-        explicit Texture(std::optional<Image> image = std::nullopt);
+        explicit Texture(std::vector<Image> image = {});
 
     private:
         bool disposed_ = false;
