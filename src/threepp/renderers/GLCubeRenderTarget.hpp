@@ -88,13 +88,13 @@ namespace threepp {
 
             material->name = "CubemapFromEquirect";
 
-            material->uniforms = std::make_shared<UniformMap>(shader.uniforms);
+            material->uniforms = shader.uniforms;
             material->vertexShader = shader.vertexShader;
             material->fragmentShader = shader.fragmentShader;
             material->side = Side::Back;
             material->blending = Blending::None;
 
-            material->uniforms->at("tEquirect").setValue(&texture);
+            material->uniforms.at("tEquirect").setValue(&texture);
 
             auto mesh = Mesh(geometry, material);
 

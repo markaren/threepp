@@ -151,7 +151,14 @@ namespace {
 
         void setValueV1f(const UniformValue& value) {
 
-            float f = std::get<float>(value);
+            float f;
+            if (std::holds_alternative<bool>(value)) {
+                f = std::get<bool>(value);
+            } else if (std::holds_alternative<float>(value)) {
+                f = std::get<float>(value);
+            } else {
+                throw std::runtime_error("Illegal variant index: " + std::to_string(value.index()));
+            }
 
             ensureCapacity(cache, 1);
             if (cache[0] == f) return;

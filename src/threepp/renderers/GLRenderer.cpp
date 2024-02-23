@@ -69,7 +69,7 @@ struct GLRenderer::Impl {
     gl::GLState state;
 
 
-    std::shared_ptr<Scene> _emptyScene;
+    std::unique_ptr<Scene> _emptyScene;
 
     OnMaterialDispose onMaterialDispose;
 
@@ -140,6 +140,7 @@ struct GLRenderer::Impl {
 
     Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
         : scope(scope), _size(size),
+          cubemaps(scope),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
           indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
           clipping(properties),
@@ -153,7 +154,7 @@ struct GLRenderer::Impl {
           background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           programCache(bindingStates, clipping),
           _currentDrawBuffers(GL_BACK),
-          _emptyScene(Scene::create()),
+          _emptyScene(std::make_unique<Scene>()),
           onMaterialDispose(this) {
 
         this->setViewport(0, 0, size.width, size.height);
@@ -1149,7 +1150,7 @@ struct GLRenderer::Impl {
 GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters) {
 
 #ifndef EMSCRIPTEN
-    loadGlad(); // if Glad has yet to be loaded, do it now
+    loadGlad();// if Glad has yet to be loaded, do it now
 #endif
 
     pimpl_ = std::make_unique<Impl>(*this, size, parameters);

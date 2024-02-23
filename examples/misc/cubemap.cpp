@@ -22,7 +22,7 @@ int main() {
     Canvas canvas("Cubemap");
     GLRenderer renderer(canvas.size());
 
-    PerspectiveCamera camera(50, canvas.aspect(), 1, 5000);
+    PerspectiveCamera camera(50, canvas.aspect(), 1, 50000);
     camera.position.z = 2000;
 
     std::filesystem::path path("data/textures/cube/SwedishRoyalCastle");

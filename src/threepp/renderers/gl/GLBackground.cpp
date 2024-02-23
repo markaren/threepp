@@ -2,8 +2,8 @@
 #include "threepp/renderers/gl/GLBackground.hpp"
 #include "threepp/renderers/gl/GLCubeMaps.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
-#include "threepp/renderers/gl/GLState.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
+#include "threepp/renderers/gl/GLState.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
 
@@ -58,7 +58,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
             if (!boxMesh) {
                 auto shaderMaterial = ShaderMaterial::create();
                 shaderMaterial->name = "BackgroundCubeMaterial";
-                shaderMaterial->uniforms = std::make_shared<UniformMap>(shaders::ShaderLib::instance().cube.uniforms);
+                shaderMaterial->uniforms = shaders::ShaderLib::instance().cube.uniforms;
                 shaderMaterial->vertexShader = shaders::ShaderLib::instance().cube.vertexShader;
                 shaderMaterial->fragmentShader = shaders::ShaderLib::instance().cube.fragmentShader;
                 shaderMaterial->side = Side::Back;
@@ -66,7 +66,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
                 shaderMaterial->depthWrite = false;
                 shaderMaterial->fog = false;
 
-                auto geometry = BoxGeometry::create(1, 1, 1);
+                auto geometry = BoxGeometry::create(100, 100, 100);
                 geometry->deleteAttribute("normal");
                 geometry->deleteAttribute("uv");
 
@@ -75,18 +75,18 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
                 boxMesh->onBeforeRender = [&](void*, Object3D*, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
                     boxMesh->matrixWorld->copyPosition(*camera->matrixWorld);
                 };
+
+                objects.update(boxMesh.get());
+
+                shaderMaterial->needsUpdate();
             }
 
-            objects.update(boxMesh.get());
+            auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
+            shaderMaterial->uniforms.at("envMap").setValue(_background->texture());
+            shaderMaterial->uniforms.at("flipEnvMap").setValue(true);
+
+            renderList.unshift(boxMesh.get(), boxMesh->geometry(), boxMesh->material(), 0, 0, std::nullopt);
         }
-
-        auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
-        shaderMaterial->uniforms->at("envMap").setValue(_background->texture());
-        shaderMaterial->uniforms->at("flipEnvMap").setValue(true);
-        shaderMaterial->needsUpdate();
-
-        renderList.unshift(boxMesh.get(), boxMesh->geometry(), boxMesh->material(), 0, 0, std::nullopt);
-
     }
 }
 
