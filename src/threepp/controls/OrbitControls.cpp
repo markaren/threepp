@@ -1,7 +1,7 @@
 
 #include "threepp/controls/OrbitControls.hpp"
 
-#include "threepp/canvas/Canvas.hpp"
+#include "threepp/input/PeripheralsEventSource.hpp"
 #include "threepp/math/Spherical.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -30,7 +30,7 @@ namespace {
 
 struct OrbitControls::Impl {
 
-    Canvas& canvas;
+    PeripheralsEventSource& canvas;
     OrbitControls& scope;
     Camera& camera;
 
@@ -59,13 +59,13 @@ struct OrbitControls::Impl {
     Vector2 dollyEnd;
     Vector2 dollyDelta;
 
-    Impl(OrbitControls& scope, Canvas& canvas, Camera& camera)
+    Impl(OrbitControls& scope, PeripheralsEventSource& canvas, Camera& camera)
         : scope(scope), canvas(canvas), camera(camera),
           keyListener(std::make_unique<MyKeyListener>(scope)),
           mouseListener(std::make_unique<MyMouseListener>(scope)) {
 
-        canvas.addMouseListener(mouseListener.get());
-        canvas.addKeyListener(keyListener.get());
+        canvas.addMouseListener(*mouseListener);
+        canvas.addKeyListener(*keyListener);
 
         update();
     }
@@ -392,8 +392,8 @@ struct OrbitControls::Impl {
 
     ~Impl() {
 
-        canvas.removeMouseListener(mouseListener.get());
-        canvas.removeKeyListener(keyListener.get());
+        canvas.removeMouseListener(*mouseListener);
+        canvas.removeKeyListener(*keyListener);
     }
 
     struct MyKeyListener: KeyListener {
@@ -461,8 +461,8 @@ struct OrbitControls::Impl {
         void onMouseUp(int button, const Vector2& pos) override {
             if (scope.enabled) {
 
-                scope.pimpl_->canvas.removeMouseListener(mouseMoveListener);
-                scope.pimpl_->canvas.removeMouseListener(this);
+                scope.pimpl_->canvas.removeMouseListener(*mouseMoveListener);
+                scope.pimpl_->canvas.removeMouseListener(*this);
                 scope.pimpl_->state = State::NONE;
             }
         }
@@ -504,8 +504,8 @@ struct OrbitControls::Impl {
 
             if (scope.pimpl_->state != State::NONE) {
 
-                scope.pimpl_->canvas.addMouseListener(&mouseMoveListener);
-                scope.pimpl_->canvas.addMouseListener(&mouseUpListener);
+                scope.pimpl_->canvas.addMouseListener(mouseMoveListener);
+                scope.pimpl_->canvas.addMouseListener(mouseUpListener);
             }
         }
 
@@ -517,8 +517,8 @@ struct OrbitControls::Impl {
     };
 };
 
-OrbitControls::OrbitControls(Camera& camera, Canvas& canvas)
-    : pimpl_(std::make_unique<Impl>(*this, canvas, camera)) {}
+OrbitControls::OrbitControls(Camera& camera, PeripheralsEventSource& eventSource)
+    : pimpl_(std::make_unique<Impl>(*this, eventSource, camera)) {}
 
 
 bool OrbitControls::update() {

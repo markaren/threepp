@@ -56,6 +56,8 @@ namespace threepp {
 
         Euler& _onChange(std::function<void()> callback);
 
+        [[nodiscard]] bool equals(const Euler& euler) const;
+
         template<class ArrayLike>
         Euler& fromArray(const ArrayLike& array, unsigned int offset = 0) {
 

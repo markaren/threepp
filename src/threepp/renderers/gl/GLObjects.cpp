@@ -6,7 +6,11 @@
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GLES3/gl3.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;

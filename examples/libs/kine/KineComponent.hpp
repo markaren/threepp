@@ -12,6 +12,8 @@ namespace kine {
 
     public:
         [[nodiscard]] virtual threepp::Matrix4 getTransformation() const = 0;
+
+        virtual ~KineComponent() = default;
     };
 
 }// namespace kine

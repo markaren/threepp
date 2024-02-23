@@ -3,15 +3,15 @@
 #ifndef THREEPP_FONT_HPP
 #define THREEPP_FONT_HPP
 
-#include "threepp/extras/core/Shape.hpp"
-
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace threepp {
 
-    struct FontData {
+    class Shape;
+
+    struct Font {
 
         struct Glyph {
             float x_min{};
@@ -30,27 +30,13 @@ namespace threepp {
         std::string familyName;
         BoundingBox boundingBox;
 
-        unsigned int resolution{};
+        int resolution{};
         int lineHeight{};
         int underlineThickness{};
 
         std::unordered_map<char, Glyph> glyphs;
-    };
 
-
-    class Font {
-
-    public:
-        explicit Font(FontData data);
-
-        FontData& data();
-
-        const FontData& data() const;
-
-        [[nodiscard]] std::vector<Shape> generateShapes(const std::string& text, unsigned int size = 100) const;
-
-    private:
-        FontData data_;
+        [[nodiscard]] std::vector<Shape> generateShapes(const std::string& text, float size = 100) const;
     };
 
 }// namespace threepp

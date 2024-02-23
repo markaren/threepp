@@ -33,7 +33,11 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
-#include <glad/glad.h>
+#ifndef EMSCRIPTEN
+#include "threepp/utils/LoadGlad.hpp"
+#else
+#include <GLES3/gl32.h>
+#endif
 
 #include <cmath>
 
@@ -69,11 +73,11 @@ struct GLRenderer::Impl {
 
     OnMaterialDispose onMaterialDispose;
 
-    std::shared_ptr<gl::GLRenderList> currentRenderList;
-    std::shared_ptr<gl::GLRenderState> currentRenderState;
+    gl::GLRenderList* currentRenderList = nullptr;
+    gl::GLRenderState* currentRenderState = nullptr;
 
-    std::vector<std::shared_ptr<gl::GLRenderList>> renderListStack;
-    std::vector<std::shared_ptr<gl::GLRenderState>> renderStateStack;
+    std::vector<gl::GLRenderList*> renderListStack;
+    std::vector<gl::GLRenderState*> renderStateStack;
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
@@ -136,9 +140,6 @@ struct GLRenderer::Impl {
 
     Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
         : scope(scope), _size(size),
-          _viewport(0, 0, _size.width, _size.height),
-          _scissor(0, 0, _size.width, _size.height),
-          cubemaps(scope),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
           indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
           clipping(properties),
@@ -153,7 +154,16 @@ struct GLRenderer::Impl {
           programCache(bindingStates, clipping),
           _currentDrawBuffers(GL_BACK),
           _emptyScene(Scene::create()),
-          onMaterialDispose(this) {}
+          onMaterialDispose(this) {
+
+        this->setViewport(0, 0, size.width, size.height);
+        this->setScissor(0, 0, _size.width, _size.height);
+    }
+
+    [[nodiscard]] std::optional<unsigned int> getGlTextureId(const Texture& texture) const {
+
+        return textures.getGlTexture(texture);
+    }
 
     void deallocateMaterial(Material* material) {
 
@@ -601,7 +611,7 @@ struct GLRenderer::Impl {
             material->addEventListener("dispose", &onMaterialDispose);
         }
 
-        std::shared_ptr<gl::GLProgram> program = nullptr;
+        gl::GLProgram* program = nullptr;
 
         if (programs.count(programCacheKey)) {
 
@@ -611,12 +621,12 @@ struct GLRenderer::Impl {
 
                 updateCommonMaterialProperties(material, parameters);
 
-                return program.get();
+                return program;
             }
 
         } else {
 
-            parameters.uniforms = gl::GLPrograms::getUniforms(material);
+            parameters.uniforms = gl::GLPrograms::getUniforms(*material);
 
             // material.onBuild( parameters, this );
 
@@ -670,7 +680,7 @@ struct GLRenderer::Impl {
         materialProperties->currentProgram = program;
         materialProperties->uniformsList = uniformsList;
 
-        return materialProperties->currentProgram.get();
+        return materialProperties->currentProgram;
     }
 
     void updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
@@ -794,7 +804,7 @@ struct GLRenderer::Impl {
 
         //
 
-        gl::GLProgram* program = materialProperties->currentProgram.get();
+        gl::GLProgram* program = materialProperties->currentProgram;
 
         if (needsProgramChange) {
 
@@ -1136,8 +1146,14 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters)
-    : pimpl_(std::make_unique<Impl>(*this, size, parameters)) {}
+GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters) {
+
+#ifndef EMSCRIPTEN
+    loadGlad(); // if Glad has yet to be loaded, do it now
+#endif
+
+    pimpl_ = std::make_unique<Impl>(*this, size, parameters);
+}
 
 
 const gl::GLInfo& threepp::GLRenderer::info() {
@@ -1335,6 +1351,11 @@ int threepp::GLRenderer::getActiveMipmapLevel() const {
 GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
+}
+
+std::optional<unsigned int> GLRenderer::getGlTextureId(const Texture& texture) const {
+
+    return pimpl_->getGlTextureId(texture);
 }
 
 GLRenderer::~GLRenderer() = default;

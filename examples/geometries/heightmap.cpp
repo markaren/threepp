@@ -35,12 +35,12 @@ namespace {
     auto createSky(const Vector3& lightPos) {
         auto sky = Sky::create();
         sky->scale.setScalar(10000);
-        auto shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
-        shaderUniforms->at("turbidity").value<float>() = 10;
-        shaderUniforms->at("rayleigh").value<float>() = 1;
-        shaderUniforms->at("mieCoefficient").value<float>() = 0.005;
-        shaderUniforms->at("mieDirectionalG").value<float>() = 0.8;
-        shaderUniforms->at("sunPosition").value<Vector3>().copy(lightPos);
+        auto& shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+        shaderUniforms.at("turbidity").value<float>() = 10;
+        shaderUniforms.at("rayleigh").value<float>() = 1;
+        shaderUniforms.at("mieCoefficient").value<float>() = 0.005;
+        shaderUniforms.at("mieDirectionalG").value<float>() = 0.8;
+        shaderUniforms.at("sunPosition").value<Vector3>().copy(lightPos);
 
         return sky;
     }
@@ -147,9 +147,10 @@ int main() {
     });
 
     Clock clock;
+    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
         float t = clock.getElapsedTime();
-        water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
+        timeUniform.setValue(t);
 
         renderer.render(*scene, *camera);
     });

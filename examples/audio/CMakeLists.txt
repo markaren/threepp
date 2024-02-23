@@ -1,6 +1,4 @@
 
-if (imgui_FOUND AND MINIAUDIO_INCLUDE_DIRS)
-    add_executable(audio audio.cpp)
-    target_link_libraries(audio PRIVATE threepp imgui::imgui)
-    target_include_directories(audio PRIVATE "${CMAKE_SOURCE_DIR}/examples/libs" "${MINIAUDIO_INCLUDE_DIRS}")
+if (THREEPP_WITH_AUDIO)
+    add_example(NAME "audio" TRY_LINK_IMGUI)
 endif ()

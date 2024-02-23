@@ -5,7 +5,6 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
-        "threepp/canvas/Canvas.hpp"
         "threepp/canvas/WindowSize.hpp"
 
         "threepp/controls/FlyControls.hpp"
@@ -64,6 +63,7 @@ set(publicHeaders
         "threepp/geometries/DecalGeometry.hpp"
         "threepp/geometries/EdgesGeometry.hpp"
         "threepp/geometries/ExtrudeGeometry.hpp"
+        "threepp/geometries/ExtrudeTextGeometry.hpp"
         "threepp/geometries/IcosahedronGeometry.hpp"
         "threepp/geometries/LatheGeometry.hpp"
         "threepp/geometries/OctahedronGeometry.hpp"
@@ -100,7 +100,6 @@ set(publicHeaders
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
-        "threepp/loaders/SVGLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
 
         "threepp/materials/Material.hpp"
@@ -144,6 +143,7 @@ set(publicHeaders
 
         "threepp/objects/Bone.hpp"
         "threepp/objects/Group.hpp"
+        "threepp/objects/HUD.hpp"
         "threepp/objects/InstancedMesh.hpp"
         "threepp/objects/Line.hpp"
         "threepp/objects/LineLoop.hpp"
@@ -151,12 +151,14 @@ set(publicHeaders
         "threepp/objects/LOD.hpp"
         "threepp/objects/Mesh.hpp"
         "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
+        "threepp/objects/ParticleSystem.hpp"
         "threepp/objects/Sky.hpp"
         "threepp/objects/Skeleton.hpp"
         "threepp/objects/SkinnedMesh.hpp"
         "threepp/objects/Sprite.hpp"
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
+        "threepp/objects/Text.hpp"
         "threepp/objects/Water.hpp"
 
         "threepp/textures/CubeTexture.hpp"
@@ -185,7 +187,6 @@ set(publicHeaders
 
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
-        "threepp/renderers/TextRenderer.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
         "threepp/renderers/gl/GLShadowMap.hpp"
@@ -195,7 +196,7 @@ set(publicHeaders
         "threepp/renderers/shaders/ShaderLib.hpp"
         "threepp/renderers/shaders/UniformsLib.hpp"
 
-        )
+)
 
 set(publicHeadersFull)
 foreach (header IN LISTS publicHeaders)
@@ -203,9 +204,6 @@ foreach (header IN LISTS publicHeaders)
 endforeach ()
 
 set(privateHeaders
-
-        "threepp/extras/earcut.hpp"
-        "threepp/extras/quickhull.hpp"
 
         "threepp/materials/MeshDistanceMaterial.hpp"
 
@@ -236,11 +234,9 @@ set(privateHeaders
 
         "threepp/utils/RegexUtil.hpp"
 
-        )
+)
 
 set(sources
-
-        "threepp/canvas/Canvas.cpp"
 
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
@@ -290,6 +286,7 @@ set(sources
         "threepp/geometries/RingGeometry.cpp"
         "threepp/geometries/ShapeGeometry.cpp"
         "threepp/geometries/SphereGeometry.cpp"
+        "threepp/geometries/TextGeometry.cpp"
         "threepp/geometries/TorusGeometry.cpp"
         "threepp/geometries/TorusKnotGeometry.cpp"
         "threepp/geometries/TubeGeometry.cpp"
@@ -311,6 +308,7 @@ set(sources
 
         "threepp/input/PeripheralsEventSource.cpp"
 
+        "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/ImageLoader.cpp"
         "threepp/loaders/MTLLoader.cpp"
         "threepp/loaders/OBJLoader.cpp"
@@ -367,12 +365,14 @@ set(sources
         "threepp/scenes/FogExp2.cpp"
 
         "threepp/objects/Group.cpp"
+        "threepp/objects/HUD.cpp"
         "threepp/objects/Line.cpp"
         "threepp/objects/LineLoop.cpp"
         "threepp/objects/LineSegments.cpp"
         "threepp/objects/LOD.cpp"
         "threepp/objects/InstancedMesh.cpp"
         "threepp/objects/Mesh.cpp"
+        "threepp/objects/ParticleSystem.cpp"
         "threepp/objects/Points.cpp"
         "threepp/objects/Skeleton.cpp"
         "threepp/objects/SkinnedMesh.cpp"
@@ -388,7 +388,6 @@ set(sources
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/ThreadPool.cpp"
 
-        "threepp/renderers/TextHandle.cpp"
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/GLRenderTarget.cpp"
 
@@ -415,26 +414,115 @@ set(sources
 
         "threepp/renderers/shaders/ShaderLib.cpp"
 
-        )
+)
+
+if (THREEPP_WITH_SVG)
+    list(APPEND publicHeaders
+            "threepp/loaders/SVGLoader.hpp"
+    )
+
+    list(APPEND sources
+            "threepp/loaders/SVGLoader.cpp"
+            "external/pugixml/pugixml.cpp"
+    )
+endif ()
+
+if (THREEPP_WITH_AUDIO)
+    list(APPEND publicHeaders
+            "threepp/audio/Audio.hpp"
+    )
+
+    list(APPEND sources
+            "threepp/audio/Audio.cpp"
+    )
+endif ()
+
+if (THREEPP_WITH_GLFW)
+    list(APPEND publicHeaders
+            "threepp/canvas/Canvas.hpp"
+    )
+
+    list(APPEND sources
+            "threepp/canvas/Canvas.cpp"
+    )
+    if (NOT EMSCRIPTEN AND NOT THREEPP_USE_EXTERNAL_GLFW)
+
+        message("Using threepp's GLFW")
+
+        #https://github.com/raysan5/raylib/blob/master/cmake/GlfwImport.cmake
+        set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_COCOA OFF CACHE BOOL "" FORCE)
+        set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
+        if (THREEPP_EMBEDDED_GLFW_WITH_X11)
+            set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
+        else()
+            set(GLFW_BUILD_X11 OFF CACHE BOOL "" FORCE)
+        endif ()
+        set(GLFW_LIBRARY_TYPE "OBJECT" CACHE STRING "" FORCE)
+        add_subdirectory("external/glfw")
+
+        # Hide glfw's symbols when building a shared lib
+        if (BUILD_SHARED_LIBS)
+            set_property(TARGET glfw PROPERTY C_VISIBILITY_PRESET hidden)
+        endif ()
+
+        list(APPEND sources $<TARGET_OBJECTS:glfw>)
+    endif ()
+endif ()
+
+if (NOT DEFINED EMSCRIPTEN)
+    list(APPEND privateHeaders
+            "threepp/utils/LoadGlad.hpp"
+    )
+    list(APPEND sources
+            "external/glad/glad.c"
+            "threepp/utils/LoadGlad.cpp"
+    )
+endif ()
 
 include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 
-add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull} "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp")
+list(APPEND sources
+        "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp"
+        "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
+)
+
+add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
-target_compile_features(threepp PUBLIC cxx_std_17)
-target_link_libraries(threepp
-        PRIVATE
-        glad::glad
-        glfw::glfw)
+target_compile_features(threepp PUBLIC "cxx_std_17")
+
 if (UNIX)
-    target_link_libraries(threepp PRIVATE pthread)
+    target_link_libraries(threepp PRIVATE pthread dl)
 endif ()
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
         PRIVATE
-        "${stb_INCLUDE_DIR}"
-        "${gltext_INCLUDE_DIR}"
         "${generatedSourcesDir}"
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/earcut"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/nlohmann"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
+)
+
+if (NOT DEFINED EMSCRIPTEN)
+
+    target_include_directories(threepp
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/external/glad"
+    )
+
+    if (THREEPP_USE_EXTERNAL_GLFW)
+        target_link_libraries(threepp PRIVATE glfw::glfw)
+    else ()
+        target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")
+    endif ()
+
+endif ()

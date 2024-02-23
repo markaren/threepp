@@ -72,8 +72,6 @@ namespace threepp {
             return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
         }
 
-        bool hasMorphAttribute(const std::string& name);
-
         std::vector<std::shared_ptr<BufferAttribute>>* getMorphAttribute(const std::string& name);
 
         std::vector<std::shared_ptr<BufferAttribute>>* getOrCreateMorphAttribute(const std::string& name);

@@ -170,3 +170,13 @@ Box2& Box2::translate(const Vector2& offset) {
 
     return *this;
 }
+
+Box2 Box2::clone() const {
+
+    return {min_, max_};
+}
+
+bool Box2::equals(const Box2& box) const {
+
+    return box.min_.equals( this->min_ ) && box.max_.equals( this->max_ );
+}

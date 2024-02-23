@@ -30,7 +30,7 @@ namespace threepp {
 
         struct GLPrograms {
 
-            std::vector<std::shared_ptr<GLProgram>> programs;
+            std::vector<std::unique_ptr<GLProgram>> programs;
 
             bool logarithmicDepthBuffer;
             bool floatVertexTextures;
@@ -55,11 +55,11 @@ namespace threepp {
 
             static std::string getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters);
 
-            static std::shared_ptr<UniformMap> getUniforms(Material* material);
+            static UniformMap* getUniforms(Material& material);
 
-            std::shared_ptr<GLProgram> acquireProgram(const GLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey);
+            GLProgram* acquireProgram(const GLRenderer& renderer, const ProgramParameters& parameters, const std::string& cacheKey);
 
-            void releaseProgram(const std::shared_ptr<GLProgram>& program);
+            void releaseProgram(GLProgram* program);
         };
 
     }// namespace gl

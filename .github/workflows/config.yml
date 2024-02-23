@@ -4,6 +4,76 @@ name: Build
 on: [push, workflow_dispatch]
 
 jobs:
+  linux:
+
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04 ]
+        compiler_version: [ 11 ]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config \
+          libglfw3 \
+          libglfw3-dev
+
+      - name: Configure and build
+        run: |
+          cmake . -B build -DTHREEPP_USE_EXTERNAL_GLFW=ON -DCMAKE_BUILD_TYPE="Release"
+          cmake --build build
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest --output-on-failure
+
+  linux-no-glfw:
+
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04 ]
+        compiler_version: [ 11 ]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config
+
+      - name: Configure and build
+        run: |
+          cmake . -B build -DTHREEPP_WITH_GLFW=OFF -DTHREEPP_BUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake --build build
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest --output-on-failure
+
   vcpkg-on-linux:
 
     runs-on: ${{ matrix.os }}
@@ -33,13 +103,13 @@ jobs:
       id: runvcpkg
       with:
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-        vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+        vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
         vcpkgJsonGlob: 'vcpkg.json'
         appendedCacheKey: vcpkginstall
 
     - name: Configure and build
       run: |
-        cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp;pugixml;json" -DTHREEPP_WITH_SVG_FEATURE=ON -DCMAKE_BUILD_TYPE=Release
+        cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
         cmake --build build
 
     - name: Test
@@ -64,7 +134,7 @@ jobs:
         id: runvcpkg
         with:
           vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
           vcpkgJsonGlob: 'vcpkg.json'
           appendedCacheKey: vcpkginstall
 
@@ -95,7 +165,7 @@ jobs:
         id: runvcpkg
         with:
           vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '12c2a93b4007612b5ffa980c9d2235eb0bcac10f'
+          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
           vcpkgJsonGlob: 'vcpkg.json'
           appendedCacheKey: vcpkginstall
 

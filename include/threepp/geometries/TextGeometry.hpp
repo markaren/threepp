@@ -1,53 +1,27 @@
-// https://github.com/mrdoob/three.js/blob/r129/src/geometries/TextGeometry.js
 
 #ifndef THREEPP_TEXTGEOMETRY_HPP
 #define THREEPP_TEXTGEOMETRY_HPP
 
 #include "threepp/extras/core/Font.hpp"
-#include "threepp/geometries/ExtrudeGeometry.hpp"
+#include "threepp/geometries/ShapeGeometry.hpp"
 
 namespace threepp {
 
-    class TextGeometry: public ExtrudeGeometry {
-
+    // Specialisation of ShapeGeometry for 2D text
+    class TextGeometry: public ShapeGeometry {
     public:
         struct Options {
-            const Font& font;
-            unsigned int size;
-            float height = 50;
-            bool bevelEnabled = false;
-            float bevelThickness = 10;
-            float bevelSize = 8;
+            Font font;
+            float size;
+            unsigned int curveSegments;
 
-            Options(const Font& font, unsigned int size)
-                : font(font), size(size) {}
-
-        private:
-            friend TextGeometry;
-
-            [[nodiscard]] ExtrudeGeometry::Options toExtrudeOptions() const {
-                ExtrudeGeometry::Options opts{};
-
-                opts.depth = height;
-
-                opts.bevelEnabled = bevelEnabled;
-                opts.bevelSize = bevelSize;
-                opts.bevelThickness = bevelThickness;
-
-                return opts;
-            }
+            explicit Options(Font font, float size = 1, unsigned int curveSegments = 3);
         };
 
-        static std::shared_ptr<TextGeometry> create(const std::string& text, const Options& options) {
-
-            auto shapes = options.font.generateShapes(text, options.size);
-
-            return std::shared_ptr<TextGeometry>(new TextGeometry(shapes, options.toExtrudeOptions()));
-        }
+        static std::shared_ptr<TextGeometry> create(const std::string& text, const TextGeometry::Options& opts);
 
     private:
-        TextGeometry(const std::vector<Shape>& shapes, const ExtrudeGeometry::Options& options)
-            : ExtrudeGeometry(shapes, options) {}
+        TextGeometry(const std::string& text, const TextGeometry::Options& opts);
     };
 
 }// namespace threepp

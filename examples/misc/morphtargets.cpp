@@ -51,7 +51,7 @@ int main() {
     auto scene = Scene::create();
     scene->background = Color(0x8FBCD4);
 
-    auto camera = PerspectiveCamera::create();
+    auto camera = PerspectiveCamera::create(60, canvas.aspect());
     camera->layers.enableAll();
     camera->position.z = 10;
     scene->add(camera);
@@ -115,7 +115,7 @@ int main() {
         mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
     });
-    canvas.addMouseListener(&l);
+    canvas.addMouseListener(l);
 
     Box3 box;
     auto helper = Box3Helper::create(box);

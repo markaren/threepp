@@ -5,6 +5,7 @@
 
 #include "threepp/scenes/Scene.hpp"
 
+#include "GLUniforms.hpp"
 #include "threepp/core/Uniform.hpp"
 
 #include <optional>
@@ -13,7 +14,6 @@
 namespace threepp::gl {
 
     struct GLProgram;
-    struct UniformObject;
 
     struct TextureProperties {
 
@@ -31,9 +31,9 @@ namespace threepp::gl {
 
     struct MaterialProperties {
 
-        std::shared_ptr<GLProgram> program;
-        std::shared_ptr<GLProgram> currentProgram;
-        std::unordered_map<std::string, std::shared_ptr<GLProgram>> programs;
+        GLProgram* program = nullptr;
+        GLProgram* currentProgram = nullptr;
+        std::unordered_map<std::string, GLProgram*> programs{};
 
         std::optional<FogVariant> fog;
 
@@ -54,8 +54,8 @@ namespace threepp::gl {
 
         unsigned int lightsStateVersion{};
 
-        std::vector<std::shared_ptr<UniformObject>> uniformsList;
-        std::shared_ptr<UniformMap> uniforms = nullptr;
+        std::vector<UniformObject*> uniformsList;
+        UniformMap* uniforms;
 
         unsigned int version{};
     };

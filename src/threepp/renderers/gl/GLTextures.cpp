@@ -8,6 +8,10 @@
 #include "threepp/textures/DepthTexture.hpp"
 #include "threepp/textures/CubeTexture.hpp"
 
+#if EMSCRIPTEN
+#include <GLES3/gl32.h>
+#endif
+
 #include <cmath>
 #include <iostream>
 
@@ -539,6 +543,13 @@ void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
         generateMipmap(target, *texture, renderTarget->width, renderTarget->height);
         state.bindTexture(target, 0);
     }
+}
+
+std::optional<unsigned int> gl::GLTextures::getGlTexture(const Texture& texture) const {
+
+    const auto textureProperties = properties.textureProperties.get(texture.uuid);
+
+    return textureProperties->glTexture;
 }
 
 void gl::GLTextures::TextureEventListener::onEvent(Event& event) {

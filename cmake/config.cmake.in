@@ -2,11 +2,12 @@
 
 include(CMakeFindDependencyMacro)
 
-find_dependency(glfw3 CONFIG)
-find_dependency(glad CONFIG)
+if (NOT DEFINED EMSCRIPTEN AND @THREEPP_USE_EXTERNAL_GLFW@)
+    find_dependency(glfw3 CONFIG)
 
-if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
-    add_library(glfw::glfw ALIAS glfw)
+    if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
+        add_library(glfw::glfw ALIAS glfw)
+    endif()
 endif()
 
 include(${CMAKE_CURRENT_LIST_DIR}/threepp-targets.cmake)

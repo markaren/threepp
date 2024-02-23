@@ -1,6 +1,4 @@
 
-#pragma warning(disable : 4312)
-
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 
 #include "threepp/renderers/gl/GLUtils.hpp"
@@ -9,11 +7,14 @@
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 
+#if EMSCRIPTEN
+#include <GLES3/gl32.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;
 
-typedef std::unordered_map<bool, std::shared_ptr<GLBindingState>> StateMap;
+typedef std::unordered_map<bool, GLBindingState> StateMap;
 typedef std::unordered_map<int, StateMap> ProgramMap;
 
 struct GLBindingStates::Impl {
@@ -21,8 +22,8 @@ struct GLBindingStates::Impl {
     GLAttributes& attributes_;
     unsigned int maxVertexAttributes_;
 
-    const std::shared_ptr<GLBindingState> defaultState_;
-    std::shared_ptr<GLBindingState> currentState_;
+    GLBindingState defaultState_;
+    GLBindingState* currentState_;
 
     std::unordered_map<unsigned int, ProgramMap> bindingStates;
 
@@ -30,7 +31,7 @@ struct GLBindingStates::Impl {
         : maxVertexAttributes_(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
           attributes_(attributes),
           defaultState_(createBindingState(std::nullopt)),
-          currentState_(defaultState_) {}
+          currentState_(&defaultState_) {}
 
 
     void setup(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry, BufferAttribute* index) {
@@ -87,34 +88,33 @@ struct GLBindingStates::Impl {
         glDeleteVertexArrays(1, &vao);
     }
 
-    std::shared_ptr<GLBindingState> getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
+    GLBindingState* getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
 
         bool wireframe = false;
 
-        auto wm = material->as<MaterialWithWireframe>();
-        if (wm) {
+        if (auto wm = material->as<MaterialWithWireframe>()) {
             wireframe = wm->wireframe;
         }
 
-        auto& programMap = bindingStates[geometry->id];
+        ProgramMap& programMap = bindingStates[geometry->id];
 
-        auto& stateMap = programMap[program->id];
+        StateMap& stateMap = programMap[program->id];
 
         if (!stateMap.count(wireframe)) {
 
-            stateMap[wireframe] = createBindingState(createVertexArrayObject());
+            stateMap.insert({wireframe, createBindingState(createVertexArrayObject())});
         }
 
-        return stateMap.at(wireframe);
+        return &stateMap.at(wireframe);
     }
 
-    [[nodiscard]] std::shared_ptr<GLBindingState> createBindingState(std::optional<GLuint> vao) const {
+    [[nodiscard]] GLBindingState createBindingState(std::optional<GLuint> vao) const {
 
-        return std::make_shared<GLBindingState>(
+        return {
                 std::vector<int>(maxVertexAttributes_),
                 std::vector<int>(maxVertexAttributes_),
                 std::vector<int>(maxVertexAttributes_),
-                vao);
+                vao};
     }
 
     bool needsUpdate(BufferGeometry* geometry, BufferAttribute* index) const {
@@ -359,7 +359,7 @@ struct GLBindingStates::Impl {
 
                 for (const auto& wireframe : stateMap) {
 
-                    deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
+                    deleteVertexArrayObject(*stateMap.at(wireframe.first).object);
 
                     stateMap.erase(wireframe.first);
                 }
@@ -383,7 +383,7 @@ struct GLBindingStates::Impl {
 
             for (const auto& wireframe : stateMap) {
 
-                deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
+                deleteVertexArrayObject(*stateMap.at(wireframe.first).object);
             }
 
             stateMap.clear();
@@ -407,7 +407,7 @@ struct GLBindingStates::Impl {
             for (const auto& wireframe : stateMap) {
 
                 auto& value = stateMap.at(wireframe.first);
-                deleteVertexArrayObject(*value->object);
+                deleteVertexArrayObject(*value.object);
             }
             stateMap.clear();
 
@@ -417,9 +417,9 @@ struct GLBindingStates::Impl {
 
     void reset() {
 
-        if (currentState_ == defaultState_) return;
+        if (currentState_ == &defaultState_) return;
 
-        currentState_ = defaultState_;
+        currentState_ = &defaultState_;
         bindVertexArrayObject(currentState_->object.value_or(0));
     }
 };
@@ -433,41 +433,6 @@ void GLBindingStates::setup(Object3D* object, Material* material, GLProgram* pro
     pimpl_->setup(object, material, program, geometry, index);
 }
 
-GLuint GLBindingStates::createVertexArrayObject() const {
-
-    return pimpl_->createVertexArrayObject();
-}
-
-void GLBindingStates::bindVertexArrayObject(GLuint vao) const {
-
-    pimpl_->bindVertexArrayObject(vao);
-}
-
-void GLBindingStates::deleteVertexArrayObject(GLuint vao) {
-
-    pimpl_->deleteVertexArrayObject(vao);
-}
-
-std::shared_ptr<GLBindingState> GLBindingStates::getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
-
-    return pimpl_->getBindingState(geometry, program, material);
-}
-
-std::shared_ptr<GLBindingState> GLBindingStates::createBindingState(std::optional<GLuint> vao) const {
-
-    return pimpl_->createBindingState(vao);
-}
-
-bool GLBindingStates::needsUpdate(BufferGeometry* geometry, BufferAttribute* index) {
-
-    return pimpl_->needsUpdate(geometry, index);
-}
-
-void GLBindingStates::saveCache(BufferGeometry* geometry, BufferAttribute* index) {
-
-    pimpl_->saveCache(geometry, index);
-}
-
 void GLBindingStates::initAttributes() {
 
     pimpl_->initAttributes();
@@ -478,24 +443,9 @@ void GLBindingStates::enableAttribute(int attribute) {
     pimpl_->enableAttribute(attribute);
 }
 
-void GLBindingStates::enableAttributeAndDivisor(int attribute, int meshPerAttribute) {
-
-    pimpl_->enableAttributeAndDivisor(attribute, meshPerAttribute);
-}
-
 void GLBindingStates::disableUnusedAttributes() {
 
     pimpl_->disableUnusedAttributes();
-}
-
-void GLBindingStates::vertexAttribPointer(GLuint index, GLint size, GLenum type, bool normalized, GLsizei stride, size_t offset) {
-
-    pimpl_->vertexAttribPointer(index, size, type, normalized, stride, offset);
-}
-
-void GLBindingStates::setupVertexAttributes(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry) {
-
-    pimpl_->setupVertexAttributes(object, material, program, geometry);
 }
 
 void GLBindingStates::dispose() {

@@ -2,8 +2,6 @@
 #ifndef THREEPP_ACTUATOR_HPP
 #define THREEPP_ACTUATOR_HPP
 
-#include "utility/PID.hpp"
-
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Vector3.hpp"
 

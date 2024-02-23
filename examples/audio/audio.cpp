@@ -1,10 +1,13 @@
 
-#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
-#include "audio/Audio.hpp"
+#include "threepp/audio/Audio.hpp"
 
+#if HAS_IMGUI
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include <array>
+#endif
+
 
 using namespace threepp;
 
@@ -72,6 +75,7 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
+#if HAS_IMGUI
     std::array<float, 3> audioPos{};
     bool play = audio.isPlaying();
     float volume = listener.getMasterVolume();
@@ -99,6 +103,7 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
+#endif
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
@@ -109,6 +114,8 @@ int main() {
     canvas.animate([&] {
         renderer.render(scene, camera);
 
+#if HAS_IMGUI
         ui.render();
+#endif
     });
 }

@@ -9,8 +9,6 @@ namespace {
 
     struct CustomSineCurve: Curve3 {
 
-        float scale;
-
         explicit CustomSineCurve(float scale): scale(scale) {}
 
         void getPoint(float t, Vector3& target) const override {
@@ -20,6 +18,9 @@ namespace {
 
             target.set(tx, ty, tz).multiplyScalar(scale);
         }
+
+    private:
+        float scale;
     };
 
 }// namespace
@@ -55,9 +56,14 @@ int main() {
         renderer.setSize(size);
     });
 
+
     Clock clock;
+    const auto count = geometry->getIndex()->count();
     canvas.animate([&]() {
         mesh->rotation.y += 1 * clock.getDelta();
+
+        auto map = math::mapLinear(std::sin(clock.elapsedTime), -1, 1, 0, static_cast<float>(count));
+        geometry->setDrawRange(0, static_cast<int>(map));
 
         renderer.render(*scene, *camera);
     });

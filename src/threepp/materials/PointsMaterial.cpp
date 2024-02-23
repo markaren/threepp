@@ -41,17 +41,13 @@ std::shared_ptr<PointsMaterial> PointsMaterial::create(const std::unordered_map<
 bool PointsMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {
-
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
-
+        
+        color.copy(extractColor(value));
+        
         return true;
     } else if (key == "size") {
 
-        size = std::get<float>(value);
+        size = extractFloat(value);
         return true;
 
     } else if (key == "sizeAttenuation") {

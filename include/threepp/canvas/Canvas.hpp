@@ -28,7 +28,7 @@ namespace threepp {
         Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values);
 
         //the current size of the Canvas window
-        [[nodiscard]] WindowSize size() const;
+        [[nodiscard]] WindowSize size() const override;
 
         //the size of the Monitor
         [[nodiscard]] WindowSize monitorSize() const;
@@ -77,12 +77,15 @@ namespace threepp {
 
             Parameters& favicon(const std::filesystem::path& path);
 
+            Parameters& exitOnKeyEscape(bool flag);
+
         private:
             std::optional<WindowSize> size_;
             int antialiasing_{2};
             std::string title_{"threepp"};
             bool vsync_{true};
             bool resizable_{true};
+            bool exitOnKeyEscape_{true};
             std::optional<std::filesystem::path> favicon_;
 
             friend struct Canvas::Impl;
