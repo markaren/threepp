@@ -3,14 +3,7 @@
 #include "threepp/renderers/gl/GLCubeMaps.hpp"
 #include "threepp/renderers/gl/GLObjects.hpp"
 #include "threepp/renderers/gl/GLRenderLists.hpp"
-#include "threepp/renderers/gl/GLState.hpp"
 
-#include "threepp/renderers/GLRenderer.hpp"
-
-#include "threepp/cameras/Camera.hpp"
-#include "threepp/geometries/BoxGeometry.hpp"
-#include "threepp/materials/ShaderMaterial.hpp"
-#include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
 using namespace threepp;
@@ -24,24 +17,24 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
     bool forceClear = false;
     bool isScene = scene->is<Scene>();
 
-    std::optional<Background> _background;
+    std::optional<Background> background;
 
     if (isScene) {
-        _background = scene->as<Scene>()->background;
+        background = scene->as<Scene>()->background;
     }
 
-    if (_background && _background->isTexture()) {
+    if (background && background->isTexture()) {
 
-        cubemaps.get(_background->texture());
+        cubemaps.get(background->texture().get());
     }
 
-    if (!_background) {
+    if (!background) {
 
         setClear(clearColor, clearAlpha);
 
-    } else if (_background && _background->isColor()) {
+    } else if (background && background->isColor()) {
 
-        setClear(_background->color(), 1);
+        setClear(background->color(), 1);
         forceClear = true;
     }
 
@@ -50,10 +43,10 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         renderer.clear(renderer.autoClearColor, renderer.autoClearDepth, renderer.autoClearStencil);
     }
 
-    if (_background && _background->isTexture()) {
+    if (background && background->isTexture()) {
 
-        auto tex = _background->texture();
-        if (auto cubeTexture = dynamic_cast<CubeTexture*>(tex)) {
+        auto tex = background->texture();
+        if (auto cubeTexture = std::dynamic_pointer_cast<CubeTexture>(tex)) {
 
             if (!boxMesh) {
                 auto shaderMaterial = ShaderMaterial::create();
@@ -66,7 +59,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
                 shaderMaterial->depthWrite = false;
                 shaderMaterial->fog = false;
 
-                auto geometry = BoxGeometry::create(100, 100, 100);
+                auto geometry = BoxGeometry::create(1, 1, 1);
                 geometry->deleteAttribute("normal");
                 geometry->deleteAttribute("uv");
 
@@ -77,13 +70,21 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
                 };
 
                 objects.update(boxMesh.get());
-
-                shaderMaterial->needsUpdate();
             }
 
             auto shaderMaterial = boxMesh->material()->as<ShaderMaterial>();
-            shaderMaterial->uniforms.at("envMap").setValue(_background->texture());
-            shaderMaterial->uniforms.at("flipEnvMap").setValue(true);
+            shaderMaterial->envMap = background->texture();
+            shaderMaterial->uniforms.at("envMap").setValue(background->texture().get());
+            shaderMaterial->uniforms.at("flipEnvMap").setValue(cubeTexture->_needsFlipEnvMap);
+
+            if (currentBackground != &background.value() || currentBackgroundVersion != tex->version() || currentTonemapping != renderer.toneMapping) {
+
+                shaderMaterial->needsUpdate();
+
+                currentBackground = &background.value();
+                currentBackgroundVersion = tex->version();
+                currentTonemapping = renderer.toneMapping;
+            }
 
             renderList.unshift(boxMesh.get(), boxMesh->geometry(), boxMesh->material(), 0, 0, std::nullopt);
         }

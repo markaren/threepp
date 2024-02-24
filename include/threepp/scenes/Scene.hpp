@@ -32,7 +32,7 @@ namespace threepp {
 
         [[nodiscard]] Color color() const;
 
-        [[nodiscard]] Texture* texture() const;
+        [[nodiscard]] std::shared_ptr<Texture> texture() const;
 
         operator bool() const;
 

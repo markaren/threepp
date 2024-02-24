@@ -1,4 +1,5 @@
 
+add_example(NAME "cubemap")
 add_example(NAME "texture3d")
 add_example(NAME "texture2d" WEB WEB_EMBED
         "../data/textures/crate.gif@data/textures/crate.gif"

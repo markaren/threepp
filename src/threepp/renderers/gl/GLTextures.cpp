@@ -4,9 +4,9 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
+#include "threepp/textures/CubeTexture.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/textures/DepthTexture.hpp"
-#include "threepp/textures/CubeTexture.hpp"
 
 #if EMSCRIPTEN
 #include <GLES3/gl32.h>
@@ -80,9 +80,9 @@ namespace {
 }// namespace
 
 gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl::GLInfo& info)
-    : state(state),
-      properties(properties),
-      info(info),
+    : state(&state),
+      properties(&properties),
+      info(&info),
       maxTextures(GLCapabilities::instance().maxTextures),
       maxCubemapSize(GLCapabilities::instance().maxCubemapSize),
       maxTextureSize(GLCapabilities::instance().maxTextureSize),
@@ -94,7 +94,7 @@ void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuin
 
     glGenerateMipmap(target);
 
-    auto textureProperties = properties.textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture.uuid);
 
     textureProperties->maxMipLevel = static_cast<int>(std::log2(std::max(width, height)));
 }
@@ -126,8 +126,8 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     initTexture(textureProperties, texture);
 
-    state.activeTexture(GL_TEXTURE0 + slot);
-    state.bindTexture(textureType, textureProperties->glTexture);
+    state->activeTexture(GL_TEXTURE0 + slot);
+    state->bindTexture(textureType, textureProperties->glTexture);
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
@@ -144,7 +144,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     if (dataTexture3D) {
 
-        state.texImage3D(GL_TEXTURE_3D, 0, glInternalFormat,
+        state->texImage3D(GL_TEXTURE_3D, 0, glInternalFormat,
                          static_cast<int>(image.width),
                          static_cast<int>(image.height),
                          static_cast<int>(image.depth),
@@ -164,7 +164,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
             for (int i = 0; i < mipmaps.size(); ++i) {
 
                 auto& mipmap = mipmaps[i];
-                state.texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
+                state->texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
                                  static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
                                  glFormat, glType, mipmap.data().data());
             }
@@ -175,11 +175,11 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
         } else {
 
             if (glType == GL_UNSIGNED_BYTE) {
-                state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
                                  static_cast<int>(image.width), static_cast<int>(image.height),
                                  glFormat, glType, texture.image.front().data().data());
             } else if (glType == GL_FLOAT) {
-                state.texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
+                state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
                                  static_cast<int>(image.width), static_cast<int>(image.height),
                                  glFormat, glType, texture.image.front().data<float>().data());
             } else {
@@ -212,19 +212,21 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
         glGenTextures(1, &glTexture);
         textureProperties->glTexture = glTexture;
 
-        info.memory.textures++;
+        info->memory.textures++;
     }
 }
 
 void gl::GLTextures::deallocateTexture(Texture* texture) {
 
-    auto textureProperties = properties.textureProperties.get(texture->uuid);
+    if (!properties) return;
+
+    auto textureProperties = properties->textureProperties.get(texture->uuid);
 
     if (!textureProperties->glInit) return;
 
     glDeleteTextures(1, &textureProperties->glTexture.value());
 
-    properties.textureProperties.remove(texture->uuid);
+    properties->textureProperties.remove(texture->uuid);
 }
 
 void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
@@ -233,14 +235,14 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
 
     const auto& texture = renderTarget->texture;
 
-    auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
-    const auto& textureProperties = properties.textureProperties.get(texture->uuid);
+    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
+    const auto& textureProperties = properties->textureProperties.get(texture->uuid);
 
     if (textureProperties->glTexture) {
 
         glDeleteTextures(1, &textureProperties->glTexture.value());
 
-        info.memory.textures--;
+        info->memory.textures--;
     }
 
     if (renderTarget->depthTexture) {
@@ -251,8 +253,8 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
     glDeleteFramebuffers(1, &renderTargetProperties->glFramebuffer.value());
     if (renderTargetProperties->glDepthbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthbuffer.value());
 
-    properties.textureProperties.remove(texture->uuid);
-    properties.renderTargetProperties.remove(renderTarget->uuid);
+    properties->textureProperties.remove(texture->uuid);
+    properties->renderTargetProperties.remove(renderTarget->uuid);
 }
 
 void gl::GLTextures::resetTextureUnits() {
@@ -276,7 +278,7 @@ int gl::GLTextures::allocateTextureUnit() {
 
 void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties.textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture.uuid);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -293,13 +295,13 @@ void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
         }
     }
 
-    state.activeTexture(GL_TEXTURE0 + slot);
-    state.bindTexture(GL_TEXTURE_2D, textureProperties->glTexture);
+    state->activeTexture(GL_TEXTURE0 + slot);
+    state->bindTexture(GL_TEXTURE_2D, textureProperties->glTexture);
 }
 
 void gl::GLTextures::setTexture2DArray(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties.textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture.uuid);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -307,13 +309,13 @@ void gl::GLTextures::setTexture2DArray(Texture& texture, GLuint slot) {
         return;
     }
 
-    state.activeTexture(GL_TEXTURE0 + slot);
-    state.bindTexture(GL_TEXTURE_2D_ARRAY, textureProperties->glTexture);
+    state->activeTexture(GL_TEXTURE0 + slot);
+    state->bindTexture(GL_TEXTURE_2D_ARRAY, textureProperties->glTexture);
 }
 
 void gl::GLTextures::setTexture3D(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties.textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture.uuid);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -321,13 +323,13 @@ void gl::GLTextures::setTexture3D(Texture& texture, GLuint slot) {
         return;
     }
 
-    state.activeTexture(GL_TEXTURE0 + slot);
-    state.bindTexture(GL_TEXTURE_3D, textureProperties->glTexture);
+    state->activeTexture(GL_TEXTURE0 + slot);
+    state->bindTexture(GL_TEXTURE_3D, textureProperties->glTexture);
 }
 
 void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties.textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture.uuid);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -335,16 +337,16 @@ void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
         return;
     }
 
-    state.activeTexture(GL_TEXTURE0 + slot);
-    state.bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties->glTexture);
+    state->activeTexture(GL_TEXTURE0 + slot);
+    state->bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties->glTexture);
 }
 
 void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Texture& texture, GLuint slot) {
 
     initTexture(textureProperties, texture);
 
-    state.activeTexture(GL_TEXTURE0 + slot);
-    state.bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties->glTexture);
+    state->activeTexture(GL_TEXTURE0 + slot);
+    state->bindTexture(GL_TEXTURE_CUBE_MAP, textureProperties->glTexture);
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
@@ -353,16 +355,27 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
     auto glInternalFormat = getInternalFormat(glFormat, glType);
     setTextureParameters(GL_TEXTURE_CUBE_MAP, texture);
 
+    auto& images = texture.image;
+    auto& mipmaps = texture.mipmaps;
     for (int i = 0; i < 6; i++) {
-        auto& image = texture.image[i];
-        state.texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
+        auto& image = images[i];
+        state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
+
+        for (int j = 0; j < mipmaps.size(); j++) {
+            state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + i, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
+        }
+    }
+
+    textureProperties->maxMipLevel = mipmaps.size();
+
+    if (textureNeedsGenerateMipmaps(texture)) {
+        generateMipmap(GL_TEXTURE_CUBE_MAP, texture, images.front().width, images.front().height);
     }
 
     textureProperties->version = texture.version();
     if (texture.onUpdate) {
         texture.onUpdate.value()(texture);
     }
-
 }
 
 void gl::GLTextures::setupFrameBufferTexture(
@@ -376,16 +389,16 @@ void gl::GLTextures::setupFrameBufferTexture(
 
     if (textureTarget == GL_TEXTURE_3D || textureTarget == GL_TEXTURE_2D_ARRAY) {
 
-        state.texImage3D(textureTarget, 0, glInternalFormat, renderTarget->width, renderTarget->height, renderTarget->depth, glFormat, glType, nullptr);
+        state->texImage3D(textureTarget, 0, glInternalFormat, renderTarget->width, renderTarget->height, renderTarget->depth, glFormat, glType, nullptr);
 
     } else {
 
-        state.texImage2D(textureTarget, 0, glInternalFormat, renderTarget->width, renderTarget->height, glFormat, glType, nullptr);
+        state->texImage2D(textureTarget, 0, glInternalFormat, renderTarget->width, renderTarget->height, glFormat, glType, nullptr);
     }
 
-    state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, textureTarget, *properties.textureProperties.get(texture.uuid)->glTexture, 0);
-    state.bindFramebuffer(GL_FRAMEBUFFER, 0);
+    state->bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, textureTarget, *properties->textureProperties.get(texture.uuid)->glTexture, 0);
+    state->bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget) {
@@ -426,7 +439,7 @@ void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRende
 
 void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget) {
 
-    state.bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    state->bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 
     if (!(renderTarget->depthTexture && renderTarget->depthTexture)) {
 
@@ -434,7 +447,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
     }
 
     // upload an empty depth texture with framebuffer size
-    if (!properties.textureProperties.get(renderTarget->depthTexture->uuid)->glTexture ||
+    if (!properties->textureProperties.get(renderTarget->depthTexture->uuid)->glTexture ||
         renderTarget->depthTexture->image.front().width != renderTarget->width ||
         renderTarget->depthTexture->image.front().height != renderTarget->height) {
 
@@ -445,7 +458,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
 
     setTexture2D(*renderTarget->depthTexture, 0);
 
-    const auto glDepthTexture = properties.textureProperties.get(renderTarget->depthTexture->uuid)->glTexture;
+    const auto glDepthTexture = properties->textureProperties.get(renderTarget->depthTexture->uuid)->glTexture;
 
     if (renderTarget->depthTexture->format == Format::Depth) {
 
@@ -463,7 +476,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
 
 void gl::GLTextures::setupDepthRenderbuffer(GLRenderTarget* renderTarget) {
 
-    auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
+    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
 
     if (renderTarget->depthTexture) {
 
@@ -471,22 +484,22 @@ void gl::GLTextures::setupDepthRenderbuffer(GLRenderTarget* renderTarget) {
 
     } else {
 
-        state.bindFramebuffer(GL_FRAMEBUFFER, renderTargetProperties->glFramebuffer.value());
+        state->bindFramebuffer(GL_FRAMEBUFFER, renderTargetProperties->glFramebuffer.value());
         GLuint glDepthbuffer;
         glGenRenderbuffers(1, &glDepthbuffer);
         renderTargetProperties->glDepthbuffer = glDepthbuffer;
         setupRenderBufferStorage(*renderTargetProperties->glDepthbuffer, renderTarget);
     }
 
-    state.bindFramebuffer(GL_FRAMEBUFFER, 0);
+    state->bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
     const auto& texture = renderTarget->texture;
 
-    auto renderTargetProperties = properties.renderTargetProperties.get(renderTarget->uuid);
-    auto textureProperties = properties.textureProperties.get(texture->uuid);
+    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
+    auto textureProperties = properties->textureProperties.get(texture->uuid);
 
     renderTarget->addEventListener("dispose", &onRenderTargetDispose_);
 
@@ -494,7 +507,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     glGenTextures(1, &glTexture);
     textureProperties->glTexture = glTexture;
     textureProperties->version = texture->version();
-    info.memory.textures++;
+    info->memory.textures++;
 
     // Handles WebGL2 RGBFormat fallback - #18858
 
@@ -515,7 +528,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
     auto glTextureType = GL_TEXTURE_2D;
 
-    state.bindTexture(glTextureType, textureProperties->glTexture);
+    state->bindTexture(glTextureType, textureProperties->glTexture);
     setTextureParameters(glTextureType, *texture);
     setupFrameBufferTexture(*renderTargetProperties->glFramebuffer, renderTarget, *texture, GL_COLOR_ATTACHMENT0, glTextureType);
 
@@ -524,7 +537,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
         generateMipmap(GL_TEXTURE_2D, *texture, renderTarget->width, renderTarget->height);
     }
 
-    state.bindTexture(GL_TEXTURE_2D, 0);
+    state->bindTexture(GL_TEXTURE_2D, 0);
 
 
     // Setup depth and stencil buffers
@@ -542,17 +555,17 @@ void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
     if (textureNeedsGenerateMipmaps(*texture)) {
 
         const auto target = GL_TEXTURE_2D;
-        const auto glTexture = properties.textureProperties.get(texture->uuid)->glTexture;
+        const auto glTexture = properties->textureProperties.get(texture->uuid)->glTexture;
 
-        state.bindTexture(target, *glTexture);
+        state->bindTexture(target, *glTexture);
         generateMipmap(target, *texture, renderTarget->width, renderTarget->height);
-        state.bindTexture(target, 0);
+        state->bindTexture(target, 0);
     }
 }
 
 std::optional<unsigned int> gl::GLTextures::getGlTexture(const Texture& texture) const {
 
-    const auto textureProperties = properties.textureProperties.get(texture.uuid);
+    const auto textureProperties = properties->textureProperties.get(texture.uuid);
 
     return textureProperties->glTexture;
 }
@@ -565,7 +578,7 @@ void gl::GLTextures::TextureEventListener::onEvent(Event& event) {
 
     scope_->deallocateTexture(texture);
 
-    --scope_->info.memory.textures;
+    --scope_->info->memory.textures;
 }
 
 void gl::GLTextures::RenderTargetEventListener::onEvent(Event& event) {

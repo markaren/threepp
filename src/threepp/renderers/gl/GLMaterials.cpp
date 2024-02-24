@@ -81,7 +81,7 @@ struct GLMaterials::Impl {
 
             const auto maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
             if (maxMipMapLevel) {
-                uniforms.at("maxMipLevel").value<int>() = *maxMipMapLevel;
+                uniforms["maxMipLevel"].value<int>() = *maxMipMapLevel;
             }
         }
 

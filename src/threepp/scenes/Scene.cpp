@@ -37,9 +37,9 @@ Color Background::color() const {
     return *color_;
 }
 
-Texture* Background::texture() const {
+std::shared_ptr<Texture> Background::texture() const {
 
-    return texture_.get();
+    return texture_;
 }
 
 Background::operator bool() const {

@@ -19,14 +19,16 @@ namespace threepp {
                 return path.find(".jpg") != std::string::npos || path.find(".jpeg") != std::string::npos;
             };
 
+            bool isJPEG{};
             std::vector<Image> images;
             for (const auto& path : paths) {
-                bool isJPEG = checkIsJPEG(path.string());
+                isJPEG = checkIsJPEG(path.string());
                 const auto load = loader.load(path, isJPEG ? 3 : 4, false);
                 images.emplace_back(*load);
             }
 
             auto texture = CubeTexture::create(images);
+            texture->format = isJPEG ? Format::RGB : Format::RGBA;
             texture->needsUpdate();
 
             return texture;

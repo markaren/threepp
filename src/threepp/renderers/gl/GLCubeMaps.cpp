@@ -49,6 +49,12 @@ void GLCubeMaps::get(Texture* texture) {
                     auto renderTarget = std::make_unique<GLCubeRenderTarget>(image.height / 2);
                     renderTarget->fromEquirectangularTexture(renderer, *texture);
                     cubemaps[texture] = std::move(renderTarget);
+
+                    renderer.setRenderTarget(currentRenderTarget);
+
+                    //TODO
+
+                    mapTextureMapping(*renderTarget->texture, texture->mapping);
                 }
             }
         }

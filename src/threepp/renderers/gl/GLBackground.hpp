@@ -3,6 +3,7 @@
 #ifndef THREEPP_GLBACKGROUND_HPP
 #define THREEPP_GLBACKGROUND_HPP
 
+#include "threepp/constants.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -45,6 +46,10 @@ namespace threepp {
             float clearAlpha = 0;
 
             std::unique_ptr<Mesh> boxMesh = nullptr;
+
+            Background* currentBackground = nullptr;
+            unsigned int currentBackgroundVersion = 0;
+            std::optional<ToneMapping> currentTonemapping;
 
             void setClear(const Color& color, float alpha);
         };

@@ -118,7 +118,6 @@ struct GLRenderer::Impl {
 
     gl::GLInfo _info;
 
-    gl::GLBackground background;
     gl::GLProperties properties;
     gl::GLGeometries geometries;
     gl::GLBindingStates bindingStates;
@@ -132,6 +131,7 @@ struct GLRenderer::Impl {
     gl::GLMorphTargets morphTargets;
     gl::GLPrograms programCache;
     gl::GLCubeMaps cubemaps;
+    gl::GLBackground background;
 
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
