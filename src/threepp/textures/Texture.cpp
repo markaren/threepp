@@ -12,6 +12,10 @@ Texture::Texture(std::vector<Image> image)
     : uuid(math::generateUUID()),
       image(std::move(image)) {}
 
+std::shared_ptr<Texture> Texture::create() {
+    return std::shared_ptr<Texture>(new Texture({}));
+}
+
 std::shared_ptr<Texture> Texture::create(const Image& image) {
 
     return std::shared_ptr<Texture>(new Texture({image}));

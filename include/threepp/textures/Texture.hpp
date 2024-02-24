@@ -86,12 +86,14 @@ namespace threepp {
 
         ~Texture() override;
 
+        static std::shared_ptr<Texture> create();
+
         static std::shared_ptr<Texture> create(const Image& image);
 
-        static std::shared_ptr<Texture> create(std::vector<Image> image = {});
+        static std::shared_ptr<Texture> create(std::vector<Image> image);
 
     protected:
-        explicit Texture(std::vector<Image> image = {});
+        explicit Texture(std::vector<Image> image);
 
     private:
         bool disposed_ = false;

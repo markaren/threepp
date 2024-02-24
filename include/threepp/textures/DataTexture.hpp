@@ -9,7 +9,6 @@ namespace threepp {
     class DataTexture: public Texture {
 
     public:
-
         void setData(const ImageData& data) {
 
             image.front().setData(data);
@@ -22,7 +21,9 @@ namespace threepp {
         }
 
     private:
-        explicit DataTexture(const ImageData& data, unsigned int width, unsigned int height) {
+        explicit DataTexture(const ImageData& data, unsigned int width, unsigned int height)
+            : Texture({}) {
+
             this->image.emplace_back(data, width, height);
 
             this->magFilter = Filter::Nearest;
