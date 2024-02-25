@@ -728,8 +728,6 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
             glGetProgramInfoLog(program, length, nullptr, &msg.front());
 
             std::cerr << "[Shader error] " << msg << std::endl;
-
-            std::cout << vertexGlsl << std::endl;
         }
     }
 
