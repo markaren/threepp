@@ -1,3 +1,4 @@
+// https://github.com/mrdoob/three.js/blob/r129/src/cameras/CubeCamera.js
 
 #ifndef THREEPP_CUBECAMERA_HPP
 #define THREEPP_CUBECAMERA_HPP
@@ -9,6 +10,7 @@
 
 namespace threepp {
 
+    // Creates 6 cameras that render to a WebGLCubeRenderTarget.
     class CubeCamera: public Object3D {
 
     public:
@@ -54,7 +56,7 @@ namespace threepp {
             this->add(cameraNZ);
         }
 
-        std::string type() const override {
+        [[nodiscard]] std::string type() const override {
 
             return "CubeCamera";
         }
@@ -62,8 +64,6 @@ namespace threepp {
         void update(GLRenderer& renderer, Object3D& scene) {
 
             if (!this->parent) this->updateMatrixWorld();
-
-            const auto& renderTarget = this->renderTarget;
 
             auto cameraPX = this->children[0]->as<PerspectiveCamera>();
             auto cameraNX = this->children[1]->as<PerspectiveCamera>();
@@ -99,6 +99,11 @@ namespace threepp {
             renderer.render(scene, *cameraNZ);
 
             renderer.setRenderTarget(currentRenderTarget);
+        }
+
+        static std::shared_ptr<CubeCamera> create(float near, float far, GLRenderTarget& renderTarget) {
+
+            return std::make_shared<CubeCamera>(near, far, renderTarget);
         }
 
     private:
