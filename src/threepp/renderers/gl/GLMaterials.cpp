@@ -258,7 +258,11 @@ struct GLMaterials::Impl {
             uniforms.at("displacementBias").value<float>() = material->displacementBias;
         }
 
-        // TODO envMap
+        auto envMap = properties.materialProperties.get(material->uuid());
+        if (envMap) {
+
+            uniforms["envMapIntensity"].value<float>() = material->envMapIntensity;
+        }
     }
 
     void refreshUniformsMatcap(UniformMap& uniforms, MeshMatcapMaterial* material) {
