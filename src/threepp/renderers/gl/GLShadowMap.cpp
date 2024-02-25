@@ -1,9 +1,7 @@
 
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 
-#include "threepp/constants.hpp"
 #include "threepp/math/Frustum.hpp"
-#include "threepp/scenes/Scene.hpp"
 
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -278,7 +276,7 @@ struct GLShadowMap::Impl {
         }
     }
 
-    void render(GLRenderer& _renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {
+    void render(GLRenderer& _renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera) {
 
         if (!scope->enabled) return;
         if (!scope->autoUpdate && !scope->needsUpdate) return;
@@ -414,7 +412,7 @@ GLShadowMap::GLShadowMap(GLObjects& objects)
     : type(ShadowMap::PFC), pimpl_(std::make_unique<Impl>(this, objects)) {}
 
 
-void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {
+void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera) {
 
     pimpl_->render(renderer, lights, scene, camera);
 }

@@ -162,7 +162,7 @@ void GLRenderList::finish() {
 
 GLRenderLists::GLRenderLists(GLProperties& properties): properties(properties) {}
 
-GLRenderList* GLRenderLists::get(Scene* scene, size_t renderCallDepth) {
+GLRenderList* GLRenderLists::get(Object3D* scene, size_t renderCallDepth) {
 
     if (!lists.count(scene->uuid)) {
 

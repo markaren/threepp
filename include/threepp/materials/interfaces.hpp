@@ -107,10 +107,10 @@ namespace threepp {
 
     struct MaterialWithEnvMap: virtual Material {
 
-        std::optional<float> envMapIntensity;
+        float envMapIntensity; // Only used by MeshStandardMaterial
         std::shared_ptr<Texture> envMap;
 
-        explicit MaterialWithEnvMap(std::optional<float> envMapIntensity = std::nullopt): envMapIntensity(envMapIntensity) {}
+        explicit MaterialWithEnvMap(std::optional<float> envMapIntensity = std::nullopt): envMapIntensity(envMapIntensity.value_or(1)) {}
     };
 
     struct MaterialWithGradientMap: virtual Material {

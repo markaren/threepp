@@ -67,7 +67,7 @@ namespace threepp::gl {
 
         explicit GLRenderLists(GLProperties& properties);
 
-        GLRenderList* get(Scene* scene, size_t renderCallDepth);
+        GLRenderList* get(Object3D* scene, size_t renderCallDepth);
 
         void dispose();
 

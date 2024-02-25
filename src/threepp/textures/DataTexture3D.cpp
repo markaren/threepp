@@ -6,7 +6,7 @@ using namespace threepp;
 
 DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data,
                              unsigned int width, unsigned int height, unsigned int depth)
-    : Texture(std::nullopt) {
+    : Texture({}) {
 
     // We're going to add .setXXX() methods for setting properties later.
     // Users can still set in DataTexture3D directly.
@@ -16,7 +16,7 @@ DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data,
     //
     // See #14839
 
-    this->image = Image{data, width, height, depth};
+    this->image.emplace_back(Image{data, width, height, depth});
 
     this->magFilter = Filter::Nearest;
     this->minFilter = Filter::Nearest;

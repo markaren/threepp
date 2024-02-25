@@ -15,7 +15,7 @@ namespace threepp {
                      int wrapS, int wrapT,
                      int magFilter, int minFilter,
                      int anisotropy, int format)
-            : Texture(std::nullopt) {
+            : Texture({}) {
         }
     };
 

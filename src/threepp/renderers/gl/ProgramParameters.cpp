@@ -97,8 +97,8 @@ ProgramParameters::ProgramParameters(
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
     envMap = envmapMaterial && envmapMaterial->envMap;
-    if (envMap && envmapMaterial->envMap->mapping){
-        envMapMode = as_integer(*envmapMaterial->envMap->mapping);
+    if (envMap){
+        envMapMode = as_integer(envmapMaterial->envMap->mapping);
     }
     envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
     envMapCubeUV = envMapMode != 0 &&

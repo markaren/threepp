@@ -90,9 +90,9 @@ namespace threepp::gl {
             GLTextures* scope_;
         };
 
-        GLInfo& info;
-        GLState& state;
-        GLProperties& properties;
+        GLInfo* info;
+        GLState* state;
+        GLProperties* properties;
 
         TextureEventListener onTextureDispose_;
         RenderTargetEventListener onRenderTargetDispose_;

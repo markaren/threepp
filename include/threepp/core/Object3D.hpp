@@ -23,11 +23,10 @@ namespace threepp {
     class Material;
     class Raycaster;
     struct Intersection;
-
-    class Scene;
+    class Object3D;
     class BufferGeometry;
 
-    typedef std::function<void(void*, Scene*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;
+    typedef std::function<void(void*, Object3D*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;
 
     // This is the base class for most objects in three.js and provides a set of properties and methods for manipulating objects in 3D space.
     //Note that this can be used for grouping objects via the .add( object ) method which adds the object as a child, however it is better to use Group for this.

@@ -7,6 +7,7 @@
 #include "threepp/renderers/gl/GLBackground.hpp"
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
+#include "threepp/renderers/gl/GLCubeMaps.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLMaterials.hpp"
 #include "threepp/renderers/gl/GLMorphTargets.hpp"
@@ -68,7 +69,7 @@ struct GLRenderer::Impl {
     gl::GLState state;
 
 
-    Scene _emptyScene;
+    std::unique_ptr<Scene> _emptyScene;
 
     OnMaterialDispose onMaterialDispose;
 
@@ -117,7 +118,6 @@ struct GLRenderer::Impl {
 
     gl::GLInfo _info;
 
-    gl::GLBackground background;
     gl::GLProperties properties;
     gl::GLGeometries geometries;
     gl::GLBindingStates bindingStates;
@@ -130,6 +130,8 @@ struct GLRenderer::Impl {
     gl::GLObjects objects;
     gl::GLMorphTargets morphTargets;
     gl::GLPrograms programCache;
+    gl::GLCubeMaps cubemaps;
+    gl::GLBackground background;
 
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
@@ -138,7 +140,7 @@ struct GLRenderer::Impl {
 
     Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
         : scope(scope), _size(size),
-          background(state, parameters.premultipliedAlpha),
+          cubemaps(scope),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
           indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
           clipping(properties),
@@ -149,8 +151,10 @@ struct GLRenderer::Impl {
           renderLists(properties),
           shadowMap(objects),
           materials(properties),
+          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           programCache(bindingStates, clipping),
           _currentDrawBuffers(GL_BACK),
+          _emptyScene(std::make_unique<Scene>()),
           onMaterialDispose(this) {
 
         this->setViewport(0, 0, size.width, size.height);
@@ -182,11 +186,13 @@ struct GLRenderer::Impl {
         }
     }
 
-    void render(Scene* scene, Camera* camera) {
+    void render(Object3D* scene, Camera* camera) {
 
         // update scene graph
 
-        if (scene->autoUpdate) scene->updateMatrixWorld();
+        if (auto _scene = scene->as<Scene>()) {
+            if (_scene->autoUpdate) scene->updateMatrixWorld();
+        }
 
         // update camera matrices and frustum
 
@@ -239,7 +245,7 @@ struct GLRenderer::Impl {
 
         //
 
-        background.render(scope, scene);
+        background.render(*currentRenderList, scene);
 
         // render scene
 
@@ -298,12 +304,12 @@ struct GLRenderer::Impl {
         }
     }
 
-    void renderBufferDirect(Camera* camera, Scene* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
+    void renderBufferDirect(Camera* camera, Object3D* _scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group) {
 
         auto scene = _scene;
 
-        if (scene == nullptr) {
-            scene = &_emptyScene;
+        if (!scene) {
+            scene = _emptyScene.get();
         }
 
         bool isMesh = object->is<Mesh>();
@@ -533,22 +539,25 @@ struct GLRenderer::Impl {
         }
     }
 
-    void renderObjects(const std::vector<gl::RenderItem*>& renderList, Scene* scene, Camera* camera) {
+    void renderObjects(const std::vector<gl::RenderItem*>& renderList, Object3D* scene, Camera* camera) {
 
-        auto& overrideMaterial = scene->overrideMaterial;
+        Material* overrideMaterial = nullptr;
+        if (auto _scene = scene->as<Scene>()) {
+            if (_scene->overrideMaterial) overrideMaterial = _scene->overrideMaterial.get();
+        }
 
         for (const auto& renderItem : renderList) {
 
             auto object = renderItem->object;
             auto geometry = renderItem->geometry;
-            auto material = overrideMaterial == nullptr ? renderItem->material : overrideMaterial.get();
+            auto material = overrideMaterial == nullptr ? renderItem->material : overrideMaterial;
             auto group = renderItem->group;
 
             renderObject(object, scene, camera, geometry, material, group);
         }
     }
 
-    void renderObject(Object3D* object, Scene* scene, Camera* camera, BufferGeometry* geometry, Material* material, std::optional<GeometryGroup> group) {
+    void renderObject(Object3D* object, Object3D* scene, Camera* camera, BufferGeometry* geometry, Material* material, std::optional<GeometryGroup> group) {
 
         if (object->onBeforeRender) {
 
@@ -566,11 +575,10 @@ struct GLRenderer::Impl {
         }
     }
 
-    gl::GLProgram* getProgram(Material* material, Scene* scene, Object3D* object) {
+    gl::GLProgram* getProgram(Material* material, Object3D* _scene, Object3D* object) {
 
-        //    bool isScene = instanceof <Scene>(scene);
-        //
-        //    if (!isScene) scene = &_emptyScene;// scene could be a Mesh, Line, Points, ...
+        auto* scene = _scene->as<Scene>();
+        if (!scene) scene = _emptyScene.get();// scene could be a Mesh, Line, Points, ...
 
         auto materialProperties = properties.materialProperties.get(material->uuid());
 
@@ -586,9 +594,16 @@ struct GLRenderer::Impl {
 
         // always update environment and fog - changing these trigger an getProgram call, but it's possible that the program doesn't change
 
-        materialProperties->environment = material->as<MeshStandardMaterial>() ? scene->environment : nullptr;
+        materialProperties->environment = material->is<MeshStandardMaterial>() ? scene->environment.get() : nullptr;
         materialProperties->fog = scene->fog;
-        //    materialProperties.envMap = cubemaps.get( material.envMap || materialProperties.environment );
+        auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
+        if (materialWithEnvMap && materialWithEnvMap->envMap) {
+            cubemaps.get(materialWithEnvMap->envMap.get());
+            materialProperties->envMap = materialWithEnvMap->envMap.get();
+        } else {
+            cubemaps.get(materialProperties->environment);
+            materialProperties->envMap = materialProperties->environment;
+        }
 
         if (programs.empty()) {
 
@@ -681,12 +696,10 @@ struct GLRenderer::Impl {
         materialProperties->vertexAlphas = parameters.vertexAlphas;
     }
 
-    gl::GLProgram* setProgram(Camera* camera, Scene* scene, Material* material, Object3D* object) {
+    gl::GLProgram* setProgram(Camera* camera, Object3D* _scene, Material* material, Object3D* object) {
 
-        //    bool isScene = instanceof <Scene>(scene);
-
-        //            if (!isScene) scene = _emptyScene;// scene could be a Mesh, Line, Points, ...
-        //
+        auto* scene = _scene->as<Scene>();
+        if (!scene) scene = _emptyScene.get();// scene could be a Mesh, Line, Points, ...
 
         bool isMeshBasicMaterial = material->type() == "MeshBasicMaterial";
         bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
@@ -699,10 +712,19 @@ struct GLRenderer::Impl {
 
         textures.resetTextureUnits();
 
-        auto fog = scene->fog;
+        auto& fog = scene->fog;
         auto environment = isMeshStandardMaterial ? scene->environment : nullptr;
         Encoding encoding = (_currentRenderTarget == nullptr) ? scope.outputEncoding : _currentRenderTarget->texture->encoding;
-        //                const envMap = cubemaps.get(material.envMap || environment);
+
+        Texture* envMap;
+        auto materialWithEnvMap = material->as<MaterialWithEnvMap>();
+        if (materialWithEnvMap && materialWithEnvMap->envMap) {
+            cubemaps.get(materialWithEnvMap->envMap.get());
+            envMap = materialWithEnvMap->envMap.get();
+        } else {
+            cubemaps.get(environment.get());
+            envMap = environment.get();
+        }
         bool vertexAlphas = material->vertexColors &&
                             object->geometry() &&
                             object->geometry()->hasAttribute("color") &&
@@ -756,7 +778,7 @@ struct GLRenderer::Impl {
 
                 needsProgramChange = true;
 
-            } else if (false /*materialProperties.envMap != envMap*/) {
+            } else if (materialProperties->envMap != envMap) {
 
                 needsProgramChange = true;
 
@@ -1072,8 +1094,8 @@ struct GLRenderer::Impl {
     void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
 
         const auto levelScale = std::pow(2, -level);
-        const auto width = static_cast<int>(texture.image->width * levelScale);
-        const auto height = static_cast<int>(texture.image->height * levelScale);
+        const auto width = static_cast<int>(texture.image.front().width * levelScale);
+        const auto height = static_cast<int>(texture.image.front().height * levelScale);
 
         textures.setTexture2D(texture, 0);
 
@@ -1108,7 +1130,7 @@ struct GLRenderer::Impl {
         renderLists.dispose();
         renderStates.dispose();
         properties.dispose();
-        //    cubemaps.dispose();
+        cubemaps.dispose();
         objects.dispose();
         bindingStates.dispose();
     }
@@ -1128,7 +1150,7 @@ struct GLRenderer::Impl {
 GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters) {
 
 #ifndef EMSCRIPTEN
-    loadGlad(); // if Glad has yet to be loaded, do it now
+    loadGlad();// if Glad has yet to be loaded, do it now
 #endif
 
     pimpl_ = std::make_unique<Impl>(*this, size, parameters);
@@ -1282,7 +1304,7 @@ void GLRenderer::dispose() {
     pimpl_->dispose();
 }
 
-void GLRenderer::render(Scene& scene, Camera& camera) {
+void GLRenderer::render(Object3D& scene, Camera& camera) {
 
     pimpl_->render(&scene, &camera);
 }

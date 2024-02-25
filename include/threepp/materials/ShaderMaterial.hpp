@@ -13,6 +13,7 @@ namespace threepp {
                           public MaterialWithLights,
                           public MaterialWithWireframe,
                           public MaterialWithLineWidth,
+                          public MaterialWithEnvMap,
                           public MaterialWithDefines {
 
     public:

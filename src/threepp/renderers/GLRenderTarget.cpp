@@ -17,7 +17,7 @@ GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GL
       scissor(0.f, 0.f, (float) width, (float) height),
       viewport(0.f, 0.f, (float) width, (float) height),
       depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
-      texture(Texture::create(std::nullopt)) {
+      texture(Texture::create({})) {
 
     if (options.mapping) texture->mapping = *options.mapping;
     if (options.wrapS) texture->wrapS = *options.wrapS;
@@ -38,9 +38,9 @@ void GLRenderTarget::setSize(unsigned int width, unsigned int height, unsigned i
         this->height = height;
         this->depth = depth;
 
-        this->texture->image->width = width;
-        this->texture->image->height = height;
-        this->texture->image->depth = depth;
+        this->texture->image.front().width = width;
+        this->texture->image.front().height = height;
+        this->texture->image.front().depth = depth;
 
         this->dispose();
     }

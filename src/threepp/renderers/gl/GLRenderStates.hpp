@@ -35,7 +35,7 @@ namespace threepp::gl {
 
     struct GLRenderStates {
 
-        GLRenderState* get(Scene* scene, size_t renderCallDepth = 1);
+        GLRenderState* get(Object3D* scene, size_t renderCallDepth = 1);
 
         void dispose();
 
