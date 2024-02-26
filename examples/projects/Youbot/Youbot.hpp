@@ -80,11 +80,11 @@ struct Youbot: Object3D, KeyListener {
 
     std::vector<float> getJointValues() {
         return {
-                arm_joint1->rotation.z() * math::RAD2DEG,
-                arm_joint2->rotation.z() * math::RAD2DEG + 90,
-                arm_joint3->rotation.z() * math::RAD2DEG + 90,
-                arm_joint4->rotation.z() * math::RAD2DEG,
-                arm_joint5->rotation.z() * math::RAD2DEG,
+                arm_joint1->rotation.z * math::RAD2DEG,
+                arm_joint2->rotation.z * math::RAD2DEG + 90,
+                arm_joint3->rotation.z * math::RAD2DEG + 90,
+                arm_joint4->rotation.z * math::RAD2DEG,
+                arm_joint5->rotation.z * math::RAD2DEG,
         };
     }
 

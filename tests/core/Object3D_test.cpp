@@ -33,9 +33,9 @@ TEST_CASE("applyMatrix4") {
     a->applyMatrix4(m);
 
     REQUIRE(a->position == expectedPos);
-    auto result = std::abs(a->quaternion.x() - expectedQuat.x()) <= eps &&
-                  std::abs(a->quaternion.y() - expectedQuat.y()) <= eps &&
-                  std::abs(a->quaternion.z() - expectedQuat.z()) <= eps;
+    auto result = std::abs(a->quaternion.x - expectedQuat.x) <= eps &&
+                  std::abs(a->quaternion.y - expectedQuat.y) <= eps &&
+                  std::abs(a->quaternion.z - expectedQuat.z) <= eps;
     REQUIRE(result);
 }
 
@@ -49,9 +49,9 @@ TEST_CASE("applyQuaternion") {
     a->quaternion.set(0.25, 0.25, 0.25, 0.25);
     a->applyQuaternion(quat);
 
-    auto result = std::abs(a->quaternion.x() - expected.x()) <= eps &&
-                  std::abs(a->quaternion.y() - expected.y()) <= eps &&
-                  std::abs(a->quaternion.z() - expected.z()) <= eps;
+    auto result = std::abs(a->quaternion.x - expected.x) <= eps &&
+                  std::abs(a->quaternion.y - expected.y) <= eps &&
+                  std::abs(a->quaternion.z - expected.z) <= eps;
     REQUIRE(result);
 }
 
