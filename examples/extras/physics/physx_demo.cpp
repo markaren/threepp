@@ -27,12 +27,11 @@ namespace {
                 case Key::NUM_1:
                 case Key::NUM_2: {
                     j1->setDriveVelocity(0);// Set motor speed
-                }
-
+                } break;
                 case Key::NUM_3:
                 case Key::NUM_4: {
                     j2->setDriveVelocity(0);// Set motor speed
-                }
+                } break;
             }
         }
 
@@ -59,12 +58,13 @@ int main() {
     box1->position.y = 1;
     scene.add(box1);
 
-    auto box2 = Mesh::create(BoxGeometry::create(1, 0.5, 0.5), MeshStandardMaterial::create());
-    box2->position.y = 2 + 0.25;
-    box2->position.x = 0.5 + 0.25;
-    scene.add(box2);
+    auto box2 = Mesh::create(BoxGeometry::create(0.25, 2, 0.25), MeshStandardMaterial::create());
+    box2->position.y = 2;
+    box1->add(box2);
 
-    auto ground = Mesh::create(BoxGeometry::create(10, 0.1, 10), MeshStandardMaterial::create({{"color", Color::blueviolet}}));
+    auto ground = Mesh::create(BoxGeometry::create(10, 0.1, 10), MeshStandardMaterial::create({{"color", Color::blueviolet},
+                                                                                               {"wireframe", true}}));
+    ground->position.y = -0.05;
     scene.add(ground);
 
     auto light = HemisphereLight::create(Color::brown, Color::blanchedalmond);
@@ -72,11 +72,13 @@ int main() {
     scene.add(light);
 
     PxEngine engine;
+    scene.add(engine);
     engine.registerMeshDynamic(*box1);
     engine.registerMeshDynamic(*box2);
     engine.registerMeshStatic(*ground);
-    auto joint1 = engine.createRevoluteJoint(*ground, *box1, {0, 0, 0}, {0, 1, 0});
-    auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0.25, 1, 0}, {1, 0, 0});
+
+    auto joint1 = engine.createRevoluteJoint(*box1, {0, -1, 0}, {0, 1, 0});
+    auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0, 1, 0}, {1, 0, 0});
 
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
@@ -92,12 +94,20 @@ int main() {
     OrbitControls controls(camera, canvas);
     controls.enableKeys = false;
 
+    bool run = false;
+    KeyAdapter adapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent) {
+        run = true;
+    });
+    canvas.addKeyListener(adapter);
+
     Clock clock;
     canvas.animate([&] {
         auto dt = clock.getDelta();
 
         renderer.render(scene, camera);
 
-        engine.step(dt);
+        if (run) {
+            engine.step(dt);
+        }
     });
 }

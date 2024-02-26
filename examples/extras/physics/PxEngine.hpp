@@ -8,7 +8,7 @@
 
 #include <unordered_map>
 
-class PxEngine {
+class PxEngine: public threepp::Object3D {
 
 public:
     explicit PxEngine(float timeStep = 1.f / 60)
@@ -26,8 +26,14 @@ public:
         if (!sceneDesc.filterShader)
             sceneDesc.filterShader = physx::PxDefaultSimulationFilterShader;
         scene = physics->createScene(sceneDesc);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eSCALE, 1.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eACTOR_AXES, 1.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LOCAL_FRAMES, 2.0f);
 
         defaultMaterial = physics->createMaterial(0.5f, 0.5f, 0.6f);
+
+        debugLines->material()->vertexColors = true;
+        add(debugLines);
     }
 
     void step(float dt) {
@@ -42,6 +48,8 @@ public:
             internalTime -= dt;
         }
 
+        threepp::Matrix4 tmpMat;
+        threepp::Quaternion tmpQuat;
         for (auto [obj, rb] : bodies) {
 
             auto t = rb->getGlobalPose();
@@ -49,7 +57,28 @@ public:
             auto quat = t.q;
 
             obj->position.set(pos.x, pos.y, pos.z);
+            obj->applyMatrix4(tmpMat.copy(*obj->parent->matrix).invert());
             obj->quaternion.set(quat.x, quat.y, quat.z, quat.w);
+            obj->applyQuaternion(tmpQuat.copy(obj->parent->quaternion).invert());
+        }
+
+        std::vector<float> lineVertices;
+        std::vector<float> lineColors;
+        const auto& rb = scene->getRenderBuffer();
+        for (auto i = 0; i < rb.getNbLines(); i++) {
+            const auto& line = rb.getLines()[i];
+
+            lineVertices.insert(lineVertices.end(), {line.pos0.x, line.pos0.y, line.pos0.z, line.pos1.x, line.pos1.y, line.pos1.z});
+            threepp::Color c1 = line.color0;
+            threepp::Color c2 = line.color1;
+            lineColors.insert(lineColors.end(), {c1.r, c1.g, c1.b, c2.r, c2.g, c2.b});
+        }
+
+        if (!lineVertices.empty()) {
+            auto geom = threepp::BufferGeometry::create();
+            geom->setAttribute("position", threepp::FloatBufferAttribute::create(lineVertices, 3));
+            geom->setAttribute("color", threepp::FloatBufferAttribute::create(lineColors, 3));
+            debugLines->setGeometry(geom);
         }
     }
 
@@ -87,34 +116,36 @@ public:
         obj.addEventListener("remove", &onMeshRemovedListener);
     }
 
-//    physx::PxRevoluteJoint* createRevoluteJoint(threepp::Object3D& o1, threepp::Vector3 anchor, threepp::Vector3 axis) {
-//
-//        auto rb1 = bodies.at(&o1);
-//
-//        threepp::Matrix4 f1;
-//        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({0, 0, 1}, axis));
-////        f1.setPosition(anchor);
-//
-//        threepp::Matrix4 f2;
-//        f2.setPosition(anchor);
-//
-//        physx::PxTransform frame1 = toPxTransform(f1);
-//        physx::PxTransform frame2 = toPxTransform(f2);
-//
-//        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, nullptr, frame1, rb1, frame2);
-//
-////        joint->set
-//
-//        return joint;
-//    }
+    physx::PxRevoluteJoint* createRevoluteJoint(threepp::Object3D& o1, threepp::Vector3 anchor, threepp::Vector3 axis) {
+
+        auto rb1 = bodies.at(&o1);
+
+        threepp::Matrix4 f1;
+        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1,0,0}, axis));
+        f1.setPosition(anchor);
+
+        threepp::Matrix4 f2;
+        f2.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1,0,0}, axis));
+
+        physx::PxTransform frame1 = toPxTransform(f1);
+        physx::PxTransform frame2 = toPxTransform(f2);
+
+        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, rb1, frame1, nullptr, frame2);
+        joint->setConstraintFlag(physx::PxConstraintFlag::eVISUALIZATION, true);
+
+        return joint;
+    }
 
     physx::PxRevoluteJoint* createRevoluteJoint(threepp::Object3D& o1, threepp::Object3D& o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
+
+        o1.updateMatrixWorld();
+        o2.updateMatrixWorld();
 
         auto rb1 = bodies.at(&o1);
         auto rb2 = bodies.at(&o2);
 
         threepp::Matrix4 f1;
-        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({0, 0, 1}, axis));
+        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
         f1.setPosition(anchor);
 
         threepp::Matrix4 f2 = *o2.matrixWorld;
@@ -124,6 +155,7 @@ public:
         physx::PxTransform frame2 = toPxTransform(f2);
 
         physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, rb1, frame1, rb2, frame2);
+        joint->setConstraintFlag(physx::PxConstraintFlag::eVISUALIZATION, true);
 
         return joint;
     }
@@ -133,7 +165,7 @@ public:
         return bodies.at(&mesh);
     }
 
-    ~PxEngine() {
+    ~PxEngine() override {
 
         for (auto [_, rb] : bodies) {
             rb->release();
@@ -163,6 +195,8 @@ private:
 
     std::unordered_map<threepp::Object3D*, std::unique_ptr<physx::PxGeometry>> geometries;
     std::unordered_map<threepp::Object3D*, physx::PxRigidActor*> bodies;
+
+    std::shared_ptr<threepp::LineSegments> debugLines = threepp::LineSegments::create();
 
 
     static physx::PxVec3 toPxVector3(const threepp::Vector3& v) {
