@@ -22,6 +22,8 @@ namespace threepp {
 
         BufferGeometry* geometry() override;
 
+        void setGeometry(const std::shared_ptr<BufferGeometry>& geometry);
+
         Material* material() override;
 
         std::vector<Material*> materials() override;

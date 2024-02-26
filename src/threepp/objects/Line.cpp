@@ -32,6 +32,10 @@ BufferGeometry* Line::geometry() {
     return geometry_.get();
 }
 
+void Line::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+    this->geometry_ = geometry;
+}
+
 Material* Line::material() {
 
     return material_.get();
