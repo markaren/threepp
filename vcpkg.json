@@ -29,6 +29,12 @@
           ]
         }
       ]
+    },
+    "physx": {
+      "description": "Enable physx in examples",
+      "dependencies": [
+        "physx"
+      ]
     }
   }
 }

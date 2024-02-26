@@ -1,7 +1,7 @@
 
 function(add_example)
 
-    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_XML WEB)
+    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_XML LINK_PHYSX WEB)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES WEB_EMBED)
 
@@ -36,6 +36,10 @@ function(add_example)
 
     if (arg_LINK_ASSIMP AND assimp_FOUND)
         target_link_libraries("${arg_NAME}" PRIVATE assimp::assimp)
+    endif ()
+
+    if (arg_LINK_PHYSX AND unofficial-omniverse-physx-sdk_FOUND)
+        target_link_libraries("${arg_NAME}" PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endif ()
 
     if (DEFINED EMSCRIPTEN)
