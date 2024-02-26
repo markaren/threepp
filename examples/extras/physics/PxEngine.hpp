@@ -11,7 +11,7 @@
 class PxEngine {
 
 public:
-    PxEngine(float timeStep = 1.f / 60)
+    explicit PxEngine(float timeStep = 1.f / 60)
         : timeStep(timeStep),
           sceneDesc(physics->getTolerancesScale()),
           onMeshRemovedListener(this) {
@@ -51,38 +51,81 @@ public:
             obj->position.set(pos.x, pos.y, pos.z);
             obj->quaternion.set(quat.x, quat.y, quat.z, quat.w);
         }
-
     }
 
-    void registerMeshDynamic(threepp::Mesh& mesh) {
+    void registerMeshDynamic(threepp::Object3D& obj) {
 
         threepp::Vector3 worldPos;
-        mesh.getWorldPosition(worldPos);
+        obj.getWorldPosition(worldPos);
 
         physx::PxTransform transform(toPxVector3(worldPos));
-        auto geometry = toPxGeometry(mesh.geometry());
+        auto geometry = toPxGeometry(obj.geometry());
         if (!geometry) return;
-        geometries[&mesh] = std::move(geometry);
-        auto* actor = PxCreateDynamic(*physics, transform, *geometries[&mesh], *defaultMaterial, 10.0f);
+        geometries[&obj] = std::move(geometry);
+        auto* actor = PxCreateDynamic(*physics, transform, *geometries[&obj], *defaultMaterial, 10.0f);
 
-        bodies[&mesh] = actor;
+        bodies[&obj] = actor;
         scene->addActor(*actor);
 
-        mesh.addEventListener("remove", &onMeshRemovedListener);
+        obj.addEventListener("remove", &onMeshRemovedListener);
     }
 
-    void registerMeshStatic(threepp::Mesh& mesh) {
+    void registerMeshStatic(threepp::Object3D& obj) {
 
         threepp::Vector3 worldPos;
-        mesh.getWorldPosition(worldPos);
+        obj.getWorldPosition(worldPos);
 
         physx::PxTransform transform(toPxVector3(worldPos));
-        auto geometry = toPxGeometry(mesh.geometry());
+        auto geometry = toPxGeometry(obj.geometry());
         if (!geometry) return;
-        geometries[&mesh] = std::move(geometry);
-        auto* actor = PxCreateStatic(*physics, transform, *geometries[&mesh], *defaultMaterial);
+        geometries[&obj] = std::move(geometry);
+        auto* actor = PxCreateStatic(*physics, transform, *geometries[&obj], *defaultMaterial);
 
+        bodies[&obj] = actor;
         scene->addActor(*actor);
+
+        obj.addEventListener("remove", &onMeshRemovedListener);
+    }
+
+//    physx::PxRevoluteJoint* createRevoluteJoint(threepp::Object3D& o1, threepp::Vector3 anchor, threepp::Vector3 axis) {
+//
+//        auto rb1 = bodies.at(&o1);
+//
+//        threepp::Matrix4 f1;
+//        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({0, 0, 1}, axis));
+////        f1.setPosition(anchor);
+//
+//        threepp::Matrix4 f2;
+//        f2.setPosition(anchor);
+//
+//        physx::PxTransform frame1 = toPxTransform(f1);
+//        physx::PxTransform frame2 = toPxTransform(f2);
+//
+//        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, nullptr, frame1, rb1, frame2);
+//
+////        joint->set
+//
+//        return joint;
+//    }
+
+    physx::PxRevoluteJoint* createRevoluteJoint(threepp::Object3D& o1, threepp::Object3D& o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
+
+        auto rb1 = bodies.at(&o1);
+        auto rb2 = bodies.at(&o2);
+
+        threepp::Matrix4 f1;
+        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({0, 0, 1}, axis));
+        f1.setPosition(anchor);
+
+        threepp::Matrix4 f2 = *o2.matrixWorld;
+        f2.invert().multiply(*o1.matrixWorld).multiply(f1);
+
+        physx::PxTransform frame1 = toPxTransform(f1);
+        physx::PxTransform frame2 = toPxTransform(f2);
+
+        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, rb1, frame1, rb2, frame2);
+
+        return joint;
     }
 
     physx::PxActor* get(threepp::Mesh& mesh) {
@@ -107,7 +150,6 @@ private:
     float timeStep;
     float internalTime{};
 
-
     // Initialize the Physics SDK
     physx::PxDefaultAllocator allocator;
     physx::PxDefaultErrorCallback errorCallback;
@@ -120,7 +162,7 @@ private:
     physx::PxMaterial* defaultMaterial;
 
     std::unordered_map<threepp::Object3D*, std::unique_ptr<physx::PxGeometry>> geometries;
-    std::unordered_map<threepp::Object3D*, physx::PxRigidBody*> bodies;
+    std::unordered_map<threepp::Object3D*, physx::PxRigidActor*> bodies;
 
 
     static physx::PxVec3 toPxVector3(const threepp::Vector3& v) {
@@ -129,6 +171,16 @@ private:
 
     static physx::PxQuat toPxQuat(const threepp::Quaternion& q) {
         return {q.x, q.y, q.z, q.w};
+    }
+
+    static physx::PxTransform toPxTransform(threepp::Matrix4& m) {
+        threepp::Vector3 pos;
+        threepp::Quaternion quat;
+        threepp::Vector3 scale;
+
+        m.decompose(pos, quat, scale);
+
+        return physx::PxTransform(toPxVector3(pos), toPxQuat(quat));
     }
 
     static std::unique_ptr<physx::PxGeometry> toPxGeometry(const threepp::BufferGeometry* geometry) {
