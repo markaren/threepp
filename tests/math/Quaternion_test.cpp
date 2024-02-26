@@ -38,32 +38,32 @@ namespace {
 TEST_CASE("instancing") {
 
     Quaternion a;
-    REQUIRE(a.x() == 0);
-    REQUIRE(a.y() == 0);
-    REQUIRE(a.z() == 0);
-    REQUIRE(a.w() == 1);
+    REQUIRE(a.x == 0.f);
+    REQUIRE(a.y == 0.f);
+    REQUIRE(a.z == 0.f);
+    REQUIRE(a.w == 1.f);
 
     a = Quaternion(x, y, z, w);
-    REQUIRE(a.x() == x);
-    REQUIRE(a.y() == y);
-    REQUIRE(a.z() == z);
-    REQUIRE(a.w() == w);
+    REQUIRE(a.x == x);
+    REQUIRE(a.y == y);
+    REQUIRE(a.z == z);
+    REQUIRE(a.w == w);
 }
 
 TEST_CASE("x") {
 
     Quaternion a;
-    REQUIRE(a.x() == 0);
+    REQUIRE(a.x == 0.f);
 
     a = Quaternion(1, 2, 3);
-    REQUIRE(a.x() == 1);
+    REQUIRE(a.x == 1.f);
 
     a = Quaternion(4, 5, 6, 1);
-    REQUIRE(a.x() == 4);
+    REQUIRE(a.x == 4.f);
 
     a = Quaternion(7, 8, 9);
     a.x = 10;
-    REQUIRE(a.x() == 10);
+    REQUIRE(a.x == 10.f);
 
     a = Quaternion(11, 12, 13);
     bool b = false;
@@ -73,23 +73,23 @@ TEST_CASE("x") {
     REQUIRE(!b);
     a.x = 14;
     REQUIRE(b);
-    REQUIRE(a.x() == 14);
+    REQUIRE(a.x == 14.f);
 }
 
 TEST_CASE("y") {
 
     Quaternion a;
-    REQUIRE(a.y() == 0);
+    REQUIRE(a.y == 0.f);
 
     a = Quaternion(1, 2, 3);
-    REQUIRE(a.y() == 2);
+    REQUIRE(a.y == 2.f);
 
     a = Quaternion(4, 5, 6, 1);
-    REQUIRE(a.y() == 5);
+    REQUIRE(a.y == 5.f);
 
     a = Quaternion(7, 8, 9);
     a.y = 10;
-    REQUIRE(a.y() == 10);
+    REQUIRE(a.y == 10.f);
 
     a = Quaternion(11, 12, 13);
     bool b = false;
@@ -99,23 +99,23 @@ TEST_CASE("y") {
     REQUIRE(!b);
     a.y = 14;
     REQUIRE(b);
-    REQUIRE(a.y() == 14);
+    REQUIRE(a.y == 14.f);
 }
 
 TEST_CASE("z") {
 
     Quaternion a;
-    REQUIRE(a.z() == 0);
+    REQUIRE(a.z == 0.f);
 
     a = Quaternion(1, 2, 3);
-    REQUIRE(a.z() == 3);
+    REQUIRE(a.z == 3.f);
 
     a = Quaternion(4, 5, 6, 1);
-    REQUIRE(a.z() == 6);
+    REQUIRE(a.z == 6.f);
 
     a = Quaternion(7, 8, 9);
     a.z = 10;
-    REQUIRE(a.z() == 10);
+    REQUIRE(a.z == 10.f);
 
     a = Quaternion(11, 12, 13);
     bool b = false;
@@ -125,23 +125,23 @@ TEST_CASE("z") {
     REQUIRE(!b);
     a.z = 14;
     REQUIRE(b);
-    REQUIRE(a.z() == 14);
+    REQUIRE(a.z == 14.f);
 }
 
 TEST_CASE("w") {
 
     Quaternion a;
-    REQUIRE(a.w() == 1);
+    REQUIRE(a.w == 1.f);
 
     a = Quaternion(1, 2, 3);
-    REQUIRE(a.w() == 1);
+    REQUIRE(a.w == 1.f);
 
     a = Quaternion(4, 5, 6, 1);
-    REQUIRE(a.w() == 1);
+    REQUIRE(a.w == 1.f);
 
     a = Quaternion(7, 8, 9);
     a.w = 10;
-    REQUIRE(a.w() == 10);
+    REQUIRE(a.w == 10.f);
 
     a = Quaternion(11, 12, 13);
     bool b = false;
@@ -151,16 +151,16 @@ TEST_CASE("w") {
     REQUIRE(!b);
     a.w = 14;
     REQUIRE(b);
-    REQUIRE(a.w() == 14);
+    REQUIRE(a.w == 14.f);
 }
 
 TEST_CASE("set") {
 
     Quaternion a;
-    CHECK(a.x == 0);
-    CHECK(a.y == 0);
-    CHECK(a.z == 0);
-    CHECK(a.w == 1);
+    CHECK(a.x == 0.f);
+    CHECK(a.y == 0.f);
+    CHECK(a.z == 0.f);
+    CHECK(a.w == 1.f);
 
     a.set(x, y, z, w);
     CHECK(a.x == x);
@@ -172,10 +172,10 @@ TEST_CASE("set") {
 TEST_CASE("clone") {
 
     auto a = Quaternion().clone();
-    CHECK(a.x == 0);
-    CHECK(a.y == 0);
-    CHECK(a.z == 0);
-    CHECK(a.w == 1);
+    CHECK(a.x == 0.f);
+    CHECK(a.y == 0.f);
+    CHECK(a.z == 0.f);
+    CHECK(a.w == 1.f);
 
     auto b = a.set(x, y, z, w).clone();
     CHECK(b.x == x);
@@ -188,18 +188,18 @@ TEST_CASE("copy") {
 
     auto a = Quaternion(1, 2, 3, 4);
     auto b = Quaternion().copy(a);
-    REQUIRE(b.x() == 1);
-    REQUIRE(b.y() == 2);
-    REQUIRE(b.z() == 3);
-    REQUIRE(b.w() == 4);
+    REQUIRE(b.x == 1.f);
+    REQUIRE(b.y == 2.f);
+    REQUIRE(b.z == 3.f);
+    REQUIRE(b.w == 4.f);
 
     // ensure that it is a true copy
     a.x = 0;
     a.y = -1;
     a.z = 0;
     a.w = -1;
-    REQUIRE(b.x() == 1);
-    REQUIRE(b.y() == 2);
+    REQUIRE(b.x == 1.f);
+    REQUIRE(b.y == 2.f);
 }
 
 TEST_CASE("setFromEuler/setFromQuaternion") {
@@ -212,7 +212,7 @@ TEST_CASE("setFromEuler/setFromQuaternion") {
         for (const auto& angle : angles) {
 
             auto eulers2 = Euler().setFromQuaternion(Quaternion().setFromEuler(Euler(angle.x, angle.y, angle.z, order)), order);
-            auto newAngle = Vector3(eulers2.x(), eulers2.y(), eulers2.z());
+            auto newAngle = Vector3(eulers2.x, eulers2.y, eulers2.z);
             REQUIRE(newAngle.distanceTo(angle) < 0.001);
         }
     }
@@ -229,20 +229,20 @@ TEST_CASE("setFromRotationMatrix") {
     auto expected = Vector4(0.8581163303210332f, 0.19069251784911848f, -0.2860387767736777f, 0.38138503569823695f);
 
     a.setFromRotationMatrix(m);
-    REQUIRE(std::abs(a.x() - expected.x) <= eps);
-    REQUIRE(std::abs(a.y() - expected.y) <= eps);
-    REQUIRE(std::abs(a.z() - expected.z) <= eps);
-    REQUIRE(std::abs(a.w() - expected.w) <= eps);
+    REQUIRE(std::abs(a.x - expected.x) <= eps);
+    REQUIRE(std::abs(a.y - expected.y) <= eps);
+    REQUIRE(std::abs(a.z - expected.z) <= eps);
+    REQUIRE(std::abs(a.w - expected.w) <= eps);
 
     q = Quaternion(-1, -2, 1, -1).normalize();
     m.makeRotationFromQuaternion(q);
     expected = Vector4(0.37796447300922714f, 0.7559289460184544f, -0.37796447300922714f, 0.37796447300922714f);
 
     a.setFromRotationMatrix(m);
-    REQUIRE(std::abs(a.x() - expected.x) <= eps);
-    REQUIRE(std::abs(a.y() - expected.y) <= eps);
-    REQUIRE(std::abs(a.z() - expected.z) <= eps);
-    REQUIRE(std::abs(a.w() - expected.w) <= eps);
+    REQUIRE(std::abs(a.x - expected.x) <= eps);
+    REQUIRE(std::abs(a.y - expected.y) <= eps);
+    REQUIRE(std::abs(a.z - expected.z) <= eps);
+    REQUIRE(std::abs(a.w - expected.w) <= eps);
 }
 
 TEST_CASE("setFromUnitVectors") {
@@ -296,10 +296,10 @@ TEST_CASE("identity") {
     a.set(1, 2, 3, -1);
     a.identity();
 
-    REQUIRE(a.x == 0);
-    REQUIRE(a.y == 0);
-    REQUIRE(a.z == 0);
-    REQUIRE(a.w == 1);
+    REQUIRE(a.x == 0.f);
+    REQUIRE(a.y == 0.f);
+    REQUIRE(a.z == 0.f);
+    REQUIRE(a.w == 1.f);
 }
 
 TEST_CASE("invert/conjugate") {
@@ -310,10 +310,10 @@ TEST_CASE("invert/conjugate") {
 
     auto b = a.clone().conjugate();
 
-    CHECK(a.x == -b.x());
-    CHECK(a.y == -b.y());
-    CHECK(a.z == -b.z());
-    CHECK(a.w == b.w());
+    CHECK(a.x == -b.x);
+    CHECK(a.y == -b.y);
+    CHECK(a.z == -b.z);
+    CHECK(a.w == b.w);
 }
 
 TEST_CASE("dot") {

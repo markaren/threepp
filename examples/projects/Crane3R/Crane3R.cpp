@@ -131,9 +131,9 @@ std::shared_ptr<Crane3R> Crane3R::create() {
 std::vector<Angle> Crane3R::getValues() const {
 
     std::vector<Angle> angles{
-            Angle::radians(parts_[0]->rotation.z()),
-            Angle::radians(parts_[1]->rotation.y()),
-            Angle::radians(parts_[2]->rotation.y()),
+            Angle::radians(parts_[0]->rotation.z),
+            Angle::radians(parts_[1]->rotation.y),
+            Angle::radians(parts_[2]->rotation.y),
     };
 
     return angles;
