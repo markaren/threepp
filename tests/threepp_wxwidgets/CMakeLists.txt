@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 include(FetchContent)
 
+## This example uses WxWidgets and not threepp's GLFW backend
 set(wxWidgets_USE_STATIC 1)
 set(wxBUILD_SHARED OFF)
 set(wxUSE_OPENGL ON)
@@ -21,11 +22,11 @@ endif()
 
 set(THREEPP_BUILD_TESTS OFF)
 set(THREEPP_BUILD_EXAMPLES OFF)
-set(THREEPP_WITH_GLFW OFF)
+set(THREEPP_WITH_GLFW OFF) # Disable default GLFW backend as we use WxWidgets
 FetchContent_Declare(
         threepp
         GIT_REPOSITORY https://github.com/markaren/threepp.git
-        GIT_TAG ced58a22f670524c5ee6639452e690a62807ee6d
+        GIT_TAG 12d6db13fe3d03d0f173621f1954016e61c9d99b
 )
 FetchContent_MakeAvailable(threepp)
 
