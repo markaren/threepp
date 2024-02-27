@@ -10,8 +10,7 @@ void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
 
     static Box3 bb;
     bb.setFromObject(o);
-    Vector3 size;
-    bb.getSize(size);
+    const auto size = bb.getSize();
 
     Vector2 offset;
     if (verticalAlignment_ == VerticalAlignment::CENTER) {
