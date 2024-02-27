@@ -669,7 +669,7 @@ Matrix4& Matrix4::compose(const Vector3& position, const Quaternion& quaternion,
     return *this;
 }
 
-Matrix4& Matrix4::decompose(Vector3& position, Quaternion& quaternion, Vector3& scale) {
+void Matrix4::decompose(Vector3& position, Quaternion& quaternion, Vector3& scale) const {
 
     const auto& te = this->elements;
 
@@ -712,8 +712,6 @@ Matrix4& Matrix4::decompose(Vector3& position, Quaternion& quaternion, Vector3& 
     scale.x = sx;
     scale.y = sy;
     scale.z = sz;
-
-    return *this;
 }
 
 Matrix4& Matrix4::makePerspective(float left, float right, float top, float bottom, float near, float far) {
