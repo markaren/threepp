@@ -23,17 +23,30 @@ public:
             cpuDispatcher = physx::PxDefaultCpuDispatcherCreate(1);
             sceneDesc.cpuDispatcher = cpuDispatcher;
         }
-        if (!sceneDesc.filterShader)
+        if (!sceneDesc.filterShader) {
             sceneDesc.filterShader = physx::PxDefaultSimulationFilterShader;
+        }
+
+        sceneDesc.solverType = physx::PxSolverType::eTGS;
+
         scene = physics->createScene(sceneDesc);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eSCALE, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eACTOR_AXES, 1.0f);
-        scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LOCAL_FRAMES, 2.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LOCAL_FRAMES, 1.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_POINT, 2.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LIMITS, 1.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_FORCE, 1.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_EDGES, 1.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_SHAPES, 1.0f);
 
         defaultMaterial = physics->createMaterial(0.5f, 0.5f, 0.6f);
 
         debugLines->material()->vertexColors = true;
+        debugPoints->material()->vertexColors = true;
+        debugTriangles->material()->vertexColors = true;
         add(debugLines);
+        add(debugPoints);
+        add(debugTriangles);
     }
 
     void step(float dt) {
@@ -52,34 +65,18 @@ public:
         threepp::Quaternion tmpQuat;
         for (auto [obj, rb] : bodies) {
 
+            obj->updateMatrixWorld();
+
             auto t = rb->getGlobalPose();
             auto pos = t.p;
             auto quat = t.q;
 
-            obj->position.set(pos.x, pos.y, pos.z);
-            obj->applyMatrix4(tmpMat.copy(*obj->parent->matrix).invert());
-            obj->quaternion.set(quat.x, quat.y, quat.z, quat.w);
-            obj->applyQuaternion(tmpQuat.copy(obj->parent->quaternion).invert());
+            obj->matrix->makeRotationFromQuaternion(threepp::Quaternion(quat.x, quat.y, quat.z, quat.w));
+            obj->matrix->setPosition(pos.x, pos.y, pos.z);
+            obj->matrix->premultiply(tmpMat.copy(*obj->parent->matrixWorld).invert());
         }
 
-        std::vector<float> lineVertices;
-        std::vector<float> lineColors;
-        const auto& rb = scene->getRenderBuffer();
-        for (auto i = 0; i < rb.getNbLines(); i++) {
-            const auto& line = rb.getLines()[i];
-
-            lineVertices.insert(lineVertices.end(), {line.pos0.x, line.pos0.y, line.pos0.z, line.pos1.x, line.pos1.y, line.pos1.z});
-            threepp::Color c1 = line.color0;
-            threepp::Color c2 = line.color1;
-            lineColors.insert(lineColors.end(), {c1.r, c1.g, c1.b, c2.r, c2.g, c2.b});
-        }
-
-        if (!lineVertices.empty()) {
-            auto geom = threepp::BufferGeometry::create();
-            geom->setAttribute("position", threepp::FloatBufferAttribute::create(lineVertices, 3));
-            geom->setAttribute("color", threepp::FloatBufferAttribute::create(lineColors, 3));
-            debugLines->setGeometry(geom);
-        }
+        debugRender();
     }
 
     void registerMeshDynamic(threepp::Object3D& obj) {
@@ -95,6 +92,8 @@ public:
 
         bodies[&obj] = actor;
         scene->addActor(*actor);
+
+        obj.matrixAutoUpdate = false;
 
         obj.addEventListener("remove", &onMeshRemovedListener);
     }
@@ -121,11 +120,11 @@ public:
         auto rb1 = bodies.at(&o1);
 
         threepp::Matrix4 f1;
-        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1,0,0}, axis));
+        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
         f1.setPosition(anchor);
 
         threepp::Matrix4 f2;
-        f2.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1,0,0}, axis));
+        f2.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
 
         physx::PxTransform frame1 = toPxTransform(f1);
         physx::PxTransform frame2 = toPxTransform(f2);
@@ -196,8 +195,66 @@ private:
     std::unordered_map<threepp::Object3D*, std::unique_ptr<physx::PxGeometry>> geometries;
     std::unordered_map<threepp::Object3D*, physx::PxRigidActor*> bodies;
 
+    std::shared_ptr<threepp::Mesh> debugTriangles = threepp::Mesh::create();
     std::shared_ptr<threepp::LineSegments> debugLines = threepp::LineSegments::create();
+    std::shared_ptr<threepp::Points> debugPoints = threepp::Points::create();
 
+    void debugRender() {
+        std::vector<float> lineVertices;
+        std::vector<float> lineColors;
+        const auto& buffer = scene->getRenderBuffer();
+        for (auto i = 0; i < buffer.getNbLines(); i++) {
+            const auto& line = buffer.getLines()[i];
+
+            lineVertices.insert(lineVertices.end(), {line.pos0.x, line.pos0.y, line.pos0.z, line.pos1.x, line.pos1.y, line.pos1.z});
+            threepp::Color c1 = line.color0;
+            threepp::Color c2 = line.color1;
+            lineColors.insert(lineColors.end(), {c1.r, c1.g, c1.b, c2.r, c2.g, c2.b});
+        }
+
+        if (!lineVertices.empty()) {
+            auto geom = threepp::BufferGeometry::create();
+            geom->setAttribute("position", threepp::FloatBufferAttribute::create(lineVertices, 3));
+            geom->setAttribute("color", threepp::FloatBufferAttribute::create(lineColors, 3));
+            debugLines->setGeometry(geom);
+        }
+
+        std::vector<float> triangleVertices;
+        std::vector<float> triangleColors;
+        for (auto i = 0; i < buffer.getNbTriangles(); i++) {
+            const auto& point = buffer.getTriangles()[i];
+            auto pos1 = point.pos0;
+            auto pos2 = point.pos1;
+            auto pos3 = point.pos2;
+            threepp::Color color1 = point.color0;
+            threepp::Color color2 = point.color1;
+            threepp::Color color3 = point.color2;
+            triangleVertices.insert(triangleVertices.end(), {pos1.x, pos1.y, pos1.z, pos2.x, pos2.y, pos2.z, pos3.x, pos3.y, pos3.z});
+            triangleColors.insert(triangleColors.end(), {color1.r, color1.g, color1.b, color2.r, color2.g, color2.b, color3.r, color3.g, color3.b});
+        }
+        if (!triangleVertices.empty()) {
+            auto geom = threepp::BufferGeometry::create();
+            geom->setAttribute("position", threepp::FloatBufferAttribute::create(triangleVertices, 3));
+            geom->setAttribute("color", threepp::FloatBufferAttribute::create(triangleColors, 3));
+            debugTriangles->setGeometry(geom);
+        }
+
+        std::vector<float> pointVertices;
+        std::vector<float> pointColors;
+        for (auto i = 0; i < buffer.getNbPoints(); i++) {
+            const auto& point = buffer.getPoints()[i];
+            auto pos = point.pos;
+            threepp::Color color = point.color;
+            pointVertices.insert(pointVertices.end(), {pos.x, pos.y, pos.z});
+            pointColors.insert(pointColors.end(), {color.r, color.g, color.b});
+        }
+        if (!pointVertices.empty()) {
+            auto geom = threepp::BufferGeometry::create();
+            geom->setAttribute("position", threepp::FloatBufferAttribute::create(pointVertices, 3));
+            geom->setAttribute("color", threepp::FloatBufferAttribute::create(pointColors, 3));
+            debugPoints->setGeometry(geom);
+        }
+    }
 
     static physx::PxVec3 toPxVector3(const threepp::Vector3& v) {
         return {v.x, v.y, v.z};
@@ -214,7 +271,7 @@ private:
 
         m.decompose(pos, quat, scale);
 
-        return physx::PxTransform(toPxVector3(pos), toPxQuat(quat));
+        return {toPxVector3(pos), toPxQuat(quat)};
     }
 
     static std::unique_ptr<physx::PxGeometry> toPxGeometry(const threepp::BufferGeometry* geometry) {
@@ -228,7 +285,16 @@ private:
         } else if (type == "SphereGeometry") {
             const auto sphere = dynamic_cast<const threepp::SphereGeometry*>(geometry);
             return std::make_unique<physx::PxSphereGeometry>(sphere->radius);
+        } else if (type == "CapsuleGeometry") {
+            const auto cap = dynamic_cast<const threepp::CapsuleGeometry*>(geometry);
+            return std::make_unique<physx::PxCapsuleGeometry>(cap->radius, cap->length / 2);
         } else {
+
+            auto pos = geometry->getAttribute<float>("position");
+            if (pos) {
+                // TODO
+            }
+
             return nullptr;
         }
     }
