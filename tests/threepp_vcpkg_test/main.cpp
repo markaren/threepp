@@ -24,7 +24,7 @@ int main() {
     GLRenderer renderer(canvas.size());
     renderer.autoClear = false; // hud
 
-    auto camera = PerspectiveCamera::create();
+    auto camera = PerspectiveCamera::create(50, canvas.aspect());
     camera->position.z = 5;
 
     OrbitControls controls{*camera, canvas};
