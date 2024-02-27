@@ -61,6 +61,10 @@ BufferGeometry* Points::geometry() {
     return geometry_.get();
 }
 
+void Points::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+    this->geometry_ = geometry;
+}
+
 Material* Points::material() {
 
     return material_.get();
