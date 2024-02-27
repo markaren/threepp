@@ -1,5 +1,3 @@
-
-#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -37,7 +35,7 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    HUD hud(canvas.size());
+    HUD hud(canvas);
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
     TextGeometry::Options opts(font, 20, 5);
@@ -48,16 +46,6 @@ int main() {
                               .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
                               .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
 
-    std::array<float, 3> posBuf{};
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
-
-        ImGui::Begin("Demo");
-        ImGui::SliderFloat3("position", posBuf.data(), -1.f, 1.f);
-        controls.enabled = !ImGui::IsWindowHovered();
-        ImGui::End();
-    });
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -77,7 +65,5 @@ int main() {
         renderer.render(*scene, *camera);
         hud.apply(renderer);
 
-        ui.render();
-        group->position.fromArray(posBuf);
     });
 }

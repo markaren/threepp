@@ -14,7 +14,7 @@ however much remains to be done..
 * Geometries [Box, Sphere, Plane, Cylindrical, Capsule, Tube, ++]  
 * Lights [Ambient, Directional, Point, Spot, Hemi]
 * Raycasting [Mesh, Line, Points]
-* 2D/3D Textures, 3D text, Sprites, RenderTarget
+* 2D/3D Textures, 3D text, Sprites, RenderTarget, CubeMaps
 * Transparency, Shadows
 * Morphtargets, Bones
 * OrbitControls, FlyControls
@@ -34,7 +34,7 @@ Because fun.
 
 ### How to build
 
-`threepp` comes bundled with all necessary dependencies. 
+`threepp` comes bundled with all required core dependencies. 
 
 Use CMake for project configuration and building.
 
@@ -172,7 +172,9 @@ int main() {
 
 ## Consuming threepp
 
-#### CMake FetchContent
+Threepp is available as a CMake package and can be consumed in a number of ways.
+
+#### CMake FetchContent (recommended)
 
 `threepp` is compatible with CMake's `FetchContent`:
 
@@ -190,11 +192,15 @@ FetchContent_MakeAvailable(threepp)
 target_link_libraries(main PUBLIC threepp::threepp)
 ```
 
-An example is provided [here](tests/threepp_wxwidgets):
+This is the preferred approach, as it enables users to update the targeted threepp version at will.
+
+An example is provided [here](tests/threepp_fetchcontent_test).
+See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses WxWidgets as the Window system.
 
 #### vcpkg
 
-`threpp` is available for use with vcpkg through a custom vcpkg-registry.
+`threepp` is available for use with vcpkg through a custom vcpkg-registry.
+However, this vcpkg port is cumbersome to maintain and is not so often updated, and support may be discontinued in the future.
 
 An example is provided [here](tests/threepp_vcpkg_test).
 
