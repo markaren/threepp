@@ -35,7 +35,11 @@ namespace threepp {
 
         void getCenter(Vector2& target) const;
 
+        [[nodiscard]] Vector2 getCenter() const;
+
         void getSize(Vector2& target) const;
+
+        [[nodiscard]] Vector2 getSize() const;
 
         Box2& expandByPoint(const Vector2& point);
 
