@@ -125,8 +125,8 @@ public:
         f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
         f1.setPosition(anchor);
 
-        threepp::Matrix4 f2;
-        f2.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
+        threepp::Matrix4 f2 = *o1.matrixWorld;
+        f2.invert().multiply(f1);
 
         physx::PxTransform frame1 = toPxTransform(f1);
         physx::PxTransform frame2 = toPxTransform(f2);
@@ -164,6 +164,14 @@ public:
     physx::PxActor* get(threepp::Mesh& mesh) {
         if (!bodies.count(&mesh)) return nullptr;
         return bodies.at(&mesh);
+    }
+
+    [[nodiscard]] physx::PxScene* getScene() const {
+        return scene;
+    }
+
+    [[nodiscard]] physx::PxPhysics* getPhysics() const {
+        return physics;
     }
 
     ~PxEngine() override {
@@ -276,7 +284,7 @@ private:
         return {toPxVector3(pos), toPxQuat(quat)};
     }
 
-    static std::unique_ptr<physx::PxGeometry> toPxGeometry(const threepp::BufferGeometry* geometry) {
+    std::unique_ptr<physx::PxGeometry> toPxGeometry(const threepp::BufferGeometry* geometry) {
 
         if (!geometry) return nullptr;
 
@@ -294,7 +302,24 @@ private:
 
             auto pos = geometry->getAttribute<float>("position");
             if (pos) {
-                // TODO
+                physx::PxConvexMeshDesc convexDesc;
+                convexDesc.points.count = 50;
+                convexDesc.points.stride = sizeof(physx::PxVec3);
+                convexDesc.points.data = pos->array().data();
+                convexDesc.flags = physx::PxConvexFlag::eCOMPUTE_CONVEX;
+
+                physx::PxTolerancesScale scale;
+                physx::PxCookingParams params(scale);
+
+                physx::PxDefaultMemoryOutputStream buf;
+                physx::PxConvexMeshCookingResult::Enum result;
+                if (!PxCookConvexMesh(params, convexDesc, buf, &result)) {
+                    return nullptr;
+                }
+                physx::PxDefaultMemoryInputData input(buf.getData(), buf.getSize());
+                auto convexMesh = physics->createConvexMesh(input);
+
+                return std::make_unique<physx::PxConvexMeshGeometry>(convexMesh);
             }
 
             return nullptr;

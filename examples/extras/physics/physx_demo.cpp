@@ -39,6 +39,8 @@ namespace {
                 case Key::NUM_6: {
                     joints[2]->setDriveVelocity(0);
                 } break;
+                default:
+                    break;
             }
         }
 
@@ -55,35 +57,40 @@ int main() {
     GLRenderer renderer(canvas.size());
 
     Scene scene;
-    scene.background = Color::navy;
+    scene.background = Color::aliceblue;
 
     PerspectiveCamera camera(60, canvas.aspect());
-    camera.position.z = 10;
+    camera.position.set(0, 2.5, 8);
 
-    auto box1 = Mesh::create(BoxGeometry::create(0.5, 1, 0.5), MeshStandardMaterial::create());
+    TextureLoader tl;
+    auto tex = tl.load("data/textures/checker.png");
+    auto defaultMaterial = MeshPhongMaterial::create({{"color", Color::darkblue}});
+
+    auto box1 = Mesh::create(BoxGeometry::create(0.5, 1, 0.5), defaultMaterial);
     box1->position.y = 0.5;
     scene.add(box1);
 
-    auto box2 = Mesh::create(BoxGeometry::create(0.25, 2, 0.25), MeshStandardMaterial::create());
+    auto box2 = Mesh::create(BoxGeometry::create(0.25, 2, 0.25), defaultMaterial);
     box2->position.y = 1.5;
     box1->add(box2);
 
-    auto box3 = Mesh::create(BoxGeometry::create(0.15, 1, 0.15), MeshStandardMaterial::create());
-    box3->position.y = 1.5;
+    auto box3 = Mesh::create(CylinderGeometry::create(0.15, 0.15, 0.5), defaultMaterial);
+    box3->position.y = 1.25;
     box2->add(box3);
 
-    auto sphere = Mesh::create(SphereGeometry::create(0.5), MeshStandardMaterial::create());
+    auto sphereMaterial = MeshPhongMaterial::create({{"color", Color::red}});
+    auto sphere = Mesh::create(SphereGeometry::create(0.5), sphereMaterial);
     sphere->position.y = 20;
     scene.add(sphere);
 
-    auto ground = Mesh::create(BoxGeometry::create(40, 0.1, 40), MeshStandardMaterial::create({{"color", Color::blueviolet},
-                                                                                               {"wireframe", true}}));
+    auto groundMaterial = MeshPhongMaterial::create({{"color", Color::gray}});
+    auto ground = Mesh::create(BoxGeometry::create(40, 0.1, 40), groundMaterial);
     ground->position.y = -0.05;
     scene.add(ground);
 
-    auto light = HemisphereLight::create(Color::brown, Color::blanchedalmond);
-    light->position.y = 5;
-    scene.add(light);
+    auto light1 = HemisphereLight::create();
+    light1->position.y = 5;
+    scene.add(light1);
 
     PxEngine engine;
     scene.add(engine);
@@ -93,9 +100,9 @@ int main() {
     engine.registerMeshDynamic(*sphere);
     engine.registerMeshStatic(*ground);
 
-    auto joint1 = engine.createRevoluteJoint(*box1, {0, 0.5, 0}, {0, 1, 0});
+    auto joint1 = engine.createRevoluteJoint(*box1, {0, 0.05, 0}, {0, 1, 0});
     auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0, 0.5, 0}, {1, 0, 0});
-    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 1, 0}, {0, 1, 0});
+    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 0.25, 0}, {0, 1, 0});
 
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
@@ -121,7 +128,7 @@ int main() {
     });
     canvas.addKeyListener(adapter);
 
-    canvas.onWindowResize([&](WindowSize size){
+    canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
         renderer.setSize(size);
