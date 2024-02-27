@@ -98,11 +98,17 @@ namespace threepp {
         // Note that a box with equal lower and upper bounds still includes one point, the one both bounds share.
         [[nodiscard]] bool isEmpty() const;
 
-        // Get the center point of the box as a Vector3.
+        // Get the center point of the box as a Vector3. Returns by reference
         void getCenter(Vector3& target) const;
+
+        // Get the center point of the box as a Vector3. Returns by reference
+        [[nodiscard]] Vector3 getCenter() const;
 
         // Get the width, height and depth of this box.
         void getSize(Vector3& target) const;
+
+        // Get the width, height and depth of this box.
+        [[nodiscard]] Vector3 getSize() const;
 
         Box3& expandByPoint(const Vector3& point);
 
