@@ -42,7 +42,7 @@ std::shared_ptr<Texture> Background::texture() const {
     return texture_;
 }
 
-Background::operator bool() const {
+bool Background::empty() const{
 
-    return hasValue_;
+    return !hasValue_;
 }

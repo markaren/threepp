@@ -34,7 +34,7 @@ namespace threepp {
 
         [[nodiscard]] std::shared_ptr<Texture> texture() const;
 
-        operator bool() const;
+        [[nodiscard]] bool empty() const;
 
     private:
         bool hasValue_{false};
