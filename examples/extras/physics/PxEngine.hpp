@@ -79,14 +79,14 @@ public:
         debugRender();
     }
 
-    void registerMeshDynamic(threepp::Object3D& obj) {
+    physx::PxRigidDynamic* registerMeshDynamic(threepp::Object3D& obj) {
 
         threepp::Vector3 worldPos;
         obj.getWorldPosition(worldPos);
 
         physx::PxTransform transform(toPxVector3(worldPos));
         auto geometry = toPxGeometry(obj.geometry());
-        if (!geometry) return;
+        if (!geometry) return nullptr;
         geometries[&obj] = std::move(geometry);
         auto* actor = PxCreateDynamic(*physics, transform, *geometries[&obj], *defaultMaterial, 10.0f);
 
@@ -96,6 +96,8 @@ public:
         obj.matrixAutoUpdate = false;
 
         obj.addEventListener("remove", &onMeshRemovedListener);
+
+        return actor;
     }
 
     void registerMeshStatic(threepp::Object3D& obj) {
@@ -129,7 +131,7 @@ public:
         physx::PxTransform frame1 = toPxTransform(f1);
         physx::PxTransform frame2 = toPxTransform(f2);
 
-        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, rb1, frame1, nullptr, frame2);
+        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, nullptr, frame1, rb1, frame2);
         joint->setConstraintFlag(physx::PxConstraintFlag::eVISUALIZATION, true);
 
         return joint;

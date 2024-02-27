@@ -15,11 +15,14 @@ namespace {
                 joints[0]->setDriveVelocity(-5);
             } else if (evt.key == Key::NUM_2) {
                 joints[0]->setDriveVelocity(5);
-            }
-            if (evt.key == Key::NUM_3) {
+            } else if (evt.key == Key::NUM_3) {
                 joints[1]->setDriveVelocity(-5);
             } else if (evt.key == Key::NUM_4) {
                 joints[1]->setDriveVelocity(5);
+            } else if (evt.key == Key::NUM_5) {
+                joints[2]->setDriveVelocity(-5);
+            } else if (evt.key == Key::NUM_6) {
+                joints[2]->setDriveVelocity(5);
             }
         }
         void onKeyReleased(KeyEvent evt) override {
@@ -31,6 +34,10 @@ namespace {
                 case Key::NUM_3:
                 case Key::NUM_4: {
                     joints[1]->setDriveVelocity(0);
+                } break;
+                case Key::NUM_5:
+                case Key::NUM_6: {
+                    joints[2]->setDriveVelocity(0);
                 } break;
             }
         }
@@ -86,25 +93,23 @@ int main() {
     engine.registerMeshDynamic(*sphere);
     engine.registerMeshStatic(*ground);
 
-    auto joint1 = engine.createRevoluteJoint(*box1, {0, -0.5, 0}, {0, 1, 0});
+    auto joint1 = engine.createRevoluteJoint(*box1, {0, 0.5, 0}, {0, 1, 0});
     auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0, 0.5, 0}, {1, 0, 0});
-    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 1, 0}, {1, 0, 0});
+    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 1, 0}, {0, 1, 0});
 
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-    joint1->setLimit({-math::degToRad(90), math::degToRad(90)});
+    joint1->setLimit({-math::degToRad(120), math::degToRad(120)});
 
     joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
     joint2->setLimit({-math::degToRad(45), math::degToRad(45)});
-    joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_FREESPIN, true);
-    joint2->setDriveForceLimit(100000);
 
     joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-    joint3->setLimit({-math::degToRad(45), math::degToRad(45)});
+    joint3->setLimit({-math::degToRad(90), math::degToRad(90)});
 
-    KeyController keyListener({joint1, joint2});
+    KeyController keyListener({joint1, joint2, joint3});
     canvas.addKeyListener(keyListener);
 
     OrbitControls controls(camera, canvas);
