@@ -21,6 +21,11 @@ function(add_example)
         return()
     endif ()
 
+    if (arg_LINK_PHYSX AND NOT unofficial-omniverse-physx-sdk_FOUND)
+        message(AUTHOR_WARNING "physx not found, skipping '${arg_NAME}' example..")
+        return()
+    endif ()
+
 
     if (NOT arg_SOURCES)
         add_executable("${arg_NAME}" "${arg_NAME}.cpp")
