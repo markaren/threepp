@@ -366,7 +366,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
         }
     }
 
-    textureProperties->maxMipLevel = mipmaps.size();
+    textureProperties->maxMipLevel = static_cast<int>(mipmaps.size());
 
     if (textureNeedsGenerateMipmaps(texture)) {
         generateMipmap(GL_TEXTURE_CUBE_MAP, texture, images.front().width, images.front().height);
