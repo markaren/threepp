@@ -194,7 +194,8 @@ target_link_libraries(main PUBLIC threepp::threepp)
 
 This is the preferred approach, as it enables users to update the targeted threepp version at will.
 
-An example is provided [here](tests/threepp_wxwidgets):
+An example is provided [here](tests/threepp_fetchcontent_test).
+See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses WxWidgets as the Window system.
 
 #### vcpkg
 
