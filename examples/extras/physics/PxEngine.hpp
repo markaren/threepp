@@ -11,7 +11,7 @@
 class PxEngine: public threepp::Object3D {
 
 public:
-    explicit PxEngine(float timeStep = 1.f / 60)
+    explicit PxEngine(float timeStep = 1.f / 100)
         : timeStep(timeStep),
           sceneDesc(physics->getTolerancesScale()),
           onMeshRemovedListener(this) {
@@ -36,7 +36,6 @@ public:
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_POINT, 2.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LIMITS, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_FORCE, 1.0f);
-        scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_EDGES, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_SHAPES, 1.0f);
 
         defaultMaterial = physics->createMaterial(0.5f, 0.5f, 0.6f);
@@ -71,7 +70,8 @@ public:
             auto pos = t.p;
             auto quat = t.q;
 
-            obj->matrix->makeRotationFromQuaternion(threepp::Quaternion(quat.x, quat.y, quat.z, quat.w));
+            tmpQuat.set(quat.x, quat.y, quat.z, quat.w);
+            obj->matrix->makeRotationFromQuaternion(tmpQuat);
             obj->matrix->setPosition(pos.x, pos.y, pos.z);
             obj->matrix->premultiply(tmpMat.copy(*obj->parent->matrixWorld).invert());
         }
@@ -92,6 +92,8 @@ public:
 
         bodies[&obj] = actor;
         scene->addActor(*actor);
+
+        actor->setSolverIterationCounts(30, 2);
 
         obj.matrixAutoUpdate = false;
 

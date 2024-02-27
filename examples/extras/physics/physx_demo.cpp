@@ -45,7 +45,7 @@ namespace {
         }
 
     private:
-        float speed = 5;
+        float speed = 0.25;
         std::vector<physx::PxRevoluteJoint*> joints;
     };
 
@@ -60,7 +60,7 @@ int main() {
     scene.background = Color::aliceblue;
 
     PerspectiveCamera camera(60, canvas.aspect());
-    camera.position.set(0, 2.5, 8);
+    camera.position.set(0, 2.5, -8);
 
     TextureLoader tl;
     auto tex = tl.load("data/textures/checker.png");
@@ -101,8 +101,8 @@ int main() {
     engine.registerMeshStatic(*ground);
 
     auto joint1 = engine.createRevoluteJoint(*box1, {0, 0.05, 0}, {0, 1, 0});
-    auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0, 0.5, 0}, {1, 0, 0});
-    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 1, 0}, {0, 1, 0});
+    auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0, 0.5, 0}, {0, 0, 1});
+    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 1, 0}, {0, 0, 1});
 
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
@@ -111,12 +111,12 @@ int main() {
 
     joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-    physx::PxJointAngularLimitPair limit2{-math::degToRad(45), math::degToRad(45)};
+    physx::PxJointAngularLimitPair limit2{math::degToRad(0), math::degToRad(90)};
     joint2->setLimit(limit2);
 
     joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
     joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-    joint3->setLimit({-math::degToRad(90), math::degToRad(90)});
+    joint3->setLimit({math::degToRad(0), math::degToRad(90)});
 
     KeyController keyListener({joint1, joint2, joint3});
     canvas.addKeyListener(keyListener);
