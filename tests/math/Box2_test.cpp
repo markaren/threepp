@@ -128,36 +128,36 @@ TEST_CASE("getSize") {
 }
 
 TEST_CASE("expandByPoint") {
-    
-    Box2 a( zero2, zero2 );
+
+    Box2 a(zero2, zero2);
     Vector2 size;
     Vector2 center;
-    
-    a.expandByPoint( zero2 );
-    a.getSize( size );
-    CHECK( size.equals( zero2 ));
 
-    a.expandByPoint( one2 );
-    a.getSize( size );
-    CHECK( size.equals( one2 ));
+    a.expandByPoint(zero2);
+    a.getSize(size);
+    CHECK(size.equals(zero2));
 
-    a.expandByPoint( one2.clone().negate() );
-    a.getSize( size );
-    CHECK( size.equals( one2 * 2 ));
-    a.getCenter( center );
-    CHECK( center.equals( zero2 ));
+    a.expandByPoint(one2);
+    a.getSize(size);
+    CHECK(size.equals(one2));
+
+    a.expandByPoint(one2.clone().negate());
+    a.getSize(size);
+    CHECK(size.equals(one2 * 2));
+    a.getCenter(center);
+    CHECK(center.equals(zero2));
 }
 
 TEST_CASE("containsPoint") {
-    Box2 a( zero2, zero2 );
-    
-    CHECK( a.containsPoint( zero2 ));
-    CHECK( ! a.containsPoint( one2 ));
+    Box2 a(zero2, zero2);
 
-    a.expandByScalar( 1 );
-    CHECK( a.containsPoint( zero2 ));
-    CHECK( a.containsPoint( one2 ));
-    CHECK( a.containsPoint( one2.clone().negate() ));
+    CHECK(a.containsPoint(zero2));
+    CHECK(!a.containsPoint(one2));
+
+    a.expandByScalar(1);
+    CHECK(a.containsPoint(zero2));
+    CHECK(a.containsPoint(one2));
+    CHECK(a.containsPoint(one2.clone().negate()));
 }
 
 TEST_CASE("intersectsBox") {
@@ -180,21 +180,21 @@ TEST_CASE("intersectsBox") {
 }
 
 TEST_CASE("intersect") {
-    
-    Box2 a( zero2, zero2 );
-    Box2 b( zero2, one2 );
-    Box2 c( one2.clone().negate(), one2 );
-    
-    CHECK( a.clone().intersect( a ).equals( a ));
-    CHECK( a.clone().intersect( b ).equals( a ));
-    CHECK( b.clone().intersect( b ).equals( b ));
-    CHECK( a.clone().intersect( c ).equals( a ));
-    CHECK( b.clone().intersect( c ).equals( b ));
-    CHECK( c.clone().intersect( c ).equals( c ));
 
-    Box2 d( one2.clone().negate(), zero2 );
-    Box2 e( one2, two2 );
-    e.intersect( d );
+    Box2 a(zero2, zero2);
+    Box2 b(zero2, one2);
+    Box2 c(one2.clone().negate(), one2);
 
-    CHECK( (e.getMin().equals( posInf2 ) && e.getMax().equals( negInf2 )) );
+    CHECK(a.clone().intersect(a).equals(a));
+    CHECK(a.clone().intersect(b).equals(a));
+    CHECK(b.clone().intersect(b).equals(b));
+    CHECK(a.clone().intersect(c).equals(a));
+    CHECK(b.clone().intersect(c).equals(b));
+    CHECK(c.clone().intersect(c).equals(c));
+
+    Box2 d(one2.clone().negate(), zero2);
+    Box2 e(one2, two2);
+    e.intersect(d);
+
+    CHECK((e.getMin().equals(posInf2) && e.getMax().equals(negInf2)));
 }
