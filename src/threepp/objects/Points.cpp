@@ -3,6 +3,7 @@
 #include "threepp/core/Raycaster.hpp"
 
 #include <cmath>
+#include <memory>
 
 using namespace threepp;
 
@@ -84,7 +85,7 @@ std::shared_ptr<Object3D> Points::clone(bool recursive) {
 
 std::shared_ptr<Points> Points::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
 
-    return std::shared_ptr<Points>(new Points(std::move(geometry), std::move(material)));
+    return std::make_shared<Points>(std::move(geometry), std::move(material));
 }
 
 void Points::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
