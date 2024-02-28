@@ -19,7 +19,7 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
-        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         BufferGeometry* geometry() override;
 

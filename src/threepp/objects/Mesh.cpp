@@ -19,7 +19,7 @@ using namespace threepp;
 namespace {
 
     std::optional<Intersection> checkIntersection(
-            Object3D* object, Material* material, Raycaster& raycaster, Ray& ray,
+            Object3D* object, Material* material, const Raycaster& raycaster, const Ray& ray,
             const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
         static Vector3 _intersectionPointWorld{};
@@ -52,7 +52,7 @@ namespace {
 
     std::optional<Intersection> checkBufferGeometryIntersection(
             Object3D* object, Material* material,
-            Raycaster& raycaster, Ray& ray,
+            const Raycaster& raycaster, const Ray& ray,
             const FloatBufferAttribute& position,
             const std::vector<std::shared_ptr<BufferAttribute>>* morphPosition,
             bool morphTargetsRelative,
@@ -194,7 +194,7 @@ std::vector<Material*> Mesh::materials() {
     return res;
 }
 
-void Mesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     if (material() == nullptr) return;
 

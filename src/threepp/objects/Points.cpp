@@ -18,7 +18,7 @@ namespace {
             unsigned int index,
             float localThresholdSq,
             const Matrix4& matrixWorld,
-            Raycaster& raycaster,
+            const Raycaster& raycaster,
             std::vector<Intersection>& intersects,
             Object3D* object) {
 
@@ -87,7 +87,7 @@ std::shared_ptr<Points> Points::create(std::shared_ptr<BufferGeometry> geometry,
     return std::shared_ptr<Points>(new Points(std::move(geometry), std::move(material)));
 }
 
-void Points::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Points::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto geometry = this->geometry();
     const auto threshold = raycaster.params.pointsThreshold;

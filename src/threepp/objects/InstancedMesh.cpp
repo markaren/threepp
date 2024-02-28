@@ -66,7 +66,7 @@ void InstancedMesh::dispose() {
     }
 }
 
-void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void InstancedMesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto& matrixWorld = this->matrixWorld;
     const auto raycastTimes = this->count;
