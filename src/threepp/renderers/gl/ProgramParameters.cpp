@@ -87,7 +87,7 @@ ProgramParameters::ProgramParameters(
 
     auto instancedMesh = dynamic_cast<InstancedMesh*>(object);
     instancing = instancedMesh != nullptr;
-    instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor != nullptr;
+    instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor() != nullptr;
 
     supportsVertexTextures = GLCapabilities::instance().vertexTextures;
     outputEncoding = renderer.outputEncoding;
