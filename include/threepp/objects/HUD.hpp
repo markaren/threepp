@@ -5,6 +5,9 @@
 #include "threepp/canvas/WindowSize.hpp"
 #include "threepp/input/PeripheralsEventSource.hpp"
 
+#include <functional>
+#include <memory>
+
 namespace threepp {
 
     class Object3D;
