@@ -102,7 +102,7 @@ namespace threepp {
 
         const std::vector<T>& array() const {
 
-            return array();
+            return array_;
         }
 
         TypedBufferAttribute<T>& copyAt(unsigned int index1, const TypedBufferAttribute<T>& attribute, unsigned int index2) {
