@@ -8,19 +8,6 @@ using namespace threepp;
 
 namespace {
 
-    struct LambdaEventListener: EventListener {
-
-        explicit LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)) {}
-
-        void onEvent(Event& event) override {
-            f_(event);
-        }
-
-    private:
-        std::function<void(Event&)> f_;
-    };
-
-
     struct MyEventListener: EventListener {
 
         int numCalled = 0;
@@ -47,7 +34,8 @@ TEST_CASE("Test events") {
     MyEventListener l;
 
     bool l1Called = false;
-    LambdaEventListener l1([&l1Called](Event& e) {
+    FunctionalEventListener l1;
+    l1.setCallback([&l1Called](const Event&) {
         l1Called = true;
     });
 
