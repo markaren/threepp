@@ -6,27 +6,31 @@
 using namespace threepp;
 
 
-void EventDispatcher::addEventListener(const std::string& type, EventListener* listener) {
+void EventDispatcher::addEventListener(const std::string& type, EventListener& listener) {
 
-    listeners_[type].emplace_back(listener);
+    listeners_[type].emplace_back(&listener);
 }
 
-bool EventDispatcher::hasEventListener(const std::string& type, const EventListener* listener) {
+bool EventDispatcher::hasEventListener(const std::string& type, const EventListener& listener) {
 
     if (!listeners_.count(type)) return false;
 
     auto& listenerArray = listeners_.at(type);
-    return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
+    return std::find_if(listenerArray.begin(), listenerArray.end(), [&](auto l) {
+               return l == &listener;
+           }) != listenerArray.end();
 }
 
-void EventDispatcher::removeEventListener(const std::string& type, const EventListener* listener) {
+void EventDispatcher::removeEventListener(const std::string& type, const EventListener& listener) {
 
     if (!listeners_.count(type)) return;
 
     auto& listenerArray = listeners_.at(type);
     if (listenerArray.empty()) return;
 
-    auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
+    auto find = std::find_if(listenerArray.begin(), listenerArray.end(), [&](auto l) {
+        return l == &listener;
+    });
     if (find != listenerArray.end()) {
         listenerArray.erase(find);
     }

@@ -25,7 +25,7 @@ struct GLObjects::Impl {
         void onEvent(Event& event) override {
             auto instancedMesh = static_cast<InstancedMesh*>(event.target);
 
-            instancedMesh->removeEventListener("dispose", this);
+            instancedMesh->removeEventListener("dispose", *this);
 
             scope->attributes_.remove(instancedMesh->instanceMatrix());
 
@@ -67,9 +67,9 @@ struct GLObjects::Impl {
 
         if (auto instancedMesh = object->as<InstancedMesh>()) {
 
-            if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
+            if (!object->hasEventListener("dispose", onInstancedMeshDispose)) {
 
-                object->addEventListener("dispose", &onInstancedMeshDispose);
+                object->addEventListener("dispose", onInstancedMeshDispose);
             }
 
             attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
