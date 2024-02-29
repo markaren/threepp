@@ -27,15 +27,21 @@ namespace threepp {
 
     struct FunctionalEventListener: EventListener {
 
+        FunctionalEventListener(): FunctionalEventListener([](Event){}){}
+
         FunctionalEventListener(std::function<void(Event)> listener)
-            : f_(std::move(listener)) {}
+            : callback_(std::move(listener)) {}
+
+        void setListener(std::function<void(Event)> f) {
+            callback_ = std::move(f);
+        }
 
         void onEvent(Event& event) override {
-            return f_(event);
+            return callback_(event);
         }
 
     private:
-        std::function<void(Event)> f_;
+        std::function<void(Event)> callback_;
     };
 
     class EventDispatcher {
