@@ -27,13 +27,10 @@ namespace threepp {
 
     struct FunctionalEventListener: EventListener {
 
-        FunctionalEventListener(): FunctionalEventListener([](Event){}){}
+        FunctionalEventListener(): callback_([](const Event&) {}) {}
 
-        FunctionalEventListener(std::function<void(Event)> listener)
-            : callback_(std::move(listener)) {}
-
-        void setListener(std::function<void(Event)> f) {
-            callback_ = std::move(f);
+        void setListener(std::function<void(Event)> listener) {
+            callback_ = std::move(listener);
         }
 
         void onEvent(Event& event) override {
