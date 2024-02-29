@@ -41,10 +41,27 @@ void Line3::getCenter(Vector3& target) const {
     target.addVectors(this->start_, this->end_).multiplyScalar(0.5f);
 }
 
+Vector3 Line3::getCenter() const {
+
+    Vector3 target;
+    getCenter(target);
+
+    return target;
+}
+
 void Line3::delta(Vector3& target) const {
 
     target.subVectors(this->end_, this->start_);
 }
+
+Vector3 Line3::delta() const {
+
+    Vector3 target;
+    delta(target);
+
+    return target;
+}
+
 
 float Line3::distanceSq() const {
 

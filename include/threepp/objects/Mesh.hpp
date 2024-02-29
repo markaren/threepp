@@ -44,7 +44,7 @@ namespace threepp {
 
         [[nodiscard]] size_t numMaterials() const;
 
-        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         std::shared_ptr<Object3D> clone(bool recursive = true) override;
 

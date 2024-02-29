@@ -23,14 +23,14 @@ TEST_CASE("Instancing") {
     float theta = math::PI;
     float y = 5;
 
-    CHECK(a.radius == 1.0);
-    CHECK(a.theta == 0);
-    CHECK(a.y == 0);
+    CHECK(a.radius() == 1.0);
+    CHECK(a.theta() == 0);
+    CHECK(a.y() == 0);
 
     a = Cylindrical(radius, theta, y);
-    CHECK_THAT(a.radius, Catch::Matchers::WithinRel(radius));
-    CHECK_THAT(a.theta, Catch::Matchers::WithinRel(theta));
-    CHECK_THAT(a.y, Catch::Matchers::WithinRel(y));
+    CHECK_THAT(a.radius(), Catch::Matchers::WithinRel(radius));
+    CHECK_THAT(a.theta(), Catch::Matchers::WithinRel(theta));
+    CHECK_THAT(a.y(), Catch::Matchers::WithinRel(y));
 }
 
 TEST_CASE("set") {
@@ -41,9 +41,9 @@ TEST_CASE("set") {
     float y = 5;
 
     a.set(radius, theta, y);
-    CHECK_THAT(a.radius, Catch::Matchers::WithinRel(radius));
-    CHECK_THAT(a.theta, Catch::Matchers::WithinRel(theta));
-    CHECK_THAT(a.y, Catch::Matchers::WithinRel(y));
+    CHECK_THAT(a.radius(), Catch::Matchers::WithinRel(radius));
+    CHECK_THAT(a.theta(), Catch::Matchers::WithinRel(theta));
+    CHECK_THAT(a.y(), Catch::Matchers::WithinRel(y));
 }
 
 TEST_CASE("setFromVector3") {
@@ -51,15 +51,15 @@ TEST_CASE("setFromVector3") {
     Cylindrical a(1, 1, 1);
     Vector3 b(0, 0, 0);
     Vector3 c(3, -1, -3);
-    Cylindrical expected(std::sqrt(9 + 9), std::atan2(3, -3), -1);
+    Cylindrical expected(std::sqrt(9.f + 9.f), std::atan2(3.f, -3.f), -1);
 
     a.setFromVector3(b);
-    CHECK(a.radius == 0);
-    CHECK(a.theta == 0);
-    CHECK(a.y == 0);
+    CHECK(a.radius() == 0);
+    CHECK(a.theta() == 0);
+    CHECK(a.y() == 0);
 
     a.setFromVector3(c);
-    CHECK(std::abs(a.radius - expected.radius) <= eps);
-    CHECK(std::abs(a.theta - expected.theta) <= eps);
-    CHECK(std::abs(a.y - expected.y) <= eps);
+    CHECK(std::abs(a.radius() - expected.radius()) <= eps);
+    CHECK(std::abs(a.theta() - expected.theta()) <= eps);
+    CHECK(std::abs(a.y() - expected.y()) <= eps);
 }

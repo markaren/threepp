@@ -27,9 +27,9 @@ struct GLObjects::Impl {
 
             instancedMesh->removeEventListener("dispose", this);
 
-            scope->attributes_.remove(instancedMesh->instanceMatrix.get());
+            scope->attributes_.remove(instancedMesh->instanceMatrix());
 
-            if (instancedMesh->instanceColor) scope->attributes_.remove(instancedMesh->instanceColor.get());
+            if (instancedMesh->instanceColor()) scope->attributes_.remove(instancedMesh->instanceColor());
         }
 
     private:
@@ -72,11 +72,11 @@ struct GLObjects::Impl {
                 object->addEventListener("dispose", &onInstancedMeshDispose);
             }
 
-            attributes_.update(instancedMesh->instanceMatrix.get(), GL_ARRAY_BUFFER);
+            attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
 
-            if (instancedMesh->instanceColor != nullptr) {
+            if (instancedMesh->instanceColor() != nullptr) {
 
-                attributes_.update(instancedMesh->instanceColor.get(), GL_ARRAY_BUFFER);
+                attributes_.update(instancedMesh->instanceColor(), GL_ARRAY_BUFFER);
             }
         }
 

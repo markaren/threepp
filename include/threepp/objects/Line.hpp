@@ -30,7 +30,7 @@ namespace threepp {
 
         virtual void computeLineDistances();
 
-        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         std::shared_ptr<Object3D> clone(bool recursive = true) override;
 

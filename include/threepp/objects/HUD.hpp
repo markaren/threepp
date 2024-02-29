@@ -2,22 +2,18 @@
 #ifndef THREEPP_HUD_HPP
 #define THREEPP_HUD_HPP
 
-#include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/canvas/WindowSize.hpp"
-#include "threepp/extras/core/Font.hpp"
-#include "threepp/objects/Mesh.hpp"
-#include "threepp/scenes/Scene.hpp"
-#include "threepp/core/Raycaster.hpp"
 #include "threepp/input/PeripheralsEventSource.hpp"
 
-#include <optional>
-#include <string>
+#include <functional>
+#include <memory>
 
 namespace threepp {
 
+    class Object3D;
     class GLRenderer;
 
-    class HUD: public Scene, public MouseListener {
+    class HUD {
 
     public:
         enum class VerticalAlignment {
@@ -81,8 +77,8 @@ namespace threepp {
 
             Vector2 pos;
             Vector2 margin_{5, 5};
-            std::function<void(int)> onMouseDown_ = [](int){};
-            std::function<void(int)> onMouseUp_ = [](int){};
+            std::function<void(int)> onMouseDown_ = [](int) {};
+            std::function<void(int)> onMouseUp_ = [](int) {};
 
             VerticalAlignment verticalAlignment_;
             HorizontalAlignment horizontalAlignment_;
@@ -96,24 +92,17 @@ namespace threepp {
 
         void add(const std::shared_ptr<Object3D>& object, Options opts);
 
-        void remove(Object3D& object) override;
+        void remove(Object3D& object);
 
         void setSize(WindowSize size);
 
         void needsUpdate(Object3D& o);
 
-        void onMouseDown(int button, const Vector2& pos) override;
-        void onMouseUp(int button, const Vector2& pos) override;
-        void onMouseMove(const Vector2& pos) override;
+        ~HUD();
 
     private:
-        WindowSize size_;
-        OrthographicCamera camera_;
-
-        Raycaster raycaster_;
-        Vector2 mouse_{-Infinity<float>, -Infinity<float>};
-
-        std::unordered_map<Object3D*, Options> map_;
+        struct Impl;
+        std::unique_ptr<Impl> pimpl_;
     };
 
 }// namespace threepp

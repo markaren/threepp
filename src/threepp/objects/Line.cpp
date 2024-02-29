@@ -87,7 +87,7 @@ void Line::computeLineDistances() {
     }
 }
 
-void Line::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     auto geometry = this->geometry();
     auto threshold = raycaster.params.lineThreshold;

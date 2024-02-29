@@ -28,7 +28,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         cubemaps.get(background->texture().get());
     }
 
-    if (!background) {
+    if (!background || (background && background->empty()) ) {
 
         setClear(clearColor, clearAlpha);
 

@@ -93,7 +93,7 @@ std::shared_ptr<Sprite> Sprite::create(const std::shared_ptr<SpriteMaterial>& ma
     return std::make_shared<Sprite>(material);
 }
 
-void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Sprite::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     if (!raycaster.camera) {
 

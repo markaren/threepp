@@ -300,7 +300,7 @@ struct GLBindingStates::Impl {
 
                 } else if (name == "instanceMatrix") {
 
-                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceMatrix.get());
+                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceMatrix());
 
                     auto buffer = attribute.buffer;
                     auto type = attribute.type;
@@ -319,7 +319,7 @@ struct GLBindingStates::Impl {
 
                 } else if (name == "instanceColor") {
 
-                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceColor.get());
+                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceColor());
 
                     auto buffer = attribute.buffer;
                     auto type = attribute.type;
