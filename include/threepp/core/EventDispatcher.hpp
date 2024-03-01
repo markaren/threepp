@@ -7,38 +7,41 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <functional>
 
 
 namespace threepp {
 
     struct Event {
-
         const std::string type;
         void* target;
+        bool unsubscribe = false;
     };
 
-    struct EventListener {
-
-        virtual void onEvent(Event& event) = 0;
-
-        virtual ~EventListener() = default;
-    };
+    using EventListener = std::function<void(Event&)>;
+    using Subscription = std::shared_ptr<void>;
 
     class EventDispatcher {
 
     public:
-        void addEventListener(const std::string& type, EventListener* listener);
+        /// Adds an event listener and returns a subscription
+        [[nodiscard]]
+        Subscription addEventListener(const std::string& type, EventListener listener);
 
-        bool hasEventListener(const std::string& type, const EventListener* listener);
+        /// Adds an event listener and assumes event.unsubscribe = true will be
+        /// used to unsubscribe. Useful for one shot events
+        void addEventListenerOwned(const std::string& type, EventListener listener);
 
-        void removeEventListener(const std::string& type, const EventListener* listener);
+        /// Adds an event listener  and unsubscribes after a single shot
+		void addEventListenerOneShot(const std::string& type, EventListener listener);
 
         void dispatchEvent(const std::string& type, void* target = nullptr);
+
 
         virtual ~EventDispatcher() = default;
 
     private:
-        std::unordered_map<std::string, std::vector<EventListener*>> listeners_;
+        std::unordered_map<std::string, std::unordered_map<size_t, EventListener>> listeners_;
     };
 
 }// namespace threepp

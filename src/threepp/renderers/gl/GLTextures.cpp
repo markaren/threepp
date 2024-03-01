@@ -86,9 +86,9 @@ gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl:
       maxTextures(GLCapabilities::instance().maxTextures),
       maxCubemapSize(GLCapabilities::instance().maxCubemapSize),
       maxTextureSize(GLCapabilities::instance().maxTextureSize),
-      maxSamples(GLCapabilities::instance().maxSamples),
-      onTextureDispose_(this),
-      onRenderTargetDispose_(this) {}
+      maxSamples(GLCapabilities::instance().maxSamples)
+{
+}
 
 void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuint width, GLuint height) {
 
@@ -206,7 +206,12 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
 
         textureProperties->glInit = true;
 
-        texture.addEventListener("dispose", &onTextureDispose_);
+        texture.addEventListenerOwned("dispose", [this](Event & event) {
+            auto texture = static_cast<Texture*>(event.target);
+            this->deallocateTexture(texture);
+            --this->info->memory.textures;
+            event.unsubscribe = true;
+        }); 
 
         GLuint glTexture;
         glGenTextures(1, &glTexture);
@@ -501,7 +506,10 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
     auto textureProperties = properties->textureProperties.get(texture->uuid);
 
-    renderTarget->addEventListener("dispose", &onRenderTargetDispose_);
+    renderTarget->addEventListenerOneShot("dispose", [this](Event& event) {
+        auto renderTarget = static_cast<GLRenderTarget*>(event.target);
+        this->deallocateRenderTarget(renderTarget);
+    });
 
     GLuint glTexture;
     glGenTextures(1, &glTexture);
@@ -570,22 +578,4 @@ std::optional<unsigned int> gl::GLTextures::getGlTexture(const Texture& texture)
     return textureProperties->glTexture;
 }
 
-void gl::GLTextures::TextureEventListener::onEvent(Event& event) {
 
-    auto texture = static_cast<Texture*>(event.target);
-
-    texture->removeEventListener("dispose", this);
-
-    scope_->deallocateTexture(texture);
-
-    --scope_->info->memory.textures;
-}
-
-void gl::GLTextures::RenderTargetEventListener::onEvent(Event& event) {
-
-    auto renderTarget = static_cast<GLRenderTarget*>(event.target);
-
-    renderTarget->removeEventListener("dispose", this);
-
-    scope_->deallocateRenderTarget(renderTarget);
-}

@@ -2,47 +2,45 @@
 #include "threepp/core/EventDispatcher.hpp"
 
 #include <algorithm>
+#include <atomic>
 
 using namespace threepp;
 
 
-void EventDispatcher::addEventListener(const std::string& type, EventListener* listener) {
+static std::atomic<size_t> id = 0;
 
-    listeners_[type].emplace_back(listener);
+threepp::Subscription EventDispatcher::addEventListener(const std::string& type, EventListener listener) {
+    size_t current_id = id.load();
+    listeners_[type].insert({current_id, listener});
+    Subscription disposer((void*)nullptr, [this, type, current_id](void*) {listeners_[type].erase(current_id); });
+    id=id+1;
+    return disposer;
 }
 
-bool EventDispatcher::hasEventListener(const std::string& type, const EventListener* listener) {
-
-    if (!listeners_.count(type)) return false;
-
-    auto& listenerArray = listeners_.at(type);
-    return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
+void EventDispatcher::addEventListenerOwned(const std::string& type, EventListener listener) {
+    size_t current_id = id.load();
+    listeners_[type].insert({current_id, listener});
+    id=id+1;
 }
 
-void EventDispatcher::removeEventListener(const std::string& type, const EventListener* listener) {
-
-    if (!listeners_.count(type)) return;
-
-    auto& listenerArray = listeners_.at(type);
-    if (listenerArray.empty()) return;
-
-    auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
-    if (find != listenerArray.end()) {
-        listenerArray.erase(find);
-    }
+void EventDispatcher::addEventListenerOneShot(const std::string& type, EventListener listener) {
+    this->addEventListenerOwned(type, [l=std::move(listener)](Event& e) { l(e); e.unsubscribe = true; });
 }
 
 void EventDispatcher::dispatchEvent(const std::string& type, void* target) {
 
     if (listeners_.count(type)) {
-
         Event e{type, target};
-
-        auto listenersOfType = listeners_.at(type);//copy
-        for (auto l : listenersOfType) {
-            if (l) {
-                l->onEvent(e);
+        std::unordered_map<size_t, EventListener> & listenersOfType = listeners_.at(type);//copy
+        std::vector<size_t> toUnsubscribe;
+        for (auto const & item : listenersOfType) {
+            item.second(e);
+            if (e.unsubscribe) {
+                e.unsubscribe = false;
+                toUnsubscribe.push_back(item.first);
             }
         }
+        for (size_t id : toUnsubscribe)
+            listenersOfType.erase(id);
     }
 }

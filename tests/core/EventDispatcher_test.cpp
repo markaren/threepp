@@ -6,75 +6,52 @@
 
 using namespace threepp;
 
-namespace {
 
-    struct LambdaEventListener: EventListener {
-
-        explicit LambdaEventListener(std::function<void(Event&)> f): f_(std::move(f)) {}
-
-        void onEvent(Event& event) override {
-            f_(event);
-        }
-
-    private:
-        std::function<void(Event&)> f_;
-    };
-
-
-    struct MyEventListener: EventListener {
-
-        int numCalled = 0;
-
-        void onEvent(Event& e) override {
-            ++numCalled;
-        }
-    };
-
-    struct OnMaterialDispose: EventListener {
-
-        void onEvent(Event& event) override {
-            auto* material = static_cast<Material*>(event.target);
-            material->removeEventListener("dispose", this);
-        }
-    };
-
-}// namespace
-
-TEST_CASE("Test events") {
+TEST_CASE("Test addEventListener") {
 
     EventDispatcher evt;
 
-    MyEventListener l;
+    int nCalls = 0;
+    {
+        auto s0 = evt.addEventListener("foo", [&](Event& e) {nCalls++; });
 
-    bool l1Called = false;
-    LambdaEventListener l1([&l1Called](Event& e) {
-        l1Called = true;
-    });
+        REQUIRE(nCalls == 0);
+        evt.dispatchEvent("foo");
+        REQUIRE(nCalls == 1);
+        evt.dispatchEvent("foo");
+        REQUIRE(nCalls == 2);
+    }
+	evt.dispatchEvent("foo");
+	REQUIRE(nCalls == 2);
 
-    evt.addEventListener("test1", &l);
-    evt.addEventListener("test2", &l1);
+}
 
-    evt.dispatchEvent("test1");
-    evt.dispatchEvent("test1");
+TEST_CASE("Test addEventListenerOneOwned") {
 
-    REQUIRE(2 == l.numCalled);
+    EventDispatcher evt;
 
-    evt.removeEventListener("test1", &l);
+    int nCalls = 0;
+    evt.addEventListenerOwned("foo", [&](Event& e) {
+        nCalls++;
+        if (nCalls == 2) { e.unsubscribe = true; } });
 
-    evt.dispatchEvent("test1");
-    evt.dispatchEvent("test2");
+    REQUIRE(nCalls == 0);
+    evt.dispatchEvent("foo");
+    REQUIRE(nCalls == 1);
+    evt.dispatchEvent("foo");
+    REQUIRE(nCalls == 2);
+    evt.dispatchEvent("foo");
+    REQUIRE(nCalls == 2);
+}
+TEST_CASE("Test addEventListenerOneShot") {
 
-    REQUIRE(2 == l.numCalled);
-    REQUIRE(l1Called);
+    EventDispatcher evt;
 
-    REQUIRE(!evt.hasEventListener("test1", &l));
-    REQUIRE(evt.hasEventListener("test2", &l1));
-
-    OnMaterialDispose onDispose;
-    auto material = MeshBasicMaterial::create();
-    material->addEventListener("dispose", &onDispose);
-
-    REQUIRE(material->hasEventListener("dispose", &onDispose));
-    material->dispose();
-    REQUIRE(!material->hasEventListener("dispose", &onDispose));
+    int nCalls = 0;
+	evt.addEventListenerOneShot("foo", [&](Event& e) {nCalls++; });
+	REQUIRE(nCalls == 0);
+	evt.dispatchEvent("foo");
+	REQUIRE(nCalls == 1);
+	evt.dispatchEvent("foo");
+	REQUIRE(nCalls == 1);
 }

@@ -18,36 +18,18 @@ using namespace threepp::gl;
 
 struct GLObjects::Impl {
 
-    struct OnInstancedMeshDispose: public EventListener {
-
-        explicit OnInstancedMeshDispose(GLObjects::Impl* scope): scope(scope) {}
-
-        void onEvent(Event& event) override {
-            auto instancedMesh = static_cast<InstancedMesh*>(event.target);
-
-            instancedMesh->removeEventListener("dispose", this);
-
-            scope->attributes_.remove(instancedMesh->instanceMatrix.get());
-
-            if (instancedMesh->instanceColor) scope->attributes_.remove(instancedMesh->instanceColor.get());
-        }
-
-    private:
-        GLObjects::Impl* scope;
-    };
-
     GLInfo& info_;
     GLGeometries& geometries_;
     GLAttributes& attributes_;
 
-    OnInstancedMeshDispose onInstancedMeshDispose;
-
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
+
+    ///  Track subscriptions to instanceMeshDispose
+    std::unordered_map<Object3D*, Subscription> instanceMeshDisposeSubscriptions_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
         : attributes_(attributes),
-          geometries_(geometries), info_(info),
-          onInstancedMeshDispose(this) {}
+          geometries_(geometries), info_(info) {}
 
     BufferGeometry* update(Object3D* object) {
 
@@ -67,9 +49,17 @@ struct GLObjects::Impl {
 
         if (auto instancedMesh = object->as<InstancedMesh>()) {
 
-            if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
+            if (instanceMeshDisposeSubscriptions_.find(object) == instanceMeshDisposeSubscriptions_.end()) {
 
-                object->addEventListener("dispose", &onInstancedMeshDispose);
+                auto onInstanceMeshDispose = [this,object](Event& event) {
+                    auto instancedMesh = static_cast<InstancedMesh*>(event.target);
+                    this->attributes_.remove(instancedMesh->instanceMatrix.get());
+                    if (instancedMesh->instanceColor) this->attributes_.remove(instancedMesh->instanceColor.get());
+                    // Remove our subscription 
+                    this->instanceMeshDisposeSubscriptions_.erase(object);
+                };
+
+                instanceMeshDisposeSubscriptions_.insert({object, object->addEventListener("dispose", onInstanceMeshDispose)});
             }
 
             attributes_.update(instancedMesh->instanceMatrix.get(), GL_ARRAY_BUFFER);

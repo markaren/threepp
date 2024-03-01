@@ -47,22 +47,6 @@ using namespace threepp;
 
 struct GLRenderer::Impl {
 
-    struct OnMaterialDispose: EventListener {
-
-        explicit OnMaterialDispose(GLRenderer::Impl* scope): scope_(scope) {}
-
-        void onEvent(Event& event) override {
-
-            auto material = static_cast<Material*>(event.target);
-
-            material->removeEventListener("dispose", this);
-
-            scope_->deallocateMaterial(material);
-        }
-
-    private:
-        GLRenderer::Impl* scope_;
-    };
 
     GLRenderer& scope;
 
@@ -71,7 +55,6 @@ struct GLRenderer::Impl {
 
     std::unique_ptr<Scene> _emptyScene;
 
-    OnMaterialDispose onMaterialDispose;
 
     gl::GLRenderList* currentRenderList = nullptr;
     gl::GLRenderState* currentRenderState = nullptr;
@@ -154,8 +137,7 @@ struct GLRenderer::Impl {
           background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
           programCache(bindingStates, clipping),
           _currentDrawBuffers(GL_BACK),
-          _emptyScene(std::make_unique<Scene>()),
-          onMaterialDispose(this) {
+          _emptyScene(std::make_unique<Scene>()) {
 
         this->setViewport(0, 0, size.width, size.height);
         this->setScissor(0, 0, _size.width, _size.height);
@@ -606,10 +588,10 @@ struct GLRenderer::Impl {
         }
 
         if (programs.empty()) {
-
             // new material
-
-            material->addEventListener("dispose", &onMaterialDispose);
+            material->addEventListenerOneShot("dispose", [this](Event& event) {
+                this->deallocateMaterial(static_cast<Material*>(event.target));
+            });
         }
 
         gl::GLProgram* program = nullptr;
