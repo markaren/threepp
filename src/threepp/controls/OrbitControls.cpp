@@ -68,6 +68,10 @@ struct OrbitControls::Impl {
             this->onMouseDown(e, scope);
         });
 
+        subs_ << canvas.mouse.OnMouseWheel.subscribe([&](MouseWheelEvent& e) {
+            this->onMouseWheel(e, scope);
+		});
+
         update();
     }
 
@@ -475,9 +479,9 @@ struct OrbitControls::Impl {
 		}
 	}
 
-	void onMouseWheel(const Vector2& delta, OrbitControls & controls) {
+	void onMouseWheel(MouseWheelEvent & ev , OrbitControls & controls) {
 		if (scope.enabled && scope.enableZoom && !(scope.pimpl_->state != State::NONE && scope.pimpl_->state != State::ROTATE)) {
-			scope.pimpl_->handleMouseWheel(delta);
+			scope.pimpl_->handleMouseWheel(ev.offset);
 		}
 	}
 };
