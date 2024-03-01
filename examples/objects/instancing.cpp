@@ -128,7 +128,7 @@ int main() {
             auto instanceId = intersects.front().instanceId;
             if (instanceId && !colorMap[*instanceId]) {
                 mesh->setColorAt(*instanceId, Color().randomize());
-                mesh->instanceColor->needsUpdate();
+                mesh->instanceColor()->needsUpdate();
                 colorMap[*instanceId] = true;
             }
         }

@@ -26,6 +26,11 @@ namespace threepp {
             return data->array();
         }
 
+        [[nodiscard]] const std::vector<float>& array() const override {
+
+            return data->array();
+        }
+
         [[nodiscard]] int count() const override {
 
             return data->count();

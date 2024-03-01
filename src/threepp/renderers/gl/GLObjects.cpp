@@ -53,20 +53,20 @@ struct GLObjects::Impl {
 
                 auto onInstanceMeshDispose = [this,object](Event& event) {
                     auto instancedMesh = static_cast<InstancedMesh*>(event.target);
-                    this->attributes_.remove(instancedMesh->instanceMatrix.get());
-                    if (instancedMesh->instanceColor) this->attributes_.remove(instancedMesh->instanceColor.get());
-                    // Remove our subscription 
+                    this->attributes_.remove(instancedMesh->instanceMatrix());
+                    if (instancedMesh->instanceColor()) this->attributes_.remove(instancedMesh->instanceColor());
+                    // Remove our subscription
                     this->instanceMeshDisposeSubscriptions_.erase(object);
                 };
 
                 instanceMeshDisposeSubscriptions_.insert({object, object->addEventListener("dispose", onInstanceMeshDispose)});
             }
 
-            attributes_.update(instancedMesh->instanceMatrix.get(), GL_ARRAY_BUFFER);
+            attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
 
-            if (instancedMesh->instanceColor != nullptr) {
+            if (instancedMesh->instanceColor() != nullptr) {
 
-                attributes_.update(instancedMesh->instanceColor.get(), GL_ARRAY_BUFFER);
+                attributes_.update(instancedMesh->instanceColor(), GL_ARRAY_BUFFER);
             }
         }
 

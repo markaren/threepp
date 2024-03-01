@@ -412,7 +412,7 @@ struct GLRenderer::Impl {
 
         if (auto im = object->as<InstancedMesh>()) {
 
-            renderer->renderInstances(drawStart, drawCount, im->count);
+            renderer->renderInstances(drawStart, drawCount, im->count());
 
         } else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
 

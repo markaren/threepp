@@ -1,7 +1,11 @@
 
 #include "threepp/objects/HUD.hpp"
 
+#include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/core/Raycaster.hpp"
+#include "threepp/math/Box3.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/scenes/Scene.hpp"
 
 using namespace threepp;
 
@@ -37,89 +41,139 @@ void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
 }
 
 
-HUD::HUD(PeripheralsEventSource& eventSource)
-    : size_(eventSource.size()), camera_(0, size_.width, size_.height, 0, 0.1, 10) {
+struct HUD::Impl: Scene, MouseListener {
 
-    eventSource.addMouseListener(*this);
+    Impl(PeripheralsEventSource* eventSource)
+        : eventSource_(eventSource),
+          size_(eventSource->size()),
+          camera_(0, size_.width, size_.height, 0, 0.1, 10) {
 
-    camera_.position.z = 1;
-}
+        eventSource->addMouseListener(*this);
 
-void HUD::apply(GLRenderer& renderer) {
-    renderer.clearDepth();
-    renderer.render(*this, camera_);
-}
-
-void HUD::remove(Object3D& object) {
-    Object3D::remove(object);
-
-    map_.erase(&object);
-}
-
-void HUD::setSize(WindowSize size) {
-    camera_.right = size.width;
-    camera_.top = size.height;
-
-    for (auto [obj, opts] : map_) {
-        opts.updateElement(*obj, size);
+        camera_.position.z = 1;
     }
 
-    camera_.updateProjectionMatrix();
+    void apply(GLRenderer& renderer) {
+        renderer.clearDepth();
+        renderer.render(*this, camera_);
+    }
 
-    size_ = size;
+    void remove(Object3D& object) override {
+        Object3D::remove(object);
+
+        map_.erase(&object);
+    }
+
+    void setSize(WindowSize size) {
+        camera_.right = size.width;
+        camera_.top = size.height;
+
+        for (auto [obj, opts] : map_) {
+            opts.updateElement(*obj, size);
+        }
+
+        camera_.updateProjectionMatrix();
+
+        size_ = size;
+    }
+
+    void add(Object3D& object, HUD::Options opts) {
+        Object3D::add(object);
+
+        opts.updateElement(object, size_);
+
+        map_[&object] = opts;
+    }
+
+    void add(const std::shared_ptr<Object3D>& object, HUD::Options opts) {
+        Object3D::add(object);
+
+        opts.updateElement(*object, size_);
+
+        map_[object.get()] = opts;
+    }
+
+    void needsUpdate(Object3D& o) {
+
+        if (map_.count(&o)) {
+            map_.at(&o).updateElement(o, size_);
+        }
+    }
+
+    void onMouseDown(int button, const Vector2& pos) override {
+
+        raycaster_.setFromCamera(mouse_, camera_);
+
+        auto intersects = raycaster_.intersectObjects(children, false);
+        if (!intersects.empty()) {
+            auto front = intersects.front();
+            if (map_.count(front.object)) {
+                map_.at(front.object).onMouseDown_(button);
+            }
+        }
+    }
+
+    void onMouseUp(int button, const Vector2& pos) override {
+
+        raycaster_.setFromCamera(mouse_, camera_);
+
+        auto intersects = raycaster_.intersectObjects(children, false);
+        if (!intersects.empty()) {
+            auto front = intersects.front();
+            if (map_.count(front.object)) {
+                map_.at(front.object).onMouseUp_(button);
+            }
+        }
+    }
+
+    void onMouseMove(const Vector2& pos) override {
+
+        mouse_.x = (pos.x / static_cast<float>(size_.width)) * 2 - 1;
+        mouse_.y = -(pos.y / static_cast<float>(size_.height)) * 2 + 1;
+    }
+
+    ~Impl() override {
+        eventSource_->removeMouseListener(*this);
+    }
+
+private:
+    PeripheralsEventSource* eventSource_;
+
+    WindowSize size_;
+    OrthographicCamera camera_;
+
+    Raycaster raycaster_;
+    Vector2 mouse_{-Infinity<float>, -Infinity<float>};
+
+    std::unordered_map<Object3D*, Options> map_;
+};
+
+
+HUD::HUD(PeripheralsEventSource& eventSource)
+    : pimpl_(std::make_unique<Impl>(&eventSource)) {}
+
+void HUD::apply(GLRenderer& renderer) {
+    pimpl_->apply(renderer);
 }
 
 void HUD::add(Object3D& object, HUD::Options opts) {
-    Object3D::add(object);
-
-    opts.updateElement(object, size_);
-
-    map_[&object] = opts;
+    pimpl_->add(object, opts);
 }
 
 void HUD::add(const std::shared_ptr<Object3D>& object, HUD::Options opts) {
-    Object3D::add(object);
+    pimpl_->add(object, opts);
+}
 
-    opts.updateElement(*object, size_);
+void HUD::remove(Object3D& object) {
+    pimpl_->remove(object);
+}
 
-    map_[object.get()] = opts;
+void HUD::setSize(WindowSize size) {
+    pimpl_->setSize(size);
 }
 
 void HUD::needsUpdate(Object3D& o) {
-
-    if (map_.count(&o)) {
-        map_.at(&o).updateElement(o, size_);
-    }
+    pimpl_->needsUpdate(o);
 }
 
-void HUD::onMouseDown(int button, const Vector2& pos) {
-
-    raycaster_.setFromCamera(mouse_, camera_);
-
-    auto intersects = raycaster_.intersectObjects(children, false);
-    if (!intersects.empty()) {
-        auto front = intersects.front();
-        if (map_.count(front.object)) {
-            map_.at(front.object).onMouseDown_(button);
-        }
-    }
-}
-
-void HUD::onMouseUp(int button, const Vector2& pos) {
-
-    raycaster_.setFromCamera(mouse_, camera_);
-
-    auto intersects = raycaster_.intersectObjects(children, false);
-    if (!intersects.empty()) {
-        auto front = intersects.front();
-        if (map_.count(front.object)) {
-            map_.at(front.object).onMouseUp_(button);
-        }
-    }
-}
-
-void HUD::onMouseMove(const Vector2& pos) {
-
-    mouse_.x = (pos.x / static_cast<float>(size_.width)) * 2 - 1;
-    mouse_.y = -(pos.y / static_cast<float>(size_.height)) * 2 + 1;
-}
+HUD::~HUD() = default;
