@@ -35,7 +35,7 @@ void Texture::dispose() {
 
     if (!disposed_) {
         disposed_ = true;
-        this->OnDispose.dispatchEvent(threepp::Event{this});
+        this->OnDispose.send(threepp::Event{this});
     }
 }
 

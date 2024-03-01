@@ -9,7 +9,7 @@
 using namespace threepp;
 
 
-class SnakeScene: public Scene, public KeyListener {
+class SnakeScene: public Scene {
 
 public:
     explicit SnakeScene(SnakeGame& game): game_(game) {
@@ -34,7 +34,7 @@ public:
         add(snake_.back());
     }
 
-    void onKeyPressed(KeyEvent evt) override {
+    void onKeyPressed(KeyEvent evt) {
 
         if (game_.isRunning()) {
 

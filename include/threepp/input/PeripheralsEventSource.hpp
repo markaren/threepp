@@ -19,15 +19,13 @@ namespace threepp {
 
         void setIOCapture(IOCapture* capture);
 
-        void addKeyListener(KeyListener& listener);
+        // Events for keys
+        Keys keys;
 
-        bool removeKeyListener(const KeyListener& listener);
+        // Events for mouse
+        Mouse mouse;
 
-        void addMouseListener(MouseListener& listener);
-
-        bool removeMouseListener(const MouseListener& listener);
-
-        virtual ~PeripheralsEventSource() = default;
+	virtual ~PeripheralsEventSource() = default;
 
     protected:
         enum class KeyAction {
@@ -41,18 +39,9 @@ namespace threepp {
             RELEASE
         };
 
-        void onMousePressedEvent(int button, const Vector2& pos, MouseAction action);
-
-        void onMouseMoveEvent(const Vector2& pos);
-
-        void onMouseWheelEvent(const Vector2& eventData);
-
-        void onKeyEvent(KeyEvent evt, KeyAction action);
 
     private:
         IOCapture* ioCapture_ = nullptr;
-        std::vector<KeyListener*> keyListeners_;
-        std::vector<MouseListener*> mouseListeners_;
     };
 
 }// namespace threepp

@@ -77,7 +77,7 @@ void InstancedMesh::dispose() {
 
     if (!disposed) {
         disposed = true;
-        OnDispose.dispatchEvent(Event{ this });
+        OnDispose.send(Event{ this });
     }
 }
 

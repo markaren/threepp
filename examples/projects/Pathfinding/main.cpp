@@ -94,12 +94,12 @@ int main() {
     Raycaster raycaster;
     raycaster.layers.set(1); // ignore grid
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    MouseUpListener mouseListener([&](int button, Vector2 pos) {
+    TEventListener<MouseButtonEvent> mouseListener = [&](MouseButtonEvent & e) {
         if (start && target) return;
 
         const auto s = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(s.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(s.height)) * 2 + 1;
+        mouse.x = (e.pos.x / static_cast<float>(s.width)) * 2 - 1;
+        mouse.y = -(e.pos.y / static_cast<float>(s.height)) * 2 + 1;
 
         raycaster.setFromCamera(mouse, camera);
         auto intersects = raycaster.intersectObjects(scene.children);
@@ -139,8 +139,9 @@ int main() {
                 }
             }
         }
-    });
-    canvas.addMouseListener(mouseListener);
+    };
+
+    auto sub = canvas.mouse.OnMouseUp.subscribe(mouseListener);
 
     canvas.onWindowResize([&](WindowSize s) {
         camera.left = -size * s.aspect() / 2;

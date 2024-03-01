@@ -7,21 +7,21 @@
 using namespace threepp;
 
 
-TEST_CASE("Test addEventListener") {
+TEST_CASE("Test subscribe") {
 
     EventDispatcher evt;
 
     int nCalls = 0;
     {
-        auto s0 = evt.addEventListener( [&](Event& e) {nCalls++; });
+        auto s0 = evt.subscribe( [&](Event& e) {nCalls++; });
 
         REQUIRE(nCalls == 0);
-        evt.dispatchEvent(Event{});
+        evt.send(Event{});
         REQUIRE(nCalls == 1);
-        evt.dispatchEvent(Event{});
+        evt.send(Event{});
         REQUIRE(nCalls == 2);
     }
-        evt.dispatchEvent(Event{});
+        evt.send(Event{});
 	REQUIRE(nCalls == 2);
 
 }
@@ -31,27 +31,27 @@ TEST_CASE("Test addEventListenerOneOwned") {
     EventDispatcher evt;
 
     int nCalls = 0;
-    evt.addEventListenerOwned([&](Event& e) {
+    evt.subscribeForever([&](Event& e) {
         nCalls++;
         if (nCalls == 2) { e.unsubscribe = true; } });
 
     REQUIRE(nCalls == 0);
-    evt.dispatchEvent(Event{});
+    evt.send(Event{});
     REQUIRE(nCalls == 1);
-    evt.dispatchEvent(Event{});
+    evt.send(Event{});
     REQUIRE(nCalls == 2);
-    evt.dispatchEvent(Event{});
+    evt.send(Event{});
     REQUIRE(nCalls == 2);
 }
-TEST_CASE("Test addEventListenerOneShot") {
+TEST_CASE("Test subscribeOnce") {
 
     EventDispatcher evt;
 
     int nCalls = 0;
-	evt.addEventListenerOneShot([&](Event& e) {nCalls++; });
+	evt.subscribeOnce([&](Event& e) {nCalls++; });
 	REQUIRE(nCalls == 0);
-    evt.dispatchEvent(Event{});
+    evt.send(Event{});
 	REQUIRE(nCalls == 1);
-	evt.dispatchEvent(Event{});
+	evt.send(Event{});
 	REQUIRE(nCalls == 1);
 }

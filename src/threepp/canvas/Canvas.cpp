@@ -316,7 +316,7 @@ struct Canvas::Impl {
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
-        p->scope.onMouseWheelEvent({static_cast<float>(xoffset), static_cast<float>(yoffset)});
+        p->scope.mouse.OnMouseWheel.send(MouseWheelEvent(Vector2{static_cast<float>(xoffset), static_cast<float>(yoffset)}));
     }
 
     static void mouse_callback(GLFWwindow* w, int button, int action, int) {
@@ -324,10 +324,10 @@ struct Canvas::Impl {
 
         switch (action) {
             case GLFW_PRESS:
-                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::PRESS);
+                p->scope.mouse.OnMouseDown.send(MouseButtonEvent(button, p->lastMousePos_));
                 break;
             case GLFW_RELEASE:
-                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::RELEASE);
+                p->scope.mouse.OnMouseUp.send(MouseButtonEvent(button, p->lastMousePos_));
                 break;
             default:
                 break;
@@ -338,7 +338,7 @@ struct Canvas::Impl {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
 
         Vector2 mousePos(static_cast<float>(xpos), static_cast<float>(ypos));
-        p->scope.onMouseMoveEvent(mousePos);
+        p->scope.mouse.OnMouseMove.send(MouseMoveEvent(mousePos, mousePos-p->lastMousePos_));
         p->lastMousePos_.copy(mousePos);
     }
 
@@ -354,15 +354,15 @@ struct Canvas::Impl {
         KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
         switch (action) {
             case GLFW_PRESS: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::PRESS);
+                p->scope.keys.OnKeyPressed.send(evt);
                 break;
             }
             case GLFW_RELEASE: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::RELEASE);
+                p->scope.keys.OnKeyReleased.send(evt);
                 break;
             }
             case GLFW_REPEAT: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::REPEAT);
+                p->scope.keys.OnKeyRepeat.send(evt);
                 break;
             }
             default:

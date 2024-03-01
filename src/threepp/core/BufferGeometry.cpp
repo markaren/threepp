@@ -672,7 +672,7 @@ void BufferGeometry::dispose() {
 
     if (!disposed_) {
         disposed_ = true;
-        this->OnDispose.dispatchEvent(Event{ this });
+        this->OnDispose.send(Event{ this });
     }
 }
 

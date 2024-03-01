@@ -72,7 +72,7 @@ void GLRenderTarget::dispose() {
     if (!disposed) {
 
         disposed = true;
-        this->OnDispose.dispatchEvent(Event{ this });
+        this->OnDispose.send(Event{ this });
     }
 }
 
