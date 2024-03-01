@@ -37,10 +37,10 @@ namespace threepp {
     };
 
     struct Mouse {
-        TEventDispatcher<MouseMoveEvent> OnMouseMove;
-        TEventDispatcher<MouseWheelEvent> OnMouseWheel;
-        TEventDispatcher<MouseButtonEvent> OnMouseDown;
-        TEventDispatcher<MouseButtonEvent> OnMouseUp;
+        TEventDispatcher<MouseMoveEvent> Move;
+        TEventDispatcher<MouseWheelEvent> Wheel;
+        TEventDispatcher<MouseButtonEvent> Down;
+        TEventDispatcher<MouseButtonEvent> Up;
     };
 
 

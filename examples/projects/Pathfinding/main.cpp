@@ -141,7 +141,7 @@ int main() {
         }
     };
 
-    auto sub = canvas.mouse.OnMouseUp.subscribe(mouseListener);
+    auto sub = canvas.mouse.Up.subscribe(mouseListener);
 
     canvas.onWindowResize([&](WindowSize s) {
         camera.left = -size * s.aspect() / 2;

@@ -52,7 +52,7 @@ int main() {
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    auto sub = canvas.mouse.OnMouseMove.subscribe([&](MouseMoveEvent& e) {
+    auto sub = canvas.mouse.Move.subscribe([&](MouseMoveEvent& e) {
         // calculate mouse position in normalized device coordinates
         // (-1 to +1) for both components
 

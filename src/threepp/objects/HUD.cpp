@@ -52,9 +52,9 @@ struct HUD::Impl: Scene {
 
         auto& mouse = eventSource->mouse;
 
-        subs_ << mouse.OnMouseDown.subscribe([this](MouseButtonEvent& e) { onMouseDown(e); });
-        subs_ << mouse.OnMouseUp.subscribe([this](MouseButtonEvent& e) { onMouseUp(e); });
-        subs_ << mouse.OnMouseMove.subscribe([this](MouseEvent& e) { onMouseMove(e); });
+        subs_ << mouse.Down.subscribe([this](MouseButtonEvent& e) { onMouseDown(e); });
+        subs_ << mouse.Up.subscribe([this](MouseButtonEvent& e) { onMouseUp(e); });
+        subs_ << mouse.Move.subscribe([this](MouseEvent& e) { onMouseMove(e); });
 
         camera_.position.z = 1;
     }

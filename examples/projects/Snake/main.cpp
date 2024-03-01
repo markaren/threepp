@@ -13,7 +13,7 @@ int main() {
     renderer.autoClear = false;
 
     auto scene = SnakeScene(game);
-    auto sub = canvas.keys.OnKeyPressed.subscribe([&](auto& e) {scene.onKeyPressed(e); });
+    auto sub = canvas.keys.Pressed.subscribe([&](auto& e) {scene.onKeyPressed(e); });
 
     auto camera = OrthographicCamera::create(0, game.gridSize(), 0, game.gridSize());
     camera->position.z = 1;

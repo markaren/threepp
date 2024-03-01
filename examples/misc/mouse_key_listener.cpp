@@ -45,16 +45,16 @@ int main() {
     Clock clock;
 
 	Subscriptions subs_;
-    subs_ << canvas.mouse.OnMouseDown.subscribe([&](auto& e) { onMouseDown(e, clock.elapsedTime); });
-    subs_ << canvas.mouse.OnMouseUp.subscribe([&](auto& e) { onMouseUp(e, clock.elapsedTime); });
-    subs_ << canvas.mouse.OnMouseMove.subscribe([&](auto& e) { onMouseMove(e, clock.elapsedTime); });
-    subs_ << canvas.mouse.OnMouseWheel.subscribe([&](auto& e) { onMouseWheel(e, clock.elapsedTime); });
+    subs_ << canvas.mouse.Down.subscribe([&](auto& e) { onMouseDown(e, clock.elapsedTime); });
+    subs_ << canvas.mouse.Up.subscribe([&](auto& e) { onMouseUp(e, clock.elapsedTime); });
+    subs_ << canvas.mouse.Move.subscribe([&](auto& e) { onMouseMove(e, clock.elapsedTime); });
+    subs_ << canvas.mouse.Wheel.subscribe([&](auto& e) { onMouseWheel(e, clock.elapsedTime); });
 
 	Subscriptions key_subs_;
 	auto subscribe_keys = [&]() {
-		key_subs_ << canvas.keys.OnKeyPressed.subscribe([&](auto& e) {onKeyPressed(e, clock.elapsedTime); });
-		key_subs_ << canvas.keys.OnKeyReleased.subscribe([&](auto& e) {onKeyReleased(e, clock.elapsedTime); });
-		key_subs_ << canvas.keys.OnKeyRepeat.subscribe([&](auto& e) {onKeyRepeat(e, clock.elapsedTime); });
+		key_subs_ << canvas.keys.Pressed.subscribe([&](auto& e) {onKeyPressed(e, clock.elapsedTime); });
+		key_subs_ << canvas.keys.Released.subscribe([&](auto& e) {onKeyReleased(e, clock.elapsedTime); });
+		key_subs_ << canvas.keys.Repeat.subscribe([&](auto& e) {onKeyRepeat(e, clock.elapsedTime); });
 	};
 
     bool finish = false;

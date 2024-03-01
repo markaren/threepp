@@ -61,14 +61,14 @@ struct OrbitControls::Impl {
     Impl(OrbitControls& scope, PeripheralsEventSource& canvas, Camera& camera)
         : scope(scope), canvas(canvas), camera(camera)
 	  {
-        subs_ << canvas.keys.OnKeyPressed.subscribe([&](auto& e) mutable { onKeyPressed(e, scope); });
-        subs_ << canvas.keys.OnKeyPressed.subscribe([&](auto& e) mutable { onKeyRepeat(e, scope); });
+        subs_ << canvas.keys.Pressed.subscribe([&](auto& e) mutable { onKeyPressed(e, scope); });
+        subs_ << canvas.keys.Repeat.subscribe([&](auto& e) mutable { onKeyRepeat(e, scope); });
 
-        subs_ << canvas.mouse.OnMouseDown.subscribe([&](MouseButtonEvent& e) {
+        subs_ << canvas.mouse.Down.subscribe([&](MouseButtonEvent& e) {
             this->onMouseDown(e, scope);
         });
 
-        subs_ << canvas.mouse.OnMouseWheel.subscribe([&](MouseWheelEvent& e) {
+        subs_ << canvas.mouse.Wheel.subscribe([&](MouseWheelEvent& e) {
             this->onMouseWheel(e, scope);
 		});
 
@@ -470,10 +470,10 @@ struct OrbitControls::Impl {
 
 		if (scope.pimpl_->state != State::NONE) {
             auto& mouse = scope.pimpl_->canvas.mouse;
-            mouse.OnMouseUp.subscribeOnce([&](MouseButtonEvent& e) {
+            mouse.Up.subscribeOnce([&](MouseButtonEvent& e) {
                 onMouseUp(e, scope);
 			});
-            mouse.OnMouseMove.subscribeUntil(mouse.OnMouseUp, [&](MouseEvent& e) {
+            mouse.Move.subscribeUntil(mouse.Up, [&](MouseEvent& e) {
                 onMouseMove(e, scope);
             });
 		}

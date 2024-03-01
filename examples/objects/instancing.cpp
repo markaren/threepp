@@ -108,7 +108,7 @@ int main() {
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    auto sub = canvas.mouse.OnMouseMove.subscribe([&](auto& e) {
+    auto sub = canvas.mouse.Move.subscribe([&](auto& e) {
         auto size = canvas.size();
         mouse.x = (e.pos.x / static_cast<float>(size.width)) * 2 - 1;
         mouse.y = -(e.pos.y / static_cast<float>(size.height)) * 2 + 1;

@@ -22,9 +22,9 @@ namespace threepp {
 
 
     struct Keys {
-        TEventDispatcher<KeyEvent> OnKeyPressed;
-        TEventDispatcher<KeyEvent> OnKeyReleased;
-        TEventDispatcher<KeyEvent> OnKeyRepeat;
+        TEventDispatcher<KeyEvent> Pressed;
+        TEventDispatcher<KeyEvent> Released;
+        TEventDispatcher<KeyEvent> Repeat;
     };
 
     enum class Key {

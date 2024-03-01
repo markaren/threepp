@@ -35,14 +35,14 @@ struct FlyControls::Impl {
         : eventSource(canvas), scope(scope), object(object)
   {
 
-        subs_ << canvas.keys.OnKeyPressed.subscribe([this, &scope](KeyEvent& key) { onKeyPressed(key, scope); });
-        subs_ << canvas.keys.OnKeyReleased.subscribe([this, &scope](KeyEvent& key) { onKeyReleased(key, scope); });
+        subs_ << canvas.keys.Pressed.subscribe([this, &scope](KeyEvent& key) { onKeyPressed(key, scope); });
+        subs_ << canvas.keys.Released.subscribe([this, &scope](KeyEvent& key) { onKeyReleased(key, scope); });
 
-        subs_ << canvas.mouse.OnMouseDown.subscribe([this, &scope](MouseButtonEvent& e) { onMouseDown(e, scope); });
-        subs_ << canvas.mouse.OnMouseUp.subscribe([this, &scope](MouseButtonEvent& e) { onMouseUp(e, scope); });
-        subs_ << canvas.mouse.OnMouseMove.subscribe([this, &scope](MouseEvent& e) { onMouseMove(e, scope); });
+        subs_ << canvas.mouse.Down.subscribe([this, &scope](MouseButtonEvent& e) { onMouseDown(e, scope); });
+        subs_ << canvas.mouse.Up.subscribe([this, &scope](MouseButtonEvent& e) { onMouseUp(e, scope); });
+        subs_ << canvas.mouse.Move.subscribe([this, &scope](MouseEvent& e) { onMouseMove(e, scope); });
         // TODO 
-        //subs_ << canvas.mouse.OnMouseWheel.subscribe([this, &scope](MouseEvent const& e) { onMouseWheel(e, scope); });
+        //subs_ << canvas.mouse.Wheel.subscribe([this, &scope](MouseEvent const& e) { onMouseWheel(e, scope); });
     }
 
     void update(float delta) {
