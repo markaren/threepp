@@ -30,7 +30,7 @@ namespace threepp {
 
     // This is the base class for most objects in three.js and provides a set of properties and methods for manipulating objects in 3D space.
     //Note that this can be used for grouping objects via the .add( object ) method which adds the object as a child, however it is better to use Group for this.
-    class Object3D: public EventDispatcher {
+    class Object3D {
 
     public:
         inline static Vector3 defaultUp{0, 1, 0};
@@ -254,7 +254,12 @@ namespace threepp {
 
         virtual std::shared_ptr<Object3D> clone(bool recursive = true);
 
-        ~Object3D() override;
+        EventDispatcher OnAdded;
+        EventDispatcher OnRemove;
+        EventDispatcher OnDispose;
+
+        virtual ~Object3D() ;
+
 
     private:
         inline static unsigned int _object3Did{0};

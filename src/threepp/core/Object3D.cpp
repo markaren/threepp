@@ -217,7 +217,7 @@ void Object3D::add(Object3D& object) {
     object.parent = this;
     this->children.emplace_back(&object);
 
-    object.dispatchEvent("added");
+    object.OnAdded.dispatchEvent(Event{ this });
 }
 
 void Object3D::remove(Object3D& object) {
@@ -231,7 +231,7 @@ void Object3D::remove(Object3D& object) {
             children.erase(find);
 
             child->parent = nullptr;
-            child->dispatchEvent("remove", child);
+            child->OnRemove.dispatchEvent(Event{child});
         }
     }
     {// owning
@@ -259,7 +259,7 @@ void Object3D::clear() {
 
         object->parent = nullptr;
 
-        object->dispatchEvent("remove");
+        object->OnRemove.dispatchEvent(Event{ object });
     }
 
     this->children.clear();

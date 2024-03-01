@@ -59,7 +59,7 @@ struct GLObjects::Impl {
                     this->instanceMeshDisposeSubscriptions_.erase(object);
                 };
 
-                instanceMeshDisposeSubscriptions_.insert({object, object->addEventListener("dispose", onInstanceMeshDispose)});
+                instanceMeshDisposeSubscriptions_.insert({object, object->OnDispose.addEventListener( onInstanceMeshDispose)});
             }
 
             attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);

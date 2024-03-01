@@ -19,7 +19,7 @@ std::string Material::uuid() const {
 void Material::dispose() {
     if (!disposed_) {
         disposed_ = true;
-        dispatchEvent("dispose", this);
+        OnDispose.dispatchEvent(Event{this});
     }
 }
 

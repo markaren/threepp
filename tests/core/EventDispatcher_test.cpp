@@ -13,15 +13,15 @@ TEST_CASE("Test addEventListener") {
 
     int nCalls = 0;
     {
-        auto s0 = evt.addEventListener("foo", [&](Event& e) {nCalls++; });
+        auto s0 = evt.addEventListener( [&](Event& e) {nCalls++; });
 
         REQUIRE(nCalls == 0);
-        evt.dispatchEvent("foo");
+        evt.dispatchEvent(Event{});
         REQUIRE(nCalls == 1);
-        evt.dispatchEvent("foo");
+        evt.dispatchEvent(Event{});
         REQUIRE(nCalls == 2);
     }
-	evt.dispatchEvent("foo");
+        evt.dispatchEvent(Event{});
 	REQUIRE(nCalls == 2);
 
 }
@@ -31,16 +31,16 @@ TEST_CASE("Test addEventListenerOneOwned") {
     EventDispatcher evt;
 
     int nCalls = 0;
-    evt.addEventListenerOwned("foo", [&](Event& e) {
+    evt.addEventListenerOwned([&](Event& e) {
         nCalls++;
         if (nCalls == 2) { e.unsubscribe = true; } });
 
     REQUIRE(nCalls == 0);
-    evt.dispatchEvent("foo");
+    evt.dispatchEvent(Event{});
     REQUIRE(nCalls == 1);
-    evt.dispatchEvent("foo");
+    evt.dispatchEvent(Event{});
     REQUIRE(nCalls == 2);
-    evt.dispatchEvent("foo");
+    evt.dispatchEvent(Event{});
     REQUIRE(nCalls == 2);
 }
 TEST_CASE("Test addEventListenerOneShot") {
@@ -48,10 +48,10 @@ TEST_CASE("Test addEventListenerOneShot") {
     EventDispatcher evt;
 
     int nCalls = 0;
-	evt.addEventListenerOneShot("foo", [&](Event& e) {nCalls++; });
+	evt.addEventListenerOneShot([&](Event& e) {nCalls++; });
 	REQUIRE(nCalls == 0);
-	evt.dispatchEvent("foo");
+    evt.dispatchEvent(Event{});
 	REQUIRE(nCalls == 1);
-	evt.dispatchEvent("foo");
+	evt.dispatchEvent(Event{});
 	REQUIRE(nCalls == 1);
 }

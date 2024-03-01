@@ -589,7 +589,7 @@ struct GLRenderer::Impl {
 
         if (programs.empty()) {
             // new material
-            material->addEventListenerOneShot("dispose", [this](Event& event) {
+            material->OnDispose.addEventListenerOneShot( [this](Event& event) {
                 this->deallocateMaterial(static_cast<Material*>(event.target));
             });
         }

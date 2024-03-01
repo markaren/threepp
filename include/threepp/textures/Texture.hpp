@@ -19,7 +19,7 @@
 
 namespace threepp {
 
-    class Texture: public EventDispatcher {
+    class Texture {
 
     public:
         inline static Mapping DEFAULT_MAPPING = Mapping::UV;
@@ -84,13 +84,15 @@ namespace threepp {
 
         [[nodiscard]] std::shared_ptr<Texture> clone() const;
 
-        ~Texture() override;
+        virtual ~Texture() ;
 
         static std::shared_ptr<Texture> create();
 
         static std::shared_ptr<Texture> create(const Image& image);
 
         static std::shared_ptr<Texture> create(std::vector<Image> image);
+
+        EventDispatcher OnDispose;
 
     protected:
         explicit Texture(std::vector<Image> image);

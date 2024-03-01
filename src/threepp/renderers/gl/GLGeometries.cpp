@@ -38,7 +38,7 @@ struct GLGeometries::Impl {
 
         if (geometries_.count(geometry) && geometries_.at(geometry)) return;
 
-        geometry->addEventListenerOneShot("dispose", [this](Event& event) {
+        geometry->OnDispose.addEventListenerOneShot([this](Event& event) {
             auto geometry = static_cast<BufferGeometry*>(event.target);
 
             if (geometry->hasIndex()) {

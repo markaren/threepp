@@ -206,7 +206,7 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
 
         textureProperties->glInit = true;
 
-        texture.addEventListenerOwned("dispose", [this](Event & event) {
+        texture.OnDispose.addEventListenerOwned([this](Event & event) {
             auto texture = static_cast<Texture*>(event.target);
             this->deallocateTexture(texture);
             --this->info->memory.textures;
@@ -506,7 +506,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
     auto textureProperties = properties->textureProperties.get(texture->uuid);
 
-    renderTarget->addEventListenerOneShot("dispose", [this](Event& event) {
+    renderTarget->OnDispose.addEventListenerOneShot( [this](Event& event) {
         auto renderTarget = static_cast<GLRenderTarget*>(event.target);
         this->deallocateRenderTarget(renderTarget);
     });

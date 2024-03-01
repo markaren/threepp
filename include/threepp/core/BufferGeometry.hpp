@@ -15,9 +15,11 @@
 
 namespace threepp {
 
-    class BufferGeometry: public EventDispatcher {
+    class BufferGeometry {
 
     public:
+        EventDispatcher OnDispose;
+
         const unsigned int id{++_id};
 
         const std::string uuid;
@@ -128,7 +130,7 @@ namespace threepp {
 
         [[nodiscard]] std::shared_ptr<BufferGeometry> clone() const;
 
-        ~BufferGeometry() override;
+        ~BufferGeometry();
 
         static std::shared_ptr<BufferGeometry> create();
 

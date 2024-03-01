@@ -15,7 +15,7 @@ namespace threepp {
 
     class DepthTexture;
 
-    class GLRenderTarget: public EventDispatcher {
+    class GLRenderTarget {
 
     public:
         struct Options {
@@ -67,7 +67,9 @@ namespace threepp {
 
         static std::unique_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
-        ~GLRenderTarget() override;
+        EventDispatcher OnDispose;
+
+        ~GLRenderTarget() ;
 
     protected:
         bool disposed = false;
