@@ -14,7 +14,7 @@
 using namespace threepp;
 using namespace threepp::gl;
 
-typedef std::unordered_map<bool, GLBindingState> StateMap;
+typedef std::unordered_map<bool, std::shared_ptr<GLBindingState>> StateMap;
 typedef std::unordered_map<int, StateMap> ProgramMap;
 
 struct GLBindingStates::Impl {
@@ -22,8 +22,8 @@ struct GLBindingStates::Impl {
     GLAttributes& attributes_;
     unsigned int maxVertexAttributes_;
 
-    GLBindingState defaultState_;
-    GLBindingState* currentState_;
+    const std::shared_ptr<GLBindingState> defaultState_;
+    std::shared_ptr<GLBindingState> currentState_;
 
     std::unordered_map<unsigned int, ProgramMap> bindingStates;
 
@@ -31,7 +31,7 @@ struct GLBindingStates::Impl {
         : maxVertexAttributes_(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
           attributes_(attributes),
           defaultState_(createBindingState(std::nullopt)),
-          currentState_(&defaultState_) {}
+          currentState_(defaultState_) {}
 
 
     void setup(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry, BufferAttribute* index) {
@@ -88,33 +88,34 @@ struct GLBindingStates::Impl {
         glDeleteVertexArrays(1, &vao);
     }
 
-    GLBindingState* getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
+    std::shared_ptr<GLBindingState> getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
 
         bool wireframe = false;
 
-        if (auto wm = material->as<MaterialWithWireframe>()) {
+        auto wm = material->as<MaterialWithWireframe>();
+        if (wm) {
             wireframe = wm->wireframe;
         }
 
-        ProgramMap& programMap = bindingStates[geometry->id];
+        auto& programMap = bindingStates[geometry->id];
 
-        StateMap& stateMap = programMap[program->id];
+        auto& stateMap = programMap[program->id];
 
         if (!stateMap.count(wireframe)) {
 
-            stateMap.insert({wireframe, createBindingState(createVertexArrayObject())});
+            stateMap[wireframe] = createBindingState(createVertexArrayObject());
         }
 
-        return &stateMap.at(wireframe);
+        return stateMap.at(wireframe);
     }
 
-    [[nodiscard]] GLBindingState createBindingState(std::optional<GLuint> vao) const {
+    [[nodiscard]] std::shared_ptr<GLBindingState> createBindingState(std::optional<GLuint> vao) const {
 
-        return {
+        return std::make_shared<GLBindingState>(
                 std::vector<int>(maxVertexAttributes_),
                 std::vector<int>(maxVertexAttributes_),
                 std::vector<int>(maxVertexAttributes_),
-                vao};
+                vao);
     }
 
     bool needsUpdate(BufferGeometry* geometry, BufferAttribute* index) const {
@@ -359,7 +360,7 @@ struct GLBindingStates::Impl {
 
                 for (const auto& wireframe : stateMap) {
 
-                    deleteVertexArrayObject(*stateMap.at(wireframe.first).object);
+                    deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
 
                     stateMap.erase(wireframe.first);
                 }
@@ -383,7 +384,7 @@ struct GLBindingStates::Impl {
 
             for (const auto& wireframe : stateMap) {
 
-                deleteVertexArrayObject(*stateMap.at(wireframe.first).object);
+                deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
             }
 
             stateMap.clear();
@@ -407,7 +408,7 @@ struct GLBindingStates::Impl {
             for (const auto& wireframe : stateMap) {
 
                 auto& value = stateMap.at(wireframe.first);
-                deleteVertexArrayObject(*value.object);
+                deleteVertexArrayObject(*value->object);
             }
             stateMap.clear();
 
@@ -417,9 +418,9 @@ struct GLBindingStates::Impl {
 
     void reset() {
 
-        if (currentState_ == &defaultState_) return;
+        if (currentState_ == defaultState_) return;
 
-        currentState_ = &defaultState_;
+        currentState_ = defaultState_;
         bindVertexArrayObject(currentState_->object.value_or(0));
     }
 };
