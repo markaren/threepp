@@ -141,8 +141,8 @@ int main() {
     scene->add(line);
 
     MyMouseListener mouseListener(canvas);
-    auto sub = canvas.mouse.Move.subscribe([&mouseListener](auto& evt) {mouseListener.onMouseMove(evt);});
-    auto sub1 = canvas.mouse.Down.subscribe([&mouseListener](auto& evt) {mouseListener.onMouseDown(evt);});
+    canvas.mouse.Move.subscribeForever([&mouseListener](auto& evt) {mouseListener.onMouseMove(evt);});
+    canvas.mouse.Down.subscribeForever([&mouseListener](auto& evt) {mouseListener.onMouseDown(evt);});
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
