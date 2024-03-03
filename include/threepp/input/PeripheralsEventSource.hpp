@@ -19,13 +19,25 @@ namespace threepp {
 
         void setIOCapture(IOCapture* capture);
 
+        bool preventMouseEvent() const {
+            return ioCapture_ && ioCapture_->preventMouseEvent();
+        }
+
+        bool preventKeyboardEvent() const {
+            return ioCapture_ && ioCapture_->preventKeyboardEvent();
+        }
+
+        bool preventScrollEvent() const {
+            return ioCapture_ && ioCapture_->preventScrollEvent();
+        }
+
         // Events for keys
         Keys keys;
 
         // Events for mouse
         Mouse mouse;
 
-	virtual ~PeripheralsEventSource() = default;
+        virtual ~PeripheralsEventSource() = default;
 
     protected:
         enum class KeyAction {
