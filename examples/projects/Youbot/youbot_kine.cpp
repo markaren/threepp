@@ -106,13 +106,15 @@ int main() {
 
     utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
+    std::vector<Subscription> subs;
     pool.submit([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
         youbot->add(targetHelper);
         youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
         canvas.invokeLater([&] {
-            canvas.addKeyListener(*youbot);
+            subs.emplace_back(canvas.keys.Pressed.subscribe([youbot](auto& e){youbot->onKeyPressed(e);}));
+            subs.emplace_back(canvas.keys.Released.subscribe([youbot](auto& e){youbot->onKeyReleased(e);}));
             scene->add(youbot);
             hud.remove(handle);
         });
