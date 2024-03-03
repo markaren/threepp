@@ -25,7 +25,7 @@ struct GLObjects::Impl {
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
 
     ///  Track subscriptions to instanceMeshDispose
-    std::unordered_map<Object3D*, Subscription> instanceMeshDisposeSubscriptions_;
+    std::unordered_map<Object3D*, bool> instanceMeshDisposeSubscriptions_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
         : attributes_(attributes),
@@ -49,17 +49,19 @@ struct GLObjects::Impl {
 
         if (auto instancedMesh = object->as<InstancedMesh>()) {
 
-            if (instanceMeshDisposeSubscriptions_.find(object) == instanceMeshDisposeSubscriptions_.end()) {
+            if (!instanceMeshDisposeSubscriptions_.count(object)) {
 
-                auto onInstanceMeshDispose = [this,object](Event& event) {
+                auto onInstanceMeshDispose = [this, object](Event& event) {
                     auto instancedMesh = static_cast<InstancedMesh*>(event.target);
                     this->attributes_.remove(instancedMesh->instanceMatrix());
                     if (instancedMesh->instanceColor()) this->attributes_.remove(instancedMesh->instanceColor());
+
                     // Remove our subscription
                     this->instanceMeshDisposeSubscriptions_.erase(object);
+                    event.unsubscribe = true;
                 };
-
-                instanceMeshDisposeSubscriptions_.insert({object, object->OnDispose.subscribe( onInstanceMeshDispose)});
+                object->OnDispose.subscribeForever(onInstanceMeshDispose);
+                instanceMeshDisposeSubscriptions_.insert({object, true});
             }
 
             attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
