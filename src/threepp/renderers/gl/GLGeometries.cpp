@@ -192,6 +192,14 @@ struct GLGeometries::Impl {
 
         return wireframeAttributes_.at(geometry).get();
     }
+
+    ~Impl() {
+
+        auto copy = geometries_;
+        for (auto [geom, _] : copy) {
+            geom->dispose();
+        }
+    }
 };
 
 
