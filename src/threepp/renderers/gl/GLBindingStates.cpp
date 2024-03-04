@@ -350,25 +350,24 @@ struct GLBindingStates::Impl {
 
         reset();
 
-        for (const auto& geometryId : bindingStates) {
+        for (auto geoIt = bindingStates.begin(); geoIt != bindingStates.end();) {
+            auto& programMap = geoIt->second;
 
-            auto& programMap = bindingStates.at(geometryId.first);
+            for (auto progIt = programMap.begin(); progIt != programMap.end();) {
+                auto& stateMap = progIt->second;
 
-            for (const auto& programId : programMap) {
+                for (auto it = stateMap.begin(); it != stateMap.end();) {
+                    const auto& wireframe = *it;
 
-                auto& stateMap = programMap.at(programId.first);
+                    deleteVertexArrayObject(*it->second->object);
 
-                for (const auto& wireframe : stateMap) {
-
-                    deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
-
-                    stateMap.erase(wireframe.first);
+                    it = stateMap.erase(it);
                 }
 
-                programMap.erase(programId.first);
+                progIt = programMap.erase(progIt);
             }
 
-            bindingStates.erase(geometryId.first);
+            geoIt = bindingStates.erase(geoIt);
         }
     }
 
