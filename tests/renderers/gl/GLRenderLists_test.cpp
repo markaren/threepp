@@ -1,8 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#define private public
-
 #undef near
 #undef far
 #include "threepp/core/BufferGeometry.hpp"
@@ -19,8 +17,7 @@ public:
     }
 };
 
-class DummyProgram: public GLProgram {
-};
+class DummyProgram: public GLProgram {};
 
 TEST_CASE("init") {
 
@@ -60,7 +57,7 @@ TEST_CASE("push") {
     objA.renderOrder = 0;
     DummyMaterial matA;
     matA.transparent = true;
-    GLProgram proA;
+    DummyProgram proA;
     BufferGeometry geoA;
 
     Object3D objB;
@@ -68,7 +65,7 @@ TEST_CASE("push") {
     objB.renderOrder = 0;
     DummyMaterial matB;
     matB.transparent = true;
-    GLProgram proB;
+    DummyProgram proB;
     BufferGeometry geoB;
 
     Object3D objC;
@@ -76,7 +73,7 @@ TEST_CASE("push") {
     objC.renderOrder = 0;
     DummyMaterial matC;
     matC.transparent = false;
-    GLProgram proC;
+    DummyProgram proC;
     BufferGeometry geoC;
 
     Object3D objD;
@@ -84,7 +81,7 @@ TEST_CASE("push") {
     objD.renderOrder = 0;
     DummyMaterial matD;
     matD.transparent = false;
-    GLProgram proD;
+    DummyProgram proD;
     BufferGeometry geoD;
 
     auto materialProperties = properties.materialProperties.get(&matA);
