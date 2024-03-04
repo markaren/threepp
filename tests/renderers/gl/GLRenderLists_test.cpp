@@ -87,16 +87,16 @@ TEST_CASE("push") {
     GLProgram proD;
     BufferGeometry geoD;
 
-    auto materialProperties = properties.materialProperties.get(matA.uuid());
+    auto materialProperties = properties.materialProperties.get(&matA);
     materialProperties->program = &proA;
 
-    materialProperties = properties.materialProperties.get(matB.uuid());
+    materialProperties = properties.materialProperties.get(&matB);
     materialProperties->program = &proB;
 
-    materialProperties = properties.materialProperties.get(matC.uuid());
+    materialProperties = properties.materialProperties.get(&matC);
     materialProperties->program = &proC;
 
-    materialProperties = properties.materialProperties.get(matD.uuid());
+    materialProperties = properties.materialProperties.get(&matD);
     materialProperties->program = &proD;
 
     // A
