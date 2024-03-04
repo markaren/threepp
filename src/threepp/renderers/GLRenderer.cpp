@@ -1122,7 +1122,9 @@ struct GLRenderer::Impl {
         bindingStates.reset();
     }
 
-    ~Impl() = default;
+    ~Impl() {
+        dispose();
+    };
 
     friend struct gl::ProgramParameters;
     friend struct gl::GLShadowMap;
