@@ -3,11 +3,9 @@
 #include "threepp/objects/Sky.hpp"
 #include "threepp/objects/Water.hpp"
 #include "threepp/threepp.hpp"
-#include "threepp/utils/ThreadPool.hpp"
 
 #include <fstream>
 #include <future>
-#include <iostream>
 
 using namespace threepp;
 
@@ -77,6 +75,7 @@ int main() {
 
     Canvas canvas("Heightmap");
     GLRenderer renderer{canvas.size()};
+    renderer.autoClear = false;
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
@@ -97,24 +96,29 @@ int main() {
     auto water = createWater(*light, scene->fog.has_value());
     scene->add(water);
 
+    FontLoader fontLoader;
+
+    HUD hud(canvas);
+    TextGeometry::Options opts(fontLoader.defaultFont(), 40);
+    Text2D hudText(opts, "Loading terrain..");
+    hudText.material()->as<MaterialWithColor>()->color.setHex(Color::black);
+    hud.add(hudText);
+
     std::promise<std::shared_ptr<Material>> promise;
     auto future = promise.get_future();
 
-    std::cout << "Loading terrain.." << std::endl;
-
-    std::mutex m;
-    utils::ThreadPool pool(2);
-    pool.submit([&] {
+    auto f1 = std::async([&] {
         TextureLoader tl;
         auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
         auto material = MeshPhongMaterial::create({{"map", texture}});
         promise.set_value(material);
 
-        std::lock_guard<std::mutex> lck(m);
-        std::cout << "Material loaded" << std::endl;
+        canvas.invokeLater([&] {
+            hudText.setText("Material loaded..", opts);
+        });
     });
 
-    pool.submit([&] {
+    auto f2 = std::async([&] {
         auto data = loadHeights();
 
         auto geometry = PlaneGeometry::create(5041, 5041, 1023, 1023);
@@ -125,19 +129,22 @@ int main() {
             pos->setY(i, data[i]);
         }
 
-        {
-            std::lock_guard<std::mutex> lck(m);
-            std::cout << "Geometry loaded" << std::endl;
-        }
+        canvas.invokeLater([&] {
+            hudText.setText("Geometry loaded..", opts);
+        });
 
         auto material = future.get();
         auto mesh = Mesh::create(geometry, material);
 
-        std::cout << "Terrain loaded" << std::endl;
-
         canvas.invokeLater([&, mesh] {
+            hudText.setText("Terrain loaded..", opts);
+
             scene->add(mesh);
         });
+
+        canvas.invokeLater([&] {
+            hud.remove(hudText);
+        }, 2);
     });
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -152,6 +159,12 @@ int main() {
         float t = clock.getElapsedTime();
         timeUniform.setValue(t);
 
+        renderer.clear();
         renderer.render(*scene, *camera);
+
+        hud.apply(renderer);
     });
+
+    f1.get();
+    f2.get();
 }
