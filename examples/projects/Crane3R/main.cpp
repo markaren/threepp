@@ -3,8 +3,11 @@
 
 #include "kine/Kine.hpp"
 #include "threepp/threepp.hpp"
-#include "threepp/utils/ThreadPool.hpp"
 #include "utility/Angle.hpp"
+
+#ifndef EMSCRIPTEN
+#include <future>
+#endif
 
 using namespace threepp;
 using namespace kine;
@@ -136,9 +139,8 @@ int main() {
 
 
 #ifndef EMSCRIPTEN
-    utils::ThreadPool pool;
     std::shared_ptr<Crane3R> crane;
-    pool.submit([&] {
+    auto future = std::async([&] {
         crane = Crane3R::create();
         crane->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
         crane->traverseType<Mesh>([](Mesh& m) {
@@ -226,4 +228,8 @@ int main() {
             hud.apply(renderer);
         }
     });
+
+#ifndef EMSCRIPTEN
+    future.get();
+#endif
 }
