@@ -46,3 +46,7 @@ void EventDispatcher::dispatchEvent(const std::string& type, void* target) {
         }
     }
 }
+void EventDispatcher::removeAllEventListeners(const std::string& type) {
+
+    listeners_.erase(type);
+}
