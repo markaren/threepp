@@ -9,7 +9,7 @@
 #include <vector>
 #include <functional>
 #include <algorithm>
-#include <atomic>
+#include <threepp/utils/Scope.hpp>
 
 
 namespace threepp {
@@ -29,7 +29,7 @@ namespace threepp {
     using TEventListener = std::function<void(TEvent&)>;
 
     /// A single subscription for an event
-    using Subscription = std::shared_ptr<void>;
+    using Subscription = threepp::utils::ScopeExit;
 
     /// For holding a large number of subscriptions to events
     using Subscriptions= std::vector<Subscription>;
@@ -43,20 +43,26 @@ namespace threepp {
     /// Generic event dispatch class
     template <typename TEvent>
 #if defined(__cpp_concepts) && (__cpp_concepts >= 201907L) 
+    // C++20 (and later) code
     requires concepts::Event<TEvent>
 #endif
-    // C++20 (and later) code
     class TEventDispatcher {
+    private:
+        void unsubscribe(size_t id) {
+            if (!sending_)
+                listeners_.erase(id);
+            else
+                to_unsubscribe_.push_back(id);
+        }
     public:
         using EventListener = TEventListener<TEvent>;
 
         /// Adds an event listener and returns a subscription
         [[nodiscard]] Subscription subscribe(EventListener listener) {
-            size_t current_id = id_.load();
-            listeners_.insert({ current_id, listener });
-            Subscription disposer((void*) nullptr, [this, current_id](void*) { listeners_.erase(current_id); });
-            id_ = id_ + 1;
-            return disposer;
+            size_t current_id = id_;
+            id_++;
+            listeners_.insert({current_id, listener});
+            return utils::at_scope_exit([this, current_id]() { unsubscribe(current_id); });
         }
 
         /// Adds an event listener and never automatically unsubscribes. You
@@ -64,7 +70,7 @@ namespace threepp {
         /// cancelled. Not recommended to be used directly. Build other
         /// tools on this.
         void subscribeForever(EventListener listener) {
-            size_t current_id = id_.load();
+            size_t current_id = id_;
             listeners_.insert({ current_id, listener });
             id_ = id_ + 1;
         }
@@ -85,16 +91,28 @@ namespace threepp {
 
         /// Send an event to all listeners.
         void send(TEvent & e){
-            std::vector<size_t> toUnsubscribe;
-            for (auto const& item : listeners_) {
-                item.second(e);
+            /// Mark that we are in the sending state.
+            auto tmp = utils::reset_at_scope_exit(sending_, true);
+
+            for(auto it = listeners_.begin(); it != listeners_.end();)
+            {
+                it->second(e);
                 if (e.unsubscribe) {
                     e.unsubscribe = false;
-                    toUnsubscribe.push_back(item.first);
+                    it = listeners_.erase(it);
                 }
+                else
+                    it++;
             }
-            for (size_t id : toUnsubscribe)
+
+            // Unsubscribe listeners that disposed of their
+            // subscription by calling unsubscribe directly
+            // during the event sending phase above. 
+            for(size_t id : to_unsubscribe_)
                 listeners_.erase(id);
+
+            if (to_unsubscribe_.size() > 0)
+                to_unsubscribe_.clear();
         }
 
         /// Handle r-value versions of send
@@ -106,7 +124,12 @@ namespace threepp {
 
     private:
         std::unordered_map<size_t, EventListener> listeners_;
-		std::atomic<size_t> id_ = 0;
+        /// The id of the current listener
+		size_t id_ = 0;
+        /// Are we sending event? Used to detect unsubscriptions during sending.
+        bool sending_ = false;
+        /// Subscriptions to be delay unsubscribed.
+        std::vector<size_t> to_unsubscribe_;
     };
 
 

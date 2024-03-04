@@ -21,7 +21,7 @@ TEST_CASE("Test subscribe") {
         evt.send(Event{});
         REQUIRE(nCalls == 2);
     }
-        evt.send(Event{});
+	evt.send(Event{});
 	REQUIRE(nCalls == 2);
 
 }
@@ -54,4 +54,8 @@ TEST_CASE("Test subscribeOnce") {
 	REQUIRE(nCalls == 1);
 	evt.send(Event{});
 	REQUIRE(nCalls == 1);
+}
+
+TEST_CASE("Unsubscribe due to message") {
+
 }
