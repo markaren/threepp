@@ -62,7 +62,7 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
         unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     gl::RenderItem* renderItem = nullptr;
-    auto materialProperties = properties.materialProperties.get(material->uuid());
+    auto materialProperties = properties.materialProperties.get(material);
 
     if (renderItemsIndex >= renderItems.size()) {
         auto r = std::make_unique<RenderItem>(RenderItem{object->id,

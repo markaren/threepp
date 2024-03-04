@@ -7,6 +7,9 @@
 
 #include "GLUniforms.hpp"
 #include "threepp/core/Uniform.hpp"
+#include "threepp/materials/Material.hpp"
+#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include <optional>
 #include <unordered_map>
@@ -60,15 +63,15 @@ namespace threepp::gl {
         unsigned int version{};
     };
 
-    template<class T>
+    template<class E, class T>
     struct GLTypeProperties {
 
-        T* get(const std::string& key) {
+        T* get(E* key) {
 
             return &properties_[key];
         }
 
-        void remove(const std::string& key) {
+        void remove(E* key) {
 
             properties_.erase(key);
         }
@@ -79,16 +82,31 @@ namespace threepp::gl {
         }
 
     private:
-        std::unordered_map<std::string, T> properties_;
+        friend struct GLProperties;
+        std::unordered_map<E*, T> properties_;
     };
 
     struct GLProperties {
 
-        GLTypeProperties<TextureProperties> textureProperties;
-        GLTypeProperties<MaterialProperties> materialProperties;
-        GLTypeProperties<RenderTargetProperties> renderTargetProperties;
+        GLTypeProperties<Texture, TextureProperties> textureProperties;
+        GLTypeProperties<Material, MaterialProperties> materialProperties;
+        GLTypeProperties<GLRenderTarget, RenderTargetProperties> renderTargetProperties;
 
         void dispose() {
+
+            auto texturePropertiesCopy = textureProperties.properties_;
+            for (auto& [tex, _] : texturePropertiesCopy) {
+                tex->dispose();
+            }
+            auto materialPropertiesCopy = materialProperties.properties_;
+            for (auto& [mat, _] : materialPropertiesCopy) {
+                mat->dispose();
+            }
+
+            auto renderTargetPropertiesCopy = renderTargetProperties.properties_;
+            for (auto& [target, _] : renderTargetPropertiesCopy) {
+                target->dispose();
+            }
 
             textureProperties.dispose();
             materialProperties.dispose();
