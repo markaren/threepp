@@ -44,10 +44,13 @@ int main() {
 
     utils::ThreadPool pool;
     std::shared_ptr<Youbot> youbot;
+    std::vector<Subscription> subs;
     pool.submit([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
+
         canvas.invokeLater([&] {
-            canvas.addKeyListener(*youbot);
+            subs.emplace_back(canvas.keys.Pressed.subscribe([youbot](auto& e) { youbot->onKeyPressed(e); }));
+            subs.emplace_back(canvas.keys.Released.subscribe([youbot](auto& e) { youbot->onKeyReleased(e); }));
             scene->add(youbot);
             handle.setText("Use WASD keys to steer robot", opts);
         });

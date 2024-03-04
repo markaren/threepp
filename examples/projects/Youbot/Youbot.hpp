@@ -8,9 +8,9 @@
 using namespace threepp;
 
 
-struct Youbot: Object3D, KeyListener {
+struct Youbot: Object3D {
 
-    void onKeyPressed(KeyEvent evt) override {
+    void onKeyPressed(KeyEvent evt) {
         if (evt.key == Key::W) {
             keyState_.up = true;
         } else if (evt.key == Key::S) {
@@ -22,7 +22,7 @@ struct Youbot: Object3D, KeyListener {
         }
     }
 
-    void onKeyReleased(KeyEvent evt) override {
+    void onKeyReleased(KeyEvent evt) {
         if (evt.key == Key::W) {
             keyState_.up = false;
         } else if (evt.key == Key::S) {

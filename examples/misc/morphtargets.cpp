@@ -107,15 +107,14 @@ int main() {
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    MouseMoveListener l([&](Vector2 pos) {
+    auto sub = canvas.mouse.Move.subscribe([&](MouseMoveEvent& evt) {
         // calculate mouse position in normalized device coordinates
         // (-1 to +1) for both components
 
         auto size = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        mouse.x = (evt.pos.x / static_cast<float>(size.width)) * 2 - 1;
+        mouse.y = -(evt.pos.y / static_cast<float>(size.height)) * 2 + 1;
     });
-    canvas.addMouseListener(l);
 
     Box3 box;
     auto helper = Box3Helper::create(box);

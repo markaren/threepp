@@ -30,12 +30,12 @@ namespace {
         return decalMaterial;
     }
 
-    class MyMouseListener: public MouseListener {
+    class MyMouseListener {
 
     public:
         Vector2 mouse{-Infinity<float>, -Infinity<float>};
 
-        explicit MyMouseListener(Canvas& canvas): canvas(canvas) {}
+        explicit MyMouseListener(PeripheralsEventSource& canvas): canvas(canvas) {}
 
         bool mouseClick() {
             if (mouseDown) {
@@ -46,18 +46,18 @@ namespace {
             }
         }
 
-        void onMouseDown(int button, const Vector2& pos) override {
-            if (button == 0) {// left mousebutton
+        void onMouseDown(MouseButtonEvent evt) {
+            if (evt.button == 0) {// left mousebutton
                 mouseDown = true;
             }
         }
 
-        void onMouseMove(const Vector2& pos) override {
-            updateMousePos(pos);
+        void onMouseMove(MouseMoveEvent evt) {
+            updateMousePos(evt.pos);
         }
 
     private:
-        Canvas& canvas;
+        PeripheralsEventSource& canvas;
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
@@ -141,7 +141,8 @@ int main() {
     scene->add(line);
 
     MyMouseListener mouseListener(canvas);
-    canvas.addMouseListener(mouseListener);
+    canvas.mouse.Move.subscribeForever([&mouseListener](auto& evt) {mouseListener.onMouseMove(evt);});
+    canvas.mouse.Down.subscribeForever([&mouseListener](auto& evt) {mouseListener.onMouseDown(evt);});
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
