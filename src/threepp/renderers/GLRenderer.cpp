@@ -119,9 +119,11 @@ struct GLRenderer::Impl {
     gl::GLInfo _info;
 
     gl::GLProperties properties;
-    gl::GLGeometries geometries;
+
     gl::GLBindingStates bindingStates;
     gl::GLAttributes attributes;
+    gl::GLGeometries geometries;
+
     gl::GLClipping clipping;
     gl::GLTextures textures;
     gl::GLMaterials materials;

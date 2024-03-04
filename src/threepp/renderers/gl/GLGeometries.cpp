@@ -195,8 +195,9 @@ struct GLGeometries::Impl {
 
     ~Impl() {
 
-        for (auto& [geom, _] : geometries_) {
-            geom->removeAllEventListeners("dispose");
+        auto copy = geometries_;
+        for (auto [geom, _] : copy) {
+            geom->dispose();
         }
     }
 };

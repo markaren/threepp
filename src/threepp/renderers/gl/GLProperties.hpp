@@ -8,7 +8,7 @@
 #include "GLUniforms.hpp"
 #include "threepp/core/Uniform.hpp"
 #include "threepp/materials/Material.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
 
 #include <optional>
@@ -94,11 +94,18 @@ namespace threepp::gl {
 
         void dispose() {
 
-            for (auto& [tex, _] : textureProperties.properties_) {
-                tex->removeAllEventListeners("dispose");
+            auto texturePropertiesCopy = textureProperties.properties_;
+            for (auto& [tex, _] : texturePropertiesCopy) {
+                tex->dispose();
             }
-            for (auto& [mat, _] : materialProperties.properties_) {
-                mat->removeAllEventListeners("dispose");
+            auto materialPropertiesCopy = materialProperties.properties_;
+            for (auto& [mat, _] : materialPropertiesCopy) {
+                mat->dispose();
+            }
+
+            auto renderTargetPropertiesCopy = renderTargetProperties.properties_;
+            for (auto& [target, _] : renderTargetPropertiesCopy) {
+                target->dispose();
             }
 
             textureProperties.dispose();
