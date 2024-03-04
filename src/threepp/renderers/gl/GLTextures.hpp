@@ -25,7 +25,7 @@ namespace threepp::gl {
 
         GLTextures(GLState& state, GLProperties& properties, GLInfo& info);
 
-        void generateMipmap(unsigned int target, const Texture& texture, unsigned int width, unsigned int height);
+        void generateMipmap(unsigned int target, Texture& texture, unsigned int width, unsigned int height);
 
         void setTextureParameters(unsigned int textureType, Texture& texture);
 
@@ -67,7 +67,7 @@ namespace threepp::gl {
 
         void updateRenderTargetMipmap(GLRenderTarget* renderTarget);
 
-        [[nodiscard]] std::optional<unsigned int> getGlTexture(const Texture& texture) const;
+        [[nodiscard]] std::optional<unsigned int> getGlTexture(Texture& texture) const;
 
     private:
 

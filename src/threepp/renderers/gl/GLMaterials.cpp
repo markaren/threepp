@@ -65,7 +65,7 @@ struct GLMaterials::Impl {
             uniforms.at("specularMap").setValue(specularMaterial->specularMap.get());
         }
 
-        auto envMap = properties.materialProperties.get(material->uuid())->envMap;
+        auto envMap = properties.materialProperties.get(material)->envMap;
         if (envMap) {
 
             auto cubeTexture = dynamic_cast<CubeTexture*>(envMap);
@@ -79,7 +79,7 @@ struct GLMaterials::Impl {
                 uniforms.at("refractionRatio").value<float>() = reflectiveMaterial->refractionRatio;
             }
 
-            const auto maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
+            const auto maxMipMapLevel = properties.textureProperties.get(envMap)->maxMipLevel;
             if (maxMipMapLevel) {
                 uniforms["maxMipLevel"].value<int>() = *maxMipMapLevel;
             }
@@ -258,7 +258,7 @@ struct GLMaterials::Impl {
             uniforms.at("displacementBias").value<float>() = material->displacementBias;
         }
 
-        auto envMap = properties.materialProperties.get(material->uuid());
+        auto envMap = properties.materialProperties.get(material);
         if (envMap) {
 
             uniforms["envMapIntensity"].value<float>() = material->envMapIntensity;

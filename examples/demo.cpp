@@ -99,6 +99,9 @@ auto createPlane() {
 
 int main() {
 
+    auto box = createBox();
+    auto sphere = createSphere();
+
     Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
     renderer.autoClear = false;
@@ -108,10 +111,8 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
-    auto box = createBox();
-    scene->add(box);
 
-    auto sphere = createSphere();
+    scene->add(box);
     box->add(sphere);
 
     auto plane = createPlane();

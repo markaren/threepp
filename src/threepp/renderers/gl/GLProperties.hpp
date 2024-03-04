@@ -7,6 +7,9 @@
 
 #include "GLUniforms.hpp"
 #include "threepp/core/Uniform.hpp"
+#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/textures/Texture.hpp"
+#include "threepp/materials/Material.hpp"
 
 #include <optional>
 #include <unordered_map>
@@ -60,17 +63,27 @@ namespace threepp::gl {
         unsigned int version{};
     };
 
-    template<class T>
+    template<class E, class T>
     struct GLTypeProperties {
 
-        T* get(const std::string& key) {
+        T* get(E* key) {
 
             return &properties_[key];
         }
 
-        void remove(const std::string& key) {
+        T* get(E& key) {
+
+            return &properties_[&key];
+        }
+
+        void remove(E* key) {
 
             properties_.erase(key);
+        }
+
+        void remove(E& key) {
+
+            properties_.erase(&key);
         }
 
         void dispose() {
@@ -79,16 +92,24 @@ namespace threepp::gl {
         }
 
     private:
-        std::unordered_map<std::string, T> properties_;
+        friend class GLProperties;
+        std::unordered_map<E*, T> properties_;
     };
 
     struct GLProperties {
 
-        GLTypeProperties<TextureProperties> textureProperties;
-        GLTypeProperties<MaterialProperties> materialProperties;
-        GLTypeProperties<RenderTargetProperties> renderTargetProperties;
+        GLTypeProperties<Texture, TextureProperties> textureProperties;
+        GLTypeProperties<Material, MaterialProperties> materialProperties;
+        GLTypeProperties<GLRenderTarget, RenderTargetProperties> renderTargetProperties;
 
         void dispose() {
+
+            for (auto& [tex, _] : textureProperties.properties_) {
+                tex->OnDispose.removeAll();
+            }
+            for (auto& [mat, _] : materialProperties.properties_) {
+                mat->OnDispose.removeAll();
+            }
 
             textureProperties.dispose();
             materialProperties.dispose();

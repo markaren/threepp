@@ -178,6 +178,13 @@ struct GLGeometries::Impl {
 
         return wireframeAttributes_.at(geometry).get();
     }
+
+    ~Impl() {
+
+        for (auto& [geom, _] : geometries_) {
+            geom->OnDispose.removeAll();
+        }
+    }
 };
 
 

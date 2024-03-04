@@ -15,7 +15,7 @@
 namespace threepp {
 
     namespace concepts {
-#if defined(__cpp_concepts) && (__cpp_concepts >= 201907L) 
+#if defined(__cpp_concepts) && (__cpp_concepts >= 201907L)
         template<typename TEvent>
         concept Event = requires(TEvent e) {
             { e.target } -> std::convertible_to<void*>;
@@ -42,7 +42,7 @@ namespace threepp {
 
     /// Generic event dispatch class
     template <typename TEvent>
-#if defined(__cpp_concepts) && (__cpp_concepts >= 201907L) 
+#if defined(__cpp_concepts) && (__cpp_concepts >= 201907L)
     // C++20 (and later) code
     requires concepts::Event<TEvent>
 #endif
@@ -107,7 +107,7 @@ namespace threepp {
 
             // Unsubscribe listeners that disposed of their
             // subscription by calling unsubscribe directly
-            // during the event sending phase above. 
+            // during the event sending phase above.
             for(size_t id : to_unsubscribe_)
                 listeners_.erase(id);
 
@@ -118,6 +118,11 @@ namespace threepp {
         /// Handle r-value versions of send
         void send(TEvent && e) {
             send(e);
+        }
+
+        void removeAll() {
+
+            listeners_.clear();
         }
 
         virtual ~TEventDispatcher() = default;

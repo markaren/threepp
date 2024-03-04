@@ -90,11 +90,11 @@ gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl:
 {
 }
 
-void gl::GLTextures::generateMipmap(GLuint target, const Texture& texture, GLuint width, GLuint height) {
+void gl::GLTextures::generateMipmap(GLuint target, Texture& texture, GLuint width, GLuint height) {
 
     glGenerateMipmap(target);
 
-    auto textureProperties = properties->textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(&texture);
 
     textureProperties->maxMipLevel = static_cast<int>(std::log2(std::max(width, height)));
 }
@@ -224,13 +224,13 @@ void gl::GLTextures::deallocateTexture(Texture* texture) {
 
     if (!properties) return;
 
-    auto textureProperties = properties->textureProperties.get(texture->uuid);
+    auto textureProperties = properties->textureProperties.get(texture);
 
     if (!textureProperties->glInit) return;
 
     glDeleteTextures(1, &textureProperties->glTexture.value());
 
-    properties->textureProperties.remove(texture->uuid);
+    properties->textureProperties.remove(texture);
 }
 
 void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
@@ -239,8 +239,8 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
 
     const auto& texture = renderTarget->texture;
 
-    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
-    const auto& textureProperties = properties->textureProperties.get(texture->uuid);
+    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
+    const auto& textureProperties = properties->textureProperties.get(texture.get());
 
     if (textureProperties->glTexture) {
 
@@ -257,8 +257,8 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
     glDeleteFramebuffers(1, &renderTargetProperties->glFramebuffer.value());
     if (renderTargetProperties->glDepthbuffer) glDeleteRenderbuffers(1, &renderTargetProperties->glDepthbuffer.value());
 
-    properties->textureProperties.remove(texture->uuid);
-    properties->renderTargetProperties.remove(renderTarget->uuid);
+    properties->textureProperties.remove(texture.get());
+    properties->renderTargetProperties.remove(renderTarget);
 }
 
 void gl::GLTextures::resetTextureUnits() {
@@ -282,7 +282,7 @@ int gl::GLTextures::allocateTextureUnit() {
 
 void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties->textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -305,7 +305,7 @@ void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
 
 void gl::GLTextures::setTexture2DArray(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties->textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -319,7 +319,7 @@ void gl::GLTextures::setTexture2DArray(Texture& texture, GLuint slot) {
 
 void gl::GLTextures::setTexture3D(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties->textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -333,7 +333,7 @@ void gl::GLTextures::setTexture3D(Texture& texture, GLuint slot) {
 
 void gl::GLTextures::setTextureCube(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties->textureProperties.get(texture.uuid);
+    auto textureProperties = properties->textureProperties.get(texture);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
@@ -401,7 +401,7 @@ void gl::GLTextures::setupFrameBufferTexture(
     }
 
     state->bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, textureTarget, *properties->textureProperties.get(texture.uuid)->glTexture, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, attachment, textureTarget, *properties->textureProperties.get(texture)->glTexture, 0);
     state->bindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
@@ -451,7 +451,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
     }
 
     // upload an empty depth texture with framebuffer size
-    if (!properties->textureProperties.get(renderTarget->depthTexture->uuid)->glTexture ||
+    if (!properties->textureProperties.get(renderTarget->depthTexture.get())->glTexture ||
         renderTarget->depthTexture->image.front().width != renderTarget->width ||
         renderTarget->depthTexture->image.front().height != renderTarget->height) {
 
@@ -462,7 +462,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
 
     setTexture2D(*renderTarget->depthTexture, 0);
 
-    const auto glDepthTexture = properties->textureProperties.get(renderTarget->depthTexture->uuid)->glTexture;
+    const auto glDepthTexture = properties->textureProperties.get(renderTarget->depthTexture.get())->glTexture;
 
     if (renderTarget->depthTexture->format == Format::Depth) {
 
@@ -480,7 +480,7 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
 
 void gl::GLTextures::setupDepthRenderbuffer(GLRenderTarget* renderTarget) {
 
-    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
+    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
 
     if (renderTarget->depthTexture) {
 
@@ -502,8 +502,8 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
 
     const auto& texture = renderTarget->texture;
 
-    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget->uuid);
-    auto textureProperties = properties->textureProperties.get(texture->uuid);
+    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
+    auto textureProperties = properties->textureProperties.get(texture.get());
 
     renderTarget->OnDispose.subscribeOnce( [this](Event& event) {
         auto renderTarget = static_cast<GLRenderTarget*>(event.target);
@@ -562,7 +562,7 @@ void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
     if (textureNeedsGenerateMipmaps(*texture)) {
 
         const auto target = GL_TEXTURE_2D;
-        const auto glTexture = properties->textureProperties.get(texture->uuid)->glTexture;
+        const auto glTexture = properties->textureProperties.get(texture.get())->glTexture;
 
         state->bindTexture(target, *glTexture);
         generateMipmap(target, *texture, renderTarget->width, renderTarget->height);
@@ -570,9 +570,9 @@ void gl::GLTextures::updateRenderTargetMipmap(GLRenderTarget* renderTarget) {
     }
 }
 
-std::optional<unsigned int> gl::GLTextures::getGlTexture(const Texture& texture) const {
+std::optional<unsigned int> gl::GLTextures::getGlTexture(Texture& texture) const {
 
-    const auto textureProperties = properties->textureProperties.get(texture.uuid);
+    const auto textureProperties = properties->textureProperties.get(texture);
 
     return textureProperties->glTexture;
 }
