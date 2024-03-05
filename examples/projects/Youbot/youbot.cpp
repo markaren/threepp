@@ -1,8 +1,9 @@
 
 #include "threepp/threepp.hpp"
-#include "threepp/utils/ThreadPool.hpp"
 
 #include "Youbot.hpp"
+
+#include <future>
 
 using namespace threepp;
 
@@ -42,10 +43,10 @@ int main() {
                             .setNormalizedPosition({0, 1})
                             .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
-    utils::ThreadPool pool;
+
     std::shared_ptr<Youbot> youbot;
     std::vector<Subscription> subs;
-    pool.submit([&] {
+    auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
 
         canvas.invokeLater([&] {

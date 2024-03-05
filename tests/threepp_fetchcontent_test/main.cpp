@@ -4,7 +4,7 @@ using namespace threepp;
 
 namespace {
 
-    auto createBox(const Vector3& pos, const Color& color) {
+    std::shared_ptr<Mesh> createBox(const Vector3 &pos, const Color &color) {
         auto geometry = BoxGeometry::create();
         auto material = MeshBasicMaterial::create();
         material->color.copy(color);
@@ -14,13 +14,28 @@ namespace {
         return mesh;
     }
 
+    std::unique_ptr<HUD> createHUD(PeripheralsEventSource &canvas) {
+        auto hud = std::make_unique<HUD>(canvas);
+        FontLoader fontLoader;
+        const auto font = fontLoader.defaultFont();
+        TextGeometry::Options opts(font, 20, 5);
+        auto hudText2 = Text2D::create(opts, "Hello World!");
+        hudText2->setColor(Color::gray);
+        hud->add(hudText2, HUD::Options()
+                                  .setNormalizedPosition({1, 1})
+                                  .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
+                                  .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
+
+        return hud;
+    }
+
 }// namespace
 
 int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
-    renderer.autoClear = false; // hud
+    renderer.autoClear = false;// hud
 
     auto camera = PerspectiveCamera::create(50, canvas.aspect());
     camera->position.z = 5;
@@ -35,35 +50,24 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    HUD hud(canvas);
-    FontLoader fontLoader;
-    const auto font = fontLoader.defaultFont();
-    TextGeometry::Options opts(font, 20, 5);
-    auto hudText2 = Text2D(opts, "Hello World!");
-    hudText2.setColor(Color::gray);
-    hud.add(hudText2, HUD::Options()
-                              .setNormalizedPosition({1, 1})
-                              .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
-                              .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
-
+    auto hud = createHUD(canvas);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
 
-        hud.setSize(size);
+        hud->setSize(size);
     });
 
     Clock clock;
     float rotationSpeed = 1;
     canvas.animate([&] {
-        auto dt = clock.getDelta();
+        const auto dt = clock.getDelta();
         group->rotation.y += rotationSpeed * dt;
 
-        renderer.clear(); //autoClear is false
+        renderer.clear();//autoClear is false
         renderer.render(*scene, *camera);
-        hud.apply(renderer);
-
+        hud->apply(renderer);
     });
 }

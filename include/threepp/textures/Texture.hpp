@@ -26,8 +26,6 @@ namespace threepp {
 
         unsigned int id = textureId++;
 
-        std::string uuid;
-
         std::string name;
 
         std::vector<Image> image;
@@ -70,6 +68,8 @@ namespace threepp {
 
         std::optional<std::function<void(Texture&)>> onUpdate;
 
+        [[nodiscard]] const std::string& uuid() const;
+
         void updateMatrix();
 
         void dispose();
@@ -98,6 +98,8 @@ namespace threepp {
         explicit Texture(std::vector<Image> image);
 
     private:
+        std::string uuid_;
+
         bool disposed_ = false;
         unsigned int version_ = 0;
 

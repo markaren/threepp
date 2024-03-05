@@ -13,7 +13,7 @@ namespace threepp {
     class Text2D: public Mesh {
 
     public:
-        Text2D(const TextGeometry::Options& opts, const std::string& str, std::shared_ptr<Material> material = nullptr)
+        Text2D(const TextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr)
             : Mesh(TextGeometry::create(str, opts), material ? material : SpriteMaterial::create()) {}
 
         void setColor(const Color& color) {
@@ -29,7 +29,7 @@ namespace threepp {
             setGeometry(geometry);
         }
 
-        static std::shared_ptr<Text2D> create(const TextGeometry::Options& opts, const std::string& str, std::shared_ptr<Material> material = nullptr) {
+        static std::shared_ptr<Text2D> create(const TextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr) {
 
             return std::make_shared<Text2D>(opts, str, material);
         }
@@ -38,7 +38,7 @@ namespace threepp {
     class Text3D: public Mesh {
 
     public:
-        Text3D(const ExtrudeTextGeometry::Options& opts, const std::string& str, std::shared_ptr<Material> material = nullptr)
+        Text3D(const ExtrudeTextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr)
             : Mesh(ExtrudeTextGeometry::create(str, opts), material ? material : MeshBasicMaterial::create()) {}
 
         void setColor(const Color& color) {
@@ -54,7 +54,7 @@ namespace threepp {
             setGeometry(geometry);
         }
 
-        static std::shared_ptr<Text3D> create(const ExtrudeTextGeometry::Options& opts, const std::string& str, std::shared_ptr<Material> material = nullptr) {
+        static std::shared_ptr<Text3D> create(const ExtrudeTextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr) {
 
             return std::make_shared<Text3D>(opts, str, material);
         }
