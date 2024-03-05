@@ -9,7 +9,7 @@ using namespace threepp;
 
 
 Texture::Texture(std::vector<Image> image)
-    : uuid(math::generateUUID()),
+    : uuid_(math::generateUUID()),
       image(std::move(image)) {}
 
 std::shared_ptr<Texture> Texture::create() {
@@ -24,6 +24,11 @@ std::shared_ptr<Texture> Texture::create(const Image& image) {
 std::shared_ptr<Texture> Texture::create(std::vector<Image> image) {
 
     return std::shared_ptr<Texture>(new Texture(std::move(image)));
+}
+
+const std::string& Texture::uuid() const {
+
+    return uuid_;
 }
 
 void Texture::updateMatrix() {

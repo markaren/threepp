@@ -119,9 +119,11 @@ struct GLRenderer::Impl {
     gl::GLInfo _info;
 
     gl::GLProperties properties;
-    gl::GLGeometries geometries;
+
     gl::GLBindingStates bindingStates;
     gl::GLAttributes attributes;
+    gl::GLGeometries geometries;
+
     gl::GLClipping clipping;
     gl::GLTextures textures;
     gl::GLMaterials materials;
@@ -161,7 +163,7 @@ struct GLRenderer::Impl {
         this->setScissor(0, 0, _size.width, _size.height);
     }
 
-    [[nodiscard]] std::optional<unsigned int> getGlTextureId(const Texture& texture) const {
+    [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
 
         return textures.getGlTexture(texture);
     }
@@ -170,12 +172,12 @@ struct GLRenderer::Impl {
 
         releaseMaterialProgramReferences(material);
 
-        properties.materialProperties.remove(material->uuid());
+        properties.materialProperties.remove(material);
     }
 
     void releaseMaterialProgramReferences(Material* material) {
 
-        auto& programs = properties.materialProperties.get(material->uuid())->programs;
+        auto& programs = properties.materialProperties.get(material)->programs;
 
         if (!programs.empty()) {
 
@@ -580,7 +582,7 @@ struct GLRenderer::Impl {
         auto* scene = _scene->as<Scene>();
         if (!scene) scene = _emptyScene.get();// scene could be a Mesh, Line, Points, ...
 
-        auto materialProperties = properties.materialProperties.get(material->uuid());
+        auto materialProperties = properties.materialProperties.get(material);
 
         auto& lights = currentRenderState->getLights();
         auto& shadowsArray = currentRenderState->getShadowsArray();
@@ -686,7 +688,7 @@ struct GLRenderer::Impl {
 
     void updateCommonMaterialProperties(Material* material, gl::ProgramParameters& parameters) {
 
-        auto materialProperties = properties.materialProperties.get(material->uuid());
+        auto materialProperties = properties.materialProperties.get(material);
 
         materialProperties->outputEncoding = parameters.outputEncoding;
         materialProperties->instancing = parameters.instancing;
@@ -730,7 +732,7 @@ struct GLRenderer::Impl {
                             object->geometry()->hasAttribute("color") &&
                             object->geometry()->getAttribute<float>("color")->itemSize() == 4;
 
-        auto materialProperties = properties.materialProperties.get(material->uuid());
+        auto materialProperties = properties.materialProperties.get(material);
         auto& lights = currentRenderState->getLights();
 
         if (_clippingEnabled) {
@@ -1029,7 +1031,7 @@ struct GLRenderer::Impl {
         _currentActiveCubeFace = activeCubeFace;
         _currentActiveMipmapLevel = activeMipmapLevel;
 
-        if (renderTarget && !properties.renderTargetProperties.get(renderTarget->uuid)->glFramebuffer) {
+        if (renderTarget && !properties.renderTargetProperties.get(renderTarget)->glFramebuffer) {
 
             textures.setupRenderTarget(renderTarget);
         }
@@ -1040,7 +1042,7 @@ struct GLRenderer::Impl {
 
             const auto& texture = renderTarget->texture;
 
-            framebuffer = *properties.renderTargetProperties.get(renderTarget->uuid)->glFramebuffer;
+            framebuffer = *properties.renderTargetProperties.get(renderTarget)->glFramebuffer;
 
             _currentViewport.copy(renderTarget->viewport);
             _currentScissor.copy(renderTarget->scissor);
@@ -1140,7 +1142,9 @@ struct GLRenderer::Impl {
         bindingStates.reset();
     }
 
-    ~Impl() = default;
+    ~Impl() {
+        dispose();
+    };
 
     friend struct gl::ProgramParameters;
     friend struct gl::GLShadowMap;
@@ -1354,7 +1358,7 @@ GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
     return pimpl_->_currentRenderTarget;
 }
 
-std::optional<unsigned int> GLRenderer::getGlTextureId(const Texture& texture) const {
+std::optional<unsigned int> GLRenderer::getGlTextureId(Texture& texture) const {
 
     return pimpl_->getGlTextureId(texture);
 }

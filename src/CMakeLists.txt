@@ -170,7 +170,6 @@ set(publicHeaders
 
         "threepp/utils/BufferGeometryUtils.hpp"
         "threepp/utils/StringUtils.hpp"
-        "threepp/utils/ThreadPool.hpp"
 
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
@@ -386,7 +385,6 @@ set(sources
 
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/StringUtils.cpp"
-        "threepp/utils/ThreadPool.cpp"
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/GLRenderTarget.cpp"

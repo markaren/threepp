@@ -38,7 +38,7 @@ namespace threepp {
 
             void destroy();
 
-        private:
+        protected:
             GLBindingStates* bindingStates = nullptr;
             std::unique_ptr<GLUniforms> cachedUniforms;
             std::unordered_map<std::string, int> cachedAttributes;

@@ -6,7 +6,8 @@
 #include "kine/ik/CCDSolver.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/utils/ThreadPool.hpp"
+
+#include <future>
 
 using namespace threepp;
 using namespace kine;
@@ -104,9 +105,9 @@ int main() {
                             .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::CENTER)
                             .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
 
-    utils::ThreadPool pool;
+
     std::shared_ptr<Youbot> youbot;
-    pool.submit([&] {
+    auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
         youbot->add(targetHelper);
         youbot->add(endEffectorHelper);
@@ -185,4 +186,6 @@ int main() {
             hud.apply(renderer);
         }
     });
+
+    future.get();
 }

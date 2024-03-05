@@ -100,7 +100,7 @@ namespace threepp {
             return array_;
         }
 
-        const std::vector<T>& array() const {
+        virtual const std::vector<T>& array() const {
 
             return array_;
         }

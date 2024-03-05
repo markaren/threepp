@@ -105,7 +105,7 @@ namespace threepp {
         Object3D();
 
         Object3D(Object3D&& source) noexcept;
-        Object3D& operator=(Object3D&& other) noexcept;
+        Object3D& operator=(Object3D&& other) = delete;
         Object3D(const Object3D&) = delete;
         Object3D& operator=(const Object3D&) = delete;
 
