@@ -28,3 +28,19 @@ add_library(pathfinding INTERFACE
         "${CMAKE_CURRENT_SOURCE_DIR}/pathfinding/heuristics/ManhattanHeuristic.hpp"
 )
 target_include_directories(pathfinding INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_library(geo-threepp INTERFACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODControl.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODFrustum.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODRadial.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODRaycast.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapNode.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapNodeGeometry.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapPlaneNode.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapProvider.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapView.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/OpenStreetMapsProvider.hpp"
+)
+
+target_include_directories(geo-threepp INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(geo-threepp INTERFACE threepp::threepp)
