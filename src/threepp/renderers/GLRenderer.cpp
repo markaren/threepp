@@ -480,12 +480,12 @@ struct GLRenderer::Impl {
                                 .applyMatrix4(_projScreenMatrix);
                     }
 
-                    auto geometry = objects.update(object);
-                    auto material = sprite->material;
+                    const auto geometry = objects.update(object);
+                    const auto material = sprite->material();
 
                     if (material->visible) {
 
-                        currentRenderList->push(object, geometry, material.get(), groupOrder, _vector3.z, std::nullopt);
+                        currentRenderList->push(object, geometry, material, groupOrder, _vector3.z, std::nullopt);
                     }
                 }
 
