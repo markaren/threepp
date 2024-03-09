@@ -228,11 +228,6 @@ namespace threepp {
             return nullptr;
         }
 
-        [[nodiscard]] virtual const Material* material() const {
-
-            return nullptr;
-        }
-
         template<class T>
         T* as() {
 
