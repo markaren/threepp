@@ -5,7 +5,7 @@
 using namespace threepp;
 
 SpotLightShadow::SpotLightShadow()
-    : LightShadow(PerspectiveCamera::create(50, 1, 0.5f, 500)) {}
+    : LightShadow(std::make_unique<PerspectiveCamera>(50, 1, 0.5f, 500)) {}
 
 void SpotLightShadow::updateMatrices(Light* _light) {
 

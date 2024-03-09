@@ -7,7 +7,7 @@
 using namespace threepp;
 
 
-LightShadow::LightShadow(std::shared_ptr<Camera> camera)
+LightShadow::LightShadow(std::unique_ptr<Camera> camera)
     : camera(std::move(camera)) {}
 
 

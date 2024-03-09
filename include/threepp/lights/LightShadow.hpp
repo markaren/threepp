@@ -17,7 +17,7 @@ namespace threepp {
     class LightShadow {
 
     public:
-        std::shared_ptr<Camera> camera;
+        std::unique_ptr<Camera> camera;
 
         float bias = 0;
         float normalBias = 0;
@@ -61,7 +61,7 @@ namespace threepp {
 
         std::vector<Vector4> _viewports{Vector4(0, 0, 1, 1)};
 
-        explicit LightShadow(std::shared_ptr<Camera> camera);
+        explicit LightShadow(std::unique_ptr<Camera> camera);
     };
 
 }// namespace threepp
