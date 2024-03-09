@@ -248,7 +248,7 @@ void GLLights::setupView(std::vector<Light*>& lights, Camera* camera) {
             direction.setFromMatrixPosition(*light->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(*l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target().matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
@@ -268,7 +268,7 @@ void GLLights::setupView(std::vector<Light*>& lights, Camera* camera) {
             direction.setFromMatrixPosition(*l->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(*l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target().matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 

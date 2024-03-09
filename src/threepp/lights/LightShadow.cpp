@@ -30,7 +30,7 @@ void LightShadow::updateMatrices(Light* light) {
     shadowCamera->position.copy(_lightPositionWorld);
 
     auto lightWithTarget = dynamic_cast<LightWithTarget*>(light);
-    _lookTarget.setFromMatrixPosition(*lightWithTarget->target->matrixWorld);
+    _lookTarget.setFromMatrixPosition(*lightWithTarget->target().matrixWorld);
     shadowCamera->lookAt(_lookTarget);
     shadowCamera->updateMatrixWorld();
 
