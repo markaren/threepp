@@ -18,7 +18,7 @@ struct CameraHelper::Impl {
     explicit Impl(CameraHelper& scope, Camera& camera)
         : scope(scope), camera(camera) {
 
-        auto m = scope.material_->as<LineBasicMaterial>();
+        auto m = scope.material()->as<LineBasicMaterial>();
         m->toneMapped = false;
         m->vertexColors = true;
         m->color = 0xffffff;

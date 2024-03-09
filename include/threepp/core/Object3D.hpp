@@ -228,11 +228,6 @@ namespace threepp {
             return nullptr;
         }
 
-        virtual std::vector<Material*> materials() {
-
-            return {};
-        }
-
         [[nodiscard]] virtual const Material* material() const {
 
             return nullptr;

@@ -511,7 +511,7 @@ struct GLRenderer::Impl {
                     }
 
                     auto geometry = objects.update(object);
-                    const auto& materials = object->materials();
+                    const auto& materials = object->as<ObjectWithMaterials>()->materials();
 
                     if (materials.size() > 1) {
 

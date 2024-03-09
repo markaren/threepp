@@ -213,7 +213,7 @@ struct GLShadowMap::Impl {
                 object->modelViewMatrix.multiplyMatrices(shadowCamera->matrixWorldInverse, *object->matrixWorld);
 
                 const auto geometry = _objects.update(object);
-                const auto material = object->materials();
+                const auto material = object->as<ObjectWithMaterials>()->materials();
 
                 if (material.size() > 1) {
 
