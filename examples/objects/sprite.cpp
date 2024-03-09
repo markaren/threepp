@@ -110,7 +110,7 @@ int main() {
     Sprite* lastPicked = nullptr;
     canvas.animate([&]() {
         if (lastPicked) {
-            lastPicked->material = material;
+            lastPicked->setMaterial(material);
             lastPicked->scale.set(1, 1, 1);
         }
 
@@ -120,12 +120,12 @@ int main() {
         raycaster.setFromCamera(mouse, *camera);
         auto intersects = raycaster.intersectObjects(sprites->children, true);
         if (!intersects.empty()) {
-            auto& intersection = intersects.front();
+            const auto& intersection = intersects.front();
             helper->position.copy(intersection.point);
             helper->visible = true;
 
             lastPicked = intersection.object->as<Sprite>();
-            lastPicked->material = pickMaterial;
+            lastPicked->setMaterial(pickMaterial);
             lastPicked->scale.set(1.2, 1.2, 1.2);
         }
 

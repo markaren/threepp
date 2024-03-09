@@ -15,9 +15,9 @@ PlaneHelper::PlaneHelper(const Plane& plane, float size, const Color& color)
     geometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
     geometry_->computeBoundingSphere();
 
-    auto material = dynamic_cast<LineBasicMaterial*>(material_.get());
-    material->color.copy(color);
-    material->toneMapped = false;
+    auto _material = material()->as<MaterialWithColor>();
+    _material->color.copy(color);
+    _material->toneMapped = false;
 
     std::vector<float> positions2{1, 1, 1, -1, 1, 1, -1, -1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1};
 
