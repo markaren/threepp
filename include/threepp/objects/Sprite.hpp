@@ -16,6 +16,8 @@ namespace threepp {
 
         explicit Sprite(const std::shared_ptr<SpriteMaterial>& material);
 
+        Sprite(Sprite&&) = delete;
+
         [[nodiscard]] std::string type() const override;
 
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;

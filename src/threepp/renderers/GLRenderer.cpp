@@ -754,7 +754,7 @@ struct GLRenderer::Impl {
         bool isInstancedMesh = object->type() == "InstancedMesh";
         bool isSkinnedMesh = object->type() == "SkinnedMesh";
 
-        if (material->version == materialProperties->version) {
+        if (material->version() == materialProperties->version) {
 
             if (materialProperties->needsLights && (materialProperties->lightsStateVersion != lights.state.version)) {
 
@@ -802,7 +802,7 @@ struct GLRenderer::Impl {
         } else {
 
             needsProgramChange = true;
-            materialProperties->version = material->version;
+            materialProperties->version = material->version();
         }
 
         //

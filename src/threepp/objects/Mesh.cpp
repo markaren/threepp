@@ -180,10 +180,6 @@ Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr
     : geometry_(std::move(geometry)), ObjectWithMaterials{std::move(materials)} {
 }
 
-Mesh::Mesh(Mesh&& other) noexcept: Object3D(std::move(other)), ObjectWithMaterials(std::move(other)) {
-    geometry_ = std::move(other.geometry_);
-}
-
 void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     if (material() == nullptr) return;

@@ -64,7 +64,9 @@ namespace threepp {
         Encoding encoding{Encoding::Linear};
 
         Texture(const Texture&) = delete;
-        Texture operator=(const Texture&) = delete;
+        Texture& operator=(const Texture&) = delete;
+        Texture(Texture&&) = delete;
+        Texture& operator=(Texture&&) = delete;
 
         std::optional<std::function<void(Texture&)>> onUpdate;
 
