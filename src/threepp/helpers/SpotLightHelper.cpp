@@ -1,7 +1,7 @@
 
 #include "threepp/helpers/SpotLightHelper.hpp"
 
-#include "threepp/lights/Spotlight.hpp"
+#include "threepp/lights/SpotLight.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/objects/LineSegments.hpp"
 
