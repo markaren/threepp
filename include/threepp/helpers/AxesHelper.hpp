@@ -11,8 +11,6 @@ namespace threepp {
     class AxesHelper: public LineSegments {
 
     public:
-        ~AxesHelper() override;
-
         static std::shared_ptr<AxesHelper> create(float size);
 
     protected:

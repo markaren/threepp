@@ -13,12 +13,13 @@ namespace threepp {
                           public MaterialWithLights,
                           public MaterialWithWireframe,
                           public MaterialWithLineWidth,
+                          public MaterialWithEnvMap,
                           public MaterialWithDefines {
 
     public:
         std::string vertexShader;
         std::string fragmentShader;
-        std::shared_ptr<UniformMap> uniforms;
+        UniformMap uniforms;
 
         std::optional<std::string> index0AttributeName;
         bool uniformsNeedUpdate = false;

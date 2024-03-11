@@ -35,12 +35,12 @@ namespace threepp::gl {
 
     struct GLRenderStates {
 
-        std::shared_ptr<GLRenderState> get(Scene* scene, size_t renderCallDepth = 1);
+        GLRenderState* get(Object3D* scene, size_t renderCallDepth = 1);
 
         void dispose();
 
     private:
-        std::unordered_map<std::string, std::vector<std::shared_ptr<GLRenderState>>> renderStates_;
+        std::unordered_map<std::string, std::vector<std::unique_ptr<GLRenderState>>> renderStates_;
     };
 
 }// namespace threepp::gl

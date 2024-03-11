@@ -62,7 +62,7 @@ int main() {
     scene->add(helper);
 
     auto target = Object3D::create();
-    light->target = target;
+    light->setTarget(*target);
     scene->add(target);
 
     auto knot = createTorusKnot();

@@ -28,8 +28,8 @@ namespace threepp::shaders {
                 {"specularMap", Uniform()}};
 
         UniformMap envmap{
-                {"envmap", Uniform()},
-                {"flipEnvMap", Uniform(-1)},
+                {"envMap", Uniform()},
+                {"flipEnvMap", Uniform(false)},
                 {"reflectivity", Uniform(1.f)},
                 {"refractionRatio", Uniform(0.98f)},
                 {"maxMipMapLevel", Uniform(0)}};

@@ -76,7 +76,7 @@ namespace threepp::gl {
               maxFragmentUniforms(glGetParameteri(GL_MAX_FRAGMENT_UNIFORM_VECTORS)),
 
               vertexTextures(maxVertexTextures > 0),
-              floatFragmentTextures(GLAD_GL_ARB_texture_float),
+              floatFragmentTextures(GL_ARB_texture_float),
               floatVertexTextures(vertexTextures && floatFragmentTextures),
 
               maxSamples(glGetParameteri(GL_MAX_SAMPLES)) {}

@@ -12,14 +12,17 @@ namespace threepp {
     class InstancedMesh: public Mesh {
 
     public:
-        const size_t count;
-        std::unique_ptr<FloatBufferAttribute> instanceMatrix;
-        std::unique_ptr<FloatBufferAttribute> instanceColor = nullptr;
 
         InstancedMesh(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
                 size_t count);
+
+        [[nodiscard]] size_t count() const;
+
+        FloatBufferAttribute* instanceMatrix() const;
+
+        FloatBufferAttribute* instanceColor() const;
 
         [[nodiscard]] std::string type() const override;
 
@@ -33,7 +36,7 @@ namespace threepp {
 
         void dispose();
 
-        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
@@ -43,7 +46,13 @@ namespace threepp {
         ~InstancedMesh() override;
 
     private:
+        Mesh _mesh;
         bool disposed{false};
+
+        size_t count_;
+        std::unique_ptr<FloatBufferAttribute> instanceMatrix_;
+        std::unique_ptr<FloatBufferAttribute> instanceColor_ = nullptr;
+
     };
 
 }// namespace threepp

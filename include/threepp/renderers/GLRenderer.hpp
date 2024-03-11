@@ -134,7 +134,7 @@ namespace threepp {
 
         void dispose();
 
-        void render(Scene& scene, Camera& camera);
+        void render(Object3D& scene, Camera& camera);
 
         void renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group);
 
@@ -142,9 +142,9 @@ namespace threepp {
 
         [[nodiscard]] int getActiveMipmapLevel() const;
 
-        std::shared_ptr<GLRenderTarget>& getRenderTarget();
+        GLRenderTarget* getRenderTarget();
 
-        void setRenderTarget(const std::shared_ptr<GLRenderTarget>& renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
+        void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0);
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
@@ -153,6 +153,8 @@ namespace threepp {
         void resetState();
 
         [[nodiscard]] const gl::GLInfo& info() const;
+
+        [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const;
 
         ~GLRenderer();
 

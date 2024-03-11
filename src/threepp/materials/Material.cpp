@@ -8,12 +8,19 @@
 
 using namespace threepp;
 
+
 Material::Material()
     : uuid_(math::generateUUID()) {}
+
 
 std::string Material::uuid() const {
 
     return uuid_;
+}
+
+unsigned int Material::version() const {
+
+    return version_;
 }
 
 void Material::dispose() {
@@ -25,7 +32,7 @@ void Material::dispose() {
 
 void Material::needsUpdate() {
 
-    this->version++;
+    this->version_++;
 }
 
 void Material::copyInto(Material* m) const {
@@ -135,7 +142,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "opacity") {
 
-            opacity = std::get<float>(value);
+            opacity = extractFloat(value);
             used = true;
 
         } else if (key == "transparent") {
@@ -244,12 +251,12 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "polygonOffsetFactor") {
 
-            polygonOffsetFactor = std::get<float>(value);
+            polygonOffsetFactor = extractFloat(value);
             used = true;
 
         } else if (key == "polygonOffsetUnits") {
 
-            polygonOffsetUnits = std::get<float>(value);
+            polygonOffsetUnits = extractFloat(value);
             used = true;
 
         } else if (key == "dithering") {
@@ -259,7 +266,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
 
         } else if (key == "alphaTest") {
 
-            alphaTest = std::get<float>(value);
+            alphaTest = extractFloat(value);
             used = true;
 
         } else if (key == "alphaToCoverage") {

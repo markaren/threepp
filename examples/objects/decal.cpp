@@ -61,7 +61,7 @@ namespace {
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
-            auto& size = canvas.size();
+            auto size = canvas.size();
             mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
             mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
         }
@@ -141,7 +141,7 @@ int main() {
     scene->add(line);
 
     MyMouseListener mouseListener(canvas);
-    canvas.addMouseListener(&mouseListener);
+    canvas.addMouseListener(mouseListener);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -192,7 +192,7 @@ int main() {
 
                 Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
-                auto mat = decalMat->clone()->as<MeshPhongMaterial>();
+                auto mat = decalMat->clone()->as_shared<MeshPhongMaterial>();
                 mat->color.randomize();
                 orientation.z = math::PI * math::randFloat();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);

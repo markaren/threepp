@@ -6,8 +6,9 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("LOD");
+    Canvas canvas("LOD", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
+    renderer.autoClear = false;
 
     Scene scene;
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 10);
@@ -32,14 +33,20 @@ int main() {
         renderer.setSize(size);
     });
 
-    TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle();
+    HUD hud(canvas);
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/gentilis_bold.typeface.json");
+
+    TextGeometry::Options opts(font, 20, 5);
+    auto handle = Text2D(opts, "");
+    handle.setColor(Color::gray);
+    hud.add(handle);
 
     canvas.animate([&]() {
-        handle.setText("LOD level: " + std::to_string(lod.getCurrentLevel()));
+        handle.setText("LOD level: " + std::to_string(lod.getCurrentLevel()), opts);
 
+        renderer.clear();
         renderer.render(scene, camera);
-        renderer.resetState();
-        textRenderer.render();
+        hud.apply(renderer);
     });
 }

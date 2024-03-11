@@ -62,14 +62,14 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
         unsigned int groupOrder, float z, std::optional<GeometryGroup> group) {
 
     gl::RenderItem* renderItem = nullptr;
-    auto materialProperties = properties.materialProperties.get(material->uuid());
+    auto materialProperties = properties.materialProperties.get(material);
 
     if (renderItemsIndex >= renderItems.size()) {
         auto r = std::make_unique<RenderItem>(RenderItem{object->id,
                                                          object,
                                                          geometry,
                                                          material,
-                                                         materialProperties->program.get(),
+                                                         materialProperties->program,
                                                          groupOrder,
                                                          object->renderOrder,
                                                          z,
@@ -86,7 +86,7 @@ gl::RenderItem* gl::GLRenderList::getNextRenderItem(
         renderItem->geometry = geometry;
         renderItem->material = material;
         if (materialProperties->program) {
-            renderItem->program = materialProperties->program.get();
+            renderItem->program = materialProperties->program;
         }
         renderItem->groupOrder = groupOrder;
         renderItem->renderOrder = object->renderOrder;
@@ -162,24 +162,24 @@ void GLRenderList::finish() {
 
 GLRenderLists::GLRenderLists(GLProperties& properties): properties(properties) {}
 
-std::shared_ptr<GLRenderList> GLRenderLists::get(Scene* scene, size_t renderCallDepth) {
+GLRenderList* GLRenderLists::get(Object3D* scene, size_t renderCallDepth) {
 
     if (!lists.count(scene->uuid)) {
 
-        auto& l = lists[scene->uuid] = std::vector<std::shared_ptr<GLRenderList>>{std::make_shared<GLRenderList>(properties)};
-        return l.back();
+        auto& l = lists[scene->uuid].emplace_back(std::make_unique<GLRenderList>(properties));
+        return l.get();
 
     } else {
 
         auto& l = lists.at(scene->uuid);
         if (renderCallDepth >= l.size()) {
 
-            l.emplace_back(std::make_shared<GLRenderList>(properties));
-            return l.back();
+            l.emplace_back(std::make_unique<GLRenderList>(properties));
+            return l.back().get();
 
         } else {
 
-            return l.at(renderCallDepth);
+            return l.at(renderCallDepth).get();
         }
     }
 }

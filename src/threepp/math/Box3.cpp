@@ -138,9 +138,25 @@ void Box3::getCenter(Vector3& target) const {
     this->isEmpty() ? target.set(0, 0, 0) : target.addVectors(this->min_, this->max_).multiplyScalar(0.5f);
 }
 
+Vector3 Box3::getCenter() const {
+
+    Vector3 target;
+    getCenter(target);
+
+    return target;
+}
+
 void Box3::getSize(Vector3& target) const {
 
     this->isEmpty() ? target.set(0, 0, 0) : target.subVectors(this->max_, this->min_);
+}
+
+Vector3 Box3::getSize() const {
+
+    Vector3 target;
+    getSize(target);
+
+    return target;
 }
 
 Box3& Box3::expandByPoint(const Vector3& point) {

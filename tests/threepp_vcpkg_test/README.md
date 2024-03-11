@@ -16,10 +16,17 @@ Under MinGW you'll need to additionally specify the vcpkg triplet:
 -DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
 ```
 
+###### Building with Emscripten
+
+Additionally pass:
+```shell
+-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
+```
+to CMake. This will generate a .html file to be loaded in a browser.
+
+
 ### Updating threepp
 
 In order to update `threepp`, replace the baseline value in [vcpkg-configuration.json](vcpkg-configuration.json).
 The baseline should point to a [commit](https://github.com/Ecos-platform/vcpkg-registry/commits/main)
 from the [custom vcpkg registry](https://github.com/Ecos-platform/vcpkg-registry) that hosts the port.
-
-In the future, it could be added to the main vcpkg registry.

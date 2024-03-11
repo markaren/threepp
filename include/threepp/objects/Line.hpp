@@ -6,6 +6,7 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/objects/ObjectWithMaterials.hpp"
 
 #include <memory>
 #include <utility>
@@ -13,22 +14,22 @@
 
 namespace threepp {
 
-    class Line: public Object3D {
+    class Line: public virtual Object3D, public ObjectWithMaterials {
 
     public:
         Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
+
+        Line(Line&&) = delete;
 
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
 
-        Material* material() override;
-
-        std::vector<Material*> materials() override;
+        void setGeometry(const std::shared_ptr<BufferGeometry>& geometry);
 
         virtual void computeLineDistances();
 
-        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         std::shared_ptr<Object3D> clone(bool recursive = true) override;
 
@@ -36,7 +37,6 @@ namespace threepp {
 
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
-        std::shared_ptr<Material> material_;
     };
 
 }// namespace threepp

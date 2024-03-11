@@ -1,19 +1,13 @@
 
-add_executable(stl_loader stl_loader.cpp)
-target_link_libraries(stl_loader PRIVATE threepp)
+add_example(NAME "stl_loader" WEB WEB_EMBED
+        "../data/models/stl/pr2_head_pan.stl@data/models/stl/pr2_head_pan.stl"
+)
+add_example(NAME "obj_loader" WEB WEB_EMBED
+        "../data/models/obj/female02@data/models/obj/female02"
+        "../data/textures/uv_grid_opengl.jpg@data/textures/uv_grid_opengl.jpg"
+)
+add_example(NAME "assimp_loader" LINK_ASSIMP)
 
-add_executable(obj_loader obj_loader.cpp)
-target_link_libraries(obj_loader PRIVATE threepp)
-
-if (assimp_FOUND)
-    add_executable(assimp_loader assimp_loader.cpp)
-    target_link_libraries(assimp_loader PRIVATE threepp assimp::assimp)
-endif ()
-
-if (pugixml_FOUND)
-    add_executable(svg_loader svg_loader.cpp)
-    target_link_libraries(svg_loader PRIVATE threepp pugixml::pugixml)
-    if (imgui_FOUND)
-        target_link_libraries(svg_loader PRIVATE imgui::imgui)
-    endif ()
+if (THREEPP_WITH_SVG)
+    add_example(NAME "svg_loader" TRY_LINK_IMGUI)
 endif ()

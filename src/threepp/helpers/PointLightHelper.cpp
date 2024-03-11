@@ -1,6 +1,7 @@
 
 #include "threepp/helpers/PointLightHelper.hpp"
 
+#include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 
@@ -8,7 +9,7 @@ using namespace threepp;
 
 
 PointLightHelper::PointLightHelper(PointLight& light, float sphereSize, std::optional<Color> color)
-    : Mesh(nullptr, nullptr), light(light), color(color) {
+    : Mesh(nullptr, nullptr), light(&light), color(color) {
 
     geometry_ = SphereGeometry::create(sphereSize, 4, 2);
 
@@ -18,9 +19,9 @@ PointLightHelper::PointLightHelper(PointLight& light, float sphereSize, std::opt
     material->toneMapped = false;
     this->materials_[0] = std::move(material);
 
-    this->light.updateMatrixWorld();
+    this->light->updateMatrixWorld();
 
-    this->matrix = this->light.matrixWorld;
+    this->matrix = this->light->matrixWorld;
     this->matrixAutoUpdate = false;
 
     update();
@@ -39,6 +40,6 @@ void PointLightHelper::update() {
 
     } else {
 
-        this->material()->as<MaterialWithColor>()->color.copy(this->light.color);
+        this->material()->as<MaterialWithColor>()->color.copy(this->light->color);
     }
 }

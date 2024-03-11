@@ -22,10 +22,10 @@ namespace threepp::gl {
 
             if (lights.count(light.id)) {
 
-                return lights.at(light.id).get();
+                return &lights.at(light.id);
             }
 
-            auto type = light.type();
+            const auto type = light.type();
             LightUniforms uniforms;
             if (type == "DirectionalLight") {
 
@@ -60,13 +60,13 @@ namespace threepp::gl {
                         {"groundColor", Color()}};
             }
 
-            lights[light.id] = std::make_unique<LightUniforms>(uniforms);
+            lights[light.id] = LightUniforms(uniforms);
 
-            return lights.at(light.id).get();
+            return &lights.at(light.id);
         }
 
     private:
-        std::unordered_map<unsigned int, std::unique_ptr<LightUniforms>> lights;
+        std::unordered_map<unsigned int, LightUniforms> lights;
     };
 
     struct ShadowUniformsCache {
@@ -75,10 +75,10 @@ namespace threepp::gl {
 
             if (lights.count(light.id)) {
 
-                return lights.at(light.id).get();
+                return &lights.at(light.id);
             }
 
-            auto type = light.type();
+            const auto type = light.type();
             LightUniforms uniforms;
             if (type == "DirectionalLight") {
 
@@ -107,13 +107,13 @@ namespace threepp::gl {
                         {"shadowCameraFar", 1000.f}};
             }
 
-            lights[light.id] = std::make_unique<LightUniforms>(uniforms);
+            lights[light.id] = LightUniforms(uniforms);
 
-            return lights.at(light.id).get();
+            return &lights.at(light.id);
         }
 
     private:
-        std::unordered_map<unsigned int, std::unique_ptr<LightUniforms>> lights;
+        std::unordered_map<unsigned int, LightUniforms> lights;
     };
 
 

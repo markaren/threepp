@@ -3,6 +3,7 @@
 #include "threepp/core/Raycaster.hpp"
 
 #include <cmath>
+#include <memory>
 
 using namespace threepp;
 
@@ -18,7 +19,7 @@ namespace {
             unsigned int index,
             float localThresholdSq,
             const Matrix4& matrixWorld,
-            Raycaster& raycaster,
+            const Raycaster& raycaster,
             std::vector<Intersection>& intersects,
             Object3D* object) {
 
@@ -48,8 +49,7 @@ namespace {
 }// namespace
 
 Points::Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-    : geometry_(std::move(geometry)), material_(std::move(material)) {
-}
+    : geometry_(std::move(geometry)), ObjectWithMaterials({std::move(material)}) {}
 
 std::string Points::type() const {
 
@@ -61,18 +61,12 @@ BufferGeometry* Points::geometry() {
     return geometry_.get();
 }
 
-Material* Points::material() {
-
-    return material_.get();
-}
-
-std::vector<Material*> Points::materials() {
-
-    return {material_.get()};
+void Points::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+    this->geometry_ = geometry;
 }
 
 std::shared_ptr<Object3D> Points::clone(bool recursive) {
-    auto clone = create(geometry_, material_);
+    auto clone = create(geometry_, materials_.front());
     clone->copy(*this, recursive);
 
     return clone;
@@ -80,10 +74,10 @@ std::shared_ptr<Object3D> Points::clone(bool recursive) {
 
 std::shared_ptr<Points> Points::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
 
-    return std::shared_ptr<Points>(new Points(std::move(geometry), std::move(material)));
+    return std::make_shared<Points>(std::move(geometry), std::move(material));
 }
 
-void Points::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Points::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto geometry = this->geometry();
     const auto threshold = raycaster.params.pointsThreshold;

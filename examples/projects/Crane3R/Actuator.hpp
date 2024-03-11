@@ -2,8 +2,6 @@
 #ifndef THREEPP_ACTUATOR_HPP
 #define THREEPP_ACTUATOR_HPP
 
-#include "utility/PID.hpp"
-
 #include "threepp/core/Object3D.hpp"
 #include "threepp/math/Vector3.hpp"
 
@@ -65,11 +63,11 @@ public:
     float getProcessOutput() override {
         switch (axis_) {
             case X:
-                return obj_->rotation.x();
+                return obj_->rotation.x;
             case Y:
-                return obj_->rotation.y();
+                return obj_->rotation.y;
             case Z:
-                return obj_->rotation.z();
+                return obj_->rotation.z;
             default:
                 throw std::runtime_error("");
         }

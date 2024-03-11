@@ -14,8 +14,6 @@ namespace {
 
     std::vector<Intersection> _instanceIntersects;
 
-    auto _mesh = Mesh::create();
-
 }// namespace
 
 
@@ -24,9 +22,24 @@ InstancedMesh::InstancedMesh(
         std::shared_ptr<Material> material,
         size_t count)
     : Mesh(std::move(geometry), std::move(material)),
-      count(count), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
+      count_(count), instanceMatrix_(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
 
     this->frustumCulled = false;
+}
+
+size_t InstancedMesh::count() const {
+
+    return count_;
+}
+
+FloatBufferAttribute* InstancedMesh::instanceMatrix() const {
+
+    return instanceMatrix_.get();
+}
+
+FloatBufferAttribute* InstancedMesh::instanceColor() const {
+
+    return instanceColor_ ? instanceColor_.get() : nullptr;
 }
 
 
@@ -37,27 +50,27 @@ std::string InstancedMesh::type() const {
 
 void InstancedMesh::getColorAt(size_t index, Color& color) const {
 
-    color.fromArray(this->instanceColor->array(), index * 3);
+    color.fromArray(this->instanceColor_->array(), index * 3);
 }
 
 void InstancedMesh::getMatrixAt(size_t index, Matrix4& matrix) const {
 
-    matrix.fromArray(this->instanceMatrix->array(), index * 16);
+    matrix.fromArray(this->instanceMatrix_->array(), index * 16);
 }
 
 void InstancedMesh::setColorAt(size_t index, const Color& color) {
 
-    if (!this->instanceColor) {
+    if (!this->instanceColor_) {
 
-        this->instanceColor = FloatBufferAttribute ::create(std::vector<float>(count * 3), 3);
+        this->instanceColor_ = FloatBufferAttribute ::create(std::vector<float>(count_ * 3), 3);
     }
 
-    color.toArray(this->instanceColor->array(), index * 3);
+    color.toArray(this->instanceColor_->array(), index * 3);
 }
 
 void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {
 
-    matrix.toArray(this->instanceMatrix->array(), index * 16);
+    matrix.toArray(this->instanceMatrix_->array(), index * 16);
 }
 
 void InstancedMesh::dispose() {
@@ -68,15 +81,15 @@ void InstancedMesh::dispose() {
     }
 }
 
-void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void InstancedMesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto& matrixWorld = this->matrixWorld;
-    const auto raycastTimes = this->count;
+    const auto raycastTimes = this->count_;
 
-    _mesh->setGeometry(geometry_);
-    _mesh->setMaterials(materials_);
+    _mesh.setGeometry(geometry_);
+    _mesh.setMaterials(materials_);
 
-    if (!_mesh->material()) return;
+    if (!_mesh.material()) return;
 
     for (int instanceId = 0; instanceId < raycastTimes; instanceId++) {
 
@@ -88,9 +101,9 @@ void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& int
 
         // the mesh represents this single instance
 
-        _mesh->matrixWorld->copy(_instanceWorldMatrix);
+        _mesh.matrixWorld->copy(_instanceWorldMatrix);
 
-        _mesh->raycast(raycaster, _instanceIntersects);
+        _mesh.raycast(raycaster, _instanceIntersects);
 
         // process the result of raycast
 

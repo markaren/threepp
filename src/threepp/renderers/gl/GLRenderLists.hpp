@@ -67,14 +67,14 @@ namespace threepp::gl {
 
         explicit GLRenderLists(GLProperties& properties);
 
-        std::shared_ptr<GLRenderList> get(Scene* scene, size_t renderCallDepth);
+        GLRenderList* get(Object3D* scene, size_t renderCallDepth);
 
         void dispose();
 
     private:
         GLProperties& properties;
 
-        std::unordered_map<std::string, std::vector<std::shared_ptr<GLRenderList>>> lists;
+        std::unordered_map<std::string, std::vector<std::unique_ptr<GLRenderList>>> lists;
     };
 
 }// namespace threepp::gl

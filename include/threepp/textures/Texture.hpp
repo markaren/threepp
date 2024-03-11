@@ -26,14 +26,12 @@ namespace threepp {
 
         unsigned int id = textureId++;
 
-        std::string uuid;
-
         std::string name;
 
-        std::optional<Image> image;
+        std::vector<Image> image;
         std::vector<Image> mipmaps;
 
-        std::optional<Mapping> mapping = Texture::DEFAULT_MAPPING;
+        Mapping mapping = Texture::DEFAULT_MAPPING;
 
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};
         TextureWrapping wrapT{TextureWrapping::ClampToEdge};
@@ -66,9 +64,13 @@ namespace threepp {
         Encoding encoding{Encoding::Linear};
 
         Texture(const Texture&) = delete;
-        Texture operator=(const Texture&) = delete;
+        Texture& operator=(const Texture&) = delete;
+        Texture(Texture&&) = delete;
+        Texture& operator=(Texture&&) = delete;
 
         std::optional<std::function<void(Texture&)>> onUpdate;
+
+        [[nodiscard]] const std::string& uuid() const;
 
         void updateMatrix();
 
@@ -86,12 +88,18 @@ namespace threepp {
 
         ~Texture() override;
 
-        static std::shared_ptr<Texture> create(std::optional<Image> image = std::nullopt);
+        static std::shared_ptr<Texture> create();
+
+        static std::shared_ptr<Texture> create(const Image& image);
+
+        static std::shared_ptr<Texture> create(std::vector<Image> image);
 
     protected:
-        explicit Texture(std::optional<Image> image = std::nullopt);
+        explicit Texture(std::vector<Image> image);
 
     private:
+        std::string uuid_;
+
         bool disposed_ = false;
         unsigned int version_ = 0;
 

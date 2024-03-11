@@ -191,13 +191,16 @@ namespace threepp {
         RGBM16 = 3005,
         RGBD = 3006
     };
+
     enum class DepthPacking {
         Basic = 3200,
         RGBA = 3201
     };
 
-    const int TangentSpaceNormalMap = 0;
-    const int ObjectSpaceNormalMap = 1;
+    enum class NormalMapType {
+        TangentSpace = 0,
+        ObjectSpace = 1
+    };
 
     enum class StencilOp {
         Zero = 0,

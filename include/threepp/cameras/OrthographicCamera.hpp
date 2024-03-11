@@ -18,13 +18,13 @@ namespace threepp {
     class OrthographicCamera: public Camera {
 
     public:
-        int left;
-        int right;
-        int top;
-        int bottom;
+        float left;
+        float right;
+        float top;
+        float bottom;
 
-        explicit OrthographicCamera(int left = -1, int right = 1,
-                                    int top = 1, int bottom = -1,
+        explicit OrthographicCamera(float left = -1, float right = 1,
+                                    float top = 1, float bottom = -1,
                                     float near = 0.1f, float far = 2000);
 
         // Sets an offset in a larger viewing frustum.
@@ -38,8 +38,8 @@ namespace threepp {
         void updateProjectionMatrix() override;
 
         static std::shared_ptr<OrthographicCamera> create(
-                int left = -1, int right = 1,
-                int top = 1, int bottom = -1,
+                float left = -1, float right = 1,
+                float top = 1, float bottom = -1,
                 float near = 0.1f, float far = 2000);
     };
 

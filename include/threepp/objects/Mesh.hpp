@@ -6,44 +6,30 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/objects/ObjectWithMaterials.hpp"
 #include "threepp/objects/ObjectWithMorphTargetInfluences.hpp"
 
 
 namespace threepp {
 
     // Class representing triangular polygon mesh based objects.
-    class Mesh: public Object3D, public ObjectWithMorphTargetInfluences {
+    class Mesh: public virtual Object3D, public ObjectWithMorphTargetInfluences, public ObjectWithMaterials {
 
     public:
-        Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material);
+        explicit Mesh(std::shared_ptr<BufferGeometry> geometry = nullptr, std::shared_ptr<Material> material = nullptr);
         Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials);
 
-        Mesh(Mesh&& other) noexcept;
+        Mesh(Mesh&& other) = delete;
 
         [[nodiscard]] std::string type() const override;
 
         BufferGeometry* geometry() override;
 
-        std::shared_ptr<BufferGeometry> shared_geometry() {
-
-            return geometry_;
-        }
-
         [[nodiscard]] const BufferGeometry* geometry() const;
 
         void setGeometry(const std::shared_ptr<BufferGeometry>& geometry);
 
-        Material* material() override;
-
-        [[nodiscard]] std::vector<Material*> materials() override;
-
-        void setMaterial(const std::shared_ptr<Material>& material);
-
-        void setMaterials(const std::vector<std::shared_ptr<Material>>& materials);
-
-        [[nodiscard]] size_t numMaterials() const;
-
-        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         std::shared_ptr<Object3D> clone(bool recursive = true) override;
 
@@ -59,7 +45,6 @@ namespace threepp {
 
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
-        std::vector<std::shared_ptr<Material>> materials_;
     };
 
 }// namespace threepp

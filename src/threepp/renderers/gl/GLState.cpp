@@ -2,10 +2,12 @@
 #include "threepp/renderers/gl/GLState.hpp"
 
 #include "threepp/renderers/gl/GLUtils.hpp"
-
 #include "threepp/materials/Material.hpp"
 
-#include <cstdint>
+#if EMSCRIPTEN
+#include <GLES3/gl32.h>
+#endif
+
 #include <iostream>
 
 using namespace threepp;

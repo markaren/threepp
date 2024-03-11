@@ -7,7 +7,11 @@
 
 #include "threepp/core/InstancedBufferGeometry.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GL/glew.h>
+#endif
 
 #include <unordered_map>
 
@@ -65,7 +69,7 @@ struct GLGeometries::Impl {
     GLAttributes& attributes_;
     GLBindingStates& bindingStates_;
 
-    std::shared_ptr<OnGeometryDispose> onGeometryDispose_;
+    OnGeometryDispose onGeometryDispose_;
 
     std::unordered_map<BufferGeometry*, bool> geometries_;
     std::unordered_map<BufferGeometry*, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;
@@ -74,13 +78,13 @@ struct GLGeometries::Impl {
         : info_(info),
           attributes_(attributes),
           bindingStates_(bindingStates),
-          onGeometryDispose_(std::make_shared<OnGeometryDispose>(this)) {}
+          onGeometryDispose_(this) {}
 
     void get(Object3D* object, BufferGeometry* geometry) {
 
         if (geometries_.count(geometry) && geometries_.at(geometry)) return;
 
-        geometry->addEventListener("dispose", onGeometryDispose_);
+        geometry->addEventListener("dispose", &onGeometryDispose_);
 
         geometries_[geometry] = true;
 
@@ -187,6 +191,14 @@ struct GLGeometries::Impl {
         }
 
         return wireframeAttributes_.at(geometry).get();
+    }
+
+    ~Impl() {
+
+        auto copy = geometries_;
+        for (auto [geom, _] : copy) {
+            geom->dispose();
+        }
     }
 };
 

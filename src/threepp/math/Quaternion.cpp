@@ -18,13 +18,13 @@ Quaternion::Quaternion(float x, float y, float z, float w)
 float Quaternion::operator[](unsigned int index) const {
     switch (index) {
         case 0:
-            return x();
+            return x;
         case 1:
-            return y();
+            return y;
         case 2:
-            return z();
+            return z;
         case 3:
-            return w();
+            return w;
         default:
             throw std::runtime_error("index out of bound: " + std::to_string(index));
     }
@@ -44,10 +44,10 @@ Quaternion& Quaternion::set(float x, float y, float z, float w) {
 
 Quaternion& Quaternion::copy(const Quaternion& quaternion) {
 
-    this->x.value_ = quaternion.x();
-    this->y.value_ = quaternion.y();
-    this->z.value_ = quaternion.z();
-    this->w.value_ = quaternion.w();
+    this->x.value_ = quaternion.x;
+    this->y.value_ = quaternion.y;
+    this->z.value_ = quaternion.z;
+    this->w.value_ = quaternion.w;
 
     this->onChangeCallback_();
 
@@ -56,7 +56,7 @@ Quaternion& Quaternion::copy(const Quaternion& quaternion) {
 
 Quaternion& Quaternion::setFromEuler(const Euler& euler, bool update) {
 
-    const auto x = euler.x(), y = euler.y(), z = euler.z();
+    const auto x = euler.x, y = euler.y, z = euler.z;
     const auto order = euler.order_;
 
     // http://www.mathworks.com/matlabcentral/fileexchange/
@@ -323,6 +323,11 @@ Quaternion& Quaternion::slerp(const Quaternion& qb, float t) {
     return *this;
 }
 
+void Quaternion::slerpQuaternions(const Quaternion& qa, const Quaternion& qb, float t) {
+
+    copy(qa).slerp(qb, t);
+}
+
 Quaternion& Quaternion::identity() {
 
     return this->set(0, 0, 0, 1);
@@ -401,8 +406,8 @@ Quaternion& Quaternion::multiplyQuaternions(const Quaternion& a, const Quaternio
 
     // from http://www.euclideanspace.com/maths/algebra/realNormedAlgebra/quaternions/code/index.htm
 
-    const auto qax = a.x(), qay = a.y(), qaz = a.z(), qaw = a.w();
-    const auto qbx = b.x(), qby = b.y(), qbz = b.z(), qbw = b.w();
+    const auto qax = a.x, qay = a.y, qaz = a.z, qaw = a.w;
+    const auto qbx = b.x, qby = b.y, qbz = b.z, qbw = b.w;
 
     this->x.value_ = qax * qbw + qaw * qbx + qay * qbz - qaz * qby;
     this->y.value_ = qay * qbw + qaw * qby + qaz * qbx - qax * qbz;
@@ -421,7 +426,7 @@ Quaternion Quaternion::clone() const {
 
 bool Quaternion::equals(const Quaternion& v) const {
 
-    return ((v.x() == this->x()) && (v.y() == this->y()) && (v.z() == this->z()) && (v.w() == this->w()));
+    return ((v.x == this->x) && (v.y == this->y) && (v.z == this->z) && (v.w == this->w));
 }
 
 Quaternion& Quaternion::_onChange(std::function<void()> callback) {

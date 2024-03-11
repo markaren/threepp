@@ -4,13 +4,12 @@
 
 #include <cmath>
 
+
 using namespace threepp;
 
 namespace {
 
     struct CustomSineCurve: Curve3 {
-
-        float scale;
 
         explicit CustomSineCurve(float scale): scale(scale) {}
 
@@ -21,8 +20,11 @@ namespace {
 
             target.set(tx, ty, tz).multiplyScalar(scale);
         }
-    };
 
+    private:
+        float scale;
+
+    };
 
     auto createBox(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = BoxGeometry::create();

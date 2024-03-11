@@ -76,7 +76,7 @@ ShaderLib::ShaderLib()
                                               {"emissive", Uniform(Color(0x000000))},
                                               {"roughness", Uniform(1.f)},
                                               {"metalness", Uniform(0.f)},
-                                              {"envMapIntensity", Uniform(1)}
+                                              {"envMapIntensity", Uniform(1.f)}
                                       }
                               }),// clang-format on
 

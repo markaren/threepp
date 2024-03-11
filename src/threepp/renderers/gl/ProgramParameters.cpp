@@ -87,7 +87,7 @@ ProgramParameters::ProgramParameters(
 
     auto instancedMesh = dynamic_cast<InstancedMesh*>(object);
     instancing = instancedMesh != nullptr;
-    instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor != nullptr;
+    instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor() != nullptr;
 
     supportsVertexTextures = GLCapabilities::instance().vertexTextures;
     outputEncoding = renderer.outputEncoding;
@@ -97,8 +97,8 @@ ProgramParameters::ProgramParameters(
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
     envMap = envmapMaterial && envmapMaterial->envMap;
-    if (envMap && envmapMaterial->envMap->mapping){
-        envMapMode = as_integer(*envmapMaterial->envMap->mapping);
+    if (envMap){
+        envMapMode = as_integer(envmapMaterial->envMap->mapping);
     }
     envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
     envMapCubeUV = envMapMode != 0 &&
@@ -111,8 +111,8 @@ ProgramParameters::ProgramParameters(
     emissiveMapEncoding = getTextureEncodingFromMap(emissiveMap ? emissiveMaterial->emissiveMap : nullptr);
     bumpMap = bumpmapMaterial && bumpmapMaterial->bumpMap;
     normalMap = normalMaterial && normalMaterial->normalMap;
-    objectSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == ObjectSpaceNormalMap;
-    tangentSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == TangentSpaceNormalMap;
+    objectSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == NormalMapType::ObjectSpace;
+    tangentSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == NormalMapType::TangentSpace;
     clearcoatMap = false;         //TODO
     clearcoatRoughnessMap = false;//TODO
     clearcoatNormalMap = false;   //TODO

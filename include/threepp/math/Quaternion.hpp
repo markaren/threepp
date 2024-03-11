@@ -63,6 +63,8 @@ namespace threepp {
 
         Quaternion& slerp(const Quaternion& qb, float t);
 
+        void slerpQuaternions(const Quaternion& qa, const Quaternion& qb, float t );
+
         [[nodiscard]] Quaternion clone() const;
 
         [[nodiscard]] bool equals(const Quaternion& v) const;
@@ -89,10 +91,10 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike& array, unsigned int offset = 0) const {
 
-            array[offset] = this->x();
-            array[offset + 1] = this->y();
-            array[offset + 2] = this->z();
-            array[offset + 3] = this->w();
+            array[offset] = this->x;
+            array[offset + 1] = this->y;
+            array[offset + 2] = this->z;
+            array[offset + 3] = this->w;
         }
 
         friend std::ostream& operator<<(std::ostream& os, const Quaternion& v) {

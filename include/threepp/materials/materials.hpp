@@ -11,6 +11,7 @@
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
+#include "threepp/materials/ShadowMaterial.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 
 #endif//THREEPP_MATERIALS_HPP

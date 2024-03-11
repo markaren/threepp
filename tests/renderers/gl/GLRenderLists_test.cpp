@@ -1,8 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-#define private public
-
 #undef near
 #undef far
 #include "threepp/core/BufferGeometry.hpp"
@@ -19,8 +17,7 @@ public:
     }
 };
 
-class DummyProgram: public GLProgram {
-};
+class DummyProgram: public GLProgram {};
 
 TEST_CASE("init") {
 
@@ -60,7 +57,7 @@ TEST_CASE("push") {
     objA.renderOrder = 0;
     DummyMaterial matA;
     matA.transparent = true;
-    auto proA = std::make_shared<GLProgram>();
+    DummyProgram proA;
     BufferGeometry geoA;
 
     Object3D objB;
@@ -68,7 +65,7 @@ TEST_CASE("push") {
     objB.renderOrder = 0;
     DummyMaterial matB;
     matB.transparent = true;
-    auto proB = std::make_shared<GLProgram>();
+    DummyProgram proB;
     BufferGeometry geoB;
 
     Object3D objC;
@@ -76,7 +73,7 @@ TEST_CASE("push") {
     objC.renderOrder = 0;
     DummyMaterial matC;
     matC.transparent = false;
-    auto proC = std::make_shared<GLProgram>();
+    DummyProgram proC;
     BufferGeometry geoC;
 
     Object3D objD;
@@ -84,20 +81,20 @@ TEST_CASE("push") {
     objD.renderOrder = 0;
     DummyMaterial matD;
     matD.transparent = false;
-    auto proD = std::make_shared<GLProgram>();
+    DummyProgram proD;
     BufferGeometry geoD;
 
-    auto materialProperties = properties.materialProperties.get(matA.uuid());
-    materialProperties->program = proA;
+    auto materialProperties = properties.materialProperties.get(&matA);
+    materialProperties->program = &proA;
 
-    materialProperties = properties.materialProperties.get(matB.uuid());
-    materialProperties->program = proB;
+    materialProperties = properties.materialProperties.get(&matB);
+    materialProperties->program = &proB;
 
-    materialProperties = properties.materialProperties.get(matC.uuid());
-    materialProperties->program = proC;
+    materialProperties = properties.materialProperties.get(&matC);
+    materialProperties->program = &proC;
 
-    materialProperties = properties.materialProperties.get(matD.uuid());
-    materialProperties->program = proD;
+    materialProperties = properties.materialProperties.get(&matD);
+    materialProperties->program = &proD;
 
     // A
     {
@@ -110,7 +107,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objA);
         CHECK(o->geometry == &geoA);
         CHECK(o->material == &matA);
-        CHECK(o->program == proA.get());
+        CHECK(o->program == &proA);
         CHECK(o->groupOrder == 0);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(0.5f));
@@ -128,7 +125,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objB);
         CHECK(o->geometry == &geoB);
         CHECK(o->material == &matB);
-        CHECK(o->program == proB.get());
+        CHECK(o->program == &proB);
         CHECK(o->groupOrder == 1);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(1.5f));
@@ -146,7 +143,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objC);
         CHECK(o->geometry == &geoC);
         CHECK(o->material == &matC);
-        CHECK(o->program == proC.get());
+        CHECK(o->program == &proC);
         CHECK(o->groupOrder == 2);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(2.5f));
@@ -164,7 +161,7 @@ TEST_CASE("push") {
         CHECK(o->object == &objD);
         CHECK(o->geometry == &geoD);
         CHECK(o->material == &matD);
-        CHECK(o->program == proD.get());
+        CHECK(o->program == &proD);
         CHECK(o->groupOrder == 3);
         CHECK(o->renderOrder == 0);
         CHECK_THAT(o->z, Catch::Matchers::WithinRel(3.5f));

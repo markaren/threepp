@@ -15,11 +15,11 @@ namespace threepp {
     public:
         Box2();
 
+        Box2(const Vector2& min, const Vector2& max);
+
         [[nodiscard]] const Vector2& getMin() const;
 
         [[nodiscard]] const Vector2& getMax() const;
-
-        Box2(const Vector2& min, const Vector2& max);
 
         Box2& set(const Vector2& min, const Vector2& max);
 
@@ -35,7 +35,11 @@ namespace threepp {
 
         void getCenter(Vector2& target) const;
 
+        [[nodiscard]] Vector2 getCenter() const;
+
         void getSize(Vector2& target) const;
+
+        [[nodiscard]] Vector2 getSize() const;
 
         Box2& expandByPoint(const Vector2& point);
 
@@ -58,6 +62,10 @@ namespace threepp {
         Box2& _union(const Box2& box);
 
         Box2& translate(const Vector2& offset);
+
+        [[nodiscard]] Box2 clone() const;
+
+        [[nodiscard]] bool equals(const Box2& box) const;
 
         friend std::ostream& operator<<(std::ostream& os, const Box2& v) {
             os << "Box2(min=" << v.min_ << ", max=" << v.max_ << ")";

@@ -6,7 +6,11 @@
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GLES3/gl3.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -23,9 +27,9 @@ struct GLObjects::Impl {
 
             instancedMesh->removeEventListener("dispose", this);
 
-            scope->attributes_.remove(instancedMesh->instanceMatrix.get());
+            scope->attributes_.remove(instancedMesh->instanceMatrix());
 
-            if (instancedMesh->instanceColor) scope->attributes_.remove(instancedMesh->instanceColor.get());
+            if (instancedMesh->instanceColor()) scope->attributes_.remove(instancedMesh->instanceColor());
         }
 
     private:
@@ -36,14 +40,14 @@ struct GLObjects::Impl {
     GLGeometries& geometries_;
     GLAttributes& attributes_;
 
-    std::shared_ptr<OnInstancedMeshDispose> onInstancedMeshDispose;
+    OnInstancedMeshDispose onInstancedMeshDispose;
 
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
         : attributes_(attributes),
           geometries_(geometries), info_(info),
-          onInstancedMeshDispose(std::make_shared<OnInstancedMeshDispose>(this)) {}
+          onInstancedMeshDispose(this) {}
 
     BufferGeometry* update(Object3D* object) {
 
@@ -63,16 +67,16 @@ struct GLObjects::Impl {
 
         if (auto instancedMesh = object->as<InstancedMesh>()) {
 
-            if (!object->hasEventListener("dispose", onInstancedMeshDispose.get())) {
+            if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
 
-                object->addEventListener("dispose", onInstancedMeshDispose);
+                object->addEventListener("dispose", &onInstancedMeshDispose);
             }
 
-            attributes_.update(instancedMesh->instanceMatrix.get(), GL_ARRAY_BUFFER);
+            attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
 
-            if (instancedMesh->instanceColor != nullptr) {
+            if (instancedMesh->instanceColor() != nullptr) {
 
-                attributes_.update(instancedMesh->instanceColor.get(), GL_ARRAY_BUFFER);
+                attributes_.update(instancedMesh->instanceColor(), GL_ARRAY_BUFFER);
             }
         }
 

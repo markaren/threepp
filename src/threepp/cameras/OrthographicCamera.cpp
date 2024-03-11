@@ -3,7 +3,7 @@
 
 using namespace threepp;
 
-OrthographicCamera::OrthographicCamera(int left, int right, int top, int bottom, float near, float far)
+OrthographicCamera::OrthographicCamera(float left, float right, float top, float bottom, float near, float far)
     : Camera(near, far), left(left), right(right), top(top), bottom(bottom) {
 
     OrthographicCamera::updateProjectionMatrix();
@@ -46,10 +46,10 @@ void OrthographicCamera::clearViewOffset() {
 
 void OrthographicCamera::updateProjectionMatrix() {
 
-    const auto dx = static_cast<float>(this->right - this->left) / (2 * this->zoom);
-    const auto dy = static_cast<float>(this->top - this->bottom) / (2 * this->zoom);
-    const auto cx = static_cast<float>(this->right + this->left) / 2;
-    const auto cy = static_cast<float>(this->top + this->bottom) / 2;
+    const auto dx = (this->right - this->left) / (2 * this->zoom);
+    const auto dy = (this->top - this->bottom) / (2 * this->zoom);
+    const auto cx = (this->right + this->left) / 2;
+    const auto cy = (this->top + this->bottom) / 2;
 
     float left = cx - dx;
     float right = cx + dx;
@@ -67,14 +67,14 @@ void OrthographicCamera::updateProjectionMatrix() {
         bottom = top - scaleH * static_cast<float>(this->view->height);
     }
 
-    this->projectionMatrix.makeOrthographic((float) left, (float) right, (float) top, (float) bottom, this->near, this->far);
+    this->projectionMatrix.makeOrthographic(left,  right, top, bottom, this->near, this->far);
 
     this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
 }
 
 std::shared_ptr<OrthographicCamera> OrthographicCamera::create(
-        int left, int right,
-        int top, int bottom,
+        float left, float right,
+        float top, float bottom,
         float near, float far) {
 
     return std::make_shared<OrthographicCamera>(left, right, top, bottom, near, far);

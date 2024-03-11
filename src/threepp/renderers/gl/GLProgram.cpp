@@ -15,7 +15,11 @@
 #include <list>
 #include <vector>
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GLES3/gl32.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -69,8 +73,9 @@ namespace {
         std::stringstream ss;
         for (int i = start; i < end; ++i) {
 
-            ss << std::regex_replace(match[3].str(), reg1, "[ " + std::to_string(i) + " ]");
-            ss.str() = std::regex_replace(ss.str(), reg2, std::to_string(i));
+            auto str = std::regex_replace(match[3].str(), reg1, "[ " + std::to_string(i) + " ]");
+            utils::replaceAll(str, "UNROLLED_LOOP_INDEX", std::to_string(i));
+            ss << str;
         }
 
         return ss.str();
@@ -644,11 +649,16 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     vertexShader = unrollLoops(vertexShader);
     fragmentShader = unrollLoops(fragmentShader);
 
+    std::string glslVersion{"330 core"};
+#if EMSCRIPTEN
+    glslVersion = "300 es";
+#endif
+
     if (!parameters->isRawShaderMaterial) {
 
         {
             std::vector<std::string> v{
-                    "#version 330 core\n",
+                    "#version " + glslVersion + "\n",
                     "#define attribute in",
                     "#define varying out",
                     "#define texture2D texture"
@@ -660,7 +670,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
         {
             std::vector<std::string> v{
-                    "#version 330 core\n",
+                    "#version " + glslVersion + "\n",
                     "#define varying in",
                     "out highp vec4 pc_fragColor;",
                     "#define gl_FragColor pc_fragColor",
@@ -685,6 +695,8 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
 
     std::string vertexGlsl = prefixVertex + vertexShader;
     std::string fragmentGlsl = prefixFragment + fragmentShader;
+
+
 
     const auto glVertexShader = createShader(GL_VERTEX_SHADER, vertexGlsl.c_str());
     const auto glFragmentShader = createShader(GL_FRAGMENT_SHADER, fragmentGlsl.c_str());
@@ -723,13 +735,13 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     glDeleteShader(glFragmentShader);
 }
 
-std::shared_ptr<GLUniforms> GLProgram::getUniforms() {
+GLUniforms* GLProgram::getUniforms() {
 
     if (!cachedUniforms) {
-        cachedUniforms = std::make_shared<GLUniforms>(program);
+        cachedUniforms = std::make_unique<GLUniforms>(program);
     }
 
-    return cachedUniforms;
+    return cachedUniforms.get();
 }
 
 std::unordered_map<std::string, int> GLProgram::getAttributes() {

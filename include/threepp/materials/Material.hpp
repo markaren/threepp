@@ -13,7 +13,7 @@
 
 namespace threepp {
 
-    typedef std::variant<bool, int, float, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
+    typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
     class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
 
@@ -76,11 +76,14 @@ namespace threepp {
 
         std::unordered_map<std::string, UniformValue> defaultAttributeValues;
 
-        unsigned int version = 0;
-
+        Material(Material&&) = delete;
+        Material& operator=(Material&&) = delete;
         Material(const Material&) = delete;
+        Material& operator=(const Material&) = delete;
 
         std::string uuid() const;
+
+        [[nodiscard]] unsigned int version() const;
 
         void setValues(const std::unordered_map<std::string, MaterialValue>& values);
 
@@ -91,7 +94,19 @@ namespace threepp {
         [[nodiscard]] virtual std::string type() const = 0;
 
         template<class T>
-        std::shared_ptr<T> as() {
+        T* as() {
+
+            static_assert(std::is_base_of<T, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
+                          "T must be a base class of the current class");
+
+            return dynamic_cast<T*>(this);
+        }
+
+        template<class T>
+        std::shared_ptr<T> as_shared() {
+
+            static_assert(std::is_base_of<Material, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
+                          "T must be a base class of Material");
 
             auto m = shared_from_this();
             return std::dynamic_pointer_cast<T>(m);
@@ -112,11 +127,28 @@ namespace threepp {
 
         void copyInto(Material* m) const;
 
+        static Color extractColor(const MaterialValue& value) {
+            if (std::holds_alternative<int>(value)) {
+                return std::get<int>(value);
+            } else {
+                return std::get<Color>(value);
+            }
+        }
+
+        static float extractFloat(const MaterialValue& value) {
+            if (std::holds_alternative<int>(value)) {
+                return std::get<int>(value);
+            } else {
+                return std::get<float>(value);
+            }
+        }
+
         virtual bool setValue(const std::string& key, const MaterialValue& value);
 
     private:
         bool disposed_ = false;
         std::string uuid_;
+        unsigned int version_ = 0;
         inline static unsigned int materialId = 0;
     };
 

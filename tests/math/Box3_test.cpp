@@ -305,11 +305,10 @@ TEST_CASE("translate") {
 
     Box3 a(zero3, zero3);
     Box3 b(zero3, one3);
-    Box3 c(one3.clone().negate(), one3);
-    Box3 d(one3.clone().negate(), zero3);
+    Box3 c(one3.clone().negate(), zero3);
 
     CHECK(a.clone().translate(one3) == (Box3(one3, one3)));
     CHECK(a.clone().translate(one3).translate(one3.clone().negate()) == (a));
-    CHECK(d.clone().translate(one3) == (b));
-    CHECK(b.clone().translate(one3.clone().negate()) == (d));
+    CHECK(c.clone().translate(one3) == (b));
+    CHECK(b.clone().translate(one3.clone().negate()) == (c));
 }

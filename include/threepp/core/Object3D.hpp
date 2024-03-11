@@ -25,11 +25,10 @@ namespace threepp {
     class Material;
     class Raycaster;
     struct Intersection;
-
-    class Scene;
+    class Object3D;
     class BufferGeometry;
 
-    typedef std::function<void(void*, Scene*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;
+    typedef std::function<void(void*, Object3D*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>)> RenderCallback;
 
     // This is the base class for most objects in three.js and provides a set of properties and methods for manipulating objects in 3D space.
     //Note that this can be used for grouping objects via the .add( object ) method which adds the object as a child, however it is better to use Group for this.
@@ -110,7 +109,7 @@ namespace threepp {
         Object3D();
 
         Object3D(Object3D&& source) noexcept;
-        Object3D& operator=(Object3D&& other) noexcept;
+        Object3D& operator=(Object3D&&) = delete;
         Object3D(const Object3D&) = delete;
         Object3D& operator=(const Object3D&) = delete;
 
@@ -167,10 +166,10 @@ namespace threepp {
         // Adds object as child of this object. An arbitrary number of objects may be added.
         // Any current parent on an object passed in here will be removed, since an object can have at most one parent.
         // This version of add does NOT take ownership of the passed in object
-        void add(Object3D& object);
+        virtual void add(Object3D& object);
 
         // Removes object as child of this object.
-        void remove(Object3D& object);
+        virtual void remove(Object3D& object);
 
         // Removes this object from its current parent.
         void removeFromParent();
@@ -194,7 +193,7 @@ namespace threepp {
         // Returns a vector representing the direction of object's positive z-axis in world space.
         virtual void getWorldDirection(Vector3& target);
 
-        virtual void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {}
+        virtual void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {}
 
         void traverse(const std::function<void(Object3D&)>& callback);
 
@@ -233,18 +232,11 @@ namespace threepp {
             return nullptr;
         }
 
-        virtual std::vector<Material*> materials() {
-
-            return {};
-        }
-
-        [[nodiscard]] virtual const Material* material() const {
-
-            return nullptr;
-        }
-
         template<class T>
         T* as() {
+
+            static_assert(std::is_base_of<Object3D, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
+                          "T must be a base class of Object3D");
 
             return dynamic_cast<T*>(this);
         }

@@ -6,7 +6,8 @@
 #include "kine/ik/CCDSolver.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/utils/ThreadPool.hpp"
+
+#include <future>
 
 using namespace threepp;
 using namespace kine;
@@ -66,6 +67,7 @@ int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot-kine").size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas.size()};
+    renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
@@ -91,21 +93,29 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle("Loading model..");
-    handle.scale = 2;
+    HUD hud(canvas);
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    utils::ThreadPool pool;
+    TextGeometry::Options opts(font, 30, 5);
+    auto handle = Text2D(opts, "Loading model..");
+    handle.setColor(Color::black);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0.5, 0.5})
+                            .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::CENTER)
+                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
+
+
     std::shared_ptr<Youbot> youbot;
-    pool.submit([&] {
+    auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
         youbot->add(targetHelper);
         youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
         canvas.invokeLater([&] {
-            canvas.addKeyListener(youbot.get());
+            canvas.addKeyListener(*youbot);
             scene->add(youbot);
-            handle.invalidate();
+            hud.remove(handle);
         });
     });
 
@@ -113,6 +123,8 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
     auto ikSolver = CCDSolver(1, 0.001f, 0.00001f);
@@ -142,6 +154,7 @@ int main() {
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
+        renderer.clear();
         renderer.render(*scene, *camera);
 
         if (youbot) {
@@ -170,8 +183,9 @@ int main() {
             youbot->update(dt);
         } else {
 
-            renderer.resetState();
-            textRenderer.render();
+            hud.apply(renderer);
         }
     });
+
+    future.get();
 }

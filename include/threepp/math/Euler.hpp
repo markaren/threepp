@@ -56,6 +56,8 @@ namespace threepp {
 
         Euler& _onChange(std::function<void()> callback);
 
+        [[nodiscard]] bool equals(const Euler& euler) const;
+
         template<class ArrayLike>
         Euler& fromArray(const ArrayLike& array, unsigned int offset = 0) {
 
@@ -71,9 +73,9 @@ namespace threepp {
         template<class ArrayLike>
         void toArray(ArrayLike& array, unsigned int offset = 0) const {
 
-            array[offset] = this->x();
-            array[offset + 1] = this->y();
-            array[offset + 2] = this->z();
+            array[offset] = this->x;
+            array[offset + 1] = this->y;
+            array[offset + 2] = this->z;
         }
 
 

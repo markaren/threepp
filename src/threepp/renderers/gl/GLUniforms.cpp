@@ -4,7 +4,11 @@
 #include "threepp/renderers/gl/UniformUtils.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GL/glew.h>
+#endif
 
 #include <iostream>
 #include <regex>
@@ -91,6 +95,12 @@ namespace {
                 case 0x8dd3:// UNSIGNED_INT_SAMPLER_3D
                     return [&](const UniformValue& value, GLTextures* textures) { setValueT3D1(value, textures); };
 
+                case 0x8b60:// SAMPLER_CUBE
+                case 0x8dcc:// INT_SAMPLER_CUBE
+                case 0x8dd4:// UNSIGNED_INT_SAMPLER_CUBE
+                case 0x8dc5:// SAMPLER_CUBE_SHADOW
+                    return [&](const UniformValue& value, GLTextures* textures) { setValueT6(value, textures); };
+
                 case 0x1404:// INT, BOOL
                 case 0x8b56:
                     return [&](const UniformValue& value, GLTextures*) { setValueV1i(value); };
@@ -119,6 +129,13 @@ namespace {
             textures->setTexture3D(*tex, unit);
         }
 
+        void setValueT6(const UniformValue& value, GLTextures* textures) const {
+            const auto unit = textures->allocateTextureUnit();
+            glUniform1i(addr, unit);
+            auto tex = std::get<Texture*>(value);
+            textures->setTextureCube(*tex, unit);
+        }
+
         void setValueV1i(const UniformValue& value) const {
 
             if (std::holds_alternative<bool>(value)) {
@@ -134,7 +151,14 @@ namespace {
 
         void setValueV1f(const UniformValue& value) {
 
-            float f = std::get<float>(value);
+            float f;
+            if (std::holds_alternative<bool>(value)) {
+                f = std::get<bool>(value);
+            } else if (std::holds_alternative<float>(value)) {
+                f = std::get<float>(value);
+            } else {
+                throw std::runtime_error("Illegal variant index: " + std::to_string(value.index()));
+            }
 
             ensureCapacity(cache, 1);
             if (cache[0] == f) return;
@@ -332,6 +356,8 @@ namespace {
                         glUniform1iv(addr, static_cast<int>(n), units.data());
 
                         for (unsigned i = 0; i != n; ++i) {
+                            auto value = data[i];
+                            if (!value) continue;
                             textures->setTexture2D(*data[i], units[i]);
                         }
                     };
@@ -377,6 +403,8 @@ namespace {
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
                                     int index = utils::parseInt(u->id);
+                                    auto value = arg[index];
+                                    if (!value) continue;
                                     u->setValue(*arg[index], textures);
                                 }
                             }},
@@ -387,10 +415,11 @@ namespace {
         ActiveUniformInfo activeInfo;
     };
 
-    void addUniform(Container* container, const std::shared_ptr<UniformObject>& uniformObject) {
+    void addUniform(Container* container, std::unique_ptr<UniformObject> uniformObject) {
 
-        container->seq.emplace_back(uniformObject);
-        container->map[uniformObject->id] = uniformObject;
+        const auto id = uniformObject->id;
+        container->seq.emplace_back(std::move(uniformObject));
+        container->map[id] = container->seq.back().get();
     }
 
     void parseUniform(ActiveUniformInfo& activeInfo, int addr, Container* container) {
@@ -418,19 +447,19 @@ namespace {
 
                 // bare name or "pure" bottom-level array "[0]" suffix
                 if (!match[3].matched) {
-                    addUniform(container, std::make_shared<SingleUniform>(id, activeInfo, addr));
+                    addUniform(container, std::make_unique<SingleUniform>(id, activeInfo, addr));
                 } else {
-                    addUniform(container, std::make_shared<PureArrayUniform>(id, activeInfo, addr));
+                    addUniform(container, std::make_unique<PureArrayUniform>(id, activeInfo, addr));
                 }
                 break;
 
             } else {
 
                 if (!container->map.count(id)) {
-                    addUniform(container, std::make_shared<StructuredUniform>(id, activeInfo));
+                    addUniform(container, std::make_unique<StructuredUniform>(id, activeInfo));
                 }
 
-                container = dynamic_cast<Container*>(container->map.at(id).get());
+                container = dynamic_cast<Container*>(container->map.at(id));
             }
 
             ++rex_it;
@@ -463,7 +492,7 @@ void GLUniforms::setValue(const std::string& name, const UniformValue& value, GL
     }
 }
 
-void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values, GLTextures* textures) {
+void GLUniforms::upload(std::vector<UniformObject*>& seq, UniformMap& values, GLTextures* textures) {
 
     for (const auto& u : seq) {
 
@@ -477,13 +506,13 @@ void GLUniforms::upload(std::vector<std::shared_ptr<UniformObject>>& seq, Unifor
     }
 }
 
-std::vector<std::shared_ptr<UniformObject>> GLUniforms::seqWithValue(std::vector<std::shared_ptr<UniformObject>>& seq, UniformMap& values) {
+std::vector<UniformObject*> GLUniforms::seqWithValue(const std::vector<std::unique_ptr<UniformObject>>& seq, UniformMap& values) {
 
-    std::vector<std::shared_ptr<UniformObject>> r;
+    std::vector<UniformObject*> r;
 
     for (const auto& u : seq) {
 
-        if (values.count(u->id)) r.emplace_back(u);
+        if (values.count(u->id)) r.emplace_back(u.get());
     }
 
     return r;

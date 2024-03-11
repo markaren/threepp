@@ -111,7 +111,7 @@ namespace threepp {
         // Sets this matrix to the transformation composed of position, quaternion and scale.
         Matrix4& compose(const Vector3& position, const Quaternion& quaternion, const Vector3& scale);
 
-        Matrix4& decompose(Vector3& position, Quaternion& quaternion, Vector3& scale);
+        void decompose(Vector3& position, Quaternion& quaternion, Vector3& scale) const;
 
         Matrix4& makePerspective(float left, float right, float top, float bottom, float near, float far);
 
