@@ -35,6 +35,42 @@ namespace {
         return plane;
     }
 
+    auto addLights(Scene& scene) {
+        auto light1 = PointLight::create(Color::yellow);
+        light1->castShadow = true;
+        light1->shadow->bias = -0.005f;
+        light1->distance = 8;
+        light1->position.y = 4;
+
+        auto light2 = PointLight::create(Color::white);
+        light2->castShadow = true;
+        light2->shadow->bias = -0.005f;
+        light2->distance = 8;
+        light2->position.y = 4;
+
+        auto light3 = PointLight::create(Color::purple);
+        light3->castShadow = true;
+        light3->shadow->bias = -0.005f;
+        light3->distance = 10;
+        light3->position.y = 7;
+
+        auto lightHelper1 = PointLightHelper::create(*light1, 0.25f);
+        auto lightHelper2 = PointLightHelper::create(*light2, 0.25f);
+        auto lightHelper3 = PointLightHelper::create(*light3, 0.25f);
+
+        light1->name = "light1";
+        light2->name = "light2";
+        light3->name = "light3";
+
+        scene.add(light1);
+        scene.add(light2);
+        scene.add(light3);
+
+        scene.add(lightHelper1);
+        scene.add(lightHelper2);
+        scene.add(lightHelper3);
+    }
+
 }// namespace
 
 int main() {
@@ -49,25 +85,7 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    auto light1 = PointLight::create(Color::yellow);
-    light1->castShadow = true;
-    light1->shadow->bias = -0.005f;
-    light1->distance = 8;
-    light1->position.y = 4;
-    scene->add(light1);
-
-    auto lightHelper1 = PointLightHelper::create(*light1, 0.25f);
-    scene->add(lightHelper1);
-
-    auto light2 = PointLight::create(Color::white);
-    light2->castShadow = true;
-    light2->shadow->bias = -0.005f;
-    light2->distance = 8;
-    light2->position.y = 4;
-    scene->add(light2);
-
-    auto lightHelper2 = PointLightHelper::create(*light2, 0.25f);
-    scene->add(lightHelper2);
+    addLights(*scene);
 
     auto knot = createTorusKnot();
     scene->add(knot);
@@ -82,10 +100,13 @@ int main() {
         renderer.setSize(size);
     });
 
+    auto light1 = scene->getObjectByName("light1");
+    auto light2 = scene->getObjectByName("light2");
+
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
-        float t = clock.elapsedTime;
+        const float dt = clock.getDelta();
+        const float t = clock.elapsedTime;
 
         knot->rotation.y += 0.5f * dt;
 

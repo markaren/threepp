@@ -105,8 +105,8 @@ namespace threepp {
         template<class T>
         std::shared_ptr<T> as_shared() {
 
-            static_assert(std::is_base_of<T, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
-                          "T must be a base class of the current class");
+            static_assert(std::is_base_of<Material, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
+                          "T must be a base class of Material");
 
             auto m = shared_from_this();
             return std::dynamic_pointer_cast<T>(m);

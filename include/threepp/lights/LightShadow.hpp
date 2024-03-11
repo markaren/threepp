@@ -35,13 +35,14 @@ namespace threepp {
 
         LightShadow(LightShadow&&) = delete;
         LightShadow(const LightShadow&) = delete;
+        LightShadow& operator=(LightShadow&&) = delete;
         LightShadow& operator=(const LightShadow&) = delete;
 
         [[nodiscard]] size_t getViewportCount() const;
 
         [[nodiscard]] const Frustum& getFrustum() const;
 
-        virtual void updateMatrices(Light* light);
+        virtual void updateMatrices(Light& light);
 
         Vector4& getViewport(size_t viewportIndex);
 

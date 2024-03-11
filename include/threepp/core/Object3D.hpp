@@ -231,8 +231,8 @@ namespace threepp {
         template<class T>
         T* as() {
 
-            static_assert(std::is_base_of<T, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
-                          "T must be a base class of the current class");
+            static_assert(std::is_base_of<Object3D, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
+                          "T must be a base class of Object3D");
 
             return dynamic_cast<T*>(this);
         }

@@ -356,7 +356,7 @@ struct GLShadowMap::Impl {
                 if (auto pointLightShadow = std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
                     pointLightShadow->updateMatrices(light->as<PointLight>(), vp);
                 } else {
-                    shadow->updateMatrices(light);
+                    shadow->updateMatrices(*light);
                 }
 
                 _frustum = &shadow->getFrustum();
