@@ -93,33 +93,64 @@ int main() {
     scene.add(light1);
 
     PxEngine engine;
+
+    auto box1Body = RigidBodyInfo{};
+    box1Body.joint = JointInfo{};
+    box1Body.joint->anchor = {0, 0.5, 0};
+    box1Body.joint->axis = {0, 0, 1};
+    box1Body.joint->connectedBody = box2.get();
+    box1->userData["rigidbodyInfo"] = box1Body;
+
+    auto box2Body = RigidBodyInfo{};
+    box2Body.joint = JointInfo{};
+    box2Body.joint->anchor = {0, 1, 0};
+    box2Body.joint->axis = {0, 0, 1};
+    box2Body.joint->connectedBody = box3.get();
+    box2->userData["rigidbodyInfo"] = box2Body;
+
+    auto box3Body = RigidBodyInfo{};
+    box3->userData["rigidbodyInfo"] = box3Body;
+
+    auto groundBody = RigidBodyInfo{};
+    groundBody.type = RigidBodyInfo::Type::STATIC;
+    ground->userData["rigidbodyInfo"] = groundBody;
+
+    auto sphereBody = RigidBodyInfo{};
+    sphereBody.type = RigidBodyInfo::Type::DYNAMIC;
+    sphere->userData["rigidbodyInfo"] = sphereBody;
+
+    engine.setup(scene);
+
     scene.add(engine);
-    engine.registerMeshDynamic(*box1);
-    engine.registerMeshDynamic(*box2);
-    engine.registerMeshDynamic(*box3);
-    engine.registerMeshDynamic(*sphere);
-    engine.registerMeshStatic(*ground);
 
-    auto joint1 = engine.createRevoluteJoint(*box1, {0, 0.05, 0}, {0, 1, 0});
-    auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0, 0.5, 0}, {0, 0, 1});
-    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 1, 0}, {0, 0, 1});
 
-    joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
-    joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-    physx::PxJointAngularLimitPair limit1{-math::degToRad(120), math::degToRad(120)};
-    joint1->setLimit(limit1);
 
-    joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
-    joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-    physx::PxJointAngularLimitPair limit2{math::degToRad(0), math::degToRad(90)};
-    joint2->setLimit(limit2);
+//    engine.registerMeshDynamic(*box1);
+//    engine.registerMeshDynamic(*box2);
+//    engine.registerMeshDynamic(*box3);
+//    engine.registerMeshDynamic(*sphere);
+//    engine.registerMeshStatic(*ground);
 
-    joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
-    joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-    joint3->setLimit({math::degToRad(0), math::degToRad(90)});
+//    auto joint1 = engine.createRevoluteJoint(*box1, {0, 0.05, 0}, {0, 1, 0});
+//    auto joint2 = engine.createRevoluteJoint(*box1, *box2, {0, 0.5, 0}, {0, 0, 1});
+//    auto joint3 = engine.createRevoluteJoint(*box2, *box3, {0, 1, 0}, {0, 0, 1});
+//
+//    joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
+//    joint1->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
+//    physx::PxJointAngularLimitPair limit1{-math::degToRad(120), math::degToRad(120)};
+//    joint1->setLimit(limit1);
 
-    KeyController keyListener({joint1, joint2, joint3});
-    canvas.addKeyListener(keyListener);
+//    joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
+//    joint2->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
+//    physx::PxJointAngularLimitPair limit2{math::degToRad(0), math::degToRad(90)};
+//    joint2->setLimit(limit2);
+//
+//    joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eDRIVE_ENABLED, true);
+//    joint3->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
+//    joint3->setLimit({math::degToRad(0), math::degToRad(90)});
+//
+//    KeyController keyListener({joint1, joint2, joint3});
+//    canvas.addKeyListener(keyListener);
 
     OrbitControls controls(camera, canvas);
     controls.enableKeys = false;

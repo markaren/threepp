@@ -4,6 +4,8 @@
 
 #include "PxPhysicsAPI.h"
 
+#include "RigidbodyInfo.hpp"
+
 #include "threepp/threepp.hpp"
 
 #include <unordered_map>
@@ -46,6 +48,40 @@ public:
         add(debugLines);
         add(debugPoints);
         add(debugTriangles);
+    }
+
+    void setup(threepp::Scene& scene) {
+
+        scene.traverse([this](threepp::Object3D& obj) {
+
+            if (obj.userData.count("rigidbodyInfo")) {
+                auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
+                if (info.type == threepp::RigidBodyInfo::Type::DYNAMIC) {
+                    registerMeshDynamic(obj);
+                } else {
+                    registerMeshStatic(obj);
+                }
+            }
+
+        });
+
+        scene.traverse([this](threepp::Object3D& obj) {
+
+            if (obj.userData.count("rigidbodyInfo")) {
+                auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
+                if (info.joint) {
+                    if (info.joint->type == threepp::JointInfo::Type::HINGE) {
+                        if (info.joint->connectedBody) {
+                            createRevoluteJoint(obj, *info.joint->connectedBody, info.joint->anchor, info.joint->axis);
+                        } else {
+                            createRevoluteJoint(obj, info.joint->anchor, info.joint->axis);
+                        }
+                    }
+                }
+            }
+
+        });
+
     }
 
     void step(float dt) {
