@@ -31,7 +31,7 @@ namespace threepp {
         std::unique_ptr<Impl> pimpl_;
 
         bool _isActiveAction(AnimationAction& action);
-//
+
         void _activateAction(const std::shared_ptr<AnimationAction>& action);
 
         void _deactivateAction(const std::shared_ptr<AnimationAction>& action);

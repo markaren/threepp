@@ -82,7 +82,7 @@ namespace threepp {
         InterpolantSettings _interpolantSettings;
         std::vector<std::shared_ptr<Interpolant>> _interpolants;
 
-        std::vector<std::unique_ptr<PropertyMixer>> _propertyBindings;
+        std::vector<std::shared_ptr<PropertyMixer>> _propertyBindings;
 
         std::optional<size_t> _cacheIndex;      // for the memory manager
         std::optional<size_t> _byClipCacheIndex;// for the memory manager

@@ -21,6 +21,8 @@ namespace threepp {
     public:
         static Interpolation defaultInterpolation;
 
+        [[nodiscard]] virtual std::string ValueTypeName() const = 0;
+
         [[nodiscard]] std::string getName() const {
 
             return name_;
@@ -57,6 +59,8 @@ namespace threepp {
         KeyframeTrack& optimize();
 
         std::unique_ptr<Interpolant> createInterpolant(std::vector<float>* result);
+
+        virtual ~KeyframeTrack() = default;
 
     protected:
         KeyframeTrack(std::string name,

@@ -8,6 +8,7 @@ set(publicHeaders
         "threepp/animation/AnimationAction.hpp"
         "threepp/animation/AnimationClip.hpp"
         "threepp/animation/AnimationMixer.hpp"
+        "threepp/animation/AnimationObjectGroup.hpp"
         "threepp/animation/AnimationUtils.hpp"
         "threepp/animation/KeyframeTrack.hpp"
         "threepp/animation/PropertyBinding.hpp"
@@ -253,6 +254,7 @@ set(sources
         "threepp/animation/AnimationClip.cpp"
         "threepp/animation/AnimationMixer.cpp"
         "threepp/animation/KeyframeTrack.cpp"
+        "threepp/animation/PropertyBinding.cpp"
         "threepp/animation/PropertyMixer.cpp"
 
         "threepp/cameras/Camera.cpp"

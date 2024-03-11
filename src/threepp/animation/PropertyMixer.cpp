@@ -1,72 +1,39 @@
 
 #include "threepp/animation/PropertyMixer.hpp"
 
-#include "threepp/math/Quaternion.hpp"
-
 #include <functional>
 
 using namespace threepp;
 
 namespace {
 
-    using MixFunction = std::function<void(std::vector<float>&, int, int, float, int)>;
+    using MixFunction = std::function<void(PropertyMixer*, std::vector<float>&, int, int, float, int)>;
+    using MixFunctionAdditive = MixFunction;
+    using SetIdentity = std::function<void()>;
 
-    // mix functions
-
-    void _select(std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
-
-        if (t >= 0.5) {
-
-            for (auto i = 0; i != stride; ++i) {
-
-                buffer[dstOffset + i] = buffer[srcOffset + i];
-            }
-        }
-    }
-
-    void _slerp(std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
-
-        Quaternion::slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, srcOffset, t);
-    }
-
-
-    void _lerp(std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
-
-        const auto s = 1 - t;
-
-        for (auto i = 0; i != stride; ++i) {
-
-            const auto j = dstOffset + i;
-
-            buffer[j] = buffer[j] * s + buffer[srcOffset + i] * t;
-        }
-    }
-
-    void _lerpAdditive(std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
-
-        for (auto i = 0; i != stride; ++i) {
-
-            const auto j = dstOffset + i;
-
-            buffer[j] = buffer[j] + buffer[srcOffset + i] * t;
-        }
-    }
 
 }// namespace
 
 struct PropertyMixer::Impl {
 
-    PropertyBinding binding;
-    int valueSize;
+    size_t valueSize;
 
-    std::vector<float> buffer;
+    int _origIndex = 3;
+    int _addIndex = 4;
+    int _workIndex = -1;
 
-    Impl(const PropertyBinding& binding, const std::string& typeName, int valueSize)
-        : binding(binding), valueSize(valueSize) {
+    float cumulativeWeight = 0;
+    float cumulativeWeightAdditive = 0;
 
-        MixFunction mixFunction;
-        MixFunction mixFunctionAdditive;
-        MixFunction setIdentity;
+    MixFunction mixFunction;
+    MixFunctionAdditive mixFunctionAdditive;
+    SetIdentity setIdentity;
+
+    PropertyMixer& scope;
+
+    Impl(PropertyMixer& scope, const std::string& typeName, size_t valueSize)
+        : scope(scope), valueSize(valueSize) {
+
 
         // buffer layout: [ incoming | accu0 | accu1 | orig | addAccu | (optional work) ]
         //
@@ -86,8 +53,8 @@ struct PropertyMixer::Impl {
 
         if (typeName == "quaternion") {
             mixFunction = _slerp;
-            //            mixFunctionAdditive = _slerpAdditive;
-            this->buffer = std::vector<float>(valueSize * 6);
+            mixFunctionAdditive = _slerpAdditive;
+            this->scope.buffer = std::vector<float>(valueSize * 6);
             this->_workIndex = 5;
 
         } else if (typeName == "string" || typeName == "bool") {
@@ -98,33 +65,62 @@ struct PropertyMixer::Impl {
             // additive is not relevant for non-numeric types
             mixFunctionAdditive = _select;
 
-            this->buffer = std::vector<float>(valueSize * 5);
+            this->scope.buffer = std::vector<float>(valueSize * 5);
         } else {
             mixFunction = _lerp;
             mixFunctionAdditive = _lerpAdditive;
 
-            buffer = std::vector<float>(valueSize * 5);
+            scope.buffer = std::vector<float>(valueSize * 5);
         }
     }
 
     void accumulate(int accuIndex, float weight) {
 
+        // note: happily accumulating nothing when weight = 0, the caller knows
+        // the weight and shouldn't have made the call in the first place
+
+        auto& buffer = this->scope.buffer;
+        const auto stride = this->valueSize;
+        const auto offset = accuIndex * stride + stride;
+
+        auto currentWeight = this->cumulativeWeight;
+
+        if (currentWeight == 0) {
+
+            // accuN := incoming * weight
+
+            for (unsigned i = 0; i != stride; ++i) {
+
+                buffer[offset + i] = buffer[i];
+            }
+
+            currentWeight = weight;
+
+        } else {
+
+            // accuN := accuN + incoming * weight
+
+            currentWeight += weight;
+            const auto mix = weight / currentWeight;
+            //            this._mixBufferRegion( buffer, offset, 0, mix, stride );
+        }
+
+        this->cumulativeWeight = currentWeight;
     }
 
     void accumulateAdditive(float weight) {
-
     }
 
-    void apply(float accuIndex) {
+    void apply(int accuIndex) {
 
         const auto stride = this->valueSize;
-        const auto& buffer = this->buffer;
+        const auto& buffer = this->scope.buffer;
         const auto offset = accuIndex * stride + stride;
 
         const auto weight = this->cumulativeWeight;
         const auto weightAdditive = this->cumulativeWeightAdditive;
 
-        const auto& binding = this->binding;
+        auto& binding = this->scope.binding;
 
         this->cumulativeWeight = 0;
         this->cumulativeWeightAdditive = 0;
@@ -135,8 +131,8 @@ struct PropertyMixer::Impl {
 
             const auto originalValueOffset = stride * this->_origIndex;
 
-            //                    this->_mixBufferRegion(
-            //                            buffer, offset, originalValueOffset, 1 - weight, stride);
+            //                                this->_mixBufferRegion(
+            //                                        buffer, offset, originalValueOffset, 1 - weight, stride);
         }
 
         if (weightAdditive > 0) {
@@ -152,37 +148,43 @@ struct PropertyMixer::Impl {
 
                 // value has changed -> update scene graph
 
-                //                        binding.setValue(buffer, offset);
+                binding->setValue(buffer, offset);
                 break;
             }
         }
     }
 
-private:
-    int _origIndex = 3;
-    int _addIndex = 4;
-    int _workIndex = -1;
+    void restoreOriginalState() {
+    }
 
-    float cumulativeWeight = 0;
-    float cumulativeWeightAdditive = 0;
+    void saveOriginalState() {
+        auto& binding = this->scope.binding;
 
-    int useCount = 0;
-    int referenceCount = 0;
+        auto& buffer = this->scope.buffer;
+        const auto stride = this->valueSize;
 
-    void _slerpAdditive(std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
+        const auto originalValueOffset = stride * this->_origIndex;
 
-        const auto workOffset = this->_workIndex * stride;
+        binding->getValue(buffer, originalValueOffset);
 
-        // Store result in intermediate buffer offset
-        Quaternion::multiplyQuaternionsFlat(buffer, workOffset, buffer, dstOffset, buffer, srcOffset);
+        // accu[0..1] := orig -- initially detect changes against the original
+        for (unsigned i = stride, e = originalValueOffset; i != e; ++i) {
 
-        // Slerp to the intermediate result
-        Quaternion::slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, workOffset, t);
+            buffer[i] = buffer[originalValueOffset + (i % stride)];
+        }
+
+        // Add to identity for additive
+        this->setIdentity();
+
+        this->cumulativeWeight = 0;
+        this->cumulativeWeightAdditive = 0;
     }
 };
 
-PropertyMixer::PropertyMixer(const PropertyBinding& binding, const std::string& typeName, int valueSize)
-    : pimpl_(std::make_unique<Impl>(binding, typeName, valueSize)) {}
+
+PropertyMixer::PropertyMixer(const std::shared_ptr<PropertyBinding>& binding, const std::string& typeName, size_t valueSize)
+    : binding(binding), pimpl_(std::make_unique<Impl>(*this, typeName, valueSize)) {}
+
 
 void PropertyMixer::accumulate(int accuIndex, float weight) {
 
@@ -196,7 +198,17 @@ void PropertyMixer::accumulateAdditive(float weight) {
 
 void PropertyMixer::apply(int accuIndex) {
 
-    pimpl_-> apply(accuIndex);
+    pimpl_->apply(accuIndex);
+}
+
+void PropertyMixer::restoreOriginalState() {
+
+    pimpl_->restoreOriginalState();
+}
+
+void PropertyMixer::saveOriginalState() {
+
+    pimpl_->saveOriginalState();
 }
 
 

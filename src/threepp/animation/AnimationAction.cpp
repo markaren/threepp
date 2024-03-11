@@ -201,7 +201,7 @@ void AnimationAction::_update(float time, float deltaTime, int timeDirection, in
 
         // check for scheduled start of action
 
-        const auto timeRunning = (time - *startTime) * timeDirection;
+        const auto timeRunning = (time - *startTime) * static_cast<float>(timeDirection);
         if (timeRunning < 0 || timeDirection == 0) {
 
             return;// yet to come / don't decide when delta = 0
@@ -210,7 +210,7 @@ void AnimationAction::_update(float time, float deltaTime, int timeDirection, in
         // start
 
         this->_startTime = std::nullopt;// unschedule
-        deltaTime = timeDirection * timeRunning;
+        deltaTime = static_cast<float>(timeDirection) * timeRunning;
     }
 
     // apply time scale and advance time

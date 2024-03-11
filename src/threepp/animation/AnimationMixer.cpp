@@ -25,10 +25,10 @@ struct AnimationMixer::Impl {
     int _nActiveBindings;
     int _nActiveControlInterpolants;
 
-    std::vector<PropertyBinding*> _bindings;
+    std::vector<std::shared_ptr<PropertyMixer>> _bindings;
     std::vector<std::shared_ptr<AnimationAction>> _actions;
     std::unordered_map<std::string, ClipAction> _actionsByClip;
-    std::unordered_map<std::string, std::unordered_map<std::string, PropertyMixer*>> _bindingsByRootAndName;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::shared_ptr<PropertyMixer>>> _bindingsByRootAndName;
 
     AnimationMixer& scope;
 
@@ -46,56 +46,58 @@ struct AnimationMixer::Impl {
         auto& interpolants = action->_interpolants;
         const auto rootUuid = root->uuid;
         auto& bindingsByRoot = this->_bindingsByRootAndName;
-        //
-        //        //        auto& bindingsByName = bindingsByRoot[ rootUuid ];
-        //
-        if (!bindingsByRoot.count(rootUuid)) {
 
-            std::unordered_map<std::string, PropertyMixer*> bindingsByName;
-            bindingsByRoot[rootUuid] = bindingsByName;
-        }
+        auto& bindingsByName = bindingsByRoot[rootUuid];//insert
 
+        //                if (!bindingsByRoot.count(rootUuid)) {
+        //
+        //                    std::unordered_map<std::string, PropertyMixer*> bindingsByName;
+        //                    bindingsByRoot[rootUuid] = bindingsByName;
+        //                }
+
+
+        std::shared_ptr<PropertyMixer> binding;
         for (auto i = 0; i != nTracks; ++i) {
 
             const auto& track = tracks[i];
             const auto trackName = track->getName();
-            //
-            //                        auto& binding = bindingsByName[trackName];
-            //
-            //            if (binding != undefined) {
-            //
-            //                bindings[i] = binding;
-            //
-            //            } else {
-            //
-            //                binding = bindings[i];
-            //
-            //                if (binding != undefined) {
-            //
-            //                    // existing binding, make sure the cache knows
-            //
-            //                    if (!binding._cacheIndex) {
-            //
-            //                        ++binding.referenceCount;
-            //                        this->_addInactiveBinding(binding, rootUuid, trackName);
-            //                    }
-            //
-            //                    continue;
-            //                }
-            //
-            //                const auto path = prototypeAction && prototypeAction._propertyBindings[i].binding.parsedPath;
-            //
-            //                binding = std::make_unique<PropertyMixer>(
-            //                        PropertyBinding::create(root, trackName, path),
-            //                        track.ValueTypeName, track->getValueSize());
-            //
-            //                ++binding.referenceCount;
-            //                this->_addInactiveBinding(binding, rootUuid, trackName);
-            //
-            //                bindings[i] = binding;
-            //            }
 
-            //                        interpolants[i].resultBuffer = binding.buffer;
+            if (bindingsByName.count(trackName)) {
+
+                bindings[i] = bindingsByName[trackName];
+
+            } else {
+
+                binding = bindings[i];
+
+                if (binding) {
+
+                    // existing binding, make sure the cache knows
+                    //
+                    if (!binding->_cacheIndex) {
+
+                        ++binding->referenceCount;
+                        this->_addInactiveBinding(binding, rootUuid, trackName);
+                    }
+
+                    continue;
+                }
+
+                std::optional<PropertyBinding::TrackResults> path;
+                if (prototypeAction) {
+                    path = prototypeAction->_propertyBindings[i]->binding->parsedPath;
+                }
+                binding = std::make_shared<PropertyMixer>(
+                        PropertyBinding::create(root, trackName, path),
+                        track->ValueTypeName(), track->getValueSize());
+
+                ++binding->referenceCount;
+                this->_addInactiveBinding(binding, rootUuid, trackName);
+
+                bindings[i] = binding;
+            }
+
+            interpolants[i]->resultBuffer = &binding->buffer;
         }
     }
 
@@ -117,7 +119,7 @@ struct AnimationMixer::Impl {
         this->_bindingsByRootAndName = {};// inside: Map< name, PropertyMixer >
 
 
-        //        this->_controlInterpolants = {};// same game as above
+        //                this->_controlInterpolants = {};// same game as above
         this->_nActiveControlInterpolants = 0;
     }
 
@@ -135,9 +137,9 @@ struct AnimationMixer::Impl {
     AnimationAction* clipAction(std::shared_ptr<AnimationClip> clipObject, Object3D* optionalRoot, std::optional<AnimationBlendMode> blendMode) {
 
         auto root = optionalRoot ? optionalRoot : this->_root;
-        auto rootUuid = root->uuid;
+        const auto rootUuid = root->uuid;
 
-        auto clipUuid = clipObject->uuid();
+        const auto clipUuid = clipObject->uuid();
 
         AnimationAction* prototypeAction = nullptr;
 
@@ -168,11 +170,12 @@ struct AnimationMixer::Impl {
 
             // we know the clip, so we don't have to parse all
             // the bindings again but can just copy
-            prototypeAction = actionsForClip.knownActions[0];
+            prototypeAction = actionsForClip.knownActions.front();
 
             // also, take the clip from the prototype action
-            if (clipObject == nullptr)
+            if (clipObject == nullptr) {
                 clipObject = prototypeAction->_clip;
+            }
         }
 
         // clip must be known when specified via string
@@ -259,11 +262,11 @@ struct AnimationMixer::Impl {
         // update scene graph
 
         auto& bindings = this->_bindings;
-        auto nBindings = this->_nActiveBindings;
+        const auto nBindings = this->_nActiveBindings;
 
         for (auto i = 0; i != nBindings; ++i) {
 
-            //            bindings[i]->apply(accuIndex);
+            bindings[i]->apply(accuIndex);
         }
     }
 
@@ -296,11 +299,11 @@ struct AnimationMixer::Impl {
 
                 auto& binding = bindings[i];
 
-                //                if (binding.useCount++ == 0) {
-                //
-                //                    this->_lendBinding(binding);
-                //                    binding.saveOriginalState();
-                //                }
+                if (binding->useCount++ == 0) {
+
+                    this->_lendBinding(binding);
+                    binding->saveOriginalState();
+                }
             }
 
             this->_lendAction(action);
@@ -318,12 +321,11 @@ struct AnimationMixer::Impl {
 
                 const auto& binding = bindings[i];
 
-                //                                if ( -- binding.useCount === 0 ) {
-                //
-                //                    binding.restoreOriginalState();
-                //                    this->_takeBackBinding( binding );
-                //
-                //                }
+                if (--binding->useCount == 0) {
+
+                    binding->restoreOriginalState();
+                    this->_takeBackBinding(binding);
+                }
             }
 
             this->_takeBackAction(action);
@@ -380,6 +382,109 @@ struct AnimationMixer::Impl {
         return index && index < _nActiveActions;
     }
 
+    void _addInactiveAction(AnimationAction& action, const std::string& clipUuid, const std::string& rootUuid) {
+
+        auto& actions = this->_actions;
+
+        auto& actionsByClip = this->_actionsByClip;
+
+        //        auto& actionsForClip = actionsByClip[ clipUuid ];
+
+        if (!actionsByClip.count(clipUuid)) {
+
+            ClipAction actionsForClip = {
+
+                    std::vector<AnimationAction*>{&action},
+                    {}
+
+            };
+
+            action._byClipCacheIndex = 0;
+
+            actionsByClip[clipUuid] = actionsForClip;
+
+        } else {
+
+            auto& knownActions = actionsByClip.at(rootUuid).knownActions;
+
+            action._byClipCacheIndex = knownActions.size();
+            knownActions.emplace_back(&action);
+        }
+
+        action._cacheIndex = actions.size();
+        actions.emplace_back(&action);
+
+        actionsByClip.at(rootUuid).actionByRoot[rootUuid] = &action;
+    }
+
+    void _addInactiveBinding(const std::shared_ptr<PropertyMixer>& binding, const std::string& rootUuid, const std::string& trackName) {
+        auto& bindingsByRoot = this->_bindingsByRootAndName;
+        auto& bindings = this->_bindings;
+
+        auto& bindingByName = bindingsByRoot[rootUuid];
+
+        bindingByName[trackName] = binding;
+
+        binding->_cacheIndex = bindings.size();
+        bindings.emplace_back(binding);
+    }
+
+    void _removeInactiveBinding(std::shared_ptr<PropertyMixer> binding) {
+
+        auto& bindings = this->_bindings;
+        auto& propBinding = binding->binding;
+        auto rootUuid = propBinding->rootNode->uuid;
+        auto trackName = propBinding->path;
+        auto& bindingsByRoot = this->_bindingsByRootAndName;
+        auto& bindingByName = bindingsByRoot[rootUuid];
+
+        auto& lastInactiveBinding = bindings.back();
+        const auto cacheIndex = binding->_cacheIndex;
+
+        lastInactiveBinding->_cacheIndex = cacheIndex;
+        bindings[cacheIndex] = lastInactiveBinding;
+        bindings.pop_back();
+
+        bindingByName.erase(trackName);
+
+        if (bindingByName.empty()) {
+
+            bindingsByRoot.erase(rootUuid);
+        }
+    }
+
+    void _lendBinding(const std::shared_ptr<PropertyMixer>& binding) {
+
+        auto& bindings = this->_bindings;
+        const auto prevIndex = binding->_cacheIndex;
+
+        auto lastActiveIndex = this->_nActiveBindings++;
+
+        auto& firstInactiveBinding = bindings[lastActiveIndex];
+
+        binding->_cacheIndex = lastActiveIndex;
+        bindings[lastActiveIndex] = binding;
+
+        firstInactiveBinding->_cacheIndex = prevIndex;
+        bindings[prevIndex] = firstInactiveBinding;
+    }
+
+    void _takeBackBinding(const std::shared_ptr<PropertyMixer>& binding) {
+
+        auto& bindings = this->_bindings;
+        const auto prevIndex = binding->_cacheIndex;
+
+        const auto firstInactiveIndex = --this->_nActiveBindings;
+
+        const auto lastActiveBinding = bindings[firstInactiveIndex];
+
+        binding->_cacheIndex = firstInactiveIndex;
+        bindings[firstInactiveIndex] = binding;
+
+        lastActiveBinding->_cacheIndex = prevIndex;
+        bindings[prevIndex] = lastActiveBinding;
+    }
+
     // Allows you to seek to a specific time in an animation.
     void setTime(float timeInSeconds) {
 
@@ -407,7 +512,6 @@ void AnimationMixer::stopAllAction() {
 
     pimpl_->stopAllAction();
 }
-
 
 void AnimationMixer::update(float dt) {
 

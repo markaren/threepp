@@ -1,3 +1,4 @@
+#include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/AssimpLoader.hpp"
@@ -51,38 +52,19 @@ int main() {
 
     AssimpLoader loader;
 
-    auto soldier = loader.load("data/models/gltf/Soldier.glb");
-    soldier->traverseType<Mesh>([](Mesh& m) {
+    auto model = loader.load("data/models/gltf/SimpleSkinning.gltf");
+    model->traverseType<SkinnedMesh>([](auto& m) {
         m.receiveShadow = true;
         m.castShadow = true;
     });
-    scene.add(soldier);
-    soldier->scale *= 2;
-    soldier->position.x = -2;
+    scene.add(model);
 
-    auto skeletonHelperSoldier = SkeletonHelper::create(*soldier);
-    skeletonHelperSoldier->material()->as<LineBasicMaterial>()->linewidth = 2;
-    scene.add(skeletonHelperSoldier);
+    auto mixer = AnimationMixer(*model);
+    mixer.clipAction(model->animations.front())->play();
 
-    //
-
-    auto stormTrooper = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
-    stormTrooper->traverseType<Mesh>([](Mesh& m) {
-        m.receiveShadow = true;
-        m.castShadow = true;
-
-        if (auto mat = m.material()->as<MaterialWithMap>()) {
-            mat->map->wrapS = TextureWrapping::Repeat;
-            mat->map->wrapT = TextureWrapping::Repeat;
-        }
-    });
-    scene.add(stormTrooper);
-    stormTrooper->scale *= 0.6;
-    stormTrooper->position.x = 2;
-
-    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTrooper);
-    skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
-    scene.add(skeletonHelperTrooper);
+    auto skeletonHelper = SkeletonHelper::create(*model);
+    skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene.add(skeletonHelper);
 
     //
 
@@ -98,19 +80,13 @@ int main() {
         renderer.setSize(size);
     });
 
-    auto& soldierBones = skeletonHelperSoldier->getBones();
-    auto& trooperBones = skeletonHelperTrooper->getBones();
 
     Clock clock;
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        const auto dt = clock.getDelta();
 
-        auto time = clock.getElapsedTime();
-        for (auto i = 0; i < soldierBones.size(); i++) {
-            soldierBones[i]->rotation.y = std::sin(time) * 5 / float(soldierBones.size());
-        }
-        for (auto i = 0; i < trooperBones.size(); i++) {
-            trooperBones[i]->rotation.y = std::sin(time) * 5 / float(trooperBones.size());
-        }
+        mixer.update(dt);
+
+        renderer.render(scene, camera);
     });
 }

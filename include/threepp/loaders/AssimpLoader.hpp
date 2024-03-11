@@ -50,7 +50,9 @@ namespace threepp {
 
                     const auto aiNodeAnim = aiAnim->mChannels[j];
 
-                    if (auto track = loadRotationTrack(aiNodeAnim)) tracks.emplace_back(track);
+                    if (auto track = loadRotationTrack(aiNodeAnim)){
+                        tracks.emplace_back(track);
+                    }
                 }
 
                 auto clip = std::make_shared<AnimationClip>(name, duration, tracks);
