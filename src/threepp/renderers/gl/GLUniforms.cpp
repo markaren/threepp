@@ -356,6 +356,8 @@ namespace {
                         glUniform1iv(addr, static_cast<int>(n), units.data());
 
                         for (unsigned i = 0; i != n; ++i) {
+                            auto value = data[i];
+                            if (!value) continue;
                             textures->setTexture2D(*data[i], units[i]);
                         }
                     };
@@ -401,6 +403,8 @@ namespace {
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
                                     int index = utils::parseInt(u->id);
+                                    auto value = arg[index];
+                                    if (!value) continue;
                                     u->setValue(*arg[index], textures);
                                 }
                             }},

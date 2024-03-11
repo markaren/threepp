@@ -16,8 +16,8 @@ namespace {
         auto geometry = BoxGeometry::create(params);
         auto material = MeshBasicMaterial::create();
 
-        Mesh mesh(geometry, material);
-        mesh.add(createWireframe(*geometry));
+        auto mesh = Mesh::create(geometry, material);
+        mesh->add(createWireframe(*geometry));
 
         return mesh;
     }
@@ -79,8 +79,8 @@ int main() {
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
-        mesh.rotation.y += 0.8f * dt;
-        mesh.rotation.x += 0.5f * dt;
+        mesh->rotation.y += 0.8f * dt;
+        mesh->rotation.x += 0.5f * dt;
 
         renderer.render(scene, camera);
 
@@ -88,7 +88,7 @@ int main() {
 
         if (paramsChanged) {
             paramsChanged = false;
-            updateGroupGeometry(mesh, params);
+            updateGroupGeometry(*mesh, params);
         }
     });
 }

@@ -105,7 +105,7 @@ namespace threepp {
         Object3D();
 
         Object3D(Object3D&& source) noexcept;
-        Object3D& operator=(Object3D&& other) = delete;
+        Object3D& operator=(Object3D&&) = delete;
         Object3D(const Object3D&) = delete;
         Object3D& operator=(const Object3D&) = delete;
 
@@ -228,18 +228,11 @@ namespace threepp {
             return nullptr;
         }
 
-        virtual std::vector<Material*> materials() {
-
-            return {};
-        }
-
-        [[nodiscard]] virtual const Material* material() const {
-
-            return nullptr;
-        }
-
         template<class T>
         T* as() {
+
+            static_assert(std::is_base_of<Object3D, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
+                          "T must be a base class of Object3D");
 
             return dynamic_cast<T*>(this);
         }

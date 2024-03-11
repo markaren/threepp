@@ -37,25 +37,15 @@ GridHelper::GridHelper(unsigned int size, unsigned int divisions, const Color& c
         k += step;
     }
 
-    auto geometry = BufferGeometry::create();
-    geometry->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
-    geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
+    geometry_->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
+    geometry_->setAttribute("color", FloatBufferAttribute::create(colors, 3));
 
-    auto material = LineBasicMaterial::create();
-    material->vertexColors = true;
-    material->toneMapped = false;
-
-    material_ = material;
-    geometry_ = geometry;
+    auto m = material()->as<LineBasicMaterial>();
+    m->vertexColors = true;
+    m->toneMapped = false;
 }
 
 std::shared_ptr<GridHelper> GridHelper::create(unsigned int size, unsigned int divisions, const Color& color1, const Color& color2) {
 
     return std::shared_ptr<GridHelper>(new GridHelper(size, divisions, color1, color2));
-}
-
-GridHelper::~GridHelper() {
-
-    this->geometry_->dispose();
-    this->material_->dispose();
 }
