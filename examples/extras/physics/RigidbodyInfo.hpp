@@ -3,7 +3,6 @@
 #ifndef THREEPP_RIGIDBODYINFO_HPP
 #define THREEPP_RIGIDBODYINFO_HPP
 
-#include <any>
 #include <optional>
 #include <string>
 #include <utility>

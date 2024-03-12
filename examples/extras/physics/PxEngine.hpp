@@ -15,15 +15,15 @@ namespace {
 
     using JointCreate = std::function<physx::PxJoint*(physx::PxPhysics& physics, physx::PxRigidActor* actor0, const physx::PxTransform& localFrame0, physx::PxRigidActor* actor1, const physx::PxTransform& localFrame1)>;
 
-    static physx::PxVec3 toPxVector3(const threepp::Vector3& v) {
+    physx::PxVec3 toPxVector3(const threepp::Vector3& v) {
         return {v.x, v.y, v.z};
     }
 
-    static physx::PxQuat toPxQuat(const threepp::Quaternion& q) {
+    physx::PxQuat toPxQuat(const threepp::Quaternion& q) {
         return {q.x, q.y, q.z, q.w};
     }
 
-    static physx::PxTransform toPxTransform(const threepp::Matrix4& m) {
+    physx::PxTransform toPxTransform(const threepp::Matrix4& m) {
         threepp::Vector3 pos;
         threepp::Quaternion quat;
         threepp::Vector3 scale;
@@ -167,7 +167,7 @@ public:
         if (info._useVisualGeometryAsCollider) {
             auto shape = toPxShape(obj.geometry());
             if (!shape) {
-                shape = physics->createShape(physx::PxSphereGeometry(0.1), *defaultMaterial, true); //dummy
+                shape = physics->createShape(physx::PxSphereGeometry(0.1), *defaultMaterial, true);//dummy
             }
             shapes.emplace_back(shape);
         }
@@ -288,7 +288,6 @@ private:
     physx::PxScene* scene;
     physx::PxMaterial* defaultMaterial;
 
-//    std::unordered_map<threepp::Object3D*, std::unique_ptr<physx::PxGeometry>> geometries;
     std::unordered_map<threepp::Object3D*, physx::PxRigidActor*> bodies;
     std::unordered_map<threepp::Object3D*, std::vector<physx::PxJoint*>> joints;
 
@@ -386,7 +385,7 @@ private:
             return physics->createShape(physx::PxBoxGeometry(physx::PxVec3{box->width / 2, box->height / 2, box->depth / 2}), *defaultMaterial, true);
         } else if (type == "SphereGeometry") {
             const auto sphere = dynamic_cast<const threepp::SphereGeometry*>(geometry);
-            return  physics->createShape(physx::PxSphereGeometry(sphere->radius), *defaultMaterial, true);
+            return physics->createShape(physx::PxSphereGeometry(sphere->radius), *defaultMaterial, true);
         } else if (type == "CapsuleGeometry") {
             const auto cap = dynamic_cast<const threepp::CapsuleGeometry*>(geometry);
             return physics->createShape(physx::PxCapsuleGeometry(cap->radius, cap->length / 2), *defaultMaterial, true);
@@ -429,7 +428,6 @@ private:
                     auto rb = scope->bodies.at(m);
                     scope->scene->removeActor(*rb);
                     scope->bodies.erase(m);
-//                    scope->geometries.erase(m);
                 }
                 m->removeEventListener("remove", this);
             }
