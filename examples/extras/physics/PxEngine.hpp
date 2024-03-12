@@ -15,6 +15,24 @@ namespace {
 
     using JointCreate = std::function<physx::PxJoint*(physx::PxPhysics& physics, physx::PxRigidActor* actor0, const physx::PxTransform& localFrame0, physx::PxRigidActor* actor1, const physx::PxTransform& localFrame1)>;
 
+    static physx::PxVec3 toPxVector3(const threepp::Vector3& v) {
+        return {v.x, v.y, v.z};
+    }
+
+    static physx::PxQuat toPxQuat(const threepp::Quaternion& q) {
+        return {q.x, q.y, q.z, q.w};
+    }
+
+    static physx::PxTransform toPxTransform(threepp::Matrix4& m) {
+        threepp::Vector3 pos;
+        threepp::Quaternion quat;
+        threepp::Vector3 scale;
+
+        m.decompose(pos, quat, scale);
+
+        return {toPxVector3(pos), toPxQuat(quat)};
+    }
+
 }
 
 class PxEngine: public threepp::Object3D {
@@ -57,16 +75,16 @@ public:
         add(debugTriangles);
     }
 
-    void setup(threepp::Scene& scene) {
+    void setup(threepp::Object3D& obj) {
 
-        scene.traverse([this](threepp::Object3D& obj) {
+        obj.traverse([this](threepp::Object3D& obj) {
             if (obj.userData.count("rigidbodyInfo")) {
                 auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
-                registerMesh(obj, info.type == threepp::RigidBodyInfo::Type::STATIC);
+                registerMesh(obj, info);
             }
         });
 
-        scene.traverse([this](threepp::Object3D& obj) {
+        obj.traverse([this](threepp::Object3D& obj) {
             if (obj.userData.count("rigidbodyInfo")) {
                 auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
                 if (info.joint) {
@@ -129,7 +147,7 @@ public:
         debugRender();
     }
 
-    void registerMesh(threepp::Object3D& obj, bool isStatic) {
+    void registerMesh(threepp::Object3D& obj, const threepp::RigidBodyInfo& info) {
 
         threepp::Vector3 worldPos;
         obj.getWorldPosition(worldPos);
@@ -139,12 +157,15 @@ public:
         if (!geometry) return;
         geometries[&obj] = std::move(geometry);
         physx::PxActor* actor;
-        if (isStatic) {
+        if (info.type == threepp::RigidBodyInfo::Type::STATIC) {
             auto staticActor = PxCreateStatic(*physics, transform, *geometries[&obj], *defaultMaterial);
             bodies[&obj] = staticActor;
             actor = staticActor;
         } else {
-            auto rigidActor = PxCreateDynamic(*physics, transform, *geometries[&obj], *defaultMaterial, 10.0f);
+            auto rigidActor = PxCreateDynamic(*physics, transform, *geometries[&obj], *defaultMaterial, 1.0f);
+            if (info.mass) {
+                rigidActor->setMass(*info.mass);
+            }
             rigidActor->setSolverIterationCounts(30, 2);
             bodies[&obj] = rigidActor;
             actor = rigidActor;
@@ -180,13 +201,13 @@ public:
         return joint;
     }
 
-    physx::PxActor* getBody(threepp::Mesh& mesh) {
+    physx::PxRigidActor* getBody(threepp::Object3D& mesh) {
         if (!bodies.count(&mesh)) return nullptr;
         return bodies.at(&mesh);
     }
 
     template<class JointType>
-    JointType* getJoint(threepp::Mesh& obj, int index = 0) {
+    JointType* getJoint(threepp::Object3D& obj, int index = 0) {
         if (!joints.count(&obj)) return nullptr;
         auto* joint = joints.at(&obj).at(index);
         return joint->is<JointType>();
@@ -293,24 +314,6 @@ private:
         }
     }
 
-    static physx::PxVec3 toPxVector3(const threepp::Vector3& v) {
-        return {v.x, v.y, v.z};
-    }
-
-    static physx::PxQuat toPxQuat(const threepp::Quaternion& q) {
-        return {q.x, q.y, q.z, q.w};
-    }
-
-    static physx::PxTransform toPxTransform(threepp::Matrix4& m) {
-        threepp::Vector3 pos;
-        threepp::Quaternion quat;
-        threepp::Vector3 scale;
-
-        m.decompose(pos, quat, scale);
-
-        return {toPxVector3(pos), toPxQuat(quat)};
-    }
-
     std::unique_ptr<physx::PxGeometry> toPxGeometry(const threepp::BufferGeometry* geometry) {
 
         if (!geometry) return nullptr;
@@ -359,7 +362,7 @@ private:
 
         void onEvent(threepp::Event& event) override {
             if (event.type == "remove") {
-                auto m = static_cast<threepp::Mesh*>(event.target);
+                auto m = static_cast<threepp::Object3D*>(event.target);
                 if (scope->bodies.count(m)) {
                     auto rb = scope->bodies.at(m);
                     scope->scene->removeActor(*rb);

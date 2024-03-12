@@ -55,6 +55,20 @@ namespace {
         std::vector<physx::PxRevoluteJoint*> joints;
     };
 
+    auto spawnObject() {
+
+        auto geometry = SphereGeometry::create(0.1);
+        auto material = MeshPhongMaterial::create();
+
+        auto mesh = Mesh::create(geometry, material);
+
+        RigidBodyInfo info;
+        info.mass = 10.f;
+        mesh->userData["rigidbodyInfo"] = info;
+
+        return mesh;
+    }
+
 }// namespace
 
 int main() {
@@ -115,7 +129,7 @@ int main() {
     auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC};
     ground->userData["rigidbodyInfo"] = groundBody;
 
-    auto sphereBody = RigidBodyInfo{}.setMass(1000);
+    auto sphereBody = RigidBodyInfo{}.setMass(50);
     sphere->userData["rigidbodyInfo"] = sphereBody;
 
     engine.setup(scene);
@@ -129,11 +143,26 @@ int main() {
     canvas.addKeyListener(keyListener);
 
     OrbitControls controls(camera, canvas);
-    controls.enableKeys = false;
+    controls.enableKeys = true;
 
     bool run = false;
-    KeyAdapter adapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent) {
+    KeyAdapter adapter(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
         run = true;
+
+        if (evt.key == Key::SPACE) {
+            auto obj = spawnObject();
+            obj->position = camera.position;
+            scene.add(obj);
+            engine.setup(*obj);
+            auto rb = engine.getBody(*obj)->is<physx::PxRigidDynamic>();
+            Vector3 world;
+            camera.getWorldDirection(world);
+            rb->addForce(toPxVector3(world * 10000));
+
+            canvas.invokeLater([&, obj]{
+                scene.remove(*obj);
+            }, 1);
+        }
     });
     canvas.addKeyListener(adapter);
 
