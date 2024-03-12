@@ -32,11 +32,11 @@ namespace {
         }
     };
 
-    struct KeyController: KeyListener {
+    struct MyKeyListener: KeyListener {
 
         float& t;
 
-        explicit KeyController(float& t): t(t) {}
+        explicit MyKeyListener(float& t): t(t) {}
 
         void onKeyPressed(KeyEvent evt) override {
             std::cout << "onKeyPressed at t=" << t << std::endl;
@@ -59,7 +59,7 @@ int main() {
     Clock clock;
 
     MyMouseListener ml{clock.elapsedTime};
-    KeyController kl{clock.elapsedTime};
+    MyKeyListener kl{clock.elapsedTime};
     canvas.addMouseListener(ml);
     canvas.addKeyListener(kl);
 
