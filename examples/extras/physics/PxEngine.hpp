@@ -8,7 +8,14 @@
 
 #include "threepp/threepp.hpp"
 
+#include <functional>
 #include <unordered_map>
+
+namespace {
+
+    using JointCreate = std::function<physx::PxJoint*(physx::PxPhysics& physics, physx::PxRigidActor* actor0, const physx::PxTransform& localFrame0, physx::PxRigidActor* actor1, const physx::PxTransform& localFrame1)>;
+
+}
 
 class PxEngine: public threepp::Object3D {
 
@@ -53,7 +60,6 @@ public:
     void setup(threepp::Scene& scene) {
 
         scene.traverse([this](threepp::Object3D& obj) {
-
             if (obj.userData.count("rigidbodyInfo")) {
                 auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
                 if (info.type == threepp::RigidBodyInfo::Type::DYNAMIC) {
@@ -62,26 +68,35 @@ public:
                     registerMeshStatic(obj);
                 }
             }
-
         });
 
         scene.traverse([this](threepp::Object3D& obj) {
-
             if (obj.userData.count("rigidbodyInfo")) {
                 auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
                 if (info.joint) {
-                    if (info.joint->type == threepp::JointInfo::Type::HINGE) {
-                        if (info.joint->connectedBody) {
-                            createRevoluteJoint(obj, *info.joint->connectedBody, info.joint->anchor, info.joint->axis);
-                        } else {
-                            createRevoluteJoint(obj, info.joint->anchor, info.joint->axis);
-                        }
+                    physx::PxJoint* joint = nullptr;
+                    switch (info.joint->type) {
+                        case threepp::JointInfo::Type::HINGE:
+                            joint = createJoint(physx::PxRevoluteJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
+                            if (info.joint->limits) {
+                                joint->is<physx::PxRevoluteJoint>()->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
+                                joint->is<physx::PxRevoluteJoint>()->setLimit({info.joint->limits->x, info.joint->limits->y});
+                            }
+                            break;
+                        case threepp::JointInfo::Type::PRISMATIC:
+                            joint = createJoint(physx::PxDistanceJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
+//                            joint->is<physx::PxPrismaticJoint>()->setPrismaticJointFlag(physx::PxPrismaticJointFlag::eLIMIT_ENABLED, true);
+                            break;
+                        case threepp::JointInfo::Type::LOCK:
+                            joint = createJoint(physx::PxFixedJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
+                            break;
+                    }
+                    if (joint) {
+                        joints[&obj].push_back(joint);
                     }
                 }
             }
-
         });
-
     }
 
     void step(float dt) {
@@ -138,6 +153,12 @@ public:
         return actor;
     }
 
+    template<class JointType>
+    JointType* getJoint(threepp::Object3D& obj, int index = 0) {
+        auto* joint = joints.at(&obj).at(index);
+        return joint->is<JointType>();
+    }
+
     void registerMeshStatic(threepp::Object3D& obj) {
 
         threepp::Vector3 worldPos;
@@ -155,45 +176,25 @@ public:
         obj.addEventListener("remove", &onMeshRemovedListener);
     }
 
-    physx::PxRevoluteJoint* createRevoluteJoint(threepp::Object3D& o1, threepp::Vector3 anchor, threepp::Vector3 axis) {
+    physx::PxJoint* createJoint(JointCreate create, threepp::Object3D* o1, threepp::Object3D* o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
 
-        auto rb1 = bodies.at(&o1);
+        o1->updateMatrixWorld();
+        if (o2) o2->updateMatrixWorld();
 
-        threepp::Matrix4 f1;
-        f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
-        f1.setPosition(anchor);
-
-        threepp::Matrix4 f2 = *o1.matrixWorld;
-        f2.invert().multiply(f1);
-
-        physx::PxTransform frame1 = toPxTransform(f1);
-        physx::PxTransform frame2 = toPxTransform(f2);
-
-        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, nullptr, frame1, rb1, frame2);
-        joint->setConstraintFlag(physx::PxConstraintFlag::eVISUALIZATION, true);
-
-        return joint;
-    }
-
-    physx::PxRevoluteJoint* createRevoluteJoint(threepp::Object3D& o1, threepp::Object3D& o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
-
-        o1.updateMatrixWorld();
-        o2.updateMatrixWorld();
-
-        auto rb1 = bodies.at(&o1);
-        auto rb2 = bodies.at(&o2);
+        auto rb1 = bodies.at(o1);
+        auto rb2 = o2 ? bodies.at(o2) : nullptr;
 
         threepp::Matrix4 f1;
         f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
         f1.setPosition(anchor);
 
-        threepp::Matrix4 f2 = *o2.matrixWorld;
-        f2.invert().multiply(*o1.matrixWorld).multiply(f1);
+        threepp::Matrix4 f2 = o2 ? *o2->matrixWorld : threepp::Matrix4();
+        f2.invert().multiply(*o1->matrixWorld).multiply(f1);
 
         physx::PxTransform frame1 = toPxTransform(f1);
         physx::PxTransform frame2 = toPxTransform(f2);
 
-        physx::PxRevoluteJoint* joint = physx::PxRevoluteJointCreate(*physics, rb1, frame1, rb2, frame2);
+        auto* joint = create(*physics, rb2, frame2, rb1, frame1);
         joint->setConstraintFlag(physx::PxConstraintFlag::eVISUALIZATION, true);
 
         return joint;
@@ -242,6 +243,7 @@ private:
 
     std::unordered_map<threepp::Object3D*, std::unique_ptr<physx::PxGeometry>> geometries;
     std::unordered_map<threepp::Object3D*, physx::PxRigidActor*> bodies;
+    std::unordered_map<threepp::Object3D*, std::vector<physx::PxJoint*>> joints;
 
     std::shared_ptr<threepp::Mesh> debugTriangles = threepp::Mesh::create();
     std::shared_ptr<threepp::LineSegments> debugLines = threepp::LineSegments::create();
