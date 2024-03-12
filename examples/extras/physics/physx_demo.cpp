@@ -112,12 +112,10 @@ int main() {
     box3Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2).setLimits({math::degToRad(-90), math::degToRad(90)});
     box3->userData["rigidbodyInfo"] = box3Body;
 
-    auto groundBody = RigidBodyInfo{};
-    groundBody.type = RigidBodyInfo::Type::STATIC;
+    auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC};
     ground->userData["rigidbodyInfo"] = groundBody;
 
-    auto sphereBody = RigidBodyInfo{};
-    sphereBody.type = RigidBodyInfo::Type::DYNAMIC;
+    auto sphereBody = RigidBodyInfo{}.setMass(1000);
     sphere->userData["rigidbodyInfo"] = sphereBody;
 
     engine.setup(scene);

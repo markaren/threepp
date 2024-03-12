@@ -65,10 +65,17 @@ namespace threepp {
             DYNAMIC
         };
 
+        explicit RigidBodyInfo(Type type = Type::DYNAMIC): type(type) {}
+
         std::optional<float> mass;
-        Type type = Type::DYNAMIC;
+        Type type;
 
         std::optional<JointInfo> joint;
+
+        RigidBodyInfo& setMass(float mass) {
+            this->mass = mass;
+            return *this;
+        }
 
         JointInfo& addJoint() {
             joint = JointInfo();

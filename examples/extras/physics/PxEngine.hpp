@@ -62,11 +62,7 @@ public:
         scene.traverse([this](threepp::Object3D& obj) {
             if (obj.userData.count("rigidbodyInfo")) {
                 auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
-                if (info.type == threepp::RigidBodyInfo::Type::DYNAMIC) {
-                    registerMeshDynamic(obj);
-                } else {
-                    registerMeshStatic(obj);
-                }
+                registerMesh(obj, info.type == threepp::RigidBodyInfo::Type::STATIC);
             }
         });
 
@@ -86,6 +82,9 @@ public:
                         case threepp::JointInfo::Type::PRISMATIC:
                             joint = createJoint(physx::PxDistanceJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
 //                            joint->is<physx::PxPrismaticJoint>()->setPrismaticJointFlag(physx::PxPrismaticJointFlag::eLIMIT_ENABLED, true);
+                            break;
+                        case threepp::JointInfo::Type::BALL:
+                            joint = createJoint(physx::PxSphericalJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
                             break;
                         case threepp::JointInfo::Type::LOCK:
                             joint = createJoint(physx::PxFixedJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
@@ -130,36 +129,7 @@ public:
         debugRender();
     }
 
-    physx::PxRigidDynamic* registerMeshDynamic(threepp::Object3D& obj) {
-
-        threepp::Vector3 worldPos;
-        obj.getWorldPosition(worldPos);
-
-        physx::PxTransform transform(toPxVector3(worldPos));
-        auto geometry = toPxGeometry(obj.geometry());
-        if (!geometry) return nullptr;
-        geometries[&obj] = std::move(geometry);
-        auto* actor = PxCreateDynamic(*physics, transform, *geometries[&obj], *defaultMaterial, 10.0f);
-
-        bodies[&obj] = actor;
-        scene->addActor(*actor);
-
-        actor->setSolverIterationCounts(30, 2);
-
-        obj.matrixAutoUpdate = false;
-
-        obj.addEventListener("remove", &onMeshRemovedListener);
-
-        return actor;
-    }
-
-    template<class JointType>
-    JointType* getJoint(threepp::Object3D& obj, int index = 0) {
-        auto* joint = joints.at(&obj).at(index);
-        return joint->is<JointType>();
-    }
-
-    void registerMeshStatic(threepp::Object3D& obj) {
+    void registerMesh(threepp::Object3D& obj, bool isStatic) {
 
         threepp::Vector3 worldPos;
         obj.getWorldPosition(worldPos);
@@ -168,15 +138,25 @@ public:
         auto geometry = toPxGeometry(obj.geometry());
         if (!geometry) return;
         geometries[&obj] = std::move(geometry);
-        auto* actor = PxCreateStatic(*physics, transform, *geometries[&obj], *defaultMaterial);
+        physx::PxActor* actor;
+        if (isStatic) {
+            auto staticActor = PxCreateStatic(*physics, transform, *geometries[&obj], *defaultMaterial);
+            bodies[&obj] = staticActor;
+            actor = staticActor;
+        } else {
+            auto rigidActor = PxCreateDynamic(*physics, transform, *geometries[&obj], *defaultMaterial, 10.0f);
+            rigidActor->setSolverIterationCounts(30, 2);
+            bodies[&obj] = rigidActor;
+            actor = rigidActor;
+        }
 
-        bodies[&obj] = actor;
         scene->addActor(*actor);
 
+        obj.matrixAutoUpdate = false;
         obj.addEventListener("remove", &onMeshRemovedListener);
     }
 
-    physx::PxJoint* createJoint(JointCreate create, threepp::Object3D* o1, threepp::Object3D* o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
+    physx::PxJoint* createJoint(const JointCreate& create, threepp::Object3D* o1, threepp::Object3D* o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
 
         o1->updateMatrixWorld();
         if (o2) o2->updateMatrixWorld();
@@ -200,9 +180,16 @@ public:
         return joint;
     }
 
-    physx::PxActor* get(threepp::Mesh& mesh) {
+    physx::PxActor* getBody(threepp::Mesh& mesh) {
         if (!bodies.count(&mesh)) return nullptr;
         return bodies.at(&mesh);
+    }
+
+    template<class JointType>
+    JointType* getJoint(threepp::Mesh& obj, int index = 0) {
+        if (!joints.count(&obj)) return nullptr;
+        auto* joint = joints.at(&obj).at(index);
+        return joint->is<JointType>();
     }
 
     [[nodiscard]] physx::PxScene* getScene() const {
