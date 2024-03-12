@@ -63,7 +63,7 @@ namespace {
         auto mesh = Mesh::create(geometry, material);
 
         RigidBodyInfo info;
-        info.mass = 10.f;
+        info.setMass(10);
         mesh->userData["rigidbodyInfo"] = info;
 
         return mesh;
@@ -104,7 +104,6 @@ int main() {
     auto sphereMaterial = MeshPhongMaterial::create({{"color", Color::red}});
     auto mesh = Mesh::create(geometry, sphereMaterial);
     mesh->position.y = 10;
-    mesh->visible = false;
     scene.add(mesh);
 
     auto groundMaterial = MeshPhongMaterial::create({{"color", Color::gray}});
@@ -119,21 +118,15 @@ int main() {
     PxEngine engine;
 
     auto box1Body = RigidBodyInfo{};
-    box1Body.addJoint().setType(threepp::JointInfo::Type::HINGE)
-            .setAnchor({0, -0.5, 0}).setAxis({0, 1, 0})
-            .setLimits({math::degToRad(-120), math::degToRad(120)});
+    box1Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -0.5, 0}).setAxis({0, 1, 0}).setLimits({math::degToRad(-120), math::degToRad(120)});
     box1->userData["rigidbodyInfo"] = box1Body;
 
     auto box2Body = RigidBodyInfo{};
-    box2Body.addJoint().setType(threepp::JointInfo::Type::HINGE)
-            .setAnchor({0, -1, 0}).setAxis({0, 0, 1}).setConnectedBody(*box1)
-            .setLimits({math::degToRad(0), math::degToRad(120)});
+    box2Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -1, 0}).setAxis({0, 0, 1}).setConnectedBody(*box1).setLimits({math::degToRad(0), math::degToRad(120)});
     box2->userData["rigidbodyInfo"] = box2Body;
 
     auto box3Body = RigidBodyInfo{};
-    box3Body.addJoint().setType(threepp::JointInfo::Type::HINGE)
-            .setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2)
-            .setLimits({math::degToRad(-90), math::degToRad(90)});
+    box3Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2).setLimits({math::degToRad(-90), math::degToRad(90)});
     box3->userData["rigidbodyInfo"] = box3Body;
 
     auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC};

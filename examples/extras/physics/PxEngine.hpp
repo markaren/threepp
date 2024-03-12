@@ -23,7 +23,7 @@ namespace {
         return {q.x, q.y, q.z, q.w};
     }
 
-    static physx::PxTransform toPxTransform(threepp::Matrix4& m) {
+    static physx::PxTransform toPxTransform(const threepp::Matrix4& m) {
         threepp::Vector3 pos;
         threepp::Quaternion quat;
         threepp::Vector3 scale;
@@ -33,7 +33,7 @@ namespace {
         return {toPxVector3(pos), toPxQuat(quat)};
     }
 
-}
+}// namespace
 
 class PxEngine: public threepp::Object3D {
 
@@ -75,37 +75,41 @@ public:
         add(debugTriangles);
     }
 
+    PxEngine(const PxEngine&) = delete;
+    PxEngine(PxEngine&&) = delete;
+    PxEngine& operator=(const PxEngine&) = delete;
+    PxEngine& operator=(PxEngine&&) = delete;
+
     void setup(threepp::Object3D& obj) {
 
         obj.traverse([this](threepp::Object3D& obj) {
             if (obj.userData.count("rigidbodyInfo")) {
                 auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
-                registerMesh(obj, info);
+                registerObject(obj, info);
             }
         });
 
         obj.traverse([this](threepp::Object3D& obj) {
             if (obj.userData.count("rigidbodyInfo")) {
                 auto info = std::any_cast<threepp::RigidBodyInfo>(obj.userData.at("rigidbodyInfo"));
-                if (info.joint) {
+                if (info._joint) {
                     physx::PxJoint* joint = nullptr;
-                    switch (info.joint->type) {
+                    switch (info._joint->type) {
                         case threepp::JointInfo::Type::HINGE:
-                            joint = createJoint(physx::PxRevoluteJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
-                            if (info.joint->limits) {
+                            joint = createJoint(physx::PxRevoluteJointCreate, &obj, info._joint->connectedBody, info._joint->anchor, info._joint->axis);
+                            if (info._joint->limits) {
                                 joint->is<physx::PxRevoluteJoint>()->setRevoluteJointFlag(physx::PxRevoluteJointFlag::eLIMIT_ENABLED, true);
-                                joint->is<physx::PxRevoluteJoint>()->setLimit({info.joint->limits->x, info.joint->limits->y});
+                                joint->is<physx::PxRevoluteJoint>()->setLimit({info._joint->limits->x, info._joint->limits->y});
                             }
                             break;
                         case threepp::JointInfo::Type::PRISMATIC:
-                            joint = createJoint(physx::PxDistanceJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
-//                            joint->is<physx::PxPrismaticJoint>()->setPrismaticJointFlag(physx::PxPrismaticJointFlag::eLIMIT_ENABLED, true);
+                            joint = createJoint(physx::PxDistanceJointCreate, &obj, info._joint->connectedBody, info._joint->anchor, info._joint->axis);
                             break;
                         case threepp::JointInfo::Type::BALL:
-                            joint = createJoint(physx::PxSphericalJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
+                            joint = createJoint(physx::PxSphericalJointCreate, &obj, info._joint->connectedBody, info._joint->anchor, info._joint->axis);
                             break;
                         case threepp::JointInfo::Type::LOCK:
-                            joint = createJoint(physx::PxFixedJointCreate, &obj, info.joint->connectedBody, info.joint->anchor, info.joint->axis);
+                            joint = createJoint(physx::PxFixedJointCreate, &obj, info._joint->connectedBody, info._joint->anchor, info._joint->axis);
                             break;
                     }
                     if (joint) {
@@ -147,31 +151,66 @@ public:
         debugRender();
     }
 
-    void registerMesh(threepp::Object3D& obj, const threepp::RigidBodyInfo& info) {
+    void registerObject(threepp::Object3D& obj, const threepp::RigidBodyInfo& info) {
 
-        threepp::Vector3 worldPos;
-        obj.getWorldPosition(worldPos);
-
-        physx::PxTransform transform(toPxVector3(worldPos));
-        auto geometry = toPxGeometry(obj.geometry());
-        if (!geometry) return;
-        geometries[&obj] = std::move(geometry);
-        physx::PxActor* actor;
-        if (info.type == threepp::RigidBodyInfo::Type::STATIC) {
-            auto staticActor = PxCreateStatic(*physics, transform, *geometries[&obj], *defaultMaterial);
-            bodies[&obj] = staticActor;
-            actor = staticActor;
-        } else {
-            auto rigidActor = PxCreateDynamic(*physics, transform, *geometries[&obj], *defaultMaterial, 1.0f);
-            if (info.mass) {
-                rigidActor->setMass(*info.mass);
-            }
-            rigidActor->setSolverIterationCounts(30, 2);
-            bodies[&obj] = rigidActor;
-            actor = rigidActor;
+        if (!info._useVisualGeometryAsCollider && info._colliders.empty()) {
+            return;
+        }
+        if (info._useVisualGeometryAsCollider && !obj.geometry()) {
+            return;
         }
 
-        scene->addActor(*actor);
+        obj.updateMatrixWorld();
+
+        std::vector<physx::PxShape*> shapes;
+
+        if (info._useVisualGeometryAsCollider) {
+            auto shape = toPxShape(obj.geometry());
+            if (!shape) {
+                shape = physics->createShape(physx::PxSphereGeometry(0.1), *defaultMaterial, true); //dummy
+            }
+            shapes.emplace_back(shape);
+        }
+
+        for (const auto& [collider, offset] : info._colliders) {
+            auto shape = toPxShape(collider);
+            shape->setLocalPose(toPxTransform(offset));
+            shapes.emplace_back(shape);
+        }
+
+        if (info._type == threepp::RigidBodyInfo::Type::STATIC) {
+            auto staticActor = PxCreateStatic(*physics, toPxTransform(*obj.matrixWorld), *shapes.front());
+
+            for (unsigned i = 1; i < shapes.size(); i++) {
+                auto shape = shapes[i];
+                staticActor->attachShape(*shape);
+            }
+
+            bodies[&obj] = staticActor;
+        } else {
+            auto rigidActor = PxCreateDynamic(*physics, toPxTransform(*obj.matrixWorld), *shapes.front(), 1.f);
+
+            rigidActor->setSolverIterationCounts(30, 2);
+
+            for (unsigned i = 1; i < shapes.size(); i++) {
+                auto shape = shapes[i];
+                rigidActor->attachShape(*shape);
+            }
+
+            if (info._mass) {
+                physx::PxRigidBodyExt::setMassAndUpdateInertia(*rigidActor, *info._mass);
+            } else {
+                physx::PxRigidBodyExt::updateMassAndInertia(*rigidActor, 1.f);
+            }
+
+            bodies[&obj] = rigidActor;
+        }
+
+        for (auto shape : shapes) {
+            shape->release();
+        }
+
+        scene->addActor(*bodies[&obj]);
 
         obj.matrixAutoUpdate = false;
         obj.addEventListener("remove", &onMeshRemovedListener);
@@ -249,7 +288,7 @@ private:
     physx::PxScene* scene;
     physx::PxMaterial* defaultMaterial;
 
-    std::unordered_map<threepp::Object3D*, std::unique_ptr<physx::PxGeometry>> geometries;
+//    std::unordered_map<threepp::Object3D*, std::unique_ptr<physx::PxGeometry>> geometries;
     std::unordered_map<threepp::Object3D*, physx::PxRigidActor*> bodies;
     std::unordered_map<threepp::Object3D*, std::vector<physx::PxJoint*>> joints;
 
@@ -314,20 +353,43 @@ private:
         }
     }
 
-    std::unique_ptr<physx::PxGeometry> toPxGeometry(const threepp::BufferGeometry* geometry) {
+    physx::PxShape* toPxShape(const threepp::Collider& collider) {
+
+        switch (collider.index()) {
+            case 0:// Sphere
+            {
+                threepp::SphereCollider sphere = std::get<threepp::SphereCollider>(collider);
+                return physics->createShape(physx::PxSphereGeometry(sphere.radius), *defaultMaterial, true);
+            }
+            case 1:// Box
+            {
+                threepp::BoxCollider box = std::get<threepp::BoxCollider>(collider);
+                return physics->createShape(physx::PxBoxGeometry(box.halfWidth, box.halfHeight, box.halfDepth), *defaultMaterial, true);
+            }
+            case 2:// Capsule
+            {
+                threepp::CapsuleCollider box = std::get<threepp::CapsuleCollider>(collider);
+                return physics->createShape(physx::PxCapsuleGeometry(box.radius, box.halfHeight), *defaultMaterial, true);
+            }
+            default:
+                return nullptr;
+        }
+    }
+
+    physx::PxShape* toPxShape(const threepp::BufferGeometry* geometry) {
 
         if (!geometry) return nullptr;
 
         const auto type = geometry->type();
         if (type == "BoxGeometry") {
             const auto box = dynamic_cast<const threepp::BoxGeometry*>(geometry);
-            return std::make_unique<physx::PxBoxGeometry>(physx::PxVec3{box->width / 2, box->height / 2, box->depth / 2});
+            return physics->createShape(physx::PxBoxGeometry(physx::PxVec3{box->width / 2, box->height / 2, box->depth / 2}), *defaultMaterial, true);
         } else if (type == "SphereGeometry") {
             const auto sphere = dynamic_cast<const threepp::SphereGeometry*>(geometry);
-            return std::make_unique<physx::PxSphereGeometry>(sphere->radius);
+            return  physics->createShape(physx::PxSphereGeometry(sphere->radius), *defaultMaterial, true);
         } else if (type == "CapsuleGeometry") {
             const auto cap = dynamic_cast<const threepp::CapsuleGeometry*>(geometry);
-            return std::make_unique<physx::PxCapsuleGeometry>(cap->radius, cap->length / 2);
+            return physics->createShape(physx::PxCapsuleGeometry(cap->radius, cap->length / 2), *defaultMaterial, true);
         } else {
 
             auto pos = geometry->getAttribute<float>("position");
@@ -349,7 +411,7 @@ private:
                 physx::PxDefaultMemoryInputData input(buf.getData(), buf.getSize());
                 auto convexMesh = physics->createConvexMesh(input);
 
-                return std::make_unique<physx::PxConvexMeshGeometry>(convexMesh);
+                return physics->createShape(physx::PxConvexMeshGeometry(convexMesh), *defaultMaterial, true);
             }
 
             return nullptr;
@@ -367,7 +429,7 @@ private:
                     auto rb = scope->bodies.at(m);
                     scope->scene->removeActor(*rb);
                     scope->bodies.erase(m);
-                    scope->geometries.erase(m);
+//                    scope->geometries.erase(m);
                 }
                 m->removeEventListener("remove", this);
             }

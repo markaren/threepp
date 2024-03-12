@@ -6,7 +6,11 @@
 #include <any>
 #include <optional>
 #include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
+#include "threepp/math/Matrix4.hpp"
 #include "threepp/math/Vector2.hpp"
 #include "threepp/math/Vector3.hpp"
 
@@ -14,14 +18,13 @@ namespace threepp {
 
     class Object3D;
 
-    struct PhysicsInfo {
-        float gravity = -9.81f;
-    };
-
     struct JointInfo {
 
         enum class Type {
-            LOCK, HINGE, PRISMATIC, BALL
+            LOCK,
+            HINGE,
+            PRISMATIC,
+            BALL
         };
 
         threepp::Vector3 anchor;
@@ -55,8 +58,33 @@ namespace threepp {
             this->type = type;
             return *this;
         }
-
     };
+
+    struct CapsuleCollider {
+        float halfHeight;
+        float radius;
+
+        CapsuleCollider(float radius, float halfHeight)
+            : radius(radius), halfHeight(halfHeight) {}
+    };
+
+    struct SphereCollider {
+        float radius;
+
+        explicit SphereCollider(float radius)
+            : radius(radius) {}
+    };
+
+    struct BoxCollider {
+        float halfWidth = 0.5;
+        float halfHeight = 0.5;
+        float halfDepth = 0.5;
+
+        BoxCollider(float halfWidth, float halfHeight, float halfDpeth)
+            : halfWidth(halfWidth), halfHeight(halfHeight), halfDepth(halfDpeth) {}
+    };
+
+    using Collider = std::variant<SphereCollider, BoxCollider, CapsuleCollider>;
 
     struct RigidBodyInfo {
 
@@ -65,21 +93,32 @@ namespace threepp {
             DYNAMIC
         };
 
-        explicit RigidBodyInfo(Type type = Type::DYNAMIC): type(type) {}
+        Type _type;
+        std::optional<float> _mass;
+        std::optional<JointInfo> _joint;
+        std::vector<std::pair<Collider, Matrix4>> _colliders;
+        bool _useVisualGeometryAsCollider{true};
 
-        std::optional<float> mass;
-        Type type;
-
-        std::optional<JointInfo> joint;
+        explicit RigidBodyInfo(Type type = Type::DYNAMIC): _type(type) {}
 
         RigidBodyInfo& setMass(float mass) {
-            this->mass = mass;
+            this->_mass = mass;
+            return *this;
+        }
+
+        RigidBodyInfo& addCollider(Collider collider, Matrix4 offset = Matrix4()) {
+            this->_colliders.emplace_back(collider, offset);
+            return *this;
+        }
+
+        RigidBodyInfo& useVisualGeometryAsCollider(bool flag) {
+            this->_useVisualGeometryAsCollider = flag;
             return *this;
         }
 
         JointInfo& addJoint() {
-            joint = JointInfo();
-            return *joint;
+            this->_joint = JointInfo();
+            return *_joint;
         }
     };
 
