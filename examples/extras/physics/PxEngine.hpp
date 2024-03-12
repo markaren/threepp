@@ -333,7 +333,7 @@ private:
             auto pos = geometry->getAttribute<float>("position");
             if (pos) {
                 physx::PxConvexMeshDesc convexDesc;
-                convexDesc.points.count = 50;
+                convexDesc.points.count = pos->count() / 2;
                 convexDesc.points.stride = sizeof(physx::PxVec3);
                 convexDesc.points.data = pos->array().data();
                 convexDesc.flags = physx::PxConvexFlag::eCOMPUTE_CONVEX;

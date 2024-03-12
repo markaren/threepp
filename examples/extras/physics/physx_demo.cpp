@@ -98,13 +98,17 @@ int main() {
     box3->position.y = 1.25;
     box2->add(box3);
 
+    STLLoader loader;
+    auto geometry = loader.load("data/models/stl/pr2_head_pan.stl");
+    geometry->scale(5, 5, 5);
     auto sphereMaterial = MeshPhongMaterial::create({{"color", Color::red}});
-    auto sphere = Mesh::create(SphereGeometry::create(0.5), sphereMaterial);
-    sphere->position.y = 20;
-    scene.add(sphere);
+    auto mesh = Mesh::create(geometry, sphereMaterial);
+    mesh->position.y = 10;
+    mesh->visible = false;
+    scene.add(mesh);
 
     auto groundMaterial = MeshPhongMaterial::create({{"color", Color::gray}});
-    auto ground = Mesh::create(BoxGeometry::create(40, 0.1, 40), groundMaterial);
+    auto ground = Mesh::create(BoxGeometry::create(60, 0.1, 60), groundMaterial);
     ground->position.y = -0.05;
     scene.add(ground);
 
@@ -115,22 +119,28 @@ int main() {
     PxEngine engine;
 
     auto box1Body = RigidBodyInfo{};
-    box1Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -0.5, 0}).setAxis({0, 1, 0}).setLimits({math::degToRad(-120), math::degToRad(120)});
+    box1Body.addJoint().setType(threepp::JointInfo::Type::HINGE)
+            .setAnchor({0, -0.5, 0}).setAxis({0, 1, 0})
+            .setLimits({math::degToRad(-120), math::degToRad(120)});
     box1->userData["rigidbodyInfo"] = box1Body;
 
     auto box2Body = RigidBodyInfo{};
-    box2Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -1, 0}).setAxis({0, 0, 1}).setConnectedBody(*box1).setLimits({math::degToRad(0), math::degToRad(120)});
+    box2Body.addJoint().setType(threepp::JointInfo::Type::HINGE)
+            .setAnchor({0, -1, 0}).setAxis({0, 0, 1}).setConnectedBody(*box1)
+            .setLimits({math::degToRad(0), math::degToRad(120)});
     box2->userData["rigidbodyInfo"] = box2Body;
 
     auto box3Body = RigidBodyInfo{};
-    box3Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2).setLimits({math::degToRad(-90), math::degToRad(90)});
+    box3Body.addJoint().setType(threepp::JointInfo::Type::HINGE)
+            .setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2)
+            .setLimits({math::degToRad(-90), math::degToRad(90)});
     box3->userData["rigidbodyInfo"] = box3Body;
 
     auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC};
     ground->userData["rigidbodyInfo"] = groundBody;
 
-    auto sphereBody = RigidBodyInfo{}.setMass(50);
-    sphere->userData["rigidbodyInfo"] = sphereBody;
+    auto meshBody = RigidBodyInfo{}.setMass(20);
+    mesh->userData["rigidbodyInfo"] = meshBody;
 
     engine.setup(scene);
     scene.add(engine);
@@ -159,9 +169,10 @@ int main() {
             camera.getWorldDirection(world);
             rb->addForce(toPxVector3(world * 10000));
 
-            canvas.invokeLater([&, obj]{
+            canvas.invokeLater([&, obj] {
                 scene.remove(*obj);
-            }, 1);
+            },
+                               1);
         }
     });
     canvas.addKeyListener(adapter);
