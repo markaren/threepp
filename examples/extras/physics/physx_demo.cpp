@@ -71,7 +71,7 @@ namespace {
         mesh->castShadow = true;
 
         RigidBodyInfo info;
-        info.setMass(10);
+        info.setMass(10).setMaterialProperties(0.5, 0.9);
         mesh->userData["rigidbodyInfo"] = info;
 
         return mesh;
@@ -153,7 +153,7 @@ int main() {
     auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC};
     ground->userData["rigidbodyInfo"] = groundBody;
 
-    auto meshBody = RigidBodyInfo{}.setMass(20);
+    auto meshBody = RigidBodyInfo{}.setMass(20).setMaterialProperties(1, 0);
     mesh->userData["rigidbodyInfo"] = meshBody;
 
     engine.setup(scene);

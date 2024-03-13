@@ -83,6 +83,14 @@ namespace threepp {
             : halfWidth(halfWidth), halfHeight(halfHeight), halfDepth(halfDpeth) {}
     };
 
+    struct MaterialInfo {
+        float friction;
+        float restitution ;
+
+        MaterialInfo(float friction, float restitution)
+            : friction(friction), restitution(restitution) {}
+    };
+
     using Collider = std::variant<SphereCollider, BoxCollider, CapsuleCollider>;
 
     struct RigidBodyInfo {
@@ -96,6 +104,7 @@ namespace threepp {
         std::optional<float> _mass;
         std::optional<JointInfo> _joint;
         std::vector<std::pair<Collider, Matrix4>> _colliders;
+        std::optional<MaterialInfo> _material;
         bool _useVisualGeometryAsCollider{true};
 
         explicit RigidBodyInfo(Type type = Type::DYNAMIC): _type(type) {}
@@ -112,6 +121,11 @@ namespace threepp {
 
         RigidBodyInfo& useVisualGeometryAsCollider(bool flag) {
             this->_useVisualGeometryAsCollider = flag;
+            return *this;
+        }
+
+        RigidBodyInfo& setMaterialProperties(float friction, float restitution) {
+            this->_material = MaterialInfo(friction, restitution);
             return *this;
         }
 
