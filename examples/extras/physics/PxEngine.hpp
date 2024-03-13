@@ -409,12 +409,12 @@ private:
         if (!lineVertices.empty()) {
             auto pos = debugLines->geometry()->getAttribute<float>("position");
             auto col = debugLines->geometry()->getAttribute<float>("color");
-            if (pos && pos->array().size() >= lineVertices.size()) { //re-use geometry
+            if (pos && pos->array().size() >= lineVertices.size()) {//re-use geometry
                 std::copy(lineVertices.begin(), lineVertices.end(), pos->array().begin());
                 std::copy(lineColors.begin(), lineColors.end(), col->array().begin());
                 pos->needsUpdate();
                 col->needsUpdate();
-                debugLines->geometry()->setDrawRange(0, lineVertices.size()/3);
+                debugLines->geometry()->setDrawRange(0, lineVertices.size() / 3);
             } else {
                 auto geom = threepp::BufferGeometry::create();
                 geom->setAttribute("position", threepp::FloatBufferAttribute::create(lineVertices, 3));
@@ -467,12 +467,12 @@ private:
         if (!triangleVertices.empty()) {
             auto pos = debugTriangles->geometry()->getAttribute<float>("position");
             auto col = debugTriangles->geometry()->getAttribute<float>("color");
-            if (pos && pos->array().size() >= triangleVertices.size()) { //re-use geometry
+            if (pos && pos->array().size() >= triangleVertices.size()) {//re-use geometry
                 std::copy(triangleVertices.begin(), triangleVertices.end(), pos->array().begin());
                 std::copy(triangleColors.begin(), triangleColors.end(), col->array().begin());
                 pos->needsUpdate();
                 col->needsUpdate();
-                debugTriangles->geometry()->setDrawRange(0, triangleVertices.size()/3);
+                debugTriangles->geometry()->setDrawRange(0, triangleVertices.size() / 3);
             } else {
                 auto geom = threepp::BufferGeometry::create();
                 geom->setAttribute("position", threepp::FloatBufferAttribute::create(triangleVertices, 3));
@@ -503,12 +503,12 @@ private:
         if (!pointVertices.empty()) {
             auto pos = debugPoints->geometry()->getAttribute<float>("position");
             auto col = debugPoints->geometry()->getAttribute<float>("color");
-            if (pos && pos->array().size() >= pointVertices.size()) { //re-use geometry
+            if (pos && pos->array().size() >= pointVertices.size()) {//re-use geometry
                 std::copy(pointVertices.begin(), pointVertices.end(), pos->array().begin());
                 std::copy(pointColors.begin(), pointColors.end(), col->array().begin());
                 pos->needsUpdate();
                 col->needsUpdate();
-                debugPoints->geometry()->setDrawRange(0, pointVertices.size()/3);
+                debugPoints->geometry()->setDrawRange(0, pointVertices.size() / 3);
             } else {
                 auto geom = threepp::BufferGeometry::create();
                 geom->setAttribute("position", threepp::FloatBufferAttribute::create(pointVertices, 3));
