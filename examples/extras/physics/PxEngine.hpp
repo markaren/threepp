@@ -412,6 +412,7 @@ private:
             lineColors.emplace_back(c2.b);
         }
 
+        debugLines->visible = !lineVertices.empty();
         if (!lineVertices.empty()) {
             auto geom = threepp::BufferGeometry::create();
             geom->setAttribute("position", threepp::FloatBufferAttribute::create(lineVertices, 3));
@@ -459,6 +460,7 @@ private:
             triangleColors.emplace_back(color3.b);
         }
 
+        debugTriangles->visible = !triangleVertices.empty();
         if (!triangleVertices.empty()) {
             auto geom = threepp::BufferGeometry::create();
             geom->setAttribute("position", threepp::FloatBufferAttribute::create(triangleVertices, 3));
@@ -484,6 +486,7 @@ private:
             pointColors.emplace_back(color.b);
         }
 
+        debugPoints->visible = !pointVertices.empty();
         if (!pointVertices.empty()) {
             auto geom = threepp::BufferGeometry::create();
             geom->setAttribute("position", threepp::FloatBufferAttribute::create(pointVertices, 3));
