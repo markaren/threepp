@@ -1,6 +1,9 @@
 
 #include "PxEngine.hpp"
 
+#include "threepp/threepp.hpp"
+
+#include <iostream>
 
 using namespace threepp;
 
@@ -16,44 +19,48 @@ namespace {
             }
         }
 
-        void onKeyPressed(KeyEvent evt) override {
-            if (evt.key == Key::NUM_1) {
-                joints[0]->setDriveVelocity(-5);
-            } else if (evt.key == Key::NUM_2) {
-                joints[0]->setDriveVelocity(5);
-            } else if (evt.key == Key::NUM_3) {
-                joints[1]->setDriveVelocity(-5);
-            } else if (evt.key == Key::NUM_4) {
-                joints[1]->setDriveVelocity(5);
-            } else if (evt.key == Key::NUM_5) {
-                joints[2]->setDriveVelocity(-5);
-            } else if (evt.key == Key::NUM_6) {
-                joints[2]->setDriveVelocity(5);
-            }
-        }
-        void onKeyReleased(KeyEvent evt) override {
-            switch (evt.key) {
-                case Key::NUM_1:
-                case Key::NUM_2: {
-                    joints[0]->setDriveVelocity(0);
-                } break;
-                case Key::NUM_3:
-                case Key::NUM_4: {
-                    joints[1]->setDriveVelocity(0);
-                } break;
-                case Key::NUM_5:
-                case Key::NUM_6: {
-                    joints[2]->setDriveVelocity(0);
-                } break;
-                default:
-                    break;
-            }
-        }
+        void onKeyPressed(KeyEvent evt) override;
+        void onKeyReleased(KeyEvent evt) override;
 
     private:
         float speed = 0.25;
         std::vector<physx::PxRevoluteJoint*> joints;
     };
+
+    void KeyController::onKeyPressed(KeyEvent evt) {
+        if (evt.key == Key::NUM_1) {
+            joints[0]->setDriveVelocity(-5);
+        } else if (evt.key == Key::NUM_2) {
+            joints[0]->setDriveVelocity(5);
+        } else if (evt.key == Key::NUM_3) {
+            joints[1]->setDriveVelocity(-5);
+        } else if (evt.key == Key::NUM_4) {
+            joints[1]->setDriveVelocity(5);
+        } else if (evt.key == Key::NUM_5) {
+            joints[2]->setDriveVelocity(-5);
+        } else if (evt.key == Key::NUM_6) {
+            joints[2]->setDriveVelocity(5);
+        }
+    }
+
+    void KeyController::onKeyReleased(KeyEvent evt) {
+        switch (evt.key) {
+            case Key::NUM_1:
+            case Key::NUM_2: {
+                joints[0]->setDriveVelocity(0);
+            } break;
+            case Key::NUM_3:
+            case Key::NUM_4: {
+                joints[1]->setDriveVelocity(0);
+            } break;
+            case Key::NUM_5:
+            case Key::NUM_6: {
+                joints[2]->setDriveVelocity(0);
+            } break;
+            default:
+                break;
+        }
+    }
 
     auto spawnObject() {
 
@@ -165,7 +172,9 @@ int main() {
             canvas.invokeLater([&, obj] {
                 scene.remove(*obj);
             },
-                               1);
+                               2);// remove after 2 seconds
+        } else if (evt.key == threepp::Key::D) {
+            engine.debugVisualisation = !engine.debugVisualisation;
         }
     });
     canvas.addKeyListener(adapter);
@@ -175,6 +184,11 @@ int main() {
         camera.updateProjectionMatrix();
         renderer.setSize(size);
     });
+
+    std::cout << "Press any key to start.\n"
+                 "\nPress 'd' to toggle debug visualization."
+                 "\nPress 'space' to spawn spheres."
+              << std::endl;
 
     Clock clock;
     canvas.animate([&] {

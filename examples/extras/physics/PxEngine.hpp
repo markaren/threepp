@@ -6,7 +6,15 @@
 
 #include "RigidbodyInfo.hpp"
 
-#include "threepp/threepp.hpp"
+#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/core/Object3D.hpp"
+#include "threepp/geometries/BoxGeometry.hpp"
+#include "threepp/geometries/CapsuleGeometry.hpp"
+#include "threepp/geometries/CylinderGeometry.hpp"
+#include "threepp/geometries/SphereGeometry.hpp"
+#include "threepp/objects/LineSegments.hpp"
+#include "threepp/objects/Mesh.hpp"
+#include "threepp/objects/Points.hpp"
 
 #include <functional>
 #include <unordered_map>
@@ -38,6 +46,8 @@ namespace {
 class PxEngine: public threepp::Object3D {
 
 public:
+    bool debugVisualisation = true;
+
     explicit PxEngine(float timeStep = 1.f / 100)
         : timeStep(timeStep),
           sceneDesc(physics->getTolerancesScale()),
@@ -148,7 +158,12 @@ public:
             obj->matrix->premultiply(tmpMat.copy(*obj->parent->matrixWorld).invert());
         }
 
-        debugRender();
+        if (debugVisualisation) {
+            visible = true;
+            debugRender();
+        } else {
+            visible = false;
+        }
     }
 
     void registerObject(threepp::Object3D& obj, const threepp::RigidBodyInfo& info) {
