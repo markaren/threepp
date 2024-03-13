@@ -139,15 +139,15 @@ int main() {
     PxEngine engine;
 
     auto box1Body = RigidBodyInfo{};
-    box1Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -0.5, 0}).setAxis({0, 1, 0}).setLimits({math::degToRad(-120), math::degToRad(120)});
+    box1Body.addJoint().setType(JointInfo::Type::HINGE).setAnchor({0, -0.5, 0}).setAxis({0, 1, 0}).setLimits({math::degToRad(-120), math::degToRad(120)});
     box1->userData["rigidbodyInfo"] = box1Body;
 
     auto box2Body = RigidBodyInfo{};
-    box2Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -1, 0}).setAxis({0, 0, 1}).setConnectedBody(*box1).setLimits({math::degToRad(0), math::degToRad(120)});
+    box2Body.addJoint().setType(JointInfo::Type::HINGE).setAnchor({0, -1, 0}).setAxis({0, 0, 1}).setConnectedBody(*box1).setLimits({math::degToRad(0), math::degToRad(120)});
     box2->userData["rigidbodyInfo"] = box2Body;
 
     auto box3Body = RigidBodyInfo{};
-    box3Body.addJoint().setType(threepp::JointInfo::Type::HINGE).setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2).setLimits({math::degToRad(-90), math::degToRad(90)});
+    box3Body.addJoint().setType(JointInfo::Type::HINGE).setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2).setLimits({math::degToRad(-90), math::degToRad(90)});
     box3->userData["rigidbodyInfo"] = box3Body;
 
     auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC};
@@ -167,10 +167,9 @@ int main() {
     canvas.addKeyListener(keyListener);
 
     OrbitControls controls(camera, canvas);
-    controls.enableKeys = true;
 
     bool run = false;
-    KeyAdapter adapter(KeyAdapter::Mode::KEY_PRESSED | threepp::KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
+    KeyAdapter adapter(KeyAdapter::Mode::KEY_PRESSED | KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
         run = true;
 
         if (evt.key == Key::SPACE) {
@@ -187,7 +186,7 @@ int main() {
                 scene.remove(*obj);
             },
                                2);// remove after 2 seconds
-        } else if (evt.key == threepp::Key::D) {
+        } else if (evt.key == Key::D) {
             engine.debugVisualisation = !engine.debugVisualisation;
         }
     });

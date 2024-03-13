@@ -67,7 +67,6 @@ public:
         sceneDesc.solverType = physx::PxSolverType::eTGS;
 
         scene = physics->createScene(sceneDesc);
-        scene->setVisualizationParameter(physx::PxVisualizationParameter::eSCALE, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eACTOR_AXES, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LOCAL_FRAMES, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_POINT, 2.0f);
@@ -75,7 +74,7 @@ public:
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_FORCE, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_SHAPES, 1.0f);
 
-        defaultMaterial = physics->createMaterial(0.5f, 0.5f, 0.6f);
+        defaultMaterial = physics->createMaterial(0.6f, 0.6f, 0.2f);
 
         debugLines->material()->vertexColors = true;
         debugPoints->material()->vertexColors = true;
@@ -139,7 +138,7 @@ public:
             scene->simulate(timeStep);
             scene->fetchResults(true);
 
-            internalTime -= dt;
+            internalTime -= timeStep;
         }
 
         threepp::Matrix4 tmpMat;
@@ -148,9 +147,9 @@ public:
 
             obj->updateMatrixWorld();
 
-            auto t = rb->getGlobalPose();
-            auto pos = t.p;
-            auto quat = t.q;
+            const auto& t = rb->getGlobalPose();
+            const auto& pos = t.p;
+            const auto& quat = t.q;
 
             tmpQuat.set(quat.x, quat.y, quat.z, quat.w);
             obj->matrix->makeRotationFromQuaternion(tmpQuat);
@@ -160,8 +159,10 @@ public:
 
         if (debugVisualisation) {
             visible = true;
+            scene->setVisualizationParameter(physx::PxVisualizationParameter::eSCALE, 1.0f);
             debugRender();
         } else {
+            scene->setVisualizationParameter(physx::PxVisualizationParameter::eSCALE, 0);
             visible = false;
         }
     }
