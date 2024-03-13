@@ -68,7 +68,7 @@ public:
 
         scene = physics->createScene(sceneDesc);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eACTOR_AXES, 1.0f);
-        scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LOCAL_FRAMES, 1.0f);
+        scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LOCAL_FRAMES, 0.5f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_POINT, 2.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eJOINT_LIMITS, 1.0f);
         scene->setVisualizationParameter(physx::PxVisualizationParameter::eCONTACT_FORCE, 1.0f);
@@ -359,8 +359,7 @@ private:
             return physics->createShape(physx::PxCapsuleGeometry(cap->radius, cap->length / 2), *material, true);
         } else {
 
-            auto pos = geometry->getAttribute<float>("position");
-            if (pos) {
+            if (auto pos = geometry->getAttribute<float>("position")) {
                 physx::PxConvexMeshDesc convexDesc;
                 convexDesc.points.count = pos->count() / 2;
                 convexDesc.points.stride = sizeof(physx::PxVec3);
@@ -414,10 +413,20 @@ private:
 
         debugLines->visible = !lineVertices.empty();
         if (!lineVertices.empty()) {
-            auto geom = threepp::BufferGeometry::create();
-            geom->setAttribute("position", threepp::FloatBufferAttribute::create(lineVertices, 3));
-            geom->setAttribute("color", threepp::FloatBufferAttribute::create(lineColors, 3));
-            debugLines->setGeometry(geom);
+            auto pos = debugLines->geometry()->getAttribute<float>("position");
+            auto col = debugLines->geometry()->getAttribute<float>("color");
+            if (pos && pos->array().size() >= lineVertices.size()) { //re-use geometry
+                std::copy(lineVertices.begin(), lineVertices.end(), pos->array().begin());
+                std::copy(lineColors.begin(), lineColors.end(), col->array().begin());
+                pos->needsUpdate();
+                col->needsUpdate();
+                debugLines->geometry()->setDrawRange(0, lineVertices.size()/3);
+            } else {
+                auto geom = threepp::BufferGeometry::create();
+                geom->setAttribute("position", threepp::FloatBufferAttribute::create(lineVertices, 3));
+                geom->setAttribute("color", threepp::FloatBufferAttribute::create(lineColors, 3));
+                debugLines->setGeometry(geom);
+            }
         }
 
         // triangles
@@ -462,10 +471,20 @@ private:
 
         debugTriangles->visible = !triangleVertices.empty();
         if (!triangleVertices.empty()) {
-            auto geom = threepp::BufferGeometry::create();
-            geom->setAttribute("position", threepp::FloatBufferAttribute::create(triangleVertices, 3));
-            geom->setAttribute("color", threepp::FloatBufferAttribute::create(triangleColors, 3));
-            debugTriangles->setGeometry(geom);
+            auto pos = debugTriangles->geometry()->getAttribute<float>("position");
+            auto col = debugTriangles->geometry()->getAttribute<float>("color");
+            if (pos && pos->array().size() >= triangleVertices.size()) { //re-use geometry
+                std::copy(triangleVertices.begin(), triangleVertices.end(), pos->array().begin());
+                std::copy(triangleColors.begin(), triangleColors.end(), col->array().begin());
+                pos->needsUpdate();
+                col->needsUpdate();
+                debugTriangles->geometry()->setDrawRange(0, triangleVertices.size()/3);
+            } else {
+                auto geom = threepp::BufferGeometry::create();
+                geom->setAttribute("position", threepp::FloatBufferAttribute::create(triangleVertices, 3));
+                geom->setAttribute("color", threepp::FloatBufferAttribute::create(triangleColors, 3));
+                debugTriangles->setGeometry(geom);
+            }
         }
 
         // points
@@ -488,10 +507,20 @@ private:
 
         debugPoints->visible = !pointVertices.empty();
         if (!pointVertices.empty()) {
-            auto geom = threepp::BufferGeometry::create();
-            geom->setAttribute("position", threepp::FloatBufferAttribute::create(pointVertices, 3));
-            geom->setAttribute("color", threepp::FloatBufferAttribute::create(pointColors, 3));
-            debugPoints->setGeometry(geom);
+            auto pos = debugPoints->geometry()->getAttribute<float>("position");
+            auto col = debugPoints->geometry()->getAttribute<float>("color");
+            if (pos && pos->array().size() >= pointVertices.size()) { //re-use geometry
+                std::copy(pointVertices.begin(), pointVertices.end(), pos->array().begin());
+                std::copy(pointColors.begin(), pointColors.end(), col->array().begin());
+                pos->needsUpdate();
+                col->needsUpdate();
+                debugPoints->geometry()->setDrawRange(0, pointVertices.size()/3);
+            } else {
+                auto geom = threepp::BufferGeometry::create();
+                geom->setAttribute("position", threepp::FloatBufferAttribute::create(pointVertices, 3));
+                geom->setAttribute("color", threepp::FloatBufferAttribute::create(pointColors, 3));
+                debugPoints->setGeometry(geom);
+            }
         }
     }
 
