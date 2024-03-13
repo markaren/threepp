@@ -23,23 +23,23 @@ namespace {
         void onKeyReleased(KeyEvent evt) override;
 
     private:
-        float speed = 0.25;
+        float speed = 2;
         std::vector<physx::PxRevoluteJoint*> joints;
     };
 
     void KeyController::onKeyPressed(KeyEvent evt) {
         if (evt.key == Key::NUM_1) {
-            joints[0]->setDriveVelocity(-5);
+            joints[0]->setDriveVelocity(-speed);
         } else if (evt.key == Key::NUM_2) {
-            joints[0]->setDriveVelocity(5);
+            joints[0]->setDriveVelocity(speed);
         } else if (evt.key == Key::NUM_3) {
-            joints[1]->setDriveVelocity(-5);
+            joints[1]->setDriveVelocity(-speed);
         } else if (evt.key == Key::NUM_4) {
-            joints[1]->setDriveVelocity(5);
+            joints[1]->setDriveVelocity(speed);
         } else if (evt.key == Key::NUM_5) {
-            joints[2]->setDriveVelocity(-5);
+            joints[2]->setDriveVelocity(-speed);
         } else if (evt.key == Key::NUM_6) {
-            joints[2]->setDriveVelocity(5);
+            joints[2]->setDriveVelocity(speed);
         }
     }
 
@@ -59,6 +59,24 @@ namespace {
             } break;
             default:
                 break;
+        }
+    }
+
+    void setupInstancedMesh(InstancedMesh& mesh) {
+
+        Matrix4 matrix;
+        size_t index = 0;
+        int amount = std::cbrt(mesh.count());
+        float offset = static_cast<float>(amount - 1) / 2;
+        for (int x = 0; x < amount; x++) {
+            for (int y = 0; y < amount; y++) {
+                for (int z = 0; z < amount; z++) {
+                    matrix.setPosition(offset - float(x), offset - float(y), offset - float(z));
+                    mesh.setMatrixAt(index, matrix);
+                    mesh.setColorAt(index, Color::gray);
+                    ++index;
+                }
+            }
         }
     }
 
@@ -125,6 +143,11 @@ int main() {
     ground->receiveShadow = true;
     scene.add(ground);
 
+    auto instanced = InstancedMesh::create(SphereGeometry::create(0.25), MeshBasicMaterial::create(), std::pow(3, 3));
+    setupInstancedMesh(*instanced);
+    instanced->position.y = 50;
+    scene.add(instanced);
+
     auto light1 = AmbientLight::create(Color::white, 0.3f);
     scene.add(light1);
 
@@ -155,6 +178,9 @@ int main() {
 
     auto meshBody = RigidBodyInfo{}.setMass(20).setMaterialProperties(1, 0);
     mesh->userData["rigidbodyInfo"] = meshBody;
+
+    auto instancedBody = RigidBodyInfo();
+    instanced->userData["rigidbodyInfo"] = instancedBody;
 
     engine.setup(scene);
     scene.add(engine);

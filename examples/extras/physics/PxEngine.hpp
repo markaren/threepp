@@ -12,6 +12,7 @@
 #include "threepp/geometries/CapsuleGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
@@ -137,17 +138,28 @@ public:
 
         threepp::Matrix4 tmpMat;
         threepp::Quaternion tmpQuat;
-        for (auto [obj, rb] : bodies) {
+        for (auto& [obj, rb] : bodies) {
 
             obj->updateMatrixWorld();
 
-            const auto& t = rb->getGlobalPose();
-            const auto& pos = t.p;
-            const auto& quat = t.q;
+            if (auto instanced = obj->as<threepp::InstancedMesh>()) {
 
-            tmpQuat.set(quat.x, quat.y, quat.z, quat.w);
-            obj->matrix->makeRotationFromQuaternion(tmpQuat);
-            obj->matrix->setPosition(pos.x, pos.y, pos.z);
+                auto& array = instanced->instanceMatrix()->array();
+                for (int i = 0; i < instanced->count(); i++) {
+                    auto pose = threepp::Matrix4().fromArray(physx::PxMat44(rb[i]->getGlobalPose()).front());
+                    pose.premultiply(tmpMat.copy(*obj->matrix).invert());
+                    for (auto j = 0; j < 16; j++) {
+                        array[i * 16 + j] = pose[j];
+                    }
+                }
+
+                instanced->instanceMatrix()->needsUpdate();
+
+            } else {
+
+                const auto pose = physx::PxMat44(rb.front()->getGlobalPose());
+                obj->matrix->fromArray(pose.front());
+            }
             obj->matrix->premultiply(tmpMat.copy(*obj->parent->matrixWorld).invert());
         }
 
@@ -170,9 +182,9 @@ public:
             return;
         }
 
-        auto material = toPxMaterial(info._material);
-
         obj.updateMatrixWorld();
+
+        auto material = toPxMaterial(info._material);
 
         std::vector<physx::PxShape*> shapes;
 
@@ -190,39 +202,57 @@ public:
             shapes.emplace_back(shape);
         }
 
+
         if (info._type == threepp::RigidBodyInfo::Type::STATIC) {
             auto staticActor = PxCreateStatic(*physics, toPxTransform(*obj.matrixWorld), *shapes.front());
 
             for (unsigned i = 1; i < shapes.size(); i++) {
-                auto shape = shapes[i];
-                staticActor->attachShape(*shape);
+                staticActor->attachShape(*shapes[i]);
             }
 
-            bodies[&obj] = staticActor;
+            bodies[&obj].emplace_back(staticActor);
         } else {
-            auto rigidActor = PxCreateDynamic(*physics, toPxTransform(*obj.matrixWorld), *shapes.front(), 1.f);
 
-            rigidActor->setSolverIterationCounts(30, 2);
+            auto createSingle = [&](float* data) {
+                auto rigidActor = PxCreateDynamic(*physics, physx::PxTransform(physx::PxMat44(data)), *shapes.front(), 1.f);
+                rigidActor->setSolverIterationCounts(30, 2);
 
-            for (unsigned i = 1; i < shapes.size(); i++) {
-                auto shape = shapes[i];
-                rigidActor->attachShape(*shape);
-            }
+                for (unsigned i = 1; i < shapes.size(); i++) {
+                    rigidActor->attachShape(*shapes[i]);
+                }
 
-            if (info._mass) {
-                physx::PxRigidBodyExt::setMassAndUpdateInertia(*rigidActor, *info._mass);
+                if (info._mass) {
+                    physx::PxRigidBodyExt::setMassAndUpdateInertia(*rigidActor, *info._mass);
+                } else {
+                    physx::PxRigidBodyExt::updateMassAndInertia(*rigidActor, 1.f);
+                }
+                return rigidActor;
+            };
+
+            if (auto instanced = obj.as<threepp::InstancedMesh>()) {
+
+                const auto& array = instanced->instanceMatrix()->array();
+
+                threepp::Matrix4 tmp;
+                for (unsigned i = 0; i < instanced->count(); i++) {
+                    unsigned index = i * 16;
+                    tmp.fromArray(array, index);
+                    tmp.premultiply(*obj.matrixWorld);
+                    auto body = createSingle(tmp.elements.data());
+                    bodies[&obj].emplace_back(body);
+                }
             } else {
-                physx::PxRigidBodyExt::updateMassAndInertia(*rigidActor, 1.f);
+                bodies[&obj].emplace_back(createSingle(obj.matrixWorld->elements.data()));
             }
-
-            bodies[&obj] = rigidActor;
         }
 
         for (auto shape : shapes) {
             shape->release();
         }
 
-        scene->addActor(*bodies[&obj]);
+        for (auto actor : bodies[&obj]) {
+            scene->addActor(*actor);
+        }
 
         obj.matrixAutoUpdate = false;
         obj.addEventListener("remove", &onMeshRemovedListener);
@@ -233,8 +263,8 @@ public:
         o1->updateMatrixWorld();
         if (o2) o2->updateMatrixWorld();
 
-        auto rb1 = bodies.at(o1);
-        auto rb2 = o2 ? bodies.at(o2) : nullptr;
+        auto rb1 = getBody(*o1);
+        auto rb2 = o2 ? getBody(*o2) : nullptr;
 
         threepp::Matrix4 f1;
         f1.makeRotationFromQuaternion(threepp::Quaternion().setFromUnitVectors({1, 0, 0}, axis));
@@ -252,9 +282,9 @@ public:
         return joint;
     }
 
-    physx::PxRigidActor* getBody(threepp::Object3D& mesh) {
+    physx::PxRigidActor* getBody(threepp::Object3D& mesh, size_t index = 0) {
         if (!bodies.count(&mesh)) return nullptr;
-        return bodies.at(&mesh);
+        return bodies.at(&mesh)[index];
     }
 
     template<class JointType>
@@ -274,8 +304,8 @@ public:
 
     ~PxEngine() override {
 
-        for (auto [_, rb] : bodies) {
-            rb->release();
+        for (auto [_, list] : bodies) {
+            for (auto rb : list) rb->release();
         }
 
         for (auto material : materials) material->release();
@@ -300,7 +330,7 @@ private:
     physx::PxScene* scene;
     std::vector<physx::PxMaterial*> materials;
 
-    std::unordered_map<threepp::Object3D*, physx::PxRigidActor*> bodies;
+    std::unordered_map<threepp::Object3D*, std::vector<physx::PxRigidActor*>> bodies;
     std::unordered_map<threepp::Object3D*, std::vector<physx::PxJoint*>> joints;
 
     std::shared_ptr<threepp::Mesh> debugTriangles = threepp::Mesh::create();
@@ -320,17 +350,17 @@ private:
             case 0:// Sphere
             {
                 threepp::SphereCollider sphere = std::get<threepp::SphereCollider>(collider);
-                return physics->createShape(physx::PxSphereGeometry(sphere.radius), *material, true);
+                return physics->createShape(physx::PxSphereGeometry(sphere.radius), *material, false);
             }
             case 1:// Box
             {
                 threepp::BoxCollider box = std::get<threepp::BoxCollider>(collider);
-                return physics->createShape(physx::PxBoxGeometry(box.halfWidth, box.halfHeight, box.halfDepth), *material, true);
+                return physics->createShape(physx::PxBoxGeometry(box.halfWidth, box.halfHeight, box.halfDepth), *material, false);
             }
             case 2:// Capsule
             {
                 threepp::CapsuleCollider box = std::get<threepp::CapsuleCollider>(collider);
-                return physics->createShape(physx::PxCapsuleGeometry(box.radius, box.halfHeight), *material, true);
+                return physics->createShape(physx::PxCapsuleGeometry(box.radius, box.halfHeight), *material, false);
             }
             default:
                 return nullptr;
@@ -344,13 +374,13 @@ private:
         const auto type = geometry->type();
         if (type == "BoxGeometry") {
             const auto box = dynamic_cast<const threepp::BoxGeometry*>(geometry);
-            return physics->createShape(physx::PxBoxGeometry(physx::PxVec3{box->width / 2, box->height / 2, box->depth / 2}), *material, true);
+            return physics->createShape(physx::PxBoxGeometry(physx::PxVec3{box->width / 2, box->height / 2, box->depth / 2}), *material, false);
         } else if (type == "SphereGeometry") {
             const auto sphere = dynamic_cast<const threepp::SphereGeometry*>(geometry);
-            return physics->createShape(physx::PxSphereGeometry(sphere->radius), *material, true);
+            return physics->createShape(physx::PxSphereGeometry(sphere->radius), *material, false);
         } else if (type == "CapsuleGeometry") {
             const auto cap = dynamic_cast<const threepp::CapsuleGeometry*>(geometry);
-            return physics->createShape(physx::PxCapsuleGeometry(cap->radius, cap->length / 2), *material, true);
+            return physics->createShape(physx::PxCapsuleGeometry(cap->radius, cap->length / 2), *material, false);
         } else {
 
             if (auto pos = geometry->getAttribute<float>("position")) {
@@ -527,7 +557,7 @@ private:
                 auto m = static_cast<threepp::Object3D*>(event.target);
                 if (scope->bodies.count(m)) {
                     auto rb = scope->bodies.at(m);
-                    scope->scene->removeActor(*rb);
+                    scope->scene->removeActor(*rb.front());
                     scope->bodies.erase(m);
                 }
                 m->removeEventListener("remove", this);
