@@ -32,13 +32,7 @@ namespace {
     }
 
     physx::PxTransform toPxTransform(const threepp::Matrix4& m) {
-        threepp::Vector3 pos;
-        threepp::Quaternion quat;
-        threepp::Vector3 scale;
-
-        m.decompose(pos, quat, scale);
-
-        return {toPxVector3(pos), toPxQuat(quat)};
+        return physx::PxTransform(physx::PxMat44((float*) m.elements.data()));
     }
 
 }// namespace
