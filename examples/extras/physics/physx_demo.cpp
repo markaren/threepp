@@ -66,14 +66,13 @@ namespace {
 
         Matrix4 matrix;
         size_t index = 0;
-        int amount = std::cbrt(mesh.count());
+        int amount = static_cast<int>(std::cbrt(mesh.count()));
         float offset = static_cast<float>(amount - 1) / 2;
         for (int x = 0; x < amount; x++) {
             for (int y = 0; y < amount; y++) {
                 for (int z = 0; z < amount; z++) {
                     matrix.setPosition(offset - float(x), offset - float(y), offset - float(z));
                     mesh.setMatrixAt(index, matrix);
-                    mesh.setColorAt(index, Color::gray);
                     ++index;
                 }
             }
@@ -98,6 +97,8 @@ namespace {
 }// namespace
 
 int main() {
+
+    PxEngine engine;
 
     Canvas canvas("PhysX", {{"aa", 6}});
     GLRenderer renderer(canvas.size());
@@ -137,15 +138,19 @@ int main() {
     mesh->position.y = 10;
     scene.add(mesh);
 
+    int groundSize = 60;
     auto groundMaterial = MeshPhongMaterial::create({{"color", Color::gray}});
-    auto ground = Mesh::create(BoxGeometry::create(60, 0.1, 60), groundMaterial);
+    auto ground = Mesh::create(BoxGeometry::create(groundSize, 0.1, groundSize), groundMaterial);
     ground->position.y = -0.05;
     ground->receiveShadow = true;
     scene.add(ground);
 
-    auto instanced = InstancedMesh::create(SphereGeometry::create(0.25), MeshBasicMaterial::create(), std::pow(3, 3));
+    auto instanceMaterial = MeshPhongMaterial::create();
+    instanceMaterial->color = Color::gray;
+    auto instanced = InstancedMesh::create(SphereGeometry::create(0.25), instanceMaterial, static_cast<int>(std::pow(3, 3)));
     setupInstancedMesh(*instanced);
     instanced->position.y = 50;
+    instanced->castShadow = true;
     scene.add(instanced);
 
     auto light1 = AmbientLight::create(Color::white, 0.3f);
@@ -159,21 +164,37 @@ int main() {
     shadowCamera->right = shadowCamera->top = 10;
     scene.add(light2);
 
-    PxEngine engine;
-
     auto box1Body = RigidBodyInfo{};
-    box1Body.addJoint().setType(JointInfo::Type::HINGE).setAnchor({0, -0.5, 0}).setAxis({0, 1, 0}).setLimits({math::degToRad(-120), math::degToRad(120)});
+    box1Body.addJoint()
+            .setType(JointInfo::Type::HINGE)
+            .setAnchor({0, -0.5, 0})
+            .setAxis({0, 1, 0})
+            .setLimits({math::degToRad(-120), math::degToRad(120)});
     box1->userData["rigidbodyInfo"] = box1Body;
 
     auto box2Body = RigidBodyInfo{};
-    box2Body.addJoint().setType(JointInfo::Type::HINGE).setAnchor({0, -1, 0}).setAxis({0, 0, 1}).setConnectedBody(*box1).setLimits({math::degToRad(0), math::degToRad(120)});
+    box2Body.addJoint()
+            .setType(JointInfo::Type::HINGE)
+            .setAnchor({0, -1, 0})
+            .setAxis({0, 0, 1})
+            .setConnectedBody(*box1)
+            .setLimits({math::degToRad(0), math::degToRad(120)});
     box2->userData["rigidbodyInfo"] = box2Body;
 
     auto box3Body = RigidBodyInfo{};
-    box3Body.addJoint().setType(JointInfo::Type::HINGE).setAnchor({0, -0.25, 0}).setAxis({0, 1, 0}).setConnectedBody(*box2).setLimits({math::degToRad(-90), math::degToRad(90)});
+    box3Body.addJoint()
+            .setType(JointInfo::Type::HINGE)
+            .setAnchor({0, -0.25, 0})
+            .setAxis({0, 1, 0})
+            .setConnectedBody(*box2)
+            .setLimits({math::degToRad(-90), math::degToRad(90)});
     box3->userData["rigidbodyInfo"] = box3Body;
 
-    auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC};
+    auto groundBody = RigidBodyInfo{RigidBodyInfo::Type::STATIC}
+                              .addCollider(BoxCollider(0.5, 2, groundSize / 2), Matrix4().setPosition(groundSize / 2, 2, 0))
+                              .addCollider(BoxCollider(0.5, 2, groundSize / 2), Matrix4().setPosition(-groundSize / 2, 2, 0))
+                              .addCollider(BoxCollider(0.5, 2, groundSize / 2), Matrix4().makeRotationY(math::PI / 2).setPosition(0, 2, groundSize / 2))
+                              .addCollider(BoxCollider(0.5, 2, groundSize / 2), Matrix4().makeRotationY(math::PI / 2).setPosition(0, 2, -groundSize / 2));
     ground->userData["rigidbodyInfo"] = groundBody;
 
     auto meshBody = RigidBodyInfo{}.setMass(20).setMaterialProperties(1, 0);

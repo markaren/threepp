@@ -79,8 +79,8 @@ namespace threepp {
         float halfHeight = 0.5;
         float halfDepth = 0.5;
 
-        BoxCollider(float halfWidth, float halfHeight, float halfDpeth)
-            : halfWidth(halfWidth), halfHeight(halfHeight), halfDepth(halfDpeth) {}
+        BoxCollider(float halfWidth, float halfHeight, float halfDepth)
+            : halfWidth(halfWidth), halfHeight(halfHeight), halfDepth(halfDepth) {}
     };
 
     struct MaterialInfo {
