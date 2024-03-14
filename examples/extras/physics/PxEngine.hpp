@@ -136,18 +136,18 @@ public:
             internalTime -= timeStep;
         }
 
-        threepp::Matrix4 tmpMat;
-        threepp::Quaternion tmpQuat;
+        static threepp::Matrix4 tmpMat;
         for (auto& [obj, rb] : bodies) {
 
             obj->updateMatrixWorld();
 
             if (auto instanced = obj->as<threepp::InstancedMesh>()) {
 
+                tmpMat.copy(*obj->matrix).invert();
                 auto& array = instanced->instanceMatrix()->array();
                 for (int i = 0; i < instanced->count(); i++) {
                     auto pose = threepp::Matrix4().fromArray(physx::PxMat44(rb[i]->getGlobalPose()).front());
-                    pose.premultiply(tmpMat.copy(*obj->matrix).invert());
+                    pose.premultiply(tmpMat);
                     for (auto j = 0; j < 16; j++) {
                         array[i * 16 + j] = pose[j];
                     }
@@ -184,7 +184,7 @@ public:
 
         obj.updateMatrixWorld();
 
-        auto material = toPxMaterial(info._material);
+        const auto material = toPxMaterial(info._material);
 
         std::vector<physx::PxShape*> shapes;
 
@@ -380,7 +380,9 @@ private:
             return physics->createShape(physx::PxSphereGeometry(sphere->radius), *material, false);
         } else if (type == "CapsuleGeometry") {
             const auto cap = dynamic_cast<const threepp::CapsuleGeometry*>(geometry);
-            return physics->createShape(physx::PxCapsuleGeometry(cap->radius, cap->length / 2), *material, false);
+            auto capShape = physics->createShape(physx::PxCapsuleGeometry(cap->radius, cap->length / 2), *material, false);
+            capShape->setLocalPose(physx::PxTransform(physx::PxQuat(physx::PxHalfPi, {0, 0, 1})));
+            return capShape;
         } else {
 
             if (auto pos = geometry->getAttribute<float>("position")) {
