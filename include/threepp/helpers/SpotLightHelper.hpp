@@ -19,15 +19,13 @@ namespace threepp {
     public:
         void update();
 
-        ~SpotLightHelper() override;
-
         static std::shared_ptr<SpotLightHelper> create(SpotLight& light, std::optional<Color> color = std::nullopt);
 
     private:
-        SpotLight& light;
+        SpotLight* light;
         std::optional<Color> color;
 
-        std::shared_ptr<LineSegments> cone;
+        LineSegments* cone;
 
         SpotLightHelper(SpotLight& light, std::optional<Color> color);
     };

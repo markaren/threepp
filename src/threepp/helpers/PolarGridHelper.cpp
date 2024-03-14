@@ -70,7 +70,7 @@ PolarGridHelper::PolarGridHelper(float radius, unsigned int sectors, unsigned in
     geometry_->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
     geometry_->setAttribute("color", FloatBufferAttribute::create(colors, 3));
 
-    material_->setValues({{"vertexColors", true}, {"toneMapped", false}});
+    material()->setValues({{"vertexColors", true}, {"toneMapped", false}});
 }
 
 

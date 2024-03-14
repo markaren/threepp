@@ -13,7 +13,7 @@ Box3Helper::Box3Helper(const Box3& box, const Color& color)
 
     std::vector<float> positions{1, 1, 1, -1, 1, 1, -1, -1, 1, 1, -1, 1, 1, 1, -1, -1, 1, -1, -1, -1, -1, 1, -1, -1};
 
-    auto lineMaterial = material_->as<LineBasicMaterial>();
+    auto lineMaterial = material()->as<LineBasicMaterial>();
     lineMaterial->color.copy(color);
     lineMaterial->toneMapped = false;
 

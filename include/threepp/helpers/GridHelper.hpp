@@ -12,8 +12,6 @@ namespace threepp {
     class GridHelper: public LineSegments {
 
     public:
-        ~GridHelper() override;
-
         static std::shared_ptr<GridHelper> create(
                 unsigned int size = 10,
                 unsigned int divisions = 10,

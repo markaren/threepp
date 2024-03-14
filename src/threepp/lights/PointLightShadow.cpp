@@ -6,16 +6,9 @@
 
 using namespace threepp;
 
-namespace {
-
-    Vector3 _lightPositionWorld;
-    Vector3 _lookTarget;
-    Matrix4 _projScreenMatrix;
-
-}// namespace
 
 PointLightShadow::PointLightShadow()
-    : LightShadow(PerspectiveCamera::create(90, 1, 0.5f, 500)),
+    : LightShadow(std::make_unique<PerspectiveCamera>(90.f, 1.f, 0.5f, 500.f)),
       _cubeDirections({Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1),
                        Vector3(0, 0, -1), Vector3(0, 1, 0), Vector3(0, -1, 0)}),
       _cubeUps({Vector3(0, 1, 0), Vector3(0, 1, 0), Vector3(0, 1, 0),

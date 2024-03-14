@@ -16,7 +16,7 @@ BoxHelper::BoxHelper(Object3D& object, const Color& color)
     geometry_->setIndex(indices);
     geometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
 
-    material_->setValues({{"color", color}, {"toneMapped", false}});
+    material()->setValues({{"color", color}, {"toneMapped", false}});
 
     this->matrixAutoUpdate = false;
 

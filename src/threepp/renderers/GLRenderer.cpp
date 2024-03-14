@@ -480,12 +480,12 @@ struct GLRenderer::Impl {
                                 .applyMatrix4(_projScreenMatrix);
                     }
 
-                    auto geometry = objects.update(object);
-                    auto material = sprite->material;
+                    const auto geometry = objects.update(object);
+                    const auto material = sprite->material();
 
                     if (material->visible) {
 
-                        currentRenderList->push(object, geometry, material.get(), groupOrder, _vector3.z, std::nullopt);
+                        currentRenderList->push(object, geometry, material, groupOrder, _vector3.z, std::nullopt);
                     }
                 }
 
@@ -511,7 +511,7 @@ struct GLRenderer::Impl {
                     }
 
                     auto geometry = objects.update(object);
-                    const auto& materials = object->materials();
+                    const auto& materials = object->as<ObjectWithMaterials>()->materials();
 
                     if (materials.size() > 1) {
 
@@ -754,7 +754,7 @@ struct GLRenderer::Impl {
         bool isInstancedMesh = object->type() == "InstancedMesh";
         bool isSkinnedMesh = object->type() == "SkinnedMesh";
 
-        if (material->version == materialProperties->version) {
+        if (material->version() == materialProperties->version) {
 
             if (materialProperties->needsLights && (materialProperties->lightsStateVersion != lights.state.version)) {
 
@@ -802,7 +802,7 @@ struct GLRenderer::Impl {
         } else {
 
             needsProgramChange = true;
-            materialProperties->version = material->version;
+            materialProperties->version = material->version();
         }
 
         //

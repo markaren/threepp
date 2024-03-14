@@ -20,9 +20,21 @@ namespace threepp {
     class LightWithTarget {
 
     public:
-        std::shared_ptr<Object3D> target{Object3D::create()};
+        [[nodiscard]] const Object3D& target() const {
+
+            return target_ ? *target_ : defaultTarget;
+        }
+
+        void setTarget(Object3D& target) {
+
+            this->target_ = &target;
+        }
 
         virtual ~LightWithTarget() = default;
+
+    private:
+        Object3D* target_ = nullptr;
+        Object3D defaultTarget;
     };
 
 }// namespace threepp

@@ -49,8 +49,7 @@ namespace {
 }// namespace
 
 Points::Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-    : geometry_(std::move(geometry)), material_(std::move(material)) {
-}
+    : geometry_(std::move(geometry)), ObjectWithMaterials({std::move(material)}) {}
 
 std::string Points::type() const {
 
@@ -66,18 +65,8 @@ void Points::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
     this->geometry_ = geometry;
 }
 
-Material* Points::material() {
-
-    return material_.get();
-}
-
-std::vector<Material*> Points::materials() {
-
-    return {material_.get()};
-}
-
 std::shared_ptr<Object3D> Points::clone(bool recursive) {
-    auto clone = create(geometry_, material_);
+    auto clone = create(geometry_, materials_.front());
     clone->copy(*this, recursive);
 
     return clone;

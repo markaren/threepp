@@ -3,7 +3,6 @@
 #ifndef THREEPP_POINTLIGHTHELPER_HPP
 #define THREEPP_POINTLIGHTHELPER_HPP
 
-#include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/objects/Mesh.hpp"
 
 #include <memory>
@@ -22,7 +21,7 @@ namespace threepp {
 
     private:
         std::optional<Color> color;
-        PointLight& light;
+        PointLight* light;
 
         PointLightHelper(PointLight& light, float sphereSize, std::optional<Color> color);
     };
