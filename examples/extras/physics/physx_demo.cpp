@@ -9,7 +9,7 @@ using namespace threepp;
 
 namespace {
 
-    struct KeyController: KeyListener {
+    struct KeyController {
 
         explicit KeyController(std::vector<physx::PxRevoluteJoint*> joints)
             : joints(std::move(joints)) {
@@ -19,8 +19,8 @@ namespace {
             }
         }
 
-        void onKeyPressed(KeyEvent evt) override;
-        void onKeyReleased(KeyEvent evt) override;
+        void onKeyPressed(KeyEvent evt);
+        void onKeyReleased(KeyEvent evt);
 
     private:
         float speed = 2;
@@ -211,14 +211,15 @@ int main() {
     auto* j3 = engine.getJoint<physx::PxRevoluteJoint>(*box3);
 
     KeyController keyListener({j1, j2, j3});
-    canvas.addKeyListener(keyListener);
+    canvas.keys.Pressed.subscribeForever([&](KeyEvent evt) { keyListener.onKeyPressed(evt); });
+    canvas.keys.Released.subscribeForever([&](KeyEvent evt) { keyListener.onKeyReleased(evt); });
 
     OrbitControls controls(camera, canvas);
 
     bool run = false;
-    KeyAdapter adapter(KeyAdapter::Mode::KEY_PRESSED | KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
-        run = true;
+    canvas.keys.Pressed.subscribeOnce([&](KeyEvent) { run = true; });
 
+    auto keyController = [&](KeyEvent evt){
         if (evt.key == Key::SPACE) {
             auto obj = spawnObject();
             obj->position = camera.position;
@@ -236,8 +237,10 @@ int main() {
         } else if (evt.key == Key::D) {
             engine.debugVisualisation = !engine.debugVisualisation;
         }
-    });
-    canvas.addKeyListener(adapter);
+    };
+
+    canvas.keys.Pressed.subscribeForever(keyController);
+    canvas.keys.Repeat.subscribeForever(keyController);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();

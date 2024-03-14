@@ -45,8 +45,7 @@ public:
 
     explicit PxEngine(float timeStep = 1.f / 100)
         : timeStep(timeStep),
-          sceneDesc(physics->getTolerancesScale()),
-          onMeshRemovedListener(this) {
+          sceneDesc(physics->getTolerancesScale()) {
 
         sceneDesc.gravity = physx::PxVec3(0.0f, -9.81f, 0.0f);
         sceneDesc.flags |= physx::PxSceneFlag::eENABLE_PCM;
@@ -255,7 +254,15 @@ public:
         }
 
         obj.matrixAutoUpdate = false;
-        obj.addEventListener("remove", &onMeshRemovedListener);
+
+        obj.OnRemove.subscribeOnce([this](threepp::Event& event) {
+            auto m = static_cast<threepp::Object3D*>(event.target);
+            if (bodies.count(m)) {
+                auto rb = bodies.at(m);
+                scene->removeActor(*rb.front());
+                bodies.erase(m);
+            }
+        });
     }
 
     physx::PxJoint* createJoint(const JointCreate& create, threepp::Object3D* o1, threepp::Object3D* o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
@@ -549,28 +556,6 @@ private:
             }
         }
     }
-
-    struct MeshRemovedListener: threepp::EventListener {
-
-        explicit MeshRemovedListener(PxEngine* scope): scope(scope) {}
-
-        void onEvent(threepp::Event& event) override {
-            if (event.type == "remove") {
-                auto m = static_cast<threepp::Object3D*>(event.target);
-                if (scope->bodies.count(m)) {
-                    auto rb = scope->bodies.at(m);
-                    scope->scene->removeActor(*rb.front());
-                    scope->bodies.erase(m);
-                }
-                m->removeEventListener("remove", this);
-            }
-        }
-
-    private:
-        PxEngine* scope;
-    };
-
-    MeshRemovedListener onMeshRemovedListener;
 };
 
 #endif//THREEPP_PXENGINE_HPP
