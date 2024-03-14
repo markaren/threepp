@@ -59,18 +59,13 @@ struct OrbitControls::Impl {
     Subscriptions subs_;
 
     Impl(OrbitControls& scope, PeripheralsEventSource& canvas, Camera& camera)
-        : scope(scope), canvas(canvas), camera(camera)
-	  {
-        subs_ << canvas.keys.Pressed.subscribe([&](auto& e) mutable { onKeyPressed(e, scope); });
-        subs_ << canvas.keys.Repeat.subscribe([&](auto& e) mutable { onKeyRepeat(e, scope); });
+        : scope(scope), canvas(canvas), camera(camera) {
 
-        subs_ << canvas.mouse.Down.subscribe([&](MouseButtonEvent& e) {
-            this->onMouseDown(e, scope);
-        });
+        subs_ << canvas.keys.Pressed.subscribe([this](auto& e) { onKeyPressed(e); });
+        subs_ << canvas.keys.Repeat.subscribe([this](auto& e) { onKeyRepeat(e); });
 
-        subs_ << canvas.mouse.Wheel.subscribe([&](MouseWheelEvent& e) {
-            this->onMouseWheel(e, scope);
-		});
+        subs_ << canvas.mouse.Down.subscribe([this](auto& e) { onMouseDown(e); });
+        subs_ << canvas.mouse.Wheel.subscribe([this](auto& e) { onMouseWheel(e); });
 
         update();
     }
@@ -395,95 +390,92 @@ struct OrbitControls::Impl {
         scope.update();
     }
 
-    ~Impl() {
+
+    void onKeyPressed(KeyEvent evt) {
+        if (scope.enabled && scope.enableKeys && scope.enablePan) {
+            handleKeyDown(evt.key);
+        }
+    }
+
+    void onKeyRepeat(KeyEvent evt) {
+        if (scope.enabled && scope.enableKeys && scope.enablePan) {
+            handleKeyDown(evt.key);
+        }
+    }
+
+    void onMouseMove(MouseEvent& e) {
+        if (scope.enabled) {
+            switch (state) {
+                case State::ROTATE:
+                    if (scope.enableRotate) {
+                        handleMouseMoveRotate(e.pos);
+                    }
+                    break;
+                case State::DOLLY:
+                    if (scope.enableZoom) {
+                        handleMouseMoveDolly(e.pos);
+                    }
+                    break;
+                case State::PAN:
+                    if (scope.enablePan) {
+                        handleMouseMovePan(e.pos);
+                    }
+                    break;
+                default:
+                    //TODO ?
+                    break;
+            }
+        }
     }
 
 
-	static void onKeyPressed(KeyEvent evt, OrbitControls & controls) {
-		if (controls.enabled && controls.enableKeys && controls.enablePan) {
-			controls.pimpl_->handleKeyDown(evt.key);
-		}
-	}
+    void onMouseUp() {
+        if (scope.enabled) {
+            scope.pimpl_->state = State::NONE;
+        }
+    }
 
-	static void onKeyRepeat(KeyEvent evt, OrbitControls & controls) {
-		if (controls.enabled && controls.enableKeys && controls.enablePan) {
-			controls.pimpl_->handleKeyDown(evt.key);
-		}
-	}
+    void onMouseDown(MouseButtonEvent e) {
+        if (scope.enabled) {
+            switch (e.button) {
+                case 0:// LEFT
+                    if (scope.enableRotate) {
+                        scope.pimpl_->handleMouseDownRotate(e.pos);
+                        scope.pimpl_->state = State::ROTATE;
+                    }
+                    break;
+                case 1:// RIGHT
+                    if (scope.enablePan) {
+                        scope.pimpl_->handleMouseDownRotate(e.pos);
+                        scope.pimpl_->handleMouseDownPan(e.pos);
+                        scope.pimpl_->state = State::PAN;
+                    }
+                    break;
+                case 2:// MIDDLE
+                    if (scope.enableZoom) {
+                        scope.pimpl_->handleMouseDownDolly(e.pos);
+                        scope.pimpl_->state = State::DOLLY;
+                    }
+                    break;
+            }
+        }
 
-	static void onMouseMove(MouseEvent & e, OrbitControls & controls) {
-		if (controls.enabled) {
-			switch (controls.pimpl_->state) {
-				case State::ROTATE:
-					if (controls.enableRotate) {
-						controls.pimpl_->handleMouseMoveRotate(e.pos);
-					}
-					break;
-				case State::DOLLY:
-					if (controls.enableZoom) {
-						controls.pimpl_->handleMouseMoveDolly(e.pos);
-					}
-					break;
-				case State::PAN:
-					if (controls.enablePan) {
-						controls.pimpl_->handleMouseMovePan(e.pos);
-					}
-					break;
-				default:
-					//TODO ?
-					break;
-			}
-		}
-	}
-
-
-	void onMouseUp(MouseButtonEvent e,OrbitControls & controls) {
-		if (scope.enabled) {
-			scope.pimpl_->state = State::NONE;
-		}
-	}
-
-	void onMouseDown(MouseButtonEvent e, OrbitControls & scope) {
-		if (scope.enabled) {
-			switch (e.button) {
-				case 0:// LEFT
-					if (scope.enableRotate) {
-						scope.pimpl_->handleMouseDownRotate(e.pos);
-						scope.pimpl_->state = State::ROTATE;
-					}
-					break;
-				case 1:// RIGHT
-					if (scope.enablePan) {
-						scope.pimpl_->handleMouseDownRotate(e.pos);
-						scope.pimpl_->handleMouseDownPan(e.pos);
-						scope.pimpl_->state = State::PAN;
-					}
-					break;
-				case 2:// MIDDLE
-					if (scope.enableZoom) {
-						scope.pimpl_->handleMouseDownDolly(e.pos);
-						scope.pimpl_->state = State::DOLLY;
-					}
-					break;
-			}
-		}
-
-		if (scope.pimpl_->state != State::NONE) {
+        if (scope.pimpl_->state != State::NONE) {
             auto& mouse = scope.pimpl_->canvas.mouse;
-            mouse.Up.subscribeOnce([&](MouseButtonEvent& e) {
-                onMouseUp(e, scope);
-			});
-            mouse.Move.subscribeUntil(mouse.Up, [&](MouseEvent& e) {
-                onMouseMove(e, scope);
+            mouse.Up.subscribeOnce([&](MouseButtonEvent&) {
+                onMouseUp();
             });
-		}
-	}
+            mouse.Move.subscribeUntil(mouse.Up, [&](MouseEvent& e) {
+                onMouseMove(e);
+            });
+        }
+    }
 
-	void onMouseWheel(MouseWheelEvent & ev , OrbitControls & controls) {
-		if (scope.enabled && scope.enableZoom && !(scope.pimpl_->state != State::NONE && scope.pimpl_->state != State::ROTATE)) {
-			scope.pimpl_->handleMouseWheel(ev.offset);
-		}
-	}
+    void onMouseWheel(MouseWheelEvent& ev) {
+        if (scope.enabled && scope.enableZoom && !(scope.pimpl_->state != State::NONE && scope.pimpl_->state != State::ROTATE)) {
+            scope.pimpl_->handleMouseWheel(ev.offset);
+        }
+    }
 };
 
 OrbitControls::OrbitControls(Camera& camera, PeripheralsEventSource& eventSource)

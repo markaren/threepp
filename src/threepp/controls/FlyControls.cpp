@@ -32,17 +32,14 @@ namespace {
 struct FlyControls::Impl {
 
     Impl(FlyControls& scope, PeripheralsEventSource& canvas, Object3D* object)
-        : eventSource(canvas), scope(scope), object(object)
-  {
+        : eventSource(canvas), scope(scope), object(object) {
 
-        subs_ << canvas.keys.Pressed.subscribe([this, &scope](KeyEvent& key) { onKeyPressed(key, scope); });
-        subs_ << canvas.keys.Released.subscribe([this, &scope](KeyEvent& key) { onKeyReleased(key, scope); });
+        subs_ << canvas.keys.Pressed.subscribe([this](auto& key) { onKeyPressed(key); });
+        subs_ << canvas.keys.Released.subscribe([this](auto& key) { onKeyReleased(key); });
 
-        subs_ << canvas.mouse.Down.subscribe([this, &scope](MouseButtonEvent& e) { onMouseDown(e, scope); });
-        subs_ << canvas.mouse.Up.subscribe([this, &scope](MouseButtonEvent& e) { onMouseUp(e, scope); });
-        subs_ << canvas.mouse.Move.subscribe([this, &scope](MouseEvent& e) { onMouseMove(e, scope); });
-        // TODO 
-        //subs_ << canvas.mouse.Wheel.subscribe([this, &scope](MouseEvent const& e) { onMouseWheel(e, scope); });
+        subs_ << canvas.mouse.Down.subscribe([this](auto& e) { onMouseDown(e); });
+        subs_ << canvas.mouse.Up.subscribe([this](auto& e) { onMouseUp(e); });
+        subs_ << canvas.mouse.Move.subscribe([this](auto& e) { onMouseMove(e); });
     }
 
     void update(float delta) {
@@ -82,7 +79,7 @@ struct FlyControls::Impl {
         rotationVector.z = (-moveState.rollRight + moveState.rollLeft);
     }
 
-	static void onKeyPressed(KeyEvent evt, FlyControls& scope) {
+    void onKeyPressed(KeyEvent evt) {
 
         if (evt.mods == 4) {// altKey
 
@@ -91,158 +88,158 @@ struct FlyControls::Impl {
 
         switch (evt.key) {
             case Key::W:
-                scope.pimpl_->moveState.forward = 1;
+                moveState.forward = 1;
                 break;
             case Key::S:
-                scope.pimpl_->moveState.back = 1;
+                moveState.back = 1;
                 break;
             case Key::A:
-                scope.pimpl_->moveState.left = 1;
+                moveState.left = 1;
                 break;
             case Key::D:
-                scope.pimpl_->moveState.right = 1;
+                moveState.right = 1;
                 break;
             case Key::R:
-                scope.pimpl_->moveState.up = 1;
+                moveState.up = 1;
                 break;
             case Key::F:
-                scope.pimpl_->moveState.down = 1;
+                moveState.down = 1;
                 break;
             case Key::UP:
-                scope.pimpl_->moveState.pitchUp = 1;
+                moveState.pitchUp = 1;
                 break;
             case Key::DOWN:
-                scope.pimpl_->moveState.pitchDown = 1;
+                moveState.pitchDown = 1;
                 break;
             case Key::LEFT:
-                scope.pimpl_->moveState.yawLeft = 1;
+                moveState.yawLeft = 1;
                 break;
             case Key::RIGHT:
-                scope.pimpl_->moveState.yawRight = 1;
+                moveState.yawRight = 1;
                 break;
             case Key::Q:
-                scope.pimpl_->moveState.rollLeft = 1;
+                moveState.rollLeft = 1;
                 break;
             case Key::E:
-                scope.pimpl_->moveState.rollRight = 1;
+                moveState.rollRight = 1;
                 break;
             default:
                 break;
         }
 
-        scope.pimpl_->updateMovementVector();
-        scope.pimpl_->updateRotationVector();
+        updateMovementVector();
+        updateRotationVector();
     }
 
-    static void onKeyReleased(KeyEvent evt, FlyControls& scope) {
+    void onKeyReleased(KeyEvent evt) {
 
         switch (evt.key) {
             case Key::W:
-                scope.pimpl_->moveState.forward = 0;
+                moveState.forward = 0;
                 break;
             case Key::S:
-                scope.pimpl_->moveState.back = 0;
+                moveState.back = 0;
                 break;
             case Key::A:
-                scope.pimpl_->moveState.left = 0;
+                moveState.left = 0;
                 break;
             case Key::D:
-                scope.pimpl_->moveState.right = 0;
+                moveState.right = 0;
                 break;
             case Key::R:
-                scope.pimpl_->moveState.up = 0;
+                moveState.up = 0;
                 break;
             case Key::F:
-                scope.pimpl_->moveState.down = 0;
+                moveState.down = 0;
                 break;
             case Key::UP:
-                scope.pimpl_->moveState.pitchUp = 0;
+                moveState.pitchUp = 0;
                 break;
             case Key::DOWN:
-                scope.pimpl_->moveState.pitchDown = 0;
+                moveState.pitchDown = 0;
                 break;
             case Key::LEFT:
-                scope.pimpl_->moveState.yawLeft = 0;
+                moveState.yawLeft = 0;
                 break;
             case Key::RIGHT:
-                scope.pimpl_->moveState.yawRight = 0;
+                moveState.yawRight = 0;
                 break;
             case Key::Q:
-                scope.pimpl_->moveState.rollLeft = 0;
+                moveState.rollLeft = 0;
                 break;
             case Key::E:
-                scope.pimpl_->moveState.rollRight = 0;
+                moveState.rollRight = 0;
                 break;
             default:
                 break;
         }
 
-        scope.pimpl_->updateMovementVector();
-        scope.pimpl_->updateRotationVector();
+        updateMovementVector();
+        updateRotationVector();
     }
 
-	static void onMouseDown(MouseButtonEvent & e, FlyControls&scope) {
-
-		if (scope.dragToLook) {
-
-			scope.pimpl_->mouseStatus++;
-
-		} else {
-
-			switch (e.button) {
-
-				case 0:
-					scope.pimpl_->moveState.forward = 1;
-					break;
-				case 1:
-					scope.pimpl_->moveState.back = 1;
-					break;
-			}
-
-			scope.pimpl_->updateMovementVector();
-		}
-	}
-
-
-	static void onMouseMove(MouseEvent & e, FlyControls&scope) {
-
-		if (!scope.dragToLook || scope.pimpl_->mouseStatus > 0) {
-
-			const float halfWidth = static_cast<float>(scope.pimpl_->eventSource.size().width) / 2;
-			const float halfHeight = static_cast<float>(scope.pimpl_->eventSource.size().height) / 2;
-
-			scope.pimpl_->moveState.yawLeft = -((e.pos.x) - halfWidth) / halfWidth;
-			scope.pimpl_->moveState.pitchDown = ((e.pos.y) - halfHeight) / halfHeight;
-
-			scope.pimpl_->updateRotationVector();
-		}
-	}
-
-
-	static void onMouseUp(MouseButtonEvent& e, FlyControls& scope) {
+    void onMouseDown(MouseButtonEvent& e) {
 
         if (scope.dragToLook) {
 
-            scope.pimpl_->mouseStatus--;
-
-            scope.pimpl_->moveState.yawLeft = scope.pimpl_->moveState.pitchDown = 0;
+            mouseStatus++;
 
         } else {
 
             switch (e.button) {
 
                 case 0:
-                    scope.pimpl_->moveState.forward = 0;
+                    moveState.forward = 1;
                     break;
                 case 1:
-                    scope.pimpl_->moveState.back = 0;
+                    moveState.back = 1;
                     break;
             }
 
-            scope.pimpl_->updateMovementVector();
+            updateMovementVector();
+        }
+    }
+
+
+    void onMouseMove(MouseEvent& e) {
+
+        if (!scope.dragToLook || mouseStatus > 0) {
+
+            const float halfWidth = static_cast<float>(eventSource.size().width) / 2;
+            const float halfHeight = static_cast<float>(eventSource.size().height) / 2;
+
+            moveState.yawLeft = -((e.pos.x) - halfWidth) / halfWidth;
+            moveState.pitchDown = ((e.pos.y) - halfHeight) / halfHeight;
+
+            updateRotationVector();
+        }
+    }
+
+
+    void onMouseUp(MouseButtonEvent& e) {
+
+        if (scope.dragToLook) {
+
+            mouseStatus--;
+
+            moveState.yawLeft = moveState.pitchDown = 0;
+
+        } else {
+
+            switch (e.button) {
+
+                case 0:
+                    moveState.forward = 0;
+                    break;
+                case 1:
+                    moveState.back = 0;
+                    break;
+            }
+
+            updateMovementVector();
         }
 
-        scope.pimpl_->updateRotationVector();
+        updateRotationVector();
     }
 
 private:
