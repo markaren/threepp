@@ -63,8 +63,8 @@ namespace {
 
 
 Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
-    : material(material),
-      _geometry(new BufferGeometry()) {
+    : _material(material ? material : SpriteMaterial::create()),
+      _geometry(BufferGeometry::create()) {
 
     std::vector<float> float32Array{
             -0.5f, -0.5f, 0.f, 0.f, 0.f,
@@ -81,6 +81,16 @@ Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
 std::string Sprite::type() const {
 
     return "Sprite";
+}
+
+Material* Sprite::material() {
+
+    return _material.get();
+}
+
+void Sprite::setMaterial(const std::shared_ptr<SpriteMaterial>& material) {
+
+    this->_material = material;
 }
 
 BufferGeometry* Sprite::geometry() {
@@ -107,12 +117,12 @@ void Sprite::raycast(const Raycaster& raycaster, std::vector<Intersection>& inte
 
     _mvPosition.setFromMatrixPosition(this->modelViewMatrix);
 
-    if (raycaster.camera->is<PerspectiveCamera>() && !this->material->sizeAttenuation) {
+    if (raycaster.camera->is<PerspectiveCamera>() && !this->_material->sizeAttenuation) {
 
         _worldScale.multiplyScalar(-_mvPosition.z);
     }
 
-    float rotation = material->rotation;
+    float rotation = _material->rotation;
     std::optional<std::pair<float, float>> sincos;
 
     if (rotation != 0) {

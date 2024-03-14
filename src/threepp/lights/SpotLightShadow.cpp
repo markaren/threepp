@@ -5,11 +5,11 @@
 using namespace threepp;
 
 SpotLightShadow::SpotLightShadow()
-    : LightShadow(PerspectiveCamera::create(50, 1, 0.5f, 500)) {}
+    : LightShadow(std::make_unique<PerspectiveCamera>(50.f, 1.f, 0.5f, 500.f)) {}
 
-void SpotLightShadow::updateMatrices(Light* _light) {
+void SpotLightShadow::updateMatrices(Light& _light) {
 
-    auto light = _light->as<SpotLight>();
+    auto light = _light.as<SpotLight>();
 
     const auto fov = math::RAD2DEG * 2 * light->angle * this->focus;
     const auto aspect = this->mapSize.x / this->mapSize.y;

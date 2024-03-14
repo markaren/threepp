@@ -20,7 +20,7 @@ namespace {
 
 Line::Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
     : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-      material_(material ? std::move(material) : LineBasicMaterial::create()) {}
+      ObjectWithMaterials({material ? std::move(material) : LineBasicMaterial::create()}) {}
 
 std::string Line::type() const {
 
@@ -36,18 +36,8 @@ void Line::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
     this->geometry_ = geometry;
 }
 
-Material* Line::material() {
-
-    return material_.get();
-}
-
-std::vector<Material*> Line::materials() {
-
-    return {material_.get()};
-}
-
 std::shared_ptr<Object3D> Line::clone(bool recursive) {
-    auto clone = create(geometry_, material_);
+    auto clone = create(geometry_, materials_.front());
     clone->copy(*this, recursive);
 
     return clone;

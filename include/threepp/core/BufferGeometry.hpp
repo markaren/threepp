@@ -15,7 +15,7 @@
 
 namespace threepp {
 
-    class BufferGeometry {
+    class BufferGeometry: public std::enable_shared_from_this<BufferGeometry> {
 
     public:
         EventDispatcher OnDispose;
@@ -36,6 +36,11 @@ namespace threepp {
         DrawRange drawRange{0, std::numeric_limits<int>::max() / 2};
 
         BufferGeometry();
+
+        BufferGeometry(const BufferGeometry&) = delete;
+        BufferGeometry& operator=(const BufferGeometry&) = delete;
+        BufferGeometry(BufferGeometry&&) = delete;
+        BufferGeometry& operator=(BufferGeometry&&) = delete;
 
         [[nodiscard]] virtual std::string type() const {
 

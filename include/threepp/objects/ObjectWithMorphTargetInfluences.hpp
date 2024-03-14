@@ -2,12 +2,15 @@
 #ifndef THREEPP_OBJECTWITHMORPHTARGETINFLUENCES_HPP
 #define THREEPP_OBJECTWITHMORPHTARGETINFLUENCES_HPP
 
+#include "threepp/core/Object3D.hpp"
+
 #include <vector>
 
 namespace threepp {
 
-    struct ObjectWithMorphTargetInfluences {
+    class ObjectWithMorphTargetInfluences: public virtual Object3D {
 
+    public:
         std::vector<float>& morphTargetInfluences() {
 
             if (copyMorphTargetInfluences_) {

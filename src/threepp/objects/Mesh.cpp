@@ -174,24 +174,10 @@ namespace {
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
     : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-      materials_{material ? std::move(material) : MeshBasicMaterial::create()} {
-}
+      ObjectWithMaterials({material ? std::move(material) : MeshBasicMaterial::create()}) {}
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
-    : geometry_(std::move(geometry)), materials_{std::move(materials)} {
-}
-
-Mesh::Mesh(Mesh&& other) noexcept: Object3D(std::move(other)) {
-    geometry_ = std::move(other.geometry_);
-    materials_ = std::move(other.materials_);
-}
-
-std::vector<Material*> Mesh::materials() {
-
-    std::vector<Material*> res(materials_.size());
-    std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) { return m.get(); });
-
-    return res;
+    : geometry_(std::move(geometry)), ObjectWithMaterials{std::move(materials)} {
 }
 
 void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
@@ -373,26 +359,6 @@ const BufferGeometry* Mesh::geometry() const {
 void Mesh::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
 
     geometry_ = geometry;
-}
-
-Material* Mesh::material() {
-
-    return materials_.front().get();
-}
-
-void Mesh::setMaterial(const std::shared_ptr<Material>& material) {
-
-    setMaterials({material});
-}
-
-void Mesh::setMaterials(const std::vector<std::shared_ptr<Material>>& materials) {
-
-    materials_ = materials;
-}
-
-size_t Mesh::numMaterials() const {
-
-    return materials_.size();
 }
 
 std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {

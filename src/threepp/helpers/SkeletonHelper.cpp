@@ -55,7 +55,7 @@ SkeletonHelper::SkeletonHelper(Object3D& object)
     geometry_->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
     geometry_->setAttribute("color", FloatBufferAttribute::create(colors, 3));
 
-    auto m = material_->as<LineBasicMaterial>();
+    auto m = material()->as<LineBasicMaterial>();
     m->vertexColors = true;
     m->depthTest = false;
     m->depthWrite = false;

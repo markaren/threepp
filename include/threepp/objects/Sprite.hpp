@@ -13,9 +13,10 @@ namespace threepp {
 
     public:
         Vector2 center{0.5f, 0.5f};
-        std::shared_ptr<SpriteMaterial> material;
 
         explicit Sprite(const std::shared_ptr<SpriteMaterial>& material);
+
+        Sprite(Sprite&&) = delete;
 
         [[nodiscard]] std::string type() const override;
 
@@ -23,10 +24,15 @@ namespace threepp {
 
         BufferGeometry* geometry() override;
 
-        static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial>& material = SpriteMaterial::create());
+        Material* material() override;
+
+        void setMaterial(const std::shared_ptr<SpriteMaterial>& material);
+
+        static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial>& material = nullptr);
 
     private:
         std::shared_ptr<BufferGeometry> _geometry;
+        std::shared_ptr<SpriteMaterial> _material;
     };
 
 }// namespace threepp

@@ -48,7 +48,7 @@ void DirectionalLightHelper::update() {
     static Vector3 _v3;
 
     _v1.setFromMatrixPosition(*this->light.matrixWorld);
-    _v2.setFromMatrixPosition(*this->light.target->matrixWorld);
+    _v2.setFromMatrixPosition(*this->light.target().matrixWorld);
     _v3.subVectors(_v2, _v1);
 
     this->lightPlane->lookAt(_v2);

@@ -8,12 +8,19 @@
 
 using namespace threepp;
 
+
 Material::Material()
     : uuid_(math::generateUUID()) {}
+
 
 std::string Material::uuid() const {
 
     return uuid_;
+}
+
+unsigned int Material::version() const {
+
+    return version_;
 }
 
 void Material::dispose() {
@@ -25,7 +32,7 @@ void Material::dispose() {
 
 void Material::needsUpdate() {
 
-    this->version++;
+    this->version_++;
 }
 
 void Material::copyInto(Material* m) const {

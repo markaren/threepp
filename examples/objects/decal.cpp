@@ -193,7 +193,7 @@ int main() {
 
                 Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
-                auto mat = decalMat->clone()->as<MeshPhongMaterial>();
+                auto mat = decalMat->clone()->as_shared<MeshPhongMaterial>();
                 mat->color.randomize();
                 orientation.z = math::PI * math::randFloat();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
