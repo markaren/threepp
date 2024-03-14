@@ -6,8 +6,8 @@
 #include "threepp/core/Raycaster.hpp"
 #include "threepp/math/MathUtils.hpp"
 
-#include "LODControl.hpp"
-#include "MapNode.hpp"
+#include "geo/lod/LODControl.hpp"
+#include "geo/nodes/MapNode.hpp"
 
 namespace threepp {
 

@@ -30,17 +30,17 @@ add_library(pathfinding INTERFACE
 target_include_directories(pathfinding INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_library(geo-threepp INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODControl.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODFrustum.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODRadial.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/LODRaycast.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapNode.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapNodeGeometry.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapPlaneNode.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapProvider.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/MapView.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo-threepp/OpenStreetMapsProvider.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODControl.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODFrustum.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRadial.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRaycast.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapNode.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapPlaneNode.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/geometries/MapNodeGeometry.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/MapProvider.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/OpenStreetMapsProvider.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/MapView.hpp"
 )
 
 target_include_directories(geo-threepp INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(geo-threepp INTERFACE threepp::threepp)
+target_link_libraries(geo-threepp INTERFACE threepp::threepp CURL::libcurl)

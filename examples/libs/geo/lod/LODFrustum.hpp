@@ -5,9 +5,11 @@
 #include "threepp/math/Frustum.hpp"
 #include "threepp/math/Matrix4.hpp"
 
+#include "geo/lod/LODRadial.hpp"
+
 namespace threepp {
 
-    class LODFrustum {
+    class LODFrustum: public LODRadial {
 
     private:
         Matrix4 projection;

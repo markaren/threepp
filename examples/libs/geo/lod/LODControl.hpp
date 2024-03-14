@@ -2,9 +2,10 @@
 #ifndef THREEPP_LODCONTROL_HPP
 #define THREEPP_LODCONTROL_HPP
 
-#include "MapView.hpp"
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
+
+#include "geo/MapView.hpp"
 
 namespace threepp {
 

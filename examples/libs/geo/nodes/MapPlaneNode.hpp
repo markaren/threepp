@@ -3,12 +3,13 @@
 #ifndef THREEPP_MAPPLANENODE_HPP
 #define THREEPP_MAPPLANENODE_HPP
 
-#include "MapNode.hpp"
+#include "geo/nodes/MapNode.hpp"
 
 namespace threepp {
 
     class MapPlaneNode {
 
+    public:
 
     };
 

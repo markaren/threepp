@@ -4,9 +4,9 @@
 
 #include "threepp/objects/Mesh.hpp"
 
-#include "LODControl.hpp"
-#include "LODRaycast.hpp"
-#include "MapProvider.hpp"
+#include "geo/lod/LODControl.hpp"
+#include "geo/lod/LODRaycast.hpp"
+#include "geo/providers/MapProvider.hpp"
 
 namespace threepp {
 

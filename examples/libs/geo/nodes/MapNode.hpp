@@ -4,7 +4,7 @@
 
 #include "threepp/objects/Mesh.hpp"
 
-#include "MapView.hpp"
+#include "geo/MapView.hpp"
 
 namespace threepp {
 
@@ -28,17 +28,21 @@ namespace threepp {
     public:
         MapNode* parentNode = nullptr;
 
-        MapNode(MapNode* parentNode, const std::shared_ptr<MapView>& mapView, int location = QuadTreePosition::root)
-            : parentNode(parentNode), mapView(mapView) {
-        }
+        MapNode(MapNode* parentNode, const std::shared_ptr<MapView>& mapView,
+                int location = QuadTreePosition::root,
+                int level = 0, float x = 0, float y = 0,
+                const std::shared_ptr<BufferGeometry>& geometry = nullptr,
+                const std::shared_ptr<Material>& material = nullptr)
+            : Mesh(geometry, material), parentNode(parentNode),
+              mapView(mapView), location(location), level(level), x(x), y(y) {}
 
-        virtual void initialize() = 0;
+        virtual void initialize(){};
 
-        virtual void createChildNodes();
+        virtual void createChildNodes(){};
 
         void subdivide() {
             const auto maxZoom = this->mapView->maxZoom();
-            if (this->children.size() > 0 || this->level + 1 > maxZoom || this->parentNode && this->parentNode->nodesLoaded < MapNode.childrens) {
+            if (!this->children.empty() || this->level + 1 > maxZoom || this->parentNode && this->parentNode->nodesLoaded < MapNode::childrens) {
                 return;
             }
 
@@ -70,7 +74,6 @@ namespace threepp {
     private:
         std::shared_ptr<MapView> mapView;
 
-
         int location;
         int level;
 
@@ -84,8 +87,13 @@ namespace threepp {
 
         std::shared_ptr<BufferGeometry> baseGeometry;
 
-        int childrens = 4;
+        static std::optional<Vector3> baseScale;
+
+        static int childrens;
     };
+
+    std::optional<Vector3> MapNode::baseScale = std::nullopt;
+    int MapNode::childrens = 4;
 
 }// namespace threepp
 
