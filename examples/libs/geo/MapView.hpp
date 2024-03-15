@@ -14,7 +14,6 @@ namespace threepp {
     class MapView: public Mesh {
 
     public:
-
         explicit MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODControl> lod);
 
         void preSubDivide();
@@ -32,7 +31,6 @@ namespace threepp {
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override {}
 
     private:
-
         std::unique_ptr<MapPlaneNode> root;
         std::unique_ptr<LODControl> lod;
         std::unique_ptr<MapProvider> provider;

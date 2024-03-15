@@ -7,6 +7,7 @@
 #include "MapNode.hpp"
 #include "geo/geometries/MapNodeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
+#include <future>
 
 namespace threepp {
 

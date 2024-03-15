@@ -50,7 +50,7 @@ std::vector<Intersection> Raycaster::intersectObject(Object3D& object, bool recu
 
     ::intersectObject(object, *this, intersects, recursive);
 
-    std::stable_sort(intersects.begin(), intersects.end(), &ascSort);
+    std::sort(intersects.begin(), intersects.end(), &ascSort);
 
     return intersects;
 }
@@ -64,7 +64,7 @@ std::vector<Intersection> Raycaster::intersectObjects(const std::vector<Object3D
         ::intersectObject(*object, *this, intersects, recursive);
     }
 
-    std::stable_sort(intersects.begin(), intersects.end(), &ascSort);
+    std::sort(intersects.begin(), intersects.end(), &ascSort);
 
     return intersects;
 }

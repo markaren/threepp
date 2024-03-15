@@ -36,6 +36,9 @@ void MapNode::simplify() {
     this->subdivided = false;
     this->layers.enable(0);
     this->clear();
+//    for (auto c : this->children) {
+//        c->visible = false;
+//    }
     this->nodesLoaded = 0;
 }
 

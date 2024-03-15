@@ -34,6 +34,7 @@ add_library(geothreepp
         "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODFrustum.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRadial.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRaycast.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRaycast.cpp"
 
         "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapNode.hpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapNode.cpp"

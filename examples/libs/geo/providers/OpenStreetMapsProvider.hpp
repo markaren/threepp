@@ -31,6 +31,8 @@ namespace threepp {
             std::vector<unsigned char> data;
             urlFetcher.fetch(ss.str(), data);
 
+            std::cout << ss.str() << std::endl;
+
             return *loader.load(data, format == "png" ? 4 : 3, true);
         }
 

@@ -37,8 +37,7 @@ MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODContr
     root = std::make_unique<MapPlaneNode>(nullptr, this);
 
     geometry_ = root->baseGeometry();
-    material()->transparent = false;
-    material()->as<MaterialWithWireframe>()->wireframe = true;
+    material()->transparent = true;
     material()->opacity = 0.0;
     material()->depthWrite = false;
     material()->colorWrite = false;

@@ -21,7 +21,6 @@ namespace threepp {
     class MapNode: public Mesh {
 
     public:
-
         MapNode* parentNode = nullptr;
 
         MapNode(MapNode* parentNode, MapView* mapView,
