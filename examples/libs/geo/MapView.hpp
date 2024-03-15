@@ -5,37 +5,38 @@
 #include "threepp/objects/Mesh.hpp"
 
 #include "geo/lod/LODControl.hpp"
-#include "geo/lod/LODRaycast.hpp"
-#include "geo/providers/MapProvider.hpp"
+#include "nodes/MapPlaneNode.hpp"
+#include "providers/MapProvider.hpp"
 
 namespace threepp {
 
     class MapView: public Mesh {
 
     public:
-        std::unique_ptr<LODControl> lod;
-        std::unique_ptr<MapProvider> provider;
 
-        MapView(std::unique_ptr<MapProvider> provider): provider(std::move(provider)) {
+        explicit MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODControl> lod);
 
-            onBeforeRender = [](void*, Object3D*, Camera*, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
+        void preSubDivide();
 
-            };
-
-            lod = std::make_unique<LODRaycast>();
-        }
-
-        float minZoom() {
+        [[nodiscard]] float minZoom() const {
             return this->provider->minZoom;
         }
 
-        float maxZoom() {
+        [[nodiscard]] float maxZoom() const {
             return this->provider->maxZoom;
         }
 
+        MapProvider* getProvider() const;
+
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override {}
 
     private:
+
+        std::unique_ptr<MapPlaneNode> root;
+        std::unique_ptr<LODControl> lod;
+        std::unique_ptr<MapProvider> provider;
     };
+
 
 }// namespace threepp
 

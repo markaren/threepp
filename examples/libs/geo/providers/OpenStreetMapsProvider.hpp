@@ -2,23 +2,24 @@
 #ifndef THREEPP_OPENSTREETMAPSPROVIDER_HPP
 #define THREEPP_OPENSTREETMAPSPROVIDER_HPP
 
-#include "geo/providers/MapProvider.hpp"
+#include "../../utility/URLFetcher.hpp"
+#include "../providers/MapProvider.hpp"
 
 #include "threepp/loaders/ImageLoader.hpp"
-#include "threepp/utils/URLFetcher.hpp"
 
 #include <sstream>
 #include <utility>
+#include <iostream>
 
 namespace threepp {
 
     class OpenStreetMapProvider: public MapProvider {
+
     public:
         explicit OpenStreetMapProvider(std::string address = "https://a.tile.openstreetmap.org/")
-            : address(std::move(address)) {}
+            : address(std::move(address)) {
 
-        [[nodiscard]] std::string name() const override {
-            return "OpenStreetMapProvider";
+            this->maxZoom = 19;
         }
 
         Image fetchTile(float zoom, float x, float y) override {
@@ -35,8 +36,6 @@ namespace threepp {
     private:
         std::string address;
         std::string format = "png";
-
-        float maxZoom = 19;
 
         utils::UrlFetcher urlFetcher;
         ImageLoader loader;

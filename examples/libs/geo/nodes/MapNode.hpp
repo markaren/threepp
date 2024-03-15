@@ -4,65 +4,46 @@
 
 #include "threepp/objects/Mesh.hpp"
 
-#include "geo/MapView.hpp"
-
 namespace threepp {
+
+    class MapView;
 
     struct QuadTreePosition {
 
-        static int root;
-        static int topLeft;
-        static int topRight;
-        static int bottomLeft;
-        static int bottomRight;
+        static inline int root = -1;
+        static inline int topLeft = 0;
+        static inline int topRight = 1;
+        static inline int bottomLeft = 2;
+        static inline int bottomRight = 3;
     };
-
-    int QuadTreePosition::root = 1;
-    int QuadTreePosition::topLeft = 0;
-    int QuadTreePosition::topRight = 1;
-    int QuadTreePosition::bottomLeft = 2;
-    int QuadTreePosition::bottomRight = 3;
 
     class MapNode: public Mesh {
 
     public:
+
         MapNode* parentNode = nullptr;
 
-        MapNode(MapNode* parentNode, const std::shared_ptr<MapView>& mapView,
+        MapNode(MapNode* parentNode, MapView* mapView,
                 int location = QuadTreePosition::root,
                 int level = 0, float x = 0, float y = 0,
                 const std::shared_ptr<BufferGeometry>& geometry = nullptr,
-                const std::shared_ptr<Material>& material = nullptr)
-            : Mesh(geometry, material), parentNode(parentNode),
-              mapView(mapView), location(location), level(level), x(x), y(y) {}
+                const std::shared_ptr<Material>& material = nullptr);
 
-        virtual void initialize(){};
+        virtual void initialize() = 0;
 
-        virtual void createChildNodes(){};
+        virtual void createChildNodes() = 0;
 
-        void subdivide() {
-            const auto maxZoom = this->mapView->maxZoom();
-            if (!this->children.empty() || this->level + 1 > maxZoom || this->parentNode && this->parentNode->nodesLoaded < MapNode::childrens) {
-                return;
-            }
+        void subdivide();
 
-            this->createChildNodes();
+        void simplify();
 
-            this->subdivided = true;
-        }
+        void loadData();
 
-        void simplify() {
-            const auto minZoom = this->mapView->minZoom();
-            if (this->level - 1 < minZoom) {
-                return;
-            }
+        void nodeReady();
 
-            // Clear children and reset flags
-            this->subdivided = false;
-            this->clear();
-            this->nodesLoaded = 0;
-        }
+        [[nodiscard]] virtual Vector3 baseScale() const = 0;
 
+        virtual std::shared_ptr<BufferGeometry> baseGeometry() = 0;
 
         [[nodiscard]] int getLevel() const {
 
@@ -71,8 +52,8 @@ namespace threepp {
 
         ~MapNode() override = default;
 
-    private:
-        std::shared_ptr<MapView> mapView;
+    protected:
+        MapView* mapView;
 
         int location;
         int level;
@@ -85,15 +66,8 @@ namespace threepp {
 
         int nodesLoaded = 0;
 
-        std::shared_ptr<BufferGeometry> baseGeometry;
-
-        static std::optional<Vector3> baseScale;
-
-        static int childrens;
+        inline static int childrens = 4;
     };
-
-    std::optional<Vector3> MapNode::baseScale = std::nullopt;
-    int MapNode::childrens = 4;
 
 }// namespace threepp
 

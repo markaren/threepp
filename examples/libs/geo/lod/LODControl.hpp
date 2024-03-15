@@ -5,9 +5,9 @@
 #include "threepp/cameras/Camera.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "geo/MapView.hpp"
-
 namespace threepp {
+
+    class MapView;
 
     class LODControl {
 

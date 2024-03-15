@@ -9,14 +9,12 @@ namespace threepp {
     class MapNodeGeometry: public BufferGeometry {
 
     public:
+        static std::shared_ptr<MapNodeGeometry> create(int width = 1, int height = 1, int widthSegments = 1, int heightSegments = 1, bool skirt = true, int skirtDepth = 10) {
 
-       static std::shared_ptr<MapNodeGeometry> create(int width = 1, int height = 1, int widthSegments = 1, int heightSegments = 1, bool skirt = true, int skirtDepth = 10) {
-
-           return std::shared_ptr<MapNodeGeometry>(new MapNodeGeometry(width, height, widthSegments, heightSegments, skirt, skirtDepth));
-       }
+            return std::shared_ptr<MapNodeGeometry>(new MapNodeGeometry(width, height, widthSegments, heightSegments, skirt, skirtDepth));
+        }
 
     private:
-
         explicit MapNodeGeometry(int width, int height, int widthSegments, int heightSegments, bool skirt, int skirtDepth) {
 
             std::vector<unsigned int> indices;
@@ -34,7 +32,6 @@ namespace threepp {
             setAttribute("position", FloatBufferAttribute::create(vertices, 3));
             setAttribute("normal", FloatBufferAttribute::create(normals, 3));
             setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
-
         }
 
         void buildPlane(std::vector<unsigned int>& indices, std::vector<float>& vertices,
