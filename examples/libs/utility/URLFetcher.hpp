@@ -4,16 +4,21 @@
 #if __has_include(<curl/curl.h>)
 #define THREEPP_WITH_CURL
 #include <curl/curl.h>
+#else
+#include <iostream>
 #endif
 
 #include <string>
 #include <vector>
+#include <mutex>
 
 namespace threepp::utils {
 
 #ifdef THREEPP_WITH_CURL
 
     inline static size_t write_data(char* ptr, size_t size, size_t nmemb, void* userdata) {
+        static std::mutex m;
+        std::lock_guard<std::mutex> lck(m);
         auto stream = (std::vector<unsigned char>*) userdata;
         size_t count = size * nmemb;
         stream->insert(stream->end(), ptr, ptr + count);
@@ -26,7 +31,7 @@ namespace threepp::utils {
 
 #ifndef THREEPP_WITH_CURL
         bool fetch(const std::string&, std::vector<unsigned char>&) {
-
+            std::cerr << "[URLFetcher] Curl not found. No fetch was made." << std::endl;
             return false;
         }
 #else
@@ -37,18 +42,9 @@ namespace threepp::utils {
 
         bool fetch(const std::string& url, std::vector<unsigned char>& data) {
 
-            if (cache_.count(url)) {
-                data = cache_[url];
-                return true;
-            }
-
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &data);
             curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
             CURLcode res = curl_easy_perform(curl);
-
-            if (res == CURLE_OK) {
-                cache_[url] = data;
-            }
 
             return res == CURLE_OK;
         }
@@ -59,7 +55,6 @@ namespace threepp::utils {
 
     private:
         CURL* curl;
-        std::unordered_map<std::string, std::vector<unsigned char>> cache_{};
 #endif
     };
 

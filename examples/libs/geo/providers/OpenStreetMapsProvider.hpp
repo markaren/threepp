@@ -8,9 +8,10 @@
 
 #include "threepp/loaders/ImageLoader.hpp"
 
+#include <iostream>
+#include <mutex>
 #include <sstream>
 #include <utility>
-#include <iostream>
 
 namespace threepp {
 
@@ -27,11 +28,17 @@ namespace threepp {
 
             std::stringstream ss;
             ss << address << zoom << '/' << x << '/' << y << '.' << format;
+            const auto url = ss.str();
 
             std::vector<unsigned char> data;
-            urlFetcher.fetch(ss.str(), data);
 
-            std::cout << ss.str() << std::endl;
+            if (cache_.count(url)) {
+                data = cache_.at(url);
+
+            } else if (urlFetcher.fetch(url, data)) {
+
+                cache_[url] = data;
+            }
 
             return *loader.load(data, format == "png" ? 4 : 3, true);
         }
@@ -40,8 +47,10 @@ namespace threepp {
         std::string address;
         std::string format = "png";
 
-        utils::UrlFetcher urlFetcher;
         ImageLoader loader;
+        utils::UrlFetcher urlFetcher;
+
+        std::unordered_map<std::string, std::vector<unsigned char>> cache_{};
     };
 
 }// namespace threepp

@@ -17,6 +17,9 @@ namespace threepp {
     class LODRadial: public LODControl {
 
     public:
+        float subdivideDistance;
+        float simplifyDistance;
+
         explicit LODRadial(float subdivideDistance = 50, float simplifyDistance = 300)
             : subdivideDistance(subdivideDistance), simplifyDistance(simplifyDistance) {}
 
@@ -28,7 +31,7 @@ namespace threepp {
                 node.getWorldPosition(position);
 
                 auto distance = pov.distanceTo(position);
-                distance /= std::pow(2, view.getProvider()->maxZoom - node.getLevel());
+                distance /= std::pow(2.f, view.getProvider()->maxZoom - node.getLevel());
                 //
                 if (distance < this->subdivideDistance) {
                     node.subdivide();
@@ -39,9 +42,6 @@ namespace threepp {
         }
 
     protected:
-        float subdivideDistance;
-        float simplifyDistance;
-
         Vector3 pov;
         Vector3 position;
     };

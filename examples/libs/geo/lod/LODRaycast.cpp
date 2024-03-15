@@ -4,7 +4,6 @@
 using namespace threepp;
 
 
-
 void LODRaycast::updateLOD(MapView& view, Camera& camera, const GLRenderer& renderer, const Object3D& scene) {
     std::vector<Intersection> intersects;
 
@@ -25,7 +24,7 @@ void LODRaycast::updateLOD(MapView& view, Camera& camera, const GLRenderer& rend
             auto distance = intersect.distance;
 
             if (this->powerDistance) {
-                distance = std::pow(distance * 2, node->getLevel());
+                distance = std::pow(distance * 2.f, node->getLevel());
             }
 
             if (this->scaleDistance) {

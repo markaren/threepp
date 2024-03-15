@@ -24,13 +24,17 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    MapView map(std::make_unique<OpenStreetMapProvider>(), std::make_unique<LODRadial>());
+    auto lodFunc = std::make_unique<LODRadial>();
+    lodFunc->subdivideDistance = 100;
+    auto provider = std::make_unique<OpenStreetMapProvider>();
+
+    MapView map(std::move(provider), std::move(lodFunc));
     scene.add(map);
     map.updateMatrixWorld(true);
 
-    const auto coords = utils::datumsToSpherical(62.50094228364612, 6.09138498277564);
+    const auto coords = utils::datumsToSpherical(62.467400106161094, 6.156371664207545);
     controls.target.set(coords.x, 0, -coords.y);
-    camera.position.set(coords.x, 100000, -coords.y);
+    camera.position.set(coords.x, 10000, -coords.y);
     controls.update();
 
     canvas.onWindowResize([&](WindowSize size) {

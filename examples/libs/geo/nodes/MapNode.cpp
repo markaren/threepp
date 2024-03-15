@@ -2,8 +2,6 @@
 #include "MapNode.hpp"
 #include "../MapView.hpp"
 
-#include "threepp/materials/interfaces.hpp"
-
 #include <iostream>
 
 using namespace threepp;
@@ -22,6 +20,8 @@ void MapNode::subdivide() {
     }
 
     this->createChildNodes();
+
+    layers.disable(0);
 
     this->subdivided = true;
 }
@@ -55,7 +55,7 @@ void MapNode::loadData() {
     }
 
     const auto texture = Texture::create(image);
-    texture->generateMipmaps = false;
+    texture->generateMipmaps = true;
     texture->format = Format::RGBA;
     texture->magFilter = Filter::Linear;
     texture->minFilter = Filter::Linear;
@@ -68,7 +68,6 @@ void MapNode::loadData() {
 void MapNode::nodeReady() {
     if (this->disposed) {
         std::cerr << "Geo-Three: nodeReady() called for disposed node" << std::endl;
-        //                this->dispose();
         disposed = true;
         return;
     }
@@ -79,13 +78,11 @@ void MapNode::nodeReady() {
         if (this->parentNode->nodesLoaded == MapNode::childrens) {
             if (this->parentNode->subdivided == true) {
 
-                this->parentNode->layers.disable(0);
+                this->layers.disable(0);
             }
 
             for (unsigned i = 0; i < this->parentNode->children.size(); i++) {
                 this->parentNode->children[i]->visible = true;
-                //                                this->parentNode->children[i]->layers.enable(0);
-                //                this->parentNode->layers.disable(0);
             }
         }
 

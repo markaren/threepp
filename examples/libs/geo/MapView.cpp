@@ -38,13 +38,14 @@ MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODContr
 
     geometry_ = root->baseGeometry();
     material()->transparent = true;
-    material()->opacity = 0.0;
     material()->depthWrite = false;
     material()->colorWrite = false;
+    material()->opacity = 0;
 
     scale.copy(root->baseScale());
 
     add(*root);
+    root->initialize();
 
     preSubDivide();
 }

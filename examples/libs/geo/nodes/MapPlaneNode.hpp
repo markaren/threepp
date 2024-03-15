@@ -3,10 +3,13 @@
 #ifndef THREEPP_MAPPLANENODE_HPP
 #define THREEPP_MAPPLANENODE_HPP
 
-#include "../utils/UnitUtils.hpp"
 #include "MapNode.hpp"
 #include "geo/geometries/MapNodeGeometry.hpp"
+#include "geo/utils/UnitUtils.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
+
+#include <iostream>
+
 
 namespace threepp {
 
@@ -20,11 +23,9 @@ namespace threepp {
         MapPlaneNode(MapNode* parent, MapView* mapView, int location = QuadTreePosition::root, int level = 0, float x = 0, float y = 0)
             : MapNode(parent, mapView, location, level, x, y, baseGeom, MeshBasicMaterial::create({{"wireframe", false}})) {
 
-            initialize();
-
             this->matrixAutoUpdate = false;
             this->layers.enable(0);
-//            this->visible = false;
+            this->visible = false;
         }
 
         void initialize() override {
@@ -55,6 +56,7 @@ namespace threepp {
             this->add(node);
             node->updateMatrix();
             node->updateMatrixWorld(true);
+            node->initialize();
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::topRight, level, x + 1, y);
             node->scale.set(0.5, 1.0, 0.5);
@@ -62,6 +64,7 @@ namespace threepp {
             this->add(node);
             node->updateMatrix();
             node->updateMatrixWorld(true);
+            node->initialize();
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::bottomLeft, level, x, y + 1);
             node->scale.set(0.5, 1.0, 0.5);
@@ -69,6 +72,7 @@ namespace threepp {
             this->add(node);
             node->updateMatrix();
             node->updateMatrixWorld(true);
+            node->initialize();
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::bottomRight, level, x + 1, y + 1);
             node->scale.set(0.5, 1.0, 0.5);
@@ -76,6 +80,7 @@ namespace threepp {
             this->add(node);
             node->updateMatrix();
             node->updateMatrixWorld(true);
+            node->initialize();
         }
     };
 
