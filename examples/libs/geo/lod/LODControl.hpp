@@ -13,7 +13,7 @@ namespace threepp {
     class LODControl {
 
     public:
-        virtual void updateLOD(MapView& view, Camera& camera, GLRenderer& renderer, Object3D& scene) = 0;
+        virtual void updateLOD(MapView& view, Camera& camera, const GLRenderer& renderer, const Object3D& scene) = 0;
 
         virtual ~LODControl() = default;
     };

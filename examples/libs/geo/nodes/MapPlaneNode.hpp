@@ -7,7 +7,6 @@
 #include "MapNode.hpp"
 #include "geo/geometries/MapNodeGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
-#include <future>
 
 namespace threepp {
 
@@ -21,18 +20,17 @@ namespace threepp {
         MapPlaneNode(MapNode* parent, MapView* mapView, int location = QuadTreePosition::root, int level = 0, float x = 0, float y = 0)
             : MapNode(parent, mapView, location, level, x, y, baseGeom, MeshBasicMaterial::create({{"wireframe", false}})) {
 
+            initialize();
+
             this->matrixAutoUpdate = false;
             this->layers.enable(0);
-            this->visible = false;
-
-            initialize();
+//            this->visible = false;
         }
 
         void initialize() override {
 
             loadData();
             nodeReady();
-            this->visible = true;
         }
 
         [[nodiscard]] Vector3 baseScale() const override {
@@ -52,7 +50,6 @@ namespace threepp {
             const auto y = this->y * 2;
 
             auto node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::topLeft, level, x, y);
-//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(-0.25, 0, -0.25);
             this->add(node);
@@ -60,7 +57,6 @@ namespace threepp {
             node->updateMatrixWorld(true);
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::topRight, level, x + 1, y);
-//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(0.25, 0, -0.25);
             this->add(node);
@@ -68,7 +64,6 @@ namespace threepp {
             node->updateMatrixWorld(true);
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::bottomLeft, level, x, y + 1);
-//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(-0.25, 0, 0.25);
             this->add(node);
@@ -76,14 +71,12 @@ namespace threepp {
             node->updateMatrixWorld(true);
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::bottomRight, level, x + 1, y + 1);
-//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(0.25, 0, 0.25);
             this->add(node);
             node->updateMatrix();
             node->updateMatrixWorld(true);
         }
-
     };
 
 }// namespace threepp

@@ -21,7 +21,7 @@ namespace threepp {
         bool powerDistance = false;
         bool scaleDistance = true;
 
-        void updateLOD(MapView& view, Camera& camera, GLRenderer& renderer, Object3D& scene) override;
+        void updateLOD(MapView& view, Camera& camera, const GLRenderer& renderer, const Object3D& scene) override;
 
     private:
         Raycaster raycaster;

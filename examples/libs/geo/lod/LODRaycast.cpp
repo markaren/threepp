@@ -5,7 +5,7 @@ using namespace threepp;
 
 
 
-void LODRaycast::updateLOD(MapView& view, Camera& camera, GLRenderer& renderer, Object3D& scene) {
+void LODRaycast::updateLOD(MapView& view, Camera& camera, const GLRenderer& renderer, const Object3D& scene) {
     std::vector<Intersection> intersects;
 
     for (unsigned t = 0; t < this->subdivisionRays; t++) {

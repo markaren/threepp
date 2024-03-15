@@ -35,16 +35,12 @@ void MapNode::simplify() {
     // Clear children and reset flags
     this->subdivided = false;
     this->layers.enable(0);
-//    this->clear();
-    for (auto c : children) {
-        c->visible = false;
-        c->layers.disable(0);
-    }
+    this->children.clear();
     this->nodesLoaded = 0;
 }
 
 void MapNode::loadData() {
-    if (this->level < this->mapView->getProvider()->minZoom || this->level > this->mapView->getProvider()->maxZoom) {
+    if ((this->level < this->mapView->getProvider()->minZoom) || (this->level > this->mapView->getProvider()->maxZoom)) {
         std::cerr << "Geo-Three: Loading tile outside of provider range." << std::endl;
 
         this->material()->as<MaterialWithMap>()->map = nullptr;
@@ -88,8 +84,8 @@ void MapNode::nodeReady() {
 
             for (unsigned i = 0; i < this->parentNode->children.size(); i++) {
                 this->parentNode->children[i]->visible = true;
-//                this->parentNode->children[i]->layers.enable(0);
-//                this->parentNode->layers.disable(0);
+                //                                this->parentNode->children[i]->layers.enable(0);
+                //                this->parentNode->layers.disable(0);
             }
         }
 

@@ -10,6 +10,7 @@
 #include "../nodes/MapNode.hpp"
 
 #include <cmath>
+#include <iostream>
 
 namespace threepp {
 
@@ -19,7 +20,7 @@ namespace threepp {
         explicit LODRadial(float subdivideDistance = 50, float simplifyDistance = 300)
             : subdivideDistance(subdivideDistance), simplifyDistance(simplifyDistance) {}
 
-        void updateLOD(MapView& view, Camera& camera, GLRenderer& renderer, Object3D& scene) override {
+        void updateLOD(MapView& view, Camera& camera, const GLRenderer& renderer, const Object3D& scene) override {
 
             camera.getWorldPosition(pov);
 

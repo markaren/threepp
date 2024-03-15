@@ -30,11 +30,11 @@ namespace {
 
 MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODControl> lod): provider(std::move(provider)), lod(std::move(lod)) {
 
+    root = std::make_unique<MapPlaneNode>(nullptr, this);
+
     onBeforeRender = [this](void* renderer, Object3D* scene, Camera* camera, BufferGeometry*, Material*, std::optional<GeometryGroup>) {
         this->lod->updateLOD(*this, *camera, *static_cast<GLRenderer*>(renderer), *scene);
     };
-
-    root = std::make_unique<MapPlaneNode>(nullptr, this);
 
     geometry_ = root->baseGeometry();
     material()->transparent = true;
@@ -48,6 +48,7 @@ MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODContr
 
     preSubDivide();
 }
+
 
 void MapView::preSubDivide() {
 

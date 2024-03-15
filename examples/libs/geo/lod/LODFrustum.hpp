@@ -15,13 +15,10 @@ namespace threepp {
 
     public:
 
-        bool testCenter = true;
-        bool pointOnly = true;
-
         explicit LODFrustum(float subdivideDistance = 150, float simplifyDistance = 400)
             : LODRadial(subdivideDistance, simplifyDistance) {}
 
-        void updateLOD(MapView& view, Camera& camera, GLRenderer& renderer, Object3D& scene) override {
+        void updateLOD(MapView& view, Camera& camera, const GLRenderer& renderer, const Object3D& scene) override {
 
             projection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
             frustum.setFromProjectionMatrix(projection);
@@ -44,6 +41,8 @@ namespace threepp {
         }
 
     private:
+        bool pointOnly = true;
+
         Matrix4 projection;
         Frustum frustum;
     };
