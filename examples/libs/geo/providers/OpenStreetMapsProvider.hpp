@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/providers/OpenStreetMapsProvider.ts
 
 #ifndef THREEPP_OPENSTREETMAPSPROVIDER_HPP
 #define THREEPP_OPENSTREETMAPSPROVIDER_HPP

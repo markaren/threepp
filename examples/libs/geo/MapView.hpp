@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/MapView.ts
 
 #ifndef THREEPP_MAPVIEW_HPP
 #define THREEPP_MAPVIEW_HPP

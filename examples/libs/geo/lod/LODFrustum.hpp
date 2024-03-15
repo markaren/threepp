@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/lod/LODFrustum.ts
 
 #ifndef THREEPP_LODFRUSTUM_HPP
 #define THREEPP_LODFRUSTUM_HPP

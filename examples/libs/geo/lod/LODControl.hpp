@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/lod/LODControl.ts
 
 #ifndef THREEPP_LODCONTROL_HPP
 #define THREEPP_LODCONTROL_HPP

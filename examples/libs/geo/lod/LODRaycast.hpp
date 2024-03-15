@@ -1,4 +1,4 @@
-
+// https://github.com/tentone/geo-three/blob/master/source/lod/LODRaycast.ts
 
 #ifndef THREEPP_LODRAYCAST_HPP
 #define THREEPP_LODRAYCAST_HPP

@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/lod/LODRadial.ts
 
 #ifndef THREEPP_LODRADIAL_HPP
 #define THREEPP_LODRADIAL_HPP

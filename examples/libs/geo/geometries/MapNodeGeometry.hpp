@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/geometries/MapNodeGeometry.ts
 
 #ifndef THREEPP_MAPNODEGEOMETRY_HPP
 #define THREEPP_MAPNODEGEOMETRY_HPP

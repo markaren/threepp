@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/utils/UnitsUtils.ts
 
 #ifndef THREEPP_UNITUTILS_HPP
 #define THREEPP_UNITUTILS_HPP

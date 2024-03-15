@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/providers/MapProvider.ts
 
 #ifndef THREEPP_MAPPROVIDER_HPP
 #define THREEPP_MAPPROVIDER_HPP

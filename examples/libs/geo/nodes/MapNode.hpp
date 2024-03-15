@@ -1,3 +1,4 @@
+// https://github.com/tentone/geo-three/blob/master/source/nodes/MapNode.ts
 
 #ifndef THREEPP_MAPNODE_HPP
 #define THREEPP_MAPNODE_HPP
