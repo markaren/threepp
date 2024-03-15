@@ -17,7 +17,7 @@ MapNode::MapNode(
 
 void MapNode::subdivide() {
     const auto maxZoom = this->mapView->maxZoom();
-    if (!this->children.empty() || this->level + 1 > maxZoom || this->parentNode && this->parentNode->nodesLoaded < MapNode::childrens) {
+    if (!this->children.empty() || (this->level + 1 > maxZoom) || this->parentNode && (this->parentNode->nodesLoaded < MapNode::childrens)) {
         return;
     }
 
@@ -35,10 +35,11 @@ void MapNode::simplify() {
     // Clear children and reset flags
     this->subdivided = false;
     this->layers.enable(0);
-    this->clear();
-//    for (auto c : this->children) {
-//        c->visible = false;
-//    }
+//    this->clear();
+    for (auto c : children) {
+        c->visible = false;
+        c->layers.disable(0);
+    }
     this->nodesLoaded = 0;
 }
 
@@ -87,6 +88,8 @@ void MapNode::nodeReady() {
 
             for (unsigned i = 0; i < this->parentNode->children.size(); i++) {
                 this->parentNode->children[i]->visible = true;
+//                this->parentNode->children[i]->layers.enable(0);
+//                this->parentNode->layers.disable(0);
             }
         }
 

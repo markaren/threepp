@@ -5,9 +5,9 @@
 
 #include "threepp/core/Object3D.hpp"
 
+#include "../MapView.hpp"
 #include "../lod/LODControl.hpp"
 #include "../nodes/MapNode.hpp"
-#include "../MapView.hpp"
 
 #include <cmath>
 
@@ -23,20 +23,16 @@ namespace threepp {
 
             camera.getWorldPosition(pov);
 
-            view.children[0]->traverse([&](Object3D& o) {
+            view.children[0]->traverseType<MapNode>([&](MapNode& node) {
+                node.getWorldPosition(position);
 
-                if (auto node = o.as<MapNode>()) {
-
-                    node->getWorldPosition(position);
-
-                    auto distance = pov.distanceTo(position);
-                    distance /= std::pow(2, view.getProvider()->maxZoom - node->getLevel());
-                    //
-                    if (distance < this->subdivideDistance) {
-                        node->subdivide();
-                    } else if (distance > this->simplifyDistance && node->parentNode) {
-                        node->parentNode->simplify();
-                    }
+                auto distance = pov.distanceTo(position);
+                distance /= std::pow(2, view.getProvider()->maxZoom - node.getLevel());
+                //
+                if (distance < this->subdivideDistance) {
+                    node.subdivide();
+                } else if (distance > this->simplifyDistance && node.parentNode) {
+                    node.parentNode->simplify();
                 }
             });
         }

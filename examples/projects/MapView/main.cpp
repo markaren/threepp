@@ -5,6 +5,7 @@
 #include "geo/providers/OpenStreetMapsProvider.hpp"
 #include "geo/utils/UnitUtils.hpp"
 #include "geo/lod/LODRaycast.hpp"
+#include "geo/lod/LODRadial.hpp"
 
 using namespace threepp;
 
@@ -23,7 +24,7 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    MapView map(std::make_unique<OpenStreetMapProvider>(), std::make_unique<LODRaycast>());
+    MapView map(std::make_unique<OpenStreetMapProvider>(), std::make_unique<LODRadial>());
     scene.add(map);
     map.updateMatrixWorld(true);
 

@@ -45,7 +45,6 @@ MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODContr
     scale.copy(root->baseScale());
 
     add(*root);
-    root->initialize();
 
     preSubDivide();
 }

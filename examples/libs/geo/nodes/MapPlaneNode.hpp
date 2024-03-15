@@ -24,12 +24,15 @@ namespace threepp {
             this->matrixAutoUpdate = false;
             this->layers.enable(0);
             this->visible = false;
+
+            initialize();
         }
 
         void initialize() override {
 
             loadData();
             nodeReady();
+            this->visible = true;
         }
 
         [[nodiscard]] Vector3 baseScale() const override {
@@ -49,7 +52,7 @@ namespace threepp {
             const auto y = this->y * 2;
 
             auto node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::topLeft, level, x, y);
-            node->initialize();
+//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(-0.25, 0, -0.25);
             this->add(node);
@@ -57,7 +60,7 @@ namespace threepp {
             node->updateMatrixWorld(true);
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::topRight, level, x + 1, y);
-            node->initialize();
+//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(0.25, 0, -0.25);
             this->add(node);
@@ -65,7 +68,7 @@ namespace threepp {
             node->updateMatrixWorld(true);
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::bottomLeft, level, x, y + 1);
-            node->initialize();
+//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(-0.25, 0, 0.25);
             this->add(node);
@@ -73,7 +76,7 @@ namespace threepp {
             node->updateMatrixWorld(true);
 
             node = std::make_shared<MapPlaneNode>(this, this->mapView, QuadTreePosition::bottomRight, level, x + 1, y + 1);
-            node->initialize();
+//            node->initialize();
             node->scale.set(0.5, 1.0, 0.5);
             node->position.set(0.25, 0, 0.25);
             this->add(node);
@@ -81,11 +84,6 @@ namespace threepp {
             node->updateMatrixWorld(true);
         }
 
-        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override {
-            if (layers.test(Layers())) {
-                Mesh::raycast(raycaster, intersects);
-            }
-        }
     };
 
 }// namespace threepp
