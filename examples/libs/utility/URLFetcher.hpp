@@ -8,7 +8,6 @@
 #include <iostream>
 #endif
 
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -17,8 +16,6 @@ namespace threepp::utils {
 #ifdef THREEPP_WITH_CURL
 
     inline static size_t write_data(char* ptr, size_t size, size_t nmemb, void* userdata) {
-        static std::mutex m;
-        std::lock_guard<std::mutex> lck(m);
         auto stream = (std::vector<unsigned char>*) userdata;
         size_t count = size * nmemb;
         stream->insert(stream->end(), ptr, ptr + count);
