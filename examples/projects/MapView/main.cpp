@@ -2,11 +2,11 @@
 #include "threepp/threepp.hpp"
 
 #include "geo/MapView.hpp"
-#include "geo/providers/OpenStreetMapsProvider.hpp"
-#include "geo/providers/BingMapsProvider.hpp"
-#include "geo/utils/UnitUtils.hpp"
-#include "geo/lod/LODRaycast.hpp"
 #include "geo/lod/LODRadial.hpp"
+#include "geo/lod/LODRaycast.hpp"
+#include "geo/providers/BingMapsProvider.hpp"
+#include "geo/providers/OpenStreetMapsProvider.hpp"
+#include "geo/utils/UnitUtils.hpp"
 
 using namespace threepp;
 
