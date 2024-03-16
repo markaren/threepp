@@ -17,8 +17,7 @@ namespace threepp {
     class OpenStreetMapProvider: public MapProvider {
 
     public:
-        explicit OpenStreetMapProvider(std::string address = "https://a.tile.openstreetmap.org/")
-            : address(std::move(address)) {
+        explicit OpenStreetMapProvider() {
 
             this->maxZoom = 19;
         }
@@ -30,7 +29,7 @@ namespace threepp {
             const auto url = ss.str();
 
             std::vector<unsigned char> data;
-            std::string cacheFilePath = ".cache/openstreetmaps/" + std::to_string(zoom) + "_" + std::to_string(x) + "_" + std::to_string(y) + "." + format;
+            std::string cacheFilePath = cacheDir + std::to_string(zoom) + "_" + std::to_string(x) + "_" + std::to_string(y) + "." + format;
 
             if (std::filesystem::exists(cacheFilePath)) {
                 // Load from cache file
@@ -38,22 +37,21 @@ namespace threepp {
                 data = std::vector<unsigned char>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             } else if (urlFetcher.fetch(url, data)) {
                 // Save to cache file
-                std::filesystem::create_directories(".cache/openstreetmaps/");
+                std::filesystem::create_directories(cacheDir);
                 std::ofstream file(cacheFilePath, std::ios::binary);
                 file.write(reinterpret_cast<const char*>(data.data()), data.size());
             }
 
-            return *loader.load(data, format == "png" ? 4 : 3, true);
+            return *loader.load(data, 4, true);
         }
 
     private:
-        std::string address;
-        std::string format = "png";
-
         ImageLoader loader;
         utils::UrlFetcher urlFetcher;
 
-        std::unordered_map<std::string, std::vector<unsigned char>> cache_{};
+        std::string format{"png"};
+        std::string cacheDir{".cache/openstreetmaps/"};
+        std::string address{"https://a.tile.openstreetmap.org/"};
     };
 
 }// namespace threepp
