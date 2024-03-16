@@ -8,9 +8,9 @@
 #include <iostream>
 #endif
 
+#include <mutex>
 #include <string>
 #include <vector>
-#include <mutex>
 
 namespace threepp::utils {
 
