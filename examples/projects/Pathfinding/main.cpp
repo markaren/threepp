@@ -126,13 +126,13 @@ int main() {
                         auto obj = scene.getObjectByName(getMeshName(c));
                         obj->material()->as<MaterialWithColor>()->color.setHex(Color::green);
                     }
-                    canvas.invokeLater([&] {
+                    renderer.invokeLater([&] {
                         start = std::nullopt;
                         target = std::nullopt;
                         resetBlockColors(); }, 2);
                 } else {
                     std::cerr << "Unable to find path between " << *start << " and " << *target << std::endl;
-                    canvas.invokeLater([&] {
+                    renderer.invokeLater([&] {
                         start = std::nullopt;
                         target = std::nullopt;
                         resetBlockColors(); }, 1);

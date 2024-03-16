@@ -17,6 +17,7 @@
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -151,6 +152,8 @@ namespace threepp {
         void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
 
         void resetState();
+
+        void invokeLater(const std::function<void()>& task, float delay = 0);
 
         [[nodiscard]] const gl::GLInfo& info() const;
 

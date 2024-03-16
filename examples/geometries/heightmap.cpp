@@ -121,7 +121,7 @@ int main() {
         TextureLoader tl;
         auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
 
-        canvas.invokeLater([&, texture, geometry] {
+        renderer.invokeLater([&, texture, geometry] {
 
             material->map = texture;
             material->needsUpdate();
@@ -130,7 +130,7 @@ int main() {
             hudText.setText("Terrain loaded..", opts);
         });
 
-        canvas.invokeLater([&] {
+        renderer.invokeLater([&] {
             hud.remove(hudText);
         },
                            2);

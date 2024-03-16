@@ -8,15 +8,18 @@
 
 namespace threepp::utils {
 
-    using Task = std::pair<std::function<void()>, float>;
+    using Task = std::pair<std::function<void()>, double>;
 
     class TaskManager {
 
     public:
-        inline void handleTasks(float currentTime) {
+        inline void handleTasks(double deltaTime) {
+
+            time += deltaTime;
+
             while (!tasks_.empty()) {
                 auto& task = tasks_.top();
-                if (task.second < currentTime) {
+                if (task.second < time) {
                     task.first();
                     tasks_.pop();
                 } else {
@@ -25,15 +28,17 @@ namespace threepp::utils {
             }
         }
 
-        void invokeLater(const std::function<void()>& f, float tNow, float tPassed = 0) {
+        void invokeLater(const std::function<void()>& f, double delay = 0) {
 
-            tasks_.emplace(f, tNow + tPassed);
+            tasks_.emplace(f, time + delay);
         }
 
     private:
         struct CustomComparator {
             bool operator()(const Task& l, const Task& r) const { return l.second > r.second; }
         };
+
+        double time{};
 
         std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     };

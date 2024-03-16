@@ -147,7 +147,7 @@ int main() {
             m.castShadow = true;
         });
 
-        canvas.invokeLater([&, crane] {
+        renderer.invokeLater([&, crane] {
             hud.remove(handle);
             scene->add(crane);
             endEffectorHelper->visible = true;

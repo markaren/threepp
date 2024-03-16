@@ -4,7 +4,6 @@
 #include "threepp/favicon.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/utils/StringUtils.hpp"
-#include "threepp/utils/TaskManager.hpp"
 
 #ifndef EMSCRIPTEN
 #include "threepp/utils/LoadGlad.hpp"
@@ -17,7 +16,6 @@
 
 #include <iostream>
 #include <optional>
-#include <queue>
 
 using namespace threepp;
 
@@ -168,8 +166,6 @@ struct Canvas::Impl {
     bool close_{false};
     bool exitOnKeyEscape_;
 
-    utils::TaskManager taskManager;
-
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
@@ -250,8 +246,6 @@ struct Canvas::Impl {
             return false;
         }
 
-        taskManager.handleTasks(static_cast<float>(glfwGetTime()));
-
         f();
 
         glfwSwapBuffers(window);
@@ -271,10 +265,6 @@ struct Canvas::Impl {
 
     void onWindowResize(std::function<void(WindowSize)> f) {
         this->resizeListener = std::move(f);
-    }
-
-    void invokeLater(const std::function<void()>& f, float t) {
-        taskManager.invokeLater(f, static_cast<float>(glfwGetTime()) + t);
     }
 
     void close() {
@@ -398,11 +388,6 @@ void Canvas::setSize(WindowSize size) {
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
-}
-
-void Canvas::invokeLater(const std::function<void()>& f, float t) {
-
-    pimpl_->invokeLater(f, t);
 }
 
 void Canvas::close() {

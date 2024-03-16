@@ -112,7 +112,7 @@ int main() {
         youbot->add(targetHelper);
         youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
-        canvas.invokeLater([&] {
+        renderer.invokeLater([&] {
             canvas.addKeyListener(*youbot);
             scene->add(youbot);
             hud.remove(handle);
