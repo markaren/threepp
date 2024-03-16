@@ -47,7 +47,7 @@ int main() {
     std::shared_ptr<Youbot> youbot;
     auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
-        canvas.invokeLater([&] {
+        renderer.invokeLater([&] {
             canvas.addKeyListener(*youbot);
             scene->add(youbot);
             handle.setText("Use WASD keys to steer robot", opts);

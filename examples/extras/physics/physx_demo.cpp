@@ -229,7 +229,7 @@ int main() {
             camera.getWorldDirection(world);
             rb->addForce(toPxVector3(world * 10000));
 
-            canvas.invokeLater([&, obj] {
+            renderer.invokeLater([&, obj] {
                 scene.remove(*obj);
             },
                                2);// remove after 2 seconds
