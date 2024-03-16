@@ -5,9 +5,9 @@
 
 #include "threepp/core/Object3D.hpp"
 
-#include "../MapView.hpp"
-#include "../lod/LODControl.hpp"
-#include "../nodes/MapNode.hpp"
+#include "geo/MapView.hpp"
+#include "geo/lod/LODControl.hpp"
+#include "geo/nodes/MapNode.hpp"
 
 #include <cmath>
 #include <iostream>

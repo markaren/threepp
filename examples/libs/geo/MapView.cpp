@@ -1,12 +1,7 @@
 
-#include "MapView.hpp"
-
-#include "lod/LODControl.hpp"
-#include "lod/LODFrustum.hpp"
-#include "lod/LODRaycast.hpp"
+#include "geo/MapView.hpp"
 
 using namespace threepp;
-
 
 namespace {
 
@@ -28,7 +23,8 @@ namespace {
 }// namespace
 
 
-MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODControl> lod): provider(std::move(provider)), lod(std::move(lod)) {
+MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODControl> lod)
+    : provider(std::move(provider)), lod(std::move(lod)) {
 
     root = std::make_unique<MapPlaneNode>(nullptr, this);
 

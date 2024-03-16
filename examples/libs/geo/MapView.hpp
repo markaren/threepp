@@ -6,8 +6,8 @@
 #include "threepp/objects/Mesh.hpp"
 
 #include "geo/lod/LODControl.hpp"
-#include "nodes/MapPlaneNode.hpp"
-#include "providers/MapProvider.hpp"
+#include "geo/nodes/MapPlaneNode.hpp"
+#include "geo/providers/MapProvider.hpp"
 
 namespace threepp {
 

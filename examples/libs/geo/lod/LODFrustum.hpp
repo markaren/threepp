@@ -6,8 +6,8 @@
 #include "threepp/math/Frustum.hpp"
 #include "threepp/math/Matrix4.hpp"
 
-#include "../lod/LODRadial.hpp"
-#include "../MapView.hpp"
+#include "geo/lod/LODRadial.hpp"
+#include "geo/MapView.hpp"
 
 namespace threepp {
 

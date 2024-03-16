@@ -1,6 +1,6 @@
 
-#include "MapNode.hpp"
-#include "../MapView.hpp"
+#include "geo/nodes/MapNode.hpp"
+#include "geo/MapView.hpp"
 
 #include <iostream>
 

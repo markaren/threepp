@@ -3,8 +3,8 @@
 #ifndef THREEPP_BINGMAPSPROVIDER_HPP
 #define THREEPP_BINGMAPSPROVIDER_HPP
 
-#include "../../utility/URLFetcher.hpp"
-#include "../providers/MapProvider.hpp"
+#include "geo/providers/MapProvider.hpp"
+#include "utility/URLFetcher.hpp"
 
 #include "threepp/loaders/ImageLoader.hpp"
 
