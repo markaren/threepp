@@ -8,8 +8,7 @@
 
 #include "threepp/loaders/ImageLoader.hpp"
 
-#include <iostream>
-#include <mutex>
+#include <fstream>
 #include <sstream>
 #include <utility>
 
@@ -24,20 +23,24 @@ namespace threepp {
             this->maxZoom = 19;
         }
 
-        Image fetchTile(float zoom, float x, float y) override {
+        Image fetchTile(int zoom, int x, int y) override {
 
             std::stringstream ss;
             ss << address << zoom << '/' << x << '/' << y << '.' << format;
             const auto url = ss.str();
 
             std::vector<unsigned char> data;
+            std::string cacheFilePath = ".cache/openstreetmaps/" + std::to_string(zoom) + "_" + std::to_string(x) + "_" + std::to_string(y) + "." + format;
 
-            if (cache_.count(url)) {
-                data = cache_.at(url);
-
+            if (std::filesystem::exists(cacheFilePath)) {
+                // Load from cache file
+                std::ifstream file(cacheFilePath, std::ios::binary);
+                data = std::vector<unsigned char>((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             } else if (urlFetcher.fetch(url, data)) {
-
-                cache_[url] = data;
+                // Save to cache file
+                std::filesystem::create_directories(".cache/openstreetmaps/");
+                std::ofstream file(cacheFilePath, std::ios::binary);
+                file.write(reinterpret_cast<const char*>(data.data()), data.size());
             }
 
             return *loader.load(data, format == "png" ? 4 : 3, true);

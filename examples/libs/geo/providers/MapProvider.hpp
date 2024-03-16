@@ -13,10 +13,10 @@ namespace threepp {
     class MapProvider {
 
     public:
-        float minZoom = 0;
-        float maxZoom = 20;
+        int minZoom = 0;
+        int maxZoom = 20;
 
-        virtual Image fetchTile(float zoom, float x, float y) = 0;
+        virtual Image fetchTile(int zoom, int x, int y) = 0;
 
         virtual ~MapProvider() = default;
     };

@@ -25,7 +25,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     auto lodFunc = std::make_unique<LODRadial>();
-    lodFunc->subdivideDistance = 100;
+    lodFunc->subdivideDistance = 70;
     auto provider = std::make_unique<OpenStreetMapProvider>();
 
     MapView map(std::move(provider), std::move(lodFunc));

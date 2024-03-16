@@ -29,27 +29,30 @@ add_library(pathfinding INTERFACE
 )
 target_include_directories(pathfinding INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 
-add_library(geothreepp
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODControl.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODFrustum.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRadial.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRaycast.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRaycast.cpp"
+if (CURL_FOUND)
+    add_library(geothreepp
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODControl.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODFrustum.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRadial.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRaycast.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODRaycast.cpp"
 
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapNode.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapNode.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapPlaneNode.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapNode.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapNode.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/nodes/MapPlaneNode.hpp"
 
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/geometries/MapNodeGeometry.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/geometries/MapNodeGeometry.hpp"
 
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/MapProvider.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/OpenStreetMapsProvider.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/MapProvider.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/OpenStreetMapsProvider.hpp"
 
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/utils/UnitUtils.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/utils/UnitUtils.hpp"
 
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/MapView.hpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/geo/MapView.cpp"
-)
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/MapView.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/MapView.cpp"
+    )
 
-target_include_directories(geothreepp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(geothreepp PUBLIC threepp::threepp CURL::libcurl)
+    target_include_directories(geothreepp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(geothreepp PUBLIC threepp::threepp CURL::libcurl)
+
+endif ()

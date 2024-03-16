@@ -20,7 +20,7 @@ namespace threepp {
     class MapPlaneNode: public MapNode {
 
     public:
-        MapPlaneNode(MapNode* parent, MapView* mapView, int location = QuadTreePosition::root, int level = 0, float x = 0, float y = 0)
+        MapPlaneNode(MapNode* parent, MapView* mapView, int location = QuadTreePosition::root, int level = 0, int x = 0, int y = 0)
             : MapNode(parent, mapView, location, level, x, y, baseGeom, MeshBasicMaterial::create({{"wireframe", false}})) {
 
             this->matrixAutoUpdate = false;

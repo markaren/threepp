@@ -10,7 +10,9 @@ namespace threepp {
     class MapNodeGeometry: public BufferGeometry {
 
     public:
-        static std::shared_ptr<MapNodeGeometry> create(int width = 1, int height = 1, int widthSegments = 1, int heightSegments = 1, bool skirt = true, int skirtDepth = 10) {
+        static std::shared_ptr<MapNodeGeometry> create(
+                int width = 1, int height = 1, int widthSegments = 1, int heightSegments = 1,
+                bool skirt = true, int skirtDepth = 10) {
 
             return std::shared_ptr<MapNodeGeometry>(new MapNodeGeometry(width, height, widthSegments, heightSegments, skirt, skirtDepth));
         }
@@ -111,13 +113,13 @@ namespace threepp {
             int gridZ = heightSegments + 1;
 
             // Width of each segment X
-            float segmentWidth = width / widthSegments;
+            float segmentWidth = width / static_cast<float>(widthSegments);
 
             // Height of each segment Z
-            float segmentHeight = height / heightSegments;
+            float segmentHeight = height / static_cast<float>(heightSegments);
 
             // Down X
-            int start = vertices.size() / 3;
+            auto start = vertices.size() / 3;
             for (int ix = 0; ix < gridX; ix++) {
                 float x = ix * segmentWidth - widthHalf;
                 float z = -heightHalf;
@@ -195,7 +197,7 @@ namespace threepp {
                 normals.push_back(0);
 
                 uvs.push_back(0);
-                uvs.push_back(1 - static_cast<float>(iz) / heightSegments);
+                uvs.push_back(1 - static_cast<float>(iz) / static_cast<float>(heightSegments));
             }
 
             for (int iz = 0; iz < heightSegments; iz++) {
@@ -226,7 +228,7 @@ namespace threepp {
                 normals.push_back(0);
 
                 uvs.push_back(1);
-                uvs.push_back(1 - static_cast<float>(iz) / heightSegments);
+                uvs.push_back(1 - static_cast<float>(iz) / static_cast<float>(heightSegments));
             }
 
             for (int iz = 0; iz < heightSegments; iz++) {

@@ -8,7 +8,7 @@ using namespace threepp;
 
 
 MapNode::MapNode(
-        MapNode* parentNode, MapView* mapView, int location, int level, float x, float y,
+        MapNode* parentNode, MapView* mapView, int location, int level, int x, int y,
         const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material)
     : Mesh(geometry, material), parentNode(parentNode),
       mapView(mapView), location(location), level(level), x(x), y(y) {}

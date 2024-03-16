@@ -25,7 +25,7 @@ namespace threepp {
 
         MapNode(MapNode* parentNode, MapView* mapView,
                 int location = QuadTreePosition::root,
-                int level = 0, float x = 0, float y = 0,
+                int level = 0, int x = 0, int y = 0,
                 const std::shared_ptr<BufferGeometry>& geometry = nullptr,
                 const std::shared_ptr<Material>& material = nullptr);
 
@@ -58,8 +58,8 @@ namespace threepp {
         int location;
         int level;
 
-        float x;
-        float y;
+        int x;
+        int y;
 
         bool subdivided = false;
         bool disposed = false;
