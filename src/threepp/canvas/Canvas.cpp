@@ -4,6 +4,7 @@
 #include "threepp/favicon.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/utils/StringUtils.hpp"
+#include "threepp/utils/TaskManager.hpp"
 
 #ifndef EMSCRIPTEN
 #include "threepp/utils/LoadGlad.hpp"
@@ -21,12 +22,6 @@
 using namespace threepp;
 
 namespace {
-
-    typedef std::pair<std::function<void()>, float> Task;
-
-    struct CustomComparator {
-        bool operator()(const Task& l, const Task& r) const { return l.second > r.second; }
-    };
 
 #if EMSCRIPTEN
     struct FunctionWrapper {
@@ -173,7 +168,8 @@ struct Canvas::Impl {
     bool close_{false};
     bool exitOnKeyEscape_;
 
-    std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
+    utils::TaskManager taskManager;
+
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
@@ -248,25 +244,13 @@ struct Canvas::Impl {
         glfwSetWindowSize(window, size.width, size.height);
     }
 
-    inline void handleTasks() {
-        while (!tasks_.empty()) {
-            auto& task = tasks_.top();
-            if (task.second < glfwGetTime()) {
-                task.first();
-                tasks_.pop();
-            } else {
-                break;
-            }
-        }
-    }
-
     bool animateOnce(const std::function<void()>& f) {
 
         if (close_ || glfwWindowShouldClose(window)) {
             return false;
         }
 
-        handleTasks();
+        taskManager.handleTasks(static_cast<float>(glfwGetTime()));
 
         f();
 
@@ -290,7 +274,7 @@ struct Canvas::Impl {
     }
 
     void invokeLater(const std::function<void()>& f, float t) {
-        tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
+        taskManager.invokeLater(f, static_cast<float>(glfwGetTime()) + t);
     }
 
     void close() {
