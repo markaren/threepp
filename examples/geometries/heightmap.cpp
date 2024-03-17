@@ -98,7 +98,7 @@ int main() {
 
     FontLoader fontLoader;
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     TextGeometry::Options opts(fontLoader.defaultFont(), 40);
     Text2D hudText(opts, "Loading terrain..");
     hudText.material()->as<MaterialWithColor>()->color.setHex(Color::black);

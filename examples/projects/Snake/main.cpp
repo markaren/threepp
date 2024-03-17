@@ -18,7 +18,7 @@ int main() {
     auto camera = OrthographicCamera::create(0, game.gridSize(), 0, game.gridSize());
     camera->position.z = 1;
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
 

@@ -43,12 +43,12 @@ void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
 
 struct HUD::Impl: Scene, MouseListener {
 
-    Impl(PeripheralsEventSource* eventSource)
+    Impl(PeripheralsEventSource* eventSource, const WindowSize& size)
         : eventSource_(eventSource),
-          size_(eventSource->size()),
+          size_(size),
           camera_(0, size_.width, size_.height, 0, 0.1, 10) {
 
-        eventSource->addMouseListener(*this);
+        if (eventSource) eventSource->addMouseListener(*this);
 
         camera_.position.z = 1;
     }
@@ -133,7 +133,7 @@ struct HUD::Impl: Scene, MouseListener {
     }
 
     ~Impl() override {
-        eventSource_->removeMouseListener(*this);
+        if (eventSource_) eventSource_->removeMouseListener(*this);
     }
 
 private:
@@ -148,9 +148,12 @@ private:
     std::unordered_map<Object3D*, Options> map_;
 };
 
+HUD::HUD(WindowSize size)
+    : pimpl_(std::make_unique<Impl>(nullptr, size)) {}
 
-HUD::HUD(PeripheralsEventSource& eventSource)
-    : pimpl_(std::make_unique<Impl>(&eventSource)) {}
+
+HUD::HUD(PeripheralsEventSource* eventSource)
+    : pimpl_(std::make_unique<Impl>(eventSource, eventSource->size())) {}
 
 void HUD::apply(GLRenderer& renderer) {
     pimpl_->apply(renderer);
