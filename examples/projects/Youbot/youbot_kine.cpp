@@ -93,7 +93,7 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 

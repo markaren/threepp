@@ -110,7 +110,7 @@ int main() {
     auto motorVisuals = VisualisationObject();
     scene.add(motorVisuals);
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
 
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();

@@ -13,8 +13,8 @@ namespace threepp {
     class Text2D: public Mesh {
 
     public:
-        Text2D(const TextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr)
-            : Mesh(TextGeometry::create(str, opts), material ? material : SpriteMaterial::create()) {}
+        Text2D(const TextGeometry::Options& opts, const std::string& str = "", const std::shared_ptr<Material>& material = nullptr)
+            : Mesh(TextGeometry::create(str, opts), material ? material : SpriteMaterial::create()), options(opts) {}
 
         void setColor(const Color& color) {
 
@@ -23,22 +23,31 @@ namespace threepp {
             }
         }
 
+        void setText(const std::string& str) {
+
+            auto geometry = TextGeometry::create(str, options);
+            setGeometry(geometry);
+        }
+
         void setText(const std::string& str, const TextGeometry::Options& opts) {
 
             auto geometry = TextGeometry::create(str, opts);
             setGeometry(geometry);
         }
 
-        static std::shared_ptr<Text2D> create(const TextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr) {
+        static std::shared_ptr<Text2D> create(const TextGeometry::Options& opts, const std::string& str = "", const std::shared_ptr<Material>& material = nullptr) {
 
             return std::make_shared<Text2D>(opts, str, material);
         }
+
+    private:
+        TextGeometry::Options options;
     };
 
     class Text3D: public Mesh {
 
     public:
-        Text3D(const ExtrudeTextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr)
+        Text3D(const ExtrudeTextGeometry::Options& opts, const std::string& str = "", const std::shared_ptr<Material>& material = nullptr)
             : Mesh(ExtrudeTextGeometry::create(str, opts), material ? material : MeshBasicMaterial::create()) {}
 
         void setColor(const Color& color) {
@@ -54,7 +63,7 @@ namespace threepp {
             setGeometry(geometry);
         }
 
-        static std::shared_ptr<Text3D> create(const ExtrudeTextGeometry::Options& opts, const std::string& str, const std::shared_ptr<Material>& material = nullptr) {
+        static std::shared_ptr<Text3D> create(const ExtrudeTextGeometry::Options& opts, const std::string& str = "", const std::shared_ptr<Material>& material = nullptr) {
 
             return std::make_shared<Text3D>(opts, str, material);
         }
