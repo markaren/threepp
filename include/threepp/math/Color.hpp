@@ -58,6 +58,8 @@ namespace threepp {
 
         Color& lerpColors(const Color& color1, const Color& color2, float alpha);
 
+        Color& lerpHSL(const Color& color, float alpha);
+
         HSL& getHSL(HSL& target) const;
 
         Color& randomize();
