@@ -45,6 +45,7 @@ if (CURL_FOUND)
 
             "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/MapProvider.hpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/BingMapsProvider.hpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/DebugMapsProvider.hpp"
             "${CMAKE_CURRENT_SOURCE_DIR}/geo/providers/OpenStreetMapsProvider.hpp"
 
             "${CMAKE_CURRENT_SOURCE_DIR}/geo/utils/UnitUtils.hpp"
