@@ -12,15 +12,11 @@
 
 namespace threepp {
 
-    namespace {
-        std::shared_ptr<BufferGeometry> baseGeom = MapNodeGeometry::create(1, 1, 1, 1, false);
-    }
-
     class MapPlaneNode: public MapNode {
 
     public:
         MapPlaneNode(MapNode* parent, MapView* mapView, int location = QuadTreePosition::root, int level = 0, int x = 0, int y = 0)
-            : MapNode(parent, mapView, location, level, x, y, baseGeom, MeshBasicMaterial::create({{"wireframe", false}})) {
+            : MapNode(parent, mapView, location, level, x, y, baseGeometry(), MeshBasicMaterial::create({{"wireframe", false}})) {
 
             this->matrixAutoUpdate = false;
             this->layers.enable(0);
@@ -39,6 +35,8 @@ namespace threepp {
         }
 
         std::shared_ptr<BufferGeometry> baseGeometry() override {
+
+            static std::shared_ptr<BufferGeometry> baseGeom = MapNodeGeometry::create(1, 1, 1, 1, false);
 
             return baseGeom;
         }
