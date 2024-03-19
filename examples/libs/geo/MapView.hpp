@@ -26,7 +26,20 @@ namespace threepp {
             return this->provider->maxZoom;
         }
 
+        void setProvider(std::unique_ptr<MapProvider> provider) {
+            this->provider = std::move(provider);
+            clear();
+        }
+
         MapProvider* getProvider() const;
+
+        void clear() {
+            traverse([&](Object3D& object) {
+                if (auto node = object.as<MapNode>()) {
+                    node->initialize();
+                }
+            });
+        }
 
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override {}
 

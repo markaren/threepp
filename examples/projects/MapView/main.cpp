@@ -6,6 +6,7 @@
 #include "geo/lod/LODRaycast.hpp"
 #include "geo/providers/BingMapsProvider.hpp"
 #include "geo/providers/OpenStreetMapsProvider.hpp"
+#include "geo/providers/DebugMapsProvider.hpp"
 #include "geo/utils/UnitUtils.hpp"
 
 using namespace threepp;
@@ -37,6 +38,18 @@ int main() {
     controls.target.set(coords.x, 0, -coords.y);
     camera.position.set(coords.x, 10000, -coords.y);
     controls.update();
+
+    std::cout << "Switch between map providers with keys 1 (OpenStreetMaps), 2 (Bing) and 3 (Debug)\n" << std::endl;
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent event) {
+        if (event.key == Key::NUM_1) {
+            map.setProvider(std::make_unique<OpenStreetMapProvider>());
+        } else if (event.key == Key::NUM_2) {
+            map.setProvider(std::make_unique<BingMapProvider>());
+        } else if (event.key == Key::NUM_3) {
+            map.setProvider(std::make_unique<DebugMapProvider>(&renderer));
+        }
+    });
+    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
