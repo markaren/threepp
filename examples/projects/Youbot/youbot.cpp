@@ -32,7 +32,7 @@ int main() {
     auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
@@ -49,7 +49,7 @@ int main() {
     auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
 
-        canvas.invokeLater([&] {
+        renderer.invokeLater([&] {
             subs.emplace_back(canvas.keys.Pressed.subscribe([youbot](auto& e) { youbot->onKeyPressed(e); }));
             subs.emplace_back(canvas.keys.Released.subscribe([youbot](auto& e) { youbot->onKeyReleased(e); }));
             scene->add(youbot);

@@ -45,16 +45,18 @@ struct HUD::Impl: Scene {
 
     Subscriptions subs_;
 
-    Impl(PeripheralsEventSource* eventSource)
+    Impl(PeripheralsEventSource* eventSource, const WindowSize& size)
         : eventSource_(eventSource),
-          size_(eventSource->size()),
+          size_(size),
           camera_(0, size_.width, size_.height, 0, 0.1, 10) {
 
-        auto& mouse = eventSource->mouse;
+        if (eventSource) {
+            auto& mouse = eventSource->mouse;
 
-        subs_ << mouse.Down.subscribe([this](MouseButtonEvent& e) { onMouseDown(e); });
-        subs_ << mouse.Up.subscribe([this](MouseButtonEvent& e) { onMouseUp(e); });
-        subs_ << mouse.Move.subscribe([this](MouseEvent& e) { onMouseMove(e); });
+            subs_ << mouse.Down.subscribe([this](MouseButtonEvent& e) { onMouseDown(e); });
+            subs_ << mouse.Up.subscribe([this](MouseButtonEvent& e) { onMouseUp(e); });
+            subs_ << mouse.Move.subscribe([this](MouseEvent& e) { onMouseMove(e); });
+        }
 
         camera_.position.z = 1;
     }
@@ -138,9 +140,6 @@ struct HUD::Impl: Scene {
         mouse_.y = -(e.pos.y / static_cast<float>(size_.height)) * 2 + 1;
     }
 
-    ~Impl() override {
-    }
-
 private:
     PeripheralsEventSource* eventSource_;
 
@@ -153,9 +152,12 @@ private:
     std::unordered_map<Object3D*, Options> map_;
 };
 
+HUD::HUD(WindowSize size)
+    : pimpl_(std::make_unique<Impl>(nullptr, size)) {}
 
-HUD::HUD(PeripheralsEventSource& eventSource)
-    : pimpl_(std::make_unique<Impl>(&eventSource)) {}
+
+HUD::HUD(PeripheralsEventSource* eventSource)
+    : pimpl_(std::make_unique<Impl>(eventSource, eventSource->size())) {}
 
 void HUD::apply(GLRenderer& renderer) {
     pimpl_->apply(renderer);

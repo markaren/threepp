@@ -323,9 +323,10 @@ void Object3D::traverse(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    for (auto& i : children) {
+    auto _childrenCopy = children_; // keep a copy because callback may delete children
+    for (auto& c : children) {
 
-        i->traverse(callback);
+        c->traverse(callback);
     }
 }
 
@@ -335,9 +336,11 @@ void Object3D::traverseVisible(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    for (auto& i : children) {
+    auto _childrenCopy = children_; // keep a copy because callback may delete children
 
-        i->traverseVisible(callback);
+    for (auto& c : children) {
+
+        c->traverseVisible(callback);
     }
 }
 

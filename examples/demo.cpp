@@ -118,7 +118,7 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
@@ -129,7 +129,7 @@ int main() {
     hud.add(hudText1, HUD::Options());
 
     TextGeometry::Options opts2(font2, 10, 1);
-    auto hudText2 = Text2D(opts1, "");
+    auto hudText2 = Text2D(opts2);
     hudText2.setColor(Color::red);
     hud.add(hudText2, HUD::Options()
                               .setNormalizedPosition({1, 1})
@@ -155,7 +155,7 @@ int main() {
 
         box->rotation.y += 0.5f * dt;
 
-        hudText2.setText("Delta=" + std::to_string(dt), opts2);
+        hudText2.setText("Delta=" + std::to_string(dt));
         hud.needsUpdate(hudText2);
 
         renderer.clear();

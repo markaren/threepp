@@ -233,6 +233,7 @@ set(privateHeaders
         "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/RegexUtil.hpp"
+        "threepp/utils/TaskManager.hpp"
 
 )
 

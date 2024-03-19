@@ -21,7 +21,6 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/core/InstancedBufferGeometry.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
-#include "threepp/math/Frustum.hpp"
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -33,16 +32,30 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
+#include "threepp/utils/TaskManager.hpp"
+
 #ifndef EMSCRIPTEN
 #include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
 #endif
 
+#include <chrono>
 #include <cmath>
 
 
 using namespace threepp;
+
+namespace {
+
+    double getCurrentTimeInSeconds() {
+        using Clock = std::chrono::high_resolution_clock;
+        const auto now = Clock::now();
+        const auto duration = now.time_since_epoch();
+        return std::chrono::duration<double>(duration).count();
+    }
+
+}// namespace
 
 
 struct GLRenderer::Impl {
@@ -123,6 +136,10 @@ struct GLRenderer::Impl {
 
     gl::GLShadowMap shadowMap;
 
+    // used for in-thread task execution
+    double previousTime{-1};
+    utils::TaskManager taskManager;
+
     Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
         : scope(scope), _size(size),
           cubemaps(scope),
@@ -143,6 +160,11 @@ struct GLRenderer::Impl {
 
         this->setViewport(0, 0, size.width, size.height);
         this->setScissor(0, 0, _size.width, _size.height);
+    }
+
+    void invokeLater(const std::function<void()>& task, float delay) {
+
+        taskManager.invokeLater(task, delay);
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
@@ -170,7 +192,22 @@ struct GLRenderer::Impl {
         }
     }
 
+    void handleTasks() {
+        // handle tasks to be invoked on the render thread
+        if (previousTime < 0) {
+            previousTime = getCurrentTimeInSeconds();// first invocation
+        }
+
+        const auto currentTime = getCurrentTimeInSeconds();
+        const auto deltaTime = currentTime - previousTime;
+        previousTime = currentTime;
+
+        taskManager.handleTasks(deltaTime);
+    }
+
     void render(Object3D* scene, Camera* camera) {
+
+        handleTasks();
 
         // update scene graph
 
@@ -1343,6 +1380,11 @@ GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
 std::optional<unsigned int> GLRenderer::getGlTextureId(Texture& texture) const {
 
     return pimpl_->getGlTextureId(texture);
+}
+
+void GLRenderer::invokeLater(const std::function<void()>& task, float tThen) {
+
+    return pimpl_->invokeLater(task, tThen);
 }
 
 GLRenderer::~GLRenderer() = default;

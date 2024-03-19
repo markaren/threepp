@@ -32,7 +32,7 @@ bool Background::isTexture() const {
     return texture_ != nullptr;
 }
 
-Color Background::color() const {
+Color& Background::color() {
 
     return *color_;
 }

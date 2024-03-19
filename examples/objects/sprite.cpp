@@ -86,7 +86,7 @@ int main() {
     auto helper = Mesh::create(SphereGeometry::create(0.1));
     scene->add(helper);
 
-    HUD hud(canvas);
+    HUD hud(&canvas);
     createHudSprites(hud);
 
     canvas.onWindowResize([&](WindowSize size) {

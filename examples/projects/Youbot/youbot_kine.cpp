@@ -93,7 +93,7 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
@@ -113,7 +113,8 @@ int main() {
         youbot->add(targetHelper);
         youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
-        canvas.invokeLater([&] {
+
+        renderer.invokeLater([&] {
             subs.emplace_back(canvas.keys.Pressed.subscribe([youbot](auto& e){youbot->onKeyPressed(e);}));
             subs.emplace_back(canvas.keys.Released.subscribe([youbot](auto& e){youbot->onKeyReleased(e);}));
             scene->add(youbot);

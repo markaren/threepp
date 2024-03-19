@@ -84,7 +84,8 @@ namespace threepp {
             HorizontalAlignment horizontalAlignment_;
         };
 
-        explicit HUD(PeripheralsEventSource& eventSource);
+        explicit HUD(WindowSize size);
+        explicit HUD(PeripheralsEventSource* eventSource);
 
         void apply(GLRenderer& renderer);
 
