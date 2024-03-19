@@ -35,7 +35,7 @@ void MapNode::simplify() {
     // Clear children and reset flags
     this->subdivided = false;
     this->layers.enable(0);
-    this->children.clear();
+    this->clear();
     this->nodesLoaded = 0;
 }
 

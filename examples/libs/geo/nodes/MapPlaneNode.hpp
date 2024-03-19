@@ -26,7 +26,10 @@ namespace threepp {
         void initialize() override {
 
             loadData();
-            nodeReady();
+            if (!initialized) {
+                nodeReady();
+                initialized = true;
+            }
         }
 
         [[nodiscard]] Vector3 baseScale() const override {
@@ -79,6 +82,9 @@ namespace threepp {
             node->updateMatrixWorld(true);
             node->initialize();
         }
+
+    private:
+        bool initialized = false;
     };
 
 }// namespace threepp

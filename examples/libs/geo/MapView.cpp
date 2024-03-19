@@ -46,7 +46,6 @@ MapView::MapView(std::unique_ptr<MapProvider> provider, std::unique_ptr<LODContr
     preSubDivide();
 }
 
-
 void MapView::preSubDivide() {
 
     const auto minZoom = this->provider->minZoom;

@@ -18,22 +18,22 @@ namespace threepp {
 
         void preSubDivide();
 
-        [[nodiscard]] float minZoom() const {
+        [[nodiscard]] int minZoom() const {
             return this->provider->minZoom;
         }
 
-        [[nodiscard]] float maxZoom() const {
+        [[nodiscard]] int maxZoom() const {
             return this->provider->maxZoom;
         }
 
         void setProvider(std::unique_ptr<MapProvider> provider) {
             this->provider = std::move(provider);
-            clear();
+            reload();
         }
 
-        MapProvider* getProvider() const;
+        [[nodiscard]] MapProvider* getProvider() const;
 
-        void clear() {
+        void reload() {
             traverse([&](Object3D& object) {
                 if (auto node = object.as<MapNode>()) {
                     node->initialize();
