@@ -58,3 +58,11 @@ MapProvider* MapView::getProvider() const {
 
     return provider ? provider.get() : nullptr;
 }
+
+void MapView::reload() {
+    traverse([&](Object3D& object) {
+      if (auto node = object.as<MapNode>()) {
+          node->initialize();
+      }
+    });
+}

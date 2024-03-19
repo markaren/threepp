@@ -33,13 +33,7 @@ namespace threepp {
 
         [[nodiscard]] MapProvider* getProvider() const;
 
-        void reload() {
-            traverse([&](Object3D& object) {
-                if (auto node = object.as<MapNode>()) {
-                    node->initialize();
-                }
-            });
-        }
+        void reload();
 
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override {}
 
