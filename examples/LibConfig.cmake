@@ -1,3 +1,5 @@
+
+find_package(CURL CONFIG QUIET)
 find_package(imgui CONFIG QUIET)
 find_package(assimp CONFIG QUIET)
 find_package(unofficial-omniverse-physx-sdk CONFIG QUIET)
