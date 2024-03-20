@@ -16,9 +16,11 @@ namespace threepp {
         InstancedMesh(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
-                size_t count);
+                size_t capacity);
 
-        [[nodiscard]] size_t count() const;
+        [[nodiscard]] size_t drawInstanceCount() const;
+
+        void setDrawInstanceCount(size_t drawInstanceCount);
 
         FloatBufferAttribute* instanceMatrix() const;
 
@@ -41,7 +43,7 @@ namespace threepp {
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
-                size_t count);
+                size_t capacity);
 
         ~InstancedMesh() override;
 
@@ -49,7 +51,8 @@ namespace threepp {
         Mesh _mesh;
         bool disposed{false};
 
-        size_t count_;
+        size_t capacity_;
+        size_t drawInstanceCount_;
         std::unique_ptr<FloatBufferAttribute> instanceMatrix_;
         std::unique_ptr<FloatBufferAttribute> instanceColor_ = nullptr;
 

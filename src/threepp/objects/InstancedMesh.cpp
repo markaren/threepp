@@ -20,16 +20,19 @@ namespace {
 InstancedMesh::InstancedMesh(
         std::shared_ptr<BufferGeometry> geometry,
         std::shared_ptr<Material> material,
-        size_t count)
+        size_t capacity)
     : Mesh(std::move(geometry), std::move(material)),
-      count_(count), instanceMatrix_(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
+      capacity_(capacity), drawInstanceCount_(capacity), instanceMatrix_(FloatBufferAttribute::create(std::vector<float>(capacity * 16), 16)) {
 
     this->frustumCulled = false;
 }
 
-size_t InstancedMesh::count() const {
+size_t InstancedMesh::drawInstanceCount() const {
+    return drawInstanceCount_;
+}
 
-    return count_;
+void InstancedMesh::setDrawInstanceCount(size_t drawInstanceCount) {
+    drawInstanceCount_ = capacity_ < drawInstanceCount ? capacity_ : drawInstanceCount;
 }
 
 FloatBufferAttribute* InstancedMesh::instanceMatrix() const {
@@ -62,7 +65,7 @@ void InstancedMesh::setColorAt(size_t index, const Color& color) {
 
     if (!this->instanceColor_) {
 
-        this->instanceColor_ = FloatBufferAttribute ::create(std::vector<float>(count_ * 3), 3);
+        this->instanceColor_ = FloatBufferAttribute ::create(std::vector<float>(capacity_ * 3), 3);
     }
 
     color.toArray(this->instanceColor_->array(), index * 3);
@@ -84,7 +87,7 @@ void InstancedMesh::dispose() {
 void InstancedMesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto& matrixWorld = this->matrixWorld;
-    const auto raycastTimes = this->count_;
+    const auto raycastTimes = this->drawInstanceCount();
 
     _mesh.setGeometry(geometry_);
     _mesh.setMaterials(materials_);
@@ -125,7 +128,7 @@ InstancedMesh::~InstancedMesh() {
 std::shared_ptr<InstancedMesh> InstancedMesh::create(
         std::shared_ptr<BufferGeometry> geometry,
         std::shared_ptr<Material> material,
-        size_t count) {
+        size_t capacity) {
 
-    return std::make_shared<InstancedMesh>(std::move(geometry), std::move(material), count);
+    return std::make_shared<InstancedMesh>(std::move(geometry), std::move(material), capacity);
 }
