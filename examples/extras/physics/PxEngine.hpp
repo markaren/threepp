@@ -154,7 +154,6 @@ public:
                 }
 
                 instanced->instanceMatrix()->needsUpdate();
-                instanced->computeBoundingSphere();
 
             } else {
 
@@ -231,6 +230,8 @@ public:
             };
 
             if (auto instanced = obj.as<threepp::InstancedMesh>()) {
+
+                instanced->frustumCulled = false;
 
                 const auto& array = instanced->instanceMatrix()->array();
 
