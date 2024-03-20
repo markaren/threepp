@@ -31,6 +31,8 @@ namespace {
         }
         mesh.instanceMatrix()->needsUpdate();
         mesh.instanceColor()->needsUpdate();
+
+        mesh.computeBoundingSphere();
     }
 
 }// namespace

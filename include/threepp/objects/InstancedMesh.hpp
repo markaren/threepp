@@ -12,6 +12,9 @@ namespace threepp {
     class InstancedMesh: public Mesh {
 
     public:
+        std::optional<Sphere> boundingSphere;
+        std::optional<Box3> boundingBox;
+
         InstancedMesh(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
@@ -35,6 +38,10 @@ namespace threepp {
 
         void setMatrixAt(size_t index, const Matrix4& matrix) const;
 
+        void computeBoundingBox();
+
+        void computeBoundingSphere();
+
         void dispose();
 
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
@@ -52,8 +59,17 @@ namespace threepp {
 
         size_t count_;
         size_t maxCount_;
+
         std::unique_ptr<FloatBufferAttribute> instanceMatrix_;
         std::unique_ptr<FloatBufferAttribute> instanceColor_ = nullptr;
+
+        Matrix4 _instanceLocalMatrix;
+        Matrix4 _instanceWorldMatrix;
+
+        Sphere _sphere;
+        Box3 _box3;
+
+        std::vector<Intersection> _instanceIntersects;
     };
 
 }// namespace threepp

@@ -154,6 +154,7 @@ public:
                 }
 
                 instanced->instanceMatrix()->needsUpdate();
+                instanced->computeBoundingSphere();
 
             } else {
 
