@@ -6,6 +6,7 @@
 #include "threepp/math/Color.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 #include <vector>
 
@@ -14,7 +15,7 @@ namespace threepp {
     class Lut {
 
     public:
-        Lut(const std::string& colormap, int numberofcolors = 32) {
+        explicit Lut(const std::string& colormap, int numberofcolors = 32) {
 
             this->setColorMap(colormap, numberofcolors);
         }
