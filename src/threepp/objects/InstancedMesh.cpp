@@ -1,20 +1,9 @@
 
-#include <memory>
-
 #include "threepp/objects/InstancedMesh.hpp"
 
 #include "threepp/core/Raycaster.hpp"
 
 using namespace threepp;
-
-namespace {
-
-    Matrix4 _instanceLocalMatrix;
-    Matrix4 _instanceWorldMatrix;
-
-    std::vector<Intersection> _instanceIntersects;
-
-}// namespace
 
 
 InstancedMesh::InstancedMesh(
@@ -24,7 +13,11 @@ InstancedMesh::InstancedMesh(
     : Mesh(std::move(geometry), std::move(material)),
       count_(count), maxCount_(count), instanceMatrix_(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
 
-    this->frustumCulled = false;
+    Matrix4 identity;
+    for (unsigned i = 0; i < count; i++) {
+
+        this->setMatrixAt(i, identity);
+    }
 }
 
 size_t InstancedMesh::count() const {
@@ -133,4 +126,58 @@ std::shared_ptr<InstancedMesh> InstancedMesh::create(
         size_t count) {
 
     return std::make_shared<InstancedMesh>(std::move(geometry), std::move(material), count);
+}
+
+void InstancedMesh::computeBoundingBox() {
+
+    const auto geometry = this->geometry();
+    const auto count = this->count_;
+
+    if (!this->boundingBox) {
+
+        this->boundingBox = Box3();
+    }
+
+    if (!geometry->boundingBox) {
+
+        geometry->computeBoundingBox();
+    }
+
+    this->boundingBox->makeEmpty();
+
+    for (unsigned i = 0; i < count; i++) {
+
+        this->getMatrixAt(i, _instanceLocalMatrix);
+
+        _box3.copy(*geometry->boundingBox).applyMatrix4(_instanceLocalMatrix);
+
+        this->boundingBox->union_(_box3);
+    }
+}
+
+void InstancedMesh::computeBoundingSphere() {
+
+    const auto geometry = this->geometry();
+    const auto count = this->count_;
+
+    if (!this->boundingSphere) {
+
+        this->boundingSphere = Sphere();
+    }
+
+    if (!geometry->boundingSphere) {
+
+        geometry->computeBoundingSphere();
+    }
+
+    this->boundingSphere->makeEmpty();
+
+    for (unsigned i = 0; i < count; i++) {
+
+        this->getMatrixAt(i, _instanceLocalMatrix);
+
+        _sphere.copy(*geometry->boundingSphere).applyMatrix4(_instanceLocalMatrix);
+
+        this->boundingSphere->union_(_sphere);
+    }
 }
