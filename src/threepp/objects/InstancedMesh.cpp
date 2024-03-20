@@ -22,7 +22,7 @@ InstancedMesh::InstancedMesh(
         std::shared_ptr<Material> material,
         size_t count)
     : Mesh(std::move(geometry), std::move(material)),
-      count_(count), instanceMatrix_(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
+      count_(count), maxCount_(count), instanceMatrix_(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
 
     this->frustumCulled = false;
 }
@@ -30,6 +30,11 @@ InstancedMesh::InstancedMesh(
 size_t InstancedMesh::count() const {
 
     return count_;
+}
+
+void InstancedMesh::setCount(size_t count) {
+
+    count_ = std::min(maxCount_, count);
 }
 
 FloatBufferAttribute* InstancedMesh::instanceMatrix() const {
@@ -62,7 +67,7 @@ void InstancedMesh::setColorAt(size_t index, const Color& color) {
 
     if (!this->instanceColor_) {
 
-        this->instanceColor_ = FloatBufferAttribute ::create(std::vector<float>(count_ * 3), 3);
+        this->instanceColor_ = FloatBufferAttribute ::create(std::vector<float>(maxCount_ * 3), 3);
     }
 
     color.toArray(this->instanceColor_->array(), index * 3);
