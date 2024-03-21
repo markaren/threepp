@@ -46,14 +46,14 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Optimization");
+    Canvas canvas("Lut", {{"aa", 6}});
     GLRenderer renderer(canvas.size());
 
     Scene scene;
     scene.background = Color::aliceblue;
 
     PerspectiveCamera camera(60, canvas.aspect());
-    camera.position.set(6, 6, -6);
+    camera.position.set(5, 4, -5);
 
     OrbitControls controls(camera, canvas);
 
