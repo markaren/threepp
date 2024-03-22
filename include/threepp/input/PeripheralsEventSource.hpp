@@ -27,6 +27,8 @@ namespace threepp {
 
         bool removeMouseListener(const MouseListener& listener);
 
+        void onDrop(std::function<void(std::vector<std::string>)> paths);
+
         virtual ~PeripheralsEventSource() = default;
 
     protected:
@@ -49,10 +51,17 @@ namespace threepp {
 
         void onKeyEvent(KeyEvent evt, KeyAction action);
 
+        void onDropEvent(std::vector<std::string> paths) {
+            if (dropListener_ && !paths.empty()) {
+                dropListener_(std::move(paths));
+            }
+        }
+
     private:
         IOCapture* ioCapture_ = nullptr;
         std::vector<KeyListener*> keyListeners_;
         std::vector<MouseListener*> mouseListeners_;
+        std::function<void(std::vector<std::string>)> dropListener_;
     };
 
 }// namespace threepp

@@ -99,3 +99,7 @@ void PeripheralsEventSource::onKeyEvent(KeyEvent evt, PeripheralsEventSource::Ke
         }
     }
 }
+
+void PeripheralsEventSource::onDrop(std::function<void(std::vector<std::string>)> paths) {
+    dropListener_ = std::move(paths);
+}
