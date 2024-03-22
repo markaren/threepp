@@ -8,38 +8,47 @@ using namespace threepp;
 
 namespace {
 
-    void rosenbrock(PlaneGeometry& geometry, float a = 1, float b = 100) {
+    void normalizeAndApplyLut(BufferGeometry& geometry, float maxHeight) {
 
         auto pos = geometry.getAttribute<float>("position");
-        auto& vertices = pos->array();
 
         std::vector<float> yValues;
-        yValues.reserve(vertices.size() / 3);
-        for (auto i = 0; i < vertices.size(); i += 3) {
+        yValues.reserve(pos->count());
+        for (auto i = 0; i < pos->count(); i++) {
+            yValues.emplace_back(pos->getY(i));
+        }
 
-            float x = vertices[i];
-            float z = vertices[i + 2];
-            float y = ((a - x) * (a - x)) + b * ((z - (x * x)) * (z - (x * x)));
-
-            vertices[i + 1] = y;
-            yValues.emplace_back(y);
+        const auto minmax = std::minmax_element(yValues.begin(), yValues.end());
+        for (auto i = 0; i < pos->count(); i++) {
+            pos->setY(i, math::mapLinear(pos->getY(i), *minmax.first, *minmax.second, 0, maxHeight));
         }
 
         Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.01f, 0xffff00}, {0.1f, 0xff0000}, {1.f, Color::darkred}});
         Lut lut("rainbow", 256 * 256);
-        auto colors = std::vector<float>(vertices.size());
-        auto minMax = std::minmax_element(yValues.begin(), yValues.end());
-        for (auto i = 0; i < vertices.size(); i += 3) {
+        auto colors = std::vector<float>(pos->count() * 3);
 
-            float y = vertices[i + 1];
+        for (auto i = 0, j = 0; i < pos->count(); i++, j += 3) {
 
-            Color c = lut.getColor(math::mapLinear(y, *minMax.first, *minMax.second, 0, 1));
-            c.toArray(colors, i);
+            float y = pos->getY(i);
+
+            Color c = lut.getColor(math::mapLinear(y, 0, maxHeight, 0, 1));
+            c.toArray(colors, j);
         }
         geometry.setAttribute("color", FloatBufferAttribute::create(colors, 3));
-        geometry.scale(1, 0.001, 1);
+    }
 
-        pos->needsUpdate();
+    void rosenbrock(PlaneGeometry& geometry, float a = 1, float b = 100) {
+
+        auto pos = geometry.getAttribute<float>("position");
+
+        for (auto i = 0; i < pos->count(); i++) {
+
+            float x = pos->getX(i);
+            float z = pos->getZ(i);
+            float y = ((a - x) * (a - x)) + b * ((z - (x * x)) * (z - (x * x)));
+
+            pos->setY(i, y);
+        }
     }
 
 }// namespace
@@ -61,8 +70,13 @@ int main() {
     auto planeGeometry2 = PlaneGeometry::create(4, 4, 40, 40);
     planeGeometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2).setPosition(0, 0, 1));
     planeGeometry2->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2).setPosition(0, 0, 1));
+
     rosenbrock(*planeGeometry);
     rosenbrock(*planeGeometry2);
+
+    normalizeAndApplyLut(*planeGeometry, 4);
+    normalizeAndApplyLut(*planeGeometry2, 4);
+
     auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create({{"vertexColors", true}}));
     auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create({{"wireframe", true}}));
     wireframe->material()->depthTest = false;
