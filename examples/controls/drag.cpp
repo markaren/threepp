@@ -19,7 +19,7 @@ int main() {
 
     scene.add(AmbientLight::create(0xaaaaaa));
 
-    auto light = SpotLight::create(0xffffff, 1);
+    auto light = SpotLight::create(0xffffff, 1.f);
     light->position.set(0, 25, 50);
     light->angle = math::PI / 9;
 
@@ -85,6 +85,17 @@ int main() {
 
     controls.addEventListener("hoveron", &hoverListener);
     controls.addEventListener("hoveroff", &hoverListener);
+
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt){
+        if (evt.key == Key::M) {
+            if (controls.mode == DragControls::Mode::Translate) {
+                controls.mode = DragControls::Mode::Rotate;
+            } else {
+                controls.mode = DragControls::Mode::Translate;
+            }
+        }
+    });
+    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
