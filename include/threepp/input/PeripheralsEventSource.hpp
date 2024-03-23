@@ -37,6 +37,8 @@ namespace threepp {
         // Events for mouse
         Mouse mouse;
 
+        void onDrop(std::function<void(std::vector<std::string>)> paths);
+
         virtual ~PeripheralsEventSource() = default;
 
     protected:
@@ -51,9 +53,15 @@ namespace threepp {
             RELEASE
         };
 
+        void onDropEvent(std::vector<std::string> paths) {
+            if (dropListener_ && !paths.empty()) {
+                dropListener_(std::move(paths));
+            }
+        }
 
     private:
         IOCapture* ioCapture_ = nullptr;
+        std::function<void(std::vector<std::string>)> dropListener_;
     };
 
 }// namespace threepp

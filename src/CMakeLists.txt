@@ -127,6 +127,7 @@ set(publicHeaders
         "threepp/math/Frustum.hpp"
         "threepp/math/ImprovedNoise.hpp"
         "threepp/math/Line3.hpp"
+        "threepp/math/Lut.hpp"
         "threepp/math/MathUtils.hpp"
         "threepp/math/Matrix3.hpp"
         "threepp/math/Matrix4.hpp"

@@ -217,6 +217,7 @@ struct Canvas::Impl {
         glfwSetCursorPosCallback(window, cursor_callback);
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
+        glfwSetDropCallback(window, drop_callback);
 
         glfwMakeContextCurrent(window);
 
@@ -344,6 +345,18 @@ struct Canvas::Impl {
             default:
                 break;
         }
+    }
+
+    static void drop_callback(GLFWwindow* w, int count, const char** paths) {
+
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        std::vector<std::string> v;
+        for (int i = 0; i < count; ++i) {
+            v.emplace_back(paths[i]);
+        }
+
+        p->scope.onDropEvent(v);
     }
 };
 

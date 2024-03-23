@@ -25,6 +25,8 @@ namespace threepp {
 
         const float width;
         const float height;
+        const unsigned int widthSegments;
+        const unsigned int heightSegments;
 
         PlaneGeometry(const PlaneGeometry&) = delete;
 

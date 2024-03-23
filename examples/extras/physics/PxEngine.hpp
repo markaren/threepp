@@ -230,6 +230,8 @@ public:
 
             if (auto instanced = obj.as<threepp::InstancedMesh>()) {
 
+                instanced->frustumCulled = false;
+
                 const auto& array = instanced->instanceMatrix()->array();
 
                 threepp::Matrix4 tmp;

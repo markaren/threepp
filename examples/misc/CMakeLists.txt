@@ -1,4 +1,5 @@
 
+add_example(NAME "lut" WEB)
 add_example(NAME "raycast")
 add_example(NAME "mouse_key_listener")
 add_example(NAME "clipping" LINK_IMGUI)

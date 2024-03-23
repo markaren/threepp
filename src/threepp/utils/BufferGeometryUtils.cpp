@@ -10,7 +10,6 @@ namespace {
     template<typename T>
     inline std::unique_ptr<BufferAttribute> mergeBufferAttributes(const std::vector<TypedBufferAttribute<T>*>& attributes) {
 
-
         std::optional<int> itemSize;
         std::optional<bool> normalized;
         size_t arrayLength = 0;
@@ -185,10 +184,13 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 }
 
 std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector<std::shared_ptr<BufferGeometry>>& geometries, bool useGroups) {
+
     std::vector<BufferGeometry*> arr;
     arr.reserve(geometries.size());
+
     for (const auto& g : geometries) {
         arr.emplace_back(g.get());
     }
+
     return mergeBufferGeometries(arr, useGroups);
 }
