@@ -223,6 +223,8 @@ private:
 
     Vector3 _up;
     Vector3 _right;
+
+    friend class DragControls;
 };
 
 
@@ -230,6 +232,8 @@ DragControls::DragControls(const std::vector<Object3D*>& objects, Camera& camera
     : pimpl_(std::make_unique<Impl>(*this, objects, camera, eventSource)) {}
 
 void DragControls::setObjects(const std::vector<Object3D*>& objects) {
+
+    pimpl_->_objects = objects;
 }
 
 DragControls::~DragControls() = default;
