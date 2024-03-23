@@ -161,7 +161,7 @@ int main() {
     plane->add(wireframe);
     scene.add(plane);
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
+    canvas.keys.Pressed.subscribeForever([&](KeyEvent evt) {
         if (evt.key == Key::NUM_1) {
             applyFunc(*planeGeometry, rosenbrock);
             applyFunc(*planeGeometry2, rosenbrock);
@@ -194,7 +194,6 @@ int main() {
         normalizeAndApplyLut(*planeGeometry, 2);
         normalizeAndApplyLut(*planeGeometry2, 2);
     });
-    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
