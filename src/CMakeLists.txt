@@ -7,6 +7,7 @@ set(publicHeaders
 
         "threepp/canvas/WindowSize.hpp"
 
+        "threepp/controls/DragControls.hpp"
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
 
@@ -244,6 +245,7 @@ set(sources
         "threepp/cameras/PerspectiveCamera.cpp"
         "threepp/cameras/OrthographicCamera.cpp"
 
+        "threepp/controls/DragControls.cpp"
         "threepp/controls/FlyControls.cpp"
         "threepp/controls/OrbitControls.cpp"
 
