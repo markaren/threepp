@@ -64,18 +64,21 @@ int main() {
     DragControls controls(objects, camera, canvas);
     controls.rotateSpeed = 2;
 
-    struct HoverListener: public EventListener {
-        void onEvent(Event& event) override {
+    struct HoverListener {
+        void hoverOn(Event& event) {
 
             auto target = static_cast<Object3D*>(event.target);
             auto& color = target->material()->as<MaterialWithColor>()->color;
 
-            if (event.type == "hoveron") {
-                prevColor = color;
-                color = Color::white;
-            } else if (event.type == "hoveroff") {
-                color = prevColor;
-            }
+            prevColor = color;
+            color = Color::white;
+        }
+
+        void hoverOff(Event& event) {
+            auto target = static_cast<Object3D*>(event.target);
+            auto& color = target->material()->as<MaterialWithColor>()->color;
+
+            color = prevColor;
         }
 
     private:
@@ -83,10 +86,15 @@ int main() {
 
     } hoverListener;
 
-    controls.addEventListener("hoveron", &hoverListener);
-    controls.addEventListener("hoveroff", &hoverListener);
+    controls.HoverOn.subscribeForever([&hoverListener](auto& evt) {
+        hoverListener.hoverOn(evt);
+    });
+    controls.HoverOff.subscribeForever([&hoverListener](auto& evt) {
+        hoverListener.hoverOff(evt);
+    });
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt){
+
+    canvas.keys.Pressed.subscribeForever([&](KeyEvent evt) {
         if (evt.key == Key::M) {
             if (controls.mode == DragControls::Mode::Translate) {
                 controls.mode = DragControls::Mode::Rotate;
@@ -95,7 +103,7 @@ int main() {
             }
         }
     });
-    canvas.addKeyListener(keyAdapter);
+
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();

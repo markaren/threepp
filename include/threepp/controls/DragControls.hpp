@@ -14,15 +14,13 @@ namespace threepp {
     class Object3D;
     class PeripheralsEventSource;
 
-    class DragControls : public EventDispatcher {
+    class DragControls {
 
     public:
-
         enum class Mode {
             Translate,
             Rotate
         };
-
 
         bool enabled = true;
         bool recursive = true;
@@ -36,14 +34,19 @@ namespace threepp {
 
         void setObjects(const std::vector<Object3D*>& objects);
 
-        ~DragControls() override;
+        ~DragControls();
+
+        EventDispatcher HoverOn;
+        EventDispatcher HoverOff;
+        EventDispatcher Drag;
+        EventDispatcher Dragstart;
+        EventDispatcher Dragend;
 
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_DRAGCONTROLS_HPP

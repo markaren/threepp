@@ -10,28 +10,12 @@
 using namespace threepp;
 
 
-struct DragControls::Impl: public MouseListener {
+struct DragControls::Impl {
 
     Impl(DragControls& scope, const std::vector<Object3D*>& objects, Camera& camera, PeripheralsEventSource& eventSource)
         : scope(&scope), _objects(objects), _camera(&camera), eventSource(&eventSource) {
 
         activate();
-    }
-
-    void onMouseMove(const Vector2& pos) override {
-        onPointerMove(pos);
-    }
-
-    void onMouseDown(int button, const Vector2& pos) override {
-        if (button == 0) {
-            onPointerDown(pos);
-        }
-    }
-
-    void onMouseUp(int button, const Vector2& pos) override {
-        if (button == 0) {
-            onPointerCancel();
-        }
     }
 
     void onPointerMove(Vector2 pos) {
@@ -59,7 +43,7 @@ struct DragControls::Impl: public MouseListener {
                 _selected->rotateOnWorldAxis(_right.normalize(), -_diff.y);
             }
 
-            scope->dispatchEvent("drag", _selected);
+            scope->Drag.send({_selected});
 
             _previousPointer.copy(_pointer);
 
@@ -80,14 +64,14 @@ struct DragControls::Impl: public MouseListener {
 
                 if (_hovered && _hovered != object) {
 
-                    scope->dispatchEvent("hoveroff", _hovered);
+                    scope->HoverOff.send({_hovered});
 
                     _hovered = nullptr;
                 }
 
                 if (_hovered != object) {
 
-                    scope->dispatchEvent("hoveron", object);
+                    scope->HoverOn.send({object});
 
                     _hovered = object;
                 }
@@ -96,7 +80,7 @@ struct DragControls::Impl: public MouseListener {
 
                 if (_hovered) {
 
-                    scope->dispatchEvent("hoveroff", _hovered);
+                    scope->HoverOff.send({_hovered});
 
                     _hovered = nullptr;
                 }
@@ -148,7 +132,7 @@ struct DragControls::Impl: public MouseListener {
                 }
             }
 
-            scope->dispatchEvent("dragstart", _selected);
+            scope->Dragstart.send({_selected});
         }
 
         _previousPointer.copy(_pointer);
@@ -160,7 +144,7 @@ struct DragControls::Impl: public MouseListener {
 
         if (_selected) {
 
-            scope->dispatchEvent("dragend", _selected);
+            scope->Dragend.send({_selected});
 
             _selected = nullptr;
         }
@@ -185,16 +169,24 @@ struct DragControls::Impl: public MouseListener {
 
     void activate() {
 
-        eventSource->addMouseListener(*this);
+        _subs << eventSource->mouse.Down.subscribe([this](auto evt) {
+            if (evt.button == 0) {
+                onPointerDown(evt.pos);
+            }
+        });
+        _subs << eventSource->mouse.Up.subscribe([this](auto evt) {
+            if (evt.button == 0) {
+                onPointerCancel();
+            }
+        });
+        _subs << eventSource->mouse.Move.subscribe([this](auto evt) {
+            onPointerMove(evt.pos);
+        });
     }
 
     void deactivate() {
 
-        eventSource->removeMouseListener(*this);
-    }
-
-    ~Impl() override {
-        deactivate();
+        _subs.clear();
     }
 
 private:
@@ -209,6 +201,8 @@ private:
     std::vector<Intersection> _intersections;
 
     Mode mode{Mode::Translate};
+
+    Subscriptions _subs;
 
     Plane _plane;
     Raycaster _raycaster;
