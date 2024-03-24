@@ -9,41 +9,40 @@
 
 namespace threepp {
 
-    struct MouseListener {
-
-        virtual void onMouseDown(int button, const Vector2& pos) {}
-        virtual void onMouseUp(int button, const Vector2& pos) {}
-        virtual void onMouseMove(const Vector2& pos) {}
-        virtual void onMouseWheel(const Vector2& delta) {}
-
-        virtual ~MouseListener() = default;
+    struct MouseEvent : Event {
+        MouseEvent(Vector2 pos) :
+            pos(pos) {}
+        Vector2 pos;
     };
 
-    struct MouseMoveListener: MouseListener {
+    struct MouseMoveEvent : MouseEvent
+    {
+        MouseMoveEvent(Vector2 pos, Vector2 delta):
+            MouseEvent(pos), delta(delta)
+        {}
 
-        explicit MouseMoveListener(std::function<void(const Vector2&)> f)
-            : f_(std::move(f)) {}
-
-        void onMouseMove(const Vector2& pos) override {
-            f_(pos);
-        }
-
-    private:
-        std::function<void(Vector2)> f_;
+        Vector2 delta;
     };
 
-    struct MouseUpListener: MouseListener {
-
-        explicit MouseUpListener(std::function<void(int, const Vector2&)> f)
-            : f_(std::move(f)) {}
-
-        void onMouseUp(int button, const Vector2& pos) override {
-            f_(button, pos);
-        }
-
-    private:
-        std::function<void(int, Vector2)> f_;
+    struct MouseButtonEvent : MouseEvent {
+        MouseButtonEvent(int button, Vector2 pos)
+            :MouseEvent(pos), button(button)
+        {}
+        int button;
     };
+
+    struct MouseWheelEvent : Event {
+        MouseWheelEvent(Vector2 offset_) :offset(offset_) {}
+        Vector2 offset;
+    };
+
+    struct Mouse {
+        TEventDispatcher<MouseMoveEvent> Move;
+        TEventDispatcher<MouseWheelEvent> Wheel;
+        TEventDispatcher<MouseButtonEvent> Down;
+        TEventDispatcher<MouseButtonEvent> Up;
+    };
+
 
 }// namespace threepp
 

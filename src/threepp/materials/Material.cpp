@@ -26,7 +26,7 @@ unsigned int Material::version() const {
 void Material::dispose() {
     if (!disposed_) {
         disposed_ = true;
-        dispatchEvent("dispose", this);
+        OnDispose.send(Event{this});
     }
 }
 

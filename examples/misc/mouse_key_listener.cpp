@@ -7,49 +7,35 @@ using namespace threepp;
 
 namespace {
 
-    struct MyMouseListener: MouseListener {
+	void onMouseDown(MouseButtonEvent & e, double t) {
+		std::cout << "onMouseDown, button= " << e.button << ", pos=" << e.pos << " at t=" << t << std::endl;
+	}
 
-        float& t;
+	void onMouseUp(MouseButtonEvent & e, double t) {
+		std::cout << "onMouseUp, button= " << e.button << ", pos=" << e.pos << " at t=" << t << std::endl;
+	}
 
-        explicit MyMouseListener(float& t): t(t) {}
+	void onMouseMove(MouseMoveEvent &e, double t) {
+		std::cout << "onMouseMove, "
+				  << "pos=" << e.pos << " at t=" << t << std::endl;
+	}
 
-        void onMouseDown(int button, const Vector2& pos) override {
-            std::cout << "onMouseDown, button= " << button << ", pos=" << pos << " at t=" << t << std::endl;
-        }
+	void onMouseWheel(MouseWheelEvent &e, double t) {
+		std::cout << "onMouseWheel, "
+				  << "delta=" << e.offset << " at t=" << t << std::endl;
+	}
 
-        void onMouseUp(int button, const Vector2& pos) override {
-            std::cout << "onMouseUp, button= " << button << ", pos=" << pos << " at t=" << t << std::endl;
-        }
+	void onKeyPressed(KeyEvent evt, double t) {
+		std::cout << "onKeyPressed at t=" << t << std::endl;
+	}
 
-        void onMouseMove(const Vector2& pos) override {
-            std::cout << "onMouseMove, "
-                      << "pos=" << pos << " at t=" << t << std::endl;
-        }
+	void onKeyReleased(KeyEvent evt, double t) {
+		std::cout << "onKeyReleased at t=" << t << std::endl;
+	}
 
-        void onMouseWheel(const Vector2& delta) override {
-            std::cout << "onMouseWheel, "
-                      << "delta=" << delta << " at t=" << t << std::endl;
-        }
-    };
-
-    struct MyKeyListener: KeyListener {
-
-        float& t;
-
-        explicit MyKeyListener(float& t): t(t) {}
-
-        void onKeyPressed(KeyEvent evt) override {
-            std::cout << "onKeyPressed at t=" << t << std::endl;
-        }
-
-        void onKeyReleased(KeyEvent evt) override {
-            std::cout << "onKeyReleased at t=" << t << std::endl;
-        }
-
-        void onKeyRepeat(KeyEvent evt) override {
-            std::cout << "onKeyRepeat at t=" << t << std::endl;
-        }
-    };
+	void onKeyRepeat(KeyEvent evt, double t) {
+		std::cout << "onKeyRepeat at t=" << t << std::endl;
+	}
 
 }// namespace
 
@@ -58,22 +44,29 @@ int main() {
     Canvas canvas("Mouse and Key Listeners Demo");
     Clock clock;
 
-    MyMouseListener ml{clock.elapsedTime};
-    MyKeyListener kl{clock.elapsedTime};
-    canvas.addMouseListener(ml);
-    canvas.addKeyListener(kl);
+	Subscriptions subs_;
+    subs_ << canvas.mouse.Down.subscribe([&](auto& e) { onMouseDown(e, clock.elapsedTime); });
+    subs_ << canvas.mouse.Up.subscribe([&](auto& e) { onMouseUp(e, clock.elapsedTime); });
+    subs_ << canvas.mouse.Move.subscribe([&](auto& e) { onMouseMove(e, clock.elapsedTime); });
+    subs_ << canvas.mouse.Wheel.subscribe([&](auto& e) { onMouseWheel(e, clock.elapsedTime); });
+
+	Subscriptions key_subs_;
+	auto subscribe_keys = [&]() {
+		key_subs_ << canvas.keys.Pressed.subscribe([&](auto& e) {onKeyPressed(e, clock.elapsedTime); });
+		key_subs_ << canvas.keys.Released.subscribe([&](auto& e) {onKeyReleased(e, clock.elapsedTime); });
+		key_subs_ << canvas.keys.Repeat.subscribe([&](auto& e) {onKeyRepeat(e, clock.elapsedTime); });
+	};
 
     bool finish = false;
     canvas.animate([&]() {
         clock.getElapsedTime();
 
         if (clock.elapsedTime > 2 && clock.elapsedTime < 4) {
-            if (canvas.removeKeyListener(kl)) {
-                std::cout << "removed key listener" << std::endl;
-            }
+			key_subs_.clear();
+			std::cout << "removed key listener" << std::endl;
         } else if (!finish && clock.elapsedTime > 5) {
+			subscribe_keys();
             std::cout << "re-added key listener" << std::endl;
-            canvas.addKeyListener(kl);
             finish = true;
         }
     });

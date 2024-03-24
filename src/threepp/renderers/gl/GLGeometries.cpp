@@ -20,56 +20,11 @@ using namespace threepp::gl;
 
 struct GLGeometries::Impl {
 
-    struct OnGeometryDispose: EventListener {
-
-        explicit OnGeometryDispose(GLGeometries::Impl* scope)
-            : scope_(scope) {}
-
-        void onEvent(Event& event) override {
-
-            auto geometry = static_cast<BufferGeometry*>(event.target);
-
-            if (geometry->hasIndex()) {
-
-                scope_->attributes_.remove(geometry->getIndex());
-            }
-
-            for (const auto& [name, value] : geometry->getAttributes()) {
-
-                scope_->attributes_.remove(value.get());
-            }
-
-            geometry->removeEventListener("dispose", this);
-
-            scope_->geometries_.erase(geometry);
-
-
-            if (scope_->wireframeAttributes_.count(geometry)) {
-
-                const auto& attribute = scope_->wireframeAttributes_.at(geometry);
-
-                scope_->attributes_.remove(attribute.get());
-                scope_->wireframeAttributes_.erase(geometry);
-            }
-
-            scope_->bindingStates_.releaseStatesOfGeometry(geometry);
-
-            if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
-                ig->_maxInstanceCount = 0;
-            }
-
-            --scope_->info_.memory.geometries;
-        }
-
-    private:
-        GLGeometries::Impl* scope_;
-    };
 
     GLInfo& info_;
     GLAttributes& attributes_;
     GLBindingStates& bindingStates_;
 
-    OnGeometryDispose onGeometryDispose_;
 
     std::unordered_map<BufferGeometry*, bool> geometries_;
     std::unordered_map<BufferGeometry*, std::unique_ptr<IntBufferAttribute>> wireframeAttributes_;
@@ -77,14 +32,45 @@ struct GLGeometries::Impl {
     Impl(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates)
         : info_(info),
           attributes_(attributes),
-          bindingStates_(bindingStates),
-          onGeometryDispose_(this) {}
+          bindingStates_(bindingStates) {}
 
     void get(Object3D* object, BufferGeometry* geometry) {
 
         if (geometries_.count(geometry) && geometries_.at(geometry)) return;
 
-        geometry->addEventListener("dispose", &onGeometryDispose_);
+        geometry->OnDispose.subscribeOnce([this](Event& event) {
+            auto geometry = static_cast<BufferGeometry*>(event.target);
+
+            if (geometry->hasIndex()) {
+
+                this->attributes_.remove(geometry->getIndex());
+            }
+
+            for (const auto& [name, value] : geometry->getAttributes()) {
+
+                this->attributes_.remove(value.get());
+            }
+
+
+            this->geometries_.erase(geometry);
+
+
+            if (this->wireframeAttributes_.count(geometry)) {
+
+                const auto& attribute = this->wireframeAttributes_.at(geometry);
+
+                this->attributes_.remove(attribute.get());
+                this->wireframeAttributes_.erase(geometry);
+            }
+
+            this->bindingStates_.releaseStatesOfGeometry(geometry);
+
+            if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+                ig->_maxInstanceCount = 0;
+            }
+
+            --this->info_.memory.geometries;
+        });
 
         geometries_[geometry] = true;
 

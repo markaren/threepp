@@ -34,9 +34,6 @@ struct OrbitControls::Impl {
     OrbitControls& scope;
     Camera& camera;
 
-    std::unique_ptr<KeyListener> keyListener;
-    std::unique_ptr<MouseListener> mouseListener;
-
     State state = State::NONE;
 
     // current position in spherical coordinates
@@ -59,13 +56,16 @@ struct OrbitControls::Impl {
     Vector2 dollyEnd;
     Vector2 dollyDelta;
 
-    Impl(OrbitControls& scope, PeripheralsEventSource& canvas, Camera& camera)
-        : scope(scope), canvas(canvas), camera(camera),
-          keyListener(std::make_unique<MyKeyListener>(scope)),
-          mouseListener(std::make_unique<MyMouseListener>(scope)) {
+    Subscriptions subs_;
 
-        canvas.addMouseListener(*mouseListener);
-        canvas.addKeyListener(*keyListener);
+    Impl(OrbitControls& scope, PeripheralsEventSource& canvas, Camera& camera)
+        : scope(scope), canvas(canvas), camera(camera) {
+
+        subs_ << canvas.keys.Pressed.subscribe([this](auto& e) { onKeyPressed(e); });
+        subs_ << canvas.keys.Repeat.subscribe([this](auto& e) { onKeyRepeat(e); });
+
+        subs_ << canvas.mouse.Down.subscribe([this](auto& e) { onMouseDown(e); });
+        subs_ << canvas.mouse.Wheel.subscribe([this](auto& e) { onMouseWheel(e); });
 
         update();
     }
@@ -390,131 +390,92 @@ struct OrbitControls::Impl {
         scope.update();
     }
 
-    ~Impl() {
 
-        canvas.removeMouseListener(*mouseListener);
-        canvas.removeKeyListener(*keyListener);
+    void onKeyPressed(KeyEvent evt) {
+        if (scope.enabled && scope.enableKeys && scope.enablePan) {
+            handleKeyDown(evt.key);
+        }
     }
 
-    struct MyKeyListener: KeyListener {
+    void onKeyRepeat(KeyEvent evt) {
+        if (scope.enabled && scope.enableKeys && scope.enablePan) {
+            handleKeyDown(evt.key);
+        }
+    }
 
-        OrbitControls& controls;
+    void onMouseMove(MouseEvent& e) {
+        if (scope.enabled) {
+            switch (state) {
+                case State::ROTATE:
+                    if (scope.enableRotate) {
+                        handleMouseMoveRotate(e.pos);
+                    }
+                    break;
+                case State::DOLLY:
+                    if (scope.enableZoom) {
+                        handleMouseMoveDolly(e.pos);
+                    }
+                    break;
+                case State::PAN:
+                    if (scope.enablePan) {
+                        handleMouseMovePan(e.pos);
+                    }
+                    break;
+                default:
+                    //TODO ?
+                    break;
+            }
+        }
+    }
 
-        explicit MyKeyListener(OrbitControls& controls)
-            : controls(controls) {}
 
-        void onKeyPressed(KeyEvent evt) override {
-            if (controls.enabled && controls.enableKeys && controls.enablePan) {
-                controls.pimpl_->handleKeyDown(evt.key);
+    void onMouseUp() {
+        if (scope.enabled) {
+            scope.pimpl_->state = State::NONE;
+        }
+    }
+
+    void onMouseDown(MouseButtonEvent e) {
+        if (scope.enabled) {
+            switch (e.button) {
+                case 0:// LEFT
+                    if (scope.enableRotate) {
+                        scope.pimpl_->handleMouseDownRotate(e.pos);
+                        scope.pimpl_->state = State::ROTATE;
+                    }
+                    break;
+                case 1:// RIGHT
+                    if (scope.enablePan) {
+                        scope.pimpl_->handleMouseDownRotate(e.pos);
+                        scope.pimpl_->handleMouseDownPan(e.pos);
+                        scope.pimpl_->state = State::PAN;
+                    }
+                    break;
+                case 2:// MIDDLE
+                    if (scope.enableZoom) {
+                        scope.pimpl_->handleMouseDownDolly(e.pos);
+                        scope.pimpl_->state = State::DOLLY;
+                    }
+                    break;
             }
         }
 
-        void onKeyRepeat(KeyEvent evt) override {
-            if (controls.enabled && controls.enableKeys && controls.enablePan) {
-                controls.pimpl_->handleKeyDown(evt.key);
-            }
+        if (scope.pimpl_->state != State::NONE) {
+            auto& mouse = scope.pimpl_->canvas.mouse;
+            mouse.Up.subscribeOnce([&](MouseButtonEvent&) {
+                onMouseUp();
+            });
+            mouse.Move.subscribeUntil(mouse.Up, [&](MouseEvent& e) {
+                onMouseMove(e);
+            });
         }
-    };
+    }
 
-    struct MyMouseMoveListener: MouseListener {
-
-        OrbitControls& controls;
-
-        explicit MyMouseMoveListener(OrbitControls& controls): controls(controls) {}
-
-        void onMouseMove(const Vector2& pos) override {
-            if (controls.enabled) {
-
-                switch (controls.pimpl_->state) {
-                    case State::ROTATE:
-                        if (controls.enableRotate) {
-                            controls.pimpl_->handleMouseMoveRotate(pos);
-                        }
-                        break;
-                    case State::DOLLY:
-                        if (controls.enableZoom) {
-                            controls.pimpl_->handleMouseMoveDolly(pos);
-                        }
-                        break;
-                    case State::PAN:
-                        if (controls.enablePan) {
-                            controls.pimpl_->handleMouseMovePan(pos);
-                        }
-                        break;
-                    default:
-                        //TODO ?
-                        break;
-                }
-            }
+    void onMouseWheel(MouseWheelEvent& ev) {
+        if (scope.enabled && scope.enableZoom && !(scope.pimpl_->state != State::NONE && scope.pimpl_->state != State::ROTATE)) {
+            scope.pimpl_->handleMouseWheel(ev.offset);
         }
-    };
-
-
-    struct MyMouseUpListener: MouseListener {
-
-        OrbitControls& scope;
-        MouseListener* mouseMoveListener;
-
-        MyMouseUpListener(OrbitControls& scope, MyMouseMoveListener* mouseMoveListener)
-            : scope(scope), mouseMoveListener(mouseMoveListener) {}
-
-        void onMouseUp(int button, const Vector2& pos) override {
-            if (scope.enabled) {
-
-                scope.pimpl_->canvas.removeMouseListener(*mouseMoveListener);
-                scope.pimpl_->canvas.removeMouseListener(*this);
-                scope.pimpl_->state = State::NONE;
-            }
-        }
-    };
-
-    struct MyMouseListener: MouseListener {
-
-        OrbitControls& scope;
-        MyMouseMoveListener mouseMoveListener;
-        MyMouseUpListener mouseUpListener;
-
-        explicit MyMouseListener(OrbitControls& scope)
-            : scope(scope), mouseMoveListener(scope), mouseUpListener(scope, &mouseMoveListener) {}
-
-        void onMouseDown(int button, const Vector2& pos) override {
-            if (scope.enabled) {
-                switch (button) {
-                    case 0:// LEFT
-                        if (scope.enableRotate) {
-                            scope.pimpl_->handleMouseDownRotate(pos);
-                            scope.pimpl_->state = State::ROTATE;
-                        }
-                        break;
-                    case 1:// RIGHT
-                        if (scope.enablePan) {
-                            scope.pimpl_->handleMouseDownRotate(pos);
-                            scope.pimpl_->handleMouseDownPan(pos);
-                            scope.pimpl_->state = State::PAN;
-                        }
-                        break;
-                    case 2:// MIDDLE
-                        if (scope.enableZoom) {
-                            scope.pimpl_->handleMouseDownDolly(pos);
-                            scope.pimpl_->state = State::DOLLY;
-                        }
-                        break;
-                }
-            }
-
-            if (scope.pimpl_->state != State::NONE) {
-
-                scope.pimpl_->canvas.addMouseListener(mouseMoveListener);
-                scope.pimpl_->canvas.addMouseListener(mouseUpListener);
-            }
-        }
-
-        void onMouseWheel(const Vector2& delta) override {
-            if (scope.enabled && scope.enableZoom && !(scope.pimpl_->state != State::NONE && scope.pimpl_->state != State::ROTATE)) {
-                scope.pimpl_->handleMouseWheel(delta);
-            }
-        }
-    };
+    }
 };
 
 OrbitControls::OrbitControls(Camera& camera, PeripheralsEventSource& eventSource)

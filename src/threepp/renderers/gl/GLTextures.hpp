@@ -70,32 +70,11 @@ namespace threepp::gl {
         [[nodiscard]] std::optional<unsigned int> getGlTexture(Texture& texture) const;
 
     private:
-        struct TextureEventListener: EventListener {
 
-            explicit TextureEventListener(GLTextures* scope): scope_(scope) {}
-
-            void onEvent(Event& event) override;
-
-        private:
-            GLTextures* scope_;
-        };
-
-        struct RenderTargetEventListener: EventListener {
-
-            explicit RenderTargetEventListener(GLTextures* scope): scope_(scope) {}
-
-            void onEvent(Event& event) override;
-
-        private:
-            GLTextures* scope_;
-        };
 
         GLInfo* info;
         GLState* state;
         GLProperties* properties;
-
-        TextureEventListener onTextureDispose_;
-        RenderTargetEventListener onRenderTargetDispose_;
 
         int textureUnits = 0;
     };

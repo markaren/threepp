@@ -19,13 +19,23 @@ namespace threepp {
 
         void setIOCapture(IOCapture* capture);
 
-        void addKeyListener(KeyListener& listener);
+        bool preventMouseEvent() const {
+            return ioCapture_ && ioCapture_->preventMouseEvent();
+        }
 
-        bool removeKeyListener(const KeyListener& listener);
+        bool preventKeyboardEvent() const {
+            return ioCapture_ && ioCapture_->preventKeyboardEvent();
+        }
 
-        void addMouseListener(MouseListener& listener);
+        bool preventScrollEvent() const {
+            return ioCapture_ && ioCapture_->preventScrollEvent();
+        }
 
-        bool removeMouseListener(const MouseListener& listener);
+        // Events for keys
+        Keys keys;
+
+        // Events for mouse
+        Mouse mouse;
 
         void onDrop(std::function<void(std::vector<std::string>)> paths);
 
@@ -43,14 +53,6 @@ namespace threepp {
             RELEASE
         };
 
-        void onMousePressedEvent(int button, const Vector2& pos, MouseAction action);
-
-        void onMouseMoveEvent(const Vector2& pos);
-
-        void onMouseWheelEvent(const Vector2& eventData);
-
-        void onKeyEvent(KeyEvent evt, KeyAction action);
-
         void onDropEvent(std::vector<std::string> paths) {
             if (dropListener_ && !paths.empty()) {
                 dropListener_(std::move(paths));
@@ -59,8 +61,6 @@ namespace threepp {
 
     private:
         IOCapture* ioCapture_ = nullptr;
-        std::vector<KeyListener*> keyListeners_;
-        std::vector<MouseListener*> mouseListeners_;
         std::function<void(std::vector<std::string>)> dropListener_;
     };
 

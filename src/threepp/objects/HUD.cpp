@@ -41,14 +41,22 @@ void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
 }
 
 
-struct HUD::Impl: Scene, MouseListener {
+struct HUD::Impl: Scene {
+
+    Subscriptions subs_;
 
     Impl(PeripheralsEventSource* eventSource, const WindowSize& size)
         : eventSource_(eventSource),
           size_(size),
           camera_(0, size_.width, size_.height, 0, 0.1, 10) {
 
-        if (eventSource) eventSource->addMouseListener(*this);
+        if (eventSource) {
+            auto& mouse = eventSource->mouse;
+
+            subs_ << mouse.Down.subscribe([this](MouseButtonEvent& e) { onMouseDown(e); });
+            subs_ << mouse.Up.subscribe([this](MouseButtonEvent& e) { onMouseUp(e); });
+            subs_ << mouse.Move.subscribe([this](MouseEvent& e) { onMouseMove(e); });
+        }
 
         camera_.position.z = 1;
     }
@@ -100,7 +108,7 @@ struct HUD::Impl: Scene, MouseListener {
         }
     }
 
-    void onMouseDown(int button, const Vector2& pos) override {
+    void onMouseDown(MouseButtonEvent & e) {
 
         raycaster_.setFromCamera(mouse_, camera_);
 
@@ -108,12 +116,12 @@ struct HUD::Impl: Scene, MouseListener {
         if (!intersects.empty()) {
             auto front = intersects.front();
             if (map_.count(front.object)) {
-                map_.at(front.object).onMouseDown_(button);
+                map_.at(front.object).onMouseDown_(e.button);
             }
         }
     }
 
-    void onMouseUp(int button, const Vector2& pos) override {
+    void onMouseUp(MouseButtonEvent & e) {
 
         raycaster_.setFromCamera(mouse_, camera_);
 
@@ -121,19 +129,15 @@ struct HUD::Impl: Scene, MouseListener {
         if (!intersects.empty()) {
             auto front = intersects.front();
             if (map_.count(front.object)) {
-                map_.at(front.object).onMouseUp_(button);
+                map_.at(front.object).onMouseUp_(e.button);
             }
         }
     }
 
-    void onMouseMove(const Vector2& pos) override {
+    void onMouseMove(MouseEvent & e) {
 
-        mouse_.x = (pos.x / static_cast<float>(size_.width)) * 2 - 1;
-        mouse_.y = -(pos.y / static_cast<float>(size_.height)) * 2 + 1;
-    }
-
-    ~Impl() override {
-        if (eventSource_) eventSource_->removeMouseListener(*this);
+        mouse_.x = (e.pos.x / static_cast<float>(size_.width)) * 2 - 1;
+        mouse_.y = -(e.pos.y / static_cast<float>(size_.height)) * 2 + 1;
     }
 
 private:

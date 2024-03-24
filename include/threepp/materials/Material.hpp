@@ -15,7 +15,7 @@ namespace threepp {
 
     typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
-    class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
+    class Material:  public std::enable_shared_from_this<Material> {
 
     public:
         const unsigned int id = materialId++;
@@ -120,8 +120,9 @@ namespace threepp {
 
         virtual std::shared_ptr<Material> clone() const { return nullptr; };
 
-        ~Material() override;
+        ~Material() ;
 
+        EventDispatcher OnDispose;
     protected:
         Material();
 

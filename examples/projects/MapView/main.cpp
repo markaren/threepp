@@ -41,7 +41,8 @@ int main() {
 
     std::cout << "Switch between map providers with keys 1 (OpenStreetMaps), 2 (Bing - Road), 3 (Bing - Arial) and 4 (Debug)\n"
               << std::endl;
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent event) {
+
+    canvas.keys.Pressed.subscribeForever([&](auto& event) {
         if (event.key == Key::NUM_1) {
             map.setProvider(std::make_unique<OpenStreetMapProvider>());
         } else if (event.key == Key::NUM_2) {
@@ -52,7 +53,6 @@ int main() {
             map.setProvider(std::make_unique<DebugMapProvider>(&renderer));
         }
     });
-    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();

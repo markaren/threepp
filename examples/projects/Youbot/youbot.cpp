@@ -45,10 +45,13 @@ int main() {
 
 
     std::shared_ptr<Youbot> youbot;
+    std::vector<Subscription> subs;
     auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
+
         renderer.invokeLater([&] {
-            canvas.addKeyListener(*youbot);
+            subs.emplace_back(canvas.keys.Pressed.subscribe([youbot](auto& e) { youbot->onKeyPressed(e); }));
+            subs.emplace_back(canvas.keys.Released.subscribe([youbot](auto& e) { youbot->onKeyReleased(e); }));
             scene->add(youbot);
             handle.setText("Use WASD keys to steer robot", opts);
         });

@@ -52,15 +52,14 @@ int main() {
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
-    MouseMoveListener l([&](Vector2 pos) {
+    auto sub = canvas.mouse.Move.subscribe([&](MouseMoveEvent& e) {
         // calculate mouse position in normalized device coordinates
         // (-1 to +1) for both components
 
         auto size = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        mouse.x = (e.pos.x / static_cast<float>(size.width)) * 2 - 1;
+        mouse.y = -(e.pos.y / static_cast<float>(size.height)) * 2 + 1;
     });
-    canvas.addMouseListener(l);
 
     Raycaster raycaster;
     raycaster.params.lineThreshold = 0.1f;

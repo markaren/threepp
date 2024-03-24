@@ -290,8 +290,9 @@ struct Canvas::Impl {
 
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        if (p->scope.preventScrollEvent()) return;
 
-        p->scope.onMouseWheelEvent({static_cast<float>(xoffset), static_cast<float>(yoffset)});
+        p->scope.mouse.Wheel.send(MouseWheelEvent(Vector2{static_cast<float>(xoffset), static_cast<float>(yoffset)}));
     }
 
     static void mouse_callback(GLFWwindow* w, int button, int action, int) {
@@ -299,10 +300,10 @@ struct Canvas::Impl {
 
         switch (action) {
             case GLFW_PRESS:
-                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::PRESS);
+                p->scope.mouse.Down.send(MouseButtonEvent(button, p->lastMousePos_));
                 break;
             case GLFW_RELEASE:
-                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::RELEASE);
+                p->scope.mouse.Up.send(MouseButtonEvent(button, p->lastMousePos_));
                 break;
             default:
                 break;
@@ -311,15 +312,16 @@ struct Canvas::Impl {
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        if (p->scope.preventMouseEvent()) return;
 
         Vector2 mousePos(static_cast<float>(xpos), static_cast<float>(ypos));
-        p->scope.onMouseMoveEvent(mousePos);
+        p->scope.mouse.Move.send(MouseMoveEvent(mousePos, mousePos - p->lastMousePos_));
         p->lastMousePos_.copy(mousePos);
     }
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
-
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        if (p->scope.preventKeyboardEvent()) return;
 
         if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->exitOnKeyEscape_) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
@@ -329,15 +331,15 @@ struct Canvas::Impl {
         KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
         switch (action) {
             case GLFW_PRESS: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::PRESS);
+                p->scope.keys.Pressed.send(evt);
                 break;
             }
             case GLFW_RELEASE: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::RELEASE);
+                p->scope.keys.Released.send(evt);
                 break;
             }
             case GLFW_REPEAT: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::REPEAT);
+                p->scope.keys.Repeat.send(evt);
                 break;
             }
             default:

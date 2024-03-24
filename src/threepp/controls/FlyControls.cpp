@@ -32,16 +32,14 @@ namespace {
 struct FlyControls::Impl {
 
     Impl(FlyControls& scope, PeripheralsEventSource& canvas, Object3D* object)
-        : eventSource(canvas), scope(scope), object(object),
-          keyUp(scope), keydown(scope),
-          mouseDown(scope), mouseMove(scope), mouseUp(scope) {
+        : eventSource(canvas), scope(scope), object(object) {
 
-        canvas.addKeyListener(keydown);
-        canvas.addKeyListener(keyUp);
+        subs_ << canvas.keys.Pressed.subscribe([this](auto& key) { onKeyPressed(key); });
+        subs_ << canvas.keys.Released.subscribe([this](auto& key) { onKeyReleased(key); });
 
-        canvas.addMouseListener(mouseDown);
-        canvas.addMouseListener(mouseMove);
-        canvas.addMouseListener(mouseUp);
+        subs_ << canvas.mouse.Down.subscribe([this](auto& e) { onMouseDown(e); });
+        subs_ << canvas.mouse.Up.subscribe([this](auto& e) { onMouseUp(e); });
+        subs_ << canvas.mouse.Move.subscribe([this](auto& e) { onMouseMove(e); });
     }
 
     void update(float delta) {
@@ -81,211 +79,168 @@ struct FlyControls::Impl {
         rotationVector.z = (-moveState.rollRight + moveState.rollLeft);
     }
 
-    ~Impl() {
+    void onKeyPressed(KeyEvent evt) {
 
-        eventSource.removeKeyListener(keydown);
-        eventSource.removeKeyListener(keyUp);
+        if (evt.mods == 4) {// altKey
 
-        eventSource.removeMouseListener(mouseDown);
-        eventSource.removeMouseListener(mouseMove);
-        eventSource.removeMouseListener(mouseUp);
+            return;
+        }
+
+        switch (evt.key) {
+            case Key::W:
+                moveState.forward = 1;
+                break;
+            case Key::S:
+                moveState.back = 1;
+                break;
+            case Key::A:
+                moveState.left = 1;
+                break;
+            case Key::D:
+                moveState.right = 1;
+                break;
+            case Key::R:
+                moveState.up = 1;
+                break;
+            case Key::F:
+                moveState.down = 1;
+                break;
+            case Key::UP:
+                moveState.pitchUp = 1;
+                break;
+            case Key::DOWN:
+                moveState.pitchDown = 1;
+                break;
+            case Key::LEFT:
+                moveState.yawLeft = 1;
+                break;
+            case Key::RIGHT:
+                moveState.yawRight = 1;
+                break;
+            case Key::Q:
+                moveState.rollLeft = 1;
+                break;
+            case Key::E:
+                moveState.rollRight = 1;
+                break;
+            default:
+                break;
+        }
+
+        updateMovementVector();
+        updateRotationVector();
     }
 
-    struct KeyDownListener: KeyListener {
+    void onKeyReleased(KeyEvent evt) {
 
-        FlyControls& scope;
-
-        explicit KeyDownListener(FlyControls& scope): scope(scope) {}
-
-        void onKeyPressed(KeyEvent evt) override {
-
-            if (evt.mods == 4) {// altKey
-
-                return;
-            }
-
-            switch (evt.key) {
-                case Key::W:
-                    scope.pimpl_->moveState.forward = 1;
-                    break;
-                case Key::S:
-                    scope.pimpl_->moveState.back = 1;
-                    break;
-                case Key::A:
-                    scope.pimpl_->moveState.left = 1;
-                    break;
-                case Key::D:
-                    scope.pimpl_->moveState.right = 1;
-                    break;
-                case Key::R:
-                    scope.pimpl_->moveState.up = 1;
-                    break;
-                case Key::F:
-                    scope.pimpl_->moveState.down = 1;
-                    break;
-                case Key::UP:
-                    scope.pimpl_->moveState.pitchUp = 1;
-                    break;
-                case Key::DOWN:
-                    scope.pimpl_->moveState.pitchDown = 1;
-                    break;
-                case Key::LEFT:
-                    scope.pimpl_->moveState.yawLeft = 1;
-                    break;
-                case Key::RIGHT:
-                    scope.pimpl_->moveState.yawRight = 1;
-                    break;
-                case Key::Q:
-                    scope.pimpl_->moveState.rollLeft = 1;
-                    break;
-                case Key::E:
-                    scope.pimpl_->moveState.rollRight = 1;
-                    break;
-                default:
-                    break;
-            }
-
-            scope.pimpl_->updateMovementVector();
-            scope.pimpl_->updateRotationVector();
+        switch (evt.key) {
+            case Key::W:
+                moveState.forward = 0;
+                break;
+            case Key::S:
+                moveState.back = 0;
+                break;
+            case Key::A:
+                moveState.left = 0;
+                break;
+            case Key::D:
+                moveState.right = 0;
+                break;
+            case Key::R:
+                moveState.up = 0;
+                break;
+            case Key::F:
+                moveState.down = 0;
+                break;
+            case Key::UP:
+                moveState.pitchUp = 0;
+                break;
+            case Key::DOWN:
+                moveState.pitchDown = 0;
+                break;
+            case Key::LEFT:
+                moveState.yawLeft = 0;
+                break;
+            case Key::RIGHT:
+                moveState.yawRight = 0;
+                break;
+            case Key::Q:
+                moveState.rollLeft = 0;
+                break;
+            case Key::E:
+                moveState.rollRight = 0;
+                break;
+            default:
+                break;
         }
-    };
 
-    struct KeyUpListener: KeyListener {
+        updateMovementVector();
+        updateRotationVector();
+    }
 
-        FlyControls& scope;
+    void onMouseDown(MouseButtonEvent& e) {
 
-        explicit KeyUpListener(FlyControls& scope): scope(scope) {}
+        if (scope.dragToLook) {
 
-        void onKeyReleased(KeyEvent evt) override {
+            mouseStatus++;
 
-            switch (evt.key) {
-                case Key::W:
-                    scope.pimpl_->moveState.forward = 0;
+        } else {
+
+            switch (e.button) {
+
+                case 0:
+                    moveState.forward = 1;
                     break;
-                case Key::S:
-                    scope.pimpl_->moveState.back = 0;
-                    break;
-                case Key::A:
-                    scope.pimpl_->moveState.left = 0;
-                    break;
-                case Key::D:
-                    scope.pimpl_->moveState.right = 0;
-                    break;
-                case Key::R:
-                    scope.pimpl_->moveState.up = 0;
-                    break;
-                case Key::F:
-                    scope.pimpl_->moveState.down = 0;
-                    break;
-                case Key::UP:
-                    scope.pimpl_->moveState.pitchUp = 0;
-                    break;
-                case Key::DOWN:
-                    scope.pimpl_->moveState.pitchDown = 0;
-                    break;
-                case Key::LEFT:
-                    scope.pimpl_->moveState.yawLeft = 0;
-                    break;
-                case Key::RIGHT:
-                    scope.pimpl_->moveState.yawRight = 0;
-                    break;
-                case Key::Q:
-                    scope.pimpl_->moveState.rollLeft = 0;
-                    break;
-                case Key::E:
-                    scope.pimpl_->moveState.rollRight = 0;
-                    break;
-                default:
+                case 1:
+                    moveState.back = 1;
                     break;
             }
 
-            scope.pimpl_->updateMovementVector();
-            scope.pimpl_->updateRotationVector();
+            updateMovementVector();
         }
-    };
+    }
 
-    struct MouseDownListener: MouseListener {
 
-        FlyControls& scope;
+    void onMouseMove(MouseEvent& e) {
 
-        explicit MouseDownListener(FlyControls& scope): scope(scope) {}
+        if (!scope.dragToLook || mouseStatus > 0) {
 
-        void onMouseDown(int button, const Vector2& pos) override {
+            const float halfWidth = static_cast<float>(eventSource.size().width) / 2;
+            const float halfHeight = static_cast<float>(eventSource.size().height) / 2;
 
-            if (scope.dragToLook) {
+            moveState.yawLeft = -((e.pos.x) - halfWidth) / halfWidth;
+            moveState.pitchDown = ((e.pos.y) - halfHeight) / halfHeight;
 
-                scope.pimpl_->mouseStatus++;
-
-            } else {
-
-                switch (button) {
-
-                    case 0:
-                        scope.pimpl_->moveState.forward = 1;
-                        break;
-                    case 1:
-                        scope.pimpl_->moveState.back = 1;
-                        break;
-                }
-
-                scope.pimpl_->updateMovementVector();
-            }
+            updateRotationVector();
         }
-    };
+    }
 
-    struct MouseMoveListener: MouseListener {
 
-        FlyControls& scope;
+    void onMouseUp(MouseButtonEvent& e) {
 
-        explicit MouseMoveListener(FlyControls& scope): scope(scope) {}
+        if (scope.dragToLook) {
 
-        void onMouseMove(const Vector2& pos) override {
+            mouseStatus--;
 
-            if (!scope.dragToLook || scope.pimpl_->mouseStatus > 0) {
+            moveState.yawLeft = moveState.pitchDown = 0;
 
-                const float halfWidth = static_cast<float>(scope.pimpl_->eventSource.size().width) / 2;
-                const float halfHeight = static_cast<float>(scope.pimpl_->eventSource.size().height) / 2;
+        } else {
 
-                scope.pimpl_->moveState.yawLeft = -((pos.x) - halfWidth) / halfWidth;
-                scope.pimpl_->moveState.pitchDown = ((pos.y) - halfHeight) / halfHeight;
+            switch (e.button) {
 
-                scope.pimpl_->updateRotationVector();
-            }
-        }
-    };
-
-    struct MouseUpListener: MouseListener {
-
-        FlyControls& scope;
-
-        explicit MouseUpListener(FlyControls& scope): scope(scope) {}
-
-        void onMouseUp(int button, const Vector2& pos) override {
-
-            if (scope.dragToLook) {
-
-                scope.pimpl_->mouseStatus--;
-
-                scope.pimpl_->moveState.yawLeft = scope.pimpl_->moveState.pitchDown = 0;
-
-            } else {
-
-                switch (button) {
-
-                    case 0:
-                        scope.pimpl_->moveState.forward = 0;
-                        break;
-                    case 1:
-                        scope.pimpl_->moveState.back = 0;
-                        break;
-                }
-
-                scope.pimpl_->updateMovementVector();
+                case 0:
+                    moveState.forward = 0;
+                    break;
+                case 1:
+                    moveState.back = 0;
+                    break;
             }
 
-            scope.pimpl_->updateRotationVector();
+            updateMovementVector();
         }
-    };
+
+        updateRotationVector();
+    }
 
 private:
     PeripheralsEventSource& eventSource;
@@ -303,12 +258,7 @@ private:
     Vector3 moveVector;
     Vector3 rotationVector;
 
-    KeyUpListener keydown;
-    KeyDownListener keyUp;
-
-    MouseDownListener mouseDown;
-    MouseMoveListener mouseMove;
-    MouseUpListener mouseUp;
+    std::vector<Subscription> subs_;
 };
 
 FlyControls::FlyControls(Object3D& object, PeripheralsEventSource& eventSource)
