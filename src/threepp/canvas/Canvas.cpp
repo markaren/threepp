@@ -16,17 +16,10 @@
 
 #include <iostream>
 #include <optional>
-#include <queue>
 
 using namespace threepp;
 
 namespace {
-
-    typedef std::pair<std::function<void()>, float> Task;
-
-    struct CustomComparator {
-        bool operator()(const Task& l, const Task& r) const { return l.second > r.second; }
-    };
 
 #if EMSCRIPTEN
     struct FunctionWrapper {
@@ -173,7 +166,6 @@ struct Canvas::Impl {
     bool close_{false};
     bool exitOnKeyEscape_;
 
-    std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
@@ -225,6 +217,7 @@ struct Canvas::Impl {
         glfwSetCursorPosCallback(window, cursor_callback);
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
+        glfwSetDropCallback(window, drop_callback);
 
         glfwMakeContextCurrent(window);
 
@@ -248,25 +241,11 @@ struct Canvas::Impl {
         glfwSetWindowSize(window, size.width, size.height);
     }
 
-    inline void handleTasks() {
-        while (!tasks_.empty()) {
-            auto& task = tasks_.top();
-            if (task.second < glfwGetTime()) {
-                task.first();
-                tasks_.pop();
-            } else {
-                break;
-            }
-        }
-    }
-
     bool animateOnce(const std::function<void()>& f) {
 
         if (close_ || glfwWindowShouldClose(window)) {
             return false;
         }
-
-        handleTasks();
 
         f();
 
@@ -287,10 +266,6 @@ struct Canvas::Impl {
 
     void onWindowResize(std::function<void(WindowSize)> f) {
         this->resizeListener = std::move(f);
-    }
-
-    void invokeLater(const std::function<void()>& f, float t) {
-        tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
     }
 
     void close() {
@@ -369,6 +344,18 @@ struct Canvas::Impl {
                 break;
         }
     }
+
+    static void drop_callback(GLFWwindow* w, int count, const char** paths) {
+
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        std::vector<std::string> v;
+        for (int i = 0; i < count; ++i) {
+            v.emplace_back(paths[i]);
+        }
+
+        p->scope.onDropEvent(v);
+    }
 };
 
 Canvas::Canvas(const Canvas::Parameters& params)
@@ -414,11 +401,6 @@ void Canvas::setSize(WindowSize size) {
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
-}
-
-void Canvas::invokeLater(const std::function<void()>& f, float t) {
-
-    pimpl_->invokeLater(f, t);
 }
 
 void Canvas::close() {

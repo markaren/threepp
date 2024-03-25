@@ -42,10 +42,10 @@ namespace {
                 out float vAngle;
                 void main()
                 {
-                    if ( customVisible > 0.5) 				// true
-                    vColor = vec4( customColor, customOpacity ); //     set color associated to vertex; use later in fragment shader.
-                    else							// false
-                    vColor = vec4(0.0, 0.0, 0.0, 0.0); 		//     make particle invisible.
+                    if ( customVisible > 0.5) 				                // true
+                        vColor = vec4( customColor, customOpacity ); //     set color associated to vertex; use later in fragment shader.
+                    else							                        // false
+                        vColor = vec4(0.0, 0.0, 0.0, 0.0); 		            //     make particle invisible.
 
                     vAngle = customAngle;
 

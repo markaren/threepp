@@ -16,6 +16,7 @@
 
 #include "misc.hpp"
 
+#include <any>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -100,6 +101,8 @@ namespace threepp {
         // This value allows the default rendering order of scene graph objects to be overridden although opaque and transparent objects remain sorted independently.
         // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
         unsigned int renderOrder = 0;
+
+        std::unordered_map<std::string, std::any> userData;
 
         std::vector<std::shared_ptr<AnimationClip>> animations;
 

@@ -18,6 +18,7 @@ set(publicHeaders
 
         "threepp/canvas/WindowSize.hpp"
 
+        "threepp/controls/DragControls.hpp"
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
 
@@ -139,6 +140,7 @@ set(publicHeaders
         "threepp/math/ImprovedNoise.hpp"
         "threepp/math/Interpolant.hpp"
         "threepp/math/Line3.hpp"
+        "threepp/math/Lut.hpp"
         "threepp/math/MathUtils.hpp"
         "threepp/math/Matrix3.hpp"
         "threepp/math/Matrix4.hpp"
@@ -245,6 +247,7 @@ set(privateHeaders
         "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/RegexUtil.hpp"
+        "threepp/utils/TaskManager.hpp"
 
 )
 
@@ -261,6 +264,7 @@ set(sources
         "threepp/cameras/PerspectiveCamera.cpp"
         "threepp/cameras/OrthographicCamera.cpp"
 
+        "threepp/controls/DragControls.cpp"
         "threepp/controls/FlyControls.cpp"
         "threepp/controls/OrbitControls.cpp"
 

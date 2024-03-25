@@ -29,6 +29,10 @@ namespace {
                 }
             }
         }
+        mesh.instanceMatrix()->needsUpdate();
+        mesh.instanceColor()->needsUpdate();
+
+        mesh.computeBoundingSphere();
     }
 
 }// namespace
@@ -36,6 +40,7 @@ namespace {
 int main() {
 
     int amount = 10;
+    const int maxAmount = 25;
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
     GLRenderer renderer(canvas.size());
@@ -44,7 +49,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
-    camera->position.set(float(amount), float(amount), float(amount));
+    camera->position.set(float(maxAmount), float(maxAmount), float(maxAmount));
 
     OrbitControls controls{*camera, canvas};
 
@@ -54,8 +59,9 @@ int main() {
 
     auto material = MeshPhongMaterial::create();
     auto geometry = IcosahedronGeometry::create(0.5f, 2);
-    auto mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(amount, 3)));
-
+    auto mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(maxAmount, 3)));
+    mesh->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+    mesh->setCount(static_cast<int>(std::pow(amount, 3)));
     setupInstancedMesh(*mesh, amount);
     scene->add(mesh);
 
@@ -68,14 +74,11 @@ int main() {
         ImGui::SetNextWindowSize({width, 0}, 0);
 
         ImGui::Begin("Settings");
-        ImGui::SliderInt("Amount", &amount, 2, 25);
+        ImGui::SliderInt("Amount", &amount, 2, maxAmount);
         if (ImGui::IsItemEdited()) {
             colorMap.clear();
-            mesh->removeFromParent();
-            mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(amount, 3)));
+            mesh->setCount(static_cast<int>(std::pow(amount, 3)));
             setupInstancedMesh(*mesh, amount);
-            scene->add(mesh);
-            camera->position.set(float(amount), float(amount), float(amount));
         }
 
         ImGui::End();
@@ -88,12 +91,12 @@ int main() {
     canvas.setIOCapture(&capture);
 #endif
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
     TextGeometry::Options opts(font, 20, 2);
-    auto handle = Text2D(opts, "");
+    auto handle = Text2D(opts);
     handle.setColor(Color::black);
     hud.add(handle, HUD::Options()
                             .setNormalizedPosition({0, 1})
@@ -135,7 +138,7 @@ int main() {
 
         counter.update(clock.getElapsedTime());
         if (it++ % 60 == 0) {
-            handle.setText("FPS: " + std::to_string(counter.fps), opts);
+            handle.setText("FPS: " + std::to_string(counter.fps));
             hud.needsUpdate(handle);
         }
 

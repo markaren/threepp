@@ -37,7 +37,7 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    HUD hud(canvas.size());
+    HUD hud(canvas);
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
     TextGeometry::Options opts(font, 20, 5);
