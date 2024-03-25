@@ -2,6 +2,7 @@
 #include "threepp/animation/PropertyBinding.hpp"
 #include "threepp/objects/SkinnedMesh.hpp"
 
+#include <iostream>
 #include <regex>
 #include <stdexcept>
 
@@ -56,9 +57,7 @@ namespace {
 
     Object3D* searchNodeSubtree(const std::string& nodeName, std::vector<Object3D*> children) {
 
-        for (unsigned i = 0; i < children.size(); i++) {
-
-            const auto childNode = children[i];
+        for (auto childNode : children) {
 
             if (childNode->name == nodeName || childNode->uuid == nodeName) {
 
@@ -75,7 +74,7 @@ namespace {
 
 }// namespace
 
-threepp::PropertyBinding::TrackResults threepp::PropertyBinding::parseTrackName(const std::string& trackName) {
+PropertyBinding::TrackResults threepp::PropertyBinding::parseTrackName(const std::string& trackName) {
 
     std::smatch matches;
     if (!std::regex_match(trackName, matches, trackRegex)) {
@@ -140,11 +139,12 @@ Object3D* PropertyBinding::findNode(Object3D* root, const std::string& nodeName)
 }
 
 void PropertyBinding::bind() {
-    auto targetObject = this->node;
-    const auto parsedPath = this->parsedPath;
 
-    const auto objectName = parsedPath.objectName;
-    const auto propertyName = parsedPath.propertyName;
+    auto targetObject = this->node;
+    const auto& parsedPath = this->parsedPath;
+
+    const auto& objectName = parsedPath.objectName;
+    const auto& propertyName = parsedPath.propertyName;
     auto propertyIndex = parsedPath.propertyIndex;
 
     if (!targetObject) {
@@ -163,170 +163,170 @@ void PropertyBinding::bind() {
     // ensure there is a value node
     if (!targetObject) {
 
-        //        console.error( 'THREE.PropertyBinding: Trying to update node for track: ' + this->path + ' but it wasn\'t found.' );
+        std::cerr << "THREE.PropertyBinding: Trying to update node for track: " << this->path << " but it wasn\'t found." << std::endl;
         return;
     }
 
-    if (objectName) {
-
-        auto objectIndex = parsedPath.objectIndex;
-
-        // special cases were we need to reach deeper into the hierarchy to get the face materials....
-        if (objectName == "materials") {
-
-            if (!targetObject.material) {
-
-                console.error('THREE.PropertyBinding: Can not bind to material as node does not have a material.', this);
-                return;
-            }
-
-            if (!targetObject.material.materials) {
-
-                console.error('THREE.PropertyBinding: Can not bind to material.materials as node.material does not have a materials array.', this);
-                return;
-            }
-
-            targetObject = targetObject.material.materials;
-        } else if (objectName == "bones") {
-
-            if (!targetObject.skeleton) {
-
-//                console.error('THREE.PropertyBinding: Can not bind to bones as node does not have a skeleton.', this);
-                return;
-            }
-
-            // potential future optimization: skip this if propertyIndex is already an integer
-            // and convert the integer string to a true integer.
-
-            targetObject = targetObject.skeleton.bones;
-
-            // support resolving morphTarget names into indices.
-            for (let i = 0; i < targetObject.length; i++) {
-
-                if (targetObject[i].name == = objectIndex) {
-
-                    objectIndex = i;
-                    break;
-                }
-            }
-
-        } else {
-
-            if (targetObject[objectName] == = undefined) {
-
-//                console.error('THREE.PropertyBinding: Can not bind to objectName of node undefined.', this);
-                return;
-            }
-
-            targetObject = targetObject[objectName];
-        }
-
-
-        if (objectIndex != = undefined) {
-
-            if (targetObject[objectIndex] == = undefined) {
-
-//                console.error('THREE.PropertyBinding: Trying to bind to objectIndex of objectName, but is undefined.', this, targetObject);
-                return;
-            }
-
-            targetObject = targetObject[objectIndex];
-        }
-    }
-
-    // resolve property
-    const auto& nodeProperty = targetObject[propertyName];
-
-    if (nodeProperty == = undefined) {
-
-        const auto& nodeName = parsedPath.nodeName;
-
-//        console.error('THREE.PropertyBinding: Trying to update property for track: ' + nodeName +
-//                              '.' + propertyName + ' but it wasn\'t found.',
-//                      targetObject);
-        return;
-    }
-
-    // determine versioning scheme
-    auto versioning = Versioning::None;
-
-    this->targetObject = targetObject;
-
-    if (targetObject.needsUpdate != = undefined) {// material
-
-        versioning = this->Versioning.NeedsUpdate;
-
-    } else if (targetObject.matrixWorldNeedsUpdate != = undefined) {// node transform
-
-        versioning = this->Versioning.MatrixWorldNeedsUpdate;
-    }
-
-    // determine how the property gets bound
-    auto bindingType = BindingType::Direct;
-
-    if (propertyIndex != undefined) {
-
-        // access a sub element of the property array (only primitives are supported right now)
-
-        if (propertyName == "morphTargetInfluences") {
-
-            // potential optimization, skip this if propertyIndex is already an integer, and convert the integer string to a true integer.
-
-            // support resolving morphTarget names into indices.
-            if (!targetObject.geometry) {
-
-                //                        console.error( 'THREE.PropertyBinding: Can not bind to morphTargetInfluences because node does not have a geometry.', this );
-                return;
-            }
-
-            if (targetObject.geometry.isBufferGeometry) {
-
-                if (!targetObject.geometry.morphAttributes) {
-
-                    //                            console.error( 'THREE.PropertyBinding: Can not bind to morphTargetInfluences because node does not have a geometry.morphAttributes.', this );
-                    return;
-                }
-
-                if (targetObject.morphTargetDictionary[propertyIndex] != = undefined) {
-
-                    propertyIndex = targetObject.morphTargetDictionary[propertyIndex];
-                }
-
-
-            } else {
-
-                //                        std::cout ( 'THREE.PropertyBinding: Can not bind to morphTargetInfluences on THREE.Geometry. Use THREE.BufferGeometry instead.', this );
-                return;
-            }
-        }
-
-        bindingType = BindingType::ArrayElement;
-
-        this->resolvedProperty = nodeProperty;
-        this->propertyIndex = propertyIndex;
-
-    } else if (nodeProperty.fromArray != = undefined&& nodeProperty.toArray != = undefined) {
-
-        // must use copy for Object3D.Euler/Quaternion
-
-        bindingType = BindingType::HasFromToArray;
-
-        this->resolvedProperty = nodeProperty;
-
-    } else if (Array.isArray(nodeProperty)) {
-
-        bindingType = BindingType::EntireArray;
-
-        this->resolvedProperty = nodeProperty;
-
-    } else {
-
-        this->propertyName = propertyName;
-    }
-
-    // select getter / setter
-    this->_getValue = this->GetterByBindingType[bindingType];
-    this->_setValue = this->SetterByBindingTypeAndVersioning[bindingType][versioning];
+    //    if (objectName) {
+    //
+    //        auto objectIndex = parsedPath.objectIndex;
+    //
+    //        // special cases were we need to reach deeper into the hierarchy to get the face materials....
+    //        if (objectName == "materials") {
+    //
+    //            if (!targetObject.material) {
+    //
+    //                console.error('THREE.PropertyBinding: Can not bind to material as node does not have a material.', this);
+    //                return;
+    //            }
+    //
+    //            if (!targetObject.material.materials) {
+    //
+    //                console.error('THREE.PropertyBinding: Can not bind to material.materials as node.material does not have a materials array.', this);
+    //                return;
+    //            }
+    //
+    //            targetObject = targetObject.material.materials;
+    //        } else if (objectName == "bones") {
+    //
+    //            if (!targetObject.skeleton) {
+    //
+    ////                console.error('THREE.PropertyBinding: Can not bind to bones as node does not have a skeleton.', this);
+    //                return;
+    //            }
+    //
+    //            // potential future optimization: skip this if propertyIndex is already an integer
+    //            // and convert the integer string to a true integer.
+    //
+    //            targetObject = targetObject.skeleton.bones;
+    //
+    //            // support resolving morphTarget names into indices.
+    //            for (let i = 0; i < targetObject.length; i++) {
+    //
+    //                if (targetObject[i].name == = objectIndex) {
+    //
+    //                    objectIndex = i;
+    //                    break;
+    //                }
+    //            }
+    //
+    //        } else {
+    //
+    //            if (targetObject[objectName] == = undefined) {
+    //
+    ////                console.error('THREE.PropertyBinding: Can not bind to objectName of node undefined.', this);
+    //                return;
+    //            }
+    //
+    //            targetObject = targetObject[objectName];
+    //        }
+    //
+    //
+    //        if (objectIndex != = undefined) {
+    //
+    //            if (targetObject[objectIndex] == = undefined) {
+    //
+    ////                console.error('THREE.PropertyBinding: Trying to bind to objectIndex of objectName, but is undefined.', this, targetObject);
+    //                return;
+    //            }
+    //
+    //            targetObject = targetObject[objectIndex];
+    //        }
+    //    }
+    //
+    //    // resolve property
+    //    const auto& nodeProperty = targetObject[propertyName];
+    //
+    //    if (nodeProperty == = undefined) {
+    //
+    //        const auto& nodeName = parsedPath.nodeName;
+    //
+    ////        console.error('THREE.PropertyBinding: Trying to update property for track: ' + nodeName +
+    ////                              '.' + propertyName + ' but it wasn\'t found.',
+    ////                      targetObject);
+    //        return;
+    //    }
+    //
+    //    // determine versioning scheme
+    //    auto versioning = Versioning::None;
+    //
+    //    this->targetObject = targetObject;
+    //
+    //    if (targetObject.needsUpdate != = undefined) {// material
+    //
+    //        versioning = this->Versioning.NeedsUpdate;
+    //
+    //    } else if (targetObject.matrixWorldNeedsUpdate != = undefined) {// node transform
+    //
+    //        versioning = this->Versioning.MatrixWorldNeedsUpdate;
+    //    }
+    //
+    //    // determine how the property gets bound
+    //    auto bindingType = BindingType::Direct;
+    //
+    //    if (propertyIndex != undefined) {
+    //
+    //        // access a sub element of the property array (only primitives are supported right now)
+    //
+    //        if (propertyName == "morphTargetInfluences") {
+    //
+    //            // potential optimization, skip this if propertyIndex is already an integer, and convert the integer string to a true integer.
+    //
+    //            // support resolving morphTarget names into indices.
+    //            if (!targetObject.geometry) {
+    //
+    //                //                        console.error( 'THREE.PropertyBinding: Can not bind to morphTargetInfluences because node does not have a geometry.', this );
+    //                return;
+    //            }
+    //
+    //            if (targetObject.geometry.isBufferGeometry) {
+    //
+    //                if (!targetObject.geometry.morphAttributes) {
+    //
+    //                    //                            console.error( 'THREE.PropertyBinding: Can not bind to morphTargetInfluences because node does not have a geometry.morphAttributes.', this );
+    //                    return;
+    //                }
+    //
+    //                if (targetObject.morphTargetDictionary[propertyIndex] != = undefined) {
+    //
+    //                    propertyIndex = targetObject.morphTargetDictionary[propertyIndex];
+    //                }
+    //
+    //
+    //            } else {
+    //
+    //                //                        std::cout ( 'THREE.PropertyBinding: Can not bind to morphTargetInfluences on THREE.Geometry. Use THREE.BufferGeometry instead.', this );
+    //                return;
+    //            }
+    //        }
+    //
+    //        bindingType = BindingType::ArrayElement;
+    //
+    //        this->resolvedProperty = nodeProperty;
+    //        this->propertyIndex = propertyIndex;
+    //
+    //    } else if (nodeProperty.fromArray != = undefined&& nodeProperty.toArray != = undefined) {
+    //
+    //        // must use copy for Object3D.Euler/Quaternion
+    //
+    //        bindingType = BindingType::HasFromToArray;
+    //
+    //        this->resolvedProperty = nodeProperty;
+    //
+    //    } else if (Array.isArray(nodeProperty)) {
+    //
+    //        bindingType = BindingType::EntireArray;
+    //
+    //        this->resolvedProperty = nodeProperty;
+    //
+    //    } else {
+    //
+    //        this->propertyName = propertyName;
+    //    }
+    //
+    //    // select getter / setter
+    //    this->_getValue = this->GetterByBindingType[bindingType];
+    //    this->_setValue = this->SetterByBindingTypeAndVersioning[bindingType][versioning];
 }
 
 void PropertyBinding::unbind() {

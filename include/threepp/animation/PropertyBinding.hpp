@@ -47,7 +47,11 @@ namespace threepp {
         TrackResults parsedPath;
 
         PropertyBinding(Object3D* rootNode, const std::string& path, const std::optional<TrackResults>& parsedPath)
-            : rootNode(rootNode), path(path), parsedPath(parsedPath.value_or(parseTrackName(path))) {}
+            : rootNode(rootNode), path(path), parsedPath(parsedPath.value_or(parseTrackName(path))) {
+
+            this->_getValue = _getValue_unbound;
+            this->_setValue = _setValue_unbound;
+        }
 
         static void _getValue_unbound(PropertyBinding* that, std::vector<float>& targetArray, size_t offset) {
 

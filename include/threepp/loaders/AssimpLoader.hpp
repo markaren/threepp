@@ -72,6 +72,7 @@ namespace threepp {
             std::vector<float> times;
             std::vector<float> values;
             std::string name(aiNodeAnim->mNodeName.data);
+            name.erase(std::remove(name.begin(), name.end(), '.'), name.end());
             for (auto k = 0; k < aiNodeAnim->mNumRotationKeys; k++) {
 
                 const auto key = aiNodeAnim->mRotationKeys[k];
