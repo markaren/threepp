@@ -5,8 +5,6 @@
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#include "threepp/core/InstancedBufferGeometry.hpp"
-
 #ifndef EMSCRIPTEN
 #include <glad/glad.h>
 #else
@@ -54,9 +52,9 @@ struct GLGeometries::Impl {
 
             scope_->bindingStates_.releaseStatesOfGeometry(geometry);
 
-            if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
-                ig->_maxInstanceCount = 0;
-            }
+//            if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+//                ig->_maxInstanceCount = 0;
+//            }
 
             --scope_->info_.memory.geometries;
         }

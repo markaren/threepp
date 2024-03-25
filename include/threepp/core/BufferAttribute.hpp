@@ -75,7 +75,6 @@ namespace threepp {
 
         void copy(const BufferAttribute& source) {
 
-            //            this->name = source.name;
             this->itemSize_ = source.itemSize_;
             this->normalized_ = source.normalized_;
 

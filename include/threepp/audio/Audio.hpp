@@ -16,11 +16,6 @@ namespace threepp {
     public:
         AudioListener();
 
-        AudioListener(AudioListener&&) = delete;
-        AudioListener& operator=(AudioListener&&) = delete;
-        AudioListener(const AudioListener&) = delete;
-        AudioListener& operator=(const AudioListener&) = delete;
-
         [[nodiscard]] float getMasterVolume() const;
 
         void setMasterVolume(float volume);

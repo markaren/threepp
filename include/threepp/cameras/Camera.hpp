@@ -40,7 +40,6 @@ namespace threepp {
 
         Camera() = default;
         Camera(float near, float far);
-        Camera(const Camera&) = delete;
 
         // Copies the world space direction in which the camera is looking into target.
         // (Note: A camera looks down its local, negative z-axis).

@@ -11,8 +11,10 @@ namespace threepp::shaders {
     class ShaderChunk {
 
     public:
+        ShaderChunk(ShaderChunk&&) = delete;
         ShaderChunk(const ShaderChunk&) = delete;
-        void operator=(const ShaderChunk&) = delete;
+        ShaderChunk& operator=(ShaderChunk&&) = delete;
+        ShaderChunk& operator=(const ShaderChunk&) = delete;
 
         const std::string& default_vertex() {
             return get("default_vertex");

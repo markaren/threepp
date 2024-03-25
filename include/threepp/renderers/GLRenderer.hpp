@@ -78,6 +78,7 @@ namespace threepp {
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
         GLRenderer& operator=(const GLRenderer&) = delete;
+        GLRenderer& operator=(GLRenderer&&) = delete;
 
         const gl::GLInfo& info();
 

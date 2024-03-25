@@ -19,7 +19,6 @@
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
-#include "threepp/core/InstancedBufferGeometry.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 
 #include "threepp/objects/Group.hpp"
@@ -471,13 +470,13 @@ struct GLRenderer::Impl {
 
             renderer->renderInstances(drawStart, drawCount, im->count());
 
-        } else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+        } /*else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
 
             const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
             renderer->renderInstances(drawStart, drawCount, instanceCount);
 
-        } else {
+        } */else {
 
             renderer->render(drawStart, drawCount);
         }

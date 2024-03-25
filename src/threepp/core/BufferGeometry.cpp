@@ -50,6 +50,11 @@ namespace {
 BufferGeometry::BufferGeometry()
     : uuid(math::generateUUID()) {}
 
+std::string BufferGeometry::type() const {
+
+    return "BufferGeometry";
+}
+
 bool BufferGeometry::hasIndex() const {
 
     return index_ != nullptr;

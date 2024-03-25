@@ -103,3 +103,9 @@ void PeripheralsEventSource::onKeyEvent(KeyEvent evt, PeripheralsEventSource::Ke
 void PeripheralsEventSource::onDrop(std::function<void(std::vector<std::string>)> paths) {
     dropListener_ = std::move(paths);
 }
+
+void PeripheralsEventSource::onDropEvent(std::vector<std::string> paths) {
+    if (dropListener_ && !paths.empty()) {
+        dropListener_(std::move(paths));
+    }
+}

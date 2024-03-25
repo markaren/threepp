@@ -55,9 +55,10 @@ namespace threepp {
 
         GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
 
+        GLRenderTarget(GLRenderTarget&&) = delete;
         GLRenderTarget(const GLRenderTarget&) = delete;
-        GLRenderTarget(const GLRenderTarget&&) = delete;
-        GLRenderTarget operator=(const GLRenderTarget&) = delete;
+        GLRenderTarget& operator=(GLRenderTarget&&) = delete;
+        GLRenderTarget& operator=(const GLRenderTarget&) = delete;
 
         void setSize(unsigned int width, unsigned int height, unsigned int depth = 1);
 
@@ -71,7 +72,6 @@ namespace threepp {
 
     protected:
         bool disposed = false;
-
     };
 
 }// namespace threepp

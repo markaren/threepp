@@ -28,6 +28,13 @@ namespace threepp::shaders {
         Shader shadow;
         Shader physical;
 
+
+        ShaderLib(ShaderLib&&) = delete;
+        ShaderLib(const ShaderLib&) = delete;
+        ShaderLib& operator=(ShaderLib&&) = delete;
+        ShaderLib& operator=(const ShaderLib&) = delete;
+
+
         [[nodiscard]] Shader& get(const std::string& name) {
 
             if (name == "basic") {
@@ -68,9 +75,6 @@ namespace threepp::shaders {
                 throw std::runtime_error("No shader with name: " + name);
             }
         }
-
-        ShaderLib(const ShaderLib&) = delete;
-        void operator=(const ShaderLib&) = delete;
 
         static ShaderLib& instance() {
             static ShaderLib instance;
