@@ -105,27 +105,31 @@ int main() {
     hud.add(hudText);
 
     auto material = MeshPhongMaterial::create();
+
     auto mesh = Mesh::create(BufferGeometry::create(), material);
     scene->add(mesh);
 
     auto future = std::async(std::launch::async, [&] {
-        const auto data = loadHeights();
-
         auto geometry = PlaneGeometry::create(5041, 5041, 1023, 1023);
         geometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-        auto pos = geometry->getAttribute<float>("position");
-        for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
-            pos->setY(i, data[i]);
-        }
+        renderer.invokeLater([&] {
+            mesh->setGeometry(geometry);
+        });
+
+        const auto data = loadHeights();
 
         TextureLoader tl;
         auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
 
-        renderer.invokeLater([&, texture, geometry] {
+        renderer.invokeLater([&, data, texture, geometry] {
+            auto pos = geometry->getAttribute<float>("position");
+            for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
+                pos->setY(i, data[i]);
+            }
+            pos->needsUpdate();
 
             material->map = texture;
             material->needsUpdate();
-            mesh->setGeometry(geometry);
 
             hudText.setText("Terrain loaded..", opts);
         });
@@ -133,7 +137,7 @@ int main() {
         renderer.invokeLater([&] {
             hud.remove(hudText);
         },
-                           2);
+                             2);
     });
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -153,5 +157,4 @@ int main() {
 
         hud.apply(renderer);
     });
-
 }
