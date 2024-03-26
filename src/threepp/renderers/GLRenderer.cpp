@@ -39,22 +39,10 @@
 #include <GLES3/gl32.h>
 #endif
 
-#include <chrono>
 #include <cmath>
 
 
 using namespace threepp;
-
-namespace {
-
-    double getCurrentTimeInSeconds() {
-        using Clock = std::chrono::high_resolution_clock;
-        const auto now = Clock::now();
-        const auto duration = now.time_since_epoch();
-        return std::chrono::duration<double>(duration).count();
-    }
-
-}// namespace
 
 
 struct GLRenderer::Impl {
@@ -210,16 +198,8 @@ struct GLRenderer::Impl {
     }
 
     void handleTasks() {
-        // handle tasks to be invoked on the render thread
-        if (previousTime < 0) {
-            previousTime = getCurrentTimeInSeconds();// first invocation
-        }
 
-        const auto currentTime = getCurrentTimeInSeconds();
-        const auto deltaTime = currentTime - previousTime;
-        previousTime = currentTime;
-
-        taskManager.handleTasks(deltaTime);
+        taskManager.handleTasks();
     }
 
     void render(Object3D* scene, Camera* camera) {
@@ -476,7 +456,8 @@ struct GLRenderer::Impl {
 
             renderer->renderInstances(drawStart, drawCount, instanceCount);
 
-        } */else {
+        } */
+        else {
 
             renderer->render(drawStart, drawCount);
         }
@@ -1399,9 +1380,9 @@ std::optional<unsigned int> GLRenderer::getGlTextureId(Texture& texture) const {
     return pimpl_->getGlTextureId(texture);
 }
 
-void GLRenderer::invokeLater(const std::function<void()>& task, float tThen) {
+void GLRenderer::invokeLater(const std::function<void()>& task, float delay) {
 
-    return pimpl_->invokeLater(task, tThen);
+    return pimpl_->invokeLater(task, delay);
 }
 
 GLRenderer::~GLRenderer() = default;
