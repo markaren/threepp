@@ -3,11 +3,8 @@
 #include "threepp/threepp.hpp"
 #include "utility/FPSCounter.hpp"
 
-#include <cmath>
-
-#ifdef HAS_IMGUI
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#endif
+#include <cmath>
 
 using namespace threepp;
 
@@ -67,7 +64,6 @@ int main() {
 
     std::unordered_map<int, bool> colorMap;
 
-#ifdef HAS_IMGUI
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         float width = 230;
         ImGui::SetNextWindowPos({float(canvas.size().width) - width, 0}, 0, {0, 0});
@@ -89,7 +85,6 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
-#endif
 
     HUD hud(canvas.size());
     FontLoader fontLoader;
@@ -146,9 +141,6 @@ int main() {
         renderer.render(*scene, *camera);
         hud.apply(renderer);
 
-
-#ifdef HAS_IMGUI
         ui.render();
-#endif
     });
 }

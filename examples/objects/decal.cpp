@@ -1,12 +1,10 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include <threepp/core/Raycaster.hpp>
 #include <threepp/geometries/DecalGeometry.hpp>
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/threepp.hpp>
 
-#ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
-#endif
 
 using namespace threepp;
 
@@ -67,9 +65,6 @@ namespace {
         }
     };
 
-
-#ifdef HAS_IMGUI
-
     struct MyGui: public ImguiContext {
 
         bool clear = false;
@@ -87,7 +82,6 @@ namespace {
             ImGui::End();
         }
     };
-#endif
 
     void addLights(Scene& scene) {
 
@@ -149,7 +143,6 @@ int main() {
         renderer.setSize(size);
     });
 
-#ifdef HAS_IMGUI
     MyGui ui(canvas);
     std::vector<Mesh*> decals;
 
@@ -158,7 +151,6 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
-#endif
 
     Matrix4 mouseHelper;
     Vector3 position;
@@ -203,8 +195,6 @@ int main() {
 
         renderer.render(*scene, *camera);
 
-#ifdef HAS_IMGUI
-
         if (ui.clear) {
             for (auto decal : decals) {
                 decal->removeFromParent();
@@ -213,7 +203,5 @@ int main() {
             ui.clear = false;
         }
         ui.render();
-
-#endif
     });
 }

@@ -12,8 +12,6 @@
 using namespace threepp;
 using namespace kine;
 
-#ifdef HAS_IMGUI
-
 #include "kine/ik/CCDSolver.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
@@ -66,7 +64,6 @@ struct MyUI: ImguiContext {
         ImGui::End();
     }
 };
-#endif
 
 auto createGrid() {
 
@@ -173,9 +170,6 @@ int main() {
         hud.setSize(size);
     });
 
-
-#ifdef HAS_IMGUI
-
     IOCapture capture{};
     capture.preventMouseEvent = [] {
         return ImGui::GetIO().WantCaptureMouse;
@@ -190,8 +184,6 @@ int main() {
     targetHelper->visible = false;
     scene->add(targetHelper);
 
-#endif
-
     Clock clock;
     canvas.animate([&]() {
         float dt = clock.getDelta();
@@ -200,7 +192,7 @@ int main() {
         renderer.render(*scene, *camera);
 
         if (crane) {
-#ifdef HAS_IMGUI
+
             ui.render();
 
             auto endEffectorPosition = kine.calculateEndEffectorTransformation(inDegrees(crane->getValues()));
@@ -219,7 +211,6 @@ int main() {
 
             crane->controllerEnabled = ui.enableController;
             crane->setTargetValues(asAngles(ui.values, Angle::Repr::DEG));
-#endif
 
             crane->update(dt);
 

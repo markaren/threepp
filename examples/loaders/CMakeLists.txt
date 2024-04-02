@@ -9,5 +9,5 @@ add_example(NAME "obj_loader" WEB WEB_EMBED
 add_example(NAME "assimp_loader" LINK_ASSIMP)
 
 if (THREEPP_WITH_SVG)
-    add_example(NAME "svg_loader" TRY_LINK_IMGUI)
+    add_example(NAME "svg_loader" LINK_IMGUI)
 endif ()
