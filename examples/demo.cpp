@@ -1,10 +1,9 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
 
-#ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
 
 struct MyGui: public ImguiContext {
 
@@ -52,7 +51,6 @@ private:
     std::array<float, 3> eulerBuf_{};
     std::array<float, 4> colorBuf_{0, 0, 0, 1};
 };
-#endif
 
 auto createBox() {
 
@@ -145,9 +143,7 @@ int main() {
         hud.setSize(size);
     });
 
-#ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
-#endif
 
     Clock clock;
     canvas.animate([&]() {
@@ -162,7 +158,6 @@ int main() {
         renderer.render(*scene, *camera);
         hud.apply(renderer);
 
-#ifdef HAS_IMGUI
         ui.render();
 
         plane->position.copy(ui.position());
@@ -174,6 +169,5 @@ int main() {
             planeMaterial->opacity = c[3];
             planeMaterial->transparent = c[3] != 1;
         }
-#endif
     });
 }

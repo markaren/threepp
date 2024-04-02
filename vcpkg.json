@@ -18,18 +18,6 @@
         "assimp"
       ]
     },
-    "imgui": {
-      "description": "Use external ImGui in examples",
-      "dependencies": [
-        {
-          "name": "imgui",
-          "features": [
-            "glfw-binding",
-            "opengl3-binding"
-          ]
-        }
-      ]
-    },
     "physx": {
       "description": "Enable physx in examples",
       "dependencies": [
