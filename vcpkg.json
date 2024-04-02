@@ -19,7 +19,7 @@
       ]
     },
     "imgui": {
-      "description": "Enable user interfaces in examples",
+      "description": "Use external ImGui in examples",
       "dependencies": [
         {
           "name": "imgui",
