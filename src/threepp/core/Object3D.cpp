@@ -147,14 +147,14 @@ Object3D& Object3D::translateZ(float distance) {
 
 void Object3D::localToWorld(Vector3& vector) {
 
-    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
+    this->updateWorldMatrix(true, false);// https://github.com/mrdoob/three.js/pull/25097
 
     vector.applyMatrix4(*this->matrixWorld);
 }
 
 void Object3D::worldToLocal(Vector3& vector) {
 
-    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
+    this->updateWorldMatrix(true, false);// https://github.com/mrdoob/three.js/pull/25097
 
     Matrix4 _m1{};
 
@@ -204,7 +204,6 @@ void Object3D::add(const std::shared_ptr<Object3D>& object) {
 
     this->children_.emplace_back(object);
     add(*object);
-
 }
 
 void Object3D::add(Object3D& object) {
@@ -323,7 +322,6 @@ void Object3D::traverse(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    auto _childrenCopy = children_; // keep a copy because callback may delete children
     for (auto& c : children) {
 
         c->traverse(callback);
@@ -335,8 +333,6 @@ void Object3D::traverseVisible(const std::function<void(Object3D&)>& callback) {
     if (!this->visible) return;
 
     callback(*this);
-
-    auto _childrenCopy = children_; // keep a copy because callback may delete children
 
     for (auto& c : children) {
 

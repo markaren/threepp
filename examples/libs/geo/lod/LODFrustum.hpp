@@ -6,15 +6,14 @@
 #include "threepp/math/Frustum.hpp"
 #include "threepp/math/Matrix4.hpp"
 
-#include "geo/lod/LODRadial.hpp"
 #include "geo/MapView.hpp"
+#include "geo/lod/LODRadial.hpp"
 
 namespace threepp {
 
     class LODFrustum: public LODRadial {
 
     public:
-
         explicit LODFrustum(float subdivideDistance = 150, float simplifyDistance = 400)
             : LODRadial(subdivideDistance, simplifyDistance) {}
 
@@ -24,6 +23,7 @@ namespace threepp {
             frustum.setFromProjectionMatrix(projection);
             camera.getWorldPosition(pov);
 
+            std::vector<MapNode*> nodesToClear;
             view.children[0]->traverseType<MapNode>([&](MapNode& node) {
                 node.getWorldPosition(position);
 
@@ -35,9 +35,14 @@ namespace threepp {
                 if (distance < this->subdivideDistance && inFrustum) {
                     node.subdivide();
                 } else if (distance > this->simplifyDistance && node.parentNode) {
-                    node.parentNode->simplify();
+                    if (node.parentNode->simplify()) {
+                        nodesToClear.emplace_back(node.parentNode);
+                    }
                 }
             });
+            for (auto node : nodesToClear) {
+                node->clear();
+            }
         }
 
     private:

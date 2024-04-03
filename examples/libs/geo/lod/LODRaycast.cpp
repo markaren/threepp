@@ -16,6 +16,7 @@ void LODRaycast::updateLOD(MapView& view, Camera& camera, const GLRenderer& rend
         intersects = this->raycaster.intersectObjects(view.children, true);
     }
 
+    std::vector<MapNode*> nodesToClear;
     for (auto& intersect : intersects) {
         auto* obj = intersect.object;
 
@@ -37,8 +38,13 @@ void LODRaycast::updateLOD(MapView& view, Camera& camera, const GLRenderer& rend
             if (distance > this->thresholdUp) {
                 node->subdivide();
             } else if (distance < this->thresholdDown && node->parentNode) {
-                node->parentNode->simplify();
+                if (node->parentNode->simplify()) {
+                    nodesToClear.emplace_back(node->parentNode);
+                }
             }
         }
+    }
+    for (auto node : nodesToClear) {
+        node->clear();
     }
 }

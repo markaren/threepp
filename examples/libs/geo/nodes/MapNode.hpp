@@ -22,7 +22,6 @@ namespace threepp {
 
     public:
         MapNode* parentNode = nullptr;
-        bool remove = false;
 
         MapNode(MapNode* parentNode, MapView* mapView,
                 int location = QuadTreePosition::root,
@@ -36,7 +35,7 @@ namespace threepp {
 
         void subdivide();
 
-        void simplify();
+        bool simplify();
 
         void loadData();
 

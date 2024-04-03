@@ -26,17 +26,18 @@ void MapNode::subdivide() {
     this->subdivided = true;
 }
 
-void MapNode::simplify() {
+bool MapNode::simplify() {
     const auto minZoom = this->mapView->minZoom();
     if (this->level - 1 < minZoom) {
-        return;
+        return false;
     }
 
     // Clear children and reset flags
     this->subdivided = false;
     this->layers.enable(0);
-    this->clear();
     this->nodesLoaded = 0;
+
+    return true; //signals that node needs clearing. Can't do it while traversing
 }
 
 void MapNode::loadData() {

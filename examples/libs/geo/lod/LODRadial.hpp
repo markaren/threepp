@@ -27,6 +27,7 @@ namespace threepp {
 
             camera.getWorldPosition(pov);
 
+            std::vector<MapNode*> nodesToClear;
             view.children[0]->traverseType<MapNode>([&](MapNode& node) {
                 node.getWorldPosition(position);
 
@@ -36,9 +37,14 @@ namespace threepp {
                 if (distance < this->subdivideDistance) {
                     node.subdivide();
                 } else if (distance > this->simplifyDistance && node.parentNode) {
-                    node.parentNode->simplify();
+                    if (node.parentNode->simplify()) {
+                        nodesToClear.emplace_back(node.parentNode);
+                    }
                 }
             });
+            for (auto node : nodesToClear) {
+                node->clear();
+            }
         }
 
     protected:
