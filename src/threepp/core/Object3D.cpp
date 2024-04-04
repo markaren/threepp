@@ -442,20 +442,12 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
     if (recursive) {
 
-        for (auto& child : source.children) {
+        for (const auto& child : source.children) {
 
             auto clone = child->clone();
             this->add(clone);
         }
     }
-}
-
-std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
-
-    auto clone = std::make_shared<Object3D>();
-    clone->copy(*this, recursive);
-
-    return clone;
 }
 
 Object3D::Object3D(Object3D&& source) noexcept: Object3D() {

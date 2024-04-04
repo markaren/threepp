@@ -333,14 +333,6 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
     }
 }
 
-std::shared_ptr<Object3D> Mesh::clone(bool recursive) {
-
-    auto clone = create(geometry_, materials_);
-    clone->copy(*this, recursive);
-
-    return clone;
-}
-
 std::string Mesh::type() const {
 
     return "Mesh";
@@ -369,4 +361,20 @@ std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std
 std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials) {
 
     return std::make_shared<Mesh>(std::move(geometry), std::move(materials));
+}
+
+void Mesh::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto m = source.as<Mesh>()) {
+
+        // TODO morphs
+
+        materials_ = m->materials_;
+        geometry_ = m->geometry_;
+    }
+}
+
+std::shared_ptr<Object3D> Mesh::createDefault() {
+    return create();
 }

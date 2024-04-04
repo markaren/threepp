@@ -241,16 +241,38 @@ namespace threepp {
         }
 
         template<class T>
+        const T* as() const {
+
+            static_assert(std::is_base_of<Object3D, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
+                          "T must be a base class of Object3D");
+
+            return dynamic_cast<const T*>(this);
+        }
+
+        template<class T>
         [[nodiscard]] bool is() const {
 
             return dynamic_cast<const T*>(this) != nullptr;
         }
 
-        void copy(const Object3D& source, bool recursive = true);
+        virtual void copy(const Object3D& source, bool recursive = true);
 
-        virtual std::shared_ptr<Object3D> clone(bool recursive = true);
+        template<class T = Object3D>
+        std::shared_ptr<T> clone(bool recursive = true) {
+
+            auto clone = createDefault();
+            clone->copy(*this, recursive);
+
+            return std::dynamic_pointer_cast<T>(clone);
+        }
 
         ~Object3D() override;
+
+    protected:
+        virtual std::shared_ptr<Object3D> createDefault() {
+
+            return std::make_shared<Object3D>();
+        }
 
     private:
         inline static unsigned int _object3Did{0};

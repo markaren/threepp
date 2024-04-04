@@ -16,16 +16,24 @@ int main() {
 
     OrbitControls controls{camera, canvas};
 
-    LOD lod;
-    scene.add(lod);
+    LOD lod1;
+    scene.add(lod1);
 
     float radius = 0.5;
     auto material = MeshBasicMaterial::create({{"wireframe", true}});
     for (int z = 0; z <= 5; z++) {
         int detail = 6 - z;
         auto obj = Mesh::create(IcosahedronGeometry::create(radius, detail), material);
-        lod.addLevel(obj, static_cast<float>(z));
+        lod1.addLevel(obj, static_cast<float>(z));
     }
+
+    LOD lod2;
+    lod2.copy(lod1);
+    scene.add(lod2);
+
+    float spacing = 1;
+    lod1.position.x = spacing;
+    lod2.position.x = -spacing;
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
@@ -38,12 +46,18 @@ int main() {
     const auto font = *fontLoader.load("data/fonts/gentilis_bold.typeface.json");
 
     TextGeometry::Options opts(font, 20, 5);
-    auto handle = Text2D(opts, "");
-    handle.setColor(Color::gray);
-    hud.add(handle);
+
+    Text2D handle1(opts);
+    handle1.setColor(Color::gray);
+    hud.add(handle1, HUD::Options().setNormalizedPosition({0.f, 0.05f}));
+
+    Text2D handle2(opts);
+    handle2.setColor(Color::gray);
+    hud.add(handle2);
 
     canvas.animate([&]() {
-        handle.setText("LOD level: " + std::to_string(lod.getCurrentLevel()), opts);
+        handle1.setText("LOD1 level: " + std::to_string(lod1.getCurrentLevel()));
+        handle2.setText("LOD2 level: " + std::to_string(lod2.getCurrentLevel()));
 
         renderer.clear();
         renderer.render(scene, camera);

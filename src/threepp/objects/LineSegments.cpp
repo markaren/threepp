@@ -46,13 +46,6 @@ void LineSegments::computeLineDistances() {
     }
 }
 
-std::shared_ptr<Object3D> LineSegments::clone(bool recursive) {
-    auto clone = create();
-    clone->copy(*this, recursive);
-
-    return clone;
-}
-
 std::shared_ptr<LineSegments> LineSegments::create(
         const std::shared_ptr<BufferGeometry>& geometry,
         const std::shared_ptr<Material>& material) {

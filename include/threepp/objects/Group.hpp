@@ -12,11 +12,12 @@ namespace threepp {
     public:
         [[nodiscard]] std::string type() const override;
 
-        std::shared_ptr<Object3D> clone(bool recursive = true) override;
-
         static std::shared_ptr<Group> create();
 
         ~Group() override = default;
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

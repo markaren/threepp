@@ -295,7 +295,7 @@ struct OBJLoader::Impl {
 
             auto cached = cache_[path.string()];
             if (!cached.expired()) {
-                return std::dynamic_pointer_cast<Group>(cached.lock()->clone());
+                return cached.lock()->clone<Group>();
             } else {
                 cache_.erase(path.string());
             }

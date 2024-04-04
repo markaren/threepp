@@ -26,7 +26,12 @@ namespace threepp {
 
         void setMaterial(const std::shared_ptr<SpriteMaterial>& material);
 
+        void copy(const Object3D& source, bool recursive) override;
+
         static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial>& material = nullptr);
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
 
     private:
         std::shared_ptr<BufferGeometry> _geometry;

@@ -29,7 +29,7 @@ namespace threepp {
 
         void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
-        std::shared_ptr<Object3D> clone(bool recursive = true) override;
+        void copy(const Object3D& source, bool recursive = true) override;
 
         static std::shared_ptr<Mesh> create(
                 std::shared_ptr<BufferGeometry> geometry = nullptr,
@@ -43,6 +43,8 @@ namespace threepp {
 
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
+
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp

@@ -165,3 +165,19 @@ void Sprite::raycast(const Raycaster& raycaster, std::vector<Intersection>& inte
     Triangle::getUV(_intersectPoint, _vA, _vB, _vC, _uvA, _uvB, _uvC, *intersection.uv);
     intersects.emplace_back(intersection);
 }
+
+void Sprite::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto s = source.as<Sprite>()) {
+
+        this->center.copy(s->center);
+
+        this->_material = s->_material;
+    }
+}
+
+std::shared_ptr<Object3D> Sprite::createDefault() {
+
+    return create();
+}
