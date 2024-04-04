@@ -35,7 +35,12 @@ namespace threepp {
 
         void update(Camera& camera);
 
+        void copy(const Object3D& source, bool recursive = false) override;
+
         static std::shared_ptr<LOD> create();
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
 
     private:
         size_t _currentLevel = 0;
