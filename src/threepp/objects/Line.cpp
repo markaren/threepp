@@ -175,3 +175,8 @@ void Line::copy(const Object3D& source, bool recursive) {
         geometry_ = l->geometry_;
     }
 }
+
+std::shared_ptr<Object3D> Line::createDefault() {
+
+    return create();
+}

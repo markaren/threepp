@@ -134,3 +134,8 @@ void Points::copy(const Object3D& source, bool recursive) {
         geometry_ = p->geometry_;
     }
 }
+
+std::shared_ptr<Object3D> Points::createDefault() {
+
+    return create();
+}

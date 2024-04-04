@@ -39,6 +39,7 @@ namespace threepp {
 
         static std::shared_ptr<LOD> create();
 
+    protected:
         std::shared_ptr<Object3D> createDefault() override;
 
     private:

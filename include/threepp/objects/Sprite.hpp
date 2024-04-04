@@ -26,7 +26,7 @@ namespace threepp {
 
         void setMaterial(const std::shared_ptr<SpriteMaterial>& material);
 
-        void copy(const Object3D& source, bool recursive) override;
+        void copy(const Object3D& source, bool recursive = true) override;
 
         static std::shared_ptr<Sprite> create(const std::shared_ptr<SpriteMaterial>& material = nullptr);
 

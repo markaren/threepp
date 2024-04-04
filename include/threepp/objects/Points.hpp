@@ -32,6 +32,8 @@ namespace threepp {
 
     protected:
         std::shared_ptr<BufferGeometry> geometry_;
+
+        std::shared_ptr<Object3D> createDefault() override;
     };
 
 }// namespace threepp
