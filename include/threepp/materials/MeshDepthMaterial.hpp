@@ -46,7 +46,7 @@ namespace threepp {
 
         static std::shared_ptr<MeshDepthMaterial> create() {
 
-            return std::shared_ptr<MeshDepthMaterial>();
+            return std::shared_ptr<MeshDepthMaterial>(new MeshDepthMaterial());
         }
 
     protected:
@@ -60,7 +60,7 @@ namespace threepp {
 
         std::shared_ptr<Material> createDefault() const override {
 
-            return std::shared_ptr<MeshDepthMaterial>();
+            return std::shared_ptr<MeshDepthMaterial>(new MeshDepthMaterial());
         }
     };
 
