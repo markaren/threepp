@@ -19,6 +19,12 @@ std::string MeshNormalMaterial::type() const {
     return "MeshNormalMaterial";
 }
 
+
+std::shared_ptr<Material> MeshNormalMaterial::createDefault() const {
+
+    return std::shared_ptr<MeshNormalMaterial>(new MeshNormalMaterial());
+}
+
 std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
 
     auto m = std::shared_ptr<MeshNormalMaterial>(new MeshNormalMaterial());
@@ -27,10 +33,11 @@ std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const std::unorde
     return m;
 }
 
-std::shared_ptr<Material> MeshNormalMaterial::clone() const {
+void MeshNormalMaterial::copyInto(Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<MeshNormalMaterial>();
 
     m->normalMap = normalMap;
     m->normalMapType = normalMapType;
@@ -44,8 +51,6 @@ std::shared_ptr<Material> MeshNormalMaterial::clone() const {
     m->wireframeLinewidth = wireframeLinewidth;
 
     m->flatShading = flatShading;
-
-    return m;
 }
 
 bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& value) {

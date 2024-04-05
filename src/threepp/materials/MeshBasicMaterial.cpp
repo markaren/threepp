@@ -17,10 +17,11 @@ std::string MeshBasicMaterial::type() const {
     return "MeshBasicMaterial";
 }
 
-std::shared_ptr<Material> MeshBasicMaterial::clone() const {
+void MeshBasicMaterial::copyInto(Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<MeshBasicMaterial>();
 
     m->color.copy(color);
 
@@ -43,8 +44,6 @@ std::shared_ptr<Material> MeshBasicMaterial::clone() const {
 
     m->wireframe = wireframe;
     m->wireframeLinewidth = wireframeLinewidth;
-
-    return m;
 }
 
 std::shared_ptr<MeshBasicMaterial> MeshBasicMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
@@ -131,4 +130,9 @@ bool MeshBasicMaterial::setValue(const std::string& key, const MaterialValue& va
     }
 
     return false;
+}
+
+std::shared_ptr<Material> MeshBasicMaterial::createDefault() const {
+
+    return {};
 }

@@ -23,10 +23,11 @@ std::string MeshPhongMaterial::type() const {
     return "MeshPhongMaterial";
 }
 
-std::shared_ptr<Material> MeshPhongMaterial::clone() const {
+void MeshPhongMaterial::copyInto(threepp::Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<MeshPhongMaterial>();
 
     m->color.copy(color);
     m->specular.copy(specular);
@@ -68,8 +69,11 @@ std::shared_ptr<Material> MeshPhongMaterial::clone() const {
     m->wireframeLinewidth = wireframeLinewidth;
 
     m->flatShading = flatShading;
+}
 
-    return m;
+std::shared_ptr<Material> MeshPhongMaterial::createDefault() const {
+
+    return std::shared_ptr<MeshPhongMaterial>(new MeshPhongMaterial());
 }
 
 std::shared_ptr<MeshPhongMaterial> MeshPhongMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
