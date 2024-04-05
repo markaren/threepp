@@ -15,7 +15,7 @@ namespace threepp {
 
     typedef std::variant<bool, int, float, Vector2, Side, Blending, BlendFactor, BlendEquation, StencilFunc, StencilOp, CombineOperation, DepthFunc, NormalMapType, Color, std::string, std::shared_ptr<Texture>> MaterialValue;
 
-    class Material: public EventDispatcher, public std::enable_shared_from_this<Material> {
+    class Material: public EventDispatcher {
 
     public:
         const unsigned int id = materialId++;
@@ -81,7 +81,7 @@ namespace threepp {
         Material(const Material&) = delete;
         Material& operator=(const Material&) = delete;
 
-        std::string uuid() const;
+        [[nodiscard]] std::string uuid() const;
 
         [[nodiscard]] unsigned int version() const;
 
@@ -103,29 +103,31 @@ namespace threepp {
         }
 
         template<class T>
-        std::shared_ptr<T> as_shared() {
+        [[nodiscard]] bool is() const {
+
+            return dynamic_cast<const T*>(this) != nullptr;
+        }
+
+        template<class T = Material>
+        std::shared_ptr<T> clone() const {
 
             static_assert(std::is_base_of<Material, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
                           "T must be a base class of Material");
 
-            auto m = shared_from_this();
-            return std::dynamic_pointer_cast<T>(m);
-        }
+            auto clone = createDefault();
+            copyInto(*clone);
 
-        template<class T>
-        bool is() {
-
-            return dynamic_cast<T*>(this) != nullptr;
-        }
-
-        virtual std::shared_ptr<Material> clone() const { return nullptr; };
+            return std::dynamic_pointer_cast<T>(clone);
+        };
 
         ~Material() override;
 
     protected:
         Material();
 
-        void copyInto(Material* m) const;
+        virtual std::shared_ptr<Material> createDefault() const = 0;
+
+        virtual void copyInto(Material& material) const;
 
         static Color extractColor(const MaterialValue& value) {
             if (std::holds_alternative<int>(value)) {

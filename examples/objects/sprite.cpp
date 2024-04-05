@@ -78,7 +78,7 @@ int main() {
     material->map = loader.load("data/textures/three.png");
     material->map->offset.set(0.5, 0.5);
 
-    auto pickMaterial = material->clone()->as_shared<SpriteMaterial>();
+    auto pickMaterial = material->clone<SpriteMaterial>();
 
     auto sprites = createSprites(material);
     scene->add(sprites);

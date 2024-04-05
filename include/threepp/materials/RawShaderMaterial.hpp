@@ -16,6 +16,8 @@ namespace threepp {
 
     protected:
         RawShaderMaterial();
+
+        std::shared_ptr<Material> createDefault() const override;
     };
 
 }// namespace threepp
