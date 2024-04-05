@@ -56,12 +56,13 @@ std::string Points::type() const {
     return "Points";
 }
 
-BufferGeometry* Points::geometry() {
+std::shared_ptr<BufferGeometry> Points::geometry() const {
 
-    return geometry_.get();
+    return geometry_;
 }
 
 void Points::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+
     this->geometry_ = geometry;
 }
 

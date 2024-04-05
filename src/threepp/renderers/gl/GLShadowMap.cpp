@@ -222,7 +222,7 @@ struct GLShadowMap::Impl {
                     for (const auto& group : groups) {
 
                         if (material.size() > group.materialIndex) {
-                            const auto groupMaterial = material[group.materialIndex];
+                            const auto groupMaterial = material[group.materialIndex].get();
 
                             if (groupMaterial && groupMaterial->visible) {
 
@@ -235,7 +235,7 @@ struct GLShadowMap::Impl {
 
                 } else if (material.front()->visible) {
 
-                    auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front(), light, shadowCamera->near, shadowCamera->far);
+                    const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front().get(), light, shadowCamera->near, shadowCamera->far);
 
                     _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, std::nullopt);
                 }

@@ -498,7 +498,7 @@ struct GLRenderer::Impl {
                     }
 
                     const auto geometry = objects.update(object);
-                    const auto material = sprite->material();
+                    const auto material = sprite->material().get();
 
                     if (material->visible) {
 
@@ -527,7 +527,7 @@ struct GLRenderer::Impl {
                                 .applyMatrix4(_projScreenMatrix);
                     }
 
-                    auto geometry = objects.update(object);
+                    const auto geometry = objects.update(object);
                     const auto& materials = object->as<ObjectWithMaterials>()->materials();
 
                     if (materials.size() > 1) {
@@ -536,7 +536,7 @@ struct GLRenderer::Impl {
 
                         for (const auto& group : groups) {
 
-                            Material* groupMaterial = materials.at(group.materialIndex);
+                            const auto groupMaterial = materials.at(group.materialIndex).get();
 
                             if (groupMaterial && groupMaterial->visible) {
 
@@ -546,7 +546,7 @@ struct GLRenderer::Impl {
 
                     } else if (materials.front()->visible) {
 
-                        currentRenderList->push(object, geometry, materials.front(), groupOrder, _vector3.z, std::nullopt);
+                        currentRenderList->push(object, geometry, materials.front().get(), groupOrder, _vector3.z, std::nullopt);
                     }
                 }
             }

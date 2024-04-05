@@ -27,12 +27,13 @@ std::string Line::type() const {
     return "Line";
 }
 
-BufferGeometry* Line::geometry() {
+std::shared_ptr<BufferGeometry> Line::geometry() const {
 
-    return geometry_.get();
+    return geometry_;
 }
 
 void Line::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+
     this->geometry_ = geometry;
 }
 

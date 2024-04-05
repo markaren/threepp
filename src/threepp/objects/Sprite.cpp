@@ -83,9 +83,9 @@ std::string Sprite::type() const {
     return "Sprite";
 }
 
-Material* Sprite::material() {
+std::shared_ptr<Material> Sprite::material() const {
 
-    return _material.get();
+    return _material;
 }
 
 void Sprite::setMaterial(const std::shared_ptr<SpriteMaterial>& material) {
@@ -93,9 +93,9 @@ void Sprite::setMaterial(const std::shared_ptr<SpriteMaterial>& material) {
     this->_material = material;
 }
 
-BufferGeometry* Sprite::geometry() {
+std::shared_ptr<BufferGeometry> Sprite::geometry() const {
 
-    return _geometry.get();
+    return _geometry;
 }
 
 std::shared_ptr<Sprite> Sprite::create(const std::shared_ptr<SpriteMaterial>& material) {

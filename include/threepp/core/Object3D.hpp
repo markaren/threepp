@@ -221,12 +221,12 @@ namespace threepp {
             return std::make_shared<Object3D>();
         }
 
-        virtual BufferGeometry* geometry() {
+        [[nodiscard]] virtual std::shared_ptr<BufferGeometry> geometry() const {
 
             return nullptr;
         }
 
-        virtual Material* material() {
+        [[nodiscard]] virtual std::shared_ptr<Material> material() const {
 
             return nullptr;
         }

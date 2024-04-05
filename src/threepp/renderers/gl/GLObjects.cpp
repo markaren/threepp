@@ -53,7 +53,7 @@ struct GLObjects::Impl {
 
         const auto frame = info_.render.frame;
 
-        auto geometry = object->geometry();
+        const auto geometry = object->geometry().get();
         geometries_.get(object, geometry);
 
         // Update once per frame

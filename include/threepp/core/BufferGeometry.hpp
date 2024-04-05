@@ -15,7 +15,7 @@
 
 namespace threepp {
 
-    class BufferGeometry: public EventDispatcher, public std::enable_shared_from_this<BufferGeometry> {
+    class BufferGeometry: public EventDispatcher {
 
     public:
         const unsigned int id{++_id};

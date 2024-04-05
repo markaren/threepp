@@ -189,7 +189,7 @@ public:
         std::vector<physx::PxShape*> shapes;
 
         if (info._useVisualGeometryAsCollider) {
-            auto shape = toPxShape(obj.geometry(), material);
+            auto shape = toPxShape(obj.geometry().get(), material);
             if (!shape) {
                 shape = physics->createShape(physx::PxSphereGeometry(0.1), *material, true);//dummy
             }

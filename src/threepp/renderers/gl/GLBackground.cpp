@@ -86,7 +86,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
                 currentTonemapping = renderer.toneMapping;
             }
 
-            renderList.unshift(boxMesh.get(), boxMesh->geometry(), boxMesh->material(), 0, 0, std::nullopt);
+            renderList.unshift(boxMesh.get(), boxMesh->geometry().get(), boxMesh->material().get(), 0, 0, std::nullopt);
         }
     }
 }
