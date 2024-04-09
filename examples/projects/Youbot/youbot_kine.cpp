@@ -102,7 +102,7 @@ int main() {
     handle.setColor(Color::black);
     hud.add(handle, HUD::Options()
                             .setNormalizedPosition({0.5, 0.5})
-                            .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::CENTER)
+                            .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
                             .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
 
 

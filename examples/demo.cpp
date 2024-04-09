@@ -131,8 +131,8 @@ int main() {
     hudText2.setColor(Color::red);
     hud.add(hudText2, HUD::Options()
                               .setNormalizedPosition({1, 1})
-                              .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
-                              .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
+                              .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
+                              .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
 
     canvas.onWindowResize([&](WindowSize size) {

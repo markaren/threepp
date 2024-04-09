@@ -9,7 +9,7 @@ int main() {
     Canvas canvas("Drag controls");
     GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = threepp::ShadowMap::PFC;
+    renderer.shadowMap().type = ShadowMap::PFC;
 
     PerspectiveCamera camera(60, canvas.aspect());
     camera.position.z = 25;

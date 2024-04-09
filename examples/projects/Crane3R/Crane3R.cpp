@@ -75,7 +75,7 @@ namespace {
 
 }// namespace
 
-Crane3R::Crane3R(const std::shared_ptr<threepp::Group>& obj) {
+Crane3R::Crane3R(const std::shared_ptr<Group>& obj) {
 
     parts_[0] = obj->getObjectByName("part1");
     parts_[1] = obj->getObjectByName("part2");

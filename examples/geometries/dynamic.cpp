@@ -48,7 +48,7 @@ int main() {
 
     Clock clock;
     auto position = plane->geometry()->getAttribute<float>("position");
-    position->setUsage(threepp::DrawUsage::Dynamic);
+    position->setUsage(DrawUsage::Dynamic);
     canvas.animate([&]() {
         float time = clock.getElapsedTime();
 
