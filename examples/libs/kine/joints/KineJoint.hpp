@@ -14,10 +14,10 @@ namespace kine {
     class KineJoint: public KineComponent {
 
     public:
-        const threepp::Vector3& axis;
-        const KineLimit limit;
+        threepp::Vector3 axis;
+        KineLimit limit;
 
-        KineJoint(const threepp::Vector3& axis, KineLimit limit)
+        KineJoint(const threepp::Vector3& axis, const KineLimit& limit)
             : axis(axis),
               limit(limit){};
 
