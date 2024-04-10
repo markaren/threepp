@@ -56,7 +56,6 @@ namespace threepp {
             m->displacementScale = displacementScale;
             m->displacementBias = displacementBias;
         }
-
     };
 
 }// namespace threepp

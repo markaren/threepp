@@ -177,8 +177,7 @@ Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> m
       ObjectWithMaterials({material ? std::move(material) : MeshBasicMaterial::create()}) {}
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
-    : geometry_(std::move(geometry)), ObjectWithMaterials{std::move(materials)} {
-}
+    : geometry_(std::move(geometry)), ObjectWithMaterials{std::move(materials)} {}
 
 void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 

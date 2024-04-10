@@ -15,7 +15,6 @@ namespace threepp {
         Font defaultFont();
         std::optional<Font> load(const std::filesystem::path& path);
         std::optional<Font> load(const std::vector<unsigned char>& data);
-
     };
 }// namespace threepp
 

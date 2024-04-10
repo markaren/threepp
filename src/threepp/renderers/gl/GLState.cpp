@@ -1,8 +1,8 @@
 
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include "threepp/renderers/gl/GLUtils.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
 #if EMSCRIPTEN
 #include <GLES3/gl32.h>

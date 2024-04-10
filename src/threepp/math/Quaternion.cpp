@@ -449,4 +449,3 @@ bool Quaternion::operator!=(const Quaternion& other) const {
 
     return !equals(other);
 }
-

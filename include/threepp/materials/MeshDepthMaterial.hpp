@@ -22,9 +22,9 @@ namespace threepp {
             return "MeshDepthMaterial";
         }
 
-       void copyInto(Material& material) const override {
+        void copyInto(Material& material) const override {
 
-           Material::copyInto(material);
+            Material::copyInto(material);
 
             auto m = material.as<MeshDepthMaterial>();
 

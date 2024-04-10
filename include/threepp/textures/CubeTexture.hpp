@@ -17,7 +17,6 @@ namespace threepp {
         }
 
     private:
-
         explicit CubeTexture(const std::vector<Image>& images): Texture(images) {
 
             this->mapping = Mapping::CubeReflection;

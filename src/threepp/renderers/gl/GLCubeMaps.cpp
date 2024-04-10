@@ -59,7 +59,6 @@ void GLCubeMaps::get(Texture* texture) {
             }
         }
     }
-
 }
 
 void GLCubeMaps::dispose() {

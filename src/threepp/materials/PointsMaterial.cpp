@@ -45,9 +45,9 @@ std::shared_ptr<PointsMaterial> PointsMaterial::create(const std::unordered_map<
 bool PointsMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {
-        
+
         color.copy(extractColor(value));
-        
+
         return true;
     } else if (key == "size") {
 

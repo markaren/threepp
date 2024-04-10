@@ -1,8 +1,8 @@
 
 #include "threepp/scenes/Scene.hpp"
 
-#include "threepp/textures/Texture.hpp"
 #include "threepp/textures/CubeTexture.hpp"
+#include "threepp/textures/Texture.hpp"
 
 using namespace threepp;
 
@@ -42,7 +42,7 @@ std::shared_ptr<Texture> Background::texture() const {
     return texture_;
 }
 
-bool Background::empty() const{
+bool Background::empty() const {
 
     return !hasValue_;
 }

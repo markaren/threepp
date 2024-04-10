@@ -194,5 +194,5 @@ Euler& Euler::_onChange(std::function<void()> callback) {
 
 bool Euler::equals(const Euler& euler) const {
 
-    return ( euler.x == this->x ) && ( euler.y == this->y ) && ( euler.z == this->z ) && ( euler.order_ == this->order_ );
+    return (euler.x == this->x) && (euler.y == this->y) && (euler.z == this->z) && (euler.order_ == this->order_);
 }

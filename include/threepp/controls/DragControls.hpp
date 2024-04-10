@@ -14,10 +14,9 @@ namespace threepp {
     class Object3D;
     class PeripheralsEventSource;
 
-    class DragControls : public EventDispatcher {
+    class DragControls: public EventDispatcher {
 
     public:
-
         enum class Mode {
             Translate,
             Rotate
@@ -41,9 +40,8 @@ namespace threepp {
     private:
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
-
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_DRAGCONTROLS_HPP

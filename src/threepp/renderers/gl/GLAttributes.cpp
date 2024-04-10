@@ -39,7 +39,7 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
         throw std::runtime_error("TODO");
     }
 
-    return {buffer, type, bytesPerElement, attribute->version}; // attribute->version + 1 (?)
+    return {buffer, type, bytesPerElement, attribute->version};// attribute->version + 1 (?)
 }
 
 void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenum bufferType, int bytesPerElement) {

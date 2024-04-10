@@ -145,10 +145,10 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
     if (dataTexture3D) {
 
         state->texImage3D(GL_TEXTURE_3D, 0, glInternalFormat,
-                         static_cast<int>(image.width),
-                         static_cast<int>(image.height),
-                         static_cast<int>(image.depth),
-                         glFormat, glType, image.data().data());
+                          static_cast<int>(image.width),
+                          static_cast<int>(image.height),
+                          static_cast<int>(image.depth),
+                          glFormat, glType, image.data().data());
         textureProperties->maxMipLevel = 0;
 
     } else {
@@ -165,8 +165,8 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
                 auto& mipmap = mipmaps[i];
                 state->texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
-                                 static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
-                                 glFormat, glType, mipmap.data().data());
+                                  static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
+                                  glFormat, glType, mipmap.data().data());
             }
 
             texture.generateMipmaps = false;
@@ -176,12 +176,12 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
             if (glType == GL_UNSIGNED_BYTE) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                                 static_cast<int>(image.width), static_cast<int>(image.height),
-                                 glFormat, glType, texture.image.front().data().data());
+                                  static_cast<int>(image.width), static_cast<int>(image.height),
+                                  glFormat, glType, texture.image.front().data().data());
             } else if (glType == GL_FLOAT) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                                 static_cast<int>(image.width), static_cast<int>(image.height),
-                                 glFormat, glType, texture.image.front().data<float>().data());
+                                  static_cast<int>(image.width), static_cast<int>(image.height),
+                                  glFormat, glType, texture.image.front().data<float>().data());
             } else {
 
                 std::cerr << "Unnsupported gltype=" << glType << std::endl;
