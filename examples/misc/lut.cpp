@@ -5,6 +5,9 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include <algorithm>
+#include <iostream>
+
+#include "optimization/DifferentialEvolution.hpp"
 
 using namespace threepp;
 
@@ -12,6 +15,19 @@ namespace {
 
     const float maxHeight = 2;
     const float gridSize = 4;
+
+    struct Ackleys: Problem {
+
+        Ackleys(): Problem(2, {-5, 5}) {}
+
+        [[nodiscard]] float evaluate(const std::vector<float>& candidate) const override {
+
+            float x = candidate[0];
+            float z = candidate[1];
+
+            return -20 * std::exp(-0.2 * std::sqrt(0.5 * (x * x + z * z))) - std::exp(0.5 * (std::cos(2 * math::PI * x) + std::cos(2 * math::PI * z))) + 20 + std::exp(1);
+        }
+    };
 
     void normalizeAndApplyLut(BufferGeometry& geometry) {
 
@@ -145,6 +161,21 @@ namespace {
 }// namespace
 
 int main() {
+
+    DifferentialEvolution de;
+
+    Ackleys ackleysFunc;
+
+    de.init(ackleysFunc);
+
+    for (int i = 0; i < 100; i++) {
+        auto& cand = de.step(ackleysFunc);
+        auto data = ackleysFunc.denormalize(cand.data());
+
+        std::cout << cand.cost() << ", x=" << data[0] << ", y=" << data[1] << std::endl;
+
+        if (cand.cost() < 1e-4) break;
+    }
 
     Canvas canvas("Lut", {{"aa", 6}});
     GLRenderer renderer(canvas.size());

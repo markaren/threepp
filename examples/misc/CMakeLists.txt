@@ -1,5 +1,8 @@
 
 add_example(NAME "lut" WEB LINK_IMGUI)
+if (TARGET "lut")
+    target_link_libraries("lut" PRIVATE optimization)
+endif ()
 add_example(NAME "raycast")
 add_example(NAME "mouse_key_listener")
 add_example(NAME "clipping" LINK_IMGUI)
