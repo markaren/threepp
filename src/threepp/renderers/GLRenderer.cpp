@@ -1209,7 +1209,7 @@ void GLRenderer::setPixelRatio(int value) {
     this->setSize({pimpl_->_size.width, pimpl_->_size.height});
 }
 
-WindowSize GLRenderer::getSize() const {
+WindowSize GLRenderer::size() const {
 
     return pimpl_->_size;
 }

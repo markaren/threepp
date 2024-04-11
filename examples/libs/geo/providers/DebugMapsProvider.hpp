@@ -44,7 +44,7 @@ namespace threepp {
             renderer->getClearColor(oldColor);
             renderer->setClearColor(Color(Color::green).lerpHSL(Color::red, static_cast<float>(zoom - minZoom) / static_cast<float>(maxZoom - minZoom)));
 
-            auto oldSize = renderer->getSize();
+            auto oldSize = renderer->size();
             renderer->setSize({resolution, resolution});
 
             std::vector<unsigned char> data(resolution * resolution * 4);
@@ -56,7 +56,7 @@ namespace threepp {
             hud.needsUpdate(*text2);
 
             hud.apply(*renderer);
-            renderer->readPixels({}, renderer->getSize(), Format::RGBA, data.data());
+            renderer->readPixels({}, renderer->size(), Format::RGBA, data.data());
             renderer->setSize(oldSize);
             renderer->setClearColor(oldColor);
             renderer->clear();
