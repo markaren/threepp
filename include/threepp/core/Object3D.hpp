@@ -178,7 +178,22 @@ namespace threepp {
 
         // Searches through an object and its children, starting with the object itself, and returns the first with a matching name.
         // Note that for most objects the name is an empty string by default. You will have to set it manually to make use of this method.
-        Object3D* getObjectByName(const std::string& name);
+        template<class T = Object3D>
+        T* getObjectByName(const std::string& name) {
+            if (this->name == name) return dynamic_cast<T*>(this);
+
+            for (const auto& child : this->children) {
+
+                auto object = child->getObjectByName(name);
+
+                if (object) {
+
+                    return dynamic_cast<T*>(object);
+                }
+            }
+
+            return nullptr;
+        }
 
         // Returns a vector representing the position of the object in world space.
         void getWorldPosition(Vector3& target);

@@ -265,23 +265,6 @@ void Object3D::clear() {
     this->children_.clear();
 }
 
-Object3D* Object3D::getObjectByName(const std::string& name) {
-
-    if (this->name == name) return this;
-
-    for (auto& child : this->children) {
-
-        auto object = child->getObjectByName(name);
-
-        if (object) {
-
-            return object;
-        }
-    }
-
-    return nullptr;
-}
-
 void Object3D::getWorldPosition(Vector3& target) {
 
     this->updateWorldMatrix(true, false);
