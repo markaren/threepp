@@ -258,8 +258,24 @@ namespace {
 
 int main() {
 
-//    auto algorithm = std::make_unique<DifferentialEvolution>(50, 0.2f, 0.9f);
-    auto algorithm = std::make_unique<ParticleSwarmOptimization>(30, 0.9f, 1.41f, 1.41f);
+    std::unordered_map<std::string, std::unique_ptr<Optimizer>> algorithms;
+    algorithms.emplace("DifferentialEvolution", std::make_unique<DifferentialEvolution>(50, 0.2f, 0.9f));
+    algorithms.emplace("ParticleSwarmOptimization", std::make_unique<ParticleSwarmOptimization>(30, 0.9f, 1.41f, 1.41f));
+    auto selectedAlgorithm = algorithms.begin()->first;
+
+    std::string selectedFunction;
+    std::unordered_map<std::string, std::unique_ptr<Problem>> functions;
+    functions.emplace("Rosenbrock", std::make_unique<Rosenbruck>());
+    functions.emplace("Ackleys", std::make_unique<Ackleys>());
+    functions.emplace("HolderTable", std::make_unique<HolderTable>());
+    functions.emplace("Rastrigin", std::make_unique<Rastrigin>());
+    functions.emplace("Himmelblaus", std::make_unique<Himmelblaus>());
+    functions.emplace("Beale", std::make_unique<Beale>());
+    functions.emplace("ThreeHumpCamel", std::make_unique<ThreeHumpCamel>());
+    functions.emplace("EggHolder", std::make_unique<EggHolder>());
+    functions.emplace("GoldsteinPrice", std::make_unique<GoldsteinPrice>());
+    functions.emplace("Booth", std::make_unique<Booth>());
+    functions.emplace("Sphere", std::make_unique<SphereFunction>());
 
     Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
 
@@ -294,20 +310,6 @@ int main() {
     solutionMesh->setCount(0);
     scene.add(solutionMesh);
 
-    std::string selectedFunction;
-    std::unordered_map<std::string, std::unique_ptr<Problem>> functions;
-    functions.emplace("Rosenbrock", std::make_unique<Rosenbruck>());
-    functions.emplace("Ackleys", std::make_unique<Ackleys>());
-    functions.emplace("HolderTable", std::make_unique<HolderTable>());
-    functions.emplace("Rastrigin", std::make_unique<Rastrigin>());
-    functions.emplace("Himmelblaus", std::make_unique<Himmelblaus>());
-    functions.emplace("Beale", std::make_unique<Beale>());
-    functions.emplace("ThreeHumpCamel", std::make_unique<ThreeHumpCamel>());
-    functions.emplace("EggHolder", std::make_unique<EggHolder>());
-    functions.emplace("GoldsteinPrice", std::make_unique<GoldsteinPrice>());
-    functions.emplace("Booth", std::make_unique<Booth>());
-    functions.emplace("Sphere", std::make_unique<SphereFunction>());
-
     std::pair<float, float> minmax;
     auto changeFunction = [&](const std::string& name) {
         selectedFunction = name;
@@ -319,7 +321,7 @@ int main() {
         minmax = normalizeAndApplyLut(*planeGeometry);
         normalizeAndApplyLut(*planeGeometry2);
 
-        algorithm->init(func);
+        algorithms[selectedAlgorithm]->init(func);
         auto solutions = func.solutions();
         solutionMesh->setCount(solutions.size());
         for (int i = 0; i < solutions.size(); i++) {
@@ -334,18 +336,29 @@ int main() {
     };
     changeFunction(functions.begin()->first);
 
-    auto instancedMesh = InstancedMesh::create(
+    auto searchSpace = InstancedMesh::create(
             SphereGeometry::create(0.05),
-            MeshBasicMaterial::create({{"color", Color::black}}), algorithm->size());
-    scene.add(instancedMesh);
+            MeshBasicMaterial::create({{"color", Color::black}}), 500);
+    scene.add(searchSpace);
 
     float searchSpeed = 0.7;
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({260, 0}, 0);
+        ImGui::SetNextWindowSize({320, 0}, 0);
 
         ImGui::Begin("Optimization");
         ImGui::SliderFloat("Search speed", &searchSpeed, 0.1, 1);
+        if (ImGui::BeginCombo("Algorithm", selectedAlgorithm.c_str())) {
+            for (const auto& [name, algorithm] : algorithms) {
+                if (ImGui::Selectable(name.c_str())) {
+
+                    selectedAlgorithm = name;
+                    searchSpace->setCount(algorithm->size());
+                    algorithm->init(*functions[selectedFunction]);
+                }
+            }
+            ImGui::EndCombo();
+        }
         if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {
             for (const auto& [name, functor] : functions) {
                 if (ImGui::Selectable(name.c_str())) {
@@ -409,14 +422,14 @@ int main() {
         renderer.setSize(size);
     });
 
-
+    Matrix4 tmp;
     Clock clock;
-    Matrix4 m;
     canvas.animate([&] {
         renderer.render(scene, camera);
         ui.render();
 
-        if (clock.getElapsedTime() > (1-searchSpeed)) {
+        if (clock.getElapsedTime() > (1 - searchSpeed)) {
+            auto& algorithm = algorithms[selectedAlgorithm];
             algorithm->step(*functions[selectedFunction]);
 
             for (auto i = 0; i < algorithm->size(); i++) {
@@ -425,11 +438,11 @@ int main() {
                 float z = math::mapLinear(candidate[1], 0, 1, -gridSize / 2, gridSize / 2);
                 float y = math::mapLinear(functions[selectedFunction]->eval({candidate[0], candidate[1]}), minmax.first, minmax.second, 0, maxHeight);
 
-                instancedMesh->setMatrixAt(i, m.setPosition(x, y, z));
+                searchSpace->setMatrixAt(i, tmp.setPosition(x, y, z));
             }
 
-            instancedMesh->instanceMatrix()->needsUpdate();
-            instancedMesh->computeBoundingSphere();
+            searchSpace->instanceMatrix()->needsUpdate();
+            searchSpace->computeBoundingSphere();
             clock.start();
         }
     });
