@@ -69,10 +69,11 @@ namespace {
 
 int main() {
 
+
     std::unordered_map<std::string, std::unique_ptr<Optimizer>> algorithms;
     algorithms.emplace("DifferentialEvolution", std::make_unique<DifferentialEvolution>(50, 0.2f, 0.9f));
     algorithms.emplace("ParticleSwarmOptimization", std::make_unique<ParticleSwarmOptimization>(30, 0.9f, 1.41f, 1.41f));
-    auto selectedAlgorithm = algorithms.begin()->first;
+    std::string selectedAlgorithm = algorithms.begin()->first;
 
     std::string selectedFunction;
     std::unordered_map<std::string, std::unique_ptr<Problem>> functions;
@@ -121,10 +122,18 @@ int main() {
     solutionMesh->setCount(0);
     scene.add(solutionMesh);
 
+    auto searchSpace = InstancedMesh::create(
+            SphereGeometry::create(0.05),
+            MeshBasicMaterial::create({{"color", Color::black}}), 500);
+    searchSpace->setCount(algorithms[selectedAlgorithm]->size());
+    scene.add(searchSpace);
+
+
     std::pair<float, float> minmax;
     auto changeFunction = [&](const std::string& name) {
         selectedFunction = name;
-        Problem& func = *functions[name];
+
+        Problem& func = *functions[selectedFunction];
 
         applyFunc(*planeGeometry, func);
         applyFunc(*planeGeometry2, func);
@@ -133,24 +142,30 @@ int main() {
         normalizeAndApplyLut(*planeGeometry2);
 
         algorithms[selectedAlgorithm]->init(func);
-        auto solutions = func.solutions();
+        const auto solutions = func.solutions();
         solutionMesh->setCount(solutions.size());
+        Matrix4 tmp;
         for (int i = 0; i < solutions.size(); i++) {
             auto solution = func.normalize(solutions[i]);
             float solutionX = math::mapLinear(solution[0], 0, 1, -gridSize / 2, gridSize / 2);
             float solutionZ = math::mapLinear(solution[1], 0, 1, -gridSize / 2, gridSize / 2);
 
-            solutionMesh->setMatrixAt(i, Matrix4().setPosition(solutionX, maxHeight / 2, solutionZ));
+            solutionMesh->setMatrixAt(i, tmp.setPosition(solutionX, maxHeight / 2, solutionZ));
         }
         solutionMesh->instanceMatrix()->needsUpdate();
         solutionMesh->computeBoundingSphere();
     };
     changeFunction(functions.begin()->first);
 
-    auto searchSpace = InstancedMesh::create(
-            SphereGeometry::create(0.05),
-            MeshBasicMaterial::create({{"color", Color::black}}), 500);
-    scene.add(searchSpace);
+
+    auto changeAlgorithm = [&](const std::string& name){
+        selectedAlgorithm = name;
+
+        auto& algorithm = algorithms[name];
+        searchSpace->setCount(algorithm->size());
+        algorithm->init(*functions[selectedFunction]);
+    };
+
 
     float searchSpeed = 0.7;
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
@@ -163,9 +178,7 @@ int main() {
             for (const auto& [name, algorithm] : algorithms) {
                 if (ImGui::Selectable(name.c_str())) {
 
-                    selectedAlgorithm = name;
-                    searchSpace->setCount(algorithm->size());
-                    algorithm->init(*functions[selectedFunction]);
+                    changeAlgorithm(name);
                 }
             }
             ImGui::EndCombo();
