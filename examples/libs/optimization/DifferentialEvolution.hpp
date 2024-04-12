@@ -9,15 +9,19 @@ public:
     explicit DifferentialEvolution(size_t pop_size = 100, float mut_factor = 0.2, float cross_prob = 0.9)
         : populationSize(pop_size), differentialWeight(mut_factor), crossoverProbability(cross_prob) {}
 
+    [[nodiscard]] size_t size() const override {
+        return populationSize;
+    }
+
+    [[nodiscard]] const Candidate& getCandiateAt(size_t index) const override {
+        return population.at(index);
+    }
+
     void init(const Problem& problem) override {
         population.clear();
         for (int i = 0; i < populationSize; i++) {
             population.emplace_back(problem.generateCandidate());
         }
-    }
-
-    [[nodiscard]] const std::vector<Candidate>& getPopulation() const {
-        return population;
     }
 
     const Candidate& step(const Problem& problem) override {
@@ -28,7 +32,7 @@ public:
             const auto mutatedData = mutate(i);
             const auto mutatedCost = problem.eval(mutatedData);
             if (mutatedCost < candidate.cost()) {
-                candidate = {mutatedData, mutatedCost};
+                candidate.set(mutatedData, mutatedCost);
             }
             if (candidate.cost() < best.second) {
                 best = {i, candidate.cost()};

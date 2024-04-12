@@ -8,6 +8,7 @@
 #include <iostream>
 
 #include "optimization/DifferentialEvolution.hpp"
+#include "optimization/ParticleSwarmOptimization.hpp"
 
 using namespace threepp;
 
@@ -257,7 +258,8 @@ namespace {
 
 int main() {
 
-    DifferentialEvolution de(50, 0.2, 0.9);
+//    auto algorithm = std::make_unique<DifferentialEvolution>(50, 0.2f, 0.9f);
+    auto algorithm = std::make_unique<ParticleSwarmOptimization>(30, 0.9f, 1.41f, 1.41f);
 
     Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
 
@@ -317,7 +319,7 @@ int main() {
         minmax = normalizeAndApplyLut(*planeGeometry);
         normalizeAndApplyLut(*planeGeometry2);
 
-        de.init(func);
+        algorithm->init(func);
         auto solutions = func.solutions();
         solutionMesh->setCount(solutions.size());
         for (int i = 0; i < solutions.size(); i++) {
@@ -334,15 +336,15 @@ int main() {
 
     auto instancedMesh = InstancedMesh::create(
             SphereGeometry::create(0.05),
-            MeshBasicMaterial::create({{"color", Color::black}}), de.getPopulation().size());
+            MeshBasicMaterial::create({{"color", Color::black}}), algorithm->size());
     scene.add(instancedMesh);
 
     float searchSpeed = 0.7;
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({260, 0}, 0);
 
-        ImGui::Begin("Lut");
+        ImGui::Begin("Optimization");
         ImGui::SliderFloat("Search speed", &searchSpeed, 0.1, 1);
         if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {
             for (const auto& [name, functor] : functions) {
@@ -415,12 +417,13 @@ int main() {
         ui.render();
 
         if (clock.getElapsedTime() > (1-searchSpeed)) {
-            de.step(*functions[selectedFunction]);
-            const auto& population = de.getPopulation();
-            for (auto i = 0; i < population.size(); i++) {
-                float x = math::mapLinear(population[i].data()[0], 0, 1, -gridSize / 2, gridSize / 2);
-                float z = math::mapLinear(population[i].data()[1], 0, 1, -gridSize / 2, gridSize / 2);
-                float y = math::mapLinear(functions[selectedFunction]->eval({population[i].data()[0], population[i].data()[1]}), minmax.first, minmax.second, 0, maxHeight);
+            algorithm->step(*functions[selectedFunction]);
+
+            for (auto i = 0; i < algorithm->size(); i++) {
+                const auto& candidate = algorithm->getCandiateAt(i).data();
+                float x = math::mapLinear(candidate[0], 0, 1, -gridSize / 2, gridSize / 2);
+                float z = math::mapLinear(candidate[1], 0, 1, -gridSize / 2, gridSize / 2);
+                float y = math::mapLinear(functions[selectedFunction]->eval({candidate[0], candidate[1]}), minmax.first, minmax.second, 0, maxHeight);
 
                 instancedMesh->setMatrixAt(i, m.setPosition(x, y, z));
             }

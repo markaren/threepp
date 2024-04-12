@@ -8,21 +8,30 @@
 #include <cmath>
 #include <random>
 
-class Range {
-    float lower;
-    float upper;
+class Constraint {
 
 public:
-    Range(float lower, float upper)
-        : lower(lower), upper(upper) {}
+    Constraint(float lower, float upper)
+        : lower_(lower), upper_(upper) {}
+
+    [[nodiscard]] float lower() const {
+        return lower_;
+    }
+    [[nodiscard]] float upper() const {
+        return upper_;
+    }
 
     [[nodiscard]] float normalize(float value) const {
-        return (value - lower) / (upper - lower);
+        return (value - lower_) / (upper_ - lower_);
     }
 
     [[nodiscard]] float denormalize(float value) const {
-        return (value) * (upper - lower) / 1 + lower;
+        return (value) * (upper_ - lower_) / 1 + lower_;
     }
+
+private:
+    float lower_;
+    float upper_;
 };
 
 class Candidate {
@@ -55,6 +64,15 @@ public:
         return candidate_;
     }
 
+    void set(const std::vector<float>& candidate, float cost) {
+        candidate_ = candidate;
+        cost_ = cost;
+    }
+
+    void setCost(float cost) {
+        cost_ = cost;
+    }
+
     bool operator<(const Candidate& other) const {
 
         return cost_ < other.cost_;
@@ -68,10 +86,10 @@ private:
 class Problem {
 
 public:
-    Problem(int dimensions, const Range& bounds)
-        : Problem(dimensions, std::vector<Range>(dimensions, bounds)) {}
+    Problem(int dimensions, const Constraint& bounds)
+        : Problem(dimensions, std::vector<Constraint>(dimensions, bounds)) {}
 
-    Problem(int dimensions, std::vector<Range> bounds)
+    Problem(int dimensions, std::vector<Constraint> bounds)
         : dimensions_(dimensions),
           bounds_(std::move(bounds)) {}
 
@@ -120,9 +138,8 @@ public:
         for (auto& value : candidate) {
             value = dis(gen);
         }
-        auto fitness = eval(candidate);
 
-        return {candidate, fitness};
+        return {candidate,  eval(candidate)};
     }
 
     [[nodiscard]] virtual std::vector<std::vector<float>> solutions() const = 0;
@@ -134,7 +151,7 @@ protected:
 
 private:
     int dimensions_;
-    std::vector<Range> bounds_;
+    std::vector<Constraint> bounds_;
 };
 
 #endif//THREEPP_PROBLEM_HPP
