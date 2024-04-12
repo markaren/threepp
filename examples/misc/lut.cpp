@@ -337,11 +337,13 @@ int main() {
             MeshBasicMaterial::create({{"color", Color::black}}), de.getPopulation().size());
     scene.add(instancedMesh);
 
+    float searchSpeed = 0.7;
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
 
         ImGui::Begin("Lut");
+        ImGui::SliderFloat("Search speed", &searchSpeed, 0.1, 1);
         if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {
             for (const auto& [name, functor] : functions) {
                 if (ImGui::Selectable(name.c_str())) {
@@ -412,7 +414,7 @@ int main() {
         renderer.render(scene, camera);
         ui.render();
 
-        if (clock.getElapsedTime() > 0.1) {
+        if (clock.getElapsedTime() > (1-searchSpeed)) {
             de.step(*functions[selectedFunction]);
             const auto& population = de.getPopulation();
             for (auto i = 0; i < population.size(); i++) {
