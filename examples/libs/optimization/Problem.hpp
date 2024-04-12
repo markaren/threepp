@@ -1,6 +1,3 @@
-//
-// Created by Lars Ivar Hatledal on 11.04.2024.
-//
 
 #ifndef THREEPP_PROBLEM_HPP
 #define THREEPP_PROBLEM_HPP
@@ -71,7 +68,7 @@ private:
 class Problem {
 
 public:
-    Problem(int dimensions, Range bounds)
+    Problem(int dimensions, const Range& bounds)
         : Problem(dimensions, std::vector<Range>(dimensions, bounds)) {}
 
     Problem(int dimensions, std::vector<Range> bounds)
@@ -81,6 +78,19 @@ public:
     [[nodiscard]] int dimensions() const {
 
         return dimensions_;
+    }
+
+    [[nodiscard]] std::vector<float> normalize(const std::vector<float>& candidate) const {
+
+        assert(candidate.size() == dimensions_);
+
+        std::vector<float> normalized(dimensions_);
+        for (auto i = 0; i < dimensions_; i++) {
+            float value = candidate[i];
+            normalized[i] = bounds_[i].normalize(value);
+        }
+
+        return normalized;
     }
 
     [[nodiscard]] std::vector<float> denormalize(const std::vector<float>& candidate) const {
@@ -106,11 +116,16 @@ public:
         static std::mt19937 gen(rd());
         static std::uniform_real_distribution<float> dis(0.0, 1.0);
 
-        auto candidate = std::vector<float>(dimensions_, dis(gen));
+        auto candidate = std::vector<float>(dimensions_);
+        for (auto& value : candidate) {
+            value = dis(gen);
+        }
         auto fitness = eval(candidate);
 
         return {candidate, fitness};
     }
+
+    [[nodiscard]] virtual std::vector<std::vector<float>> solutions() const = 0;
 
     virtual ~Problem() = default;
 
