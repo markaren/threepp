@@ -29,6 +29,14 @@ add_library(pathfinding INTERFACE
 )
 target_include_directories(pathfinding INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 
+add_library(optimization INTERFACE
+        "${CMAKE_CURRENT_SOURCE_DIR}/optimization/DifferentialEvolution.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/optimization/ParticleSwarmOptimization.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/optimization/Problem.hpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/optimization/Optimizer.hpp"
+)
+target_include_directories(optimization INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+
 if (CURL_FOUND)
     add_library(geothreepp
             "${CMAKE_CURRENT_SOURCE_DIR}/geo/lod/LODControl.hpp"

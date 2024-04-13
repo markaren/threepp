@@ -246,10 +246,10 @@ int main() {
         }
 
         if (key) {
+            if (*key >= functions.size()) return;
+
             auto it = functions.begin();
             std::advance(it, *key);
-
-            if (it == functions.end()) return;
 
             changeFunction(it->first);
         }
