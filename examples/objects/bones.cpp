@@ -104,7 +104,7 @@ namespace {
         Sizing sizing{segmentHeight, segmentCount, height, halfHeight};
 
         auto geometry = createGeometry(sizing);
-        geometry->applyMatrix4(Matrix4().makeTranslation(0,halfHeight,0));
+        geometry->applyMatrix4(Matrix4().makeTranslation(0, halfHeight, 0));
         auto bones = createBones(sizing);
 
         auto mesh = createMesh(geometry, bones);

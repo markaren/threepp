@@ -42,8 +42,8 @@ int main() {
     Reflector::Options opt;
     opt.clipBias = 0.003f;
     opt.color = 0x777777;
-    opt.textureWidth = 1024*2;
-    opt.textureHeight = 1024*2;
+    opt.textureWidth = 1024 * 2;
+    opt.textureHeight = 1024 * 2;
     auto reflector = Reflector::create(PlaneGeometry::create(10, 10), opt);
     reflector->rotateX(math::degToRad(-90));
     reflector->position.setY(-2.5f);

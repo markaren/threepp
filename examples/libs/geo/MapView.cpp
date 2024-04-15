@@ -61,8 +61,8 @@ MapProvider* MapView::getProvider() const {
 
 void MapView::reload() {
     traverse([&](Object3D& object) {
-      if (auto node = object.as<MapNode>()) {
-          node->initialize();
-      }
+        if (auto node = object.as<MapNode>()) {
+            node->initialize();
+        }
     });
 }

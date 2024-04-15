@@ -232,7 +232,7 @@ int main() {
             renderer.invokeLater([&, obj] {
                 scene.remove(*obj);
             },
-                               2);// remove after 2 seconds
+                                 2);// remove after 2 seconds
         } else if (evt.key == Key::D) {
             engine.debugVisualisation = !engine.debugVisualisation;
         }

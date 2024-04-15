@@ -158,7 +158,7 @@ int main() {
     changeFunction(functions.begin()->first);
 
 
-    auto changeAlgorithm = [&](const std::string& name){
+    auto changeAlgorithm = [&](const std::string& name) {
         selectedAlgorithm = name;
 
         auto& algorithm = algorithms[name];

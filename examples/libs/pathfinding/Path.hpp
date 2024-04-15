@@ -5,11 +5,11 @@
 
 #include "Coordinate.hpp"
 
+#include <algorithm>
 #include <ostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <algorithm>
 
 /**
  * A path determined by some path finding algorithm. A series of steps from
@@ -36,7 +36,7 @@ public:
      *
 	 * @return The step information, the position on the map.
 	 */
-    const Coordinate &operator[](size_t index) const {
+    const Coordinate& operator[](size_t index) const {
 
         if (index >= steps_.size()) {
             throw std::runtime_error("Index out of bounds: " + std::to_string(index));
@@ -49,17 +49,17 @@ public:
 	 *
 	 * @param c The coordinate of the new step
 	 */
-    void prependStep(const Coordinate &c) {
+    void prependStep(const Coordinate& c) {
 
         steps_.insert(steps_.begin(), c);
     }
 
-    [[nodiscard]] const Coordinate &start() const {
+    [[nodiscard]] const Coordinate& start() const {
 
         return steps_.front();
     }
 
-    [[nodiscard]] const Coordinate &target() const {
+    [[nodiscard]] const Coordinate& target() const {
 
         return steps_.back();
     }
@@ -70,7 +70,7 @@ public:
      *
      * @return True if contains the coordinate, false otherwise
      */
-    [[nodiscard]] bool contains(const Coordinate &c) {
+    [[nodiscard]] bool contains(const Coordinate& c) {
 
         return std::find(steps_.begin(), steps_.end(), c) != std::end(steps_);
     }

@@ -86,7 +86,7 @@ int main() {
     controls.addEventListener("hoveron", &hoverListener);
     controls.addEventListener("hoveroff", &hoverListener);
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt){
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::M) {
             if (controls.mode == DragControls::Mode::Translate) {
                 controls.mode = DragControls::Mode::Rotate;

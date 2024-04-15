@@ -113,7 +113,6 @@ struct Youbot: Object3D, KeyListener {
     }
 
 private:
-
     struct KeyState {
         bool left = false;
         bool right = false;
