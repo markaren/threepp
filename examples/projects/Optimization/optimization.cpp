@@ -91,7 +91,7 @@ int main() {
 
     Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
 
-    Canvas canvas("Lut", {{"aa", 6}});
+    Canvas canvas("Optimization", {{"aa", 6}});
     GLRenderer renderer(canvas.size());
 
     Scene scene;
