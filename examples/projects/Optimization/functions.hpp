@@ -4,9 +4,7 @@
 
 #include "optimization/Problem.hpp"
 
-namespace {
-    const float PI = 3.14159265358979323846f;
-}
+#include <numbers>
 
 struct Ackleys: Problem {
 
@@ -17,7 +15,7 @@ struct Ackleys: Problem {
         float x = candidate[0];
         float z = candidate[1];
 
-        return -20 * std::exp(-0.2 * std::sqrt(0.5 * (x * x + z * z))) - std::exp(0.5 * (std::cos(2 * PI * x) + std::cos(2 * PI * z))) + 20 + std::exp(1);
+        return -20 * std::exp(-0.2 * std::sqrt(0.5 * (x * x + z * z))) - std::exp(0.5 * (std::cos(2 * std::numbers::pi * x) + std::cos(2 * std::numbers::pi * z))) + 20 + std::exp(1);
     }
 
     [[nodiscard]] std::vector<std::vector<float>> solutions() const override {
@@ -52,7 +50,7 @@ struct HolderTable: Problem {
         float x = candidate[0];
         float z = candidate[1];
 
-        return -std::abs(std::sin(x) * std::cos(z) * std::exp(std::abs(1 - std::sqrt(x * x + z * z) / PI)));
+        return -std::abs(std::sin(x) * std::cos(z) * std::exp(std::abs(1 - std::sqrt(x * x + z * z) / std::numbers::pi)));
     }
 
     [[nodiscard]] std::vector<std::vector<float>> solutions() const override {
@@ -69,7 +67,7 @@ struct Rastrigin: Problem {
         float x = candidate[0];
         float z = candidate[1];
 
-        return 20 + x * x - 10 * std::cos(2 * PI * x) + z * z - 10 * std::cos(2 * PI * z);
+        return 20 + x * x - 10 * std::cos(2 * std::numbers::pi * x) + z * z - 10 * std::cos(2 * std::numbers::pi * z);
     }
 
     [[nodiscard]] std::vector<std::vector<float>> solutions() const override {
