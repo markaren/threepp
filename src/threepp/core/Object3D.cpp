@@ -147,14 +147,14 @@ Object3D& Object3D::translateZ(float distance) {
 
 void Object3D::localToWorld(Vector3& vector) {
 
-    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
+    this->updateWorldMatrix(true, false);// https://github.com/mrdoob/three.js/pull/25097
 
     vector.applyMatrix4(*this->matrixWorld);
 }
 
 void Object3D::worldToLocal(Vector3& vector) {
 
-    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
+    this->updateWorldMatrix(true, false);// https://github.com/mrdoob/three.js/pull/25097
 
     Matrix4 _m1{};
 
@@ -202,16 +202,8 @@ void Object3D::lookAt(float x, float y, float z) {
 
 void Object3D::add(const std::shared_ptr<Object3D>& object) {
 
-    if (object->parent) {
-
-        object->parent->remove(*object);
-    }
-
-    object->parent = this;
     this->children_.emplace_back(object);
-    this->children.emplace_back(object.get());
-
-    object->dispatchEvent("added");
+    add(*object);
 }
 
 void Object3D::add(Object3D& object) {
@@ -273,23 +265,6 @@ void Object3D::clear() {
     this->children_.clear();
 }
 
-Object3D* Object3D::getObjectByName(const std::string& name) {
-
-    if (this->name == name) return this;
-
-    for (auto& child : this->children) {
-
-        auto object = child->getObjectByName(name);
-
-        if (object) {
-
-            return object;
-        }
-    }
-
-    return nullptr;
-}
-
 void Object3D::getWorldPosition(Vector3& target) {
 
     this->updateWorldMatrix(true, false);
@@ -330,9 +305,9 @@ void Object3D::traverse(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    for (auto& i : children) {
+    for (auto& c : children) {
 
-        i->traverse(callback);
+        c->traverse(callback);
     }
 }
 
@@ -342,9 +317,9 @@ void Object3D::traverseVisible(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    for (auto& i : children) {
+    for (auto& c : children) {
 
-        i->traverseVisible(callback);
+        c->traverseVisible(callback);
     }
 }
 
@@ -450,20 +425,12 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
     if (recursive) {
 
-        for (auto& child : source.children) {
+        for (const auto& child : source.children) {
 
             auto clone = child->clone();
             this->add(clone);
         }
     }
-}
-
-std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
-
-    auto clone = std::make_shared<Object3D>();
-    clone->copy(*this, recursive);
-
-    return clone;
 }
 
 Object3D::Object3D(Object3D&& source) noexcept: Object3D() {

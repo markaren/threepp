@@ -52,7 +52,7 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(0, 100, 175);
 
-    float sep = 40;
+    float sep = 50;
     AssimpLoader loader;
     auto glb = loadGlb(loader);
     auto obj = loadObj(loader);

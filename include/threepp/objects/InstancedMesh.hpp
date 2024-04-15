@@ -12,14 +12,21 @@ namespace threepp {
     class InstancedMesh: public Mesh {
 
     public:
-        const size_t count;
-        std::unique_ptr<FloatBufferAttribute> instanceMatrix;
-        std::unique_ptr<FloatBufferAttribute> instanceColor = nullptr;
+        std::optional<Sphere> boundingSphere;
+        std::optional<Box3> boundingBox;
 
         InstancedMesh(
                 std::shared_ptr<BufferGeometry> geometry,
                 std::shared_ptr<Material> material,
                 size_t count);
+
+        [[nodiscard]] size_t count() const;
+
+        void setCount(size_t count);
+
+        [[nodiscard]] FloatBufferAttribute* instanceMatrix() const;
+
+        [[nodiscard]] FloatBufferAttribute* instanceColor() const;
 
         [[nodiscard]] std::string type() const override;
 
@@ -31,9 +38,13 @@ namespace threepp {
 
         void setMatrixAt(size_t index, const Matrix4& matrix) const;
 
+        void computeBoundingBox();
+
+        void computeBoundingSphere();
+
         void dispose();
 
-        void raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) override;
+        void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) override;
 
         static std::shared_ptr<InstancedMesh> create(
                 std::shared_ptr<BufferGeometry> geometry,
@@ -46,6 +57,19 @@ namespace threepp {
         Mesh _mesh;
         bool disposed{false};
 
+        size_t count_;
+        size_t maxCount_;
+
+        std::unique_ptr<FloatBufferAttribute> instanceMatrix_;
+        std::unique_ptr<FloatBufferAttribute> instanceColor_ = nullptr;
+
+        Matrix4 _instanceLocalMatrix;
+        Matrix4 _instanceWorldMatrix;
+
+        Sphere _sphere;
+        Box3 _box3;
+
+        std::vector<Intersection> _instanceIntersects;
     };
 
 }// namespace threepp

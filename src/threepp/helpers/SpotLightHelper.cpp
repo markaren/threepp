@@ -11,11 +11,11 @@ using namespace threepp;
 
 
 SpotLightHelper::SpotLightHelper(SpotLight& light, std::optional<Color> color)
-    : light(light), color(color) {
+    : light(&light), color(color) {
 
-    this->light.updateMatrixWorld();
+    this->light->updateMatrixWorld();
 
-    this->matrix = this->light.matrixWorld;
+    this->matrix = this->light->matrixWorld;
     this->matrixAutoUpdate = false;
 
     auto geometry = BufferGeometry::create();
@@ -43,8 +43,9 @@ SpotLightHelper::SpotLightHelper(SpotLight& light, std::optional<Color> color)
     material->fog = false;
     material->toneMapped = false;
 
-    this->cone = LineSegments::create(geometry, material);
-    this->add(this->cone);
+    auto _cone = LineSegments::create(geometry, material);
+    this->cone = _cone.get();
+    this->add(_cone);
 
     this->update();
 }
@@ -56,15 +57,15 @@ std::shared_ptr<SpotLightHelper> SpotLightHelper::create(SpotLight& light, std::
 
 void SpotLightHelper::update() {
 
-    this->light.updateMatrixWorld();
+    this->light->updateMatrixWorld();
 
-    const auto coneLength = (this->light.distance > 0) ? this->light.distance : 1000;
-    const auto coneWidth = coneLength * std::tan(this->light.angle);
+    const auto coneLength = (this->light->distance > 0) ? this->light->distance : 1000;
+    const auto coneWidth = coneLength * std::tan(this->light->angle);
 
     this->cone->scale.set(coneWidth, coneWidth, coneLength);
 
     static Vector3 _vector;
-    _vector.setFromMatrixPosition(*this->light.target->matrixWorld);
+    _vector.setFromMatrixPosition(*this->light->target().matrixWorld);
 
     this->cone->lookAt(_vector);
 
@@ -74,12 +75,6 @@ void SpotLightHelper::update() {
 
     } else {
 
-        this->cone->material()->as<MaterialWithColor>()->color.copy(this->light.color);
+        this->cone->material()->as<MaterialWithColor>()->color.copy(this->light->color);
     }
-}
-
-SpotLightHelper::~SpotLightHelper() {
-
-    this->cone->geometry()->dispose();
-    this->cone->material()->dispose();
 }

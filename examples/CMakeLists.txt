@@ -1,15 +1,16 @@
 
+include(AddExample.cmake)
 include(LibConfig.cmake)
 
-add_executable(demo demo.cpp)
-target_link_libraries(demo PRIVATE threepp)
-if (imgui_FOUND)
-    target_link_libraries(demo PRIVATE imgui::imgui)
-endif ()
+add_subdirectory(libs)
+
+add_example(NAME "demo" LINK_IMGUI WEB WEB_EMBED
+        "../data/fonts@data/fonts"
+)
 
 add_subdirectory(animation)
 add_subdirectory(audio)
-add_subdirectory(bullet)
+add_subdirectory(controls)
 add_subdirectory(extras)
 add_subdirectory(geometries)
 add_subdirectory(helpers)

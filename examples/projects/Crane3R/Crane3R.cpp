@@ -10,55 +10,55 @@ using namespace threepp;
 
 namespace {
 
-    std::shared_ptr<Group> make_house_attachment(int i, float len, const Vector3& p) {
+    std::shared_ptr<Group> make_house_attachment(int i, float len, float sep, const Vector3& p) {
 
         auto material = MeshPhongMaterial::create();
-        material->color = threepp::Color::gray;
+        material->color = Color::gray;
 
         float radius = 0.1f;
-        auto geometry = threepp::CylinderGeometry::create(radius, radius, len);
+        auto geometry = CylinderGeometry::create(radius, radius, len);
         geometry->translate(0, len / 2, 0);
-        geometry->rotateX(threepp::math::PI / 2);
+        geometry->rotateX(math::PI / 2);
 
-        auto group = threepp::Group::create();
+        auto group = Group::create();
         group->name = "house" + std::to_string(i);
         group->position.copy(p);
 
-        auto cyl1 = threepp::Mesh::create(geometry, material);
-        auto cyl2 = threepp::Mesh::create(geometry, material);
-        cyl1->position.x = 0.34f;
-        cyl2->position.x = -0.34f;
+        auto cyl1 = Mesh::create(geometry, material);
+        auto cyl2 = Mesh::create(geometry, material);
+        cyl1->position.x = sep/2;
+        cyl2->position.x = -sep/2;
         group->add(cyl1);
         group->add(cyl2);
 
         return group;
     }
 
-    std::shared_ptr<Group> make_rod_attachment(int i, float len, const Vector3& p) {
+    std::shared_ptr<Group> make_rod_attachment(int i, float len, float sep, const Vector3& p) {
 
-        auto material = threepp::MeshPhongMaterial::create();
-        material->color = threepp::Color::grey;
+        auto material = MeshPhongMaterial::create();
+        material->color = Color::grey;
 
         float radius = 0.075f;
-        auto geometry = threepp::CylinderGeometry::create(radius, radius, len);
+        auto geometry = CylinderGeometry::create(radius, radius, len);
         geometry->translate(0, len / 2, 0);
-        geometry->rotateX(threepp::math::PI / 2);
+        geometry->rotateX(math::PI / 2);
 
-        auto group = threepp::Group::create();
+        auto group = Group::create();
         group->name = "rod" + std::to_string(i);
         group->position.copy(p);
 
-        auto cyl1 = threepp::Mesh::create(geometry, material);
-        auto cyl2 = threepp::Mesh::create(geometry, material);
-        cyl1->position.x = 0.34f;
-        cyl2->position.x = -0.34f;
+        auto cyl1 = Mesh::create(geometry, material);
+        auto cyl2 = Mesh::create(geometry, material);
+        cyl1->position.x = sep/2;
+        cyl2->position.x = -sep/2;
         group->add(cyl1);
         group->add(cyl2);
 
         return group;
     }
 
-    void updateCylinders(std::array<std::pair<threepp::Object3D*, threepp::Object3D*>, 2> cylinders) {
+    void updateCylinders(std::array<std::pair<Object3D*, Object3D*>, 2> cylinders) {
         Vector3 tmp;
         for (const auto& cylinder : cylinders) {
 
@@ -75,7 +75,7 @@ namespace {
 
 }// namespace
 
-Crane3R::Crane3R(const std::shared_ptr<threepp::Group>& obj) {
+Crane3R::Crane3R(const std::shared_ptr<Group>& obj) {
 
     parts_[0] = obj->getObjectByName("part1");
     parts_[1] = obj->getObjectByName("part2");
@@ -98,7 +98,6 @@ Crane3R::Crane3R(const std::shared_ptr<threepp::Group>& obj) {
 
 std::shared_ptr<Crane3R> Crane3R::create() {
 
-
     auto parent = Group::create();
 
     OBJLoader loader;
@@ -115,11 +114,11 @@ std::shared_ptr<Crane3R> Crane3R::create() {
     part2->name = "part2";
     part3->name = "part3";
 
-    part1->add(make_house_attachment(1, 2.05f, {0.68, 0, 2.85}));
-    part2->add(make_house_attachment(2, 2.05f, {4.2, 0, -0.78}));
+    part1->add(make_house_attachment(1, 2.05f, 0.64f, {0.68, 0, 2.85}));
+    part2->add(make_house_attachment(2, 2.05f, 0.5f, {4.2, 0, -0.78}));
 
-    part2->add(make_rod_attachment(1, 2.05f, {2.695, 0, -0.85}));
-    part3->add(make_rod_attachment(2, 2.05f, {0.98, 0, 0.2}));
+    part2->add(make_rod_attachment(1, 2.05f, 0.64f, {2.695, 0, -0.85}));
+    part3->add(make_rod_attachment(2, 2.05f, 0.5f, {0.98, 0, 0.2}));
 
     parent->add(part1);
     parent->rotateY(-math::PI / 2);
@@ -132,9 +131,9 @@ std::shared_ptr<Crane3R> Crane3R::create() {
 std::vector<Angle> Crane3R::getValues() const {
 
     std::vector<Angle> angles{
-            Angle::radians(parts_[0]->rotation.z()),
-            Angle::radians(parts_[1]->rotation.y()),
-            Angle::radians(parts_[2]->rotation.y()),
+            Angle::radians(parts_[0]->rotation.z),
+            Angle::radians(parts_[1]->rotation.y),
+            Angle::radians(parts_[2]->rotation.y),
     };
 
     return angles;
@@ -185,9 +184,10 @@ void Crane3R::Controller::update(float dt) {
     if (mode_ == POSITION) {
         for (unsigned i = 0; i < 3; ++i) {
             auto& pid = pids_[i];
-            auto& act = actuators_[i];
-            auto v = pid.regulate(targetValues[i], act->getProcessOutput(), dt);
-            act->setGain(v);
+            const auto& act = actuators_[i];
+            float error = targetValues[i] - act->getProcessOutput();
+            auto gain = std::clamp(pid.regulate(error, dt), -1.f, 1.f);
+            act->setGain(gain);
         }
     } else {
         for (unsigned i = 0; i < 3; ++i) {

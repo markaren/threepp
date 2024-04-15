@@ -2,7 +2,11 @@
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/core/InterleavedBufferAttribute.hpp"
 
+#ifndef EMSCRIPTEN
 #include <glad/glad.h>
+#else
+#include <GLES3/gl3.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -35,7 +39,7 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
         throw std::runtime_error("TODO");
     }
 
-    return {buffer, type, bytesPerElement, attribute->version + 1};
+    return {buffer, type, bytesPerElement, attribute->version};// attribute->version + 1 (?)
 }
 
 void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenum bufferType, int bytesPerElement) {
@@ -110,6 +114,8 @@ void GLAttributes::remove(BufferAttribute* attribute) {
         buffers_.erase(attribute);
     }
 }
+
+#include <iostream>
 
 void GLAttributes::update(BufferAttribute* attribute, GLenum bufferType) {
 

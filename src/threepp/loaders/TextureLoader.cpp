@@ -60,7 +60,7 @@ struct TextureLoader::Impl {
 
         auto image = imageLoader_.load(path, isJPEG ? 3 : 4, flipY);
 
-        auto texture = Texture::create(image);
+        auto texture = Texture::create(*image);
         texture->name = path.stem().string();
 
         texture->format = isJPEG ? Format::RGB : Format::RGBA;
@@ -82,7 +82,7 @@ struct TextureLoader::Impl {
 
         auto image = imageLoader_.load(data, isJPEG ? 3 : 4, flipY);
 
-        auto texture = Texture::create(image);
+        auto texture = Texture::create(*image);
         texture->name = name;
 
         texture->format = isJPEG ? Format::RGB : Format::RGBA;

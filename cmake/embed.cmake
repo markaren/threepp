@@ -102,3 +102,31 @@ file(WRITE "${favicon_out}"
         "#define THREEPP_FAVICON_HPP\n\n")
 file(APPEND "${favicon_out}" "${header_content}")
 file(APPEND "${favicon_out}" "\n\n#endif\n")
+
+
+############################################
+# fonts
+############################################
+
+set(embeddedFonts_out "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp")
+
+set(fontName "helvetiker_bold")
+set(fontFile "${PROJECT_SOURCE_DIR}/data/fonts/${fontName}.typeface.json")
+file(READ ${fontFile} FILE_CONTENTS HEX)
+string(REGEX REPLACE "(..)" "0x\\0," FILE_CONTENTS "${FILE_CONTENTS}")
+get_filename_component(fontName ${fontFile} NAME)
+
+file(WRITE ${embeddedFonts_out}
+        "#include \"threepp/loaders/FontLoader.hpp\"\n\n"
+
+        "#include <vector>\n\n"
+
+        "using namespace threepp;\n\n"
+
+        "// ${fontName}\n"
+        "const std::vector<unsigned char> data{${FILE_CONTENTS}};\n\n"
+
+        "Font FontLoader::defaultFont() {\n"
+        "\treturn *load(data);\n"
+        "}\n"
+)

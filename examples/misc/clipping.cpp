@@ -1,8 +1,6 @@
 // https://threejs.org/examples/?q=clipping#webgl_clipping
 
 #include "threepp/geometries/TorusKnotGeometry.hpp"
-#include "threepp/lights/DirectionalLightShadow.hpp"
-#include "threepp/lights/SpotLightShadow.hpp"
 #include "threepp/threepp.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"

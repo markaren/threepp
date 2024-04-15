@@ -7,69 +7,67 @@
 
 using namespace threepp;
 
-struct wasd {
-    bool left = false;
-    bool right = false;
-    bool up = false;
-    bool down = false;
-};
 
 struct Youbot: Object3D, KeyListener {
 
     void onKeyPressed(KeyEvent evt) override {
         if (evt.key == Key::W) {
-            wasd_.up = true;
+            keyState_.up = true;
         } else if (evt.key == Key::S) {
-            wasd_.down = true;
+            keyState_.down = true;
         } else if (evt.key == Key::D) {
-            wasd_.right = true;
+            keyState_.right = true;
         } else if (evt.key == Key::A) {
-            wasd_.left = true;
+            keyState_.left = true;
         }
     }
 
     void onKeyReleased(KeyEvent evt) override {
         if (evt.key == Key::W) {
-            wasd_.up = false;
+            keyState_.up = false;
         } else if (evt.key == Key::S) {
-            wasd_.down = false;
+            keyState_.down = false;
         } else if (evt.key == Key::D) {
-            wasd_.right = false;
+            keyState_.right = false;
         } else if (evt.key == Key::A) {
-            wasd_.left = false;
+            keyState_.left = false;
         }
     }
 
     void driveForwards(float dt) {
+        float scale = 100;
         translateX(translationSpeed * dt);
-        back_left_wheel->rotateY(math::DEG2RAD * translationSpeed * 100 * dt);
-        back_right_wheel->rotateY(math::DEG2RAD * translationSpeed * 100 * dt);
-        front_left_wheel->rotateY(math::DEG2RAD * translationSpeed * 100 * dt);
-        front_right_wheel->rotateY(math::DEG2RAD * translationSpeed * 100 * dt);
+        back_left_wheel->rotateY(math::DEG2RAD * translationSpeed * scale * dt);
+        back_right_wheel->rotateY(math::DEG2RAD * translationSpeed * scale * dt);
+        front_left_wheel->rotateY(math::DEG2RAD * translationSpeed * scale * dt);
+        front_right_wheel->rotateY(math::DEG2RAD * translationSpeed * scale * dt);
     }
 
     void driveBackwards(float dt) {
+        float scale = 100;
         translateX(-translationSpeed * dt);
-        back_left_wheel->rotateY(-math::DEG2RAD * translationSpeed * 100 * dt);
-        back_right_wheel->rotateY(-math::DEG2RAD * translationSpeed * 100 * dt);
-        front_left_wheel->rotateY(-math::DEG2RAD * translationSpeed * 100 * dt);
-        front_right_wheel->rotateY(-math::DEG2RAD * translationSpeed * 100 * dt);
+        back_left_wheel->rotateY(-math::DEG2RAD * translationSpeed * scale * dt);
+        back_right_wheel->rotateY(-math::DEG2RAD * translationSpeed * scale * dt);
+        front_left_wheel->rotateY(-math::DEG2RAD * translationSpeed * scale * dt);
+        front_right_wheel->rotateY(-math::DEG2RAD * translationSpeed * scale * dt);
     }
 
     void driveRight(float dt) {
+        float scale = 200;
         rotateY(-rotationSpeed * dt);
-        back_left_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
-        back_right_wheel->rotateY(-math::DEG2RAD * rotationSpeed * 200 * dt);
-        front_left_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
-        front_right_wheel->rotateY(-math::DEG2RAD * rotationSpeed * 200 * dt);
+        back_left_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
+        back_right_wheel->rotateY(-math::DEG2RAD * rotationSpeed * scale * dt);
+        front_left_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
+        front_right_wheel->rotateY(-math::DEG2RAD * rotationSpeed * scale * dt);
     }
 
     void driveLeft(float dt) {
+        float scale = 200;
         rotateY(rotationSpeed * dt);
-        back_left_wheel->rotateY(-math::DEG2RAD * rotationSpeed * 200 * dt);
-        back_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
-        front_left_wheel->rotateY(-math::DEG2RAD * rotationSpeed * 200 * dt);
-        front_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * 200 * dt);
+        back_left_wheel->rotateY(-math::DEG2RAD * rotationSpeed * scale * dt);
+        back_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
+        front_left_wheel->rotateY(-math::DEG2RAD * rotationSpeed * scale * dt);
+        front_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
     }
 
     void setJointValues(const std::vector<float>& vals) {
@@ -82,26 +80,26 @@ struct Youbot: Object3D, KeyListener {
 
     std::vector<float> getJointValues() {
         return {
-                arm_joint1->rotation.z() * math::RAD2DEG,
-                arm_joint2->rotation.z() * math::RAD2DEG + 90,
-                arm_joint3->rotation.z() * math::RAD2DEG + 90,
-                arm_joint4->rotation.z() * math::RAD2DEG,
-                arm_joint5->rotation.z() * math::RAD2DEG,
+                arm_joint1->rotation.z * math::RAD2DEG,
+                arm_joint2->rotation.z * math::RAD2DEG + 90,
+                arm_joint3->rotation.z * math::RAD2DEG + 90,
+                arm_joint4->rotation.z * math::RAD2DEG,
+                arm_joint5->rotation.z * math::RAD2DEG,
         };
     }
 
     void update(float dt) {
 
-        if (wasd_.up) {
+        if (keyState_.up) {
             driveForwards(dt);
         }
-        if (wasd_.down) {
+        if (keyState_.down) {
             driveBackwards(dt);
         }
-        if (wasd_.right) {
+        if (keyState_.right) {
             driveRight(dt);
         }
-        if (wasd_.left) {
+        if (keyState_.left) {
             driveLeft(dt);
         }
     }
@@ -115,7 +113,16 @@ struct Youbot: Object3D, KeyListener {
     }
 
 private:
-    wasd wasd_;
+
+    struct KeyState {
+        bool left = false;
+        bool right = false;
+        bool up = false;
+        bool down = false;
+    };
+
+
+    KeyState keyState_;
     float rotationSpeed = 2;
     float translationSpeed = 5;
 

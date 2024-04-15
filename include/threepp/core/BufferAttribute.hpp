@@ -76,7 +76,6 @@ namespace threepp {
 
         void copy(const BufferAttribute& source) {
 
-            //            this->name = source.name;
             this->itemSize_ = source.itemSize_;
             this->normalized_ = source.normalized_;
 
@@ -97,6 +96,11 @@ namespace threepp {
         }
 
         virtual std::vector<T>& array() {
+
+            return array_;
+        }
+
+        virtual const std::vector<T>& array() const {
 
             return array_;
         }

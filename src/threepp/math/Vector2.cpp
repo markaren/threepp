@@ -13,6 +13,8 @@ Vector2::Vector2(int x, int y): Vector2(static_cast<float>(x), static_cast<float
 
 Vector2::Vector2(float x, float y): x(x), y(y) {}
 
+Vector2::Vector2(double x, double y): x(x), y(y) {}
+
 Vector2& Vector2::set(float x, float y) {
 
     this->x = x;
@@ -375,4 +377,24 @@ Vector2& Vector2::rotateAround(const Vector2& center, float angle) {
     this->y = x * s + y * c + center.y;
 
     return *this;
+}
+
+Vector2 Vector2::operator+(float value) const {
+
+    return Vector2(x, y).addScalar(value);
+}
+
+Vector2 Vector2::operator-(float value) const {
+
+    return Vector2(x, y).subScalar(value);
+}
+
+Vector2 Vector2::operator*(float value) const {
+
+    return Vector2(x, y).multiplyScalar(value);
+}
+
+Vector2 Vector2::operator/(float value) const {
+
+    return Vector2(x, y).divideScalar(value);
 }

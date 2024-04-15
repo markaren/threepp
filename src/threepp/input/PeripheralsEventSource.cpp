@@ -9,15 +9,15 @@ void PeripheralsEventSource::setIOCapture(IOCapture* capture) {
     ioCapture_ = capture;
 }
 
-void PeripheralsEventSource::addKeyListener(KeyListener* listener) {
-    auto find = std::find(keyListeners_.begin(), keyListeners_.end(), listener);
+void PeripheralsEventSource::addKeyListener(KeyListener& listener) {
+    auto find = std::find(keyListeners_.begin(), keyListeners_.end(), &listener);
     if (find == keyListeners_.end()) {
-        keyListeners_.emplace_back(listener);
+        keyListeners_.emplace_back(&listener);
     }
 }
 
-bool PeripheralsEventSource::removeKeyListener(const KeyListener* listener) {
-    auto find = std::find(keyListeners_.begin(), keyListeners_.end(), listener);
+bool PeripheralsEventSource::removeKeyListener(const KeyListener& listener) {
+    auto find = std::find(keyListeners_.begin(), keyListeners_.end(), &listener);
     if (find != keyListeners_.end()) {
         keyListeners_.erase(find);
         return true;
@@ -25,15 +25,15 @@ bool PeripheralsEventSource::removeKeyListener(const KeyListener* listener) {
     return false;
 }
 
-void PeripheralsEventSource::addMouseListener(MouseListener* listener) {
-    auto find = std::find(mouseListeners_.begin(), mouseListeners_.end(), listener);
+void PeripheralsEventSource::addMouseListener(MouseListener& listener) {
+    auto find = std::find(mouseListeners_.begin(), mouseListeners_.end(), &listener);
     if (find == mouseListeners_.end()) {
-        mouseListeners_.emplace_back(listener);
+        mouseListeners_.emplace_back(&listener);
     }
 }
 
-bool PeripheralsEventSource::removeMouseListener(const MouseListener* listener) {
-    auto find = std::find(mouseListeners_.begin(), mouseListeners_.end(), listener);
+bool PeripheralsEventSource::removeMouseListener(const MouseListener& listener) {
+    auto find = std::find(mouseListeners_.begin(), mouseListeners_.end(), &listener);
     if (find != mouseListeners_.end()) {
         mouseListeners_.erase(find);
         return true;
@@ -97,5 +97,15 @@ void PeripheralsEventSource::onKeyEvent(KeyEvent evt, PeripheralsEventSource::Ke
                 break;
             }
         }
+    }
+}
+
+void PeripheralsEventSource::onDrop(std::function<void(std::vector<std::string>)> paths) {
+    dropListener_ = std::move(paths);
+}
+
+void PeripheralsEventSource::onDropEvent(std::vector<std::string> paths) {
+    if (dropListener_ && !paths.empty()) {
+        dropListener_(std::move(paths));
     }
 }

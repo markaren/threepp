@@ -60,7 +60,6 @@ namespace {
 
         auto prevBone = Bone::create();
         bones.emplace_back(prevBone);
-        prevBone->position.y = -sizing.halfHeight;
 
         for (unsigned i = 0; i < sizing.segmentCount; i++) {
 
@@ -82,6 +81,7 @@ namespace {
                                                    {"flatShading", true}});
 
         auto mesh = SkinnedMesh::create(geometry, material);
+        mesh->castShadow = true;
         auto skeleton = Skeleton::create(bones);
 
         mesh->add(bones[0]);
@@ -104,6 +104,7 @@ namespace {
         Sizing sizing{segmentHeight, segmentCount, height, halfHeight};
 
         auto geometry = createGeometry(sizing);
+        geometry->applyMatrix4(Matrix4().makeTranslation(0,halfHeight,0));
         auto bones = createBones(sizing);
 
         auto mesh = createMesh(geometry, bones);
@@ -112,33 +113,56 @@ namespace {
         return mesh;
     }
 
+    auto initPlane() {
+        int gridSize = 100;
+        auto grid = GridHelper::create(gridSize, 10, Color::yellow);
+
+        auto geometry = PlaneGeometry::create(gridSize, gridSize);
+        auto material = ShadowMaterial::create();
+        material->color = 0x000000;
+        material->opacity = 0.2f;
+
+        auto plane = Mesh::create(geometry, material);
+        plane->rotation.x = -math::PI / 2;
+        plane->receiveShadow = true;
+        grid->add(plane);
+
+        return grid;
+    }
+
 }// namespace
 
 int main() {
 
     Canvas canvas("Bones");
     GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    renderer.shadowMap().enabled = true;
 
     Scene scene;
     scene.background = Color(0x444444);
 
     PerspectiveCamera camera(75, canvas.size().aspect(), 0.1, 200);
-    camera.position.set(0, 30, 30);
+    camera.position.set(0, 50, 50);
 
     auto light1 = PointLight::create(0xffffff);
     light1->position.set(0, 200, 0);
+    light1->castShadow = true;
     auto light2 = PointLight::create(0xffffff);
     light2->position.set(100, 200, 100);
+    light2->castShadow = true;
     auto light3 = PointLight::create(0xffffff);
     light3->position.set(-100, -200, -100);
+    light3->castShadow = true;
 
     scene.add(light1);
     scene.add(light2);
     scene.add(light3);
 
-    auto mesh = initBones();
-    scene.add(mesh);
+    auto plane = initPlane();
+    scene.add(plane);
+
+    auto bones = initBones();
+    scene.add(bones);
 
     OrbitControls controls{camera, canvas};
     controls.enableZoom = false;
@@ -172,9 +196,9 @@ int main() {
         ui.render();
 
         if (animate) {
-            for (unsigned i = 0; i < mesh->skeleton->bones.size(); i++) {
+            for (unsigned i = 0; i < bones->skeleton->bones.size(); i++) {
 
-                mesh->skeleton->bones[i]->rotation.z = std::sin(time) * 2 / float(mesh->skeleton->bones.size());
+                bones->skeleton->bones[i]->rotation.z = std::sin(time) * 2 / float(bones->skeleton->bones.size());
             }
         }
     });

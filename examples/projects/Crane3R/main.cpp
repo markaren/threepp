@@ -1,18 +1,19 @@
 
 #include "Crane3R.hpp"
 
+#include "kine/Kine.hpp"
 #include "threepp/threepp.hpp"
-#include "threepp/utils/ThreadPool.hpp"
+#include "utility/Angle.hpp"
+
+#ifndef EMSCRIPTEN
+#include <future>
+#endif
 
 using namespace threepp;
-
-#ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
-
-#include "kine/Kine.hpp"
-#include "kine/ik/CCDSolver.hpp"
-
 using namespace kine;
+
+#include "kine/ik/CCDSolver.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
 
 struct MyUI: ImguiContext {
 
@@ -63,12 +64,28 @@ struct MyUI: ImguiContext {
         ImGui::End();
     }
 };
-#endif
+
+auto createGrid() {
+
+    unsigned int size = 30;
+    auto material = ShadowMaterial::create();
+    auto plane = Mesh::create(PlaneGeometry::create(size, size), material);
+    plane->rotation.x = -math::PI / 2;
+    plane->receiveShadow = true;
+
+    auto grid = GridHelper::create(size, size, Color::yellowgreen);
+    grid->rotation.x = math::PI / 2;
+    plane->add(grid);
+
+    return plane;
+}
 
 int main() {
 
     Canvas canvas{"Crane3R", {{"size", WindowSize{1280, 720}}, {"antialiasing", 8}}};
     GLRenderer renderer{canvas.size()};
+    renderer.autoClear = false;
+    renderer.shadowMap().enabled = true;
     renderer.setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
@@ -78,46 +95,36 @@ int main() {
 
     auto scene = Scene::create();
 
-    auto grid = GridHelper::create(20, 10, Color::yellowgreen);
+    auto grid = createGrid();
     scene->add(grid);
 
     auto endEffectorHelper = AxesHelper::create(1);
     endEffectorHelper->visible = false;
     scene->add(endEffectorHelper);
 
-    auto light = AmbientLight::create(Color::white);
-    scene->add(light);
+    auto light1 = AmbientLight::create(Color::white);
+    auto light2 = DirectionalLight::create(Color::white);
+    light2->shadow->camera->as<OrthographicCamera>()->top = 15;
+    light2->shadow->camera->as<OrthographicCamera>()->bottom = -15;
+    light2->shadow->camera->as<OrthographicCamera>()->left = 15;
+    light2->shadow->camera->as<OrthographicCamera>()->right = -15;
+    light2->position.set(-100, 100, 50);
+    light2->castShadow = true;
+    scene->add(light1);
+    scene->add(light2);
 
-    TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle("Loading Crane3R..");
-    handle.scale = 2;
+    HUD hud(canvas.size());
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    utils::ThreadPool pool;
-    std::shared_ptr<Crane3R> crane;
-    pool.submit([&] {
-        crane = Crane3R::create();
-        canvas.invokeLater([&, crane] {
-            handle.invalidate();
-            scene->add(crane);
-            endEffectorHelper->visible = true;
-        });
-    });
+    TextGeometry::Options opts(font, 40, 2);
+    auto handle = Text2D(opts, "Loading Crane3R..");
+    handle.setColor(Color::black);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0.5, 0.5})
+                            .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
+                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
 
-    canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.aspect();
-        camera->updateProjectionMatrix();
-        renderer.setSize(size);
-    });
-
-#ifdef HAS_IMGUI
-
-    IOCapture capture{};
-    capture.preventMouseEvent = [] {
-        return ImGui::GetIO().WantCaptureMouse;
-    };
-    canvas.setIOCapture(&capture);
-
-    auto ikSolver = std::make_unique<CCDSolver>();
     Kine kine = KineBuilder()
                         .addRevoluteJoint(Vector3::Y(), {-90.f, 90.f})
                         .addLink(Vector3::Y() * 4.2)
@@ -127,22 +134,65 @@ int main() {
                         .addLink(Vector3::Z() * 5.2)
                         .build();
 
+
+#ifndef EMSCRIPTEN
+    std::shared_ptr<Crane3R> crane;
+    auto future = std::async([&] {
+        crane = Crane3R::create();
+        crane->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
+        crane->traverseType<Mesh>([](Mesh& m) {
+            m.castShadow = true;
+        });
+
+        renderer.invokeLater([&, crane] {
+            hud.remove(handle);
+            scene->add(crane);
+            endEffectorHelper->visible = true;
+        });
+    });
+#else
+    auto crane = Crane3R::create();
+    crane->setTargetValues(asAngles(kine.meanAngles(), Angle::Repr::DEG));
+    crane->traverseType<Mesh>([](Mesh& m) {
+        m.castShadow = true;
+    });
+
+    hud.remove(handle);
+    scene->add(crane);
+    endEffectorHelper->visible = true;
+#endif
+
+    canvas.onWindowResize([&](WindowSize size) {
+        camera->aspect = size.aspect();
+        camera->updateProjectionMatrix();
+        renderer.setSize(size);
+
+        hud.setSize(size);
+    });
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
+
+    auto ikSolver = std::make_unique<CCDSolver>();
+
     MyUI ui(canvas, kine);
 
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
     scene->add(targetHelper);
 
-#endif
     Clock clock;
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
+        renderer.clear();
         renderer.render(*scene, *camera);
 
         if (crane) {
 
-#ifdef HAS_IMGUI
             ui.render();
 
             auto endEffectorPosition = kine.calculateEndEffectorTransformation(inDegrees(crane->getValues()));
@@ -161,13 +211,16 @@ int main() {
 
             crane->controllerEnabled = ui.enableController;
             crane->setTargetValues(asAngles(ui.values, Angle::Repr::DEG));
-#endif
 
             crane->update(dt);
+
         } else {
 
-            renderer.resetState();
-            textRenderer.render();
+            hud.apply(renderer);
         }
     });
+
+#ifndef EMSCRIPTEN
+    future.get();
+#endif
 }

@@ -219,7 +219,7 @@ Vector3& Vector3::applyMatrix4(const Matrix4& m) {
 Vector3& Vector3::applyQuaternion(const Quaternion& q) {
 
     const auto x = this->x, y = this->y, z = this->z;
-    const auto qx = q.x(), qy = q.y(), qz = q.z(), qw = q.w();
+    const auto qx = q.x, qy = q.y, qz = q.z, qw = q.w;
 
     // calculate quat * vector
 

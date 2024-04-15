@@ -1,19 +1,13 @@
 
 #include "threepp/lights/LightShadow.hpp"
 
+#include "threepp/lights/light_interfaces.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
 
 using namespace threepp;
 
-namespace {
 
-    Vector3 _lightPositionWorld;
-    Vector3 _lookTarget;
-    Matrix4 _projScreenMatrix;
-
-}// namespace
-
-LightShadow::LightShadow(std::shared_ptr<Camera> camera)
+LightShadow::LightShadow(std::unique_ptr<Camera> camera)
     : camera(std::move(camera)) {}
 
 
@@ -27,16 +21,16 @@ const Frustum& LightShadow::getFrustum() const {
     return this->_frustum;
 }
 
-void LightShadow::updateMatrices(Light* light) {
+void LightShadow::updateMatrices(Light& light) {
 
     auto& shadowCamera = this->camera;
     auto& shadowMatrix = this->matrix;
 
-    _lightPositionWorld.setFromMatrixPosition(*light->matrixWorld);
+    _lightPositionWorld.setFromMatrixPosition(*light.matrixWorld);
     shadowCamera->position.copy(_lightPositionWorld);
 
-    auto lightWithTarget = dynamic_cast<LightWithTarget*>(light);
-    _lookTarget.setFromMatrixPosition(*lightWithTarget->target->matrixWorld);
+    auto lightWithTarget = dynamic_cast<LightWithTarget*>(&light);
+    _lookTarget.setFromMatrixPosition(*lightWithTarget->target().matrixWorld);
     shadowCamera->lookAt(_lookTarget);
     shadowCamera->updateMatrixWorld();
 

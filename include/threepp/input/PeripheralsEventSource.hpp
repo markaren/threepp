@@ -6,6 +6,8 @@
 #include "threepp/input/KeyListener.hpp"
 #include "threepp/input/MouseListener.hpp"
 
+#include "threepp/canvas/WindowSize.hpp"
+
 #include <vector>
 
 namespace threepp {
@@ -13,15 +15,19 @@ namespace threepp {
     class PeripheralsEventSource {
 
     public:
+        [[nodiscard]] virtual WindowSize size() const = 0;
+
         void setIOCapture(IOCapture* capture);
 
-        void addKeyListener(KeyListener* listener);
+        void addKeyListener(KeyListener& listener);
 
-        bool removeKeyListener(const KeyListener* listener);
+        bool removeKeyListener(const KeyListener& listener);
 
-        void addMouseListener(MouseListener* listener);
+        void addMouseListener(MouseListener& listener);
 
-        bool removeMouseListener(const MouseListener* listener);
+        bool removeMouseListener(const MouseListener& listener);
+
+        void onDrop(std::function<void(std::vector<std::string>)> paths);
 
         virtual ~PeripheralsEventSource() = default;
 
@@ -45,10 +51,13 @@ namespace threepp {
 
         void onKeyEvent(KeyEvent evt, KeyAction action);
 
+        void onDropEvent(std::vector<std::string> paths);
+
     private:
         IOCapture* ioCapture_ = nullptr;
         std::vector<KeyListener*> keyListeners_;
         std::vector<MouseListener*> mouseListeners_;
+        std::function<void(std::vector<std::string>)> dropListener_;
     };
 
 }// namespace threepp

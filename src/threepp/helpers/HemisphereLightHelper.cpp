@@ -110,4 +110,4 @@ std::shared_ptr<HemisphereLightHelper> threepp::HemisphereLightHelper::create(He
     return std::shared_ptr<HemisphereLightHelper>(new HemisphereLightHelper(light, size, color));
 }
 
-threepp::HemisphereLightHelper::~HemisphereLightHelper() = default;
+HemisphereLightHelper::~HemisphereLightHelper() = default;

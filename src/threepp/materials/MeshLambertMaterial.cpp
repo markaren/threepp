@@ -18,10 +18,11 @@ std::string MeshLambertMaterial::type() const {
     return "MeshLambertMaterial";
 }
 
-std::shared_ptr<Material> MeshLambertMaterial::clone() const {
+void MeshLambertMaterial::copyInto(threepp::Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<MeshLambertMaterial>();
 
     m->color.copy(color);
 
@@ -48,8 +49,11 @@ std::shared_ptr<Material> MeshLambertMaterial::clone() const {
 
     m->wireframe = wireframe;
     m->wireframeLinewidth = wireframeLinewidth;
+}
 
-    return m;
+std::shared_ptr<Material> MeshLambertMaterial::createDefault() const {
+
+    return std::shared_ptr<MeshLambertMaterial>(new MeshLambertMaterial());
 }
 
 std::shared_ptr<MeshLambertMaterial> MeshLambertMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
@@ -64,21 +68,13 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     if (key == "color") {
 
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
+        color.copy(extractColor(value));
 
         return true;
 
     } else if (key == "emissive") {
 
-        if (std::holds_alternative<int>(value)) {
-            emissive = std::get<int>(value);
-        } else {
-            emissive.copy(std::get<Color>(value));
-        }
+        emissive.copy(extractColor(value));
 
         return true;
 
@@ -94,7 +90,7 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "aoMapIntensity") {
 
-        aoMapIntensity = std::get<float>(value);
+        aoMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "alphaMap") {
@@ -114,7 +110,7 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "lightMapIntensity") {
 
-        lightMapIntensity = std::get<float>(value);
+        lightMapIntensity = extractFloat(value);
         return true;
 
     } else if (key == "wireframe") {
@@ -124,7 +120,7 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "wireframeLinewidth") {
 
-        wireframeLinewidth = std::get<float>(value);
+        wireframeLinewidth = extractFloat(value);
         return true;
 
     } else if (key == "envMap") {
@@ -139,12 +135,12 @@ bool MeshLambertMaterial::setValue(const std::string& key, const MaterialValue& 
 
     } else if (key == "reflectivity") {
 
-        reflectivity = std::get<float>(value);
+        reflectivity = extractFloat(value);
         return true;
 
     } else if (key == "refractionRatio") {
 
-        refractionRatio = std::get<float>(value);
+        refractionRatio = extractFloat(value);
         return true;
     }
 

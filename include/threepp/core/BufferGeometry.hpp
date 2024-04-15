@@ -35,10 +35,12 @@ namespace threepp {
 
         BufferGeometry();
 
-        [[nodiscard]] virtual std::string type() const {
+        BufferGeometry(const BufferGeometry&) = delete;
+        BufferGeometry& operator=(const BufferGeometry&) = delete;
+        BufferGeometry(BufferGeometry&&) = delete;
+        BufferGeometry& operator=(BufferGeometry&&) = delete;
 
-            return "BufferGeometry";
-        }
+        [[nodiscard]] virtual std::string type() const;
 
         [[nodiscard]] bool hasIndex() const;
 
@@ -71,8 +73,6 @@ namespace threepp {
 
             return dynamic_cast<TypedBufferAttribute<T>*>(attributes_.at(name).get());
         }
-
-        bool hasMorphAttribute(const std::string& name);
 
         std::vector<std::shared_ptr<BufferAttribute>>* getMorphAttribute(const std::string& name);
 

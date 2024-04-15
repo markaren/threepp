@@ -12,7 +12,7 @@ namespace threepp {
 
     class GLRenderer;
     class Light;
-    class Scene;
+    class Object3D;
     class Camera;
 
     namespace gl {
@@ -30,7 +30,7 @@ namespace threepp {
 
             explicit GLShadowMap(GLObjects& objects);
 
-            void render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera);
+            void render(GLRenderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera);
 
             ~GLShadowMap();
 

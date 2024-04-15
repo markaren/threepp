@@ -20,16 +20,10 @@ AxesHelper::AxesHelper(float size): LineSegments(BufferGeometry::create(), LineB
     geometry_->setAttribute("position", FloatBufferAttribute::create(vertices, 3));
     geometry_->setAttribute("color", FloatBufferAttribute::create(colors, 3));
 
-    material_->vertexColors = true;
+    materials_.front()->vertexColors = true;
 }
 
 std::shared_ptr<AxesHelper> AxesHelper::create(float size) {
 
     return std::shared_ptr<AxesHelper>(new AxesHelper(size));
-}
-
-AxesHelper::~AxesHelper() {
-
-    this->geometry_->dispose();
-    this->material_->dispose();
 }

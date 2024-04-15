@@ -1,9 +1,9 @@
 
 #include "threepp/threepp.hpp"
-#include "threepp/utils/ThreadPool.hpp"
 
 #include "Youbot.hpp"
 
+#include <future>
 
 using namespace threepp;
 
@@ -12,9 +12,10 @@ int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot").size({1280, 720}).antialiasing(8)};
     GLRenderer renderer{canvas.size()};
-    renderer.setClearColor(Color::aliceblue);
+    renderer.autoClear = false;
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
@@ -31,18 +32,25 @@ int main() {
     auto light2 = AmbientLight::create(0xffffff, 1.f);
     scene->add(light2);
 
-    TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle("Loading model..");
-    handle.scale = 2;
+    HUD hud(canvas.size());
+    FontLoader fontLoader;
+    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    utils::ThreadPool pool;
+    TextGeometry::Options opts(font, 20, 5);
+    auto handle = Text2D(opts, "Loading model..");
+    handle.setColor(Color::black);
+    hud.add(handle, HUD::Options()
+                            .setNormalizedPosition({0, 1})
+                            .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+
+
     std::shared_ptr<Youbot> youbot;
-    pool.submit([&] {
+    auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
-        canvas.invokeLater([&] {
-            canvas.addKeyListener(youbot.get());
+        renderer.invokeLater([&] {
+            canvas.addKeyListener(*youbot);
             scene->add(youbot);
-            handle.setText("Use WASD keys to steer robot");
+            handle.setText("Use WASD keys to steer robot", opts);
         });
     });
 
@@ -50,16 +58,17 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
+
+        hud.setSize(size);
     });
 
     Clock clock;
     canvas.animate([&]() {
         float dt = clock.getDelta();
 
+        renderer.clear();
         renderer.render(*scene, *camera);
-        renderer.resetState();
-
-        textRenderer.render();
+        hud.apply(renderer);
 
         if (youbot) youbot->update(dt);
     });

@@ -1,10 +1,9 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
 
-#ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
 
 struct MyGui: public ImguiContext {
 
@@ -52,7 +51,6 @@ private:
     std::array<float, 3> eulerBuf_{};
     std::array<float, 4> colorBuf_{0, 0, 0, 1};
 };
-#endif
 
 auto createBox() {
 
@@ -99,11 +97,12 @@ auto createPlane() {
 
 int main() {
 
-    Canvas canvas("threepp demo");
+    Canvas canvas("threepp demo", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    renderer.autoClear = false;
 
     auto scene = Scene::create();
+    scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.z = 5;
 
@@ -117,40 +116,48 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    TextRenderer textRenderer;
-    auto& handle = textRenderer.createHandle();
-    handle.setPosition(canvas.size().width - 130, 0);
-    handle.color = Color::red;
+    HUD hud(canvas.size());
+    FontLoader fontLoader;
+    const auto font1 = fontLoader.defaultFont();
+    const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    auto& handle2 = textRenderer.createHandle("Hello world!");
-    handle2.verticalAlignment = threepp::TextHandle::VerticalAlignment::BOTTOM;
-    handle2.setPosition(0, canvas.size().height);
-    handle2.color = Color::white;
-    handle2.scale = 2;
+    TextGeometry::Options opts1(font1, 40);
+    auto hudText1 = Text2D(opts1, "Hello World!");
+    hudText1.setColor(Color::black);
+    hud.add(hudText1, HUD::Options());
+
+    TextGeometry::Options opts2(font2, 10, 1);
+    auto hudText2 = Text2D(opts2);
+    hudText2.setColor(Color::red);
+    hud.add(hudText2, HUD::Options()
+                              .setNormalizedPosition({1, 1})
+                              .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
+                              .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-        handle.setPosition(canvas.size().width - 130, 0);
-        handle2.setPosition(0, canvas.size().height);
+
+        hud.setSize(size);
     });
 
-#ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
-#endif
+
     Clock clock;
-    auto loop = [&]() {
+    canvas.animate([&]() {
         float dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
-        handle.setText("Delta=" + std::to_string(dt));
 
+        hudText2.setText("Delta=" + std::to_string(dt));
+        hud.needsUpdate(hudText2);
+
+        renderer.clear();
         renderer.render(*scene, *camera);
-        renderer.resetState();
-        textRenderer.render();
+        hud.apply(renderer);
 
-#ifdef HAS_IMGUI
         ui.render();
 
         plane->position.copy(ui.position());
@@ -162,9 +169,5 @@ int main() {
             planeMaterial->opacity = c[3];
             planeMaterial->transparent = c[3] != 1;
         }
-
-#endif
-    };
-
-    while (canvas.animateOnce(loop)) {}
+    });
 }

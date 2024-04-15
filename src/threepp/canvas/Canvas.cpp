@@ -5,23 +5,39 @@
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#ifndef EMSCRIPTEN
+#include "threepp/utils/LoadGlad.hpp"
 #define GLFW_INCLUDE_NONE
+#else
+#include <emscripten.h>
+#endif
+
 #include <GLFW/glfw3.h>
-#include <glad/glad.h>
 
 #include <iostream>
 #include <optional>
-#include <queue>
 
 using namespace threepp;
 
 namespace {
 
-    typedef std::pair<std::function<void()>, float> Task;
+#if EMSCRIPTEN
+    struct FunctionWrapper {
+        std::function<void()> loopFunction;
 
-    struct CustomComparator {
-        bool operator()(const Task& l, const Task& r) const { return l.second > r.second; }
+        FunctionWrapper(std::function<void()> loopFunction)
+            : loopFunction(std::move(loopFunction)) {}
+
+        void loop() {
+            loopFunction();
+        }
     };
+
+    EMSCRIPTEN_KEEPALIVE
+    void emscriptenLoop(void* arg) {
+        static_cast<FunctionWrapper*>(arg)->loop();
+    }
+#endif
 
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
 
@@ -119,10 +135,22 @@ namespace {
     }
 
     WindowSize getMonitorSize() {
+#if EMSCRIPTEN
+        int width = EM_ASM_INT({
+            return window.innerWidth;
+        });
+
+        int height = EM_ASM_INT({
+            return window.innerHeight;
+        });
+
+        return {width, height};
+#else
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
 
         return {mode->width, mode->height};
+#endif
     }
 
 }// namespace
@@ -136,12 +164,12 @@ struct Canvas::Impl {
     Vector2 lastMousePos_;
 
     bool close_{false};
+    bool exitOnKeyEscape_;
 
-    std::priority_queue<Task, std::vector<Task>, CustomComparator> tasks_;
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
-        : scope(scope) {
+        : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
 
         glfwSetErrorCallback(error_callback);
 
@@ -153,14 +181,16 @@ struct Canvas::Impl {
             size_ = *params.size_;
         } else {
             auto fullSize = getMonitorSize();
-            size_ = {fullSize.width/2, fullSize.height/2};
+            size_ = {fullSize.width / 2, fullSize.height / 2};
         }
 
+#ifndef EMSCRIPTEN
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
+#endif
 
         if (params.antialiasing_ > 0) {
             glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
@@ -172,18 +202,27 @@ struct Canvas::Impl {
             exit(EXIT_FAILURE);
         }
 
-        setWindowIcon(window, params.favicon_);
+#if EMSCRIPTEN
+        EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
+#endif
 
         glfwSetWindowUserPointer(window, this);
+
+#ifndef EMSCRIPTEN
+        setWindowIcon(window, params.favicon_);
+#endif
 
         glfwSetKeyCallback(window, key_callback);
         glfwSetMouseButtonCallback(window, mouse_callback);
         glfwSetCursorPosCallback(window, cursor_callback);
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
+        glfwSetDropCallback(window, drop_callback);
 
         glfwMakeContextCurrent(window);
-        gladLoadGL();
+
+#ifndef EMSCRIPTEN
+        loadGlad();
         glfwSwapInterval(params.vsync_ ? 1 : 0);
 
         if (params.antialiasing_ > 0) {
@@ -191,8 +230,7 @@ struct Canvas::Impl {
         }
 
         glEnable(GL_PROGRAM_POINT_SIZE);
-        //        glEnable(GL_POINT_SPRITE);
-        //        glEnable(GL_POINT_SMOOTH);
+#endif
     }
 
     [[nodiscard]] const WindowSize& getSize() const {
@@ -203,25 +241,11 @@ struct Canvas::Impl {
         glfwSetWindowSize(window, size.width, size.height);
     }
 
-    inline void handleTasks() {
-        while (!tasks_.empty()) {
-            auto& task = tasks_.top();
-            if (task.second < glfwGetTime()) {
-                task.first();
-                tasks_.pop();
-            } else {
-                break;
-            }
-        }
-    }
-
     bool animateOnce(const std::function<void()>& f) {
 
         if (close_ || glfwWindowShouldClose(window)) {
             return false;
         }
-
-        handleTasks();
 
         f();
 
@@ -232,16 +256,16 @@ struct Canvas::Impl {
     }
 
     void animate(const std::function<void()>& f) {
-
+#if EMSCRIPTEN
+        FunctionWrapper wrapper(f);
+        emscripten_set_main_loop_arg(&emscriptenLoop, &wrapper, 0, true);
+#else
         while (animateOnce(f)) {}
+#endif
     }
 
     void onWindowResize(std::function<void(WindowSize)> f) {
         this->resizeListener = std::move(f);
-    }
-
-    void invokeLater(const std::function<void()>& f, float t) {
-        tasks_.emplace(f, static_cast<float>(glfwGetTime()) + t);
     }
 
     void close() {
@@ -295,13 +319,14 @@ struct Canvas::Impl {
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
 
-        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->exitOnKeyEscape_) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
 
         KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
         switch (action) {
             case GLFW_PRESS: {
                 p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::PRESS);
@@ -318,6 +343,18 @@ struct Canvas::Impl {
             default:
                 break;
         }
+    }
+
+    static void drop_callback(GLFWwindow* w, int count, const char** paths) {
+
+        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+
+        std::vector<std::string> v;
+        for (int i = 0; i < count; ++i) {
+            v.emplace_back(paths[i]);
+        }
+
+        p->scope.onDropEvent(v);
     }
 };
 
@@ -366,11 +403,6 @@ void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
     pimpl_->onWindowResize(std::move(f));
 }
 
-void Canvas::invokeLater(const std::function<void()>& f, float t) {
-
-    pimpl_->invokeLater(f, t);
-}
-
 void Canvas::close() {
 
     pimpl_->close();
@@ -413,10 +445,16 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
             auto _size = std::get<WindowSize>(value);
             size(_size);
             used = true;
+
         } else if (key == "favicon") {
 
             auto path = std::get<std::string>(value);
             favicon(path);
+            used = true;
+
+        } else if (key == "exitOnKeyEscape") {
+
+            exitOnKeyEscape(std::get<bool>(value));
             used = true;
         }
 
@@ -479,6 +517,13 @@ Canvas::Parameters& threepp::Canvas::Parameters::favicon(const std::filesystem::
     } else {
         std::cerr << "Invalid favicon path: " << std::filesystem::absolute(path) << std::endl;
     }
+
+    return *this;
+}
+
+Canvas::Parameters& threepp::Canvas::Parameters::exitOnKeyEscape(bool flag) {
+
+    exitOnKeyEscape_ = flag;
 
     return *this;
 }

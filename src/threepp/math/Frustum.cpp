@@ -2,6 +2,7 @@
 #include "threepp/math/Frustum.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
 using namespace threepp;
@@ -56,11 +57,20 @@ Frustum& Frustum::setFromProjectionMatrix(const Matrix4& m) {
 
 bool Frustum::intersectsObject(Object3D& object) const {
 
-    auto geometry = object.geometry();
+    if (auto instancedMesh = object.as<InstancedMesh>()) {
 
-    if (!geometry->boundingSphere) geometry->computeBoundingSphere();
+        if (!instancedMesh->boundingSphere) instancedMesh->computeBoundingSphere();
 
-    _sphere.copy(geometry->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
+        _sphere.copy(instancedMesh->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
+
+    } else {
+
+        const auto geometry = object.geometry();
+
+        if (!geometry->boundingSphere) geometry->computeBoundingSphere();
+
+        _sphere.copy(geometry->boundingSphere.value()).applyMatrix4(*object.matrixWorld);
+    }
 
     return this->intersectsSphere(_sphere);
 }

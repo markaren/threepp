@@ -3,6 +3,7 @@
 #include "threepp/core/Raycaster.hpp"
 
 #include <cmath>
+#include <memory>
 
 using namespace threepp;
 
@@ -18,7 +19,7 @@ namespace {
             unsigned int index,
             float localThresholdSq,
             const Matrix4& matrixWorld,
-            Raycaster& raycaster,
+            const Raycaster& raycaster,
             std::vector<Intersection>& intersects,
             Object3D* object) {
 
@@ -48,42 +49,29 @@ namespace {
 }// namespace
 
 Points::Points(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
-    : geometry_(std::move(geometry)), material_(std::move(material)) {
-}
+    : geometry_(std::move(geometry)), ObjectWithMaterials({std::move(material)}) {}
 
 std::string Points::type() const {
 
     return "Points";
 }
 
-BufferGeometry* Points::geometry() {
+std::shared_ptr<BufferGeometry> Points::geometry() const {
 
-    return geometry_.get();
+    return geometry_;
 }
 
-Material* Points::material() {
+void Points::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
 
-    return material_.get();
-}
-
-std::vector<Material*> Points::materials() {
-
-    return {material_.get()};
-}
-
-std::shared_ptr<Object3D> Points::clone(bool recursive) {
-    auto clone = create(geometry_, material_);
-    clone->copy(*this, recursive);
-
-    return clone;
+    this->geometry_ = geometry;
 }
 
 std::shared_ptr<Points> Points::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
 
-    return std::shared_ptr<Points>(new Points(std::move(geometry), std::move(material)));
+    return std::make_shared<Points>(std::move(geometry), std::move(material));
 }
 
-void Points::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Points::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto geometry = this->geometry();
     const auto threshold = raycaster.params.pointsThreshold;
@@ -136,4 +124,19 @@ void Points::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects
             testPoint(_position, i, localThresholdSq, *matrixWorld, raycaster, intersects, this);
         }
     }
+}
+
+void Points::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (auto p = source.as<Points>()) {
+
+        materials_ = p->materials_;
+        geometry_ = p->geometry_;
+    }
+}
+
+std::shared_ptr<Object3D> Points::createDefault() {
+
+    return create();
 }

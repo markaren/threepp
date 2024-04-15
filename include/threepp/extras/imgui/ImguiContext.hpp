@@ -1,5 +1,4 @@
 
-
 #ifndef THREEPP_IMGUI_HELPER_HPP
 #define THREEPP_IMGUI_HELPER_HPP
 
@@ -16,7 +15,11 @@ public:
     explicit ImguiContext(void* window) {
         ImGui::CreateContext();
         ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) window, true);
-        ImGui_ImplOpenGL3_Init("#version 330");
+#if EMSCRIPTEN
+        ImGui_ImplOpenGL3_Init("#version 300 es");
+#else
+        ImGui_ImplOpenGL3_Init("#version 330 core");
+#endif
     }
 
     ImguiContext(ImguiContext&&) = delete;

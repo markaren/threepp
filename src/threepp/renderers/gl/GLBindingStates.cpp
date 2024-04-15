@@ -1,6 +1,4 @@
 
-#pragma warning(disable : 4312)
-
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 
 #include "threepp/renderers/gl/GLUtils.hpp"
@@ -9,6 +7,9 @@
 #include "threepp/materials/materials.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 
+#if EMSCRIPTEN
+#include <GLES3/gl32.h>
+#endif
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -300,7 +301,7 @@ struct GLBindingStates::Impl {
 
                 } else if (name == "instanceMatrix") {
 
-                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceMatrix.get());
+                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceMatrix());
 
                     auto buffer = attribute.buffer;
                     auto type = attribute.type;
@@ -319,7 +320,7 @@ struct GLBindingStates::Impl {
 
                 } else if (name == "instanceColor") {
 
-                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceColor.get());
+                    auto attribute = attributes_.get(object->as<InstancedMesh>()->instanceColor());
 
                     auto buffer = attribute.buffer;
                     auto type = attribute.type;
@@ -349,25 +350,24 @@ struct GLBindingStates::Impl {
 
         reset();
 
-        for (const auto& geometryId : bindingStates) {
+        for (auto geoIt = bindingStates.begin(); geoIt != bindingStates.end();) {
+            auto& programMap = geoIt->second;
 
-            auto& programMap = bindingStates.at(geometryId.first);
+            for (auto progIt = programMap.begin(); progIt != programMap.end();) {
+                auto& stateMap = progIt->second;
 
-            for (const auto& programId : programMap) {
+                for (auto it = stateMap.begin(); it != stateMap.end();) {
+                    const auto& wireframe = *it;
 
-                auto& stateMap = programMap.at(programId.first);
+                    deleteVertexArrayObject(*it->second->object);
 
-                for (const auto& wireframe : stateMap) {
-
-                    deleteVertexArrayObject(*stateMap.at(wireframe.first)->object);
-
-                    stateMap.erase(wireframe.first);
+                    it = stateMap.erase(it);
                 }
 
-                programMap.erase(programId.first);
+                progIt = programMap.erase(progIt);
             }
 
-            bindingStates.erase(geometryId.first);
+            geoIt = bindingStates.erase(geoIt);
         }
     }
 
@@ -433,41 +433,6 @@ void GLBindingStates::setup(Object3D* object, Material* material, GLProgram* pro
     pimpl_->setup(object, material, program, geometry, index);
 }
 
-GLuint GLBindingStates::createVertexArrayObject() const {
-
-    return pimpl_->createVertexArrayObject();
-}
-
-void GLBindingStates::bindVertexArrayObject(GLuint vao) const {
-
-    pimpl_->bindVertexArrayObject(vao);
-}
-
-void GLBindingStates::deleteVertexArrayObject(GLuint vao) {
-
-    pimpl_->deleteVertexArrayObject(vao);
-}
-
-std::shared_ptr<GLBindingState> GLBindingStates::getBindingState(BufferGeometry* geometry, GLProgram* program, Material* material) {
-
-    return pimpl_->getBindingState(geometry, program, material);
-}
-
-std::shared_ptr<GLBindingState> GLBindingStates::createBindingState(std::optional<GLuint> vao) const {
-
-    return pimpl_->createBindingState(vao);
-}
-
-bool GLBindingStates::needsUpdate(BufferGeometry* geometry, BufferAttribute* index) {
-
-    return pimpl_->needsUpdate(geometry, index);
-}
-
-void GLBindingStates::saveCache(BufferGeometry* geometry, BufferAttribute* index) {
-
-    pimpl_->saveCache(geometry, index);
-}
-
 void GLBindingStates::initAttributes() {
 
     pimpl_->initAttributes();
@@ -478,24 +443,9 @@ void GLBindingStates::enableAttribute(int attribute) {
     pimpl_->enableAttribute(attribute);
 }
 
-void GLBindingStates::enableAttributeAndDivisor(int attribute, int meshPerAttribute) {
-
-    pimpl_->enableAttributeAndDivisor(attribute, meshPerAttribute);
-}
-
 void GLBindingStates::disableUnusedAttributes() {
 
     pimpl_->disableUnusedAttributes();
-}
-
-void GLBindingStates::vertexAttribPointer(GLuint index, GLint size, GLenum type, bool normalized, GLsizei stride, size_t offset) {
-
-    pimpl_->vertexAttribPointer(index, size, type, normalized, stride, offset);
-}
-
-void GLBindingStates::setupVertexAttributes(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry) {
-
-    pimpl_->setupVertexAttributes(object, material, program, geometry);
 }
 
 void GLBindingStates::dispose() {

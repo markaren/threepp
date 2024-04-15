@@ -13,7 +13,7 @@ namespace threepp {
     public:
         float focus = 1;
 
-        void updateMatrices(Light* light) override;
+        void updateMatrices(Light& light) override;
 
         static std::shared_ptr<SpotLightShadow> create();
 

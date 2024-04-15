@@ -37,86 +37,88 @@ namespace {
                                                 {"waterColor", Uniform(Color{0x555555})},
                                         }}),
 
-                "uniform mat4 textureMatrix;\n"
-                "\t\t\t\tuniform float time;\n"
-                "\t\t\t\tvarying vec4 mirrorCoord;\n"
-                "\t\t\t\tvarying vec4 worldPosition;\n"
-                "\t\t\t\t#include <common>\n"
-                "\t\t\t\t#include <fog_pars_vertex>\n"
-                "\t\t\t\t#include <shadowmap_pars_vertex>\n"
-                "\t\t\t\t#include <logdepthbuf_pars_vertex>\n"
-                "\t\t\t\tvoid main() {\n"
-                "\t\t\t\t\tmirrorCoord = modelMatrix * vec4( position, 1.0 );\n"
-                "\t\t\t\t\tworldPosition = mirrorCoord.xyzw;\n"
-                "\t\t\t\t\tmirrorCoord = textureMatrix * mirrorCoord;\n"
-                "\t\t\t\t\tvec4 mvPosition =  modelViewMatrix * vec4( position, 1.0 );\n"
-                "\t\t\t\t\tgl_Position = projectionMatrix * mvPosition;\n"
-                "\t\t\t\t#include <beginnormal_vertex>\n"
-                "\t\t\t\t#include <defaultnormal_vertex>\n"
-                "\t\t\t\t#include <logdepthbuf_vertex>\n"
-                "\t\t\t\t#include <fog_vertex>\n"
-                "\t\t\t\t#include <shadowmap_vertex>\n"
-                "\t\t\t}",
+                R"(
+                uniform mat4 textureMatrix;
+                uniform float time;
+                varying vec4 mirrorCoord;
+                varying vec4 worldPosition;
+                #include <common>
+                #include <fog_pars_vertex>
+                #include <shadowmap_pars_vertex>
+                #include <logdepthbuf_pars_vertex>
+                void main() {
+                    mirrorCoord = modelMatrix * vec4( position, 1.0 );
+                    worldPosition = mirrorCoord.xyzw;
+                    mirrorCoord = textureMatrix * mirrorCoord;
+                    vec4 mvPosition =  modelViewMatrix * vec4( position, 1.0 );
+                    gl_Position = projectionMatrix * mvPosition;
+                    #include <beginnormal_vertex>
+                    #include <defaultnormal_vertex>
+                    #include <logdepthbuf_vertex>
+                    #include <fog_vertex>
+                    #include <shadowmap_vertex>
+                })",
 
-                "uniform sampler2D mirrorSampler;\n"
-                "\t\t\t\tuniform float alpha;\n"
-                "\t\t\t\tuniform float time;\n"
-                "\t\t\t\tuniform float size;\n"
-                "\t\t\t\tuniform float distortionScale;\n"
-                "\t\t\t\tuniform sampler2D normalSampler;\n"
-                "\t\t\t\tuniform vec3 sunColor;\n"
-                "\t\t\t\tuniform vec3 sunDirection;\n"
-                "\t\t\t\tuniform vec3 eye;\n"
-                "\t\t\t\tuniform vec3 waterColor;\n"
-                "\t\t\t\tvarying vec4 mirrorCoord;\n"
-                "\t\t\t\tvarying vec4 worldPosition;\n"
-                "\t\t\t\tvec4 getNoise( vec2 uv ) {\n"
-                "\t\t\t\t\tvec2 uv0 = ( uv / 103.0 ) + vec2(time / 17.0, time / 29.0);\n"
-                "\t\t\t\t\tvec2 uv1 = uv / 107.0-vec2( time / -19.0, time / 31.0 );\n"
-                "\t\t\t\t\tvec2 uv2 = uv / vec2( 8907.0, 9803.0 ) + vec2( time / 101.0, time / 97.0 );\n"
-                "\t\t\t\t\tvec2 uv3 = uv / vec2( 1091.0, 1027.0 ) - vec2( time / 109.0, time / -113.0 );\n"
-                "\t\t\t\t\tvec4 noise = texture2D( normalSampler, uv0 ) +\n"
-                "\t\t\t\t\t\ttexture2D( normalSampler, uv1 ) +\n"
-                "\t\t\t\t\t\ttexture2D( normalSampler, uv2 ) +\n"
-                "\t\t\t\t\t\ttexture2D( normalSampler, uv3 );\n"
-                "\t\t\t\t\treturn noise * 0.5 - 1.0;\n"
-                "\t\t\t\t}\n"
-                "\t\t\t\tvoid sunLight( const vec3 surfaceNormal, const vec3 eyeDirection, float shiny, float spec, float diffuse, inout vec3 diffuseColor, inout vec3 specularColor ) {\n"
-                "\t\t\t\t\tvec3 reflection = normalize( reflect( -sunDirection, surfaceNormal ) );\n"
-                "\t\t\t\t\tfloat direction = max( 0.0, dot( eyeDirection, reflection ) );\n"
-                "\t\t\t\t\tspecularColor += pow( direction, shiny ) * sunColor * spec;\n"
-                "\t\t\t\t\tdiffuseColor += max( dot( sunDirection, surfaceNormal ), 0.0 ) * sunColor * diffuse;\n"
-                "\t\t\t\t}\n"
-                "\t\t\t\t#include <common>\n"
-                "\t\t\t\t#include <packing>\n"
-                "\t\t\t\t#include <bsdfs>\n"
-                "\t\t\t\t#include <fog_pars_fragment>\n"
-                "\t\t\t\t#include <logdepthbuf_pars_fragment>\n"
-                "\t\t\t\t#include <lights_pars_begin>\n"
-                "\t\t\t\t#include <shadowmap_pars_fragment>\n"
-                "\t\t\t\t#include <shadowmask_pars_fragment>\n"
-                "\t\t\t\tvoid main() {\n"
-                "\t\t\t\t\t#include <logdepthbuf_fragment>\n"
-                "\t\t\t\t\tvec4 noise = getNoise( worldPosition.xz * size );\n"
-                "\t\t\t\t\tvec3 surfaceNormal = normalize( noise.xzy * vec3( 1.5, 1.0, 1.5 ) );\n"
-                "\t\t\t\t\tvec3 diffuseLight = vec3(0.0);\n"
-                "\t\t\t\t\tvec3 specularLight = vec3(0.0);\n"
-                "\t\t\t\t\tvec3 worldToEye = eye-worldPosition.xyz;\n"
-                "\t\t\t\t\tvec3 eyeDirection = normalize( worldToEye );\n"
-                "\t\t\t\t\tsunLight( surfaceNormal, eyeDirection, 100.0, 2.0, 0.5, diffuseLight, specularLight );\n"
-                "\t\t\t\t\tfloat distance = length(worldToEye);\n"
-                "\t\t\t\t\tvec2 distortion = surfaceNormal.xz * ( 0.001 + 1.0 / distance ) * distortionScale;\n"
-                "\t\t\t\t\tvec3 reflectionSample = vec3( texture2D( mirrorSampler, mirrorCoord.xy / mirrorCoord.w + distortion ) );\n"
-                "\t\t\t\t\tfloat theta = max( dot( eyeDirection, surfaceNormal ), 0.0 );\n"
-                "\t\t\t\t\tfloat rf0 = 0.3;\n"
-                "\t\t\t\t\tfloat reflectance = rf0 + ( 1.0 - rf0 ) * pow( ( 1.0 - theta ), 5.0 );\n"
-                "\t\t\t\t\tvec3 scatter = max( 0.0, dot( surfaceNormal, eyeDirection ) ) * waterColor;\n"
-                "\t\t\t\t\tvec3 albedo = mix( ( sunColor * diffuseLight * 0.3 + scatter ) * getShadowMask(), ( vec3( 0.1 ) + reflectionSample * 0.9 + reflectionSample * specularLight ), reflectance);\n"
-                "\t\t\t\t\tvec3 outgoingLight = albedo;\n"
-                "\t\t\t\t\tgl_FragColor = vec4( outgoingLight, alpha );\n"
-                "\t\t\t\t\t#include <tonemapping_fragment>\n"
-                "\t\t\t\t\t#include <fog_fragment>\n"
-                "\t\t\t\t}"
+                R"(
+                uniform sampler2D mirrorSampler;
+                uniform float alpha;
+                uniform float time;
+                uniform float size;
+                uniform float distortionScale;
+                uniform sampler2D normalSampler;
+                uniform vec3 sunColor;
+                uniform vec3 sunDirection;
+                uniform vec3 eye;
+                uniform vec3 waterColor;
+                varying vec4 mirrorCoord;
+                varying vec4 worldPosition;
+                vec4 getNoise( vec2 uv ) {
+                    vec2 uv0 = ( uv / 103.0 ) + vec2(time / 17.0, time / 29.0);
+                    vec2 uv1 = uv / 107.0-vec2( time / -19.0, time / 31.0 );
+                    vec2 uv2 = uv / vec2( 8907.0, 9803.0 ) + vec2( time / 101.0, time / 97.0 );
+                    vec2 uv3 = uv / vec2( 1091.0, 1027.0 ) - vec2( time / 109.0, time / -113.0 );
+                    vec4 noise = texture2D( normalSampler, uv0 ) +
+                    texture2D( normalSampler, uv1 ) +
+                    texture2D( normalSampler, uv2 ) +
+                    texture2D( normalSampler, uv3 );
+                    return noise * 0.5 - 1.0;
+                }
+                void sunLight( const vec3 surfaceNormal, const vec3 eyeDirection, float shiny, float spec, float diffuse, inout vec3 diffuseColor, inout vec3 specularColor ) {
+                    vec3 reflection = normalize( reflect( -sunDirection, surfaceNormal ) );
+                    float direction = max( 0.0, dot( eyeDirection, reflection ) );
+                    specularColor += pow( direction, shiny ) * sunColor * spec;
+                    diffuseColor += max( dot( sunDirection, surfaceNormal ), 0.0 ) * sunColor * diffuse;
+                }
+                #include <common>
+                #include <packing>
+                #include <bsdfs>
+                #include <fog_pars_fragment>
+                #include <logdepthbuf_pars_fragment>
+                #include <lights_pars_begin>
+                #include <shadowmap_pars_fragment>
+                #include <shadowmask_pars_fragment>
+                void main() {
+                    #include <logdepthbuf_fragment>
+                    vec4 noise = getNoise( worldPosition.xz * size );
+                    vec3 surfaceNormal = normalize( noise.xzy * vec3( 1.5, 1.0, 1.5 ) );
+                    vec3 diffuseLight = vec3(0.0);
+                    vec3 specularLight = vec3(0.0);
+                    vec3 worldToEye = eye-worldPosition.xyz;
+                    vec3 eyeDirection = normalize( worldToEye );
+                    sunLight( surfaceNormal, eyeDirection, 100.0, 2.0, 0.5, diffuseLight, specularLight );
+                    float distance = length(worldToEye);
+                    vec2 distortion = surfaceNormal.xz * ( 0.001 + 1.0 / distance ) * distortionScale;
+                    vec3 reflectionSample = vec3( texture2D( mirrorSampler, mirrorCoord.xy / mirrorCoord.w + distortion ) );
+                    float theta = max( dot( eyeDirection, surfaceNormal ), 0.0 );
+                    float rf0 = 0.3;
+                    float reflectance = rf0 + ( 1.0 - rf0 ) * pow( ( 1.0 - theta ), 5.0 );
+                    vec3 scatter = max( 0.0, dot( surfaceNormal, eyeDirection ) ) * waterColor;
+                    vec3 albedo = mix( ( sunColor * diffuseLight * 0.3 + scatter ) * getShadowMask(), ( vec3( 0.1 ) + reflectionSample * 0.9 + reflectionSample * specularLight ), reflectance);
+                    vec3 outgoingLight = albedo;
+                    gl_FragColor = vec4( outgoingLight, alpha );
+                    #include <tonemapping_fragment>
+                    #include <fog_fragment>
+                })"
 
         };
 
@@ -161,7 +163,7 @@ struct Water::Impl {
         }
 
         auto material = ShaderMaterial::create();
-        material->uniforms = std::make_shared<UniformMap>(shader.uniforms);
+        material->uniforms = shader.uniforms;
         material->fragmentShader = shader.fragmentShader;
         material->vertexShader = shader.vertexShader;
         material->lights = true;
@@ -169,16 +171,16 @@ struct Water::Impl {
         material->side = options.side.value_or(Side::Front);
         material->fog = options.fog.value_or(false);
 
-        (*material->uniforms)["mirrorSampler"].setValue(renderTarget->texture.get());
-        (*material->uniforms)["textureMatrix"].setValue(&textureMatrix);
-        (*material->uniforms)["alpha"].setValue(alpha);
-        (*material->uniforms)["time"].setValue(time);
-        (*material->uniforms)["normalSampler"].setValue(waterNormals.get());
-        (*material->uniforms)["sunColor"].setValue(sunColor);
-        (*material->uniforms)["waterColor"].setValue(waterColor);
-        (*material->uniforms)["sunDirection"].setValue(sunDirection);
-        (*material->uniforms)["distortionScale"].setValue(distortionScale);
-        (*material->uniforms)["eye"].setValue(&eye);
+        material->uniforms["mirrorSampler"].setValue(renderTarget->texture.get());
+        material->uniforms["textureMatrix"].setValue(&textureMatrix);
+        material->uniforms["alpha"].setValue(alpha);
+        material->uniforms["time"].setValue(time);
+        material->uniforms["normalSampler"].setValue(waterNormals.get());
+        material->uniforms["sunColor"].setValue(sunColor);
+        material->uniforms["waterColor"].setValue(waterColor);
+        material->uniforms["sunDirection"].setValue(sunDirection);
+        material->uniforms["distortionScale"].setValue(distortionScale);
+        material->uniforms["eye"].setValue(&eye);
 
         water_.onBeforeRender = RenderCallback([this, material](void* renderer, auto scene, auto camera, auto, auto, auto) {
             mirrorWorldPosition.setFromMatrixPosition(*water_.matrixWorld);

@@ -7,7 +7,7 @@ MeshNormalMaterial::MeshNormalMaterial()
     : MaterialWithFlatShading(false),
       MaterialWithWireframe(false, 1),
       MaterialWithDisplacementMap(1, 0),
-      MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}),
+      MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithBumpMap(1) {
 
     this->fog = false;
@@ -19,6 +19,12 @@ std::string MeshNormalMaterial::type() const {
     return "MeshNormalMaterial";
 }
 
+
+std::shared_ptr<Material> MeshNormalMaterial::createDefault() const {
+
+    return std::shared_ptr<MeshNormalMaterial>(new MeshNormalMaterial());
+}
+
 std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
 
     auto m = std::shared_ptr<MeshNormalMaterial>(new MeshNormalMaterial());
@@ -27,10 +33,11 @@ std::shared_ptr<MeshNormalMaterial> MeshNormalMaterial::create(const std::unorde
     return m;
 }
 
-std::shared_ptr<Material> MeshNormalMaterial::clone() const {
+void MeshNormalMaterial::copyInto(Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<MeshNormalMaterial>();
 
     m->normalMap = normalMap;
     m->normalMapType = normalMapType;
@@ -44,8 +51,6 @@ std::shared_ptr<Material> MeshNormalMaterial::clone() const {
     m->wireframeLinewidth = wireframeLinewidth;
 
     m->flatShading = flatShading;
-
-    return m;
 }
 
 bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& value) {
@@ -57,7 +62,7 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
 
     } else if (key == "wireframeLinewidth") {
 
-        wireframeLinewidth = std::get<float>(value);
+        wireframeLinewidth = extractFloat(value);
         return true;
 
     } else if (key == "flatShading") {
@@ -72,7 +77,7 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
 
     } else if (key == "normalMapType") {
 
-        normalMapType = std::get<int>(value);
+        normalMapType = std::get<NormalMapType>(value);
         return true;
 
     } else if (key == "displacementMap") {
@@ -82,12 +87,12 @@ bool MeshNormalMaterial::setValue(const std::string& key, const MaterialValue& v
 
     } else if (key == "displacementBias") {
 
-        displacementBias = std::get<float>(value);
+        displacementBias = extractFloat(value);
         return true;
 
     } else if (key == "displacementScale") {
 
-        displacementScale = std::get<float>(value);
+        displacementScale = extractFloat(value);
         return true;
     }
 

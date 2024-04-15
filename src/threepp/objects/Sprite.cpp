@@ -63,8 +63,8 @@ namespace {
 
 
 Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
-    : material(material),
-      _geometry(new BufferGeometry()) {
+    : _material(material ? material : SpriteMaterial::create()),
+      _geometry(BufferGeometry::create()) {
 
     std::vector<float> float32Array{
             -0.5f, -0.5f, 0.f, 0.f, 0.f,
@@ -83,9 +83,19 @@ std::string Sprite::type() const {
     return "Sprite";
 }
 
-BufferGeometry* Sprite::geometry() {
+std::shared_ptr<Material> Sprite::material() const {
 
-    return _geometry.get();
+    return _material;
+}
+
+void Sprite::setMaterial(const std::shared_ptr<SpriteMaterial>& material) {
+
+    this->_material = material;
+}
+
+std::shared_ptr<BufferGeometry> Sprite::geometry() const {
+
+    return _geometry;
 }
 
 std::shared_ptr<Sprite> Sprite::create(const std::shared_ptr<SpriteMaterial>& material) {
@@ -93,7 +103,7 @@ std::shared_ptr<Sprite> Sprite::create(const std::shared_ptr<SpriteMaterial>& ma
     return std::make_shared<Sprite>(material);
 }
 
-void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Sprite::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     if (!raycaster.camera) {
 
@@ -107,12 +117,12 @@ void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects
 
     _mvPosition.setFromMatrixPosition(this->modelViewMatrix);
 
-    if (raycaster.camera->is<PerspectiveCamera>() && !this->material->sizeAttenuation) {
+    if (raycaster.camera->is<PerspectiveCamera>() && !this->_material->sizeAttenuation) {
 
         _worldScale.multiplyScalar(-_mvPosition.z);
     }
 
-    float rotation = material->rotation;
+    float rotation = _material->rotation;
     std::optional<std::pair<float, float>> sincos;
 
     if (rotation != 0) {
@@ -154,4 +164,20 @@ void Sprite::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects
     intersection.uv = Vector2();
     Triangle::getUV(_intersectPoint, _vA, _vB, _vC, _uvA, _uvB, _uvC, *intersection.uv);
     intersects.emplace_back(intersection);
+}
+
+void Sprite::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto s = source.as<Sprite>()) {
+
+        this->center.copy(s->center);
+
+        this->_material = s->_material;
+    }
+}
+
+std::shared_ptr<Object3D> Sprite::createDefault() {
+
+    return create();
 }

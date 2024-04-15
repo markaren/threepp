@@ -16,7 +16,7 @@ namespace threepp {
         float_view(float value = 0)
             : value_(value) {}
 
-        inline float operator()() const {
+        inline operator float() const {
 
             return value_;
         }

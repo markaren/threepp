@@ -10,7 +10,6 @@ ShaderMaterial::ShaderMaterial()
       MaterialWithClipping(false),
       MaterialWithWireframe(false, 1),
       MaterialWithLineWidth(1),
-      uniforms(std::make_shared<UniformMap>()),
       vertexShader(shaders::ShaderChunk::instance().default_vertex()),
       fragmentShader(shaders::ShaderChunk::instance().default_fragment()) {
 
@@ -30,6 +29,11 @@ std::string ShaderMaterial::type() const {
 }
 
 std::shared_ptr<ShaderMaterial> ShaderMaterial::create() {
+
+    return std::shared_ptr<ShaderMaterial>(new ShaderMaterial());
+}
+
+std::shared_ptr<Material> ShaderMaterial::createDefault() const {
 
     return std::shared_ptr<ShaderMaterial>(new ShaderMaterial());
 }

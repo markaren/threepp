@@ -14,18 +14,18 @@ however much remains to be done..
 * Geometries [Box, Sphere, Plane, Cylindrical, Capsule, Tube, ++]  
 * Lights [Ambient, Directional, Point, Spot, Hemi]
 * Raycasting [Mesh, Line, Points]
-* 2D/3D Textures, 3D text, Sprites, RenderTarget
+* 2D/3D Textures, 3D text, Sprites, RenderTarget, CubeMaps
 * Transparency, Shadows
-* Morphtargets
-* OrbitControls, FlyControls
+* Morphtargets, Bones
+* Controls [Orbit, Fly, Drag]
 * Water and Sky shaders
+* Built-in text rendering and font loading [typeface.json, TTF]
 * Loaders [Binary STL, OBJ/MTL, SVG]
+* Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
-* Easy integration with [Bullet](https://github.com/bulletphysics/bullet3)
-* Easy to use text rendering using [glText](https://github.com/vallentin/glText)
 
-Builds on Windows, Linux, MacOS and MinGW.
+Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
 ### But, but why?
 
@@ -34,7 +34,24 @@ Because fun.
 
 ### How to build
 
-`threepp` is easiest built in conjunction with [vcpkg](https://vcpkg.io/en/index.html).
+`threepp` comes bundled with all required core dependencies. 
+
+Use CMake for project configuration and building.
+
+###### Windows
+```shell
+cmake . -A x64 -B build -DCMAKE_BUILD_TYPE="Release"
+cmake --build build --config "Release"
+```
+
+###### Unix
+```shell
+cmake . -B build -DCMAKE_BUILD_TYPE="Release"
+cmake --build build
+```
+
+However, some of the examples (and headers) require additional dependencies. 
+To make use of all features and to enable/build all examples, the use of [vcpkg](https://vcpkg.io/en/index.html) is encouraged.
 
 #### vcpkg (using manifest mode)
 
@@ -44,26 +61,34 @@ Add optional features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;f
 
 See [vcpkg.json](vcpkg.json) for available features.
 
-###### Building under MinGW
-
-Under MinGW you'll need to specify the vcpkg triplet:
+Note, however, that under MinGW you'll need to specify the vcpkg triplet:
 ```shell
 -DVCPKG_TARGET_TRIPLET=x64-mingw-[static|dynamic]  # choose either `static` or `dynamic`.
 -DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
 ```
+
+##### Building examples with Emscripten
+
+Pass to CMake:
+```shell
+-DCMAKE_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
+```
+When using vcpkg, however, do:
+```shell
+-DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
+```
+This will generate .html versions of a subset of the examples to be loaded in a browser.
+
 
 ##### Optional downstream dependencies
 
 When consuming `threepp` in your own application, 
 some headers will require additional dependencies in order to compile.
 
-| **Header**     | **Dependency** | **Description**                               |
-|----------------|----------------|-----------------------------------------------|
-| AssimpLoader   | assimp         | Import a wide variety of different 3D formats |
-| FontLoader     | nlohmann-json  | Import fonts to be used for 3D text           |
-| SVGLoader      | pugixml        | Import SVG files                              |
-| ImguiContext   | imgui          | ImGUI utility                                 |
-| BulletPhysics  | bullet3        | Bullet utility                                |
+| **Header**   | **Dependency** | **Description**                               |
+|--------------|----------------|-----------------------------------------------|
+| AssimpLoader | assimp         | Import a wide variety of different 3D formats |
+| ImguiContext | imgui          | ImGUI utility                                 |
 
 
 ### Implementation notes
@@ -85,10 +110,24 @@ auto createBox(const Vector3& pos, const Color& color) {
     auto geometry = BoxGeometry::create();
     auto material = MeshPhongMaterial::create();
     material->color = color;
+    
     auto box = Mesh::create(geometry, material);
     box->position.copy(pos);
     
     return box;
+}
+
+auto createPlane() {
+    auto planeGeometry = PlaneGeometry::create(5, 5);
+    auto planeMaterial = MeshLambertMaterial::create();
+    planeMaterial->color = Color::gray;
+    planeMaterial->side = Side::Double;
+    
+    auto plane = Mesh::create(planeGeometry, planeMaterial);
+    plane->position.y = -1;
+    plane->rotateX(math::degToRad(90));
+    
+    return plane;
 }
 
 int main() {
@@ -105,19 +144,13 @@ int main() {
     auto light = HemisphereLight::create();
     scene->add(light);
 
+    auto plane = createPlane();
+    scene->add(plane);
+    
     auto group = Group::create();
     group->add(createBox({-1, 0, 0}, Color::green));
     group->add(createBox({1, 0, 0}, Color::red));
     scene->add(group);
-
-    auto planeGeometry = PlaneGeometry::create(5, 5);
-    auto planeMaterial = MeshLambertMaterial::create();
-    planeMaterial->color = Color::gray;
-    planeMaterial->side = Side::Double;
-    auto plane = Mesh::create(planeGeometry, planeMaterial);
-    plane->position.y = -1;
-    plane->rotateX(math::degToRad(90));
-    scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -137,15 +170,46 @@ int main() {
 
 ```
 
-## Consuming threepp using a custom vcpkg-registry
+## Consuming threepp
 
-See [here](tests/threepp_vcpkg_test) for an example of how `threepp` may be consumed 
-as a library in a separate project using `vcpkg`.
+Threepp is available as a CMake package and can be consumed in a number of ways.
+
+#### CMake FetchContent (recommended)
+
+`threepp` is compatible with CMake's `FetchContent`:
+
+```cmake
+include(FetchContent)
+set(THREEPP_BUILD_TESTS OFF)
+set(THREEPP_BUILD_EXAMPLES OFF)
+FetchContent_Declare(
+        threepp
+        GIT_REPOSITORY https://github.com/markaren/threepp.git
+        GIT_TAG tag_or_commit_hash
+)
+FetchContent_MakeAvailable(threepp)
+#...
+target_link_libraries(main PUBLIC threepp::threepp)
+```
+
+This is the preferred approach, as it enables users to update the targeted threepp version at will.
+
+An example is provided [here](tests/threepp_fetchcontent_test).
+See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses WxWidgets as the Window system.
+
+#### vcpkg
+
+`threepp` is available for use with vcpkg through a custom vcpkg-registry.
+However, this vcpkg port is cumbersome to maintain and is not so often updated, and support may be discontinued in the future.
+
+An example is provided [here](tests/threepp_vcpkg_test).
 
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
 ![Shadows](doc/screenshots/Shadows.PNG)
+![FlyControls](doc/screenshots/fly.PNG)
 ![Crane](doc/screenshots/crane.png)
 ![Physics](doc/screenshots/instanced_physics.PNG)
 ![Water](doc/screenshots/OlympicOctopus.PNG)
+![MotorController](doc/screenshots/motor_controller.PNG)

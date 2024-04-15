@@ -8,13 +8,27 @@
 using namespace threepp;
 
 
-Texture::Texture(std::optional<Image> image)
-    : uuid(math::generateUUID()),
+Texture::Texture(std::vector<Image> image)
+    : uuid_(math::generateUUID()),
       image(std::move(image)) {}
 
-std::shared_ptr<Texture> Texture::create(std::optional<Image> image) {
+std::shared_ptr<Texture> Texture::create() {
+    return std::shared_ptr<Texture>(new Texture({}));
+}
+
+std::shared_ptr<Texture> Texture::create(const Image& image) {
+
+    return std::shared_ptr<Texture>(new Texture({image}));
+}
+
+std::shared_ptr<Texture> Texture::create(std::vector<Image> image) {
 
     return std::shared_ptr<Texture>(new Texture(std::move(image)));
+}
+
+const std::string& Texture::uuid() const {
+
+    return uuid_;
 }
 
 void Texture::updateMatrix() {
@@ -94,7 +108,7 @@ void Texture::transformUv(Vector2& uv) const {
         }
     }
 
-    if (this->image && (*this->image).flipped()) {
+    if (!this->image.empty() && this->image.front().flipped()) {
 
         uv.y = 1 - uv.y;
     }

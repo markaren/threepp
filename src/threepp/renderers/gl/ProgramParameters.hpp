@@ -12,6 +12,7 @@
 
 namespace threepp {
 
+    class Scene;
     class GLRenderer;
 
     namespace gl {
@@ -124,7 +125,7 @@ namespace threepp {
 
             std::optional<std::string> index0AttributeName;
 
-            std::shared_ptr<UniformMap> uniforms = nullptr;
+            UniformMap* uniforms = nullptr;
 
             ProgramParameters(
                     const GLRenderer& renderer,

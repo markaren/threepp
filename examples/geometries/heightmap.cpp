@@ -3,11 +3,9 @@
 #include "threepp/objects/Sky.hpp"
 #include "threepp/objects/Water.hpp"
 #include "threepp/threepp.hpp"
-#include "threepp/utils/ThreadPool.hpp"
 
 #include <fstream>
 #include <future>
-#include <iostream>
 
 using namespace threepp;
 
@@ -35,12 +33,12 @@ namespace {
     auto createSky(const Vector3& lightPos) {
         auto sky = Sky::create();
         sky->scale.setScalar(10000);
-        auto shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
-        shaderUniforms->at("turbidity").value<float>() = 10;
-        shaderUniforms->at("rayleigh").value<float>() = 1;
-        shaderUniforms->at("mieCoefficient").value<float>() = 0.005;
-        shaderUniforms->at("mieDirectionalG").value<float>() = 0.8;
-        shaderUniforms->at("sunPosition").value<Vector3>().copy(lightPos);
+        auto& shaderUniforms = sky->material()->as<ShaderMaterial>()->uniforms;
+        shaderUniforms.at("turbidity").value<float>() = 10;
+        shaderUniforms.at("rayleigh").value<float>() = 1;
+        shaderUniforms.at("mieCoefficient").value<float>() = 0.005;
+        shaderUniforms.at("mieDirectionalG").value<float>() = 0.8;
+        shaderUniforms.at("sunPosition").value<Vector3>().copy(lightPos);
 
         return sky;
     }
@@ -77,6 +75,7 @@ int main() {
 
     Canvas canvas("Heightmap");
     GLRenderer renderer{canvas.size()};
+    renderer.autoClear = false;
     renderer.toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
@@ -97,47 +96,48 @@ int main() {
     auto water = createWater(*light, scene->fog.has_value());
     scene->add(water);
 
-    std::promise<std::shared_ptr<Material>> promise;
-    auto future = promise.get_future();
+    FontLoader fontLoader;
 
-    std::cout << "Loading terrain.." << std::endl;
+    HUD hud(canvas.size());
+    TextGeometry::Options opts(fontLoader.defaultFont(), 40);
+    Text2D hudText(opts, "Loading terrain..");
+    hudText.material()->as<MaterialWithColor>()->color.setHex(Color::black);
+    hud.add(hudText);
 
-    std::mutex m;
-    utils::ThreadPool pool(2);
-    pool.submit([&] {
-        TextureLoader tl;
-        auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
-        auto material = MeshPhongMaterial::create({{"map", texture}});
-        promise.set_value(material);
+    auto material = MeshPhongMaterial::create();
 
-        std::lock_guard<std::mutex> lck(m);
-        std::cout << "Material loaded" << std::endl;
-    });
+    auto mesh = Mesh::create(BufferGeometry::create(), material);
+    scene->add(mesh);
 
-    pool.submit([&] {
-        auto data = loadHeights();
-
+    auto future = std::async(std::launch::async, [&] {
         auto geometry = PlaneGeometry::create(5041, 5041, 1023, 1023);
         geometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-
-        auto pos = geometry->getAttribute<float>("position");
-        for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
-            pos->setY(i, data[i]);
-        }
-
-        {
-            std::lock_guard<std::mutex> lck(m);
-            std::cout << "Geometry loaded" << std::endl;
-        }
-
-        auto material = future.get();
-        auto mesh = Mesh::create(geometry, material);
-
-        std::cout << "Terrain loaded" << std::endl;
-
-        canvas.invokeLater([&, mesh] {
-            scene->add(mesh);
+        renderer.invokeLater([&] {
+            mesh->setGeometry(geometry);
         });
+
+        const auto data = loadHeights();
+
+        TextureLoader tl;
+        auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
+
+        renderer.invokeLater([&, data, texture, geometry] {
+            auto pos = geometry->getAttribute<float>("position");
+            for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
+                pos->setY(i, data[i]);
+            }
+            pos->needsUpdate();
+
+            material->map = texture;
+            material->needsUpdate();
+
+            hudText.setText("Terrain loaded..", opts);
+        });
+
+        renderer.invokeLater([&] {
+            hud.remove(hudText);
+        },
+                             2);
     });
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -147,10 +147,14 @@ int main() {
     });
 
     Clock clock;
+    auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
         float t = clock.getElapsedTime();
-        water->material()->as<ShaderMaterial>()->uniforms->at("time").setValue(t);
+        timeUniform.setValue(t);
 
+        renderer.clear();
         renderer.render(*scene, *camera);
+
+        hud.apply(renderer);
     });
 }

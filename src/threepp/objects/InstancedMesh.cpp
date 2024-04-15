@@ -1,20 +1,9 @@
 
-#include <memory>
-
 #include "threepp/objects/InstancedMesh.hpp"
 
 #include "threepp/core/Raycaster.hpp"
 
 using namespace threepp;
-
-namespace {
-
-    Matrix4 _instanceLocalMatrix;
-    Matrix4 _instanceWorldMatrix;
-
-    std::vector<Intersection> _instanceIntersects;
-
-}// namespace
 
 
 InstancedMesh::InstancedMesh(
@@ -22,9 +11,33 @@ InstancedMesh::InstancedMesh(
         std::shared_ptr<Material> material,
         size_t count)
     : Mesh(std::move(geometry), std::move(material)),
-      count(count), instanceMatrix(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
+      count_(count), maxCount_(count), instanceMatrix_(FloatBufferAttribute::create(std::vector<float>(count * 16), 16)) {
 
-    this->frustumCulled = false;
+    Matrix4 identity;
+    for (unsigned i = 0; i < count; i++) {
+
+        this->setMatrixAt(i, identity);
+    }
+}
+
+size_t InstancedMesh::count() const {
+
+    return count_;
+}
+
+void InstancedMesh::setCount(size_t count) {
+
+    count_ = std::min(maxCount_, count);
+}
+
+FloatBufferAttribute* InstancedMesh::instanceMatrix() const {
+
+    return instanceMatrix_.get();
+}
+
+FloatBufferAttribute* InstancedMesh::instanceColor() const {
+
+    return instanceColor_ ? instanceColor_.get() : nullptr;
 }
 
 
@@ -35,27 +48,27 @@ std::string InstancedMesh::type() const {
 
 void InstancedMesh::getColorAt(size_t index, Color& color) const {
 
-    color.fromArray(this->instanceColor->array(), index * 3);
+    color.fromArray(this->instanceColor_->array(), index * 3);
 }
 
 void InstancedMesh::getMatrixAt(size_t index, Matrix4& matrix) const {
 
-    matrix.fromArray(this->instanceMatrix->array(), index * 16);
+    matrix.fromArray(this->instanceMatrix_->array(), index * 16);
 }
 
 void InstancedMesh::setColorAt(size_t index, const Color& color) {
 
-    if (!this->instanceColor) {
+    if (!this->instanceColor_) {
 
-        this->instanceColor = FloatBufferAttribute ::create(std::vector<float>(count * 3), 3);
+        this->instanceColor_ = FloatBufferAttribute ::create(std::vector<float>(maxCount_ * 3), 3);
     }
 
-    color.toArray(this->instanceColor->array(), index * 3);
+    color.toArray(this->instanceColor_->array(), index * 3);
 }
 
 void InstancedMesh::setMatrixAt(size_t index, const Matrix4& matrix) const {
 
-    matrix.toArray(this->instanceMatrix->array(), index * 16);
+    matrix.toArray(this->instanceMatrix_->array(), index * 16);
 }
 
 void InstancedMesh::dispose() {
@@ -66,10 +79,10 @@ void InstancedMesh::dispose() {
     }
 }
 
-void InstancedMesh::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void InstancedMesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     const auto& matrixWorld = this->matrixWorld;
-    const auto raycastTimes = this->count;
+    const auto raycastTimes = this->count_;
 
     _mesh.setGeometry(geometry_);
     _mesh.setMaterials(materials_);
@@ -113,4 +126,58 @@ std::shared_ptr<InstancedMesh> InstancedMesh::create(
         size_t count) {
 
     return std::make_shared<InstancedMesh>(std::move(geometry), std::move(material), count);
+}
+
+void InstancedMesh::computeBoundingBox() {
+
+    const auto geometry = this->geometry();
+    const auto count = this->count_;
+
+    if (!this->boundingBox) {
+
+        this->boundingBox = Box3();
+    }
+
+    if (!geometry->boundingBox) {
+
+        geometry->computeBoundingBox();
+    }
+
+    this->boundingBox->makeEmpty();
+
+    for (unsigned i = 0; i < count; i++) {
+
+        this->getMatrixAt(i, _instanceLocalMatrix);
+
+        _box3.copy(*geometry->boundingBox).applyMatrix4(_instanceLocalMatrix);
+
+        this->boundingBox->union_(_box3);
+    }
+}
+
+void InstancedMesh::computeBoundingSphere() {
+
+    const auto geometry = this->geometry();
+    const auto count = this->count_;
+
+    if (!this->boundingSphere) {
+
+        this->boundingSphere = Sphere();
+    }
+
+    if (!geometry->boundingSphere) {
+
+        geometry->computeBoundingSphere();
+    }
+
+    this->boundingSphere->makeEmpty();
+
+    for (unsigned i = 0; i < count; i++) {
+
+        this->getMatrixAt(i, _instanceLocalMatrix);
+
+        _sphere.copy(*geometry->boundingSphere).applyMatrix4(_instanceLocalMatrix);
+
+        this->boundingSphere->union_(_sphere);
+    }
 }

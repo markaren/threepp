@@ -309,19 +309,31 @@ namespace threepp {
         void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
 
             aiTextureMapMode wrapS;
-            if(AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
+            if (AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
                 switch (wrapS) {
-                    case aiTextureMapMode_Wrap: tex.wrapS = TextureWrapping::Repeat; break;
-                    case aiTextureMapMode_Mirror: tex.wrapS = TextureWrapping::MirroredRepeat; break;
-                    case aiTextureMapMode_Clamp: tex.wrapS = TextureWrapping::ClampToEdge; break;
+                    case aiTextureMapMode_Wrap:
+                        tex.wrapS = TextureWrapping::Repeat;
+                        break;
+                    case aiTextureMapMode_Mirror:
+                        tex.wrapS = TextureWrapping::MirroredRepeat;
+                        break;
+                    case aiTextureMapMode_Clamp:
+                        tex.wrapS = TextureWrapping::ClampToEdge;
+                        break;
                 }
             }
             aiTextureMapMode wrapT;
-            if(AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_V(mode, 0), wrapT)) {
+            if (AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_V(mode, 0), wrapT)) {
                 switch (wrapT) {
-                    case aiTextureMapMode_Wrap: tex.wrapT = TextureWrapping::Repeat; break;
-                    case aiTextureMapMode_Mirror: tex.wrapT = TextureWrapping::MirroredRepeat; break;
-                    case aiTextureMapMode_Clamp: tex.wrapT = TextureWrapping::ClampToEdge; break;
+                    case aiTextureMapMode_Wrap:
+                        tex.wrapT = TextureWrapping::Repeat;
+                        break;
+                    case aiTextureMapMode_Mirror:
+                        tex.wrapT = TextureWrapping::MirroredRepeat;
+                        break;
+                    case aiTextureMapMode_Clamp:
+                        tex.wrapT = TextureWrapping::ClampToEdge;
+                        break;
                 }
             }
         }
@@ -338,7 +350,6 @@ namespace threepp {
                         material.map = tex;
 
                         handleWrapping(mat, aiTextureType_DIFFUSE, *tex);
-
                     }
                 } else {
                     C_STRUCT aiColor4D diffuse;

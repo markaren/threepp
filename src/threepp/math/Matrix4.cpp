@@ -151,7 +151,7 @@ Matrix4& Matrix4::makeRotationFromEuler(const Euler& ee) {
 
     auto& te = this->elements;
 
-    const float x = ee.x(), y = ee.y(), z = ee.z();
+    const float x = ee.x, y = ee.y, z = ee.z;
     const float a = std::cos(x), b = std::sin(x);
     const float c = std::cos(y), d = std::sin(y);
     const float e = std::cos(z), f = std::sin(z);
@@ -638,7 +638,7 @@ Matrix4& Matrix4::compose(const Vector3& position, const Quaternion& quaternion,
 
     auto& te = this->elements;
 
-    const float x = quaternion.x(), y = quaternion.y(), z = quaternion.z(), w = quaternion.w();
+    const float x = quaternion.x, y = quaternion.y, z = quaternion.z, w = quaternion.w;
     const float x2 = x + x, y2 = y + y, z2 = z + z;
     const float xx = x * x2, xy = x * y2, xz = x * z2;
     const float yy = y * y2, yz = y * z2, zz = z * z2;
@@ -669,7 +669,7 @@ Matrix4& Matrix4::compose(const Vector3& position, const Quaternion& quaternion,
     return *this;
 }
 
-Matrix4& Matrix4::decompose(Vector3& position, Quaternion& quaternion, Vector3& scale) {
+void Matrix4::decompose(Vector3& position, Quaternion& quaternion, Vector3& scale) const {
 
     const auto& te = this->elements;
 
@@ -712,8 +712,6 @@ Matrix4& Matrix4::decompose(Vector3& position, Quaternion& quaternion, Vector3& 
     scale.x = sx;
     scale.y = sy;
     scale.z = sz;
-
-    return *this;
 }
 
 Matrix4& Matrix4::makePerspective(float left, float right, float top, float bottom, float near, float far) {

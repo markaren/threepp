@@ -36,9 +36,9 @@ namespace kine {
 
             threepp::Matrix4 result;
             for (unsigned i = 0, j = 0; i < components_.size(); ++i) {
-                auto& c = components_[i];
-                if (dynamic_cast<KineJoint*>(c.get())) {
-                    result.multiply(joints_[j]->getTransformation(values[j++]));
+                const auto& c = components_[i];
+                if (auto joint = dynamic_cast<KineJoint*>(c.get())) {
+                    result.multiply(joint->getTransformation(values.at(j++)));
                 } else {
                     result.multiply(c->getTransformation());
                 }

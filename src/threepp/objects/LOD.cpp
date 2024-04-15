@@ -101,3 +101,22 @@ void LOD::update(Camera& camera) {
         }
     }
 }
+
+void LOD::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, false);
+
+    if (const auto l = source.as<LOD>()) {
+
+        for (auto level : l->levels) {
+
+            this->addLevel(level.object->clone(), level.distance);
+        }
+
+        this->autoUpdate = l->autoUpdate;
+    }
+}
+
+std::shared_ptr<Object3D> LOD::createDefault() {
+
+    return create();
+}

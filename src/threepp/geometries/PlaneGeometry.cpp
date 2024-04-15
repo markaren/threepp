@@ -7,7 +7,7 @@ using namespace threepp;
 
 
 PlaneGeometry::PlaneGeometry(const Params& params)
-    : width(params.width), height(params.height) {
+    : width(params.width), height(params.height), widthSegments(params.widthSegments), heightSegments(params.heightSegments) {
 
     const auto width_half = width / 2;
     const auto height_half = height / 2;
@@ -23,10 +23,15 @@ PlaneGeometry::PlaneGeometry(const Params& params)
 
     //
 
-    std::list<unsigned int> indices;
-    std::list<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
+    std::vector<unsigned int> indices;
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> uvs;
+
+    vertices.reserve(gridX1 * gridY1 * 3);
+    normals.reserve(gridX1 * gridY1 * 3);
+    uvs.reserve(gridX1 * gridY1 * 2);
+    indices.reserve(gridX * gridY * 6);
 
     for (unsigned iy = 0; iy < gridY1; iy++) {
 
@@ -36,9 +41,13 @@ PlaneGeometry::PlaneGeometry(const Params& params)
 
             const auto x = static_cast<float>(ix) * segment_width - width_half;
 
-            vertices.insert(vertices.end(), {x, -y, 0});
+            vertices.push_back(x);
+            vertices.push_back(-y);
+            vertices.push_back(0);
 
-            normals.insert(normals.end(), {0, 0, 1});
+            normals.push_back(0);
+            normals.push_back(0);
+            normals.push_back(1);
 
             uvs.emplace_back(static_cast<float>(ix) / static_cast<float>(gridX));
             uvs.emplace_back(1 - (static_cast<float>(iy) / static_cast<float>(gridY)));
@@ -54,8 +63,12 @@ PlaneGeometry::PlaneGeometry(const Params& params)
             const auto c = ((ix + 1) + gridX1 * (iy + 1));
             const auto d = ((ix + 1) + gridX1 * iy);
 
-            indices.insert(indices.end(), {a, b, d});
-            indices.insert(indices.end(), {b, c, d});
+            indices.push_back(a);
+            indices.push_back(b);
+            indices.push_back(d);
+            indices.push_back(b);
+            indices.push_back(c);
+            indices.push_back(d);
         }
     }
 

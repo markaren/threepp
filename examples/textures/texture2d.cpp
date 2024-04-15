@@ -2,8 +2,6 @@
 #include "threepp/objects/Reflector.hpp"
 #include "threepp/threepp.hpp"
 
-#include <iostream>
-
 using namespace threepp;
 
 int main() {

@@ -22,7 +22,11 @@ namespace threepp {
 
         void getCenter(Vector3& target) const;
 
+        [[nodiscard]] Vector3 getCenter() const;
+
         void delta(Vector3& target) const;
+
+        [[nodiscard]] Vector3 delta() const;
 
         [[nodiscard]] float distanceSq() const;
 

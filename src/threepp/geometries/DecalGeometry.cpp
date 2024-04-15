@@ -221,7 +221,7 @@ DecalGeometry::DecalGeometry(
 
         // handle different geometry types
 
-        auto geometry = mesh.geometry();
+        const auto& geometry = mesh.geometry();
 
         auto positionAttribute = geometry->getAttribute<float>("position");
         auto normalAttribute = geometry->getAttribute<float>("normal");

@@ -19,12 +19,14 @@ namespace threepp {
     public:
         [[nodiscard]] std::string type() const override;
 
-        std::shared_ptr<Material> clone() const override;
-
         static std::shared_ptr<SpriteMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
     protected:
         SpriteMaterial();
+
+        std::shared_ptr<Material> createDefault() const override;
+
+        void copyInto(Material& material) const override;
 
         bool setValue(const std::string& key, const MaterialValue& value) override;
     };

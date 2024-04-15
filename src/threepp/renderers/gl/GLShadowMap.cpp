@@ -1,9 +1,7 @@
 
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 
-#include "threepp/constants.hpp"
 #include "threepp/math/Frustum.hpp"
-#include "threepp/scenes/Scene.hpp"
 
 #include "threepp/objects/Line.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -38,35 +36,6 @@ namespace {
             {Side::Back, Side::Front},
             {Side::Double, Side::Double}};
 
-    std::shared_ptr<ShaderMaterial> createShadowMaterialVertical() {
-
-        auto shadowMaterialVertical = ShaderMaterial::create();
-        shadowMaterialVertical->vertexShader = shaders::ShaderChunk::instance().get("vsm_vert");
-        shadowMaterialVertical->fragmentShader = shaders::ShaderChunk::instance().get("vsm_frag");
-
-        shadowMaterialVertical->defines["SAMPLE_RATE"] = std::to_string(2.f / 8.f);
-        shadowMaterialVertical->defines["HALF_SAMPLE_RATE"] = std::to_string(1.f / 8.f);
-
-        shadowMaterialVertical->uniforms = std::make_shared<UniformMap>(UniformMap{
-                {"shadow_pass", Uniform()},
-                {"resolution", Uniform(Vector2())},
-                {"radius", Uniform(4.f)}});
-
-        return shadowMaterialVertical;
-    }
-
-
-    std::shared_ptr<ShaderMaterial> createShadowMaterialHorizontal() {
-
-        auto horizontal = createShadowMaterialVertical();
-        horizontal->defines["HORIZONTAL_PASS "] = "1";
-
-        return horizontal;
-    }
-
-    std::shared_ptr<ShaderMaterial> shadowMaterialVertical = createShadowMaterialVertical();
-    std::shared_ptr<ShaderMaterial> shadowMaterialHorizontal = createShadowMaterialHorizontal();
-
 
 }// namespace
 
@@ -94,6 +63,7 @@ struct GLShadowMap::Impl {
     Impl(GLShadowMap* scope, GLObjects& objects)
         : scope(scope),
           _objects(objects),
+          _frustum(nullptr),
           _maxTextureSize(GLCapabilities::instance().maxTextureSize) {
 
         auto fullScreenTri = BufferGeometry::create();
@@ -107,18 +77,18 @@ struct GLShadowMap::Impl {
 
         // vertical pass
 
-        shadowMaterialVertical->uniforms->operator[]("shadow_pass").setValue(shadow->map->texture.get());
-        shadowMaterialVertical->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
-        shadowMaterialVertical->uniforms->operator[]("radius").value<float>() = shadow->radius;
+        shadowMaterialVertical->uniforms.at("shadow_pass").setValue(shadow->map->texture.get());
+        shadowMaterialVertical->uniforms.at("resolution").value<Vector2>().copy(shadow->mapSize);
+        shadowMaterialVertical->uniforms.at("radius").value<float>() = shadow->radius;
         _renderer.setRenderTarget(shadow->mapPass.get());
         _renderer.clear();
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialVertical.get(), fullScreenMesh.get(), std::nullopt);
 
         // horizontal pass
 
-        shadowMaterialHorizontal->uniforms->operator[]("shadow_pass").setValue(shadow->mapPass->texture.get());
-        shadowMaterialHorizontal->uniforms->operator[]("resolution").value<Vector2>().copy(shadow->mapSize);
-        shadowMaterialHorizontal->uniforms->operator[]("radius").value<float>() = shadow->radius;
+        shadowMaterialHorizontal->uniforms.at("shadow_pass").setValue(shadow->mapPass->texture.get());
+        shadowMaterialHorizontal->uniforms.at("resolution").value<Vector2>().copy(shadow->mapSize);
+        shadowMaterialHorizontal->uniforms.at("radius").value<float>() = shadow->radius;
         _renderer.setRenderTarget(shadow->map.get());
         _renderer.clear();
         _renderer.renderBufferDirect(camera, nullptr, geometry, shadowMaterialHorizontal.get(), fullScreenMesh.get(), std::nullopt);
@@ -243,7 +213,7 @@ struct GLShadowMap::Impl {
                 object->modelViewMatrix.multiplyMatrices(shadowCamera->matrixWorldInverse, *object->matrixWorld);
 
                 const auto geometry = _objects.update(object);
-                const auto material = object->materials();
+                const auto material = object->as<ObjectWithMaterials>()->materials();
 
                 if (material.size() > 1) {
 
@@ -252,7 +222,7 @@ struct GLShadowMap::Impl {
                     for (const auto& group : groups) {
 
                         if (material.size() > group.materialIndex) {
-                            const auto groupMaterial = material[group.materialIndex];
+                            const auto groupMaterial = material[group.materialIndex].get();
 
                             if (groupMaterial && groupMaterial->visible) {
 
@@ -265,7 +235,7 @@ struct GLShadowMap::Impl {
 
                 } else if (material.front()->visible) {
 
-                    auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front(), light, shadowCamera->near, shadowCamera->far);
+                    const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front().get(), light, shadowCamera->near, shadowCamera->far);
 
                     _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, std::nullopt);
                 }
@@ -278,7 +248,7 @@ struct GLShadowMap::Impl {
         }
     }
 
-    void render(GLRenderer& _renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {
+    void render(GLRenderer& _renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera) {
 
         if (!scope->enabled) return;
         if (!scope->autoUpdate && !scope->needsUpdate) return;
@@ -386,7 +356,7 @@ struct GLShadowMap::Impl {
                 if (auto pointLightShadow = std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
                     pointLightShadow->updateMatrices(light->as<PointLight>(), vp);
                 } else {
-                    shadow->updateMatrices(light);
+                    shadow->updateMatrices(*light);
                 }
 
                 _frustum = &shadow->getFrustum();
@@ -408,13 +378,43 @@ struct GLShadowMap::Impl {
 
         _renderer.setRenderTarget(currentRenderTarget, activeCubeFace, activeMipmapLevel);
     }
+
+private:
+    static std::shared_ptr<ShaderMaterial> createShadowMaterialVertical() {
+
+        auto shadowMaterialVertical = ShaderMaterial::create();
+        shadowMaterialVertical->vertexShader = shaders::ShaderChunk::instance().get("vsm_vert");
+        shadowMaterialVertical->fragmentShader = shaders::ShaderChunk::instance().get("vsm_frag");
+
+        shadowMaterialVertical->defines["SAMPLE_RATE"] = std::to_string(2.f / 8.f);
+        shadowMaterialVertical->defines["HALF_SAMPLE_RATE"] = std::to_string(1.f / 8.f);
+
+        shadowMaterialVertical->uniforms = {
+                {"shadow_pass", Uniform()},
+                {"resolution", Uniform(Vector2())},
+                {"radius", Uniform(4.f)}};
+
+        return shadowMaterialVertical;
+    }
+
+
+    static std::shared_ptr<ShaderMaterial> createShadowMaterialHorizontal() {
+
+        auto horizontal = createShadowMaterialVertical();
+        horizontal->defines["HORIZONTAL_PASS "] = "1";
+
+        return horizontal;
+    }
+
+    std::shared_ptr<ShaderMaterial> shadowMaterialVertical = createShadowMaterialVertical();
+    std::shared_ptr<ShaderMaterial> shadowMaterialHorizontal = createShadowMaterialHorizontal();
 };
 
 GLShadowMap::GLShadowMap(GLObjects& objects)
     : type(ShadowMap::PFC), pimpl_(std::make_unique<Impl>(this, objects)) {}
 
 
-void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Scene* scene, Camera* camera) {
+void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera) {
 
     pimpl_->render(renderer, lights, scene, camera);
 }

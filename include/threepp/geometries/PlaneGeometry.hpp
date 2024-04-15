@@ -25,8 +25,8 @@ namespace threepp {
 
         const float width;
         const float height;
-
-        PlaneGeometry(const PlaneGeometry&) = delete;
+        const unsigned int widthSegments;
+        const unsigned int heightSegments;
 
         [[nodiscard]] std::string type() const override;
 

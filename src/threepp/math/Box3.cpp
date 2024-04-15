@@ -3,9 +3,10 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/objects/InstancedMesh.hpp"
 
-#include "threepp/math/Plane.hpp"
 #include "threepp/math/Triangle.hpp"
+
 
 using namespace threepp;
 
@@ -138,9 +139,25 @@ void Box3::getCenter(Vector3& target) const {
     this->isEmpty() ? target.set(0, 0, 0) : target.addVectors(this->min_, this->max_).multiplyScalar(0.5f);
 }
 
+Vector3 Box3::getCenter() const {
+
+    Vector3 target;
+    getCenter(target);
+
+    return target;
+}
+
 void Box3::getSize(Vector3& target) const {
 
     this->isEmpty() ? target.set(0, 0, 0) : target.subVectors(this->max_, this->min_);
+}
+
+Vector3 Box3::getSize() const {
+
+    Vector3 target;
+    getSize(target);
+
+    return target;
 }
 
 Box3& Box3::expandByPoint(const Vector3& point) {
@@ -183,32 +200,49 @@ Box3& Box3::expandByObject(Object3D& object, bool presice) {
 
     object.updateWorldMatrix(false, false);
 
-    const auto geometry = object.geometry();
+    if (auto instancedMesh = object.as<InstancedMesh>()) {
 
-    if (geometry) {
+        Box3 _box{};
+
+        if (!instancedMesh->boundingBox) instancedMesh->computeBoundingBox();
+
+        _box.copy(*instancedMesh->boundingBox);
+
+        _box.applyMatrix4(*object.matrixWorld);
+
+        this->union_(_box);
+
+    } else {
+
+        const auto geometry = object.geometry();
+
+        if (geometry) {
 
         if (presice && geometry->getAttributes().contains("position")) {
 
-            const auto position = geometry->getAttribute<float>("position");
-            for (unsigned i = 0, l = position->count(); i < l; i++) {
+                const auto position = geometry->getAttribute<float>("position");
+                for (unsigned i = 0, l = position->count(); i < l; i++) {
 
-                position->setFromBufferAttribute(_vector, i);
-                _vector.applyMatrix4(*object.matrixWorld);
-                this->expandByPoint(_vector);
+                    position->setFromBufferAttribute(_vector, i);
+                    _vector.applyMatrix4(*object.matrixWorld);
+
+                    this->expandByPoint(_vector);
+                }
+
+            } else {
+
+                if (!geometry->boundingBox) {
+
+                    geometry->computeBoundingBox();
+                }
+
+                Box3 _box{};
+
+                _box.copy(geometry->boundingBox.value());
+                _box.applyMatrix4(*object.matrixWorld);
+
+                this->union_(_box);
             }
-
-        } else {
-
-            if (!geometry->boundingBox) {
-
-                geometry->computeBoundingBox();
-            }
-
-            Box3 _box{};
-            _box.copy(geometry->boundingBox.value());
-            _box.applyMatrix4(*object.matrixWorld);
-
-            this->union_(_box);
         }
     }
 

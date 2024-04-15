@@ -13,16 +13,20 @@ std::string LineBasicMaterial::type() const {
     return "LineBasicMaterial";
 }
 
-std::shared_ptr<Material> LineBasicMaterial::clone() const {
+void LineBasicMaterial::copyInto(Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<LineBasicMaterial>();
 
     m->color.copy(color);
 
     m->linewidth = linewidth;
+}
 
-    return m;
+std::shared_ptr<Material> LineBasicMaterial::createDefault() const {
+
+    return std::shared_ptr<LineBasicMaterial>(new LineBasicMaterial());
 }
 
 std::shared_ptr<LineBasicMaterial> LineBasicMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
@@ -37,13 +41,9 @@ bool LineBasicMaterial::setValue(const std::string& key, const MaterialValue& va
 
     if (key == "color") {
 
-        if (std::holds_alternative<int>(value)) {
-            color = std::get<int>(value);
-        } else {
-            color.copy(std::get<Color>(value));
-        }
-
+        color.copy(extractColor(value));
         return true;
+
     } else if (key == "linewidth") {
 
         linewidth = std::get<float>(value);

@@ -25,9 +25,11 @@ namespace threepp {
             return "MeshMatcapMaterial";
         }
 
-        [[nodiscard]] std::shared_ptr<Material> clone() const override {
-            auto m = create();
-            copyInto(m.get());
+        void copyInto(Material& material) const override {
+
+            Material::copyInto(material);
+
+            auto m = material.as<MeshMatcapMaterial>();
 
             m->defines["MATCAP"] = "";
 
@@ -51,8 +53,6 @@ namespace threepp {
             m->alphaMap = alphaMap;
 
             m->flatShading = flatShading;
-
-            return m;
         }
 
         static std::shared_ptr<MeshMatcapMaterial> create() {
@@ -66,9 +66,14 @@ namespace threepp {
               MaterialWithFlatShading(false),
               MaterialWithBumpMap(1),
               MaterialWithDisplacementMap(1, 0),
-              MaterialWithNormalMap(TangentSpaceNormalMap, {1, 1}) {
+              MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}) {
 
             this->defines["MATCAP"] = "";
+        }
+
+        std::shared_ptr<Material> createDefault() const override {
+
+            return std::shared_ptr<MeshMatcapMaterial>(new MeshMatcapMaterial());
         }
     };
 

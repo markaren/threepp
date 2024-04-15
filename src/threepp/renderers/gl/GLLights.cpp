@@ -18,7 +18,7 @@ namespace {
 
     bool shadowCastingLightsFirst(const Light* lightA, const Light* lightB) {
 
-        return (lightB->castShadow ? 1 : 0) > (lightA->castShadow ? 1 : 0);
+        return (lightB->castShadow ? 1 : 0) < (lightA->castShadow ? 1 : 0);
     }
 
     template<class T>
@@ -51,10 +51,10 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
     for (auto light : lights) {
 
-        auto& color = light->color;
-        auto intensity = light->intensity;
+        const auto& color = light->color;
+        const auto intensity = light->intensity;
 
-        if (light->is<AmbientLight>()) {
+        if (light->type() == "AmbientLight") {
 
             r += color.r * intensity;
             g += color.g * intensity;
@@ -62,7 +62,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
         } else if (light->type() == "LightProbe") {
 
-            auto l = light->as<LightProbe>();
+            const auto l = light->as<LightProbe>();
 
             for (unsigned j = 0; j < 9; ++j) {
 
@@ -71,7 +71,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
         } else if (auto directionalLight = light->as<DirectionalLight>()) {
 
-            auto uniforms = cache_.get(*light);
+            const auto uniforms = cache_.get(*light);
 
             std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(light->intensity);
 
@@ -103,7 +103,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
         } else if (auto spotLight = light->as<SpotLight>()) {
 
-            auto uniforms = cache_.get(*light);
+            const auto uniforms = cache_.get(*light);
 
             std::get<Vector3>(uniforms->at("position")).setFromMatrixPosition(*spotLight->matrixWorld);
 
@@ -116,8 +116,8 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             if (light->castShadow) {
 
-                auto& shadow = spotLight->shadow;
-                auto shadowUniforms = shadowCache_.get(*light);
+                const auto& shadow = spotLight->shadow;
+                const auto shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms->at("shadowBias") = shadow->bias;
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
@@ -141,7 +141,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
         } else if (auto pointLight = light->as<PointLight>()) {
 
-            auto uniforms = cache_.get(*light);
+            const auto uniforms = cache_.get(*light);
 
             std::get<Color>(uniforms->at("color")).copy(light->color).multiplyScalar(pointLight->intensity);
             uniforms->at("distance") = pointLight->distance;
@@ -149,7 +149,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
             if (light->castShadow) {
 
-                auto& shadow = pointLight->shadow;
+                const auto& shadow = pointLight->shadow;
                 LightUniforms* shadowUniforms = shadowCache_.get(*light);
 
                 shadowUniforms->at("shadowBias") = shadow->bias;
@@ -176,7 +176,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
 
         } else if (auto hemisphereLight = light->as<HemisphereLight>()) {
 
-            auto uniforms = cache_.get(*light);
+            const auto uniforms = cache_.get(*light);
 
             std::get<Color>(uniforms->at("skyColor")).copy(hemisphereLight->color).multiplyScalar(intensity);
             std::get<Color>(uniforms->at("groundColor")).copy(hemisphereLight->groundColor).multiplyScalar(intensity);
@@ -249,7 +249,7 @@ void GLLights::setupView(std::vector<Light*>& lights, Camera* camera) {
             direction.setFromMatrixPosition(*light->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(*l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target().matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 
@@ -269,7 +269,7 @@ void GLLights::setupView(std::vector<Light*>& lights, Camera* camera) {
             direction.setFromMatrixPosition(*l->matrixWorld);
 
             Vector3 vector3;
-            vector3.setFromMatrixPosition(*l->target->matrixWorld);
+            vector3.setFromMatrixPosition(*l->target().matrixWorld);
             direction.sub(vector3);
             direction.transformDirection(viewMatrix);
 

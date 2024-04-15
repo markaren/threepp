@@ -53,7 +53,7 @@ struct GLClipping::Impl {
         auto clipIntersection = material->clipIntersection;
         auto clipShadows = material->clipShadows;
 
-        auto materialProperties = properties.materialProperties.get(material->uuid());
+        auto materialProperties = properties.materialProperties.get(material);
 
         if (!scope.localClippingEnabled || planes.empty() || scope.renderingShadows && !clipShadows) {
 

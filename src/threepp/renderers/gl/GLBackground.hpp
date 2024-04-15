@@ -3,22 +3,27 @@
 #ifndef THREEPP_GLBACKGROUND_HPP
 #define THREEPP_GLBACKGROUND_HPP
 
+#include "threepp/constants.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 namespace threepp {
 
+    class Mesh;
     class GLRenderer;
 
     namespace gl {
 
         class GLState;
+        class GLObjects;
+        class GLCubeMaps;
+        struct GLRenderList;
 
         struct GLBackground {
 
-            GLBackground(GLState& state, bool premultipliedAlpha);
+            GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& state, GLObjects& objects, bool premultipliedAlpha);
 
-            void render(GLRenderer& renderer, Scene* scene);
+            void render(GLRenderList& renderList, Object3D* scene);
 
             [[nodiscard]] const Color& getClearColor() const;
 
@@ -30,12 +35,21 @@ namespace threepp {
 
 
         private:
+            GLRenderer& renderer;
+            GLCubeMaps& cubemaps;
             GLState& state;
+            GLObjects& objects;
 
             bool premultipliedAlpha;
 
             Color clearColor = Color(0x000000);
             float clearAlpha = 0;
+
+            std::unique_ptr<Mesh> boxMesh = nullptr;
+
+            Background* currentBackground = nullptr;
+            unsigned int currentBackgroundVersion = 0;
+            std::optional<ToneMapping> currentTonemapping;
 
             void setClear(const Color& color, float alpha);
         };

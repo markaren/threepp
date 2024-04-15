@@ -43,7 +43,7 @@ int main() {
 
         mesh->material()->as<MaterialWithMorphTargets>()->morphTargets = true;
 
-        auto points = Points::create(mesh->shared_geometry(), pointsMaterial);
+        auto points = Points::create(mesh->geometry(), pointsMaterial);
         points->copyMorphTargetInfluences(&mesh->morphTargetInfluences());
         mesh->add(points);
     });

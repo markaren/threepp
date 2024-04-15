@@ -1,55 +1,34 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
   "name": "threepp",
-  "dependencies": [
-    {
-      "name": "glad",
-      "features": ["gl-api-41", "extensions"]
-    },
-    "glfw3",
-    "stb"
-  ],
+  "dependencies": [],
   "features": {
-    "audio": {
-      "description": "Audio support",
-      "dependencies": ["miniaudio"]
-    },
-    "json": {
-      "description": "Enable JSON support in library. Required to use Fonts.",
-      "dependencies":[
-        "nlohmann-json"
-      ]
-    },
-    "bullet": {
-      "description": "Enable bullet physics in examples",
+    "external-glfw": {
+      "description": "Install external GLFW",
       "dependencies": [
-        "bullet3"
+        {
+          "name": "glfw3",
+          "platform": "!wasm32"
+        }
       ]
     },
     "assimp": {
-      "description": "Enable assimp model importer",
+      "description": "Enable assimp model importer in examples",
       "dependencies": [
         "assimp"
       ]
     },
-    "imgui": {
-      "description": "Enable user interfaces in examples",
+    "physx": {
+      "description": "Enable physx in examples",
       "dependencies": [
-        {
-          "name": "imgui",
-          "features": ["glfw-binding", "opengl3-binding"]
-        }
+        "physx"
       ]
     },
-    "pugixml": {
-      "description": "Enable SVGLoader",
+    "curl": {
+      "description": "Enable curl in examples",
       "dependencies": [
-        "pugixml"
+        "curl"
       ]
-    },
-    "opencv": {
-      "description": "Enable OpenCV in examples",
-      "dependencies": ["opencv"]
     }
   }
 }

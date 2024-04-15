@@ -9,6 +9,7 @@
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/materials.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 
 using namespace threepp;
 using namespace threepp::gl;
@@ -64,11 +65,13 @@ struct GLMaterials::Impl {
             uniforms.at("specularMap").setValue(specularMaterial->specularMap.get());
         }
 
-        auto envMap = properties.materialProperties.get(material->uuid())->envMap;
+        auto envMap = properties.materialProperties.get(material)->envMap;
         if (envMap) {
 
-            uniforms.at("envMap").setValue(envMap.get());
-            uniforms.at("flipEnvMap").value<bool>() = false;//TODO
+            auto cubeTexture = dynamic_cast<CubeTexture*>(envMap);
+
+            uniforms.at("envMap").setValue(envMap);
+            uniforms.at("flipEnvMap").value<bool>() = cubeTexture && cubeTexture->_needsFlipEnvMap;
 
             auto reflectiveMaterial = dynamic_cast<MaterialWithReflectivity*>(material);
             if (reflectiveMaterial) {
@@ -76,9 +79,9 @@ struct GLMaterials::Impl {
                 uniforms.at("refractionRatio").value<float>() = reflectiveMaterial->refractionRatio;
             }
 
-            const auto& maxMipMapLevel = properties.textureProperties.get(envMap->uuid)->maxMipLevel;
+            const auto maxMipMapLevel = properties.textureProperties.get(envMap)->maxMipLevel;
             if (maxMipMapLevel) {
-                uniforms.at("maxMipLevel").value<int>() = *maxMipMapLevel;
+                uniforms["maxMipLevel"].value<int>() = *maxMipMapLevel;
             }
         }
 
@@ -255,7 +258,11 @@ struct GLMaterials::Impl {
             uniforms.at("displacementBias").value<float>() = material->displacementBias;
         }
 
-        // TODO envMap
+        auto envMap = properties.materialProperties.get(material);
+        if (envMap) {
+
+            uniforms["envMapIntensity"].value<float>() = material->envMapIntensity;
+        }
     }
 
     void refreshUniformsMatcap(UniformMap& uniforms, MeshMatcapMaterial* material) {
@@ -469,69 +476,80 @@ struct GLMaterials::Impl {
 
     void refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height) {
 
-        if (material->is<MeshBasicMaterial>()) {
+        const auto type = material->type();
+
+        if (type == "MeshBasicMaterial") {
 
             refreshUniformsCommon(uniforms, material);
 
-        } else if (material->is<MeshLambertMaterial>()) {
+        } else if (type == "MeshLambertMaterial") {
 
-            auto m = material->as<MeshLambertMaterial>().get();
+            auto m = material->as<MeshLambertMaterial>();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsLambert(uniforms, m);
 
-        } else if (material->is<MeshToonMaterial>()) {
+        } else if (type == "MeshToonMaterial") {
 
-            auto m = material->as<MeshToonMaterial>().get();
+            auto m = material->as<MeshToonMaterial>();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsToon(uniforms, m);
 
-        } else if (material->is<MeshPhongMaterial>()) {
+        } else if (type == "MeshPhongMaterial") {
 
-            auto m = material->as<MeshPhongMaterial>().get();
+            auto m = material->as<MeshPhongMaterial>();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsPhong(uniforms, m);
 
-        } else if (material->is<MeshStandardMaterial>()) {
+        } else if (type == "MeshStandardMaterial") {
 
-            auto m = material->as<MeshStandardMaterial>().get();
+            auto m = material->as<MeshStandardMaterial>();
             refreshUniformsCommon(uniforms, material);
             refreshUniformsStandard(uniforms, m);
 
-        } else if (material->is<MeshMatcapMaterial>()) {
+        } else if (type == "MeshMatcapMaterial") {
 
-            auto m = material->as<MeshMatcapMaterial>().get();
+            auto m = material->as<MeshMatcapMaterial>();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsMatcap(uniforms, m);
 
-        } else if (material->is<MeshDepthMaterial>()) {
+        } else if (type == "MeshDepthMaterial") {
 
-            auto m = material->as<MeshDepthMaterial>().get();
+            auto m = material->as<MeshDepthMaterial>();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsDepth(uniforms, m);
 
-        } else if (material->is<MeshDistanceMaterial>()) {
+        } else if (type == "MeshDistanceMaterial") {
 
-            auto m = material->as<MeshDistanceMaterial>().get();
+            auto m = material->as<MeshDistanceMaterial>();
             refreshUniformsCommon(uniforms, m);
             refreshUniformsDistance(uniforms, m);
 
-        } else if (material->is<LineBasicMaterial>()) {
+        } else if (type == "LineBasicMaterial") {
 
-            refreshUniformsLine(uniforms, material->as<LineBasicMaterial>().get());
+            auto m = material->as<LineBasicMaterial>();
+            refreshUniformsLine(uniforms, m);
 
-        } else if (material->is<PointsMaterial>()) {
+        } else if (type == "PointsMaterial") {
 
-            auto m = material->as<PointsMaterial>().get();
+            auto m = material->as<PointsMaterial>();
             refreshUniformsPoints(uniforms, m, pixelRatio, static_cast<float>(height));
 
-        } else if (material->is<SpriteMaterial>()) {
+        } else if (type == "ShadowMaterial") {
+
+            auto m = material->as<ShadowMaterial>();
+            uniforms.at("color").value<Color>().copy(m->color);
+            uniforms.at("opacity").value<float>() = material->opacity;
+
+        } else if (type == "SpriteMaterial") {
 
             auto m = material->as<SpriteMaterial>();
-            refreshUniformsSprites(uniforms, material->as<SpriteMaterial>().get());
+            refreshUniformsSprites(uniforms, m);
 
-        } else if (material->is<ShaderMaterial>()) {
 
-            material->as<ShaderMaterial>()->uniformsNeedUpdate = false;
+        } else if (type == "ShaderMaterial") {
+
+            auto m = material->as<ShaderMaterial>();
+            m->uniformsNeedUpdate = false;
         }
     }
 };

@@ -20,33 +20,21 @@ namespace {
 
 Line::Line(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material)
     : geometry_(geometry ? std::move(geometry) : BufferGeometry::create()),
-      material_(material ? std::move(material) : LineBasicMaterial::create()) {}
+      ObjectWithMaterials({material ? std::move(material) : LineBasicMaterial::create()}) {}
 
 std::string Line::type() const {
 
     return "Line";
 }
 
-BufferGeometry* Line::geometry() {
+std::shared_ptr<BufferGeometry> Line::geometry() const {
 
-    return geometry_.get();
+    return geometry_;
 }
 
-Material* Line::material() {
+void Line::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
 
-    return material_.get();
-}
-
-std::vector<Material*> Line::materials() {
-
-    return {material_.get()};
-}
-
-std::shared_ptr<Object3D> Line::clone(bool recursive) {
-    auto clone = create(geometry_, material_);
-    clone->copy(*this, recursive);
-
-    return clone;
+    this->geometry_ = geometry;
 }
 
 std::shared_ptr<Line> Line::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {
@@ -83,7 +71,7 @@ void Line::computeLineDistances() {
     }
 }
 
-void Line::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) {
+void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
     auto geometry = this->geometry();
     auto threshold = raycaster.params.lineThreshold;
@@ -177,4 +165,19 @@ void Line::raycast(Raycaster& raycaster, std::vector<Intersection>& intersects) 
             intersects.emplace_back(intersection);
         }
     }
+}
+
+void Line::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto l = source.as<Line>()) {
+
+        materials_ = l->materials_;
+        geometry_ = l->geometry_;
+    }
+}
+
+std::shared_ptr<Object3D> Line::createDefault() {
+
+    return create();
 }

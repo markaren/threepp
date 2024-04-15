@@ -22,10 +22,27 @@ namespace threepp {
             return "MeshDistanceMaterial";
         }
 
-        std::shared_ptr<Material> clone() const override {
+        static std::shared_ptr<MeshDistanceMaterial> create() {
 
-            auto m = create();
-            copyInto(m.get());
+            return std::shared_ptr<MeshDistanceMaterial>(new MeshDistanceMaterial());
+        }
+
+    protected:
+        MeshDistanceMaterial(): MaterialWithDisplacementMap(1, 0) {
+
+            this->fog = false;
+        }
+
+        std::shared_ptr<Material> createDefault() const override {
+
+            return std::shared_ptr<MeshDistanceMaterial>(new MeshDistanceMaterial());
+        }
+
+        void copyInto(Material& material) const override {
+
+            Material::copyInto(material);
+
+            auto m = material.as<MeshDistanceMaterial>();
 
             m->referencePosition.copy(referencePosition);
             m->nearDistance = nearDistance;
@@ -38,19 +55,6 @@ namespace threepp {
             m->displacementMap = displacementMap;
             m->displacementScale = displacementScale;
             m->displacementBias = displacementBias;
-
-            return m;
-        }
-
-        static std::shared_ptr<MeshDistanceMaterial> create() {
-
-            return std::shared_ptr<MeshDistanceMaterial>(new MeshDistanceMaterial());
-        }
-
-    protected:
-        MeshDistanceMaterial(): MaterialWithDisplacementMap(1, 0) {
-
-            this->fog = false;
         }
     };
 
