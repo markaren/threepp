@@ -247,24 +247,21 @@ namespace threepp {
         }
 
         template<class T>
+            requires std::is_base_of<Object3D, T>::value
         T* as() {
-
-            static_assert(std::is_base_of<Object3D, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
-                          "T must be a base class of Object3D");
 
             return dynamic_cast<T*>(this);
         }
 
         template<class T>
+            requires std::is_base_of<Object3D, T>::value
         const T* as() const {
-
-            static_assert(std::is_base_of<Object3D, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
-                          "T must be a base class of Object3D");
 
             return dynamic_cast<const T*>(this);
         }
 
         template<class T>
+            requires std::is_base_of<Object3D, T>::value
         [[nodiscard]] bool is() const {
 
             return dynamic_cast<const T*>(this) != nullptr;

@@ -108,10 +108,8 @@ namespace threepp {
         }
 
         template<class T = Material>
-        std::shared_ptr<T> clone() const {
-
-            static_assert(std::is_base_of<Material, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
-                          "T must be a base class of Material");
+            requires std::derived_from<T, Material>
+        [[nodiscard]] std::shared_ptr<T> clone() const {
 
             auto clone = createDefault();
             copyInto(*clone);
