@@ -135,14 +135,12 @@ std::vector<Shape> ShapePath::toShapes(bool isCCW) const {
 
     if (subPaths.empty()) return {};
 
-    std::shared_ptr<Path> tmpPath;
     std::vector<Shape> shapes;
 
     if (subPaths.size() == 1) {
 
-        tmpPath = subPaths.front();
         shapes.emplace_back();
-        shapes.back().curves = tmpPath->curves;
+        shapes.back().curves = subPaths.front()->curves;
         return shapes;
     }
 
@@ -153,15 +151,13 @@ std::vector<Shape> ShapePath::toShapes(bool isCCW) const {
     std::vector<std::optional<NewShape>> newShapes;
     std::vector<std::vector<NewShapeHoles>> newShapeHoles;
     unsigned int mainIdx = 0;
-    std::vector<Vector2> tmpPoints;
 
     newShapes.emplace_back();
     newShapeHoles.emplace_back();
 
     for (const auto& subPath : subPaths) {
 
-        tmpPath = subPath;
-        tmpPoints = tmpPath->getPoints();
+        const auto tmpPoints = subPath->getPoints();
         bool solid = shapeutils::isClockWise(tmpPoints);
         solid = isCCW ? !solid : solid;
 
@@ -171,7 +167,7 @@ std::vector<Shape> ShapePath::toShapes(bool isCCW) const {
 
             newShapes.resize(mainIdx + 1);
             newShapes[mainIdx] = NewShape{std::make_shared<Shape>(), tmpPoints};
-            newShapes[mainIdx]->s->curves = tmpPath->curves;
+            newShapes[mainIdx]->s->curves = subPath->curves;
 
             if (holesFirst) mainIdx++;
             newShapeHoles.resize(mainIdx + 1);
@@ -179,7 +175,7 @@ std::vector<Shape> ShapePath::toShapes(bool isCCW) const {
 
         } else {
 
-            newShapeHoles[mainIdx].emplace_back(NewShapeHoles{tmpPath, tmpPoints[0]});
+            newShapeHoles[mainIdx].emplace_back(NewShapeHoles{subPath, tmpPoints[0]});
         }
     }
 
