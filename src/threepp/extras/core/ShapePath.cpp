@@ -22,16 +22,14 @@ namespace {
         Vector2 p;
     };
 
-    std::vector<std::shared_ptr<Shape>> toShapesNoHoles(const std::vector<std::shared_ptr<Path>>& inSubpaths) {
+    std::vector<Shape> toShapesNoHoles(const std::vector<std::shared_ptr<Path>>& inSubpaths) {
 
-        std::vector<std::shared_ptr<Shape>> shapes;
+        std::vector<Shape> shapes;
 
         for (const auto& tmpPath : inSubpaths) {
 
-            auto tmpShape = std::make_unique<Shape>();
-            tmpShape->curves = tmpPath->curves;
-
-            shapes.emplace_back(std::move(tmpShape));
+            shapes.emplace_back();
+            shapes.back().curves = tmpPath->curves;
         }
 
         return shapes;
@@ -133,18 +131,18 @@ ShapePath& ShapePath::splineThru(const std::vector<Vector2>& pts) {
     return *this;
 }
 
-std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW) const {
+std::vector<Shape> ShapePath::toShapes(bool isCCW) const {
 
     if (subPaths.empty()) return {};
 
     std::shared_ptr<Path> tmpPath;
-    std::vector<std::shared_ptr<Shape>> shapes;
+    std::vector<Shape> shapes;
 
     if (subPaths.size() == 1) {
 
         tmpPath = subPaths.front();
-        shapes.emplace_back(std::make_shared<Shape>());
-        shapes.back()->curves = tmpPath->curves;
+        shapes.emplace_back();
+        shapes.back().curves = tmpPath->curves;
         return shapes;
     }
 
@@ -243,12 +241,12 @@ std::vector<std::shared_ptr<Shape>> ShapePath::toShapes(bool isCCW) const {
 
     for (unsigned i = 0, il = newShapes.size(); i < il; i++) {
 
-        shapes.emplace_back(newShapes[i]->s);
+        shapes.emplace_back(*newShapes[i]->s);
         tmpHoles = newShapeHoles[i];
 
         for (const NewShapeHoles& tmpHole : tmpHoles) {
 
-            shapes.back()->holes.emplace_back(tmpHole.h);
+            shapes.back().holes.emplace_back(tmpHole.h);
         }
     }
 
