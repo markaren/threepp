@@ -5,6 +5,7 @@
 #include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
+#include "KeyController.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include <future>
@@ -107,13 +108,15 @@ int main() {
 
 
     std::shared_ptr<Youbot> youbot;
+    std::unique_ptr<KeyController> keyController;
     auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
         youbot->add(targetHelper);
         youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
+        keyController = std::make_unique<KeyController>(*youbot);
         renderer.invokeLater([&] {
-            canvas.addKeyListener(*youbot);
+            canvas.addKeyListener(*keyController);
             scene->add(youbot);
             hud.remove(handle);
         });
@@ -180,7 +183,7 @@ int main() {
             }
 
             youbot->setJointValues(ui.values);
-            youbot->update(dt);
+            keyController->update(dt);
         } else {
 
             hud.apply(renderer);
