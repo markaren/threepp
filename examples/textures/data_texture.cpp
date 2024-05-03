@@ -81,25 +81,25 @@ int main() {
     grid3->position.y = -2.5;
     scene.add(grid3);
 
-    canvas.onWindowResize([&](WindowSize size) {
-        camera.aspect = size.aspect();
+    canvas.onWindowResize([&](WindowSize newSize) {
+        camera.aspect = newSize.aspect();
         camera.updateProjectionMatrix();
 
-        orthoCamera.left = -size.width / 2;
-        orthoCamera.right = size.width / 2;
-        orthoCamera.top = size.height / 2;
-        orthoCamera.bottom = -size.height / 2;
+        orthoCamera.left = -newSize.width / 2;
+        orthoCamera.right = newSize.width / 2;
+        orthoCamera.top = newSize.height / 2;
+        orthoCamera.bottom = -newSize.height / 2;
         orthoCamera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer.setSize(newSize);
 
-        updateSpritePosition(sprite, size, textureSize);
+        updateSpritePosition(sprite, newSize, textureSize);
     });
 
     Clock clock;
     Vector2 vector;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         box.rotation.y += 0.5f * dt;
         sphere.rotation.x += 0.5f * dt;

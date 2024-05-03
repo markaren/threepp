@@ -66,7 +66,7 @@ void Texture::transformUv(Vector2& uv) const {
 
             case TextureWrapping::MirroredRepeat:
 
-                if (std::abs((int) std::floor(uv.x) % 2) == 1) {
+                if (std::abs(static_cast<int>(std::floor(uv.x)) % 2) == 1) {
 
                     uv.x = std::ceil(uv.x) - uv.x;
 
@@ -95,7 +95,7 @@ void Texture::transformUv(Vector2& uv) const {
 
             case TextureWrapping::MirroredRepeat:
 
-                if (std::abs((int) std::floor(uv.y) % 2) == 1) {
+                if (std::abs(static_cast<int>(std::floor(uv.y)) % 2) == 1) {
 
                     uv.y = std::ceil(uv.y) - uv.y;
 
