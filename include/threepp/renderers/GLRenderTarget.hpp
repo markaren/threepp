@@ -30,10 +30,12 @@ namespace threepp {
             std::optional<int> anisotropy;
             std::optional<Encoding> encoding;
 
-            bool generateMipmaps = false;
-            bool depthBuffer = true;
-            bool stencilBuffer = false;
+            bool generateMipmaps{false};
+            bool depthBuffer{true};
+            bool stencilBuffer{false};
             std::shared_ptr<DepthTexture> depthTexture;
+
+            Options() = default;
         };
 
         const std::string uuid;
@@ -66,7 +68,7 @@ namespace threepp {
 
         void dispose();
 
-        static std::unique_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options = {});
+        static std::unique_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
 
         ~GLRenderTarget() override;
 
