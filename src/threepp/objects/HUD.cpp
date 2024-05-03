@@ -1,4 +1,6 @@
 
+#include <utility>
+
 #include "threepp/objects/HUD.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -18,9 +20,9 @@ void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
 
     Vector2 offset;
     if (verticalAlignment_ == VerticalAlignment::CENTER) {
-        offset.y = (float(size.y) / 2);
+        offset.y = (static_cast<float>(size.y) / 2);
     } else if (verticalAlignment_ == VerticalAlignment::TOP) {
-        offset.y = float(size.y);
+        offset.y = static_cast<float>(size.y);
     } else {
         offset.y = 0;
     }
@@ -36,8 +38,8 @@ void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
         offset.x = 0;
     }
 
-    o.position.x = pos.x * float(windowSize.width) - offset.x - (margin_.x * ((0.5 > pos.x) ? -1.f : 1.f));
-    o.position.y = pos.y * float(windowSize.height) - (offset.y) - (margin_.y * ((0.5 > pos.y) ? -1.f : 1.f));
+    o.position.x = pos.x * static_cast<float>(windowSize.width) - offset.x - margin_.x * (0.5 > pos.x ? -1.f : 1.f);
+    o.position.y = pos.y * static_cast<float>(windowSize.height) - offset.y - margin_.y * (0.5 > pos.y ? -1.f : 1.f);
 }
 
 
@@ -160,11 +162,11 @@ void HUD::apply(GLRenderer& renderer) {
 }
 
 void HUD::add(Object3D& object, HUD::Options opts) {
-    pimpl_->add(object, opts);
+    pimpl_->add(object, std::move(opts));
 }
 
 void HUD::add(const std::shared_ptr<Object3D>& object, HUD::Options opts) {
-    pimpl_->add(object, opts);
+    pimpl_->add(object, std::move(opts));
 }
 
 void HUD::remove(Object3D& object) {

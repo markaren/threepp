@@ -16,7 +16,7 @@ DataTexture3D::DataTexture3D(const std::vector<unsigned char>& data,
     //
     // See #14839
 
-    this->image.emplace_back(Image{data, width, height, depth});
+    this->image.emplace_back(data, width, height, depth);
 
     this->magFilter = Filter::Nearest;
     this->minFilter = Filter::Nearest;

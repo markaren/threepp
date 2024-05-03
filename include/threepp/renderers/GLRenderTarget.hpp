@@ -66,7 +66,7 @@ namespace threepp {
 
         void dispose();
 
-        static std::unique_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options);
+        static std::unique_ptr<GLRenderTarget> create(unsigned int width, unsigned int height, const Options& options = {});
 
         ~GLRenderTarget() override;
 

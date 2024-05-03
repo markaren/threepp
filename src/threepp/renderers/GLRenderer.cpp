@@ -1057,8 +1057,6 @@ struct GLRenderer::Impl {
 
         if (renderTarget) {
 
-            const auto& texture = renderTarget->texture;
-
             framebuffer = *properties.renderTargetProperties.get(renderTarget)->glFramebuffer;
 
             _currentViewport.copy(renderTarget->viewport);
@@ -1125,7 +1123,7 @@ struct GLRenderer::Impl {
 
     void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
 
-        auto glFormat = gl::toGLFormat(format);
+        const auto glFormat = gl::toGLFormat(format);
 
         glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, glFormat, GL_UNSIGNED_BYTE, data);
     }
@@ -1178,22 +1176,22 @@ GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters
 }
 
 
-const gl::GLInfo& threepp::GLRenderer::info() {
+const gl::GLInfo& GLRenderer::info() {
 
     return pimpl_->_info;
 }
 
-gl::GLShadowMap& threepp::GLRenderer::shadowMap() {
+gl::GLShadowMap& GLRenderer::shadowMap() {
 
     return pimpl_->shadowMap;
 }
 
-const gl::GLShadowMap& threepp::GLRenderer::shadowMap() const {
+const gl::GLShadowMap& GLRenderer::shadowMap() const {
 
     return pimpl_->shadowMap;
 }
 
-gl::GLState& threepp::GLRenderer::state() {
+gl::GLState& GLRenderer::state() {
 
     return pimpl_->state;
 }
@@ -1355,22 +1353,22 @@ void GLRenderer::resetState() {
     pimpl_->reset();
 }
 
-const gl::GLInfo& threepp::GLRenderer::info() const {
+const gl::GLInfo& GLRenderer::info() const {
 
     return pimpl_->_info;
 }
 
-int threepp::GLRenderer::getActiveCubeFace() const {
+int GLRenderer::getActiveCubeFace() const {
 
     return pimpl_->_currentActiveCubeFace;
 }
 
-int threepp::GLRenderer::getActiveMipmapLevel() const {
+int GLRenderer::getActiveMipmapLevel() const {
 
     return pimpl_->_currentActiveMipmapLevel;
 }
 
-GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
+GLRenderTarget* GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
 }

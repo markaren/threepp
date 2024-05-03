@@ -4,7 +4,7 @@
 using namespace threepp;
 
 
-Fog::Fog(const threepp::Color& color, float near, float far)
+Fog::Fog(const Color& color, float near, float far)
     : color(color), near(near), far(far) {}
 
 bool Fog::operator==(const Fog& f) const {

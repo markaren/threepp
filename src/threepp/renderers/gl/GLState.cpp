@@ -14,7 +14,7 @@ using namespace threepp;
 
 namespace {
 
-    inline GLenum equationToGL(BlendEquation eq) {
+    GLenum equationToGL(BlendEquation eq) {
 
         switch (eq) {
             case BlendEquation::Add:
@@ -32,7 +32,7 @@ namespace {
         }
     }
 
-    inline GLenum factorToGL(BlendFactor factor) {
+    GLenum factorToGL(BlendFactor factor) {
 
         switch (factor) {
             case BlendFactor::Zero:

@@ -160,7 +160,7 @@ Texture& Texture::copy(const Texture& source) {
 }
 
 std::shared_ptr<Texture> Texture::clone() const {
-    auto tex = Texture::create();
+    auto tex = create();
     tex->copy(*this);
 
     return tex;
