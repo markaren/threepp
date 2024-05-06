@@ -22,11 +22,10 @@ namespace {
 int main() {
 
     Canvas canvas("Data texture", {{"aa", 4}});
-    GLRenderer renderer{canvas.size()};
+    auto size = canvas.size();
+    GLRenderer renderer{size};
     renderer.autoClear = false;
     renderer.setClearColor(Color::aliceblue);
-
-    const auto& size = canvas.size();
 
     Scene scene;
     Scene orthoScene;
@@ -92,6 +91,7 @@ int main() {
         orthoCamera.updateProjectionMatrix();
 
         renderer.setSize(newSize);
+        size = newSize;
 
         updateSpritePosition(sprite, newSize, textureSize);
     });
