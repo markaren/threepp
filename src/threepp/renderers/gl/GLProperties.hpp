@@ -23,6 +23,7 @@ namespace threepp::gl {
         bool glInit{};
         std::optional<int> maxMipLevel{};
         std::optional<unsigned int> glTexture{};
+        std::optional<int> currentAnisotropy{};
         unsigned int version{};
     };
 

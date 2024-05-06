@@ -111,6 +111,12 @@ void gl::GLTextures::setTextureParameters(GLuint textureType, Texture& texture) 
 
     glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);
     glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[texture.minFilter]);
+
+    if (texture.anisotropy > 1 || properties->textureProperties.get(&texture)->currentAnisotropy) {
+
+        glTexParameterf(textureType, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::min(texture.anisotropy, GLCapabilities::instance().maxAnisotropy));
+        properties->textureProperties.get(&texture)->currentAnisotropy = texture.anisotropy;
+    }
 }
 
 void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture& texture, GLuint slot) {
