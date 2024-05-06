@@ -152,6 +152,9 @@ namespace threepp {
 
         void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
 
+        // Experimental threepp function
+        void copyTextureToImage(Texture& texture);
+
         void resetState();
 
         void invokeLater(const std::function<void()>& task, float delay = 0);

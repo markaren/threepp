@@ -17,7 +17,7 @@ GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GL
       scissor(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
       viewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
       depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
-      texture(Texture::create({})) {
+      texture(Texture::create({Image({}, width, height)})) {
 
     if (options.mapping) texture->mapping = *options.mapping;
     if (options.wrapS) texture->wrapS = *options.wrapS;

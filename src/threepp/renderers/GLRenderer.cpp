@@ -1128,6 +1128,22 @@ struct GLRenderer::Impl {
         glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, glFormat, GL_UNSIGNED_BYTE, data);
     }
 
+    void copyTextureToImage(Texture& texture) {
+
+        textures.setTexture2D(texture, 0);
+
+        auto& image = texture.image.front();
+        auto& data = image.data();
+        if (data.empty()) {
+            auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
+            data.resize(newSize);
+        }
+
+        glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
+
+        state.unbindTexture();
+    }
+
     void setViewport(int x, int y, int width, int height) {
 
         _viewport.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
@@ -1346,6 +1362,11 @@ void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& text
 void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
 
     pimpl_->readPixels(position, size, format, data);
+}
+
+void GLRenderer::copyTextureToImage(Texture& texture) {
+
+    pimpl_->copyTextureToImage(texture);
 }
 
 void GLRenderer::resetState() {
