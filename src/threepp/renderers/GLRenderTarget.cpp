@@ -6,12 +6,12 @@
 using namespace threepp;
 
 
-std::unique_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const GLRenderTarget::Options& options) {
+std::unique_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const Options& options) {
 
     return std::make_unique<GLRenderTarget>(width, height, options);
 }
 
-GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GLRenderTarget::Options& options)
+GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const Options& options)
     : uuid(math::generateUUID()),
       width(width), height(height),
       scissor(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),

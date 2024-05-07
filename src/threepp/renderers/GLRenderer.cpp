@@ -1151,7 +1151,7 @@ struct GLRenderer::Impl {
 
     void setScissor(int x, int y, int width, int height) {
 
-        _scissor.set((float) x, (float) y, (float) width, (float) height);
+        _scissor.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
 
         state.scissor(_currentScissor.copy(_scissor).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
     }

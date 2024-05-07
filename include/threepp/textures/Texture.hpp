@@ -15,7 +15,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <utility>
 
 namespace threepp {
 
@@ -31,7 +30,7 @@ namespace threepp {
         std::vector<Image> image;
         std::vector<Image> mipmaps;
 
-        Mapping mapping = Texture::DEFAULT_MAPPING;
+        Mapping mapping = DEFAULT_MAPPING;
 
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};
         TextureWrapping wrapT{TextureWrapping::ClampToEdge};
@@ -45,9 +44,9 @@ namespace threepp {
         std::optional<std::string> internalFormat;
         Type type{Type::UnsignedByte};
 
-        Vector2 offset = Vector2(0, 0);
-        Vector2 repeat = Vector2(1, 1);
-        Vector2 center = Vector2(0, 0);
+        Vector2 offset{0, 0};
+        Vector2 repeat{1, 1};
+        Vector2 center{0, 0};
         float rotation = 0;
 
         bool matrixAutoUpdate = true;
