@@ -1111,8 +1111,8 @@ struct GLRenderer::Impl {
     void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
 
         const auto levelScale = std::pow(2, -level);
-        const auto width = static_cast<int>(texture.image.front().width * levelScale);
-        const auto height = static_cast<int>(texture.image.front().height * levelScale);
+        const auto width = static_cast<int>(texture.image().width * levelScale);
+        const auto height = static_cast<int>(texture.image().height * levelScale);
 
         textures.setTexture2D(texture, 0);
 
@@ -1132,7 +1132,7 @@ struct GLRenderer::Impl {
 
         textures.setTexture2D(texture, 0);
 
-        auto& image = texture.image.front();
+        auto& image = texture.image();
         auto& data = image.data();
         auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
         data.resize(newSize);

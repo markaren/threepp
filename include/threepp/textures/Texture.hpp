@@ -13,7 +13,6 @@
 #include "threepp/textures/Image.hpp"
 
 #include <functional>
-#include <memory>
 #include <optional>
 
 namespace threepp {
@@ -26,9 +25,6 @@ namespace threepp {
         unsigned int id = textureId++;
 
         std::string name;
-
-        std::vector<Image> image;
-        std::vector<Image> mipmaps;
 
         Mapping mapping = DEFAULT_MAPPING;
 
@@ -71,6 +67,18 @@ namespace threepp {
 
         [[nodiscard]] const std::string& uuid() const;
 
+        Image& image();
+
+        [[nodiscard]] const Image& image() const;
+
+        [[nodiscard]] std::vector<Image>& images();
+
+        [[nodiscard]] const std::vector<Image>& images() const;
+
+        [[nodiscard]] std::vector<Image>& mipmaps();
+
+        [[nodiscard]] const std::vector<Image>& mipmaps() const;
+
         void updateMatrix();
 
         void dispose();
@@ -98,11 +106,13 @@ namespace threepp {
 
     private:
         std::string uuid_;
+        std::vector<Image> images_;
+        std::vector<Image> mipmaps_;
 
-        bool disposed_ = false;
-        unsigned int version_ = 0;
+        bool disposed_{false};
+        unsigned int version_{0};
 
-        inline static unsigned int textureId = 0;
+        inline static unsigned int textureId{0};
     };
 
 }// namespace threepp

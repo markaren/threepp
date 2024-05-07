@@ -121,7 +121,7 @@ void gl::GLTextures::setTextureParameters(GLuint textureType, Texture& texture) 
 
 void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture& texture, GLuint slot) {
 
-    if (texture.image.empty()) return;
+    if (texture.images().empty()) return;
 
     GLint textureType = GL_TEXTURE_2D;
 
@@ -137,7 +137,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
-    auto& image = texture.image.front();
+    auto& image = texture.image();
 
     GLuint glFormat = toGLFormat(texture.format);
 
@@ -146,7 +146,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     setTextureParameters(textureType, texture);
 
-    auto& mipmaps = texture.mipmaps;
+    auto& mipmaps = texture.mipmaps();
 
     if (dataTexture3D) {
 
@@ -183,11 +183,11 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
             if (glType == GL_UNSIGNED_BYTE) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
                                   static_cast<int>(image.width), static_cast<int>(image.height),
-                                  glFormat, glType, texture.image.front().data().data());
+                                  glFormat, glType, texture.image().data().data());
             } else if (glType == GL_FLOAT) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
                                   static_cast<int>(image.width), static_cast<int>(image.height),
-                                  glFormat, glType, texture.image.front().data<float>().data());
+                                  glFormat, glType, texture.image().data<float>().data());
             } else {
 
                 std::cerr << "Unnsupported gltype=" << glType << std::endl;
@@ -284,11 +284,11 @@ int gl::GLTextures::allocateTextureUnit() {
 
 void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties->textureProperties.get(&texture);
+    const auto textureProperties = properties->textureProperties.get(&texture);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
-        const auto& image = texture.image;
+        const auto& image = texture.images();
 
         if (image.empty()) {
 
@@ -361,8 +361,8 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
     auto glInternalFormat = getInternalFormat(glFormat, glType);
     setTextureParameters(GL_TEXTURE_CUBE_MAP, texture);
 
-    auto& images = texture.image;
-    auto& mipmaps = texture.mipmaps;
+    auto& images = texture.images();
+    auto& mipmaps = texture.mipmaps();
     for (int i = 0; i < 6; i++) {
         auto& image = images[i];
         state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
@@ -454,11 +454,11 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
 
     // upload an empty depth texture with framebuffer size
     if (!properties->textureProperties.get(renderTarget->depthTexture.get())->glTexture ||
-        renderTarget->depthTexture->image.front().width != renderTarget->width ||
-        renderTarget->depthTexture->image.front().height != renderTarget->height) {
+        renderTarget->depthTexture->image().width != renderTarget->width ||
+        renderTarget->depthTexture->image().height != renderTarget->height) {
 
-        renderTarget->depthTexture->image.front().width = renderTarget->width;
-        renderTarget->depthTexture->image.front().height = renderTarget->height;
+        renderTarget->depthTexture->image().width = renderTarget->width;
+        renderTarget->depthTexture->image().height = renderTarget->height;
         renderTarget->depthTexture->needsUpdate();
     }
 
