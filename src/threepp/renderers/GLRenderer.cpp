@@ -1134,10 +1134,8 @@ struct GLRenderer::Impl {
 
         auto& image = texture.image.front();
         auto& data = image.data();
-        if (data.empty()) {
-            auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
-            data.resize(newSize);
-        }
+        auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
+        data.resize(newSize);
 
         glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
 
