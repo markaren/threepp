@@ -18,6 +18,11 @@ namespace threepp {
 
     protected:
         explicit AmbientLight(const Color& color, std::optional<float> intensity);
+
+        std::shared_ptr<Object3D> createDefault() override {
+
+            return create();
+        }
     };
 
 }// namespace threepp
