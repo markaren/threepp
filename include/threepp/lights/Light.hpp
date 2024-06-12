@@ -18,6 +18,8 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
+        void copy(const Object3D& source, bool recursive) override;
+
         virtual void dispose();
 
     protected:

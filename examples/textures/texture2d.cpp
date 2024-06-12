@@ -57,7 +57,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;

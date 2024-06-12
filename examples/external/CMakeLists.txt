@@ -1,5 +1,5 @@
 
-add_library(imgui OBJECT)
+add_library(imgui STATIC)
 add_library(imgui::imgui ALIAS imgui)
 target_sources(imgui PRIVATE
         "imgui/imgui.cpp"

@@ -1,5 +1,4 @@
 #include "threepp/helpers/SkeletonHelper.hpp"
-#include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/AssimpLoader.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/threepp.hpp"

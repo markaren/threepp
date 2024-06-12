@@ -22,6 +22,8 @@ namespace threepp {
 
         void dispose() override;
 
+        void copy(const Object3D& source, bool recursive) override;
+
         static std::shared_ptr<PointLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt, float distance = 0, float decay = 1);
 
     protected:

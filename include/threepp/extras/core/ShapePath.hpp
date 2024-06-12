@@ -29,7 +29,7 @@ namespace threepp {
 
         ShapePath& splineThru(const std::vector<Vector2>& pts);
 
-        [[nodiscard]] std::vector<std::shared_ptr<Shape>> toShapes(bool isCCW = false) const;
+        [[nodiscard]] std::vector<Shape> toShapes(bool isCCW = false) const;
     };
 
 }// namespace threepp

@@ -11,20 +11,19 @@ namespace threepp {
     public:
         void setData(const ImageData& data) {
 
-            image.front().setData(data);
+            image().setData(data);
         }
 
         static std::shared_ptr<DataTexture> create(
                 const ImageData& data,
                 unsigned int width = 1, unsigned int height = 1) {
+
             return std::shared_ptr<DataTexture>(new DataTexture(data, width, height));
         }
 
     private:
         explicit DataTexture(const ImageData& data, unsigned int width, unsigned int height)
-            : Texture({}) {
-
-            this->image.emplace_back(data, width, height);
+            : Texture({Image(data, width, height)}) {
 
             this->magFilter = Filter::Nearest;
             this->minFilter = Filter::Nearest;

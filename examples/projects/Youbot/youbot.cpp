@@ -1,6 +1,7 @@
 
 #include "threepp/threepp.hpp"
 
+#include "KeyController.hpp"
 #include "Youbot.hpp"
 
 #include <future>
@@ -45,10 +46,12 @@ int main() {
 
 
     std::shared_ptr<Youbot> youbot;
+    std::unique_ptr<KeyController> keyController;
     auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
+        keyController = std::make_unique<KeyController>(*youbot);
         renderer.invokeLater([&] {
-            canvas.addKeyListener(*youbot);
+            canvas.addKeyListener(*keyController);
             scene->add(youbot);
             handle.setText("Use WASD keys to steer robot", opts);
         });
@@ -70,6 +73,8 @@ int main() {
         renderer.render(*scene, *camera);
         hud.apply(renderer);
 
-        if (youbot) youbot->update(dt);
+        if (youbot) keyController->update(dt);
     });
+
+    future.get();
 }
