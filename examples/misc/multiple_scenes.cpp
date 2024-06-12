@@ -1,28 +1,21 @@
 #include "threepp/threepp.hpp"
 
-using namespace threepp;
-
 #include <cmath>
 
-struct MyMouseListener final: public MouseListener {
-    bool& dragging;
-    int& sliderPos;
-    Canvas& canvas;
-    OrbitControls& controls;
+using namespace threepp;
 
-    MyMouseListener(bool& d, int& slider, Canvas& c, OrbitControls& oc): dragging(d), sliderPos(slider), canvas(c), controls(oc) {
-    }
+struct MyMouseListener: MouseListener {
+
+    MyMouseListener(bool& d, int& slider, Canvas& c, OrbitControls& oc)
+        : dragging(d), sliderPos(slider), canvas(c), controls(oc) {}
 
     void onMouseDown(int button, const Vector2& pos) override {
         if (button == 0) {
 
-            //
             // Check to see if we're within a short tolerance to the
             // slider. Let's say 10 pixels for now.
-            //
-
             constexpr float kSliderTol = 10.f;
-            if (std::abs(pos.x - sliderPos) < kSliderTol) {
+            if (std::abs(pos.x - static_cast<float>(sliderPos)) < kSliderTol) {
                 dragging = true;
                 controls.enabled = false;
             }
@@ -41,6 +34,12 @@ struct MyMouseListener final: public MouseListener {
             sliderPos = std::clamp(static_cast<int>(pos.x), 0, canvas.size().width);
         }
     }
+
+private:
+    bool& dragging;
+    int& sliderPos;
+    Canvas& canvas;
+    OrbitControls& controls;
 };
 
 int main() {
@@ -55,8 +54,8 @@ int main() {
 
     auto geometry = IcosahedronGeometry::create(1, 3);
 
-    auto materialLeft = MeshBasicMaterial::create({{"color", Color::lightgrey}});
-    auto materialRight = MeshBasicMaterial::create({{"color", Color::gray}});
+    auto materialLeft = MeshStandardMaterial::create({{"color", Color::lightgrey}});
+    auto materialRight = MeshStandardMaterial::create({{"color", Color::gray}});
     materialRight->wireframe = true;
 
     auto meshLeft = Mesh::create(geometry, materialLeft);
@@ -67,13 +66,12 @@ int main() {
 
     auto camera = PerspectiveCamera::create(35, canvas.aspect(), 0.1f, 100);
     camera->position.z = 6;
-    camera->layers.enableAll();
 
-    auto light = HemisphereLight::create(0xffffff, 0x444444, 3.f);
+    auto light = HemisphereLight::create(0xffffff, 0x444444);
     light->position.set(-2, 2, 2);
 
-    sceneLeft.add(light->clone());
-    sceneRight.add(light->clone());
+    sceneLeft.add(light);
+    sceneRight.add(light->clone());// need to clone second light for some reason
 
     OrbitControls controls(*camera, canvas);
 
@@ -101,7 +99,4 @@ int main() {
         renderer.setScissor(sliderPos, 0, canvas.size().width - sliderPos, canvas.size().height);
         renderer.render(sceneRight, *camera);
     });
-
-
-    return 0;
 }
