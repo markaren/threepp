@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <ranges>
 #include <unordered_map>
 
 using namespace threepp;

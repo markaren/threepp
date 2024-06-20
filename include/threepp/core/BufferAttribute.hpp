@@ -14,7 +14,6 @@
 
 #include <memory>
 #include <vector>
-#include <ranges>
 
 namespace threepp {
 
@@ -385,29 +384,29 @@ namespace threepp {
             target.set(minX, minY, minZ, maxX, maxY, maxZ);
         }
 
-        void copy(const TypedBufferAttribute<T>& source) {
+        void copy(const TypedBufferAttribute& source) {
             BufferAttribute::copy(source);
 
             this->count_ = source.count_;
             this->array_ = source.array_;
         }
 
-        [[nodiscard]] std::unique_ptr<TypedBufferAttribute<T>> clone() const {
-            auto clone = std::unique_ptr<TypedBufferAttribute<T>>(new TypedBufferAttribute<T>());
+        [[nodiscard]] std::unique_ptr<TypedBufferAttribute> clone() const {
+            auto clone = std::unique_ptr<TypedBufferAttribute>(new TypedBufferAttribute());
             clone->copy(*this);
 
             return clone;
         }
 
-        static std::unique_ptr<TypedBufferAttribute<T>> create(std::initializer_list<T>&& array, int itemSize, bool normalized = false) {
+        static std::unique_ptr<TypedBufferAttribute> create(std::initializer_list<T>&& array, int itemSize, bool normalized = false) {
 
             return create(std::vector<T>{array.begin(), array.end()}, itemSize, normalized);
         }
 
         template<std::ranges::range Range>
-        static std::unique_ptr<TypedBufferAttribute<T>> create(const Range& range, int itemSize, bool normalized = false) {
+        static std::unique_ptr<TypedBufferAttribute> create(const Range& range, int itemSize, bool normalized = false) {
 
-            return std::unique_ptr<TypedBufferAttribute<T>>(new TypedBufferAttribute({std::ranges::begin(range), std::ranges::end(range)}, itemSize, normalized));
+            return std::unique_ptr<TypedBufferAttribute>(new TypedBufferAttribute({std::ranges::begin(range), std::ranges::end(range)}, itemSize, normalized));
         }
 
     protected:
