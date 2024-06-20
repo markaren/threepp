@@ -59,7 +59,7 @@ ProgramParameters::ProgramParameters(
     auto metallnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
 
     std::string vShader, fShader;
-    if (shaderIDs.count(material->type())) {
+    if (shaderIDs.contains(material->type())) {
 
         shaderID = shaderIDs.at(material->type());
         const auto shader = shaders::ShaderLib::instance().get(*shaderID);

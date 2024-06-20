@@ -495,7 +495,7 @@ list(APPEND sources
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
-target_compile_features(threepp PUBLIC "cxx_std_17")
+target_compile_features(threepp PUBLIC "cxx_std_20")
 
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread dl)

@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <unordered_map>
 
 using namespace threepp;
@@ -46,7 +47,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
     int numPointShadows = 0;
     int numSpotShadows = 0;
 
-    std::sort(lights.begin(), lights.end(), shadowCastingLightsFirst);
+    std::ranges::stable_sort(lights, shadowCastingLightsFirst);
 
     for (auto light : lights) {
 

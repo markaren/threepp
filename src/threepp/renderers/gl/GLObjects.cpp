@@ -58,7 +58,7 @@ struct GLObjects::Impl {
 
         // Update once per frame
 
-        if (!updateMap_.count(geometry) || updateMap_[geometry] != frame) {
+        if (!updateMap_.contains(geometry) || updateMap_[geometry] != frame) {
 
             geometries_.update(geometry);
 

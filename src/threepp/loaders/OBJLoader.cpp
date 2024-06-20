@@ -291,9 +291,9 @@ struct OBJLoader::Impl {
 
     std::shared_ptr<Group> load(const std::filesystem::path& path, bool tryLoadMtl) {
 
-        if (scope.useCache && cache_.count(path.string())) {
+        if (scope.useCache && cache_.contains(path.string())) {
 
-            auto cached = cache_[path.string()];
+            auto cached = cache_.at(path.string());
             if (!cached.expired()) {
                 return cached.lock()->clone<Group>();
             } else {

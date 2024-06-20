@@ -32,14 +32,14 @@ ShapeGeometry::ShapeGeometry(const std::vector<Shape>& shapes, unsigned int curv
 
         if (!shapeutils::isClockWise(shapeVertices)) {
 
-            std::reverse(shapeVertices.begin(), shapeVertices.end());
+            std::ranges::reverse(shapeVertices);
         }
 
         for (auto& shapeHole : shapeHoles) {
 
             if (shapeutils::isClockWise(shapeHole)) {
 
-                std::reverse(shapeHole.begin(), shapeHole.end());
+                std::ranges::reverse(shapeHole);
             }
         }
 

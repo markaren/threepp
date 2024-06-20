@@ -95,7 +95,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const Pro
 
 UniformMap* GLPrograms::getUniforms(Material& material) {
 
-    if (shaderIDs.count(material.type())) {
+    if (shaderIDs.contains(material.type())) {
 
         auto shaderID = shaderIDs.at(material.type());
 

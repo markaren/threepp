@@ -218,7 +218,7 @@ Box3& Box3::expandByObject(Object3D& object, bool presice) {
 
         if (geometry) {
 
-            if (presice && geometry->getAttributes().count("position")) {
+        if (presice && geometry->getAttributes().contains("position")) {
 
                 const auto position = geometry->getAttribute<float>("position");
                 for (unsigned i = 0, l = position->count(); i < l; i++) {
