@@ -36,8 +36,8 @@ namespace threepp {
     public:
         struct Parameters {
 
-            bool alpha;
-            bool depth;
+            // bool alpha;
+            // bool depth;
             bool premultipliedAlpha;
         };
 
@@ -73,7 +73,7 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
-        explicit GLRenderer(WindowSize size, const Parameters& parameters = {});
+        explicit GLRenderer(WindowSize size = {}, const Parameters& parameters = {});
 
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
