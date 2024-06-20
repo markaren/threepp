@@ -49,7 +49,7 @@ struct GLRenderer::Impl {
 
     struct OnMaterialDispose: EventListener {
 
-        explicit OnMaterialDispose(GLRenderer::Impl* scope): scope_(scope) {}
+        explicit OnMaterialDispose(Impl* scope): scope_(scope) {}
 
         void onEvent(Event& event) override {
 
@@ -61,7 +61,7 @@ struct GLRenderer::Impl {
         }
 
     private:
-        GLRenderer::Impl* scope_;
+        Impl* scope_;
     };
 
     GLRenderer& scope;
@@ -144,7 +144,7 @@ struct GLRenderer::Impl {
     double previousTime{-1};
     utils::TaskManager taskManager;
 
-    Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
+    Impl(GLRenderer& scope, WindowSize size, const Parameters& parameters)
         : scope(scope), _size(size),
           cubemaps(scope),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),

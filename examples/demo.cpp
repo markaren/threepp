@@ -5,7 +5,7 @@
 using namespace threepp;
 
 
-struct MyGui: public ImguiContext {
+struct MyGui: ImguiContext {
 
     bool colorChanged = false;
 
