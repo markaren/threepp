@@ -38,11 +38,9 @@ namespace {
             }
 
             return FloatBufferAttribute::create(array2, itemSize, normalized);
-
-        } else {
-
-            throw std::runtime_error("Unsupported operation");
         }
+
+        throw std::runtime_error("Unsupported operation");
     }
 
 }// namespace
