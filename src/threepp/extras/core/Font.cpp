@@ -99,14 +99,12 @@ namespace {
 std::vector<Shape> Font::generateShapes(const std::string& text, float size) const {
 
     std::vector<Shape> shapes;
-    auto paths = createPaths(text, size, *this);
+    const auto paths = createPaths(text, size, *this);
 
     for (const auto& path : paths) {
 
-        auto pathShapes = path.toShapes();
-        for (auto& s : pathShapes) {
-            shapes.emplace_back(*s);
-        }
+        const auto pathShapes = path.toShapes();
+        shapes.insert(shapes.end(), pathShapes.begin(), pathShapes.end());
     }
 
     return shapes;

@@ -92,7 +92,7 @@ int main() {
     };
 
     Raycaster raycaster;
-    raycaster.layers.set(1); // ignore grid
+    raycaster.layers.set(1);// ignore grid
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseUpListener mouseListener([&](int button, Vector2 pos) {
         if (start && target) return;

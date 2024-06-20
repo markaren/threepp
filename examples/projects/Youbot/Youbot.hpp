@@ -8,32 +8,9 @@
 using namespace threepp;
 
 
-struct Youbot: Object3D, KeyListener {
+class Youbot: public Object3D {
 
-    void onKeyPressed(KeyEvent evt) override {
-        if (evt.key == Key::W) {
-            keyState_.up = true;
-        } else if (evt.key == Key::S) {
-            keyState_.down = true;
-        } else if (evt.key == Key::D) {
-            keyState_.right = true;
-        } else if (evt.key == Key::A) {
-            keyState_.left = true;
-        }
-    }
-
-    void onKeyReleased(KeyEvent evt) override {
-        if (evt.key == Key::W) {
-            keyState_.up = false;
-        } else if (evt.key == Key::S) {
-            keyState_.down = false;
-        } else if (evt.key == Key::D) {
-            keyState_.right = false;
-        } else if (evt.key == Key::A) {
-            keyState_.left = false;
-        }
-    }
-
+public:
     void driveForwards(float dt) {
         float scale = 100;
         translateX(translationSpeed * dt);
@@ -88,22 +65,6 @@ struct Youbot: Object3D, KeyListener {
         };
     }
 
-    void update(float dt) {
-
-        if (keyState_.up) {
-            driveForwards(dt);
-        }
-        if (keyState_.down) {
-            driveBackwards(dt);
-        }
-        if (keyState_.right) {
-            driveRight(dt);
-        }
-        if (keyState_.left) {
-            driveLeft(dt);
-        }
-    }
-
     static std::unique_ptr<Youbot> create(const std::filesystem::path& path) {
         AssimpLoader loader;
         auto model = loader.load(path);
@@ -113,16 +74,6 @@ struct Youbot: Object3D, KeyListener {
     }
 
 private:
-
-    struct KeyState {
-        bool left = false;
-        bool right = false;
-        bool up = false;
-        bool down = false;
-    };
-
-
-    KeyState keyState_;
     float rotationSpeed = 2;
     float translationSpeed = 5;
 

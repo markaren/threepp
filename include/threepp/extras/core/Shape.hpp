@@ -18,9 +18,9 @@ namespace threepp {
     class Shape: public Path {
 
     public:
-        std::string uuid;
-
         std::vector<std::shared_ptr<Path>> holes;
+
+        const std::string& uuid() const;
 
         explicit Shape(const std::vector<Vector2>& points = {});
 
@@ -28,6 +28,9 @@ namespace threepp {
 
         // get points of shape and holes (keypoints based on segments parameter)
         [[nodiscard]] ShapePoints extractPoints(unsigned int divisions) const;
+
+    private:
+        std::string uuid_;
     };
 
 }// namespace threepp

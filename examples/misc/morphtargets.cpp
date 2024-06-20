@@ -124,7 +124,6 @@ int main() {
 
     Raycaster raycaster;
     canvas.animate([&] {
-
         box.setFromObject(*mesh);
 
         raycaster.setFromCamera(mouse, *camera);

@@ -12,7 +12,7 @@ std::shared_ptr<Scene> Scene::create() {
     return std::make_shared<Scene>();
 }
 
-Background::Background(): hasValue_(false) {}
+Background::Background() {}
 
 Background::Background(int color): Background(Color(color)) {}
 

@@ -37,7 +37,7 @@ bool MapNode::simplify() {
     this->layers.enable(0);
     this->nodesLoaded = 0;
 
-    return true; //signals that node needs clearing. Can't do it while traversing
+    return true;//signals that node needs clearing. Can't do it while traversing
 }
 
 void MapNode::loadData() {

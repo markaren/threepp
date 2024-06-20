@@ -30,10 +30,12 @@ namespace threepp {
             std::optional<int> anisotropy;
             std::optional<Encoding> encoding;
 
-            bool generateMipmaps = false;
-            bool depthBuffer = true;
-            bool stencilBuffer = false;
+            bool generateMipmaps{false};
+            bool depthBuffer{true};
+            bool stencilBuffer{false};
             std::shared_ptr<DepthTexture> depthTexture;
+
+            Options() = default;
         };
 
         const std::string uuid;

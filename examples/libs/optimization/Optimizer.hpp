@@ -7,7 +7,6 @@
 class Optimizer {
 
 public:
-
     [[nodiscard]] virtual size_t size() const = 0;
 
     [[nodiscard]] virtual const Candidate& getCandiateAt(size_t index) const = 0;

@@ -3,10 +3,10 @@
 #define THREEPP_PROBLEM_HPP
 
 #include <cassert>
-#include <utility>
-#include <vector>
 #include <cmath>
 #include <random>
+#include <utility>
+#include <vector>
 
 class Constraint {
 
@@ -139,7 +139,7 @@ public:
             value = dis(gen);
         }
 
-        return {candidate,  eval(candidate)};
+        return {candidate, eval(candidate)};
     }
 
     [[nodiscard]] virtual std::vector<std::vector<float>> solutions() const = 0;

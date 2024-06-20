@@ -170,6 +170,7 @@ set(publicHeaders
         "threepp/textures/Texture.hpp"
 
         "threepp/utils/BufferGeometryUtils.hpp"
+        "threepp/utils/ImageUtils.hpp"
         "threepp/utils/StringUtils.hpp"
 
         "threepp/lights/lights.hpp"

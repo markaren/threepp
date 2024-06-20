@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <functional>
+#include <mutex>
 #include <queue>
 #include <utility>
 
@@ -25,25 +26,31 @@ namespace threepp::utils {
             time += deltaTime;
             previousTime = currentTime;
 
+            std::unique_lock<decltype(m_)> lock(m_);
             while (!tasks_.empty()) {
-                auto& task = tasks_.top();
-                if (task.second < time) {
-                    task.first();
+                if (tasks_.top().second < time) {
+                    auto task = tasks_.top();
                     tasks_.pop();
+                    lock.unlock();
+                    task.first();
+                    lock.lock();
                 } else {
                     break;
                 }
             }
         }
 
-        void invokeLater(const Task& task, double delay = 0) {
+        void invokeLater(const Task& task, double delay = -1) {
 
+            std::lock_guard<decltype(m_)> lock(m_);
             tasks_.emplace(task, time + delay);
         }
 
     private:
         double time{};
         double previousTime = -1;
+
+        std::mutex m_;
 
         using TimedTask = std::pair<std::function<void()>, double>;
 

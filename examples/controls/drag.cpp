@@ -2,6 +2,8 @@
 #include "threepp/controls/DragControls.hpp"
 #include "threepp/threepp.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 int main() {
@@ -86,7 +88,7 @@ int main() {
     controls.addEventListener("hoveron", &hoverListener);
     controls.addEventListener("hoveroff", &hoverListener);
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt){
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::M) {
             if (controls.mode == DragControls::Mode::Translate) {
                 controls.mode = DragControls::Mode::Rotate;
@@ -103,6 +105,8 @@ int main() {
 
         renderer.setSize(size);
     });
+
+    std::cout << "Press 'm' to switch between translate and rotate mode" << std::endl;
 
     canvas.animate([&] {
         renderer.render(scene, camera);

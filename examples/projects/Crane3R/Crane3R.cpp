@@ -26,8 +26,8 @@ namespace {
 
         auto cyl1 = Mesh::create(geometry, material);
         auto cyl2 = Mesh::create(geometry, material);
-        cyl1->position.x = sep/2;
-        cyl2->position.x = -sep/2;
+        cyl1->position.x = sep / 2;
+        cyl2->position.x = -sep / 2;
         group->add(cyl1);
         group->add(cyl2);
 
@@ -50,8 +50,8 @@ namespace {
 
         auto cyl1 = Mesh::create(geometry, material);
         auto cyl2 = Mesh::create(geometry, material);
-        cyl1->position.x = sep/2;
-        cyl2->position.x = -sep/2;
+        cyl1->position.x = sep / 2;
+        cyl2->position.x = -sep / 2;
         group->add(cyl1);
         group->add(cyl2);
 

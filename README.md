@@ -210,6 +210,7 @@ An example is provided [here](tests/threepp_vcpkg_test).
 ![Shadows](doc/screenshots/Shadows.PNG)
 ![FlyControls](doc/screenshots/fly.PNG)
 ![Crane](doc/screenshots/crane.png)
+![Optimization](doc/screenshots/Optimization.PNG)
 ![Physics](doc/screenshots/instanced_physics.PNG)
 ![Water](doc/screenshots/OlympicOctopus.PNG)
 ![MotorController](doc/screenshots/motor_controller.PNG)

@@ -15,7 +15,7 @@ GLBackground::GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& 
 void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
 
     bool forceClear = false;
-    bool isScene = scene->is<Scene>();
+    const bool isScene = scene->is<Scene>();
 
     std::optional<Background> background;
 

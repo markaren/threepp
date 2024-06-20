@@ -85,7 +85,7 @@ namespace threepp {
 
     struct MaterialInfo {
         float friction;
-        float restitution ;
+        float restitution;
 
         MaterialInfo(float friction, float restitution)
             : friction(friction), restitution(restitution) {}

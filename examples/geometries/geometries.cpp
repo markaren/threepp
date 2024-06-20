@@ -23,7 +23,6 @@ namespace {
 
     private:
         float scale;
-
     };
 
     auto createBox(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
