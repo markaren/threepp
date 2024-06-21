@@ -109,7 +109,7 @@ jobs:
 
     - name: Configure and build
       run: |
-        cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
+        cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="assimp" -DCMAKE_BUILD_TYPE="Release"
         cmake --build build
 
     - name: Test
@@ -118,7 +118,7 @@ jobs:
         ctest --output-on-failure
 
 
-  vcpkg-on-windows:
+  windows:
 
     runs-on: ${{ matrix.os }}
     strategy:
@@ -129,18 +129,9 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Restore artifacts, or run vcpkg, build (and cache artifacts as post step)
-        uses: lukka/run-vcpkg@v10
-        id: runvcpkg
-        with:
-          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
-          vcpkgJsonGlob: 'vcpkg.json'
-          appendedCacheKey: vcpkginstall
-
       - name: Configure and build
         run: |
-          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui" -DCMAKE_BUILD_TYPE="Release"
+          cmake . -A x64 -B build -DCMAKE_BUILD_TYPE="Release"
           cmake --build build --config Release
 
       - name: Test
@@ -149,7 +140,7 @@ jobs:
           ctest -C Release --output-on-failure
 
 
-  vcpkg-on-darwin:
+  darwin:
 
     runs-on: ${{ matrix.os }}
     strategy:
@@ -160,20 +151,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Restore artifacts, or run vcpkg, build (and cache artifacts as post step)
-        uses: lukka/run-vcpkg@v10
-        id: runvcpkg
-        with:
-          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
-          vcpkgJsonGlob: 'vcpkg.json'
-          appendedCacheKey: vcpkginstall
-
-      - name: Install prerequisites
-        run: |
-          brew install pkg-config
-
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake . -B build -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
