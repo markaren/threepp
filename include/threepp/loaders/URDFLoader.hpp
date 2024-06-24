@@ -7,14 +7,22 @@
 
 namespace threepp {
 
-    class Object3D;
+    class Group;
+
+    template <class T>
+    class Loader {
+    public:
+        virtual std::shared_ptr<T> load(const std::filesystem::path& path) = 0;
+
+        virtual ~Loader() = default;
+    };
 
     class URDFLoader {
 
     public:
         explicit URDFLoader();
 
-        std::shared_ptr<Object3D> load(const std::filesystem::path& path);
+        std::shared_ptr<Group> load(Loader<Group>& loader, const std::filesystem::path& path);
 
         ~URDFLoader();
 

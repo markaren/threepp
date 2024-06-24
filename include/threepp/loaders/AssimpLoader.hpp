@@ -2,6 +2,7 @@
 #ifndef THREEPP_ASSIMPLOADER_HPP
 #define THREEPP_ASSIMPLOADER_HPP
 
+#include "URDFLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
@@ -18,10 +19,10 @@
 
 namespace threepp {
 
-    class AssimpLoader {
+    class AssimpLoader: public Loader<Group> {
 
     public:
-        std::shared_ptr<Group> load(const std::filesystem::path& path) {
+        std::shared_ptr<Group> load(const std::filesystem::path& path) override {
 
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
