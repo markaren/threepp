@@ -55,9 +55,9 @@ struct URDFLoader::Impl {
             auto linkObject = std::make_shared<Object3D>();
             linkObject->name = link.attribute("name").value();
 
-            if (linkObject->name == "base_link") {
-                object->add(linkObject);
-            }
+            // if (linkObject->name == "base_link") {
+            //     object->add(linkObject);
+            // }
 
             for (auto visual : link.children("visual")) {
 
@@ -143,20 +143,8 @@ struct URDFLoader::Impl {
 
         for (const auto& l : links) {
 
-            // if (!l->parent) object->add(l);
+            if (!l->parent) object->add(l);
         }
-
-        // auto o = object->getObjectByName("joint_1");
-        // o->rotation.z = -std::numbers::phi / 2;
-
-        // object->traverse([&](auto& o) {
-        //     if (o.name.find("joint_") != std::string::npos) {
-        //         std::cout << o.name << std::endl;
-        //         // std::cout << o.parent->name << std::endl;
-        //         std::cout << std::endl;
-        //         o.rotation.y = std::numbers::phi/6;
-        //     }
-        // });
 
         return object;
     }

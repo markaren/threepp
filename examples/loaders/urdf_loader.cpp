@@ -6,7 +6,11 @@
 
 using namespace threepp;
 
-int main() {
+int main(int argc, char** argv) {
+
+    if (argc != 2) return 1;
+
+    std::string urdfPath = argv[1];
 
     Canvas canvas{"URDF loader", {{"aa", 4}}};
     GLRenderer renderer(canvas.size());
@@ -26,7 +30,7 @@ int main() {
 
     URDFLoader loader;
     AssimpLoader assimpLoader;
-    auto model = loader.load(assimpLoader, "C:\\Users\\Lars Ivar Hatledal\\OneDrive - NTNU\\Teaching\\AIS1003\\2023\\Mappe\\Sensur\\10031\\testfiler\\abb-kinetic-devel\\abb_irb2400_support\\urdf\\irb2400.urdf");
+    auto model = loader.load(assimpLoader, urdfPath);
     scene->add(model);
 
     Box3 bb;
@@ -47,7 +51,12 @@ int main() {
     canvas.animate([&]() {
         const auto dt = clock.getDelta();
 
-        model->getObjectByName("joint_1")->rotation.y += dt * 1;
+        model->getObjectByName("joint_1")->rotation.y += dt * 0.1;
+        model->getObjectByName("joint_2")->rotation.z += dt * 0.1;
+        model->getObjectByName("joint_3")->rotation.z += dt * 0.1;
+        model->getObjectByName("joint_4")->rotation.x += dt * 0.1;
+        // model->getObjectByName("joint_5")->rotation.y += dt * 0.1;
+        // model->getObjectByName("joint_6")->rotation.y += dt * 0.1;
 
         model->updateMatrixWorld();
 
