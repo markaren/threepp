@@ -91,21 +91,17 @@ namespace threepp {
         mutable std::vector<float> cacheArcLengths;
     };
 
+    struct FrenetFrames {
+
+        std::vector<Vector3> tangents;
+        std::vector<Vector3> normals;
+        std::vector<Vector3> binormals;
+
+        static FrenetFrames compute(const Curve<Vector3>& curve, unsigned int segments, bool closed);
+    };
 
     typedef Curve<Vector2> Curve2;
-
-    class Curve3: public Curve<Vector3> {
-
-    public:
-        struct FrenetFrames {
-
-            std::vector<Vector3> tangents;
-            std::vector<Vector3> normals;
-            std::vector<Vector3> binormals;
-        };
-
-        FrenetFrames computeFrenetFrames(unsigned int segments, bool closed);
-    };
+    typedef Curve<Vector3> Curve3;
 
     extern template class threepp::Curve<Vector2>;
     extern template class threepp::Curve<Vector3>;

@@ -43,7 +43,7 @@ namespace threepp {
                 bool closed = false);
 
     private:
-        Curve3::FrenetFrames frames;
+        FrenetFrames frames;
 
         TubeGeometry(std::shared_ptr<Curve3> path, const Params& params);
     };

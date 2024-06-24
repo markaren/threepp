@@ -10,7 +10,7 @@ using namespace threepp;
 TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
     : path(std::move(path)), radius(params.radius) {
 
-    this->frames = this->path->computeFrenetFrames(params.tubularSegments, params.closed);
+    this->frames = FrenetFrames::compute(*this->path, params.tubularSegments, params.closed);
 
     // helper variables
 
