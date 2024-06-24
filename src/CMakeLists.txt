@@ -95,6 +95,7 @@ set(publicHeaders
         "threepp/loaders/loaders.hpp"
         "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/CubeTextureLoader.hpp"
+        "threepp/loaders/FontLoader.hpp"
         "threepp/loaders/MTLLoader.hpp"
         "threepp/loaders/ImageLoader.hpp"
         "threepp/loaders/OBJLoader.hpp"
