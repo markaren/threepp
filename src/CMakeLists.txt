@@ -100,6 +100,7 @@ set(publicHeaders
         "threepp/loaders/OBJLoader.hpp"
         "threepp/loaders/STLLoader.hpp"
         "threepp/loaders/TextureLoader.hpp"
+        "threepp/loaders/URDFLoader.hpp"
 
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"
@@ -317,6 +318,7 @@ set(sources
         "threepp/loaders/OBJLoader.cpp"
         "threepp/loaders/STLLoader.cpp"
         "threepp/loaders/TextureLoader.cpp"
+        "threepp/loaders/URDFLoader.cpp"
 
         "threepp/materials/LineBasicMaterial.cpp"
         "threepp/materials/Material.cpp"
