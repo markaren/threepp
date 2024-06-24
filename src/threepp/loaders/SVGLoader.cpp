@@ -100,7 +100,7 @@ std::vector<SVGLoader::SVGData> SVGLoader::load(const std::filesystem::path& fil
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_file(filePath.string().c_str());
     if (!result) {
-        throw std::runtime_error("Unable to parse modelDescription.xml");
+        throw std::runtime_error("Unable to load XML:  " + filePath.string());
     }
 
     return pimpl_->load(doc);
@@ -111,7 +111,7 @@ std::vector<SVGLoader::SVGData> SVGLoader::parse(const std::string& text) {
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_string(text.c_str());
     if (!result) {
-        throw std::runtime_error("Unable to parse modelDescription.xml");
+        throw std::runtime_error("Unable to parse XML content");
     }
 
     return pimpl_->load(doc);
