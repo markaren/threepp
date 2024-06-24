@@ -267,7 +267,7 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<Shape>& shapes, const Extrude
 
         std::vector<Vector3> extrudePts;
         bool extrudeByPath = false;
-        Curve3::FrenetFrames splineTube;
+        FrenetFrames splineTube;
         Vector3 binormal, normal, position2;
 
         if (extrudePath) {
@@ -281,7 +281,7 @@ ExtrudeGeometry::ExtrudeGeometry(const std::vector<Shape>& shapes, const Extrude
 
             // TODO1 - have a .isClosed in spline?
 
-            splineTube = extrudePath->computeFrenetFrames(steps, false);
+            splineTube = FrenetFrames::compute(*extrudePath, steps, false);
         }
 
         // Safeguards if bevels are not enabled
