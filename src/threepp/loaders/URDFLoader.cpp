@@ -6,7 +6,7 @@
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
-#include "threepp/utils/stringUtils.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include <iostream>
 #include <numbers>
