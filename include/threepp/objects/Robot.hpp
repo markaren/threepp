@@ -4,6 +4,8 @@
 
 #include "threepp/core/Object3D.hpp"
 
+#include <algorithm>
+
 namespace threepp {
 
     struct JointRange {
@@ -96,7 +98,7 @@ namespace threepp {
 
         [[nodiscard]] size_t numDOF() const {
 
-           return articulatedJoints_.size();
+            return articulatedJoints_.size();
         }
 
     private:
@@ -104,7 +106,6 @@ namespace threepp {
         std::vector<std::shared_ptr<Object3D>> links_;
         std::vector<std::shared_ptr<Object3D>> joints_;
         std::unordered_map<int, std::pair<Object3D*, JointInfo>> articulatedJoints_;
-
     };
 
 }// namespace threepp
