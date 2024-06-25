@@ -145,6 +145,7 @@ namespace {
             const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
 
             if (auto obj = loader.load(fileName)) {
+
                 obj->traverseType<Mesh>([fileName](const Mesh& mesh) {
                     if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
                         mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
@@ -161,14 +162,14 @@ namespace {
             return obj;
 
         } else if (const auto sphere = geometry.child("sphere")) {
-            const auto radius = utils::parseFloat(box.attribute("radius").value());
+            const auto radius = utils::parseFloat(sphere.attribute("radius").value());
             auto obj = Mesh::create(SphereGeometry::create(radius));
 
             return obj;
 
         } else if (const auto cylinder = geometry.child("cylinder")) {
-            const auto radius = utils::parseFloat(box.attribute("radius").value());
-            const auto length = utils::parseFloat(box.attribute("length").value());
+            const auto radius = utils::parseFloat(cylinder.attribute("radius").value());
+            const auto length = utils::parseFloat(cylinder.attribute("length").value());
             auto obj = Mesh::create(CylinderGeometry::create(radius, radius, length));
 
             return obj;
@@ -199,32 +200,29 @@ struct URDFLoader::Impl {
             const auto linkObject = std::make_shared<Object3D>();
             linkObject->name = link.attribute("name").value();
 
-            if (const auto visual = link.child("visual")) {
+            for (const auto visual : link.children("visual")) {
 
                 auto group = Group::create();
                 group->position.copy(getXYZ(visual));
                 applyRotation(group, getRPY(visual));
 
-                if (const auto geometry = visual.child("geometry")) {
+                if (auto visualObject = parseGeometryNode(path, loader, visual.child("geometry"))) {
+                    group->add(visualObject);
+                }
 
-                    if (auto visualObject = parseGeometryNode(path, loader, geometry)) {
-                        group->add(visualObject);
-                    }
+                if (const auto material = visual.child("material")) {
 
-                    if (const auto material = visual.child("material")) {
+                    const auto mtl = getMaterial(material);
 
-                        const auto mtl = getMaterial(material);
-
-                        group->traverseType<Mesh>([mtl](Mesh& mesh) {
-                            mesh.setMaterial(mtl);
-                        });
-                    }
+                    group->traverseType<Mesh>([mtl](Mesh& mesh) {
+                        mesh.setMaterial(mtl);
+                    });
                 }
 
                 linkObject->add(group);
             }
 
-            if (const auto collider = link.child("collision")) {
+            for (const auto collider : link.children("collision")) {
 
                 auto group = Group::create();
                 group->userData["collider"] = true;
@@ -234,15 +232,12 @@ struct URDFLoader::Impl {
                 const auto material = MeshBasicMaterial::create();
                 material->wireframe = true;
 
-                if (const auto geometry = collider.child("geometry")) {
+                if (auto colliderObject = parseGeometryNode(path, loader, collider.child("geometry"))) {
+                    group->add(colliderObject);
 
-                    if (auto colliderObject = parseGeometryNode(path, loader, geometry)) {
-                        group->add(colliderObject);
-
-                        colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
-                            mesh.setMaterial(material);
-                        });
-                    }
+                    colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
+                        mesh.setMaterial(material);
+                    });
                 }
 
                 linkObject->add(group);

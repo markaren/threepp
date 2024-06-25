@@ -56,7 +56,9 @@ namespace threepp {
             joints_.emplace_back(joint);
             jointInfos_.emplace_back(info);
             if (info.type != JointType::Fixed) {
-                articulatedJoints_.emplace(joints_.size() - 1, std::make_pair(joint.get(), info));
+                size_t idx = joints_.size() -1;
+                articulatedJoints_.emplace(idx, std::make_pair(joint.get(), info));
+                origPose_.emplace(idx, std::make_pair(joint->position.clone(), joint->quaternion.clone()));
             }
         }
 
@@ -87,7 +89,7 @@ namespace threepp {
             jointValues_.resize(numDOF());
         }
 
-        void setJointValues(std::vector<float> values) {
+        void setJointValues(const std::vector<float>& values) {
             for (auto i = 0; i < values.size(); ++i) {
                 setJointValue(i, values[i]);
             }
@@ -95,8 +97,11 @@ namespace threepp {
 
         void setJointValue(int index, float value, bool deg = false) {
 
-            const auto& joint = articulatedJoints_[index].first;
-            const auto& info = articulatedJoints_[index].second;
+            const auto& joint = articulatedJoints_.at(index).first;
+            const auto& info = articulatedJoints_.at(index).second;
+
+            const auto& origPos = origPose_.at(index).first;
+            const auto& origQuat = origPose_.at(index).second;
 
             switch (info.type) {
                 case JointType::Revolute: {
@@ -105,6 +110,7 @@ namespace threepp {
                         value = info.range->clamp(value);
                     }
                     joint->quaternion.setFromAxisAngle(info.axis, value);
+                    joint->quaternion.premultiply(origQuat);
                     jointValues_[index] = value;
                     break;
                 }
@@ -179,6 +185,7 @@ namespace threepp {
         std::vector<std::shared_ptr<Object3D>> colliders_;
         std::vector<std::shared_ptr<Object3D>> joints_;
         std::unordered_map<size_t, std::pair<Object3D*, JointInfo>> articulatedJoints_;
+        std::unordered_map<size_t, std::pair<Vector3, Quaternion>> origPose_;
 
         std::vector<float> jointValues_;
     };

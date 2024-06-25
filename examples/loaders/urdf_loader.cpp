@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
     camera->position.set(0, size.y * 1.5f, size.z * 3.f);
     controls.update();
 
-    bool animate{true};
+    bool animate{false};
     bool showColliders{false};
     const auto info = robot->getArticulatedJointInfo();
     std::vector<float> jointValues = robot->jointValuesWithConversionFromRadiansToDeg();
