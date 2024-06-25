@@ -1,16 +1,16 @@
 
 #include "threepp/loaders/URDFLoader.hpp"
 
-#include "pugixml.hpp"
 #include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/CylinderGeometry.hpp"
 #include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
-#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/utils/StringUtils.hpp"
+
+#include "pugixml.hpp"
 
 using namespace threepp;
 
@@ -22,34 +22,6 @@ namespace {
         return {utils::parseFloat(values[0]),
                 utils::parseFloat(values[1]),
                 utils::parseFloat(values[2])};
-    }
-
-    Vector3 getXYZ(const pugi::xml_node& node) {
-        if (!node.child("origin")) return {};
-        const auto xyz = utils::split(node.child("origin").attribute("xyz").value(), ' ');
-        return Vector3(
-                utils::parseFloat(xyz[0]),
-                utils::parseFloat(xyz[2]),
-                -utils::parseFloat(xyz[1]));
-    }
-
-    Vector3 getAxis(const std::string& axis) {
-        if (axis.empty()) return {};
-        const auto xyz = utils::split(axis, ' ');
-        return Vector3(
-                       utils::parseFloat(xyz[0]),
-                       utils::parseFloat(xyz[2]),
-                       utils::parseFloat(xyz[1]))
-                .normalize();
-    }
-
-    Vector3 getRPY(const pugi::xml_node& node) {
-        if (!node.child("origin")) return {};
-        const auto xyz = utils::split(node.child("origin").attribute("rpy").value(), ' ');
-        return Vector3(
-                utils::parseFloat(xyz[0]),
-                utils::parseFloat(xyz[1]),
-                utils::parseFloat(xyz[2]));
     }
 
     void applyRotation(const std::shared_ptr<Object3D>& object, const Vector3& rotation) {
@@ -106,8 +78,13 @@ namespace {
     }
 
     JointInfo parseInfo(const pugi::xml_node& node) {
+
+        auto axis = parseTupleString(node.child("axis")
+                                             .attribute("xyz")
+                                             .as_string("1 0 0"));
+
         return {
-                .axis = getAxis(node.child("axis").attribute("xyz").value()),
+                .axis = axis.normalize(),
                 .type = getType(node.attribute("type").value()),
                 .range = getRange(node),
                 .parent = node.child("parent").attribute("link").value(),
@@ -143,31 +120,38 @@ namespace {
     std::shared_ptr<Object3D> parseGeometryNode(const std::filesystem::path& path, Loader<Group>& loader, const pugi::xml_node& geometry) {
         if (const auto mesh = geometry.child("mesh")) {
             const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
+            if (fileName.empty()) {
+                return nullptr;
+            }
 
             if (auto obj = loader.load(fileName)) {
+                if (const auto scale = mesh.attribute("scale")) {
+                    obj->scale.copy(parseTupleString(scale.value()));
+                }
 
-                obj->traverseType<Mesh>([fileName](const Mesh& mesh) {
-                    if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
-                        mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-                    }
-                });
+                if (utils::toLower(fileName.extension().string()) == ".dae") {
+                    obj->traverseType<Mesh>([](const Mesh& mesh) {
+                        mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(math::PI / 2));
+                    });
+                }
 
                 return obj;
             }
-        } else if (const auto box = geometry.child("box")) {
+        }
+        if (const auto box = geometry.child("box")) {
             const auto size = parseTupleString(box.attribute("size").value());
             auto obj = Mesh::create(BoxGeometry::create(1, 1, 1));
             obj->scale.copy(size);
 
             return obj;
-
-        } else if (const auto sphere = geometry.child("sphere")) {
+        }
+        if (const auto sphere = geometry.child("sphere")) {
             const auto radius = utils::parseFloat(sphere.attribute("radius").value());
             auto obj = Mesh::create(SphereGeometry::create(radius));
 
             return obj;
-
-        } else if (const auto cylinder = geometry.child("cylinder")) {
+        }
+        if (const auto cylinder = geometry.child("cylinder")) {
             const auto radius = utils::parseFloat(cylinder.attribute("radius").value());
             const auto length = utils::parseFloat(cylinder.attribute("length").value());
             auto obj = Mesh::create(CylinderGeometry::create(radius, radius, length));
@@ -203,8 +187,10 @@ struct URDFLoader::Impl {
             for (const auto visual : link.children("visual")) {
 
                 auto group = Group::create();
-                group->position.copy(getXYZ(visual));
-                applyRotation(group, getRPY(visual));
+                if (const auto origin = visual.child("origin")) {
+                    group->position.copy(parseTupleString(origin.attribute("xyz").value()));
+                    applyRotation(group, parseTupleString(origin.attribute("rpy").value()));
+                }
 
                 if (auto visualObject = parseGeometryNode(path, loader, visual.child("geometry"))) {
                     group->add(visualObject);
@@ -226,8 +212,10 @@ struct URDFLoader::Impl {
 
                 auto group = Group::create();
                 group->userData["collider"] = true;
-                group->position.copy(getXYZ(collider));
-                applyRotation(group, getRPY(collider));
+                if (const auto origin = collider.child("origin")) {
+                    group->position.copy(parseTupleString(origin.attribute("xyz").value()));
+                    applyRotation(group, parseTupleString(origin.attribute("rpy").value()));
+                }
 
                 const auto material = MeshBasicMaterial::create();
                 material->wireframe = true;
@@ -251,8 +239,10 @@ struct URDFLoader::Impl {
             const auto jointObject = std::make_shared<Object3D>();
             jointObject->name = joint.attribute("name").value();
 
-            jointObject->position.copy(getXYZ(joint));
-            applyRotation(jointObject, getRPY(joint));
+            if (const auto origin = joint.child("origin")) {
+                jointObject->position.copy(parseTupleString(origin.attribute("xyz").value()));
+                applyRotation(jointObject, parseTupleString(origin.attribute("rpy").value()));
+            }
 
             robot->addJoint(jointObject, parseInfo(joint));
         }

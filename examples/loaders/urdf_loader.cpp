@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     }
 
     std::filesystem::path urdfPath = argv[1];
-    if (!std::filesystem::exists(urdfPath)) {
+    if (!exists(urdfPath)) {
         std::cerr << "File not found: " << urdfPath << std::endl;
         return 1;
     }
@@ -30,15 +30,13 @@ int main(int argc, char** argv) {
 
     OrbitControls controls{*camera, canvas};
 
-    auto grid = GridHelper::create();
-    scene->add(grid);
-
     auto light = HemisphereLight::create(Color::aliceblue, Color::grey);
     scene->add(light);
 
     URDFLoader loader;
     AssimpLoader assimpLoader;
     auto robot = loader.load(assimpLoader, urdfPath);
+    robot->rotation.x = -math::PI / 2;
     robot->showColliders(false);
     scene->add(robot);
 
@@ -57,7 +55,7 @@ int main(int argc, char** argv) {
 
     std::vector<std::string> labels;
     for (auto i = 0; i < robot->numDOF(); i++) {
-        labels.emplace_back("j" + std::to_string(i+1));
+        labels.emplace_back("j" + std::to_string(i + 1));
     }
 
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
@@ -83,10 +81,10 @@ int main(int argc, char** argv) {
         ImGui::End();
 
         if (animate) {
-           for (auto i = 0; i < robot->numDOF(); i++) {
-               jointValues[i] = robot->getJointValue(i, true);
-           }
-       }
+            for (auto i = 0; i < robot->numDOF(); i++) {
+                jointValues[i] = robot->getJointValue(i, true);
+            }
+        }
     });
 
     IOCapture capture{};
