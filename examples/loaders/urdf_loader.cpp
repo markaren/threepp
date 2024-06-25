@@ -8,9 +8,16 @@ using namespace threepp;
 
 int main(int argc, char** argv) {
 
-    if (argc != 2) return 1;
+    if (argc != 2) {
+        std::cerr << "Usage: " << argv[0] << " <urdf file>" << std::endl;
+        return 1;
+    }
 
-    std::string urdfPath = argv[1];
+    std::filesystem::path urdfPath = argv[1];
+    if (!std::filesystem::exists(urdfPath)) {
+        std::cerr << "File not found: " << urdfPath << std::endl;
+        return 1;
+    }
 
     Canvas canvas{"URDF loader", {{"aa", 4}}};
     GLRenderer renderer(canvas.size());
@@ -38,7 +45,7 @@ int main(int argc, char** argv) {
 
     Vector3 size;
     bb.getSize(size);
-    camera->position.copy(size).multiplyScalar(1.5).setX(0);
+    camera->position.set(0, size.y * 1.5f, size.z * 3.f);
     controls.update();
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -51,10 +58,10 @@ int main(int argc, char** argv) {
     canvas.animate([&]() {
         const auto dt = clock.getDelta();
 
-        model->getObjectByName("joint_1")->rotation.y += dt * 0.1;
-        model->getObjectByName("joint_2")->rotation.z += dt * 0.1;
-        model->getObjectByName("joint_3")->rotation.z += dt * 0.1;
-        model->getObjectByName("joint_4")->rotation.x += dt * 0.1;
+        model->getObjectByName("joint_1")->rotation.y += dt * 0.1f;
+        model->getObjectByName("joint_2")->rotation.z += dt * 0.1f;
+        model->getObjectByName("joint_3")->rotation.z += dt * 0.1f;
+        model->getObjectByName("joint_4")->rotation.x += dt * 0.1f;
         // model->getObjectByName("joint_5")->rotation.y += dt * 0.1;
         // model->getObjectByName("joint_6")->rotation.y += dt * 0.1;
 
@@ -62,5 +69,4 @@ int main(int argc, char** argv) {
 
         renderer.render(*scene, *camera);
     });
-
 }

@@ -31,6 +31,32 @@ namespace {
                 -utils::parseFloat(xyz[2]));
     }
 
+    std::filesystem::path getModelPath(const std::filesystem::path& basePath, std::string fileName) {
+
+        if (fileName.find("package://") != std::string::npos) {
+
+            fileName = fileName.substr(10);
+
+            //find parent path with package.xml
+            bool packageFound = false;
+            auto packagePath = basePath.parent_path();
+            for (int i = 0; i < 10; ++i) {
+                if (exists(packagePath / "package.xml")) {
+                    packageFound = true;
+                    break;
+                }
+                packagePath = packagePath.parent_path();
+            }
+            if (!packageFound) {
+                return "";
+            }
+
+            return packagePath.parent_path().string() + "/" + fileName;
+        }
+
+        return fileName;
+    }
+
 }// namespace
 
 struct URDFLoader::Impl {
@@ -50,7 +76,7 @@ struct URDFLoader::Impl {
         object->name = root.attribute("name").as_string("robot");
 
         std::vector<std::shared_ptr<Object3D>> links;
-        for (auto link : root.children("link")) {
+        for (const auto link : root.children("link")) {
 
             auto linkObject = std::make_shared<Object3D>();
             linkObject->name = link.attribute("name").value();
@@ -59,7 +85,7 @@ struct URDFLoader::Impl {
             //     object->add(linkObject);
             // }
 
-            for (auto visual : link.children("visual")) {
+            for (const auto visual : link.children("visual")) {
 
                 auto visualObject = std::make_shared<Object3D>();
                 visualObject->name = visual.attribute("name").value();
@@ -67,32 +93,12 @@ struct URDFLoader::Impl {
                 visualObject->position.copy(getXYZ(visual));
                 visualObject->rotation.copy(getRPY(visual));
 
-                for (auto geometry : visual.children("geometry")) {
+                for (const auto geometry : visual.children("geometry")) {
 
                     auto mesh = geometry.child("mesh");
-                    auto fileName = std::string(mesh.attribute("filename").value());
+                    auto fileName = getModelPath(path, mesh.attribute("filename").value());
 
-                    if (fileName.find("package://") == 0) {
-                        fileName = fileName.substr(10);
-                        //find parent path with package.xml
-                        bool packageFound = false;
-                        auto packagePath = path.parent_path();
-                        for (int i = 0; i < 10; ++i) {
-                            if (exists(packagePath / "package.xml")) {
-                                packageFound = true;
-                                break;
-                            }
-                            packagePath = packagePath.parent_path();
-                        }
-                        if (!packageFound) {
-                            return nullptr;
-                        }
-
-                        fileName = packagePath.parent_path().string() + "/" + fileName;
-                    }
-
-                    auto load = loader.load(fileName);
-                    if (load) {
+                    if (auto load = loader.load(fileName)) {
                         visualObject->add(load);
                     }
                 }
@@ -116,7 +122,7 @@ struct URDFLoader::Impl {
             links.emplace_back(linkObject);
         }
 
-        for (auto joint : root.children("joint")) {
+        for (const auto joint : root.children("joint")) {
 
             auto jointObject = std::make_shared<Object3D>();
             jointObject->name = joint.attribute("name").value();

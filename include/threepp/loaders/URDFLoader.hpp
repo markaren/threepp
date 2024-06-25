@@ -2,20 +2,14 @@
 #ifndef THREEPP_URDFLOADER_HPP
 #define THREEPP_URDFLOADER_HPP
 
-#include <memory>
+#include "threepp/loaders/Loader.hpp"
+
 #include <filesystem>
+#include <memory>
 
 namespace threepp {
 
     class Group;
-
-    template <class T>
-    class Loader {
-    public:
-        virtual std::shared_ptr<T> load(const std::filesystem::path& path) = 0;
-
-        virtual ~Loader() = default;
-    };
 
     class URDFLoader {
 
@@ -31,6 +25,6 @@ namespace threepp {
         std::unique_ptr<Impl> pimpl_;
     };
 
-}
+}// namespace threepp
 
 #endif//THREEPP_URDFLOADER_HPP
