@@ -26,17 +26,31 @@ namespace {
         if (axis.empty()) return {};
         const auto xyz = utils::split(axis, ' ');
         return Vector3(
-                utils::parseFloat(xyz[0]),
-                utils::parseFloat(xyz[2]),
-                utils::parseFloat(xyz[1]));
+                       utils::parseFloat(xyz[0]),
+                       utils::parseFloat(xyz[2]),
+                       utils::parseFloat(xyz[1]))
+                .normalize();
     }
 
-    Euler getRPY(const pugi::xml_node& node) {
+    Vector3 getRPY(const pugi::xml_node& node) {
         const auto xyz = utils::split(node.child("origin").attribute("rpy").value(), ' ');
-        return Euler(
+        return Vector3(
                 utils::parseFloat(xyz[0]),
                 utils::parseFloat(xyz[1]),
-                -utils::parseFloat(xyz[2]));
+                utils::parseFloat(xyz[2]));
+    }
+
+    void applyRotation(std::shared_ptr<Object3D> object, const Vector3& rotation) {
+
+        static Quaternion tempQuaternion;
+        static Euler tempEuler;
+
+        object->rotation.set(0, 0, 0);
+
+        tempEuler.set(rotation.x, rotation.y, rotation.z, Euler::RotationOrders::ZYX);
+        tempQuaternion.setFromEuler(tempEuler);
+        tempQuaternion.multiply(object->quaternion);
+        object->quaternion.copy(tempQuaternion);
     }
 
     std::shared_ptr<Material> getMaterial(const pugi::xml_node& node) {
@@ -50,7 +64,8 @@ namespace {
                 utils::parseFloat(diffuseArray[1]),
                 utils::parseFloat(diffuseArray[2]));
 
-        if (float alpha = utils::parseFloat(diffuseArray[3]) < 1) {
+        float alpha = utils::parseFloat(diffuseArray[3]);
+        if (alpha < 1) {
             mtl->transparent = true;
             mtl->opacity = alpha;
         }
@@ -72,11 +87,10 @@ namespace {
 
     std::optional<JointRange> getRange(const pugi::xml_node& node) {
         const auto limit = node.child("limit");
-        if (!limit) return {};
+        if (!limit || !limit.attribute("lower") || !limit.attribute("upper")) return {};
         return JointRange{
                 .min = utils::parseFloat(limit.attribute("lower").value()),
-                .max = utils::parseFloat(limit.attribute("upper").value())
-        };
+                .max = utils::parseFloat(limit.attribute("upper").value())};
     }
 
     JointInfo parseInfo(const pugi::xml_node& node) {
@@ -85,8 +99,7 @@ namespace {
                 .type = getType(node.attribute("type").value()),
                 .range = getRange(node),
                 .parent = node.child("parent").attribute("link").value(),
-                .child = node.child("child").attribute("link").value()
-        };
+                .child = node.child("child").attribute("link").value()};
     }
 
 
@@ -140,32 +153,38 @@ struct URDFLoader::Impl {
 
             for (const auto visual : link.children("visual")) {
 
-                if (const auto geometry = visual.child("geometry")) {
+                auto group = Group::create();
+                group->name = visual.attribute("name").value();
+                group->position.copy(getXYZ(visual));
+                applyRotation(group, getRPY(visual));
+
+                for (const auto geometry : visual.children("geometry")) {
 
                     const auto mesh = geometry.child("mesh");
                     const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
 
                     if (auto visualObject = loader.load(fileName)) {
-                        visualObject->name = visual.attribute("name").value();
-                        visualObject->position.copy(getXYZ(visual));
-                        visualObject->rotation.copy(getRPY(visual));
 
-                        if (const auto material = visual.child("material")) {
+                        visualObject->traverseType<Mesh>([&](Mesh& mesh) {
+                            if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
+                                mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
+                            }
+                        });
 
-                            const auto mtl = getMaterial(material);
-
-                            visualObject->traverseType<Mesh>([&](Mesh& mesh) {
-                                mesh.setMaterial(mtl);
-                            });
-                        }
-
-                        if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
-                            visualObject->rotateX(-math::PI / 2);
-                        }
-
-                        linkObject->add(visualObject);
+                        group->add(visualObject);
                     }
                 }
+
+                if (const auto material = visual.child("material")) {
+
+                    const auto mtl = getMaterial(material);
+
+                    group->traverseType<Mesh>([&](Mesh& mesh) {
+                        mesh.setMaterial(mtl);
+                    });
+                }
+
+                linkObject->add(group);
             }
 
             robot->addLink(linkObject);
@@ -177,10 +196,9 @@ struct URDFLoader::Impl {
             jointObject->name = joint.attribute("name").value();
 
             jointObject->position.copy(getXYZ(joint));
-            jointObject->rotation.copy(getRPY(joint));
+            applyRotation(jointObject, getRPY(joint));
 
             robot->addJoint(jointObject, parseInfo(joint));
-
         }
 
         robot->finalize();
