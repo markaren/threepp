@@ -2,7 +2,8 @@
 #include "threepp/loaders/URDFLoader.hpp"
 
 #include "pugixml.hpp"
-#include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/utils/StringUtils.hpp"
@@ -36,6 +37,25 @@ namespace {
                 utils::parseFloat(xyz[0]),
                 utils::parseFloat(xyz[1]),
                 -utils::parseFloat(xyz[2]));
+    }
+
+    std::shared_ptr<Material> getMaterial(const pugi::xml_node& node) {
+        const auto color = node.child("color");
+        const auto diffuse = color.attribute("rgba").value();
+        const auto diffuseArray = utils::split(diffuse, ' ');
+
+        const auto mtl = MeshStandardMaterial::create();
+        mtl->color.setRGB(
+                utils::parseFloat(diffuseArray[0]),
+                utils::parseFloat(diffuseArray[1]),
+                utils::parseFloat(diffuseArray[2]));
+
+        if (float alpha = utils::parseFloat(diffuseArray[3]) < 1) {
+            mtl->transparent = true;
+            mtl->opacity = alpha;
+        }
+
+        return mtl;
     }
 
     JointType getType(const std::string& type) {
@@ -78,7 +98,7 @@ namespace {
 
             //find parent path with package.xml
             bool packageFound = false;
-            auto packagePath = basePath.parent_path();
+            auto packagePath = basePath;
             for (int i = 0; i < 10; ++i) {
                 if (exists(packagePath / "package.xml")) {
                     packageFound = true;
@@ -93,7 +113,7 @@ namespace {
             return packagePath.parent_path().string() + "/" + fileName;
         }
 
-        return fileName;
+        return basePath / fileName;
     }
 
 }// namespace
@@ -110,47 +130,42 @@ struct URDFLoader::Impl {
         const auto root = doc.child("robot");
         if (!root) return nullptr;
 
-
         auto robot = std::make_shared<Robot>();
         robot->name = root.attribute("name").as_string("robot");
 
         for (const auto link : root.children("link")) {
 
-            auto linkObject = std::make_shared<Object3D>();
+            const auto linkObject = std::make_shared<Object3D>();
             linkObject->name = link.attribute("name").value();
 
             for (const auto visual : link.children("visual")) {
 
-                auto visualObject = std::make_shared<Object3D>();
-                visualObject->name = visual.attribute("name").value();
+                if (const auto geometry = visual.child("geometry")) {
 
-                visualObject->position.copy(getXYZ(visual));
-                visualObject->rotation.copy(getRPY(visual));
+                    const auto mesh = geometry.child("mesh");
+                    const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
 
-                for (const auto geometry : visual.children("geometry")) {
+                    if (auto visualObject = loader.load(fileName)) {
+                        visualObject->name = visual.attribute("name").value();
+                        visualObject->position.copy(getXYZ(visual));
+                        visualObject->rotation.copy(getRPY(visual));
 
-                    auto mesh = geometry.child("mesh");
-                    auto fileName = getModelPath(path, mesh.attribute("filename").value());
+                        if (const auto material = visual.child("material")) {
 
-                    if (auto load = loader.load(fileName)) {
-                        visualObject->add(load);
+                            const auto mtl = getMaterial(material);
+
+                            visualObject->traverseType<Mesh>([&](Mesh& mesh) {
+                                mesh.setMaterial(mtl);
+                            });
+                        }
+
+                        if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
+                            visualObject->rotateX(-math::PI / 2);
+                        }
+
+                        linkObject->add(visualObject);
                     }
                 }
-
-                // for (auto material : visual.children("material")) {
-                //
-                //     auto color = material.child("color");
-                //     auto diffuse = color.attribute("rgba").value();
-                //     auto diffuseArray = utils::split(diffuse, ' ');
-                //
-                //     auto mtl = MeshBasicMaterial::create();
-                //     mtl->color.setRGB(
-                //             utils::parseFloat(diffuseArray[0]),
-                //             utils::parseFloat(diffuseArray[1]),
-                //             utils::parseFloat(diffuseArray[2]));
-                // }
-
-                linkObject->add(visualObject);
             }
 
             robot->addLink(linkObject);
@@ -158,7 +173,7 @@ struct URDFLoader::Impl {
 
         for (const auto joint : root.children("joint")) {
 
-            auto jointObject = std::make_shared<Object3D>();
+            const auto jointObject = std::make_shared<Object3D>();
             jointObject->name = joint.attribute("name").value();
 
             jointObject->position.copy(getXYZ(joint));

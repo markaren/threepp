@@ -51,9 +51,9 @@ namespace threepp {
         }
 
         void finalize() {
-            for (int i = 0; i < joints_.size(); i++) {
-                auto info = jointInfos_[i];
-                auto joint = joints_[i];
+            for (auto i = 0; i < joints_.size(); i++) {
+                const auto info = jointInfos_[i];
+                const auto joint = joints_[i];
 
                 auto parent = std::ranges::find_if(links_, [&](auto link) {
                     return link->name == info.parent;
@@ -105,7 +105,7 @@ namespace threepp {
         std::vector<JointInfo> jointInfos_;
         std::vector<std::shared_ptr<Object3D>> links_;
         std::vector<std::shared_ptr<Object3D>> joints_;
-        std::unordered_map<int, std::pair<Object3D*, JointInfo>> articulatedJoints_;
+        std::unordered_map<size_t, std::pair<Object3D*, JointInfo>> articulatedJoints_;
     };
 
 }// namespace threepp
