@@ -50,33 +50,43 @@ int main(int argc, char** argv) {
     camera->position.set(0, size.y * 1.5f, size.z * 3.f);
     controls.update();
 
-    bool showColliders{false};
     bool animate{true};
-    std::vector<float> jointValues = robot->jointValues();
+    bool showColliders{false};
+    const auto info = robot->getArticulatedJointInfo();
+    std::vector<float> jointValues = robot->jointValuesWithConversionFromRadiansToDeg();
+
+    std::vector<std::string> labels;
+    for (auto i = 0; i < robot->numDOF(); i++) {
+        labels.emplace_back("j" + std::to_string(i+1));
+    }
+
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({}, 0, {});
         ImGui::SetNextWindowSize({230, 0}, 0);
 
         ImGui::Begin("Settings");
-        if (ImGui::Checkbox("Animate", &animate)) {
-        }
+
+        ImGui::Checkbox("Animate", &animate);
         if (ImGui::Checkbox("Show Colliders", &showColliders)) {
             robot->showColliders(showColliders);
         }
 
-        if (ImGui::SliderScalarN(
-                    "JointValues",
-                    ImGuiDataType_Float,
-                    jointValues.data(),
-                    static_cast<int>(robot->numDOF()),
-                    robot->minJointValues().data(),
-                    robot->maxJointValues().data())) {
-
-            robot->setJointValues(jointValues);
-            animate = false;
+        for (auto i = 0; i < robot->numDOF(); i++) {
+            const auto type = info[i].type;
+            const auto minmax = robot->getJointRange(i, true);
+            if (ImGui::SliderFloat(labels[i].c_str(), &jointValues[i], minmax.first, minmax.second)) {
+                robot->setJointValue(i, jointValues[i], type == JointType::Revolute);
+                animate = false;
+            }
         }
 
         ImGui::End();
+
+        if (animate) {
+           for (auto i = 0; i < robot->numDOF(); i++) {
+               jointValues[i] = robot->getJointValue(i, true);
+           }
+       }
     });
 
     IOCapture capture{};

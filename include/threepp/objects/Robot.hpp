@@ -3,6 +3,7 @@
 #define THREEPP_ROBOT_HPP
 
 #include "threepp/core/Object3D.hpp"
+#include "threepp/math/MathUtils.hpp"
 
 #include <algorithm>
 
@@ -20,7 +21,6 @@ namespace threepp {
     enum class JointType {
         Revolute,
         Prismatic,
-        Continuous,
         Fixed
     };
 
@@ -85,44 +85,32 @@ namespace threepp {
             }
 
             jointValues_.resize(numDOF());
-            minRange_.resize(numDOF());
-            maxRange_.resize(numDOF());
+        }
 
-            for (auto i = 0; i < numDOF(); i++) {
-                const auto info = articulatedJoints_[i].second;
-                if (info.range) {
-                    minRange_[i] = info.range->min;
-                    maxRange_[i] = info.range->max;
-                } else {
-                    minRange_[i] = std::numeric_limits<float>::infinity();
-                    maxRange_[i] = std::numeric_limits<float>::infinity();
-                }
+        void setJointValues(std::vector<float> values) {
+            for (auto i = 0; i < values.size(); ++i) {
+                setJointValue(i, values[i]);
             }
         }
 
-        void setJointValues(std::vector<float> value) {
-            for (auto i = 0; i < value.size(); ++i) {
-                setJointValue(i, value[i]);
-            }
-        }
+        void setJointValue(int index, float value, bool deg = false) {
 
-
-        void setJointValue(int index, float value) {
-
-            auto joint = articulatedJoints_[index].first;
-            auto info = articulatedJoints_[index].second;
+            const auto& joint = articulatedJoints_[index].first;
+            const auto& info = articulatedJoints_[index].second;
 
             switch (info.type) {
-                case JointType::Continuous:
                 case JointType::Revolute: {
+                    value = deg ? math::degToRad(value) : value;
                     if (info.range.has_value()) {
                         value = info.range->clamp(value);
                     }
                     joint->quaternion.setFromAxisAngle(info.axis, value);
+                    jointValues_[index] = value;
                     break;
                 }
                 case JointType::Prismatic: {
                     joint->position = info.axis * value;
+                    jointValues_[index] = value;
                     break;
                 }
             }
@@ -138,14 +126,51 @@ namespace threepp {
             return jointValues_;
         }
 
-        [[nodiscard]] const std::vector<float>& minJointValues() const {
+        [[nodiscard]] std::vector<float> jointValuesWithConversionFromRadiansToDeg() const {
 
-            return minRange_;
+            std::vector<float> values = jointValues_;
+            for (auto i = 0; i < numDOF(); i++) {
+                const auto type = articulatedJoints_.at(i).second.type;
+                if (type == JointType::Revolute) {
+                    values[i] = math::radToDeg(jointValues_[i]);
+                }
+            }
+
+            return values;
         }
 
-        [[nodiscard]] const std::vector<float>& maxJointValues() const {
+        [[nodiscard]] std::pair<float, float> getJointRange(int index, bool deg = false) const {
+            const auto& info = articulatedJoints_.at(index).second;
+            const auto type = articulatedJoints_.at(index).second.type;
+            if (!info.range) {
+                return {-std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()};
+            }
 
-            return maxRange_;
+            float min = info.range->min;
+            float max = info.range->max;
+
+            if (deg && type == JointType::Revolute) {
+                min = math::radToDeg(min);
+                max = math::radToDeg(max);
+            }
+
+            return {min, max};
+        }
+
+        [[nodiscard]] std::vector<JointInfo> getArticulatedJointInfo() const {
+            std::vector<JointInfo> info(numDOF());
+            for (auto i = 0; i < numDOF(); i++) {
+                info[i] = articulatedJoints_.at(i).second;
+            }
+            return info;
+        }
+
+        [[nodiscard]] float getJointValue(int index, bool deg = false) const {
+            const auto& info = articulatedJoints_.at(index).second;
+            if (deg && info.type == JointType::Revolute) {
+                return math::radToDeg(jointValues_[index]);
+            }
+            return jointValues_[index];
         }
 
     private:
@@ -156,8 +181,6 @@ namespace threepp {
         std::unordered_map<size_t, std::pair<Object3D*, JointInfo>> articulatedJoints_;
 
         std::vector<float> jointValues_;
-        std::vector<float> minRange_;
-        std::vector<float> maxRange_;
     };
 
 }// namespace threepp
