@@ -37,11 +37,11 @@ int main(int argc, char** argv) {
 
     URDFLoader loader;
     AssimpLoader assimpLoader;
-    auto model = loader.load(assimpLoader, urdfPath);
-    scene->add(model);
+    auto robot = loader.load(assimpLoader, urdfPath);
+    scene->add(robot);
 
     Box3 bb;
-    bb.setFromObject(*model);
+    bb.setFromObject(*robot);
 
     Vector3 size;
     bb.getSize(size);
@@ -58,14 +58,9 @@ int main(int argc, char** argv) {
     canvas.animate([&]() {
         const auto dt = clock.getDelta();
 
-        model->getObjectByName("joint_1")->rotation.y += dt * 0.1f;
-        model->getObjectByName("joint_2")->rotation.z += dt * 0.1f;
-        model->getObjectByName("joint_3")->rotation.z += dt * 0.1f;
-        model->getObjectByName("joint_4")->rotation.x += dt * 0.1f;
-        // model->getObjectByName("joint_5")->rotation.y += dt * 0.1;
-        // model->getObjectByName("joint_6")->rotation.y += dt * 0.1;
-
-        model->updateMatrixWorld();
+        for (auto i = 0; i < robot->numDOF(); ++i) {
+            robot->setJointValue(i, std::sin(clock.elapsedTime) * 0.5f);
+        }
 
         renderer.render(*scene, *camera);
     });

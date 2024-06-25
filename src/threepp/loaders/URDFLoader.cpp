@@ -2,14 +2,12 @@
 #include "threepp/loaders/URDFLoader.hpp"
 
 #include "pugixml.hpp"
-#include "threepp/core/Object3D.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
 #include <iostream>
-#include <numbers>
 
 using namespace threepp;
 
@@ -23,6 +21,15 @@ namespace {
                 -utils::parseFloat(xyz[1]));
     }
 
+    Vector3 getAxis(const std::string& axis) {
+        if (axis.empty()) return {};
+        const auto xyz = utils::split(axis, ' ');
+        return Vector3(
+                utils::parseFloat(xyz[0]),
+                utils::parseFloat(xyz[2]),
+                utils::parseFloat(xyz[1]));
+    }
+
     Euler getRPY(const pugi::xml_node& node) {
         const auto xyz = utils::split(node.child("origin").attribute("rpy").value(), ' ');
         return Euler(
@@ -30,6 +37,38 @@ namespace {
                 utils::parseFloat(xyz[1]),
                 -utils::parseFloat(xyz[2]));
     }
+
+    JointType getType(const std::string& type) {
+        if (type == "revolute") {
+            return JointType::Revolute;
+        } else if (type == "continuous") {
+            return JointType::Continuous;
+        } else if (type == "prismatic") {
+            return JointType::Prismatic;
+        } else {
+            return JointType::Fixed;
+        }
+    }
+
+    std::optional<JointRange> getRange(const pugi::xml_node& node) {
+        const auto limit = node.child("limit");
+        if (!limit) return {};
+        return JointRange{
+                .min = utils::parseFloat(limit.attribute("lower").value()),
+                .max = utils::parseFloat(limit.attribute("upper").value())
+        };
+    }
+
+    JointInfo parseInfo(const pugi::xml_node& node) {
+        return {
+                .axis = getAxis(node.child("axis").attribute("xyz").value()),
+                .type = getType(node.attribute("type").value()),
+                .range = getRange(node),
+                .parent = node.child("parent").attribute("link").value(),
+                .child = node.child("child").attribute("link").value()
+        };
+    }
+
 
     std::filesystem::path getModelPath(const std::filesystem::path& basePath, std::string fileName) {
 
@@ -61,7 +100,7 @@ namespace {
 
 struct URDFLoader::Impl {
 
-    std::shared_ptr<Group> load(Loader<Group>& loader, const std::filesystem::path& path) {
+    std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path) {
 
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_file(path.string().c_str());
@@ -72,18 +111,13 @@ struct URDFLoader::Impl {
         if (!root) return nullptr;
 
 
-        auto object = std::make_shared<Group>();
-        object->name = root.attribute("name").as_string("robot");
+        auto robot = std::make_shared<Robot>();
+        robot->name = root.attribute("name").as_string("robot");
 
-        std::vector<std::shared_ptr<Object3D>> links;
         for (const auto link : root.children("link")) {
 
             auto linkObject = std::make_shared<Object3D>();
             linkObject->name = link.attribute("name").value();
-
-            // if (linkObject->name == "base_link") {
-            //     object->add(linkObject);
-            // }
 
             for (const auto visual : link.children("visual")) {
 
@@ -119,7 +153,7 @@ struct URDFLoader::Impl {
                 linkObject->add(visualObject);
             }
 
-            links.emplace_back(linkObject);
+            robot->addLink(linkObject);
         }
 
         for (const auto joint : root.children("joint")) {
@@ -130,36 +164,20 @@ struct URDFLoader::Impl {
             jointObject->position.copy(getXYZ(joint));
             jointObject->rotation.copy(getRPY(joint));
 
-            const auto parent = joint.child("parent").attribute("link").value();
-            if (const auto parentIt = std::ranges::find_if(links, [&](auto& o) {
-                    return o->name == parent;
-                });
-                parentIt != links.end()) {
-                (*parentIt)->add(jointObject);
-            }
+            robot->addJoint(jointObject, parseInfo(joint));
 
-            const auto child = joint.child("child").attribute("link").value();
-            if (const auto childIt = std::ranges::find_if(links, [&](auto& o) {
-                    return o->name == child;
-                });
-                childIt != links.end()) {
-                jointObject->add(*childIt);
-            }
         }
 
-        for (const auto& l : links) {
+        robot->finalize();
 
-            if (!l->parent) object->add(l);
-        }
-
-        return object;
+        return robot;
     }
 };
 
 URDFLoader::URDFLoader()
     : pimpl_(std::make_unique<Impl>()) {}
 
-std::shared_ptr<Group> URDFLoader::load(Loader<Group>& loader, const std::filesystem::path& path) {
+std::shared_ptr<Robot> URDFLoader::load(Loader<Group>& loader, const std::filesystem::path& path) {
 
     return pimpl_->load(loader, path);
 }

@@ -3,6 +3,7 @@
 #define THREEPP_URDFLOADER_HPP
 
 #include "threepp/loaders/Loader.hpp"
+#include "threepp/objects/Robot.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -16,7 +17,7 @@ namespace threepp {
     public:
         explicit URDFLoader();
 
-        std::shared_ptr<Group> load(Loader<Group>& loader, const std::filesystem::path& path);
+        std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path);
 
         ~URDFLoader();
 
