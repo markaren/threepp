@@ -20,7 +20,7 @@ however much remains to be done..
 * Controls [Orbit, Fly, Drag]
 * Water and Sky shaders
 * Built-in text rendering and font loading [typeface.json, TTF]
-* Loaders [Binary STL, OBJ/MTL, SVG]
+* Loaders [Binary STL, OBJ/MTL, SVG, URDF]
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
