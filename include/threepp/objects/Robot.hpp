@@ -38,6 +38,16 @@ namespace threepp {
     public:
         Robot() = default;
 
+        void showColliders(bool flag) {
+            for (auto& c : links_) {
+                c->traverse([&](auto& obj) {
+                    if (obj.userData.contains("collider")) {
+                        obj.visible = flag;
+                    }
+                });
+            }
+        }
+
         void addLink(const std::shared_ptr<Object3D>& link) {
             links_.emplace_back(link);
         }
@@ -73,7 +83,29 @@ namespace threepp {
 
                 if (!l->parent) add(*l);
             }
+
+            jointValues_.resize(numDOF());
+            minRange_.resize(numDOF());
+            maxRange_.resize(numDOF());
+
+            for (auto i = 0; i < numDOF(); i++) {
+                const auto info = articulatedJoints_[i].second;
+                if (info.range) {
+                    minRange_[i] = info.range->min;
+                    maxRange_[i] = info.range->max;
+                } else {
+                    minRange_[i] = std::numeric_limits<float>::infinity();
+                    maxRange_[i] = std::numeric_limits<float>::infinity();
+                }
+            }
         }
+
+        void setJointValues(std::vector<float> value) {
+            for (auto i = 0; i < value.size(); ++i) {
+                setJointValue(i, value[i]);
+            }
+        }
+
 
         void setJointValue(int index, float value) {
 
@@ -101,11 +133,31 @@ namespace threepp {
             return articulatedJoints_.size();
         }
 
+        [[nodiscard]] const std::vector<float>& jointValues() const {
+
+            return jointValues_;
+        }
+
+        [[nodiscard]] const std::vector<float>& minJointValues() const {
+
+            return minRange_;
+        }
+
+        [[nodiscard]] const std::vector<float>& maxJointValues() const {
+
+            return maxRange_;
+        }
+
     private:
         std::vector<JointInfo> jointInfos_;
         std::vector<std::shared_ptr<Object3D>> links_;
+        std::vector<std::shared_ptr<Object3D>> colliders_;
         std::vector<std::shared_ptr<Object3D>> joints_;
         std::unordered_map<size_t, std::pair<Object3D*, JointInfo>> articulatedJoints_;
+
+        std::vector<float> jointValues_;
+        std::vector<float> minRange_;
+        std::vector<float> maxRange_;
     };
 
 }// namespace threepp

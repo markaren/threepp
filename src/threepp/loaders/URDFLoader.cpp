@@ -2,6 +2,7 @@
 #include "threepp/loaders/URDFLoader.hpp"
 
 #include "pugixml.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Group.hpp"
@@ -15,6 +16,7 @@ using namespace threepp;
 namespace {
 
     Vector3 getXYZ(const pugi::xml_node& node) {
+        if (!node.child("origin")) return {};
         const auto xyz = utils::split(node.child("origin").attribute("xyz").value(), ' ');
         return Vector3(
                 utils::parseFloat(xyz[0]),
@@ -33,6 +35,7 @@ namespace {
     }
 
     Vector3 getRPY(const pugi::xml_node& node) {
+        if (!node.child("origin")) return {};
         const auto xyz = utils::split(node.child("origin").attribute("rpy").value(), ' ');
         return Vector3(
                 utils::parseFloat(xyz[0]),
@@ -40,7 +43,7 @@ namespace {
                 utils::parseFloat(xyz[2]));
     }
 
-    void applyRotation(std::shared_ptr<Object3D> object, const Vector3& rotation) {
+    void applyRotation(const std::shared_ptr<Object3D>& object, const Vector3& rotation) {
 
         static Quaternion tempQuaternion;
         static Euler tempEuler;
@@ -151,10 +154,9 @@ struct URDFLoader::Impl {
             const auto linkObject = std::make_shared<Object3D>();
             linkObject->name = link.attribute("name").value();
 
-            for (const auto visual : link.children("visual")) {
+            if (const auto visual = link.child("visual")) {
 
                 auto group = Group::create();
-                group->name = visual.attribute("name").value();
                 group->position.copy(getXYZ(visual));
                 applyRotation(group, getRPY(visual));
 
@@ -165,7 +167,7 @@ struct URDFLoader::Impl {
 
                     if (auto visualObject = loader.load(fileName)) {
 
-                        visualObject->traverseType<Mesh>([&](Mesh& mesh) {
+                        visualObject->traverseType<Mesh>([fileName](const Mesh& mesh) {
                             if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
                                 mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
                             }
@@ -179,9 +181,40 @@ struct URDFLoader::Impl {
 
                     const auto mtl = getMaterial(material);
 
-                    group->traverseType<Mesh>([&](Mesh& mesh) {
+                    group->traverseType<Mesh>([mtl](Mesh& mesh) {
                         mesh.setMaterial(mtl);
                     });
+                }
+
+                linkObject->add(group);
+            }
+
+            if (const auto collider = link.child("collision")) {
+
+                auto group = Group::create();
+                group->userData["collider"] = true;
+                group->position.copy(getXYZ(collider));
+                applyRotation(group, getRPY(collider));
+
+                const auto material = MeshBasicMaterial::create();
+                material->wireframe = true;
+
+                for (const auto geometry : collider.children("geometry")) {
+
+                    const auto mesh = geometry.child("mesh");
+                    const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
+
+                    if (auto colliderObject = loader.load(fileName)) {
+
+                        colliderObject->traverseType<Mesh>([fileName, material](Mesh& mesh) {
+                            mesh.setMaterial(material);
+                            if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
+                                mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
+                            }
+                        });
+
+                        group->add(colliderObject);
+                    }
                 }
 
                 linkObject->add(group);

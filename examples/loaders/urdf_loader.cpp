@@ -1,5 +1,6 @@
 
 #include <iostream>
+#include <threepp/extras/imgui/ImguiContext.hpp>
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/loaders/URDFLoader.hpp>
 #include <threepp/threepp.hpp>
@@ -38,6 +39,7 @@ int main(int argc, char** argv) {
     URDFLoader loader;
     AssimpLoader assimpLoader;
     auto robot = loader.load(assimpLoader, urdfPath);
+    robot->showColliders(false);
     scene->add(robot);
 
     Box3 bb;
@@ -47,6 +49,41 @@ int main(int argc, char** argv) {
     bb.getSize(size);
     camera->position.set(0, size.y * 1.5f, size.z * 3.f);
     controls.update();
+
+    bool showColliders{false};
+    bool animate{true};
+    std::vector<float> jointValues = robot->jointValues();
+    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+        ImGui::SetNextWindowPos({}, 0, {});
+        ImGui::SetNextWindowSize({230, 0}, 0);
+
+        ImGui::Begin("Settings");
+        if (ImGui::Checkbox("Animate", &animate)) {
+        }
+        if (ImGui::Checkbox("Show Colliders", &showColliders)) {
+            robot->showColliders(showColliders);
+        }
+
+        if (ImGui::SliderScalarN(
+                    "JointValues",
+                    ImGuiDataType_Float,
+                    jointValues.data(),
+                    static_cast<int>(robot->numDOF()),
+                    robot->minJointValues().data(),
+                    robot->maxJointValues().data())) {
+
+            robot->setJointValues(jointValues);
+            animate = false;
+        }
+
+        ImGui::End();
+    });
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -58,10 +95,13 @@ int main(int argc, char** argv) {
     canvas.animate([&]() {
         const auto dt = clock.getDelta();
 
-        for (auto i = 0; i < robot->numDOF(); ++i) {
-            robot->setJointValue(i, std::sin(clock.elapsedTime) * 0.5f);
+        if (animate) {
+            for (auto i = 0; i < robot->numDOF(); ++i) {
+                robot->setJointValue(i, std::sin(clock.elapsedTime) * 0.5f);
+            }
         }
 
         renderer.render(*scene, *camera);
+        ui.render();
     });
 }
