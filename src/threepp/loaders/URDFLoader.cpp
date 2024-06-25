@@ -2,6 +2,9 @@
 #include "threepp/loaders/URDFLoader.hpp"
 
 #include "pugixml.hpp"
+#include "threepp/geometries/BoxGeometry.hpp"
+#include "threepp/geometries/CylinderGeometry.hpp"
+#include "threepp/geometries/SphereGeometry.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -12,6 +15,14 @@
 using namespace threepp;
 
 namespace {
+
+    Vector3 parseTupleString(const std::string& strValues) {
+        if (strValues.empty()) return {};
+        const auto values = utils::split(strValues, ' ');
+        return {utils::parseFloat(values[0]),
+                utils::parseFloat(values[1]),
+                utils::parseFloat(values[2])};
+    }
 
     Vector3 getXYZ(const pugi::xml_node& node) {
         if (!node.child("origin")) return {};
@@ -87,8 +98,8 @@ namespace {
     std::optional<JointRange> getRange(const pugi::xml_node& node) {
         const auto limit = node.child("limit");
         if (!limit || !limit.attribute("lower") || !limit.attribute("upper")) return {};
-        const auto min =  utils::parseFloat(limit.attribute("lower").value());
-        const auto max =  utils::parseFloat(limit.attribute("upper").value());
+        const auto min = utils::parseFloat(limit.attribute("lower").value());
+        const auto max = utils::parseFloat(limit.attribute("upper").value());
         return JointRange{
                 .min = min,
                 .max = max};
@@ -102,7 +113,6 @@ namespace {
                 .parent = node.child("parent").attribute("link").value(),
                 .child = node.child("child").attribute("link").value()};
     }
-
 
     std::filesystem::path getModelPath(const std::filesystem::path& basePath, std::string fileName) {
 
@@ -130,11 +140,48 @@ namespace {
         return basePath / fileName;
     }
 
+    std::shared_ptr<Object3D> parseGeometryNode(const std::filesystem::path& path, Loader<Group>& loader, const pugi::xml_node& geometry) {
+        if (const auto mesh = geometry.child("mesh")) {
+            const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
+
+            if (auto obj = loader.load(fileName)) {
+                obj->traverseType<Mesh>([fileName](const Mesh& mesh) {
+                    if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
+                        mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
+                    }
+                });
+
+                return obj;
+            }
+        } else if (const auto box = geometry.child("box")) {
+            const auto size = parseTupleString(box.attribute("size").value());
+            auto obj = Mesh::create(BoxGeometry::create(1, 1, 1));
+            obj->scale.copy(size);
+
+            return obj;
+
+        } else if (const auto sphere = geometry.child("sphere")) {
+            const auto radius = utils::parseFloat(box.attribute("radius").value());
+            auto obj = Mesh::create(SphereGeometry::create(radius));
+
+            return obj;
+
+        } else if (const auto cylinder = geometry.child("cylinder")) {
+            const auto radius = utils::parseFloat(box.attribute("radius").value());
+            const auto length = utils::parseFloat(box.attribute("length").value());
+            auto obj = Mesh::create(CylinderGeometry::create(radius, radius, length));
+
+            return obj;
+        }
+
+        return nullptr;
+    }
+
 }// namespace
 
 struct URDFLoader::Impl {
 
-    std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path) {
+    static std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path) {
 
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_file(path.string().c_str());
@@ -158,30 +205,20 @@ struct URDFLoader::Impl {
                 group->position.copy(getXYZ(visual));
                 applyRotation(group, getRPY(visual));
 
-                for (const auto geometry : visual.children("geometry")) {
+                if (const auto geometry = visual.child("geometry")) {
 
-                    const auto mesh = geometry.child("mesh");
-                    const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
-
-                    if (auto visualObject = loader.load(fileName)) {
-
-                        visualObject->traverseType<Mesh>([fileName](const Mesh& mesh) {
-                            if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
-                                mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-                            }
-                        });
-
+                    if (auto visualObject = parseGeometryNode(path, loader, geometry)) {
                         group->add(visualObject);
                     }
-                }
 
-                if (const auto material = visual.child("material")) {
+                    if (const auto material = visual.child("material")) {
 
-                    const auto mtl = getMaterial(material);
+                        const auto mtl = getMaterial(material);
 
-                    group->traverseType<Mesh>([mtl](Mesh& mesh) {
-                        mesh.setMaterial(mtl);
-                    });
+                        group->traverseType<Mesh>([mtl](Mesh& mesh) {
+                            mesh.setMaterial(mtl);
+                        });
+                    }
                 }
 
                 linkObject->add(group);
@@ -197,21 +234,14 @@ struct URDFLoader::Impl {
                 const auto material = MeshBasicMaterial::create();
                 material->wireframe = true;
 
-                for (const auto geometry : collider.children("geometry")) {
+                if (const auto geometry = collider.child("geometry")) {
 
-                    const auto mesh = geometry.child("mesh");
-                    const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
-
-                    if (auto colliderObject = loader.load(fileName)) {
-
-                        colliderObject->traverseType<Mesh>([fileName, material](Mesh& mesh) {
-                            mesh.setMaterial(material);
-                            if (fileName.extension().string() == ".stl" || fileName.extension().string() == ".STL") {
-                                mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-                            }
-                        });
-
+                    if (auto colliderObject = parseGeometryNode(path, loader, geometry)) {
                         group->add(colliderObject);
+
+                        colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
+                            mesh.setMaterial(material);
+                        });
                     }
                 }
 
