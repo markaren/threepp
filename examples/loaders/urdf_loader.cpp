@@ -43,8 +43,7 @@ int main(int argc, char** argv) {
     Box3 bb;
     bb.setFromObject(*robot);
 
-    Vector3 size;
-    bb.getSize(size);
+    Vector3 size = bb.getSize();
     camera->position.set(0, size.y * 1.5f, size.z * 3.f);
     controls.update();
 
@@ -52,6 +51,9 @@ int main(int argc, char** argv) {
     bool showColliders{false};
     const auto info = robot->getArticulatedJointInfo();
     std::vector<float> jointValues = robot->jointValuesWithConversionFromRadiansToDeg();
+
+    auto axis = AxesHelper::create(size.length()*0.1f);
+    scene->add(axis);
 
     std::vector<std::string> labels;
     for (auto i = 0; i < robot->numDOF(); i++) {
@@ -79,12 +81,6 @@ int main(int argc, char** argv) {
         }
 
         ImGui::End();
-
-        if (animate) {
-            for (auto i = 0; i < robot->numDOF(); i++) {
-                jointValues[i] = robot->getJointValue(i, true);
-            }
-        }
     });
 
     IOCapture capture{};
@@ -105,9 +101,14 @@ int main(int argc, char** argv) {
 
         if (animate) {
             for (auto i = 0; i < robot->numDOF(); ++i) {
+                jointValues[i] = robot->getJointValue(i, true);
                 robot->setJointValue(i, std::sin(clock.elapsedTime) * 0.5f);
             }
         }
+
+        auto m = robot->computeEndEffectorTransform(jointValues, true);
+        axis->position.setFromMatrixPosition(m);
+        axis->quaternion.setFromRotationMatrix(m);
 
         renderer.render(*scene, *camera);
         ui.render();

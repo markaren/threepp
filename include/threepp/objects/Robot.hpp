@@ -62,6 +62,47 @@ namespace threepp {
             }
         }
 
+        Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false) {
+            Matrix4 result;
+
+            for (auto i = 0, j = 0; i < joints_.size(); ++i) {
+
+                const auto& joint = joints_.at(i);
+                const auto& info = jointInfos_.at(i);
+
+                switch (info.type) {
+
+                    case JointType::Fixed: {
+                        result.multiply(*joint->matrix);
+                        break;
+                    }
+                    case JointType::Revolute: {
+                        auto jointTransform = Matrix4()
+                                                      .makeRotationFromQuaternion(origPose_.at(j).second)
+                                                      .setPosition(origPose_.at(j).first);
+                        auto value = values[j++];
+                        value = deg ? math::degToRad(value) : value;
+                        if (info.range.has_value()) {
+                            value = info.range->clamp(value);
+                        }
+
+                        result.multiply(jointTransform.multiply(Matrix4().makeRotationAxis(info.axis, value)));
+                        break;
+                    }
+                    case JointType::Prismatic: {
+                        auto jointTransform = Matrix4()
+                                                      .makeRotationFromQuaternion(origPose_.at(j).second)
+                                                      .setPosition(origPose_.at(j).first);
+                        auto value = values[j++];
+                        result.multiply(jointTransform.multiply(Matrix4().makeTranslation(info.axis.clone().multiplyScalar(value))));
+                        break;
+                    }
+                }
+            }
+
+            return result.premultiply(*matrix);
+        }
+
         void finalize() {
             for (auto i = 0; i < joints_.size(); i++) {
                 const auto info = jointInfos_[i];
@@ -115,7 +156,9 @@ namespace threepp {
                     break;
                 }
                 case JointType::Prismatic: {
-                    joint->position = info.axis * value;
+                    static Vector3 tempAxis;
+                    tempAxis.copy(info.axis).applyEuler(rotation);
+                    joint->position.copy(origPos).addScaledVector(tempAxis, value);
                     jointValues_[index] = value;
                     break;
                 }
