@@ -9,33 +9,33 @@
 
 namespace threepp {
 
-    struct JointRange {
-        float min;
-        float max;
-
-        [[nodiscard]] float clamp(float value) const {
-            return std::clamp(value, min, max);
-        }
-    };
-
-    enum class JointType {
-        Revolute,
-        Prismatic,
-        Fixed
-    };
-
-    struct JointInfo {
-        Vector3 axis;
-        JointType type;
-        std::optional<JointRange> range;
-
-        std::string parent;
-        std::string child;
-    };
-
     class Robot: public Object3D {
 
     public:
+        struct JointRange {
+            float min;
+            float max;
+
+            [[nodiscard]] float clamp(float value) const {
+                return std::clamp(value, min, max);
+            }
+        };
+
+        enum class JointType {
+            Revolute,
+            Prismatic,
+            Fixed
+        };
+
+        struct JointInfo {
+            Vector3 axis;
+            JointType type;
+            std::optional<JointRange> range;
+
+            std::string parent;
+            std::string child;
+        };
+
         Robot() = default;
 
         void showColliders(bool flag) {
@@ -56,7 +56,7 @@ namespace threepp {
             joints_.emplace_back(joint);
             jointInfos_.emplace_back(info);
             if (info.type != JointType::Fixed) {
-                size_t idx = joints_.size() -1;
+                size_t idx = joints_.size() - 1;
                 articulatedJoints_.emplace(idx, std::make_pair(joint.get(), info));
                 origPose_.emplace(idx, std::make_pair(joint->position.clone(), joint->quaternion.clone()));
             }
@@ -122,10 +122,7 @@ namespace threepp {
                 }
             }
 
-            for (const auto& l : links_) {
-
-                if (!l->parent) add(*l);
-            }
+            add(links_.front());
 
             jointValues_.resize(numDOF());
         }
@@ -223,14 +220,14 @@ namespace threepp {
         }
 
     private:
+        std::vector<float> jointValues_;
+
         std::vector<JointInfo> jointInfos_;
         std::vector<std::shared_ptr<Object3D>> links_;
         std::vector<std::shared_ptr<Object3D>> colliders_;
         std::vector<std::shared_ptr<Object3D>> joints_;
         std::unordered_map<size_t, std::pair<Object3D*, JointInfo>> articulatedJoints_;
         std::unordered_map<size_t, std::pair<Vector3, Quaternion>> origPose_;
-
-        std::vector<float> jointValues_;
     };
 
 }// namespace threepp

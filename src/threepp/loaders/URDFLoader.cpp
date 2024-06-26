@@ -57,27 +57,27 @@ namespace {
         return mtl;
     }
 
-    JointType getType(const std::string& type) {
+    Robot::JointType getType(const std::string& type) {
         if (type == "revolute" || type == "continuous") {
-            return JointType::Revolute;
+            return Robot::JointType::Revolute;
         }
         if (type == "prismatic") {
-            return JointType::Prismatic;
+            return Robot::JointType::Prismatic;
         }
-        return JointType::Fixed;
+        return Robot::JointType::Fixed;
     }
 
-    std::optional<JointRange> getRange(const pugi::xml_node& node) {
+    std::optional<Robot::JointRange> getRange(const pugi::xml_node& node) {
         const auto limit = node.child("limit");
         if (!limit || !limit.attribute("lower") || !limit.attribute("upper")) return {};
         const auto min = utils::parseFloat(limit.attribute("lower").value());
         const auto max = utils::parseFloat(limit.attribute("upper").value());
-        return JointRange{
+        return Robot::JointRange{
                 .min = min,
                 .max = max};
     }
 
-    JointInfo parseInfo(const pugi::xml_node& node) {
+    Robot::JointInfo parseInfo(const pugi::xml_node& node) {
 
         auto axis = parseTupleString(node.child("axis")
                                              .attribute("xyz")

@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
         for (auto i = 0; i < robot->numDOF(); i++) {
             const auto type = info[i].type;
             const auto minmax = robot->getJointRange(i, true);
-            bool isRevolute = type == JointType::Revolute;
+            bool isRevolute = type == Robot::JointType::Revolute;
             float min = minmax.first > (isRevolute ? -360.f : -1.f) ? minmax.first : (isRevolute ? -360.f : -1.f);
             float max = minmax.second < (isRevolute ? 360.f : 1.f) ? minmax.second : (isRevolute ? 360.f : 1.f);
             if (ImGui::SliderFloat(labels[i].c_str(), &jointValues[i], min, max)) {
@@ -100,12 +100,11 @@ int main(int argc, char** argv) {
 
     Clock clock;
     canvas.animate([&]() {
-        const auto dt = clock.getDelta();
 
         if (animate) {
             for (auto i = 0; i < robot->numDOF(); ++i) {
                 jointValues[i] = robot->getJointValue(i, true);
-                robot->setJointValue(i, std::sin(clock.elapsedTime) * 0.5f);
+                robot->setJointValue(i, std::sin(clock.getElapsedTime()) * 0.5f);
             }
         }
 
