@@ -109,10 +109,12 @@ int main() {
     auto mesh = Mesh::create(BufferGeometry::create(), material);
     scene->add(mesh);
 
+    TaskManager tm;
+
     auto future = std::async(std::launch::async, [&] {
         auto geometry = PlaneGeometry::create(5041, 5041, 1023, 1023);
         geometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-        renderer.invokeLater([&] {
+        tm.invokeLater([&] {
             mesh->setGeometry(geometry);
         });
 
@@ -121,7 +123,7 @@ int main() {
         TextureLoader tl;
         auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
 
-        renderer.invokeLater([&, data, texture, geometry] {
+        tm.invokeLater([&, data, texture, geometry] {
             auto pos = geometry->getAttribute<float>("position");
             for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
                 pos->setY(i, data[i]);
@@ -134,7 +136,7 @@ int main() {
             hudText.setText("Terrain loaded..", opts);
         });
 
-        renderer.invokeLater([&] {
+        tm.invokeLater([&] {
             hud.remove(hudText);
         },
                              2);
@@ -149,8 +151,10 @@ int main() {
     Clock clock;
     auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+        const auto t = clock.getElapsedTime();
         timeUniform.setValue(t);
+
+        tm.handleTasks();
 
         renderer.clear();
         renderer.render(*scene, *camera);

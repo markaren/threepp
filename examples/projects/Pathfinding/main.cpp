@@ -91,6 +91,8 @@ int main() {
         }
     };
 
+    TaskManager tm;
+
     Raycaster raycaster;
     raycaster.layers.set(1);// ignore grid
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -116,9 +118,7 @@ int main() {
 
             if (start && target) {
 
-                auto path = algorithm.findPath(*start, *target);
-
-                if (path) {
+                if (auto path = algorithm.findPath(*start, *target)) {
                     std::cout << "Found path between " << *start << " and " << *target << ", length=" << path->length() << std::endl;
                     for (unsigned i = 1; i < path->length() - 1; i++) {
                         auto c = (*path)[i];
@@ -126,13 +126,13 @@ int main() {
                         auto obj = scene.getObjectByName(getMeshName(c));
                         obj->material()->as<MaterialWithColor>()->color.setHex(Color::green);
                     }
-                    renderer.invokeLater([&] {
+                    tm.invokeLater([&] {
                         start = std::nullopt;
                         target = std::nullopt;
                         resetBlockColors(); }, 2);
                 } else {
                     std::cerr << "Unable to find path between " << *start << " and " << *target << std::endl;
-                    renderer.invokeLater([&] {
+                    tm.invokeLater([&] {
                         start = std::nullopt;
                         target = std::nullopt;
                         resetBlockColors(); }, 1);
@@ -150,6 +150,7 @@ int main() {
     });
 
     canvas.animate([&] {
+        tm.handleTasks();
         renderer.render(scene, camera);
     });
 }

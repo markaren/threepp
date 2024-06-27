@@ -44,13 +44,14 @@ int main() {
                             .setNormalizedPosition({0, 1})
                             .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
+    TaskManager tm;
 
     std::shared_ptr<Youbot> youbot;
     std::unique_ptr<KeyController> keyController;
     auto future = std::async([&] {
         youbot = Youbot::create("data/models/collada/youbot.dae");
         keyController = std::make_unique<KeyController>(*youbot);
-        renderer.invokeLater([&] {
+        tm.invokeLater([&] {
             canvas.addKeyListener(*keyController);
             scene->add(youbot);
             handle.setText("Use WASD keys to steer robot", opts);
@@ -67,7 +68,9 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
+
+        tm.handleTasks();
 
         renderer.clear();
         renderer.render(*scene, *camera);
