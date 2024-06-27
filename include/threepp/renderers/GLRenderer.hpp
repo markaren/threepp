@@ -157,8 +157,6 @@ namespace threepp {
 
         void resetState();
 
-        void invokeLater(const std::function<void()>& task, float delay = 0);
-
         [[nodiscard]] const gl::GLInfo& info() const;
 
         [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const;

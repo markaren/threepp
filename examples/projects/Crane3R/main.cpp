@@ -134,6 +134,7 @@ int main() {
                         .addLink(Vector3::Z() * 5.2)
                         .build();
 
+    TaskManager tm;
 
 #ifndef EMSCRIPTEN
     std::shared_ptr<Crane3R> crane;
@@ -144,7 +145,7 @@ int main() {
             m.castShadow = true;
         });
 
-        renderer.invokeLater([&, crane] {
+        tm.invokeLater([&, crane] {
             hud.remove(handle);
             scene->add(crane);
             endEffectorHelper->visible = true;
@@ -186,7 +187,9 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
+
+        tm.handleTasks();
 
         renderer.clear();
         renderer.render(*scene, *camera);

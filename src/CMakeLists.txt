@@ -174,6 +174,7 @@ set(publicHeaders
         "threepp/utils/BufferGeometryUtils.hpp"
         "threepp/utils/ImageUtils.hpp"
         "threepp/utils/StringUtils.hpp"
+        "threepp/utils/TaskManager.hpp"
 
         "threepp/lights/lights.hpp"
         "threepp/lights/Light.hpp"
@@ -236,8 +237,6 @@ set(privateHeaders
         "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/RegexUtil.hpp"
-        "threepp/utils/TaskManager.hpp"
-
 )
 
 set(sources
@@ -393,6 +392,7 @@ set(sources
 
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/StringUtils.cpp"
+        "threepp/utils/TaskManager.cpp"
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/GLRenderTarget.cpp"

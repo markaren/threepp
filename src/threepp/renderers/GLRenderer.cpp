@@ -31,8 +31,6 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
-#include "threepp/utils/TaskManager.hpp"
-
 #ifndef EMSCRIPTEN
 #include "threepp/utils/LoadGlad.hpp"
 #else
@@ -140,10 +138,6 @@ struct GLRenderer::Impl {
 
     gl::GLShadowMap shadowMap;
 
-    // used for in-thread task execution
-    double previousTime{-1};
-    utils::TaskManager taskManager;
-
     Impl(GLRenderer& scope, WindowSize size, const Parameters& parameters)
         : scope(scope), _size(size),
           cubemaps(scope),
@@ -165,11 +159,6 @@ struct GLRenderer::Impl {
 
         this->setViewport(0, 0, size.width, size.height);
         this->setScissor(0, 0, _size.width, _size.height);
-    }
-
-    void invokeLater(const std::function<void()>& task, float delay) {
-
-        taskManager.invokeLater(task, delay);
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
@@ -197,14 +186,7 @@ struct GLRenderer::Impl {
         }
     }
 
-    void handleTasks() {
-
-        taskManager.handleTasks();
-    }
-
     void render(Object3D* scene, Camera* camera) {
-
-        handleTasks();
 
         // update scene graph
 
@@ -1395,11 +1377,6 @@ GLRenderTarget* GLRenderer::getRenderTarget() {
 std::optional<unsigned int> GLRenderer::getGlTextureId(Texture& texture) const {
 
     return pimpl_->getGlTextureId(texture);
-}
-
-void GLRenderer::invokeLater(const std::function<void()>& task, float delay) {
-
-    return pimpl_->invokeLater(task, delay);
 }
 
 GLRenderer::~GLRenderer() = default;

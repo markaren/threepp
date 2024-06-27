@@ -5,7 +5,7 @@
 
 #include <thread>
 
-using namespace threepp::utils;
+using namespace threepp;
 
 
 TEST_CASE("TaskManager") {

@@ -42,4 +42,6 @@
 
 #include "threepp/loaders/loaders.hpp"
 
+#include "threepp/utils/TaskManager.hpp"
+
 #endif//THREEPP_THREEPP_HPP
