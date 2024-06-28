@@ -50,7 +50,7 @@ namespace threepp {
             for (int i = 1; i < numberofcolors; i++) {
                 float alpha = static_cast<float>(i) * step;
 
-                for (int j = 0; j < this->map.size() - 1; j++) {
+                for (unsigned j = 0; j < this->map.size() - 1; j++) {
                     if (alpha > this->map[j].first && alpha <= this->map[j + 1].first) {
                         float min = this->map[j].first;
                         float max = this->map[j + 1].first;

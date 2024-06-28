@@ -50,11 +50,11 @@ int main() {
     auto position = plane->geometry()->getAttribute<float>("position");
     position->setUsage(DrawUsage::Dynamic);
     canvas.animate([&]() {
-        float time = clock.getElapsedTime();
+        const auto time = clock.getElapsedTime();
 
         renderer.render(*scene, *camera);
 
-        for (unsigned i = 0; i < position->count(); i++) {
+        for (auto i = 0; i < position->count(); i++) {
 
             float y = 2 * std::sin(static_cast<float>(i) / 5.f + (time * 20 + static_cast<float>(i)) / 7.f);
             position->setY(i, y);

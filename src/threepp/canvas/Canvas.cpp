@@ -25,7 +25,7 @@ namespace {
     struct FunctionWrapper {
         std::function<void()> loopFunction;
 
-        FunctionWrapper(std::function<void()> loopFunction)
+        explicit FunctionWrapper(std::function<void()> loopFunction)
             : loopFunction(std::move(loopFunction)) {}
 
         void loop() {
@@ -37,8 +37,8 @@ namespace {
     void emscriptenLoop(void* arg) {
         static_cast<FunctionWrapper*>(arg)->loop();
     }
-#endif
 
+#else
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
 
         ImageLoader imageLoader;
@@ -56,6 +56,7 @@ namespace {
             glfwSetWindowIcon(window, 1, images);
         }
     }
+#endif
 
     Key glfwKeyCodeToKey(int keyCode) {
 
@@ -203,7 +204,10 @@ struct Canvas::Impl {
         }
 
 #if EMSCRIPTEN
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
         EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
+#pragma GCC diagnostic pop
 #endif
 
         glfwSetWindowUserPointer(window, this);

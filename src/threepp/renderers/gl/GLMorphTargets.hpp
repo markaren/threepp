@@ -59,13 +59,13 @@ namespace threepp::gl {
 
             std::vector<Influence> influences;
 
-            if (influencesList.count(geometry->id)) {
+            if (influencesList.contains(geometry->id)) {
 
                 influences = influencesList.at(geometry->id);
 
             } else {
 
-                for (auto i = 0; i < length; i++) {
+                for (unsigned i = 0; i < length; i++) {
 
                     influences.emplace_back(i, 0.f);
                 }

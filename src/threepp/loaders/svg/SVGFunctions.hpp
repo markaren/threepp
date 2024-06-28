@@ -755,7 +755,7 @@ namespace threepp::svg {
         Matrix3 tempTransform0;
         Matrix3 tempTransform1;
         Matrix3 tempTransform2;
-        Matrix3 tempTransform3;
+        // Matrix3 tempTransform3;
 
         // For math description see:
         // https://math.stackexchange.com/questions/4544164
@@ -871,7 +871,7 @@ namespace threepp::svg {
             v2.set(tempV3.x, tempV3.y);
         };
 
-        const auto isRotated = isTransformRotated(m);
+        // const auto isRotated = isTransformRotated(m);
 
         const auto& subPaths = path.subPaths;
 

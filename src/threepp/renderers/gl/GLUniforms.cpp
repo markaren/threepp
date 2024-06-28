@@ -106,7 +106,7 @@ namespace {
                     return [&](const UniformValue& value, GLTextures*) { setValueV1i(value); };
 
                 default:
-                    return [&](const UniformValue& value, GLTextures*) {
+                    return [&](const UniformValue&, GLTextures*) {
                         std::cout << "SingleUniform TODO: "
                                   << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
                     };
@@ -387,9 +387,9 @@ namespace {
             std::visit(
                     overloaded{
                             [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
-                            [&](std::unordered_map<std::string, NestedUniformValue> arg) {
+                            [&](std::unordered_map<std::string, NestedUniformValue> args) {
                                 for (auto& u : seq) {
-                                    NestedUniformValue& v = arg.at(u->id);
+                                    NestedUniformValue& v = args.at(u->id);
                                     std::visit(overloaded{
                                                        [&](auto) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
                                                        [&](int arg) { u->setValue(arg, textures); },
@@ -402,7 +402,7 @@ namespace {
                             },
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
-                                    int index = utils::parseInt(u->id);
+                                    const auto index = utils::parseInt(u->id);
                                     auto value = arg[index];
                                     if (!value) continue;
                                     u->setValue(*arg[index], textures);
@@ -435,7 +435,7 @@ namespace {
         while (rex_it != rex_end) {
             std::smatch match = *rex_it;
 
-            const auto matchEnd = match.length();
+            const size_t matchEnd = match.length();
 
             std::string id = match[1];
             bool isIndex = match[2] == "]";

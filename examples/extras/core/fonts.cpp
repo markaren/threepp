@@ -33,8 +33,8 @@ namespace {
             ImGui::Begin("Font");
 
             if (ImGui::BeginCombo("Select Font", names[selectedIndex].c_str())) {
-                for (int i = 0; i < names.size(); ++i) {
-                    const bool isSelected = (selectedIndex == i);
+                for (unsigned i = 0; i < names.size(); ++i) {
+                    const auto isSelected = (selectedIndex == i);
                     if (ImGui::Selectable(names[i].c_str(), isSelected)) {
                         selectedIndex = i;
                     }

@@ -7,7 +7,6 @@
 #include "imgui_impl_opengl3.h"
 
 #include <functional>
-#include <utility>
 
 class ImguiContext {
 
@@ -37,7 +36,7 @@ public:
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     }
 
-    ~ImguiContext() {
+    virtual ~ImguiContext() {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();

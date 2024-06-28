@@ -222,7 +222,7 @@ int main() {
     canvas.setIOCapture(&capture);
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
-        std::optional<int> key;
+        std::optional<size_t> key;
         if (evt.key == Key::NUM_1) {
             key = 0;
         } else if (evt.key == Key::NUM_2) {
