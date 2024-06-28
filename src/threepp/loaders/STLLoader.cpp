@@ -10,7 +10,7 @@ using namespace threepp;
 
 std::shared_ptr<BufferGeometry> STLLoader::load(const std::filesystem::path& path) const {
 
-    if (!std::filesystem::exists(path)) {
+    if (!exists(path)) {
         std::cerr << "[STLLoader] No such file: '" << absolute(path).string() << "'!" << std::endl;
         return nullptr;
     }
@@ -33,7 +33,7 @@ std::shared_ptr<BufferGeometry> STLLoader::load(const std::filesystem::path& pat
     float normalY;
     float normalZ;
 
-    for (int face = 0; face < faces; face++) {
+    for (uint32_t face = 0; face < faces; face++) {
         int start = dataOffset + face * faceLength;
         reader.seekg(start, std::ios::beg);
 
@@ -47,9 +47,9 @@ std::shared_ptr<BufferGeometry> STLLoader::load(const std::filesystem::path& pat
             int componentIdx = face * 3 * 3 + (i - 1) * 3;
             reader.seekg(vertexStart, std::ios::beg);
 
-            float& x = vertices.emplace_back();
-            float& y = vertices.emplace_back();
-            float& z = vertices.emplace_back();
+            vertices.emplace_back();
+            vertices.emplace_back();
+            vertices.emplace_back();
 
             reader.read(reinterpret_cast<char*>(&vertices[componentIdx]), 4);
             reader.read(reinterpret_cast<char*>(&vertices[componentIdx + 1]), 4);

@@ -102,27 +102,27 @@ struct HUD::Impl: Scene, MouseListener {
         }
     }
 
-    void onMouseDown(int button, const Vector2& pos) override {
+    void onMouseDown(int button, const Vector2&) override {
 
         raycaster_.setFromCamera(mouse_, camera_);
 
         auto intersects = raycaster_.intersectObjects(children, false);
         if (!intersects.empty()) {
             auto front = intersects.front();
-            if (map_.count(front.object)) {
+            if (map_.contains(front.object)) {
                 map_.at(front.object).onMouseDown_(button);
             }
         }
     }
 
-    void onMouseUp(int button, const Vector2& pos) override {
+    void onMouseUp(int button, const Vector2&) override {
 
         raycaster_.setFromCamera(mouse_, camera_);
 
         auto intersects = raycaster_.intersectObjects(children, false);
         if (!intersects.empty()) {
             auto front = intersects.front();
-            if (map_.count(front.object)) {
+            if (map_.contains(front.object)) {
                 map_.at(front.object).onMouseUp_(button);
             }
         }

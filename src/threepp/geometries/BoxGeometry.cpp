@@ -42,15 +42,15 @@ namespace {
             int vertexCounter = 0;
             int groupCount = 0;
 
-            auto vector = Vector3();
+            Vector3 vector;
 
             // generate vertices, normals and uvs
 
-            for (auto iy = 0; iy < gridY1; iy++) {
+            for (unsigned iy = 0; iy < gridY1; iy++) {
 
                 const auto y = static_cast<float>(iy) * segmentHeight - heightHalf;
 
-                for (auto ix = 0; ix < gridX1; ix++) {
+                for (unsigned ix = 0; ix < gridX1; ix++) {
 
                     const auto x = static_cast<float>(ix) * segmentWidth - widthHalf;
 
@@ -91,9 +91,9 @@ namespace {
             // 2. a single segment consists of two faces
             // 3. so we need to generate six (2*3) indices per segment
 
-            for (auto iy = 0; iy < gridY; iy++) {
+            for (unsigned iy = 0; iy < gridY; iy++) {
 
-                for (auto ix = 0; ix < gridX; ix++) {
+                for (unsigned ix = 0; ix < gridX; ix++) {
 
                     const auto a = numberOfVertices + ix + gridX1 * iy;
                     const auto b = numberOfVertices + ix + gridX1 * (iy + 1);

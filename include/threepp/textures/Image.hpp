@@ -19,10 +19,10 @@ namespace threepp {
         unsigned int depth;
 
         Image(ImageData data, unsigned int width, unsigned int height, bool flipped = true)
-            : data_(std::move(data)), width(width), height(height), depth(0), flipped_(flipped){};
+            : width(width), height(height), depth(0), flipped_(flipped), data_(std::move(data)){};
 
         Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
-            : data_(std::move(data)), width(width), height(height), depth(depth), flipped_(flipped){};
+            : width(width), height(height), depth(depth), flipped_(flipped), data_(std::move(data)){};
 
         [[nodiscard]] bool flipped() const {
 

@@ -21,7 +21,7 @@ LOD& LOD::addLevel(Object3D& object, float distance) {
 
     distance = std::abs(distance);
 
-    int l;
+    unsigned l;
 
     for (l = 0; l < levels.size(); l++) {
 
@@ -42,7 +42,7 @@ LOD& LOD::addLevel(const std::shared_ptr<Object3D>& object, float distance) {
 
     distance = std::abs(distance);
 
-    int l;
+    unsigned l;
 
     for (l = 0; l < levels.size(); l++) {
 
@@ -102,7 +102,7 @@ void LOD::update(Camera& camera) {
     }
 }
 
-void LOD::copy(const Object3D& source, bool recursive) {
+void LOD::copy(const Object3D& source, bool /*recursive*/) {
     Object3D::copy(source, false);
 
     if (const auto l = source.as<LOD>()) {

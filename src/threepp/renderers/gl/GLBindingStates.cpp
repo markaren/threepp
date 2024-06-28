@@ -335,7 +335,7 @@ struct GLBindingStates::Impl {
 
                     if (materialDefaultAttributeValues.contains("name")) {
 
-                        UniformValue& value = materialDefaultAttributeValues.at("name");
+                        // UniformValue& value = materialDefaultAttributeValues.at("name");
 
                         // TODO
                     }
@@ -357,7 +357,7 @@ struct GLBindingStates::Impl {
                 auto& stateMap = progIt->second;
 
                 for (auto it = stateMap.begin(); it != stateMap.end();) {
-                    const auto& wireframe = *it;
+                    // const auto& wireframe = *it;
 
                     deleteVertexArrayObject(*it->second->object);
 

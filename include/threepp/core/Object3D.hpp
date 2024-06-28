@@ -207,7 +207,7 @@ namespace threepp {
         // Returns a vector representing the direction of object's positive z-axis in world space.
         virtual void getWorldDirection(Vector3& target);
 
-        virtual void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {}
+        virtual void raycast(const Raycaster&, std::vector<Intersection>&) {}
 
         void traverse(const std::function<void(Object3D&)>& callback);
 

@@ -58,7 +58,7 @@ namespace {
     }
 
     TexParams getTextureParams(const std::string& value, MeshPhongMaterial& params) {
-        TexParams texParams{Vector2(1, 1), Vector2(0, 0)};
+        TexParams texParams{.scale = Vector2(1, 1), .offset = Vector2(0, 0)};
 
         auto items = utils::split(value, ' ');
         auto pos = std::find(items.begin(), items.end(), "-bm");

@@ -16,7 +16,7 @@ void SplineCurve::getPoint(float t, Vector2& point) const {
 
     const auto p = static_cast<float>(points.size() - 1) * t;
 
-    const auto intPoint = static_cast<int>(std::floor(p));
+    const auto intPoint = static_cast<size_t>(std::floor(p));
     const auto weight = p - static_cast<float>(intPoint);
 
     const auto p0 = points[intPoint == 0 ? intPoint : intPoint - 1];

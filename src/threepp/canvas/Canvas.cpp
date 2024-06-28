@@ -284,7 +284,7 @@ struct Canvas::Impl {
         if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
     }
 
-    static void error_callback(int error, const char* description) {
+    static void error_callback(int /*error*/, const char* description) {
         std::cerr << "Error: " << description << std::endl;
     }
 
@@ -299,10 +299,10 @@ struct Canvas::Impl {
 
         switch (action) {
             case GLFW_PRESS:
-                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::PRESS);
+                p->scope.onMousePressedEvent(button, p->lastMousePos_, MouseAction::PRESS);
                 break;
             case GLFW_RELEASE:
-                p->scope.onMousePressedEvent(button, p->lastMousePos_, PeripheralsEventSource::MouseAction::RELEASE);
+                p->scope.onMousePressedEvent(button, p->lastMousePos_, MouseAction::RELEASE);
                 break;
             default:
                 break;
@@ -329,15 +329,15 @@ struct Canvas::Impl {
         KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
         switch (action) {
             case GLFW_PRESS: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::PRESS);
+                p->scope.onKeyEvent(evt, KeyAction::PRESS);
                 break;
             }
             case GLFW_RELEASE: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::RELEASE);
+                p->scope.onKeyEvent(evt, KeyAction::RELEASE);
                 break;
             }
             case GLFW_REPEAT: {
-                p->scope.onKeyEvent(evt, PeripheralsEventSource::KeyAction::REPEAT);
+                p->scope.onKeyEvent(evt, KeyAction::REPEAT);
                 break;
             }
             default:
@@ -358,14 +358,14 @@ struct Canvas::Impl {
     }
 };
 
-Canvas::Canvas(const Canvas::Parameters& params)
+Canvas::Canvas(const Parameters& params)
     : pimpl_(std::make_unique<Impl>(*this, params)) {}
 
 Canvas::Canvas(const std::string& name)
-    : Canvas(Canvas::Parameters().title(name)) {}
+    : Canvas(Parameters().title(name)) {}
 
 Canvas::Canvas(const std::string& name, const std::unordered_map<std::string, ParameterValue>& values)
-    : Canvas(Canvas::Parameters(values).title(name)) {}
+    : Canvas(Parameters(values).title(name)) {}
 
 
 void Canvas::animate(const std::function<void()>& f) {

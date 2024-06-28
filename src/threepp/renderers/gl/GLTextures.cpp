@@ -167,7 +167,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         if (!mipmaps.empty()) {
 
-            for (int i = 0; i < mipmaps.size(); ++i) {
+            for (unsigned i = 0; i < mipmaps.size(); ++i) {
 
                 auto& mipmap = mipmaps[i];
                 state->texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
@@ -367,7 +367,7 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
         auto& image = images[i];
         state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
 
-        for (int j = 0; j < mipmaps.size(); j++) {
+        for (unsigned j = 0; j < mipmaps.size(); j++) {
             state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + i, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
         }
     }

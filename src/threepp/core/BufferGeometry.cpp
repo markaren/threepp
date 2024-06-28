@@ -31,7 +31,7 @@ namespace {
 
                 index = indices[i] * itemSize;
 
-                for (unsigned j = 0; j < itemSize; j++) {
+                for (auto j = 0; j < itemSize; j++) {
 
                     array2[index2++] = array[index++];
                 }

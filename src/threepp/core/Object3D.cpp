@@ -464,8 +464,8 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
     this->frustumCulled = source.frustumCulled;
     this->renderOrder = source.renderOrder;
 
-    this->onAfterRender = std::move(onAfterRender);
-    this->onBeforeRender = std::move(onBeforeRender);
+    this->onAfterRender = std::move(source.onAfterRender);
+    this->onBeforeRender = std::move(source.onBeforeRender);
 
     this->rotation._onChange([this] {
         quaternion.setFromEuler(rotation, false);

@@ -36,12 +36,12 @@ EdgesGeometry::EdgesGeometry(const BufferGeometry& geometry, float thresholdAngl
     const auto indexCount = indexAttr ? indexAttr->count() : positionAttr->count();
 
     std::vector<unsigned int> indexArr{0, 0, 0};
-    std::vector<char> vertKeys{'a', 'b', 'c'};
+    std::vector vertKeys{'a', 'b', 'c'};
     std::vector<std::string> hashes(3);
 
     std::unordered_map<std::string, std::optional<EdgeData>> edgeData;
     std::vector<float> vertices;
-    for (unsigned i = 0; i < indexCount; i += 3) {
+    for (int i = 0; i < indexCount; i += 3) {
 
         if (indexAttr) {
 

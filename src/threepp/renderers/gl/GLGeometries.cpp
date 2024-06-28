@@ -78,7 +78,7 @@ struct GLGeometries::Impl {
           bindingStates_(bindingStates),
           onGeometryDispose_(this) {}
 
-    void get(Object3D* object, BufferGeometry* geometry) {
+    void get(Object3D* /*object*/, BufferGeometry* geometry) {
 
         if (geometries_.contains(geometry) && geometries_.at(geometry)) return;
 

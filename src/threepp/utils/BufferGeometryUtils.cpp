@@ -141,7 +141,7 @@ std::shared_ptr<BufferGeometry> threepp::mergeBufferGeometries(const std::vector
 
             auto index = geometry->getIndex();
 
-            for (unsigned j = 0; j < index->count(); ++j) {
+            for (auto j = 0; j < index->count(); ++j) {
 
                 mergedIndex.emplace_back(index->getX(j) + indexOffset);
             }

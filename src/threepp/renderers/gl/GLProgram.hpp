@@ -15,7 +15,7 @@ namespace threepp {
 
     namespace gl {
 
-        struct GLBindingStates;
+        class GLBindingStates;
 
         struct GLProgram {
 

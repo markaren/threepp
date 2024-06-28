@@ -519,7 +519,7 @@ struct OBJLoader::Impl {
 
             if (!createdMaterials.empty()) {
 
-                for (int mi = 0; mi < materials.size(); ++mi) {
+                for (unsigned mi = 0; mi < materials.size(); ++mi) {
 
                     auto& sourceMaterial = materials.at(mi);
                     bufferGeometry->addGroup(sourceMaterial->groupStart, sourceMaterial->groupCount, mi);

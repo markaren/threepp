@@ -314,7 +314,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
     }
 }
 
-bool Material::setValue(const std::string& key, const MaterialValue& value) {
+bool Material::setValue(const std::string&, const MaterialValue&) {
 
     return false;
 }

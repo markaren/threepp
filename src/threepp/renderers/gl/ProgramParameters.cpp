@@ -54,7 +54,7 @@ ProgramParameters::ProgramParameters(
     auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
     auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
     auto definesMaterial = dynamic_cast<MaterialWithDefines*>(material);
-    auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
+    // auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
     auto roughnessMaterial = dynamic_cast<MaterialWithRoughness*>(material);
     auto metallnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
 

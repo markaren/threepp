@@ -210,7 +210,7 @@ struct FlyControls::Impl {
 
         explicit MouseDownListener(FlyControls& scope): scope(scope) {}
 
-        void onMouseDown(int button, const Vector2& pos) override {
+        void onMouseDown(int button, const Vector2&) override {
 
             if (scope.dragToLook) {
 
@@ -260,7 +260,7 @@ struct FlyControls::Impl {
 
         explicit MouseUpListener(FlyControls& scope): scope(scope) {}
 
-        void onMouseUp(int button, const Vector2& pos) override {
+        void onMouseUp(int button, const Vector2&) override {
 
             if (scope.dragToLook) {
 
@@ -303,8 +303,8 @@ private:
     Vector3 moveVector;
     Vector3 rotationVector;
 
-    KeyUpListener keydown;
     KeyDownListener keyUp;
+    KeyUpListener keydown;
 
     MouseDownListener mouseDown;
     MouseMoveListener mouseMove;

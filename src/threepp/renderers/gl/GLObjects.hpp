@@ -18,8 +18,9 @@ namespace threepp {
         class GLAttributes;
 
 
-        struct GLObjects {
+        class GLObjects {
 
+        public:
             GLObjects(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info);
 
             BufferGeometry* update(Object3D* object);

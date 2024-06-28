@@ -290,11 +290,11 @@ namespace mapbox {
             Node* prev;
             Node* next;
 
-            int iterations = 0;
+            // int iterations = 0;
 
             // iterate through ears, slicing them one by one
             while (ear->prev != ear->next) {
-                iterations++;
+                // iterations++;
                 prev = ear->prev;
                 next = ear->next;
 

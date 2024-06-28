@@ -65,7 +65,7 @@ namespace threepp {
         Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false) {
             Matrix4 result;
 
-            for (auto i = 0, j = 0; i < joints_.size(); ++i) {
+            for (unsigned i = 0, j = 0; i < joints_.size(); ++i) {
 
                 const auto& joint = joints_.at(i);
                 const auto& info = jointInfos_.at(i);
@@ -104,9 +104,9 @@ namespace threepp {
         }
 
         void finalize() {
-            for (auto i = 0; i < joints_.size(); i++) {
-                const auto info = jointInfos_[i];
-                const auto joint = joints_[i];
+            for (unsigned i = 0; i < joints_.size(); i++) {
+                const auto& info = jointInfos_[i];
+                const auto& joint = joints_[i];
 
                 auto parent = std::ranges::find_if(links_, [&](auto link) {
                     return link->name == info.parent;
@@ -128,7 +128,7 @@ namespace threepp {
         }
 
         void setJointValues(const std::vector<float>& values) {
-            for (auto i = 0; i < values.size(); ++i) {
+            for (unsigned i = 0; i < values.size(); ++i) {
                 setJointValue(i, values[i]);
             }
         }
@@ -159,6 +159,8 @@ namespace threepp {
                     jointValues_[index] = value;
                     break;
                 }
+                default:
+                    break;
             }
         }
 
@@ -175,7 +177,7 @@ namespace threepp {
         [[nodiscard]] std::vector<float> jointValuesWithConversionFromRadiansToDeg() const {
 
             std::vector<float> values = jointValues_;
-            for (auto i = 0; i < numDOF(); i++) {
+            for (unsigned i = 0; i < numDOF(); i++) {
                 const auto type = articulatedJoints_.at(i).second.type;
                 if (type == JointType::Revolute) {
                     values[i] = math::radToDeg(jointValues_[i]);
@@ -205,7 +207,7 @@ namespace threepp {
 
         [[nodiscard]] std::vector<JointInfo> getArticulatedJointInfo() const {
             std::vector<JointInfo> info(numDOF());
-            for (auto i = 0; i < numDOF(); i++) {
+            for (unsigned i = 0; i < numDOF(); i++) {
                 info[i] = articulatedJoints_.at(i).second;
             }
             return info;

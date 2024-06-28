@@ -186,7 +186,7 @@ namespace {
         void setValueV2f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector2 arg) { setValueV2fHelper(arg); },
                        },
                        value);
@@ -213,7 +213,7 @@ namespace {
         void setValueV3f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector3 arg) { setValueV3fHelper(arg); },
                                [&](Vector3* arg) { setValueV3fHelper(*arg); },
                                [&](Color arg) { setValueV3fHelper(arg); },
@@ -244,7 +244,7 @@ namespace {
         void setValueV4f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector4 arg) { setValueV4fHelper(arg); },
                                [&](Quaternion arg) { setValueV4fHelper(arg); },
                        },
@@ -285,7 +285,7 @@ namespace {
         void setValueM4(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
                                [&](Matrix4* arg) { setValueM4Helper(arg->elements); }},
                        value);
@@ -337,7 +337,7 @@ namespace {
                 case 0x8b5c:// MAT4
                     return [&](const UniformValue& value, GLTextures*) {
                         std::visit(overloaded{
-                                           [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                                           [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
                                            [&](std::vector<float> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, arg.data()); },
                                            [&](std::vector<Matrix4> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
                                            [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
@@ -362,7 +362,7 @@ namespace {
                         }
                     };
                 default:
-                    return [&](const UniformValue& value, GLTextures*) {
+                    return [&](const UniformValue&, GLTextures*) {
                         std::cout << "PureArrayUniform TODO: "
                                   << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
                     };

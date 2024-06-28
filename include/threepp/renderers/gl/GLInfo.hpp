@@ -34,8 +34,9 @@ namespace threepp::gl {
         }
     };
 
-    struct GLInfo {
+    class GLInfo {
 
+    public:
         MemoryInfo memory{};
         RenderInfo render{};
 

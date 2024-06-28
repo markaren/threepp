@@ -30,14 +30,14 @@ namespace {
 
 struct OrbitControls::Impl {
 
-    PeripheralsEventSource& canvas;
     OrbitControls& scope;
+    PeripheralsEventSource& canvas;
     Camera& camera;
 
     std::unique_ptr<KeyListener> keyListener;
     std::unique_ptr<MouseListener> mouseListener;
 
-    State state = State::NONE;
+    State state = NONE;
 
     // current position in spherical coordinates
     Spherical spherical;
@@ -458,12 +458,12 @@ struct OrbitControls::Impl {
         MyMouseUpListener(OrbitControls& scope, MyMouseMoveListener* mouseMoveListener)
             : scope(scope), mouseMoveListener(mouseMoveListener) {}
 
-        void onMouseUp(int button, const Vector2& pos) override {
+        void onMouseUp(int, const Vector2&) override {
             if (scope.enabled) {
 
                 scope.pimpl_->canvas.removeMouseListener(*mouseMoveListener);
                 scope.pimpl_->canvas.removeMouseListener(*this);
-                scope.pimpl_->state = State::NONE;
+                scope.pimpl_->state = NONE;
             }
         }
     };

@@ -59,7 +59,7 @@ std::vector<float> Curve<T>::getLengths() const {
 template<class T>
 std::vector<float> Curve<T>::getLengths(int divisions) const {
 
-    if ((this->cacheArcLengths.size() == divisions + 1) && !this->needsUpdate) {
+    if (static_cast<int>(this->cacheArcLengths.size()) == divisions + 1 && !this->needsUpdate) {
 
         return this->cacheArcLengths;
     }

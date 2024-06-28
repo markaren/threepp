@@ -3,8 +3,6 @@
 #ifndef THREEPP_TUBEGEOMETRY_HPP
 #define THREEPP_TUBEGEOMETRY_HPP
 
-#include <utility>
-
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/core/Curve.hpp"
 #include "threepp/math/MathUtils.hpp"

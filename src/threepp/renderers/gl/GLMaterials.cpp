@@ -32,7 +32,7 @@ struct GLMaterials::Impl {
         auto metalnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
         auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
         auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
-        auto spriteMaterial = dynamic_cast<SpriteMaterial*>(material);
+        // auto spriteMaterial = dynamic_cast<SpriteMaterial*>(material);
         // TODO clearcoat
 
         auto aoMaterial = dynamic_cast<MaterialWithAoMap*>(material);
