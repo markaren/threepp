@@ -537,7 +537,7 @@ endif ()
 if (THREEPP_TREAT_WARNINGS_AS_ERRORS)
     # Treat warnings as errors,
     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(threepp PRIVATE "-Wall" "-Wextra" "-Wpedantic")
+        target_compile_options(threepp PRIVATE "-Wall" "-Wextra")
         target_compile_options(threepp PRIVATE
                 "-Wno-parentheses" "-Wno-reorder" "-Wno-reorder-ctor"
                 "-Wno-missing-field-initializers" "-Wno-overloaded-virtual"
