@@ -115,7 +115,7 @@ namespace threepp {
             copyInto(*clone);
 
             return std::dynamic_pointer_cast<T>(clone);
-        };
+        }
 
         ~Material() override;
 
