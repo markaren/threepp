@@ -39,15 +39,15 @@ namespace {
                texture.minFilter != Filter::Nearest && texture.minFilter != Filter::Linear;
     }
 
-    GLuint filterFallback(Filter f) {
-
-        if (f == Filter::Nearest || f == Filter::NearestMipmapNearest || f == Filter::NearestMipmapLinear) {
-
-            return GL_NEAREST;
-        }
-
-        return GL_LINEAR;
-    }
+    // GLuint filterFallback(Filter f) {
+    //
+    //     if (f == Filter::Nearest || f == Filter::NearestMipmapNearest || f == Filter::NearestMipmapLinear) {
+    //
+    //         return GL_NEAREST;
+    //     }
+    //
+    //     return GL_LINEAR;
+    // }
 
     GLint getInternalFormat(GLuint glFormat, GLuint glType) {
 

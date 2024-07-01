@@ -49,19 +49,19 @@ namespace {
         return regex_replace(s.cbegin(), s.cend(), re, f);
     }
 
-    std::vector<std::string> regexSplit(const std::string& input, const std::regex& r) {
-
-        std::vector<std::string> result;
-
-        std::sregex_token_iterator iter(input.begin(), input.end(), r, -1);
-        std::sregex_token_iterator end;
-
-        for (; iter != end; ++iter) {
-            result.emplace_back(*iter);
-        }
-
-        return result;
-    }
+    // std::vector<std::string> regexSplit(const std::string& input, const std::regex& r) {
+    //
+    //     std::vector<std::string> result;
+    //
+    //     std::sregex_token_iterator iter(input.begin(), input.end(), r, -1);
+    //     std::sregex_token_iterator end;
+    //
+    //     for (; iter != end; ++iter) {
+    //         result.emplace_back(*iter);
+    //     }
+    //
+    //     return result;
+    // }
 
 }// namespace
 
