@@ -75,7 +75,7 @@ namespace threepp::gl {
 
             // Collect influences
 
-            for (int i = 0; i < length; i++) {
+            for (unsigned i = 0; i < length; i++) {
 
                 auto& influence = influences.at(i);
 
@@ -83,7 +83,7 @@ namespace threepp::gl {
                 influence.second = objectInfluences[i];
             }
 
-            std::stable_sort(influences.begin(), influences.end(), absNumericalSort);
+            std::ranges::stable_sort(influences, absNumericalSort);
 
             for (unsigned i = 0; i < 8; i++) {
 

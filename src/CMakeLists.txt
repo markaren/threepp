@@ -464,7 +464,7 @@ if (THREEPP_WITH_GLFW)
         set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
         if (THREEPP_EMBEDDED_GLFW_WITH_X11)
             set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
-        else()
+        else ()
             set(GLFW_BUILD_X11 OFF CACHE BOOL "" FORCE)
         endif ()
         set(GLFW_LIBRARY_TYPE "OBJECT" CACHE STRING "" FORCE)
@@ -531,4 +531,19 @@ if (NOT DEFINED EMSCRIPTEN)
         target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")
     endif ()
 
+endif ()
+
+
+if (THREEPP_TREAT_WARNINGS_AS_ERRORS)
+    # Treat warnings as errors,
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(threepp PRIVATE "-Wall" "-Wextra")
+        target_compile_options(threepp PRIVATE
+                "-Wno-parentheses" "-Wno-reorder" "-Wno-reorder-ctor"
+                "-Wno-missing-field-initializers" "-Wno-overloaded-virtual"
+                "-Wno-unused-parameter" "-Wno-dollar-in-identifier-extension")
+        target_compile_options(threepp PRIVATE "-Werror")
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        target_compile_options(threepp PRIVATE "/WX")
+    endif ()
 endif ()

@@ -131,7 +131,7 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake . -A x64 -B build -DCMAKE_BUILD_TYPE="Release"
+          cmake . -A x64 -B build -DTHREEPP_TREAT_WARNINGS_AS_ERRORS=ON -DCMAKE_BUILD_TYPE="Release"
           cmake --build build --config Release
 
       - name: Test

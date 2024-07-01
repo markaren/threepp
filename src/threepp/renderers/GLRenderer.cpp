@@ -494,7 +494,7 @@ struct GLRenderer::Impl {
 
                     // update skeleton only once in a frame
 
-                    if (skinned->skeleton->frame != _info.render.frame) {
+                    if (skinned->skeleton->frame != static_cast<int>(_info.render.frame)) {
 
                         skinned->skeleton->update();
                         skinned->skeleton->frame = _info.render.frame;
@@ -788,8 +788,8 @@ struct GLRenderer::Impl {
                 needsProgramChange = true;
 
             } else if (materialProperties->numClippingPlanes &&
-                       (materialProperties->numClippingPlanes.value() != clipping.numPlanes ||
-                        materialProperties->numIntersection != clipping.numIntersection)) {
+                       (materialProperties->numClippingPlanes.value() != static_cast<int>(clipping.numPlanes) ||
+                        materialProperties->numIntersection != static_cast<int>(clipping.numIntersection))) {
 
                 needsProgramChange = true;
 
