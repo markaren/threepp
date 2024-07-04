@@ -82,7 +82,7 @@ namespace threepp {
         Color getColor(float alpha) {
             alpha = std::clamp(alpha, this->minV, this->maxV);
             alpha = (alpha - this->minV) / (this->maxV - this->minV);
-            int colorPosition = static_cast<int>(std::round(alpha * this->n));
+            int colorPosition = static_cast<int>(std::round(alpha * static_cast<float>(this->n)));
 
             return this->lut[colorPosition];
         }

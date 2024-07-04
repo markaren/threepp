@@ -19,17 +19,16 @@ namespace {
 
     std::pair<float, float> normalizeAndApplyLut(BufferGeometry& geometry) {
 
-        auto pos = geometry.getAttribute<float>("position");
+        const auto pos = geometry.getAttribute<float>("position");
 
-        std::vector<float> yValues;
-        yValues.reserve(pos->count());
+        std::vector<float> yValues(pos->count());
         for (auto i = 0; i < pos->count(); i++) {
-            yValues.emplace_back(pos->getY(i));
+            yValues[i] = pos->getY(i);
         }
 
-        const auto minmax = std::minmax_element(yValues.begin(), yValues.end());
+        const auto [min, max] = std::minmax_element(yValues.begin(), yValues.end());
         for (auto i = 0; i < pos->count(); i++) {
-            pos->setY(i, math::mapLinear(pos->getY(i), *minmax.first, *minmax.second, 0, maxHeight));
+            pos->setY(i, math::mapLinear(pos->getY(i), *min, *max, 0, maxHeight));
         }
 
         Lut lut("rainbow", 256 * 256);
@@ -37,7 +36,7 @@ namespace {
 
         for (auto i = 0, j = 0; i < pos->count(); i++, j += 3) {
 
-            float y = pos->getY(i);
+            const auto y = pos->getY(i);
 
             Color c = lut.getColor(math::mapLinear(y, 0, maxHeight, 0, 1));
             c.toArray(colors, j);
@@ -49,16 +48,16 @@ namespace {
             geometry.getAttribute<float>("color")->needsUpdate();
         }
 
-        return {*minmax.first, *minmax.second};
+        return {*min, *max};
     }
 
     void applyFunc(BufferGeometry& geometry, const Problem& func) {
 
-        auto pos = geometry.getAttribute<float>("position");
+        const auto pos = geometry.getAttribute<float>("position");
 
         for (auto i = 0; i < pos->count(); i++) {
-            auto x = math::mapLinear(pos->getX(i), -gridSize / 2, gridSize / 2, 0, 1);
-            auto z = math::mapLinear(pos->getZ(i), -gridSize / 2, gridSize / 2, 0, 1);
+            const auto x = math::mapLinear(pos->getX(i), -gridSize / 2, gridSize / 2, 0, 1);
+            const auto z = math::mapLinear(pos->getZ(i), -gridSize / 2, gridSize / 2, 0, 1);
             pos->setY(i, func.eval({x, z}));
         }
 
@@ -68,7 +67,6 @@ namespace {
 }// namespace
 
 int main() {
-
 
     std::unordered_map<std::string, std::unique_ptr<Optimizer>> algorithms;
     algorithms.emplace("DifferentialEvolution", std::make_unique<DifferentialEvolution>(50, 0.2f, 0.9f));
