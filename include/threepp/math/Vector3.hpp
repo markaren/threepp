@@ -272,23 +272,23 @@ namespace threepp {
             return os;
         }
 
-        inline static Vector3 X() {
+        static Vector3 X() {
             return {1, 0, 0};
         }
 
-        inline static Vector3 Y() {
+        static Vector3 Y() {
             return {0, 1, 0};
         }
 
-        inline static Vector3 Z() {
+        static Vector3 Z() {
             return {0, 0, 1};
         }
 
-        inline static Vector3 ZEROS() {
+        static Vector3 ZEROS() {
             return {0, 0, 0};
         }
 
-        inline static Vector3 ONES() {
+        static Vector3 ONES() {
             return {1, 1, 1};
         }
     };

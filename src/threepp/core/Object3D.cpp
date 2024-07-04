@@ -10,6 +10,8 @@
 
 #include "threepp/lights/Light.hpp"
 
+#include <ranges>
+
 using namespace threepp;
 
 Object3D::Object3D()
@@ -221,26 +223,26 @@ void Object3D::add(Object3D& object) {
 
 void Object3D::remove(Object3D& object) {
 
-    {// non-owning (all children should be represented here)
-        auto find = std::find_if(children.begin(), children.end(), [&object](const auto& obj) {
+    // non-owning (all children should be represented here)
+    if (const auto find = std::ranges::find_if(children, [&object](const auto& obj) {
             return obj == &object;
         });
-        if (find != children.end()) {
-            Object3D* child = *find;
-            children.erase(find);
+        find != children.end()) {
 
-            child->parent = nullptr;
-            child->dispatchEvent("remove", child);
-        }
+        Object3D* child = *find;
+        children.erase(find);
+
+        child->parent = nullptr;
+        child->dispatchEvent("remove", child);
     }
-    {// owning
-        auto find = std::find_if(children_.begin(), children_.end(), [&object](const auto& obj) {
+
+    // owning
+    if (const auto find = std::ranges::find_if(children_, [&object](const auto& obj) {
             return obj.get() == &object;
         });
-        if (find != children_.end()) {
+        find != children_.end()) {
 
-            children_.erase(find);
-        }
+        children_.erase(find);
     }
 }
 

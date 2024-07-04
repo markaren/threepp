@@ -2,7 +2,6 @@
 #ifndef THREEPP_IMAGE_HPP
 #define THREEPP_IMAGE_HPP
 
-#include <memory>
 #include <utility>
 #include <variant>
 #include <vector>

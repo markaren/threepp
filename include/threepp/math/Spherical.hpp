@@ -3,9 +3,9 @@
 #ifndef THREEPP_SPHERICAL_HPP
 #define THREEPP_SPHERICAL_HPP
 
-#include "threepp/math/Vector3.hpp"
-
 namespace threepp {
+
+    class Vector3;
 
     class Spherical {
 

@@ -3,6 +3,7 @@
 
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Spherical.hpp"
+#include "threepp/math/Vector3.hpp"
 
 #include <cmath>
 

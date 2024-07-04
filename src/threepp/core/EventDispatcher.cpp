@@ -16,7 +16,7 @@ bool EventDispatcher::hasEventListener(const std::string& type, const EventListe
     if (!listeners_.contains(type)) return false;
 
     auto& listenerArray = listeners_.at(type);
-    return std::find(listenerArray.begin(), listenerArray.end(), listener) != listenerArray.end();
+    return std::ranges::find(listenerArray, listener) != listenerArray.end();
 }
 
 void EventDispatcher::removeEventListener(const std::string& type, const EventListener* listener) {
@@ -26,8 +26,7 @@ void EventDispatcher::removeEventListener(const std::string& type, const EventLi
     auto& listenerArray = listeners_.at(type);
     if (listenerArray.empty()) return;
 
-    auto find = std::find(listenerArray.begin(), listenerArray.end(), listener);
-    if (find != listenerArray.end()) {
+    if (const auto find = std::ranges::find(listenerArray, listener); find != listenerArray.end()) {
         listenerArray.erase(find);
     }
 }

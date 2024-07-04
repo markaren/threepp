@@ -35,7 +35,7 @@ namespace threepp {
 
         SphericalHarmonis3& lerp(const SphericalHarmonis3& sh, float alpha);
 
-        const std::vector<Vector3>& getCoefficients() const;
+        [[nodiscard]] const std::vector<Vector3>& getCoefficients() const;
 
     private:
         std::vector<Vector3> coefficients_;

@@ -16,12 +16,12 @@ namespace threepp {
         float_view(float value = 0)
             : value_(value) {}
 
-        inline operator float() const {
+        operator float() const {
 
             return value_;
         }
 
-        inline float_view& operator=(float v) {
+        float_view& operator=(float v) {
 
             this->value_ = v;
             if (f_) f_.value()();
@@ -29,17 +29,17 @@ namespace threepp {
             return *this;
         }
 
-        inline float operator*(float f) const {
+        float operator*(float f) const {
 
             return value_ * f;
         }
 
-        inline float operator*(const float_view& f) const {
+        float operator*(const float_view& f) const {
 
             return value_ * f.value_;
         }
 
-        inline float_view& operator*=(float f) {
+        float_view& operator*=(float f) {
 
             value_ *= f;
             if (f_) f_.value()();
@@ -47,12 +47,12 @@ namespace threepp {
             return *this;
         }
 
-        inline float operator/(float f) const {
+        float operator/(float f) const {
 
             return value_ / f;
         }
 
-        inline float_view& operator/=(float f) {
+        float_view& operator/=(float f) {
 
             value_ /= f;
             if (f_) f_.value()();
@@ -60,17 +60,17 @@ namespace threepp {
             return *this;
         }
 
-        inline float operator+(float f) const {
+        float operator+(float f) const {
 
             return value_ + f;
         }
 
-        inline float operator+(const float_view& f) const {
+        float operator+(const float_view& f) const {
 
             return value_ + f.value_;
         }
 
-        inline float_view& operator+=(float f) {
+        float_view& operator+=(float f) {
 
             value_ += f;
             if (f_) f_.value()();
@@ -78,17 +78,17 @@ namespace threepp {
             return *this;
         }
 
-        inline float operator-(float f) const {
+        float operator-(float f) const {
 
             return value_ - f;
         }
 
-        inline float operator-(const float_view& f) const {
+        float operator-(const float_view& f) const {
 
             return value_ - f.value_;
         }
 
-        inline float_view& operator-=(float f) {
+        float_view& operator-=(float f) {
 
             value_ -= f;
             if (f_) f_.value()();
@@ -96,7 +96,7 @@ namespace threepp {
             return *this;
         }
 
-        inline float_view& operator++() {
+        float_view& operator++() {
 
             value_++;
             if (f_) f_.value()();
@@ -104,7 +104,7 @@ namespace threepp {
             return *this;
         }
 
-        inline float_view& operator--() {
+        float_view& operator--() {
 
             value_--;
             if (f_) f_.value()();
@@ -112,27 +112,27 @@ namespace threepp {
             return *this;
         }
 
-        inline bool operator==(float other) const {
+        bool operator==(float other) const {
 
             return value_ == other;
         }
 
-        inline bool operator!=(float other) const {
+        bool operator!=(float other) const {
 
             return value_ != other;
         }
 
-        inline bool operator==(const float_view& other) const {
+        bool operator==(const float_view& other) const {
 
             return value_ == other.value_;
         }
 
-        inline bool operator!=(const float_view& other) const {
+        bool operator!=(const float_view& other) const {
 
             return value_ != other.value_;
         }
 
-        inline constexpr float_view& clamp(float min, float max) {
+        constexpr float_view& clamp(float min, float max) {
 
             value_ = std::max(min, std::min(max, value_));
 
