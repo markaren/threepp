@@ -197,12 +197,6 @@ This is the preferred approach, as it enables users to update the targeted three
 An example is provided [here](tests/threepp_fetchcontent_test).
 See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses WxWidgets as the Window system.
 
-#### vcpkg
-
-`threepp` is available for use with vcpkg through a custom vcpkg-registry.
-However, this vcpkg port is cumbersome to maintain and is not so often updated, and support may be discontinued in the future.
-
-An example is provided [here](tests/threepp_vcpkg_test).
 
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
