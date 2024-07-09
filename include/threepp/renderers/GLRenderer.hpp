@@ -17,8 +17,8 @@
 #include "threepp/renderers/gl/GLShadowMap.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace threepp {

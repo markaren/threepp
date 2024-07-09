@@ -10,7 +10,7 @@
 
 #include "threepp/lights/Light.hpp"
 
-#include <ranges>
+#include <algorithm>
 
 using namespace threepp;
 
