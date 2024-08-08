@@ -291,8 +291,19 @@ namespace threepp {
         static Vector3 ONES() {
             return {1, 1, 1};
         }
+
+        static Vector3 INF() {
+            return {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()};
+        }
     };
 
+    // Implementing get function template
+    template<std::size_t N>
+    inline auto get(const Vector3& p) {
+        if constexpr (N == 0) return p.x;
+        else if constexpr (N == 1) return p.y;
+        else if constexpr (N == 2) return p.z;
+    }
 
 }// namespace threepp
 
