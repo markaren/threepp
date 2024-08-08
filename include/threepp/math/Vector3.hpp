@@ -292,9 +292,6 @@ namespace threepp {
             return {1, 1, 1};
         }
 
-        static Vector3 INF() {
-            return {std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()};
-        }
     };
 
     // Implementing get function template
