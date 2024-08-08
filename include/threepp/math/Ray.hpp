@@ -56,6 +56,10 @@ namespace threepp {
         std::optional<Vector3> intersectTriangle(const Vector3& a, const Vector3& b, const Vector3& c, bool backfaceCulling, Vector3& target) const;
 
         Ray& applyMatrix4(const Matrix4& matrix4);
+
+        [[nodiscard]] bool equals(const Ray& ray) const;
+
+        [[nodiscard]] Ray clone() const;
     };
 
 }// namespace threepp
