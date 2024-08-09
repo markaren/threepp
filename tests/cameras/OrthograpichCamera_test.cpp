@@ -2,11 +2,12 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 using namespace threepp;
 
 TEST_CASE("updateProjectionMatrix") {
-    int left = -1, right = 1, top = 1, bottom = -1;
+    float left = -1, right = 1, top = 1, bottom = -1;
     float near = 1, far = 3;
     auto cam = OrthographicCamera::create(left, right, top, bottom, near, far);
 
@@ -19,10 +20,10 @@ TEST_CASE("updateProjectionMatrix") {
     //   0			0		-2/f-n	-(f+n/f-n)
     //   0			0			 0				1
 
-    CHECK(pMatrix[0] == 2.f / (right - left));
-    CHECK(pMatrix[5] == 2.f / (top - bottom));
-    CHECK(pMatrix[10] == -2 / (far - near));
-    CHECK(pMatrix[12] == -((right + left) / (right - left)));
-    CHECK(pMatrix[13] == -((top + bottom) / (top - bottom)));
-    CHECK(pMatrix[14] == -((far + near) / (far - near)));
+    CHECK_THAT(pMatrix[0], Catch::Matchers::WithinRel (2.f / (right - left)));
+    CHECK_THAT(pMatrix[5], Catch::Matchers::WithinRel (2.f / (top - bottom)));
+    CHECK_THAT(pMatrix[10], Catch::Matchers::WithinRel (-2 / (far - near)));
+    CHECK_THAT(pMatrix[12], Catch::Matchers::WithinRel (-((right + left) / (right - left))));
+    CHECK_THAT(pMatrix[13], Catch::Matchers::WithinRel ( -((top + bottom) / (top - bottom))));
+    CHECK_THAT(pMatrix[14], Catch::Matchers::WithinRel (-((far + near) / (far - near))));
 }
