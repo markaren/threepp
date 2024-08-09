@@ -48,6 +48,8 @@ namespace threepp {
 
         Vector4& divideScalar(float scalar);
 
+        Vector4& setFromMatrixPosition(const Matrix4& m);
+
         Vector4& floor();
 
         Vector4& ceil();
