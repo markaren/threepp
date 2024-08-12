@@ -27,11 +27,11 @@ namespace threepp {
     class EventDispatcher {
 
     public:
-        void addEventListener(const std::string& type, EventListener* listener);
+        void addEventListener(const std::string& type, EventListener& listener);
 
-        bool hasEventListener(const std::string& type, const EventListener* listener);
+        bool hasEventListener(const std::string& type, const EventListener& listener);
 
-        void removeEventListener(const std::string& type, const EventListener* listener);
+        void removeEventListener(const std::string& type, const EventListener& listener);
 
         void dispatchEvent(const std::string& type, void* target = nullptr);
 

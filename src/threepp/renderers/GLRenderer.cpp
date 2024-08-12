@@ -53,7 +53,7 @@ struct GLRenderer::Impl {
 
             auto material = static_cast<Material*>(event.target);
 
-            material->removeEventListener("dispose", this);
+            material->removeEventListener("dispose", *this);
 
             scope_->deallocateMaterial(material);
         }
@@ -610,7 +610,7 @@ struct GLRenderer::Impl {
 
             // new material
 
-            material->addEventListener("dispose", &onMaterialDispose);
+            material->addEventListener("dispose", onMaterialDispose);
         }
 
         gl::GLProgram* program = nullptr;

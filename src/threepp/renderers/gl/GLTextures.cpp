@@ -212,7 +212,7 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
 
         textureProperties->glInit = true;
 
-        texture.addEventListener("dispose", &onTextureDispose_);
+        texture.addEventListener("dispose", onTextureDispose_);
 
         GLuint glTexture;
         glGenTextures(1, &glTexture);
@@ -507,7 +507,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
     auto textureProperties = properties->textureProperties.get(texture.get());
 
-    renderTarget->addEventListener("dispose", &onRenderTargetDispose_);
+    renderTarget->addEventListener("dispose", onRenderTargetDispose_);
 
     GLuint glTexture;
     glGenTextures(1, &glTexture);
@@ -580,7 +580,7 @@ void gl::GLTextures::TextureEventListener::onEvent(Event& event) {
 
     auto texture = static_cast<Texture*>(event.target);
 
-    texture->removeEventListener("dispose", this);
+    texture->removeEventListener("dispose", *this);
 
     scope_->deallocateTexture(texture);
 
@@ -591,7 +591,7 @@ void gl::GLTextures::RenderTargetEventListener::onEvent(Event& event) {
 
     auto renderTarget = static_cast<GLRenderTarget*>(event.target);
 
-    renderTarget->removeEventListener("dispose", this);
+    renderTarget->removeEventListener("dispose", *this);
 
     scope_->deallocateRenderTarget(renderTarget);
 }

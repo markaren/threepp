@@ -85,8 +85,8 @@ int main() {
 
     } hoverListener;
 
-    controls.addEventListener("hoveron", &hoverListener);
-    controls.addEventListener("hoveroff", &hoverListener);
+    controls.addEventListener("hoveron", hoverListener);
+    controls.addEventListener("hoveroff", hoverListener);
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::M) {

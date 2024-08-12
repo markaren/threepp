@@ -257,7 +257,7 @@ public:
         }
 
         obj.matrixAutoUpdate = false;
-        obj.addEventListener("remove", &onMeshRemovedListener);
+        obj.addEventListener("remove", onMeshRemovedListener);
     }
 
     physx::PxJoint* createJoint(const JointCreate& create, threepp::Object3D* o1, threepp::Object3D* o2, threepp::Vector3 anchor, threepp::Vector3 axis) {
@@ -564,7 +564,7 @@ private:
                     scope->scene->removeActor(*rb.front());
                     scope->bodies.erase(m);
                 }
-                m->removeEventListener("remove", this);
+                m->removeEventListener("remove", *this);
             }
         }
 

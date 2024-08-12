@@ -37,7 +37,7 @@ struct GLGeometries::Impl {
                 scope_->attributes_.remove(value.get());
             }
 
-            geometry->removeEventListener("dispose", this);
+            geometry->removeEventListener("dispose", *this);
 
             scope_->geometries_.erase(geometry);
 
@@ -82,7 +82,7 @@ struct GLGeometries::Impl {
 
         if (geometries_.contains(geometry) && geometries_.at(geometry)) return;
 
-        geometry->addEventListener("dispose", &onGeometryDispose_);
+        geometry->addEventListener("dispose", onGeometryDispose_);
 
         geometries_[geometry] = true;
 

@@ -6,27 +6,27 @@
 using namespace threepp;
 
 
-void EventDispatcher::addEventListener(const std::string& type, EventListener* listener) {
+void EventDispatcher::addEventListener(const std::string& type, EventListener& listener) {
 
-    listeners_[type].emplace_back(listener);
+    listeners_[type].emplace_back(&listener);
 }
 
-bool EventDispatcher::hasEventListener(const std::string& type, const EventListener* listener) {
+bool EventDispatcher::hasEventListener(const std::string& type, const EventListener& listener) {
 
     if (!listeners_.contains(type)) return false;
 
-    auto& listenerArray = listeners_.at(type);
-    return std::ranges::find(listenerArray, listener) != listenerArray.end();
+    const auto& listenerArray = listeners_.at(type);
+    return std::ranges::find(listenerArray, &listener) != listenerArray.end();
 }
 
-void EventDispatcher::removeEventListener(const std::string& type, const EventListener* listener) {
+void EventDispatcher::removeEventListener(const std::string& type, const EventListener& listener) {
 
     if (!listeners_.contains(type)) return;
 
     auto& listenerArray = listeners_.at(type);
     if (listenerArray.empty()) return;
 
-    if (const auto find = std::ranges::find(listenerArray, listener); find != listenerArray.end()) {
+    if (const auto find = std::ranges::find(listenerArray, &listener); find != listenerArray.end()) {
         listenerArray.erase(find);
     }
 }
