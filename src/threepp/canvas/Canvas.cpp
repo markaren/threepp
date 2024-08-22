@@ -134,24 +134,22 @@ namespace {
         }
         // clang-format on
     }
+    void error_callback(int /*error*/, const char* description) {
+        std::cerr << "Error: " << description << std::endl;
+    }
 
-    WindowSize getMonitorSize() {
-#if EMSCRIPTEN
-        int width = EM_ASM_INT({
-            return window.innerWidth;
-        });
+    void initGLfw() {
+        static bool initialized = false;
 
-        int height = EM_ASM_INT({
-            return window.innerHeight;
-        });
+        if (!initialized) {
+            initialized = true;
 
-        return {width, height};
-#else
-        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            glfwSetErrorCallback(error_callback);
 
-        return {mode->width, mode->height};
-#endif
+            if (!glfwInit()) {
+                exit(EXIT_FAILURE);
+            }
+        }
     }
 
 }// namespace
@@ -172,16 +170,12 @@ struct Canvas::Impl {
     explicit Impl(Canvas& scope, const Canvas::Parameters& params)
         : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
 
-        glfwSetErrorCallback(error_callback);
-
-        if (!glfwInit()) {
-            exit(EXIT_FAILURE);
-        }
+        initGLfw();
 
         if (params.size_) {
             size_ = *params.size_;
         } else {
-            auto fullSize = getMonitorSize();
+            const auto fullSize = monitorSize();
             size_ = {fullSize.width() / 2, fullSize.height() / 2};
         }
 
@@ -290,9 +284,6 @@ struct Canvas::Impl {
         if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
     }
 
-    static void error_callback(int /*error*/, const char* description) {
-        std::cerr << "Error: " << description << std::endl;
-    }
 
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
         auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
@@ -389,11 +380,6 @@ WindowSize Canvas::size() const {
     return pimpl_->getSize();
 }
 
-WindowSize Canvas::monitorSize() const {
-
-    return getMonitorSize();
-}
-
 float Canvas::aspect() const {
 
     return size().aspect();
@@ -475,6 +461,39 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
     }
 }
 
+WindowSize Canvas::monitorSize() {
+
+#if EMSCRIPTEN
+    int width = EM_ASM_INT({
+        return window.innerWidth;
+    });
+
+    int height = EM_ASM_INT({
+        return window.innerHeight;
+    });
+
+    return {width, height};
+#else
+
+    initGLfw();
+
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+    return {mode->width, mode->height};
+#endif
+}
+
+std::pair<float, float> Canvas::contentScale() {
+    initGLfw();
+
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+
+    float xscale, yscale;
+    glfwGetMonitorContentScale(monitor, &xscale, &yscale);
+
+    return {xscale, yscale};
+}
 
 Canvas::Parameters& Canvas::Parameters::title(std::string value) {
 
@@ -509,14 +528,14 @@ Canvas::Parameters& Canvas::Parameters::vsync(bool flag) {
     return *this;
 }
 
-Canvas::Parameters& threepp::Canvas::Parameters::resizable(bool flag) {
+Canvas::Parameters& Canvas::Parameters::resizable(bool flag) {
 
     this->resizable_ = flag;
 
     return *this;
 }
 
-Canvas::Parameters& threepp::Canvas::Parameters::favicon(const std::filesystem::path& path) {
+Canvas::Parameters& Canvas::Parameters::favicon(const std::filesystem::path& path) {
 
     if (std::filesystem::exists(path)) {
         favicon_ = path;
@@ -527,7 +546,7 @@ Canvas::Parameters& threepp::Canvas::Parameters::favicon(const std::filesystem::
     return *this;
 }
 
-Canvas::Parameters& threepp::Canvas::Parameters::exitOnKeyEscape(bool flag) {
+Canvas::Parameters& Canvas::Parameters::exitOnKeyEscape(bool flag) {
 
     exitOnKeyEscape_ = flag;
 

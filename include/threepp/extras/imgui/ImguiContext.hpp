@@ -7,18 +7,27 @@
 #include "imgui_impl_opengl3.h"
 
 #include <functional>
+#include <threepp/canvas/Canvas.hpp>
 
 class ImguiContext {
 
 public:
     explicit ImguiContext(void* window) {
         ImGui::CreateContext();
-        ImGui_ImplGlfw_InitForOpenGL((GLFWwindow*) window, true);
+        ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(window), true);
 #if EMSCRIPTEN
         ImGui_ImplOpenGL3_Init("#version 300 es");
 #else
         ImGui_ImplOpenGL3_Init("#version 330 core");
 #endif
+
+        const auto contentScale = threepp::Canvas::contentScale();
+
+        ImGuiIO& io = ImGui::GetIO();
+        io.FontGlobalScale = contentScale.first;// Assuming dpiScaleX = dpiScaleY
+
+        ImGuiStyle& style = ImGui::GetStyle();
+        style.ScaleAllSizes(contentScale.first);
     }
 
     ImguiContext(ImguiContext&&) = delete;
