@@ -63,12 +63,12 @@ int main() {
 
         helper->visible = false;
 
-        renderer.setViewport({size.width / 2, 0, size.width / 2, size.height});
+        renderer.setViewport({size.width() / 2, 0, size.width() / 2, size.height()});
         renderer.render(*scene, *camera);
 
         helper->visible = true;
 
-        renderer.setViewport({0, 0, size.width / 2, size.height});
+        renderer.setViewport({0, 0, size.width() / 2, size.height()});
         renderer.render(*scene, *camera2);
 
         camera->position.z = 4 * std::sin(math::TWO_PI * 0.1f * clock.getElapsedTime());

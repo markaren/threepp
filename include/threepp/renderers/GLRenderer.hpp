@@ -94,11 +94,11 @@ namespace threepp {
 
         [[nodiscard]] WindowSize size() const;
 
-        void setSize(WindowSize size);
+        void setSize(std::pair<int, int> size);
 
         void getDrawingBufferSize(Vector2& target) const;
 
-        void setDrawingBufferSize(int width, int height, int pixelRatio);
+        void setDrawingBufferSize(std::pair<int, int> size, int pixelRatio);
 
         void getCurrentViewport(Vector4& target) const;
 

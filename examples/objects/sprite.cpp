@@ -100,8 +100,8 @@ int main() {
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](auto& pos) {
         auto size = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
     });
     canvas.addMouseListener(l);
 

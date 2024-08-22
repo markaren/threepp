@@ -182,7 +182,7 @@ struct Canvas::Impl {
             size_ = *params.size_;
         } else {
             auto fullSize = getMonitorSize();
-            size_ = {fullSize.width / 2, fullSize.height / 2};
+            size_ = {fullSize.width() / 2, fullSize.height() / 2};
         }
 
 #ifndef EMSCRIPTEN
@@ -197,7 +197,7 @@ struct Canvas::Impl {
             glfwWindowHint(GLFW_SAMPLES, params.antialiasing_);
         }
 
-        window = glfwCreateWindow(size_.width, size_.height, params.title_.c_str(), nullptr, nullptr);
+        window = glfwCreateWindow(size_.width(), size_.height(), params.title_.c_str(), nullptr, nullptr);
         if (!window) {
             glfwTerminate();
             exit(EXIT_FAILURE);
@@ -238,11 +238,13 @@ struct Canvas::Impl {
     }
 
     [[nodiscard]] const WindowSize& getSize() const {
+
         return size_;
     }
 
-    void setSize(WindowSize size) const {
-        glfwSetWindowSize(window, size.width, size.height);
+    void setSize(std::pair<int, int> size) const {
+
+        glfwSetWindowSize(window, size.first, size.second);
     }
 
     bool animateOnce(const std::function<void()>& f) {
@@ -397,7 +399,7 @@ float Canvas::aspect() const {
     return size().aspect();
 }
 
-void Canvas::setSize(WindowSize size) {
+void Canvas::setSize(std::pair<int, int> size) {
 
     pimpl_->setSize(size);
 }

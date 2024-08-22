@@ -66,7 +66,7 @@ int main() {
 
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         float width = 230;
-        ImGui::SetNextWindowPos({float(canvas.size().width) - width, 0}, 0, {0, 0});
+        ImGui::SetNextWindowPos({float(canvas.size().width()) - width, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({width, 0}, 0);
 
         ImGui::Begin("Settings");
@@ -108,8 +108,8 @@ int main() {
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](auto& pos) {
         auto size = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
     });
     canvas.addMouseListener(l);
 

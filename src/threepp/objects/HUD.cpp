@@ -38,8 +38,8 @@ void HUD::Options::updateElement(Object3D& o, WindowSize windowSize) {
         offset.x = 0;
     }
 
-    o.position.x = pos.x * static_cast<float>(windowSize.width) - offset.x - margin_.x * (0.5 > pos.x ? -1.f : 1.f);
-    o.position.y = pos.y * static_cast<float>(windowSize.height) - offset.y - margin_.y * (0.5 > pos.y ? -1.f : 1.f);
+    o.position.x = pos.x * static_cast<float>(windowSize.width()) - offset.x - margin_.x * (0.5 > pos.x ? -1.f : 1.f);
+    o.position.y = pos.y * static_cast<float>(windowSize.height()) - offset.y - margin_.y * (0.5 > pos.y ? -1.f : 1.f);
 }
 
 
@@ -48,7 +48,7 @@ struct HUD::Impl: Scene, MouseListener {
     Impl(PeripheralsEventSource* eventSource, const WindowSize& size)
         : eventSource_(eventSource),
           size_(size),
-          camera_(0, size_.width, size_.height, 0, 0.1, 10) {
+          camera_(0, size_.width(), size_.height(), 0, 0.1, 10) {
 
         if (eventSource) eventSource->addMouseListener(*this);
 
@@ -66,9 +66,9 @@ struct HUD::Impl: Scene, MouseListener {
         map_.erase(&object);
     }
 
-    void setSize(WindowSize size) {
-        camera_.right = size.width;
-        camera_.top = size.height;
+    void setSize(std::pair<int, int> size) {
+        camera_.right = size.first;
+        camera_.top = size.second;
 
         for (auto [obj, opts] : map_) {
             opts.updateElement(*obj, size);
@@ -130,8 +130,8 @@ struct HUD::Impl: Scene, MouseListener {
 
     void onMouseMove(const Vector2& pos) override {
 
-        mouse_.x = (pos.x / static_cast<float>(size_.width)) * 2 - 1;
-        mouse_.y = -(pos.y / static_cast<float>(size_.height)) * 2 + 1;
+        mouse_.x = (pos.x / static_cast<float>(size_.width())) * 2 - 1;
+        mouse_.y = -(pos.y / static_cast<float>(size_.height())) * 2 + 1;
     }
 
     ~Impl() override {

@@ -157,8 +157,8 @@ struct GLRenderer::Impl {
           _emptyScene(std::make_unique<Scene>()),
           onMaterialDispose(this) {
 
-        this->setViewport(0, 0, size.width, size.height);
-        this->setScissor(0, 0, _size.width, _size.height);
+        this->setViewport(0, 0, size.width(), size.height());
+        this->setScissor(0, 0, _size.width(), _size.height());
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
@@ -964,7 +964,7 @@ struct GLRenderer::Impl {
                 materials.refreshFogUniforms(m_uniforms, *fog);
             }
 
-            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height);
+            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height());
 
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
@@ -1107,7 +1107,7 @@ struct GLRenderer::Impl {
 
         const auto glFormat = gl::toGLFormat(format);
 
-        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, glFormat, GL_UNSIGNED_BYTE, data);
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width(), size.width(), glFormat, GL_UNSIGNED_BYTE, data);
     }
 
     void copyTextureToImage(Texture& texture) {
@@ -1149,7 +1149,7 @@ struct GLRenderer::Impl {
     }
 
     void reset() {
-        state.reset(_size.width, _size.height);
+        state.reset(_size);
         bindingStates.reset();
     }
 
@@ -1200,7 +1200,7 @@ int GLRenderer::getTargetPixelRatio() const {
 void GLRenderer::setPixelRatio(int value) {
 
     pimpl_->_pixelRatio = value;
-    this->setSize({pimpl_->_size.width, pimpl_->_size.height});
+    this->setSize(pimpl_->_size);
 }
 
 WindowSize GLRenderer::size() const {
@@ -1208,26 +1208,25 @@ WindowSize GLRenderer::size() const {
     return pimpl_->_size;
 }
 
-void GLRenderer::setSize(WindowSize size) {
+void GLRenderer::setSize(std::pair<int, int> size) {
 
     pimpl_->_size = size;
 
-    this->setViewport(0, 0, size.width, size.height);
+    this->setViewport(0, 0, size.first, size.second);
 }
 
 void GLRenderer::getDrawingBufferSize(Vector2& target) const {
 
-    target.set(static_cast<float>(pimpl_->_size.width * pimpl_->_pixelRatio), static_cast<float>(pimpl_->_size.height * pimpl_->_pixelRatio)).floor();
+    target.set(static_cast<float>(pimpl_->_size.width() * pimpl_->_pixelRatio), static_cast<float>(pimpl_->_size.height() * pimpl_->_pixelRatio)).floor();
 }
 
-void GLRenderer::setDrawingBufferSize(int width, int height, int pixelRatio) {
+void GLRenderer::setDrawingBufferSize(std::pair<int, int> size, int pixelRatio) {
 
-    pimpl_->_size.width = width;
-    pimpl_->_size.height = height;
+    pimpl_->_size = size;
 
     pimpl_->_pixelRatio = pixelRatio;
 
-    this->setViewport(0, 0, width, height);
+    this->setViewport(0, 0, size.first, size.second);
 }
 
 void GLRenderer::getCurrentViewport(Vector4& target) const {

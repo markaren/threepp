@@ -7,7 +7,7 @@ int main() {
     SnakeGame game(10);
 
     Canvas canvas("Snake");
-    int height = canvas.monitorSize().height / 2;
+    int height = canvas.monitorSize().height() / 2;
     canvas.setSize({height, height});
     GLRenderer renderer(canvas.size());
     renderer.autoClear = false;

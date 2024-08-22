@@ -69,8 +69,8 @@ int main() {
         renderer.render(scene, camera);
 
         const auto size = canvas.size();
-        coords.x = (float(size.width) / 2) - (float(textureSizeXY) / 2);
-        coords.y = (float(size.height) / 2) - (float(textureSizeXY) / 2);
+        coords.x = (float(size.width()) / 2) - (float(textureSizeXY) / 2);
+        coords.y = (float(size.height()) / 2) - (float(textureSizeXY) / 2);
 
         renderer.copyFramebufferToTexture({coords.x, coords.y}, *texture);
 

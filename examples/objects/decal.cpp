@@ -60,8 +60,8 @@ namespace {
 
         void updateMousePos(Vector2 pos) {
             auto size = canvas.size();
-            mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-            mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+            mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
+            mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
         }
     };
 
@@ -161,7 +161,7 @@ int main() {
     Raycaster raycaster;
     canvas.animate([&]() {
         raycaster.setFromCamera(mouseListener.mouse, *camera);
-        auto intersects = raycaster.intersectObject(*mesh, false);
+        const auto intersects = raycaster.intersectObject(*mesh, false);
 
         bool click = mouseListener.mouseClick();
 
@@ -184,7 +184,7 @@ int main() {
 
                 Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
-                auto mat = decalMat->clone<MeshPhongMaterial>();
+                const auto mat = decalMat->clone<MeshPhongMaterial>();
                 mat->color.randomize();
                 orientation.z = math::PI * math::randFloat();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
