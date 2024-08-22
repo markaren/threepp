@@ -35,7 +35,7 @@ namespace threepp {
 
         [[nodiscard]] float aspect() const;
 
-        void setSize(WindowSize size);
+        void setSize(std::pair<int, int> size);
 
         void onWindowResize(std::function<void(WindowSize)> f);
 

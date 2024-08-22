@@ -31,7 +31,7 @@ struct MyMouseListener: MouseListener {
 
     void onMouseMove(const Vector2& pos) override {
         if (dragging) {
-            sliderPos = std::clamp(static_cast<int>(pos.x), 0, canvas.size().width);
+            sliderPos = std::clamp(static_cast<int>(pos.x), 0, canvas.size().width());
         }
     }
 
@@ -86,17 +86,19 @@ int main() {
         renderer.setSize(size);
     });
 
-    int sliderPos = canvas.size().width / 2;
+    int sliderPos = canvas.size().width() / 2;
     bool dragging = false;
 
     MyMouseListener listener{dragging, sliderPos, canvas, controls};
     canvas.addMouseListener(listener);
 
     canvas.animate([&]() {
-        renderer.setScissor(0, 0, sliderPos, canvas.size().height);
+        auto size = canvas.size();
+
+        renderer.setScissor(0, 0, sliderPos, size.height());
         renderer.render(sceneLeft, *camera);
 
-        renderer.setScissor(sliderPos, 0, canvas.size().width - sliderPos, canvas.size().height);
+        renderer.setScissor(sliderPos, 0, size.width() - sliderPos,size.height());
         renderer.render(sceneRight, *camera);
     });
 }

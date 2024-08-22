@@ -6,10 +6,10 @@ using namespace threepp;
 
 namespace {
 
-    void updateSpritePosition(Sprite& sprite, WindowSize windowSize, unsigned int textureSize) {
+    void updateSpritePosition(Sprite& sprite, std::pair<int, int> windowSize, unsigned int textureSize) {
 
-        const auto halfWidth = static_cast<float>(windowSize.width) / 2;
-        const auto halfHeight = static_cast<float>(windowSize.height) / 2;
+        const auto halfWidth = static_cast<float>(windowSize.first) / 2;
+        const auto halfHeight = static_cast<float>(windowSize.second) / 2;
 
         const auto halfImageWidth = static_cast<float>(textureSize) / 2;
         const auto halfImageHeight = static_cast<float>(textureSize) / 2;
@@ -33,7 +33,7 @@ int main() {
     PerspectiveCamera camera(70, canvas.aspect(), 0.1f, 1000);
     camera.position.z = 10;
 
-    OrthographicCamera orthoCamera(-size.width / 2, size.width / 2, size.height / 2, -size.height / 2, 1, 10);
+    OrthographicCamera orthoCamera(-size.width() / 2, size.width() / 2, size.height() / 2, -size.height() / 2, 1, 10);
     orthoCamera.position.z = 10;
 
     OrbitControls controls{camera, canvas};
@@ -84,10 +84,10 @@ int main() {
         camera.aspect = newSize.aspect();
         camera.updateProjectionMatrix();
 
-        orthoCamera.left = -newSize.width / 2;
-        orthoCamera.right = newSize.width / 2;
-        orthoCamera.top = newSize.height / 2;
-        orthoCamera.bottom = -newSize.height / 2;
+        orthoCamera.left = -newSize.width() / 2;
+        orthoCamera.right = newSize.width() / 2;
+        orthoCamera.top = newSize.height() / 2;
+        orthoCamera.bottom = -newSize.height() / 2;
         orthoCamera.updateProjectionMatrix();
 
         renderer.setSize(newSize);
@@ -107,8 +107,8 @@ int main() {
         renderer.clear();
         renderer.render(scene, camera);
 
-        vector.x = (size.width / 2) - (textureSize / 2);
-        vector.y = (size.height / 2) - (textureSize / 2);
+        vector.x = (size.width() / 2) - (textureSize / 2);
+        vector.y = (size.height() / 2) - (textureSize / 2);
 
         renderer.copyFramebufferToTexture(vector, *texture);
 

@@ -751,7 +751,7 @@ void gl::GLState::viewport(const Vector4& viewport) {
     }
 }
 
-void gl::GLState::reset(int width, int height) {
+void gl::GLState::reset(std::pair<int, int> size) {
 
     // reset state
 
@@ -795,8 +795,8 @@ void gl::GLState::reset(int width, int height) {
 
     glLineWidth(1);
 
-    glScissor(0, 0, width, height);
-    glViewport(0, 0, width, height);
+    glScissor(0, 0, size.first, size.second);
+    glViewport(0, 0, size.first, size.second);
 
     // reset internals
 
@@ -827,8 +827,8 @@ void gl::GLState::reset(int width, int height) {
     currentPolygonOffsetFactor = std::nullopt;
     currentPolygonOffsetUnits = std::nullopt;
 
-    currentScissor.set(0, 0, width, height);
-    currentViewport.set(0, 0, width, height);
+    currentScissor.set(0, 0, size.first, size.second);
+    currentViewport.set(0, 0, size.first, size.second);
 
     colorBuffer.reset();
     depthBuffer.reset();

@@ -170,8 +170,8 @@ struct DragControls::Impl: public MouseListener {
 
         const auto rect = eventSource->size();
 
-        _pointer.x = (pos.x / rect.width) * 2 - 1;
-        _pointer.y = -(pos.y / rect.height) * 2 + 1;
+        _pointer.x = (pos.x / static_cast<float>(rect.width())) * 2 - 1;
+        _pointer.y = -(pos.y / static_cast<float>(rect.height())) * 2 + 1;
     }
 
     Object3D* findGroup(Object3D* obj, Object3D* group = nullptr) {

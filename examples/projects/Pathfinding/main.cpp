@@ -100,8 +100,8 @@ int main() {
         if (start && target) return;
 
         const auto s = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(s.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(s.height)) * 2 + 1;
+        mouse.x = (pos.x / static_cast<float>(s.width())) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(s.height())) * 2 + 1;
 
         raycaster.setFromCamera(mouse, camera);
         auto intersects = raycaster.intersectObjects(scene.children);
