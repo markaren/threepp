@@ -12,7 +12,7 @@
 class ImguiContext {
 
 public:
-    explicit ImguiContext(void* window) {
+    explicit ImguiContext(void* window, bool dpiAware = false) {
         ImGui::CreateContext();
         ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(window), true);
 #if EMSCRIPTEN
@@ -21,13 +21,15 @@ public:
         ImGui_ImplOpenGL3_Init("#version 330 core");
 #endif
 
-        const auto contentScale = threepp::Canvas::contentScale();
+        if (dpiAware) {
+            const auto [dpiScaleX, _] = threepp::Canvas::contentScale();
 
-        ImGuiIO& io = ImGui::GetIO();
-        io.FontGlobalScale = contentScale.first;// Assuming dpiScaleX = dpiScaleY
+            ImGuiIO& io = ImGui::GetIO();
+            io.FontGlobalScale = dpiScaleX;// Assuming dpiScaleX = dpiScaleY
 
-        ImGuiStyle& style = ImGui::GetStyle();
-        style.ScaleAllSizes(contentScale.first);
+            ImGuiStyle& style = ImGui::GetStyle();
+            style.ScaleAllSizes(dpiScaleX);
+        }
     }
 
     ImguiContext(ImguiContext&&) = delete;
