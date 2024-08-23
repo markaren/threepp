@@ -6,6 +6,7 @@ set(publicHeaders
         "threepp/threepp.hpp"
 
         "threepp/canvas/Canvas.hpp"
+        "threepp/canvas/Monitor.hpp"
         "threepp/canvas/WindowSize.hpp"
 
         "threepp/controls/DragControls.hpp"

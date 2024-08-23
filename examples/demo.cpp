@@ -122,12 +122,12 @@ int main() {
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    TextGeometry::Options opts1(font1, 40 * Canvas::contentScale().first);
+    TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
     auto hudText1 = Text2D(opts1, "Hello World!");
     hudText1.setColor(Color::black);
     hud.add(hudText1, HUD::Options());
 
-    TextGeometry::Options opts2(font2, 10 * Canvas::contentScale().first, 1);
+    TextGeometry::Options opts2(font2, 10 * monitor::contentScale().first, 1);
     auto hudText2 = Text2D(opts2);
     hudText2.setColor(Color::red);
     hud.add(hudText2, HUD::Options()

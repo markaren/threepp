@@ -7,7 +7,7 @@
 #include <imgui_impl_opengl3.h>
 
 #include <functional>
-#include <threepp/canvas/Canvas.hpp>
+#include <threepp/canvas/Monitor.hpp>
 
 class ImguiContext {
 
@@ -22,7 +22,7 @@ public:
 #endif
 
         if (dpiAware) {
-            const auto [dpiScaleX, _] = threepp::Canvas::contentScale();
+            const auto [dpiScaleX, _] = threepp::monitor::contentScale();
 
             ImGuiIO& io = ImGui::GetIO();
             io.FontGlobalScale = dpiScaleX;// Assuming dpiScaleX = dpiScaleY

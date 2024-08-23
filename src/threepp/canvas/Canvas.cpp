@@ -1,5 +1,6 @@
 
 #include "threepp/canvas/Canvas.hpp"
+#include "threepp/canvas/Monitor.hpp"
 
 #include "threepp/favicon.hpp"
 #include "threepp/loaders/ImageLoader.hpp"
@@ -175,7 +176,7 @@ struct Canvas::Impl {
         if (params.size_) {
             size_ = *params.size_;
         } else {
-            const auto fullSize = monitorSize();
+            const auto fullSize = monitor::monitorSize();
             size_ = {fullSize.width() / 2, fullSize.height() / 2};
         }
 
@@ -461,40 +462,6 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
     }
 }
 
-WindowSize Canvas::monitorSize() {
-
-#if EMSCRIPTEN
-    int width = EM_ASM_INT({
-        return window.innerWidth;
-    });
-
-    int height = EM_ASM_INT({
-        return window.innerHeight;
-    });
-
-    return {width, height};
-#else
-
-    initGLfw();
-
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-
-    return {mode->width, mode->height};
-#endif
-}
-
-std::pair<float, float> Canvas::contentScale() {
-    initGLfw();
-
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-
-    float xscale, yscale;
-    glfwGetMonitorContentScale(monitor, &xscale, &yscale);
-
-    return {xscale, yscale};
-}
-
 Canvas::Parameters& Canvas::Parameters::title(std::string value) {
 
     this->title_ = std::move(value);
@@ -551,4 +518,43 @@ Canvas::Parameters& Canvas::Parameters::exitOnKeyEscape(bool flag) {
     exitOnKeyEscape_ = flag;
 
     return *this;
+}
+
+
+WindowSize monitor::monitorSize() {
+
+#if EMSCRIPTEN
+    int width = EM_ASM_INT({
+        return window.innerWidth;
+    });
+
+    int height = EM_ASM_INT({
+        return window.innerHeight;
+    });
+
+    return {width, height};
+#else
+
+    initGLfw();
+
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+    return {mode->width, mode->height};
+#endif
+}
+
+std::pair<float, float> monitor::contentScale() {
+#if EMSCRIPTEN
+    return {1, 1};//TODO
+#else
+    initGLfw();
+
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+
+    float xscale, yscale;
+    glfwGetMonitorContentScale(monitor, &xscale, &yscale);
+
+    return {xscale, yscale};
+#endif
 }

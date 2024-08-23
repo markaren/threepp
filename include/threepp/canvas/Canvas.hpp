@@ -30,12 +30,6 @@ namespace threepp {
         //the current size of the Canvas window
         [[nodiscard]] WindowSize size() const override;
 
-        //the size of the (primary) Monitor
-        [[nodiscard]] static WindowSize monitorSize();
-
-        // query the dpi scale of the (primary) Monitor
-        [[nodiscard]] static std::pair<float, float> contentScale();
-
         [[nodiscard]] float aspect() const;
 
         void setSize(std::pair<int, int> size);
