@@ -40,7 +40,7 @@ struct MyGui: ImguiContext {
         return euler_;
     }
 
-    const std::array<float, 4>& color() {
+    [[nodiscard]] const std::array<float, 4>& color() const {
         return colorBuf_;
     }
 

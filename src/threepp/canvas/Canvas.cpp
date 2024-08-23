@@ -279,20 +279,20 @@ struct Canvas::Impl {
     }
 
     static void window_size_callback(GLFWwindow* w, int width, int height) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
         p->size_ = {width, height};
         if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
     }
 
 
     static void scroll_callback(GLFWwindow* w, double xoffset, double yoffset) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        const auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
         p->scope.onMouseWheelEvent({static_cast<float>(xoffset), static_cast<float>(yoffset)});
     }
 
     static void mouse_callback(GLFWwindow* w, int button, int action, int) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        const auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
         switch (action) {
             case GLFW_PRESS:
@@ -307,7 +307,7 @@ struct Canvas::Impl {
     }
 
     static void cursor_callback(GLFWwindow* w, double xpos, double ypos) {
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        const auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
         Vector2 mousePos(static_cast<float>(xpos), static_cast<float>(ypos));
         p->scope.onMouseMoveEvent(mousePos);
@@ -316,14 +316,14 @@ struct Canvas::Impl {
 
     static void key_callback(GLFWwindow* w, int key, int scancode, int action, int mods) {
 
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        const auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
         if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS && p->exitOnKeyEscape_) {
             glfwSetWindowShouldClose(w, GLFW_TRUE);
             return;
         }
 
-        KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
+        const KeyEvent evt{glfwKeyCodeToKey(key), scancode, mods};
         switch (action) {
             case GLFW_PRESS: {
                 p->scope.onKeyEvent(evt, KeyAction::PRESS);
