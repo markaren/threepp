@@ -9,7 +9,8 @@ struct MyGui: ImguiContext {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m): ImguiContext(canvas.windowPtr()) {
+    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m)
+        : ImguiContext(canvas.windowPtr(), true) {
         colorBuf_[0] = m.color.r;
         colorBuf_[1] = m.color.g;
         colorBuf_[2] = m.color.b;
@@ -19,7 +20,7 @@ struct MyGui: ImguiContext {
     void onRender() override {
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Plane transform");
         ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
         ImGui::SliderFloat3("rotation", eulerBuf_.data(), -180.f, 180.f);
@@ -121,12 +122,12 @@ int main() {
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    TextGeometry::Options opts1(font1, 40);
+    TextGeometry::Options opts1(font1, 40 * Canvas::contentScale().first);
     auto hudText1 = Text2D(opts1, "Hello World!");
     hudText1.setColor(Color::black);
     hud.add(hudText1, HUD::Options());
 
-    TextGeometry::Options opts2(font2, 10, 1);
+    TextGeometry::Options opts2(font2, 10 * Canvas::contentScale().first, 1);
     auto hudText2 = Text2D(opts2);
     hudText2.setColor(Color::red);
     hud.add(hudText2, HUD::Options()
@@ -147,7 +148,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
 
