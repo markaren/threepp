@@ -75,7 +75,7 @@ namespace {
 
 }// namespace
 
-threepp::PropertyBinding::TrackResults threepp::PropertyBinding::parseTrackName(const std::string& trackName) {
+PropertyBinding::TrackResults PropertyBinding::parseTrackName(const std::string& trackName) {
 
     std::smatch matches;
     if (!std::regex_match(trackName, matches, trackRegex)) {
@@ -89,7 +89,7 @@ threepp::PropertyBinding::TrackResults threepp::PropertyBinding::parseTrackName(
     results.propertyName = matches[5];
     results.propertyIndex = matches[6];
 
-    auto lastDot = results.nodeName.find_last_of('.');
+    const auto lastDot = results.nodeName.find_last_of('.');
     if (lastDot != std::string::npos) {
         std::string objectName = results.nodeName.substr(lastDot + 1);
         // Check if objectName is in the allowlist
