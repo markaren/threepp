@@ -272,27 +272,35 @@ namespace threepp {
             return os;
         }
 
-        inline static Vector3 X() {
+        static Vector3 X() {
             return {1, 0, 0};
         }
 
-        inline static Vector3 Y() {
+        static Vector3 Y() {
             return {0, 1, 0};
         }
 
-        inline static Vector3 Z() {
+        static Vector3 Z() {
             return {0, 0, 1};
         }
 
-        inline static Vector3 ZEROS() {
+        static Vector3 ZEROS() {
             return {0, 0, 0};
         }
 
-        inline static Vector3 ONES() {
+        static Vector3 ONES() {
             return {1, 1, 1};
         }
+
     };
 
+    // Implementing get function template
+    template<std::size_t N>
+    inline auto get(const Vector3& p) {
+        if constexpr (N == 0) return p.x;
+        else if constexpr (N == 1) return p.y;
+        else if constexpr (N == 2) return p.z;
+    }
 
 }// namespace threepp
 

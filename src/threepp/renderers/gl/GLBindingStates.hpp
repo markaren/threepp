@@ -38,8 +38,9 @@ namespace threepp::gl {
               object(object) {}
     };
 
-    struct GLBindingStates {
+    class GLBindingStates {
 
+    public:
         explicit GLBindingStates(GLAttributes& attributes);
 
         void setup(Object3D* object, Material* material, GLProgram* program, BufferGeometry* geometry, BufferAttribute* index);

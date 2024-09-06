@@ -11,7 +11,6 @@
 class InvertedPendulum {
 
 public:
-
     // Function to simulate the system for a certain duration
     void simulate(double duration, double externalForce, Regulator* regulator = nullptr) {
         int steps = static_cast<int>(duration / internalTimeStep);
@@ -34,7 +33,6 @@ public:
     }
 
 private:
-
     double cartPosition{0};                          // Position of the cart
     double pendulumAngle{threepp::math::degToRad(5)};// Angle of the pendulum
     double cartVelocity{0};                          // Velocity of the cart

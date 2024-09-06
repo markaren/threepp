@@ -16,6 +16,7 @@
 
 #include "misc.hpp"
 
+#include <any>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -101,6 +102,8 @@ namespace threepp {
         // When this property is set for an instance of Group, all descendants objects will be sorted and rendered together. Sorting is from lowest to highest renderOrder. Default value is 0.
         unsigned int renderOrder = 0;
 
+        std::unordered_map<std::string, std::any> userData;
+
         std::vector<std::shared_ptr<AnimationClip>> animations;
 
         std::optional<RenderCallback> onBeforeRender;
@@ -179,7 +182,22 @@ namespace threepp {
 
         // Searches through an object and its children, starting with the object itself, and returns the first with a matching name.
         // Note that for most objects the name is an empty string by default. You will have to set it manually to make use of this method.
-        Object3D* getObjectByName(const std::string& name);
+        template<class T = Object3D>
+        T* getObjectByName(const std::string& name) {
+            if (this->name == name) return dynamic_cast<T*>(this);
+
+            for (const auto& child : this->children) {
+
+                auto object = child->getObjectByName(name);
+
+                if (object) {
+
+                    return dynamic_cast<T*>(object);
+                }
+            }
+
+            return nullptr;
+        }
 
         // Returns a vector representing the position of the object in world space.
         void getWorldPosition(Vector3& target);
@@ -193,7 +211,7 @@ namespace threepp {
         // Returns a vector representing the direction of object's positive z-axis in world space.
         virtual void getWorldDirection(Vector3& target);
 
-        virtual void raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {}
+        virtual void raycast(const Raycaster&, std::vector<Intersection>&) {}
 
         void traverse(const std::function<void(Object3D&)>& callback);
 
@@ -222,36 +240,55 @@ namespace threepp {
             return std::make_shared<Object3D>();
         }
 
-        virtual BufferGeometry* geometry() {
+        [[nodiscard]] virtual std::shared_ptr<BufferGeometry> geometry() const {
 
             return nullptr;
         }
 
-        virtual Material* material() {
+        [[nodiscard]] virtual std::shared_ptr<Material> material() const {
 
             return nullptr;
         }
 
         template<class T>
+            requires std::is_base_of<Object3D, T>::value
         T* as() {
-
-            static_assert(std::is_base_of<Object3D, typename std::remove_cv<typename std::remove_pointer<T>::type>::type>::value,
-                          "T must be a base class of Object3D");
 
             return dynamic_cast<T*>(this);
         }
 
         template<class T>
+            requires std::is_base_of<Object3D, T>::value
+        const T* as() const {
+
+            return dynamic_cast<const T*>(this);
+        }
+
+        template<class T>
+            requires std::is_base_of<Object3D, T>::value
         [[nodiscard]] bool is() const {
 
             return dynamic_cast<const T*>(this) != nullptr;
         }
 
-        void copy(const Object3D& source, bool recursive = true);
+        virtual void copy(const Object3D& source, bool recursive = true);
 
-        virtual std::shared_ptr<Object3D> clone(bool recursive = true);
+        template<class T = Object3D>
+        std::shared_ptr<T> clone(bool recursive = true) {
+
+            auto clone = createDefault();
+            clone->copy(*this, recursive);
+
+            return std::dynamic_pointer_cast<T>(clone);
+        }
 
         ~Object3D() override;
+
+    protected:
+        virtual std::shared_ptr<Object3D> createDefault() {
+
+            return std::make_shared<Object3D>();
+        }
 
     private:
         inline static unsigned int _object3Did{0};

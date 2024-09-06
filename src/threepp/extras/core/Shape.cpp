@@ -6,7 +6,12 @@
 using namespace threepp;
 
 Shape::Shape(const std::vector<Vector2>& points)
-    : Path(points), uuid{math::generateUUID()} {}
+    : Path(points), uuid_{math::generateUUID()} {}
+
+
+const std::string& Shape::uuid() const {
+    return uuid_;
+}
 
 std::vector<std::vector<Vector2>> Shape::getPointsHoles(unsigned int divisions) const {
 

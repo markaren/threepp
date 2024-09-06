@@ -4,6 +4,7 @@
 
 #include "threepp/animation/AnimationClip.hpp"
 #include "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
+#include "threepp/loaders/Loader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
@@ -20,10 +21,10 @@
 
 namespace threepp {
 
-    class AssimpLoader {
+    class AssimpLoader: public Loader<Group> {
 
     public:
-        std::shared_ptr<Group> load(const std::filesystem::path& path) {
+        std::shared_ptr<Group> load(const std::filesystem::path& path) override {
 
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
@@ -37,7 +38,6 @@ namespace threepp {
             auto group = Group::create();
             group->name = path.filename().stem().string();
             parseNodes(info, aiScene, aiScene->mRootNode, *group);
-
 
             for (unsigned i = 0; i < aiScene->mNumAnimations; i++) {
                 const auto aiAnim = aiScene->mAnimations[i];

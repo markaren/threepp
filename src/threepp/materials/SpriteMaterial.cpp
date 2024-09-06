@@ -14,10 +14,11 @@ std::string SpriteMaterial::type() const {
     return "SpriteMaterial";
 }
 
-std::shared_ptr<Material> SpriteMaterial::clone() const {
+void SpriteMaterial::copyInto(Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<SpriteMaterial>();
 
     m->color.copy(color);
 
@@ -28,8 +29,12 @@ std::shared_ptr<Material> SpriteMaterial::clone() const {
     m->rotation = rotation;
 
     m->sizeAttenuation = sizeAttenuation;
+}
 
-    return m;
+
+std::shared_ptr<Material> SpriteMaterial::createDefault() const {
+
+    return std::shared_ptr<SpriteMaterial>(new SpriteMaterial());
 }
 
 std::shared_ptr<SpriteMaterial> SpriteMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {

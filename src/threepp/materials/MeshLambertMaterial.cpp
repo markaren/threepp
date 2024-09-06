@@ -18,10 +18,11 @@ std::string MeshLambertMaterial::type() const {
     return "MeshLambertMaterial";
 }
 
-std::shared_ptr<Material> MeshLambertMaterial::clone() const {
+void MeshLambertMaterial::copyInto(threepp::Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<MeshLambertMaterial>();
 
     m->color.copy(color);
 
@@ -48,8 +49,11 @@ std::shared_ptr<Material> MeshLambertMaterial::clone() const {
 
     m->wireframe = wireframe;
     m->wireframeLinewidth = wireframeLinewidth;
+}
 
-    return m;
+std::shared_ptr<Material> MeshLambertMaterial::createDefault() const {
+
+    return std::shared_ptr<MeshLambertMaterial>(new MeshLambertMaterial());
 }
 
 std::shared_ptr<MeshLambertMaterial> MeshLambertMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {

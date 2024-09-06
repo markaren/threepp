@@ -1,13 +1,15 @@
 
 #include "SnakeScene.hpp"
 
+#include "threepp/canvas/Monitor.hpp"
+
 
 int main() {
 
     SnakeGame game(10);
 
     Canvas canvas("Snake");
-    int height = canvas.monitorSize().height / 2;
+    int height = monitor::monitorSize().height() / 2;
     canvas.setSize({height, height});
     GLRenderer renderer(canvas.size());
     renderer.autoClear = false;
@@ -18,7 +20,7 @@ int main() {
     auto camera = OrthographicCamera::create(0, game.gridSize(), 0, game.gridSize());
     camera->position.z = 1;
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
 

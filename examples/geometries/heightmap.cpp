@@ -98,42 +98,48 @@ int main() {
 
     FontLoader fontLoader;
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     TextGeometry::Options opts(fontLoader.defaultFont(), 40);
     Text2D hudText(opts, "Loading terrain..");
     hudText.material()->as<MaterialWithColor>()->color.setHex(Color::black);
     hud.add(hudText);
 
     auto material = MeshPhongMaterial::create();
+
     auto mesh = Mesh::create(BufferGeometry::create(), material);
     scene->add(mesh);
 
-    auto future = std::async(std::launch::async, [&] {
-        const auto data = loadHeights();
+    TaskManager tm;
 
+    auto future = std::async(std::launch::async, [&] {
         auto geometry = PlaneGeometry::create(5041, 5041, 1023, 1023);
         geometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-        auto pos = geometry->getAttribute<float>("position");
-        for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
-            pos->setY(i, data[i]);
-        }
+        tm.invokeLater([&] {
+            mesh->setGeometry(geometry);
+        });
+
+        const auto data = loadHeights();
 
         TextureLoader tl;
         auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
 
-        canvas.invokeLater([&, texture, geometry] {
+        tm.invokeLater([&, data, texture, geometry] {
+            auto pos = geometry->getAttribute<float>("position");
+            for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
+                pos->setY(i, data[i]);
+            }
+            pos->needsUpdate();
 
             material->map = texture;
             material->needsUpdate();
-            mesh->setGeometry(geometry);
 
             hudText.setText("Terrain loaded..", opts);
         });
 
-        canvas.invokeLater([&] {
+        tm.invokeLater([&] {
             hud.remove(hudText);
         },
-                           2);
+                             2);
     });
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -145,13 +151,14 @@ int main() {
     Clock clock;
     auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+        const auto t = clock.getElapsedTime();
         timeUniform.setValue(t);
+
+        tm.handleTasks();
 
         renderer.clear();
         renderer.render(*scene, *camera);
 
         hud.apply(renderer);
     });
-
 }

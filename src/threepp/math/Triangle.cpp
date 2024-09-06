@@ -123,7 +123,7 @@ float Triangle::getArea() const {
 
 void Triangle::getMidpoint(Vector3& target) {
 
-    target.addVectors(this->a_, this->b_).add(this->c_).addScalar(1.0f / 3);
+    target.addVectors(this->a_, this->b_).add(this->c_).multiplyScalar(1.0f / 3);
 }
 
 void Triangle::getNormal(Vector3& target) {

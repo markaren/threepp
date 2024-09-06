@@ -246,7 +246,7 @@ private:
 	 */
     float getHeuristicCost(const Coordinate& s, const Coordinate& t) {
 
-        if (!heuristic) return 0; // Dijkstra's
+        if (!heuristic) return 0;// Dijkstra's
 
         return heuristic->getCost(*map, s, t);
     }

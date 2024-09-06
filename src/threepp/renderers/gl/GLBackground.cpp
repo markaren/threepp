@@ -15,7 +15,7 @@ GLBackground::GLBackground(GLRenderer& renderer, GLCubeMaps& cubemaps, GLState& 
 void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
 
     bool forceClear = false;
-    bool isScene = scene->is<Scene>();
+    const bool isScene = scene->is<Scene>();
 
     std::optional<Background> background;
 
@@ -28,7 +28,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
         cubemaps.get(background->texture().get());
     }
 
-    if (!background || (background && background->empty()) ) {
+    if (!background || (background && background->empty())) {
 
         setClear(clearColor, clearAlpha);
 
@@ -86,7 +86,7 @@ void GLBackground::render(GLRenderList& renderList, Object3D* scene) {
                 currentTonemapping = renderer.toneMapping;
             }
 
-            renderList.unshift(boxMesh.get(), boxMesh->geometry(), boxMesh->material(), 0, 0, std::nullopt);
+            renderList.unshift(boxMesh.get(), boxMesh->geometry().get(), boxMesh->material().get(), 0, 0, std::nullopt);
         }
     }
 }

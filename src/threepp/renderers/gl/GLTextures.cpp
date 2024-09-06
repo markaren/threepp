@@ -39,15 +39,15 @@ namespace {
                texture.minFilter != Filter::Nearest && texture.minFilter != Filter::Linear;
     }
 
-    GLuint filterFallback(Filter f) {
-
-        if (f == Filter::Nearest || f == Filter::NearestMipmapNearest || f == Filter::NearestMipmapLinear) {
-
-            return GL_NEAREST;
-        }
-
-        return GL_LINEAR;
-    }
+    // GLuint filterFallback(Filter f) {
+    //
+    //     if (f == Filter::Nearest || f == Filter::NearestMipmapNearest || f == Filter::NearestMipmapLinear) {
+    //
+    //         return GL_NEAREST;
+    //     }
+    //
+    //     return GL_LINEAR;
+    // }
 
     GLint getInternalFormat(GLuint glFormat, GLuint glType) {
 
@@ -111,11 +111,17 @@ void gl::GLTextures::setTextureParameters(GLuint textureType, Texture& texture) 
 
     glTexParameteri(textureType, GL_TEXTURE_MAG_FILTER, filterToGL[texture.magFilter]);
     glTexParameteri(textureType, GL_TEXTURE_MIN_FILTER, filterToGL[texture.minFilter]);
+
+    if (texture.anisotropy > 1 || properties->textureProperties.get(&texture)->currentAnisotropy) {
+
+        glTexParameterf(textureType, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::min(texture.anisotropy, GLCapabilities::instance().maxAnisotropy));
+        properties->textureProperties.get(&texture)->currentAnisotropy = texture.anisotropy;
+    }
 }
 
 void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture& texture, GLuint slot) {
 
-    if (texture.image.empty()) return;
+    if (texture.images().empty()) return;
 
     GLint textureType = GL_TEXTURE_2D;
 
@@ -131,7 +137,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, texture.unpackAlignment);
 
-    auto& image = texture.image.front();
+    auto& image = texture.image();
 
     GLuint glFormat = toGLFormat(texture.format);
 
@@ -140,15 +146,15 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
     setTextureParameters(textureType, texture);
 
-    auto& mipmaps = texture.mipmaps;
+    auto& mipmaps = texture.mipmaps();
 
     if (dataTexture3D) {
 
         state->texImage3D(GL_TEXTURE_3D, 0, glInternalFormat,
-                         static_cast<int>(image.width),
-                         static_cast<int>(image.height),
-                         static_cast<int>(image.depth),
-                         glFormat, glType, image.data().data());
+                          static_cast<int>(image.width),
+                          static_cast<int>(image.height),
+                          static_cast<int>(image.depth),
+                          glFormat, glType, image.data().data());
         textureProperties->maxMipLevel = 0;
 
     } else {
@@ -161,12 +167,12 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         if (!mipmaps.empty()) {
 
-            for (int i = 0; i < mipmaps.size(); ++i) {
+            for (unsigned i = 0; i < mipmaps.size(); ++i) {
 
                 auto& mipmap = mipmaps[i];
                 state->texImage2D(GL_TEXTURE_2D, i, glInternalFormat,
-                                 static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
-                                 glFormat, glType, mipmap.data().data());
+                                  static_cast<int>(mipmap.width), static_cast<int>(mipmap.height),
+                                  glFormat, glType, mipmap.data().data());
             }
 
             texture.generateMipmaps = false;
@@ -176,12 +182,12 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
             if (glType == GL_UNSIGNED_BYTE) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                                 static_cast<int>(image.width), static_cast<int>(image.height),
-                                 glFormat, glType, texture.image.front().data().data());
+                                  static_cast<int>(image.width), static_cast<int>(image.height),
+                                  glFormat, glType, texture.image().data().data());
             } else if (glType == GL_FLOAT) {
                 state->texImage2D(GL_TEXTURE_2D, 0, glInternalFormat,
-                                 static_cast<int>(image.width), static_cast<int>(image.height),
-                                 glFormat, glType, texture.image.front().data<float>().data());
+                                  static_cast<int>(image.width), static_cast<int>(image.height),
+                                  glFormat, glType, texture.image().data<float>().data());
             } else {
 
                 std::cerr << "Unnsupported gltype=" << glType << std::endl;
@@ -206,7 +212,7 @@ void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& 
 
         textureProperties->glInit = true;
 
-        texture.addEventListener("dispose", &onTextureDispose_);
+        texture.addEventListener("dispose", onTextureDispose_);
 
         GLuint glTexture;
         glGenTextures(1, &glTexture);
@@ -278,11 +284,11 @@ int gl::GLTextures::allocateTextureUnit() {
 
 void gl::GLTextures::setTexture2D(Texture& texture, GLuint slot) {
 
-    auto textureProperties = properties->textureProperties.get(&texture);
+    const auto textureProperties = properties->textureProperties.get(&texture);
 
     if (texture.version() > 0 && textureProperties->version != texture.version()) {
 
-        const auto& image = texture.image;
+        const auto& image = texture.images();
 
         if (image.empty()) {
 
@@ -355,13 +361,13 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
     auto glInternalFormat = getInternalFormat(glFormat, glType);
     setTextureParameters(GL_TEXTURE_CUBE_MAP, texture);
 
-    auto& images = texture.image;
-    auto& mipmaps = texture.mipmaps;
+    auto& images = texture.images();
+    auto& mipmaps = texture.mipmaps();
     for (int i = 0; i < 6; i++) {
         auto& image = images[i];
         state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, glInternalFormat, image.width, image.height, glFormat, glType, image.data().data());
 
-        for (int j = 0; j < mipmaps.size(); j++) {
+        for (unsigned j = 0; j < mipmaps.size(); j++) {
             state->texImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, j + i, glInternalFormat, image.width, image.height, glFormat, glType, mipmaps[j].data().data());
         }
     }
@@ -448,11 +454,11 @@ void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget*
 
     // upload an empty depth texture with framebuffer size
     if (!properties->textureProperties.get(renderTarget->depthTexture.get())->glTexture ||
-        renderTarget->depthTexture->image.front().width != renderTarget->width ||
-        renderTarget->depthTexture->image.front().height != renderTarget->height) {
+        renderTarget->depthTexture->image().width != renderTarget->width ||
+        renderTarget->depthTexture->image().height != renderTarget->height) {
 
-        renderTarget->depthTexture->image.front().width = renderTarget->width;
-        renderTarget->depthTexture->image.front().height = renderTarget->height;
+        renderTarget->depthTexture->image().width = renderTarget->width;
+        renderTarget->depthTexture->image().height = renderTarget->height;
         renderTarget->depthTexture->needsUpdate();
     }
 
@@ -501,7 +507,7 @@ void gl::GLTextures::setupRenderTarget(GLRenderTarget* renderTarget) {
     auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
     auto textureProperties = properties->textureProperties.get(texture.get());
 
-    renderTarget->addEventListener("dispose", &onRenderTargetDispose_);
+    renderTarget->addEventListener("dispose", onRenderTargetDispose_);
 
     GLuint glTexture;
     glGenTextures(1, &glTexture);
@@ -574,7 +580,7 @@ void gl::GLTextures::TextureEventListener::onEvent(Event& event) {
 
     auto texture = static_cast<Texture*>(event.target);
 
-    texture->removeEventListener("dispose", this);
+    texture->removeEventListener("dispose", *this);
 
     scope_->deallocateTexture(texture);
 
@@ -585,7 +591,7 @@ void gl::GLTextures::RenderTargetEventListener::onEvent(Event& event) {
 
     auto renderTarget = static_cast<GLRenderTarget*>(event.target);
 
-    renderTarget->removeEventListener("dispose", this);
+    renderTarget->removeEventListener("dispose", *this);
 
     scope_->deallocateRenderTarget(renderTarget);
 }

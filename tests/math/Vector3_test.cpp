@@ -18,6 +18,17 @@ namespace {
 
 }// namespace
 
+TEST_CASE("structured binding") {
+
+    Vector3 v{x, y, z};
+
+    auto [a, b, c] = v;
+
+    CHECK(a == x);
+    CHECK(b == y);
+    CHECK(c == z);
+}
+
 TEST_CASE("add") {
 
     Vector3 a{x, y, z};

@@ -15,7 +15,7 @@
 
 namespace threepp {
 
-    class BufferGeometry: public EventDispatcher, public std::enable_shared_from_this<BufferGeometry> {
+    class BufferGeometry: public EventDispatcher {
 
     public:
         const unsigned int id{++_id};
@@ -40,10 +40,7 @@ namespace threepp {
         BufferGeometry(BufferGeometry&&) = delete;
         BufferGeometry& operator=(BufferGeometry&&) = delete;
 
-        [[nodiscard]] virtual std::string type() const {
-
-            return "BufferGeometry";
-        }
+        [[nodiscard]] virtual std::string type() const;
 
         [[nodiscard]] bool hasIndex() const;
 

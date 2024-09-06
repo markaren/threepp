@@ -78,7 +78,7 @@ int main() {
     material->map = loader.load("data/textures/three.png");
     material->map->offset.set(0.5, 0.5);
 
-    auto pickMaterial = material->clone()->as_shared<SpriteMaterial>();
+    auto pickMaterial = material->clone<SpriteMaterial>();
 
     auto sprites = createSprites(material);
     scene->add(sprites);
@@ -86,7 +86,7 @@ int main() {
     auto helper = Mesh::create(SphereGeometry::create(0.1));
     scene->add(helper);
 
-    HUD hud(canvas);
+    HUD hud(&canvas);
     createHudSprites(hud);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -100,8 +100,8 @@ int main() {
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](auto& pos) {
         auto size = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
     });
     canvas.addMouseListener(l);
 

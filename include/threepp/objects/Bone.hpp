@@ -18,6 +18,12 @@ namespace threepp {
 
             return std::make_shared<Bone>();
         }
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override {
+
+            return create();
+        }
     };
 
 }// namespace threepp

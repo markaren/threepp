@@ -14,10 +14,17 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
+        void copy(const Object3D& source, bool recursive) override;
+
         static std::shared_ptr<HemisphereLight> create(const Color& skyColor = 0xffffff, const Color& groundColor = 0xffffff, std::optional<float> intensity = std::nullopt);
 
     protected:
         HemisphereLight(const Color& skyColor, const Color& groundColor, std::optional<float> intensity);
+
+        std::shared_ptr<Object3D> createDefault() override {
+
+            return create();
+        }
     };
 
 }// namespace threepp

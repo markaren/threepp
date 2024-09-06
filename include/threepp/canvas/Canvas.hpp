@@ -30,12 +30,9 @@ namespace threepp {
         //the current size of the Canvas window
         [[nodiscard]] WindowSize size() const override;
 
-        //the size of the Monitor
-        [[nodiscard]] WindowSize monitorSize() const;
-
         [[nodiscard]] float aspect() const;
 
-        void setSize(WindowSize size);
+        void setSize(std::pair<int, int> size);
 
         void onWindowResize(std::function<void(WindowSize)> f);
 
@@ -43,8 +40,6 @@ namespace threepp {
 
         // returns false if application should quit, true otherwise
         bool animateOnce(const std::function<void()>& f);
-
-        void invokeLater(const std::function<void()>& f, float t = 0);
 
         void close();
 

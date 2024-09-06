@@ -59,7 +59,7 @@ std::vector<float> Curve<T>::getLengths() const {
 template<class T>
 std::vector<float> Curve<T>::getLengths(int divisions) const {
 
-    if ((this->cacheArcLengths.size() == divisions + 1) && !this->needsUpdate) {
+    if (static_cast<int>(this->cacheArcLengths.size()) == divisions + 1 && !this->needsUpdate) {
 
         return this->cacheArcLengths;
     }
@@ -190,7 +190,7 @@ void Curve<T>::getTangentAt(float u, T& optionalTarget) const {
     this->getTangent(t, optionalTarget);
 }
 
-Curve3::FrenetFrames Curve3::computeFrenetFrames(unsigned int segments, bool closed) {
+FrenetFrames FrenetFrames::compute(const Curve<Vector3>& curve, unsigned int segments, bool closed) {
 
     // see http://www.cs.indiana.edu/pub/techreports/TR425.pdf
 
@@ -210,7 +210,7 @@ Curve3::FrenetFrames Curve3::computeFrenetFrames(unsigned int segments, bool clo
         const float u = static_cast<float>(i) / static_cast<float>(segments);
 
         auto& tangent = tangents.emplace_back();
-        this->getTangentAt(u, tangent);
+        curve.getTangentAt(u, tangent);
         tangent.normalize();
     }
 

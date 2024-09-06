@@ -18,16 +18,16 @@
         "assimp"
       ]
     },
-    "imgui": {
-      "description": "Enable user interfaces in examples",
+    "physx": {
+      "description": "Enable physx in examples",
       "dependencies": [
-        {
-          "name": "imgui",
-          "features": [
-            "glfw-binding",
-            "opengl3-binding"
-          ]
-        }
+        "physx"
+      ]
+    },
+    "curl": {
+      "description": "Enable curl in examples",
+      "dependencies": [
+        "curl"
       ]
     }
   }

@@ -20,10 +20,12 @@ namespace threepp {
 
         static std::shared_ptr<MeshNormalMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
-        std::shared_ptr<Material> clone() const override;
-
     protected:
         MeshNormalMaterial();
+
+        std::shared_ptr<Material> createDefault() const override;
+
+        void copyInto(Material& material) const override;
 
         bool setValue(const std::string& key, const MaterialValue& value) override;
     };

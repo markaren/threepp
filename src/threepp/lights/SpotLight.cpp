@@ -38,6 +38,18 @@ void SpotLight::dispose() {
     this->shadow->dispose();
 }
 
+void SpotLight::copy(const Object3D& source, bool recursive) {
+    Light::copy(source, recursive);
+
+    if (auto l = source.as<SpotLight>()) {
+
+        this->distance = l->distance;
+        this->angle = l->angle;
+        this->penumbra = l->penumbra;
+        this->decay = l->decay;
+    }
+}
+
 std::shared_ptr<SpotLight> SpotLight::create(const Color& color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay) {
 
     return std::shared_ptr<SpotLight>(new SpotLight(color, intensity, distance, angle, penumbra, decay));

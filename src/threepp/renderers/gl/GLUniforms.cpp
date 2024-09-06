@@ -106,7 +106,7 @@ namespace {
                     return [&](const UniformValue& value, GLTextures*) { setValueV1i(value); };
 
                 default:
-                    return [&](const UniformValue& value, GLTextures*) {
+                    return [&](const UniformValue&, GLTextures*) {
                         std::cout << "SingleUniform TODO: "
                                   << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
                     };
@@ -186,7 +186,7 @@ namespace {
         void setValueV2f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueV2f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector2 arg) { setValueV2fHelper(arg); },
                        },
                        value);
@@ -213,7 +213,7 @@ namespace {
         void setValueV3f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueV3f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector3 arg) { setValueV3fHelper(arg); },
                                [&](Vector3* arg) { setValueV3fHelper(*arg); },
                                [&](Color arg) { setValueV3fHelper(arg); },
@@ -244,7 +244,7 @@ namespace {
         void setValueV4f(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueV4f: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Vector4 arg) { setValueV4fHelper(arg); },
                                [&](Quaternion arg) { setValueV4fHelper(arg); },
                        },
@@ -285,7 +285,7 @@ namespace {
         void setValueM4(const UniformValue& value) {
 
             std::visit(overloaded{
-                               [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                               [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
                                [&](Matrix4 arg) { setValueM4Helper(arg.elements); },
                                [&](Matrix4* arg) { setValueM4Helper(arg->elements); }},
                        value);
@@ -337,7 +337,7 @@ namespace {
                 case 0x8b5c:// MAT4
                     return [&](const UniformValue& value, GLTextures*) {
                         std::visit(overloaded{
-                                           [&](auto arg) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
+                                           [&](auto) { std::cerr << "setValueM4: unsupported variant at index: " << value.index() << std::endl; },
                                            [&](std::vector<float> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, arg.data()); },
                                            [&](std::vector<Matrix4> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flatten(arg, activeInfo.size, 16).data()); },
                                            [&](std::vector<Matrix4*> arg) { glUniformMatrix4fv(addr, activeInfo.size, false, flattenP(arg, activeInfo.size, 16).data()); }},
@@ -362,7 +362,7 @@ namespace {
                         }
                     };
                 default:
-                    return [&](const UniformValue& value, GLTextures*) {
+                    return [&](const UniformValue&, GLTextures*) {
                         std::cout << "PureArrayUniform TODO: "
                                   << "name=" << activeInfo.name << ",type=" << activeInfo.type << std::endl;
                     };
@@ -387,9 +387,9 @@ namespace {
             std::visit(
                     overloaded{
                             [&](auto) { std::cout << "StructuredUniform '" << activeInfo.name << "': unsupported variant at index: " << value.index() << std::endl; },
-                            [&](std::unordered_map<std::string, NestedUniformValue> arg) {
+                            [&](std::unordered_map<std::string, NestedUniformValue> args) {
                                 for (auto& u : seq) {
-                                    NestedUniformValue& v = arg.at(u->id);
+                                    NestedUniformValue& v = args.at(u->id);
                                     std::visit(overloaded{
                                                        [&](auto) { std::cout << "Warning: Unhandled NestedUniformValue!" << std::endl; },
                                                        [&](int arg) { u->setValue(arg, textures); },
@@ -402,7 +402,7 @@ namespace {
                             },
                             [&](std::vector<std::unordered_map<std::string, NestedUniformValue>*> arg) {
                                 for (auto& u : seq) {
-                                    int index = utils::parseInt(u->id);
+                                    const auto index = utils::parseInt(u->id);
                                     auto value = arg[index];
                                     if (!value) continue;
                                     u->setValue(*arg[index], textures);
@@ -435,7 +435,7 @@ namespace {
         while (rex_it != rex_end) {
             std::smatch match = *rex_it;
 
-            const auto matchEnd = match.length();
+            const size_t matchEnd = match.length();
 
             std::string id = match[1];
             bool isIndex = match[2] == "]";
@@ -455,7 +455,7 @@ namespace {
 
             } else {
 
-                if (!container->map.count(id)) {
+                if (!container->map.contains(id)) {
                     addUniform(container, std::make_unique<StructuredUniform>(id, activeInfo));
                 }
 
@@ -486,7 +486,7 @@ GLUniforms::GLUniforms(unsigned int program) {
 
 void GLUniforms::setValue(const std::string& name, const UniformValue& value, GLTextures* textures) {
 
-    if (map.count(name)) {
+    if (map.contains(name)) {
 
         map.at(name)->setValue(value, textures);
     }
@@ -512,7 +512,7 @@ std::vector<UniformObject*> GLUniforms::seqWithValue(const std::vector<std::uniq
 
     for (const auto& u : seq) {
 
-        if (values.count(u->id)) r.emplace_back(u.get());
+        if (values.contains(u->id)) r.emplace_back(u.get());
     }
 
     return r;

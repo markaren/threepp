@@ -30,10 +30,6 @@ namespace threepp {
         explicit PerspectiveCamera(float fov = 60, float aspect = 1,
                                    float near = 0.1, float far = 2000);
 
-        PerspectiveCamera(PerspectiveCamera&&) = delete;
-        PerspectiveCamera(const PerspectiveCamera&) = delete;
-        PerspectiveCamera& operator=(const PerspectiveCamera&) = delete;
-
         /**
          * Sets the FOV by focal length in respect to the current .filmGauge.
          *

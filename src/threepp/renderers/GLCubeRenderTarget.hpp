@@ -8,6 +8,7 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 
 namespace threepp {
 

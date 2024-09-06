@@ -291,11 +291,11 @@ struct OBJLoader::Impl {
 
     std::shared_ptr<Group> load(const std::filesystem::path& path, bool tryLoadMtl) {
 
-        if (scope.useCache && cache_.count(path.string())) {
+        if (scope.useCache && cache_.contains(path.string())) {
 
-            auto cached = cache_[path.string()];
+            auto cached = cache_.at(path.string());
             if (!cached.expired()) {
-                return std::dynamic_pointer_cast<Group>(cached.lock()->clone());
+                return cached.lock()->clone<Group>();
             } else {
                 cache_.erase(path.string());
             }
@@ -519,7 +519,7 @@ struct OBJLoader::Impl {
 
             if (!createdMaterials.empty()) {
 
-                for (int mi = 0; mi < materials.size(); ++mi) {
+                for (unsigned mi = 0; mi < materials.size(); ++mi) {
 
                     auto& sourceMaterial = materials.at(mi);
                     bufferGeometry->addGroup(sourceMaterial->groupStart, sourceMaterial->groupCount, mi);

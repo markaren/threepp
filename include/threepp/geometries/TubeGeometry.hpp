@@ -3,8 +3,6 @@
 #ifndef THREEPP_TUBEGEOMETRY_HPP
 #define THREEPP_TUBEGEOMETRY_HPP
 
-#include <utility>
-
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/core/Curve.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -43,7 +41,7 @@ namespace threepp {
                 bool closed = false);
 
     private:
-        Curve3::FrenetFrames frames;
+        FrenetFrames frames;
 
         TubeGeometry(std::shared_ptr<Curve3> path, const Params& params);
     };

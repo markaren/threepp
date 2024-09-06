@@ -17,6 +17,16 @@ namespace {
 
 }// namespace
 
+TEST_CASE("structured binding") {
+
+    Vector2 v{x, y};
+
+    auto [a, b] = v;
+
+    CHECK(a == x);
+    CHECK(b == y);
+}
+
 TEST_CASE("add") {
 
     Vector2 a{x, y};

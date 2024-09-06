@@ -13,10 +13,11 @@ std::string PointsMaterial::type() const {
     return "PointsMaterial";
 }
 
-std::shared_ptr<Material> PointsMaterial::clone() const {
+void PointsMaterial::copyInto(Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<PointsMaterial>();
 
     m->color.copy(color);
 
@@ -26,8 +27,11 @@ std::shared_ptr<Material> PointsMaterial::clone() const {
 
     m->size = size;
     m->sizeAttenuation = sizeAttenuation;
+}
 
-    return m;
+std::shared_ptr<Material> PointsMaterial::createDefault() const {
+
+    return std::shared_ptr<PointsMaterial>(new PointsMaterial());
 }
 
 std::shared_ptr<PointsMaterial> PointsMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
@@ -41,9 +45,9 @@ std::shared_ptr<PointsMaterial> PointsMaterial::create(const std::unordered_map<
 bool PointsMaterial::setValue(const std::string& key, const MaterialValue& value) {
 
     if (key == "color") {
-        
+
         color.copy(extractColor(value));
-        
+
         return true;
     } else if (key == "size") {
 

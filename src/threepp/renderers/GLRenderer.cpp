@@ -19,9 +19,7 @@
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
-#include "threepp/core/InstancedBufferGeometry.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
-#include "threepp/math/Frustum.hpp"
 
 #include "threepp/objects/Group.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
@@ -49,19 +47,19 @@ struct GLRenderer::Impl {
 
     struct OnMaterialDispose: EventListener {
 
-        explicit OnMaterialDispose(GLRenderer::Impl* scope): scope_(scope) {}
+        explicit OnMaterialDispose(Impl* scope): scope_(scope) {}
 
         void onEvent(Event& event) override {
 
             auto material = static_cast<Material*>(event.target);
 
-            material->removeEventListener("dispose", this);
+            material->removeEventListener("dispose", *this);
 
             scope_->deallocateMaterial(material);
         }
 
     private:
-        GLRenderer::Impl* scope_;
+        Impl* scope_;
     };
 
     GLRenderer& scope;
@@ -140,7 +138,7 @@ struct GLRenderer::Impl {
 
     gl::GLShadowMap shadowMap;
 
-    Impl(GLRenderer& scope, WindowSize size, const GLRenderer::Parameters& parameters)
+    Impl(GLRenderer& scope, WindowSize size, const Parameters& parameters)
         : scope(scope), _size(size),
           cubemaps(scope),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
@@ -159,8 +157,8 @@ struct GLRenderer::Impl {
           _emptyScene(std::make_unique<Scene>()),
           onMaterialDispose(this) {
 
-        this->setViewport(0, 0, size.width, size.height);
-        this->setScissor(0, 0, _size.width, _size.height);
+        this->setViewport(0, 0, size.width(), size.height());
+        this->setScissor(0, 0, _size.width(), _size.height());
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
@@ -434,13 +432,14 @@ struct GLRenderer::Impl {
 
             renderer->renderInstances(drawStart, drawCount, im->count());
 
-        } else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+        } /*else if (auto g = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
 
             const auto instanceCount = std::min(g->instanceCount, g->_maxInstanceCount);
 
             renderer->renderInstances(drawStart, drawCount, instanceCount);
 
-        } else {
+        } */
+        else {
 
             renderer->render(drawStart, drawCount);
         }
@@ -481,7 +480,7 @@ struct GLRenderer::Impl {
                     }
 
                     const auto geometry = objects.update(object);
-                    const auto material = sprite->material();
+                    const auto material = sprite->material().get();
 
                     if (material->visible) {
 
@@ -495,7 +494,7 @@ struct GLRenderer::Impl {
 
                     // update skeleton only once in a frame
 
-                    if (skinned->skeleton->frame != _info.render.frame) {
+                    if (skinned->skeleton->frame != static_cast<int>(_info.render.frame)) {
 
                         skinned->skeleton->update();
                         skinned->skeleton->frame = _info.render.frame;
@@ -510,7 +509,7 @@ struct GLRenderer::Impl {
                                 .applyMatrix4(_projScreenMatrix);
                     }
 
-                    auto geometry = objects.update(object);
+                    const auto geometry = objects.update(object);
                     const auto& materials = object->as<ObjectWithMaterials>()->materials();
 
                     if (materials.size() > 1) {
@@ -519,7 +518,7 @@ struct GLRenderer::Impl {
 
                         for (const auto& group : groups) {
 
-                            Material* groupMaterial = materials.at(group.materialIndex);
+                            const auto groupMaterial = materials.at(group.materialIndex).get();
 
                             if (groupMaterial && groupMaterial->visible) {
 
@@ -529,7 +528,7 @@ struct GLRenderer::Impl {
 
                     } else if (materials.front()->visible) {
 
-                        currentRenderList->push(object, geometry, materials.front(), groupOrder, _vector3.z, std::nullopt);
+                        currentRenderList->push(object, geometry, materials.front().get(), groupOrder, _vector3.z, std::nullopt);
                     }
                 }
             }
@@ -611,12 +610,12 @@ struct GLRenderer::Impl {
 
             // new material
 
-            material->addEventListener("dispose", &onMaterialDispose);
+            material->addEventListener("dispose", onMaterialDispose);
         }
 
         gl::GLProgram* program = nullptr;
 
-        if (programs.count(programCacheKey)) {
+        if (programs.contains(programCacheKey)) {
 
             program = programs.at(programCacheKey);
 
@@ -789,8 +788,8 @@ struct GLRenderer::Impl {
                 needsProgramChange = true;
 
             } else if (materialProperties->numClippingPlanes &&
-                       (materialProperties->numClippingPlanes.value() != clipping.numPlanes ||
-                        materialProperties->numIntersection != clipping.numIntersection)) {
+                       (materialProperties->numClippingPlanes.value() != static_cast<int>(clipping.numPlanes) ||
+                        materialProperties->numIntersection != static_cast<int>(clipping.numIntersection))) {
 
                 needsProgramChange = true;
 
@@ -865,9 +864,9 @@ struct GLRenderer::Impl {
                 isMeshStandardMaterial ||
                 isEnvMap) {
 
-                if (p_uniforms->map.count("cameraPosition")) {
+                if (p_uniforms->map.contains("cameraPosition")) {
 
-                    auto& uCamPos = p_uniforms->map["cameraPosition"];
+                    auto& uCamPos = p_uniforms->map.at("cameraPosition");
                     _vector3.setFromMatrixPosition(*camera->matrixWorld);
                     uCamPos->setValue(_vector3);
                 }
@@ -965,7 +964,7 @@ struct GLRenderer::Impl {
                 materials.refreshFogUniforms(m_uniforms, *fog);
             }
 
-            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height);
+            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height());
 
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }
@@ -1040,8 +1039,6 @@ struct GLRenderer::Impl {
 
         if (renderTarget) {
 
-            const auto& texture = renderTarget->texture;
-
             framebuffer = *properties.renderTargetProperties.get(renderTarget)->glFramebuffer;
 
             _currentViewport.copy(renderTarget->viewport);
@@ -1096,8 +1093,8 @@ struct GLRenderer::Impl {
     void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
 
         const auto levelScale = std::pow(2, -level);
-        const auto width = static_cast<int>(texture.image.front().width * levelScale);
-        const auto height = static_cast<int>(texture.image.front().height * levelScale);
+        const auto width = static_cast<int>(texture.image().width * levelScale);
+        const auto height = static_cast<int>(texture.image().height * levelScale);
 
         textures.setTexture2D(texture, 0);
 
@@ -1108,9 +1105,23 @@ struct GLRenderer::Impl {
 
     void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
 
-        auto glFormat = gl::toGLFormat(format);
+        const auto glFormat = gl::toGLFormat(format);
 
-        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width, size.width, glFormat, GL_UNSIGNED_BYTE, data);
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width(), size.width(), glFormat, GL_UNSIGNED_BYTE, data);
+    }
+
+    void copyTextureToImage(Texture& texture) {
+
+        textures.setTexture2D(texture, 0);
+
+        auto& image = texture.image();
+        auto& data = image.data();
+        auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
+        data.resize(newSize);
+
+        glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
+
+        state.unbindTexture();
     }
 
     void setViewport(int x, int y, int width, int height) {
@@ -1122,7 +1133,7 @@ struct GLRenderer::Impl {
 
     void setScissor(int x, int y, int width, int height) {
 
-        _scissor.set((float) x, (float) y, (float) width, (float) height);
+        _scissor.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
 
         state.scissor(_currentScissor.copy(_scissor).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
     }
@@ -1138,7 +1149,7 @@ struct GLRenderer::Impl {
     }
 
     void reset() {
-        state.reset(_size.width, _size.height);
+        state.reset(_size);
         bindingStates.reset();
     }
 
@@ -1161,22 +1172,22 @@ GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters
 }
 
 
-const gl::GLInfo& threepp::GLRenderer::info() {
+const gl::GLInfo& GLRenderer::info() {
 
     return pimpl_->_info;
 }
 
-gl::GLShadowMap& threepp::GLRenderer::shadowMap() {
+gl::GLShadowMap& GLRenderer::shadowMap() {
 
     return pimpl_->shadowMap;
 }
 
-const gl::GLShadowMap& threepp::GLRenderer::shadowMap() const {
+const gl::GLShadowMap& GLRenderer::shadowMap() const {
 
     return pimpl_->shadowMap;
 }
 
-gl::GLState& threepp::GLRenderer::state() {
+gl::GLState& GLRenderer::state() {
 
     return pimpl_->state;
 }
@@ -1189,34 +1200,33 @@ int GLRenderer::getTargetPixelRatio() const {
 void GLRenderer::setPixelRatio(int value) {
 
     pimpl_->_pixelRatio = value;
-    this->setSize({pimpl_->_size.width, pimpl_->_size.height});
+    this->setSize(pimpl_->_size);
 }
 
-WindowSize GLRenderer::getSize() const {
+WindowSize GLRenderer::size() const {
 
     return pimpl_->_size;
 }
 
-void GLRenderer::setSize(WindowSize size) {
+void GLRenderer::setSize(std::pair<int, int> size) {
 
     pimpl_->_size = size;
 
-    this->setViewport(0, 0, size.width, size.height);
+    this->setViewport(0, 0, size.first, size.second);
 }
 
 void GLRenderer::getDrawingBufferSize(Vector2& target) const {
 
-    target.set(static_cast<float>(pimpl_->_size.width * pimpl_->_pixelRatio), static_cast<float>(pimpl_->_size.height * pimpl_->_pixelRatio)).floor();
+    target.set(static_cast<float>(pimpl_->_size.width() * pimpl_->_pixelRatio), static_cast<float>(pimpl_->_size.height() * pimpl_->_pixelRatio)).floor();
 }
 
-void GLRenderer::setDrawingBufferSize(int width, int height, int pixelRatio) {
+void GLRenderer::setDrawingBufferSize(std::pair<int, int> size, int pixelRatio) {
 
-    pimpl_->_size.width = width;
-    pimpl_->_size.height = height;
+    pimpl_->_size = size;
 
     pimpl_->_pixelRatio = pixelRatio;
 
-    this->setViewport(0, 0, width, height);
+    this->setViewport(0, 0, size.first, size.second);
 }
 
 void GLRenderer::getCurrentViewport(Vector4& target) const {
@@ -1333,27 +1343,32 @@ void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, For
     pimpl_->readPixels(position, size, format, data);
 }
 
+void GLRenderer::copyTextureToImage(Texture& texture) {
+
+    pimpl_->copyTextureToImage(texture);
+}
+
 void GLRenderer::resetState() {
 
     pimpl_->reset();
 }
 
-const gl::GLInfo& threepp::GLRenderer::info() const {
+const gl::GLInfo& GLRenderer::info() const {
 
     return pimpl_->_info;
 }
 
-int threepp::GLRenderer::getActiveCubeFace() const {
+int GLRenderer::getActiveCubeFace() const {
 
     return pimpl_->_currentActiveCubeFace;
 }
 
-int threepp::GLRenderer::getActiveMipmapLevel() const {
+int GLRenderer::getActiveMipmapLevel() const {
 
     return pimpl_->_currentActiveMipmapLevel;
 }
 
-GLRenderTarget* threepp::GLRenderer::getRenderTarget() {
+GLRenderTarget* GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
 }

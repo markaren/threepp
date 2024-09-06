@@ -539,10 +539,27 @@ Color& Color::setStyle(const std::string& style) {
 
 Color& Color::setColorName(const std::string& style) {
 
-    if (!colorKeywords.count(style)) {
+    if (!colorKeywords.contains(style)) {
         std::cerr << "THREE.Color: Unknown color '" + style + "'" << std::endl;
         return *this;
     }
 
     return setHex(colorKeywords.at(style));
+}
+
+Color& Color::lerpHSL(const Color& color, float alpha) {
+
+    static HSL _hslA;
+    static HSL _hslB;
+
+    this->getHSL(_hslA);
+    color.getHSL(_hslB);
+
+    const auto h = math::lerp(_hslA.h, _hslB.h, alpha);
+    const auto s = math::lerp(_hslA.s, _hslB.s, alpha);
+    const auto l = math::lerp(_hslA.l, _hslB.l, alpha);
+
+    this->setHSL(h, s, l);
+
+    return *this;
 }

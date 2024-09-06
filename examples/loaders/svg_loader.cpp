@@ -1,15 +1,10 @@
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/loaders/SVGLoader.hpp"
 #include "threepp/threepp.hpp"
-
-#ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
-#endif
 
 using namespace threepp;
 
 namespace {
-
-#ifdef HAS_IMGUI
 
     struct MyUI: public ImguiContext {
 
@@ -56,8 +51,6 @@ namespace {
                 "style-css-inside-defs.svg", "ordering.svg",
                 "styles.svg", "units.svg", "ellipseTransform.svg"};
     };
-
-#endif
 
     auto loadSvg(const std::string& name = "tiger.svg") {
 
@@ -157,7 +150,6 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-#ifdef HAS_IMGUI
     MyUI ui(canvas.windowPtr());
 
     IOCapture capture{};
@@ -168,10 +160,6 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
-#else
-    svg = loadSvg();
-    scene->add(svg);
-#endif
 
     Box3 bb;
     auto box3Helper = Box3Helper::create(bb, Color::grey);
@@ -184,8 +172,6 @@ int main() {
     Clock clock;
     canvas.animate([&]() {
         renderer.render(*scene, *camera);
-
-#ifdef HAS_IMGUI
 
         if (ui.newSelection()) {
             if (svg) {
@@ -220,6 +206,5 @@ int main() {
         }
 
         ui.render();
-#endif
     });
 }

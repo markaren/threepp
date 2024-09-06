@@ -16,3 +16,8 @@ std::shared_ptr<RawShaderMaterial> RawShaderMaterial::create() {
 
     return std::shared_ptr<RawShaderMaterial>(new RawShaderMaterial());
 }
+
+std::shared_ptr<Material> RawShaderMaterial::createDefault() const {
+
+    return std::shared_ptr<RawShaderMaterial>(new RawShaderMaterial());
+}

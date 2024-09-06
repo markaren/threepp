@@ -130,8 +130,8 @@ struct CatmullRomCurve3::Impl {
 };
 
 
-CatmullRomCurve3::CatmullRomCurve3(std::vector<Vector3> points, bool closed, CatmullRomCurve3::CurveType type, float tension)
-    : pimpl_(std::make_unique<Impl>(*this)), points(std::move(points)), closed(closed), curveType(type), tension(tension) {}
+CatmullRomCurve3::CatmullRomCurve3(std::vector<Vector3> points, bool closed, CurveType type, float tension)
+    : points(std::move(points)), closed(closed), curveType(type), tension(tension), pimpl_(std::make_unique<Impl>(*this)) {}
 
 
 void CatmullRomCurve3::getPoint(float t, Vector3& point) const {

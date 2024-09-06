@@ -18,6 +18,7 @@
 #include "threepp/renderers/gl/GLState.hpp"
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace threepp {
@@ -35,8 +36,8 @@ namespace threepp {
     public:
         struct Parameters {
 
-            bool alpha;
-            bool depth;
+            // bool alpha;
+            // bool depth;
             bool premultipliedAlpha;
         };
 
@@ -72,11 +73,12 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
-        explicit GLRenderer(WindowSize size, const Parameters& parameters = {});
+        explicit GLRenderer(WindowSize size = {}, const Parameters& parameters = {});
 
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
         GLRenderer& operator=(const GLRenderer&) = delete;
+        GLRenderer& operator=(GLRenderer&&) = delete;
 
         const gl::GLInfo& info();
 
@@ -90,13 +92,13 @@ namespace threepp {
 
         void setPixelRatio(int value);
 
-        [[nodiscard]] WindowSize getSize() const;
+        [[nodiscard]] WindowSize size() const;
 
-        void setSize(WindowSize size);
+        void setSize(std::pair<int, int> size);
 
         void getDrawingBufferSize(Vector2& target) const;
 
-        void setDrawingBufferSize(int width, int height, int pixelRatio);
+        void setDrawingBufferSize(std::pair<int, int> size, int pixelRatio);
 
         void getCurrentViewport(Vector4& target) const;
 
@@ -149,6 +151,9 @@ namespace threepp {
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
         void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
+
+        // Experimental threepp function
+        void copyTextureToImage(Texture& texture);
 
         void resetState();
 

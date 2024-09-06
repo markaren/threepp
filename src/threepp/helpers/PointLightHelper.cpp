@@ -9,7 +9,7 @@ using namespace threepp;
 
 
 PointLightHelper::PointLightHelper(PointLight& light, float sphereSize, std::optional<Color> color)
-    : Mesh(nullptr, nullptr), light(&light), color(color) {
+    : Mesh(nullptr, nullptr), color(color), light(&light) {
 
     geometry_ = SphereGeometry::create(sphereSize, 4, 2);
 

@@ -76,9 +76,9 @@ SphereGeometry::SphereGeometry(const Params& params)
     }
     // indices
 
-    for (int iy = 0; iy < heightSegments; iy++) {
+    for (unsigned iy = 0; iy < heightSegments; iy++) {
 
-        for (int ix = 0; ix < widthSegments; ix++) {
+        for (unsigned ix = 0; ix < widthSegments; ix++) {
 
             const auto a = grid[iy][ix + 1];
             const auto b = grid[iy][ix];

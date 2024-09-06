@@ -37,6 +37,16 @@ void PointLight::dispose() {
     this->shadow->dispose();
 }
 
+void PointLight::copy(const Object3D& source, bool recursive) {
+    Light::copy(source, recursive);
+
+    if (auto l = source.as<PointLight>()) {
+
+        this->distance = l->distance;
+        this->decay = l->decay;
+    }
+}
+
 std::shared_ptr<PointLight> PointLight::create(const Color& color, std::optional<float> intensity, float distance, float decay) {
 
     return std::shared_ptr<PointLight>(new PointLight(color, intensity, distance, decay));

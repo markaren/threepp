@@ -59,13 +59,13 @@ namespace threepp::gl {
 
             std::vector<Influence> influences;
 
-            if (influencesList.count(geometry->id)) {
+            if (influencesList.contains(geometry->id)) {
 
                 influences = influencesList.at(geometry->id);
 
             } else {
 
-                for (auto i = 0; i < length; i++) {
+                for (unsigned i = 0; i < length; i++) {
 
                     influences.emplace_back(i, 0.f);
                 }
@@ -75,7 +75,7 @@ namespace threepp::gl {
 
             // Collect influences
 
-            for (int i = 0; i < length; i++) {
+            for (unsigned i = 0; i < length; i++) {
 
                 auto& influence = influences.at(i);
 
@@ -83,7 +83,7 @@ namespace threepp::gl {
                 influence.second = objectInfluences[i];
             }
 
-            std::stable_sort(influences.begin(), influences.end(), absNumericalSort);
+            std::ranges::stable_sort(influences, absNumericalSort);
 
             for (unsigned i = 0; i < 8; i++) {
 

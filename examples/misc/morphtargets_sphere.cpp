@@ -43,7 +43,7 @@ int main() {
 
         mesh->material()->as<MaterialWithMorphTargets>()->morphTargets = true;
 
-        auto points = Points::create(mesh->geometry()->shared_from_this(), pointsMaterial);
+        auto points = Points::create(mesh->geometry(), pointsMaterial);
         points->copyMorphTargetInfluences(&mesh->morphTargetInfluences());
         mesh->add(points);
     });
@@ -75,7 +75,7 @@ int main() {
 
         if (influence <= 0 || influence >= 1) {
             sign *= -1;
-            influence = std::clamp(influence, 0.01f, 0.99f); // avoid "locking"
+            influence = std::clamp(influence, 0.01f, 0.99f);// avoid "locking"
         }
 
         renderer.render(scene, camera);

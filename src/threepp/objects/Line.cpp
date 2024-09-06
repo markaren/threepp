@@ -27,20 +27,14 @@ std::string Line::type() const {
     return "Line";
 }
 
-BufferGeometry* Line::geometry() {
+std::shared_ptr<BufferGeometry> Line::geometry() const {
 
-    return geometry_.get();
+    return geometry_;
 }
 
 void Line::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+
     this->geometry_ = geometry;
-}
-
-std::shared_ptr<Object3D> Line::clone(bool recursive) {
-    auto clone = create(geometry_, materials_.front());
-    clone->copy(*this, recursive);
-
-    return clone;
 }
 
 std::shared_ptr<Line> Line::create(const std::shared_ptr<BufferGeometry>& geometry, const std::shared_ptr<Material>& material) {
@@ -171,4 +165,19 @@ void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
             intersects.emplace_back(intersection);
         }
     }
+}
+
+void Line::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto l = source.as<Line>()) {
+
+        materials_ = l->materials_;
+        geometry_ = l->geometry_;
+    }
+}
+
+std::shared_ptr<Object3D> Line::createDefault() {
+
+    return create();
 }

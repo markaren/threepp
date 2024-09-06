@@ -8,7 +8,7 @@
 using namespace threepp;
 
 DirectionalLightHelper::DirectionalLightHelper(DirectionalLight& light, float size, std::optional<Color> color)
-    : light(light), color(color) {
+    : color(color), light(light) {
 
     this->light.updateMatrixWorld();
 

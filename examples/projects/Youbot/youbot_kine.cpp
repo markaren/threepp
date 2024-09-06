@@ -5,6 +5,7 @@
 #include "kine/Kine.hpp"
 #include "kine/ik/CCDSolver.hpp"
 
+#include "KeyController.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include <future>
@@ -93,7 +94,7 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
@@ -102,18 +103,23 @@ int main() {
     handle.setColor(Color::black);
     hud.add(handle, HUD::Options()
                             .setNormalizedPosition({0.5, 0.5})
-                            .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::CENTER)
+                            .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
                             .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
 
+    TaskManager tm;
 
     std::shared_ptr<Youbot> youbot;
+    std::unique_ptr<KeyController> keyController;
     auto future = std::async([&] {
+
         youbot = Youbot::create("data/models/collada/youbot.dae");
         youbot->add(targetHelper);
         youbot->add(endEffectorHelper);
         endEffectorHelper->visible = true;
-        canvas.invokeLater([&] {
-            canvas.addKeyListener(*youbot);
+        keyController = std::make_unique<KeyController>(*youbot);
+
+        tm.invokeLater([&] {
+            canvas.addKeyListener(*keyController);
             scene->add(youbot);
             hud.remove(handle);
         });
@@ -152,7 +158,9 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
+
+        tm.handleTasks();
 
         renderer.clear();
         renderer.render(*scene, *camera);
@@ -180,7 +188,7 @@ int main() {
             }
 
             youbot->setJointValues(ui.values);
-            youbot->update(dt);
+            keyController->update(dt);
         } else {
 
             hud.apply(renderer);

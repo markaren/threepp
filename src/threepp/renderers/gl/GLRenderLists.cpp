@@ -164,7 +164,7 @@ GLRenderLists::GLRenderLists(GLProperties& properties): properties(properties) {
 
 GLRenderList* GLRenderLists::get(Object3D* scene, size_t renderCallDepth) {
 
-    if (!lists.count(scene->uuid)) {
+    if (!lists.contains(scene->uuid)) {
 
         auto& l = lists[scene->uuid].emplace_back(std::make_unique<GLRenderList>(properties));
         return l.get();

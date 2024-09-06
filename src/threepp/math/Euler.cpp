@@ -11,15 +11,15 @@
 
 using namespace threepp;
 
-Euler::Euler(float x, float y, float z, Euler::RotationOrders order)
-    : x(x), y(y), z(z), order_() {}
+Euler::Euler(float x, float y, float z, RotationOrders order)
+    : x(x), y(y), z(z), order_(order) {}
 
 
 Euler::RotationOrders Euler::getOrder() const {
 
     return order_;
 }
-void Euler::setOrder(Euler::RotationOrders value) {
+void Euler::setOrder(RotationOrders value) {
 
     this->order_ = value;
     onChangeCallback_();
@@ -38,9 +38,9 @@ Euler& Euler::set(float x, float y, float z, const std::optional<RotationOrders>
 }
 
 Euler& Euler::copy(const Euler& euler) {
-    this->x = euler.x;
-    this->y = euler.y;
-    this->z = euler.z;
+    this->x.value_ = euler.x;
+    this->y.value_ = euler.y;
+    this->z.value_ = euler.z;
     this->order_ = euler.order_;
 
     this->onChangeCallback_();
@@ -194,5 +194,5 @@ Euler& Euler::_onChange(std::function<void()> callback) {
 
 bool Euler::equals(const Euler& euler) const {
 
-    return ( euler.x == this->x ) && ( euler.y == this->y ) && ( euler.z == this->z ) && ( euler.order_ == this->order_ );
+    return (euler.x == this->x) && (euler.y == this->y) && (euler.z == this->z) && (euler.order_ == this->order_);
 }

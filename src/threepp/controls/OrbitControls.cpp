@@ -30,14 +30,14 @@ namespace {
 
 struct OrbitControls::Impl {
 
-    PeripheralsEventSource& canvas;
     OrbitControls& scope;
+    PeripheralsEventSource& canvas;
     Camera& camera;
 
     std::unique_ptr<KeyListener> keyListener;
     std::unique_ptr<MouseListener> mouseListener;
 
-    State state = State::NONE;
+    State state = NONE;
 
     // current position in spherical coordinates
     Spherical spherical;
@@ -229,18 +229,18 @@ struct OrbitControls::Impl {
 
             // we use only clientHeight here so aspect ratio does not distort speed
             const auto size = canvas.size();
-            panLeft(2 * deltaX * targetDistance / (float) size.height, *this->camera.matrix);
-            panUp(2 * deltaY * targetDistance / (float) size.height, *this->camera.matrix);
+            panLeft(2 * deltaX * targetDistance / static_cast<float>(size.height()), *this->camera.matrix);
+            panUp(2 * deltaY * targetDistance / static_cast<float>(size.height()), *this->camera.matrix);
         } else if (auto ortho = camera.as<OrthographicCamera>()) {
 
             const auto size = canvas.size();
 
             // orthographic
             panLeft(
-                    deltaX * (ortho->right - ortho->left) / this->camera.zoom / size.width,
+                    deltaX * (ortho->right - ortho->left) / this->camera.zoom / static_cast<float>(size.width()),
                     *this->camera.matrix);
             panUp(
-                    deltaY * (ortho->top - ortho->bottom) / this->camera.zoom / size.height,
+                    deltaY * (ortho->top - ortho->bottom) / this->camera.zoom / static_cast<float>(size.height()),
                     *this->camera.matrix);
 
         } else {
@@ -334,9 +334,9 @@ struct OrbitControls::Impl {
         rotateDelta.subVectors(rotateEnd, rotateStart).multiplyScalar(scope.rotateSpeed);
 
         const auto size = canvas.size();
-        rotateLeft(2 * math::PI * rotateDelta.x / static_cast<float>(size.height));// yes, height
+        rotateLeft(2 * math::PI * rotateDelta.x / static_cast<float>(size.height()));// yes, height
 
-        rotateUp(2 * math::PI * rotateDelta.y / static_cast<float>(size.height));
+        rotateUp(2 * math::PI * rotateDelta.y / static_cast<float>(size.height()));
 
         rotateStart.copy(rotateEnd);
 
@@ -458,12 +458,12 @@ struct OrbitControls::Impl {
         MyMouseUpListener(OrbitControls& scope, MyMouseMoveListener* mouseMoveListener)
             : scope(scope), mouseMoveListener(mouseMoveListener) {}
 
-        void onMouseUp(int button, const Vector2& pos) override {
+        void onMouseUp(int, const Vector2&) override {
             if (scope.enabled) {
 
                 scope.pimpl_->canvas.removeMouseListener(*mouseMoveListener);
                 scope.pimpl_->canvas.removeMouseListener(*this);
-                scope.pimpl_->state = State::NONE;
+                scope.pimpl_->state = NONE;
             }
         }
     };

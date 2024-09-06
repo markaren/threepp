@@ -35,38 +35,38 @@ void Material::needsUpdate() {
     this->version_++;
 }
 
-void Material::copyInto(Material* m) const {
+void Material::copyInto(Material& m) const {
 
-    m->name = name;
+    m.name = name;
 
-    m->fog = fog;
+    m.fog = fog;
 
-    m->blending = blending;
-    m->side = side;
-    m->vertexColors = vertexColors;
+    m.blending = blending;
+    m.side = side;
+    m.vertexColors = vertexColors;
 
-    m->opacity = opacity;
-    m->transparent = transparent;
+    m.opacity = opacity;
+    m.transparent = transparent;
 
-    m->blendSrc = blendSrc;
-    m->blendDst = blendDst;
-    m->blendEquation = blendEquation;
-    m->blendSrcAlpha = blendSrcAlpha;
-    m->blendDstAlpha = blendDstAlpha;
-    m->blendEquationAlpha = blendEquationAlpha;
+    m.blendSrc = blendSrc;
+    m.blendDst = blendDst;
+    m.blendEquation = blendEquation;
+    m.blendSrcAlpha = blendSrcAlpha;
+    m.blendDstAlpha = blendDstAlpha;
+    m.blendEquationAlpha = blendEquationAlpha;
 
-    m->depthFunc = depthFunc;
-    m->depthTest = depthTest;
-    m->depthWrite = depthWrite;
+    m.depthFunc = depthFunc;
+    m.depthTest = depthTest;
+    m.depthWrite = depthWrite;
 
-    m->stencilWriteMask = stencilWriteMask;
-    m->stencilFunc = stencilFunc;
-    m->stencilRef = stencilRef;
-    m->stencilFuncMask = stencilFuncMask;
-    m->stencilFail = stencilFail;
-    m->stencilZFail = stencilZFail;
-    m->stencilZPass = stencilZPass;
-    m->stencilWrite = stencilWrite;
+    m.stencilWriteMask = stencilWriteMask;
+    m.stencilFunc = stencilFunc;
+    m.stencilRef = stencilRef;
+    m.stencilFuncMask = stencilFuncMask;
+    m.stencilFail = stencilFail;
+    m.stencilZFail = stencilZFail;
+    m.stencilZPass = stencilZPass;
+    m.stencilWrite = stencilWrite;
 
     const auto& srcPlanes = clippingPlanes;
     std::vector<Plane> dstPlanes;
@@ -82,27 +82,27 @@ void Material::copyInto(Material* m) const {
         }
     }
 
-    m->clippingPlanes = dstPlanes;
-    m->clipIntersection = clipIntersection;
-    m->clipShadows = clipShadows;
+    m.clippingPlanes = dstPlanes;
+    m.clipIntersection = clipIntersection;
+    m.clipShadows = clipShadows;
 
-    m->shadowSide = shadowSide;
+    m.shadowSide = shadowSide;
 
-    m->colorWrite = colorWrite;
+    m.colorWrite = colorWrite;
 
-    m->polygonOffset = polygonOffset;
-    m->polygonOffsetFactor = polygonOffsetFactor;
-    m->polygonOffsetUnits = polygonOffsetUnits;
+    m.polygonOffset = polygonOffset;
+    m.polygonOffsetFactor = polygonOffsetFactor;
+    m.polygonOffsetUnits = polygonOffsetUnits;
 
-    m->dithering = dithering;
+    m.dithering = dithering;
 
-    m->alphaTest = alphaTest;
-    m->alphaToCoverage = alphaToCoverage;
-    m->premultipliedAlpha = premultipliedAlpha;
+    m.alphaTest = alphaTest;
+    m.alphaToCoverage = alphaToCoverage;
+    m.premultipliedAlpha = premultipliedAlpha;
 
-    m->visible = visible;
+    m.visible = visible;
 
-    m->toneMapped = toneMapped;
+    m.toneMapped = toneMapped;
 }
 
 Material::~Material() {
@@ -314,7 +314,7 @@ void Material::setValues(const std::unordered_map<std::string, MaterialValue>& v
     }
 }
 
-bool Material::setValue(const std::string& key, const MaterialValue& value) {
+bool Material::setValue(const std::string&, const MaterialValue&) {
 
     return false;
 }

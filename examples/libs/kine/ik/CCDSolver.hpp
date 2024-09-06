@@ -10,14 +10,14 @@ namespace kine {
     class CCDSolver: public IKSolver {
 
     public:
-        explicit CCDSolver(int maxTries = 10, float stepSize = 0.005f, float eps = 0.00001f)
+        explicit CCDSolver(unsigned int maxTries = 10, float stepSize = 0.005f, float eps = 0.00001f)
             : maxTries(maxTries),
               stepSize(stepSize),
               eps(eps) {}
 
-        std::vector<float> solveIK(const Kine& kine, const threepp::Vector3& target, const std::vector<float>& startValues) override {
+        std::vector<float> solveIK(const Kine& kine, const Vector3& target, const std::vector<float>& startValues) override {
 
-            threepp::Vector3 endPos;
+            Vector3 endPos;
             endPos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(startValues));
 
             float error = endPos.distanceTo(target);
@@ -52,7 +52,7 @@ namespace kine {
         }
 
     private:
-        int maxTries;
+        unsigned int maxTries;
         float stepSize;
         float eps;
     };

@@ -10,6 +10,8 @@
 
 #include "threepp/lights/Light.hpp"
 
+#include <algorithm>
+
 using namespace threepp;
 
 Object3D::Object3D()
@@ -147,14 +149,14 @@ Object3D& Object3D::translateZ(float distance) {
 
 void Object3D::localToWorld(Vector3& vector) {
 
-    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
+    this->updateWorldMatrix(true, false);// https://github.com/mrdoob/three.js/pull/25097
 
     vector.applyMatrix4(*this->matrixWorld);
 }
 
 void Object3D::worldToLocal(Vector3& vector) {
 
-    this->updateWorldMatrix( true, false ); // https://github.com/mrdoob/three.js/pull/25097
+    this->updateWorldMatrix(true, false);// https://github.com/mrdoob/three.js/pull/25097
 
     Matrix4 _m1{};
 
@@ -204,7 +206,6 @@ void Object3D::add(const std::shared_ptr<Object3D>& object) {
 
     this->children_.emplace_back(object);
     add(*object);
-
 }
 
 void Object3D::add(Object3D& object) {
@@ -222,26 +223,26 @@ void Object3D::add(Object3D& object) {
 
 void Object3D::remove(Object3D& object) {
 
-    {// non-owning (all children should be represented here)
-        auto find = std::find_if(children.begin(), children.end(), [&object](const auto& obj) {
+    // non-owning (all children should be represented here)
+    if (const auto find = std::ranges::find_if(children, [&object](const auto& obj) {
             return obj == &object;
         });
-        if (find != children.end()) {
-            Object3D* child = *find;
-            children.erase(find);
+        find != children.end()) {
 
-            child->parent = nullptr;
-            child->dispatchEvent("remove", child);
-        }
+        Object3D* child = *find;
+        children.erase(find);
+
+        child->parent = nullptr;
+        child->dispatchEvent("remove", child);
     }
-    {// owning
-        auto find = std::find_if(children_.begin(), children_.end(), [&object](const auto& obj) {
+
+    // owning
+    if (const auto find = std::ranges::find_if(children_, [&object](const auto& obj) {
             return obj.get() == &object;
         });
-        if (find != children_.end()) {
+        find != children_.end()) {
 
-            children_.erase(find);
-        }
+        children_.erase(find);
     }
 }
 
@@ -264,23 +265,6 @@ void Object3D::clear() {
 
     this->children.clear();
     this->children_.clear();
-}
-
-Object3D* Object3D::getObjectByName(const std::string& name) {
-
-    if (this->name == name) return this;
-
-    for (auto& child : this->children) {
-
-        auto object = child->getObjectByName(name);
-
-        if (object) {
-
-            return object;
-        }
-    }
-
-    return nullptr;
 }
 
 void Object3D::getWorldPosition(Vector3& target) {
@@ -323,9 +307,9 @@ void Object3D::traverse(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    for (auto& i : children) {
+    for (auto& c : children) {
 
-        i->traverse(callback);
+        c->traverse(callback);
     }
 }
 
@@ -335,9 +319,9 @@ void Object3D::traverseVisible(const std::function<void(Object3D&)>& callback) {
 
     callback(*this);
 
-    for (auto& i : children) {
+    for (auto& c : children) {
 
-        i->traverseVisible(callback);
+        c->traverseVisible(callback);
     }
 }
 
@@ -443,20 +427,12 @@ void Object3D::copy(const Object3D& source, bool recursive) {
 
     if (recursive) {
 
-        for (auto& child : source.children) {
+        for (const auto& child : source.children) {
 
             auto clone = child->clone();
             this->add(clone);
         }
     }
-}
-
-std::shared_ptr<Object3D> Object3D::clone(bool recursive) {
-
-    auto clone = std::make_shared<Object3D>();
-    clone->copy(*this, recursive);
-
-    return clone;
 }
 
 Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
@@ -490,8 +466,8 @@ Object3D::Object3D(Object3D&& source) noexcept: Object3D() {
     this->frustumCulled = source.frustumCulled;
     this->renderOrder = source.renderOrder;
 
-    this->onAfterRender = std::move(onAfterRender);
-    this->onBeforeRender = std::move(onBeforeRender);
+    this->onAfterRender = std::move(source.onAfterRender);
+    this->onBeforeRender = std::move(source.onBeforeRender);
 
     this->rotation._onChange([this] {
         quaternion.setFromEuler(rotation, false);

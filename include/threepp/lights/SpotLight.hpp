@@ -25,10 +25,17 @@ namespace threepp {
 
         void dispose() override;
 
+        void copy(const Object3D& source, bool recursive) override;
+
         static std::shared_ptr<SpotLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt, float distance = 0, float angle = math::PI / 3, float penumbra = 0, float decay = 1);
 
     protected:
         SpotLight(const Color& color, std::optional<float> intensity, float distance, float angle, float penumbra, float decay);
+
+        std::shared_ptr<Object3D> createDefault() override {
+
+            return create();
+        }
     };
 
 }// namespace threepp

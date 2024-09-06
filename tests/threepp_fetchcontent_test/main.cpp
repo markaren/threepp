@@ -14,8 +14,8 @@ namespace {
         return mesh;
     }
 
-    std::unique_ptr<HUD> createHUD(PeripheralsEventSource &canvas) {
-        auto hud = std::make_unique<HUD>(canvas);
+    std::unique_ptr<HUD> createHUD(WindowSize size) {
+        auto hud = std::make_unique<HUD>(size);
         FontLoader fontLoader;
         const auto font = fontLoader.defaultFont();
         TextGeometry::Options opts(font, 20, 5);
@@ -50,7 +50,7 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    auto hud = createHUD(canvas);
+    auto hud = createHUD(canvas.size());
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();

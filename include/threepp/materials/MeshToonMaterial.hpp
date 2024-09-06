@@ -28,10 +28,11 @@ namespace threepp {
             return "MeshToonMaterial";
         }
 
-        [[nodiscard]] std::shared_ptr<Material> clone() const override {
+        void copyInto(Material& material) const override {
 
-            auto m = create();
-            copyInto(m.get());
+            Material::copyInto(material);
+
+            auto m = material.as<MeshToonMaterial>();
 
             m->color.copy(color);
 
@@ -63,11 +64,10 @@ namespace threepp {
 
             m->wireframe = wireframe;
             m->wireframeLinewidth = wireframeLinewidth;
-
-            return m;
         }
 
         static std::shared_ptr<MeshToonMaterial> create() {
+
             return std::shared_ptr<MeshToonMaterial>(new MeshToonMaterial());
         }
 
@@ -83,6 +83,11 @@ namespace threepp {
               MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}) {
 
             this->defines["TOON"] = "";
+        }
+
+        std::shared_ptr<Material> createDefault() const override {
+
+            return std::shared_ptr<MeshToonMaterial>(new MeshToonMaterial());
         }
     };
 

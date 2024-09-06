@@ -4,7 +4,7 @@ include(LibConfig.cmake)
 
 add_subdirectory(libs)
 
-add_example(NAME "demo" TRY_LINK_IMGUI WEB WEB_EMBED
+add_example(NAME "demo" LINK_IMGUI WEB WEB_EMBED
         "../data/fonts@data/fonts"
 )
 

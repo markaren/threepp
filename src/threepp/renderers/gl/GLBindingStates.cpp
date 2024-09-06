@@ -101,7 +101,7 @@ struct GLBindingStates::Impl {
 
         auto& stateMap = programMap[program->id];
 
-        if (!stateMap.count(wireframe)) {
+        if (!stateMap.contains(wireframe)) {
 
             stateMap[wireframe] = createBindingState(createVertexArrayObject());
         }
@@ -127,12 +127,12 @@ struct GLBindingStates::Impl {
 
         for (const auto& [key, value] : geometryAttributes) {
 
-            if (!cachedAttributes.count(key)) return true;
+            if (!cachedAttributes.contains(key)) return true;
 
 
             const auto& geometryAttribute = geometryAttributes.at(key);
 
-            if (!cachedAttributes.count(key)) return true;
+            if (!cachedAttributes.contains(key)) return true;
 
             const auto& cachedAttribute = cachedAttributes.at(key);
 
@@ -246,7 +246,7 @@ struct GLBindingStates::Impl {
 
             if (programAttribute >= 0) {
 
-                if (geometryAttributes.count(name)) {
+                if (geometryAttributes.contains(name)) {
 
                     auto& geometryAttribute = geometryAttributes.at(name);
 
@@ -333,9 +333,9 @@ struct GLBindingStates::Impl {
 
                 } else if (!materialDefaultAttributeValues.empty()) {
 
-                    if (materialDefaultAttributeValues.count("name")) {
+                    if (materialDefaultAttributeValues.contains("name")) {
 
-                        UniformValue& value = materialDefaultAttributeValues.at("name");
+                        // UniformValue& value = materialDefaultAttributeValues.at("name");
 
                         // TODO
                     }
@@ -357,7 +357,7 @@ struct GLBindingStates::Impl {
                 auto& stateMap = progIt->second;
 
                 for (auto it = stateMap.begin(); it != stateMap.end();) {
-                    const auto& wireframe = *it;
+                    // const auto& wireframe = *it;
 
                     deleteVertexArrayObject(*it->second->object);
 
@@ -373,7 +373,7 @@ struct GLBindingStates::Impl {
 
     void releaseStatesOfGeometry(BufferGeometry* geometry) {
 
-        if (!bindingStates.count(geometry->id)) return;
+        if (!bindingStates.contains(geometry->id)) return;
 
         ProgramMap& programMap = bindingStates[geometry->id];
 
@@ -400,7 +400,7 @@ struct GLBindingStates::Impl {
 
             auto& programMap = bindingStates[geometryId.first];
 
-            if (!programMap.count(program.id)) continue;
+            if (!programMap.contains(program.id)) continue;
 
             auto& stateMap = programMap.at(program.id);
 

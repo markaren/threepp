@@ -18,7 +18,7 @@ GridHelper::GridHelper(unsigned int size, unsigned int divisions, const Color& c
 
     int j = 0;
     float k = -halfSize;
-    for (int i = 0; i <= divisions; i++) {
+    for (unsigned i = 0; i <= divisions; i++) {
 
         vertices.insert(vertices.end(), {-halfSize, 0, k, halfSize, 0, k});
         vertices.insert(vertices.end(), {k, 0, -halfSize, k, 0, halfSize});

@@ -110,7 +110,7 @@ int main() {
     auto motorVisuals = VisualisationObject();
     scene.add(motorVisuals);
 
-    HUD hud(canvas);
+    HUD hud(canvas.size());
 
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();
@@ -140,7 +140,7 @@ int main() {
         ImGui::Begin("Motor Controller");
 
         ImGui::Text("Target position");
-        if(ImGui::SliderFloat("deg", &targetPosition, 0, 180)) {
+        if (ImGui::SliderFloat("deg", &targetPosition, 0, 180)) {
             targetText->setText("Target position: " + std::to_string(targetPosition), opts);
         }
         ImGui::Text("PID gains");

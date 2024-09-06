@@ -1,8 +1,8 @@
 
 #include "threepp/lights/LightShadow.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/lights/light_interfaces.hpp"
+#include "threepp/renderers/GLRenderTarget.hpp"
 
 using namespace threepp;
 

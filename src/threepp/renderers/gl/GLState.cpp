@@ -1,8 +1,8 @@
 
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include "threepp/renderers/gl/GLUtils.hpp"
 #include "threepp/materials/Material.hpp"
+#include "threepp/renderers/gl/GLUtils.hpp"
 
 #if EMSCRIPTEN
 #include <GLES3/gl32.h>
@@ -14,7 +14,7 @@ using namespace threepp;
 
 namespace {
 
-    inline GLenum equationToGL(BlendEquation eq) {
+    GLenum equationToGL(BlendEquation eq) {
 
         switch (eq) {
             case BlendEquation::Add:
@@ -32,7 +32,7 @@ namespace {
         }
     }
 
-    inline GLenum factorToGL(BlendFactor factor) {
+    GLenum factorToGL(BlendFactor factor) {
 
         switch (factor) {
             case BlendFactor::Zero:
@@ -347,7 +347,7 @@ gl::GLState::GLState(): maxTextures(glGetParameteri(GL_MAX_COMBINED_TEXTURE_IMAG
 }
 
 void gl::GLState::enable(int id) {
-    if (!enabledCapabilities.count(id) || enabledCapabilities.at(id) == false) {
+    if (!enabledCapabilities.contains(id) || enabledCapabilities.at(id) == false) {
 
         glEnable(id);
         enabledCapabilities[id] = true;
@@ -355,7 +355,7 @@ void gl::GLState::enable(int id) {
 }
 
 void gl::GLState::disable(int id) {
-    if (enabledCapabilities.count(id) && enabledCapabilities.at(id) == true) {
+    if (enabledCapabilities.contains(id) && enabledCapabilities.at(id) == true) {
 
         glDisable(id);
         enabledCapabilities[id] = false;
@@ -364,7 +364,7 @@ void gl::GLState::disable(int id) {
 
 bool gl::GLState::bindFramebuffer(int target, unsigned int framebuffer) {
 
-    if (!currentBoundFramebuffers.count(target) || (currentBoundFramebuffers.count(target) && currentBoundFramebuffers[target] != framebuffer)) {
+    if (!currentBoundFramebuffers.contains(target) || (currentBoundFramebuffers.contains(target) && currentBoundFramebuffers.at(target) != framebuffer)) {
 
         glBindFramebuffer(target, framebuffer);
 
@@ -690,7 +690,7 @@ void gl::GLState::bindTexture(int glType, std::optional<int> glTexture) {
         activeTexture();
     }
 
-    if (!currentBoundTextures.count(*currentTextureSlot)) {
+    if (!currentBoundTextures.contains(*currentTextureSlot)) {
 
         BoundTexture boundTexture{};
         currentBoundTextures[*currentTextureSlot] = boundTexture;
@@ -709,7 +709,7 @@ void gl::GLState::bindTexture(int glType, std::optional<int> glTexture) {
 
 void gl::GLState::unbindTexture() {
 
-    if (currentTextureSlot && currentBoundTextures.count(*currentTextureSlot)) {
+    if (currentTextureSlot && currentBoundTextures.contains(*currentTextureSlot)) {
 
         auto& boundTexture = currentBoundTextures.at(*currentTextureSlot);
 
@@ -751,7 +751,7 @@ void gl::GLState::viewport(const Vector4& viewport) {
     }
 }
 
-void gl::GLState::reset(int width, int height) {
+void gl::GLState::reset(std::pair<int, int> size) {
 
     // reset state
 
@@ -795,8 +795,8 @@ void gl::GLState::reset(int width, int height) {
 
     glLineWidth(1);
 
-    glScissor(0, 0, width, height);
-    glViewport(0, 0, width, height);
+    glScissor(0, 0, size.first, size.second);
+    glViewport(0, 0, size.first, size.second);
 
     // reset internals
 
@@ -827,8 +827,8 @@ void gl::GLState::reset(int width, int height) {
     currentPolygonOffsetFactor = std::nullopt;
     currentPolygonOffsetUnits = std::nullopt;
 
-    currentScissor.set(0, 0, width, height);
-    currentViewport.set(0, 0, width, height);
+    currentScissor.set(0, 0, size.first, size.second);
+    currentViewport.set(0, 0, size.first, size.second);
 
     colorBuffer.reset();
     depthBuffer.reset();

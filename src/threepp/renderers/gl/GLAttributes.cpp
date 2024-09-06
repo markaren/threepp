@@ -39,7 +39,7 @@ Buffer GLAttributes::createBuffer(BufferAttribute* attribute, GLenum bufferType)
         throw std::runtime_error("TODO");
     }
 
-    return {buffer, type, bytesPerElement, attribute->version + 1};
+    return {buffer, type, bytesPerElement, attribute->version};// attribute->version + 1 (?)
 }
 
 void GLAttributes::updateBuffer(GLuint buffer, BufferAttribute* attribute, GLenum bufferType, int bytesPerElement) {
@@ -105,7 +105,7 @@ void GLAttributes::remove(BufferAttribute* attribute) {
         attribute = attr->data.get();
     }
 
-    if (buffers_.count(attribute)) {
+    if (buffers_.contains(attribute)) {
 
         auto& data = buffers_.at(attribute);
 
@@ -115,13 +115,15 @@ void GLAttributes::remove(BufferAttribute* attribute) {
     }
 }
 
+#include <iostream>
+
 void GLAttributes::update(BufferAttribute* attribute, GLenum bufferType) {
 
     if (auto attr = dynamic_cast<InterleavedBufferAttribute*>(attribute)) {
         attribute = attr->data.get();
     }
 
-    if (!buffers_.count(attribute)) {
+    if (!buffers_.contains(attribute)) {
 
         buffers_[attribute] = createBuffer(attribute, bufferType);
 

@@ -24,7 +24,9 @@ namespace threepp::utils {
     }
 
     template<class ArrayLike>
-    inline std::string join(const ArrayLike& v, char c = '\n') {
+    std::string join(const ArrayLike& v, char c = '\n') {
+
+        if (v.empty()) return "";
 
         auto p = v.cbegin();
         std::stringstream ss;
@@ -39,21 +41,21 @@ namespace threepp::utils {
     inline void replaceAll(std::string& text, const std::string& replaceFrom, const std::string& replaceTo) {
         std::string& result = text;
         size_t start_pos = 0;
-        while (((start_pos = text.find(replaceFrom, start_pos)) != std::string::npos)) {
+        while ((start_pos = text.find(replaceFrom, start_pos)) != std::string::npos) {
             result.replace(start_pos, replaceFrom.length(), replaceTo);
             start_pos += replaceTo.length();
         }
     }
 
     inline std::string trimStart(std::string s) {
-        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
+        s.erase(s.begin(), std::ranges::find_if(s, [](unsigned char ch) {
                     return !std::isspace(ch);
                 }));
         return s;
     }
 
     inline void trimStartInplace(std::string& s) {
-        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
+        s.erase(s.begin(), std::ranges::find_if(s, [](unsigned char ch) {
                     return !std::isspace(ch);
                 }));
     }
@@ -85,13 +87,13 @@ namespace threepp::utils {
     }
 
     inline std::string toLower(std::string s) {
-        std::transform(s.begin(), s.end(), s.begin(),
+        std::ranges::transform(s, s.begin(),
                        [](unsigned char c) { return std::tolower(c); });
         return s;
     }
 
     inline void toLowerInplace(std::string& s) {
-        std::transform(s.begin(), s.end(), s.begin(),
+        std::ranges::transform(s, s.begin(),
                        [](unsigned char c) { return std::tolower(c); });
     }
 

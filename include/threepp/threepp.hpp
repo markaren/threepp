@@ -28,11 +28,11 @@
 #include "threepp/core/Raycaster.hpp"
 
 #include "threepp/objects/Group.hpp"
+#include "threepp/objects/HUD.hpp"
 #include "threepp/objects/InstancedMesh.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/objects/Sprite.hpp"
-#include "threepp/objects/HUD.hpp"
 #include "threepp/objects/Text.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
@@ -41,5 +41,7 @@
 #include "threepp/renderers/GLRenderer.hpp"
 
 #include "threepp/loaders/loaders.hpp"
+
+#include "threepp/utils/TaskManager.hpp"
 
 #endif//THREEPP_THREEPP_HPP
