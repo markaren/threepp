@@ -38,6 +38,9 @@ Because fun.
 
 Use CMake for project configuration and building.
 
+Do note that you may also use a system installation of GLFW3 if you want or have issues with the bundled setup by passing
+`-DTHREEPP_USE_EXTERNAL_GLFW=ON` to CMake.
+
 ###### Windows
 ```shell
 cmake . -A x64 -B build -DCMAKE_BUILD_TYPE="Release"
