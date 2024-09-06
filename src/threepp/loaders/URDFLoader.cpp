@@ -12,6 +12,8 @@
 
 #include "pugixml.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 namespace {
@@ -48,7 +50,7 @@ namespace {
                 utils::parseFloat(diffuseArray[1]),
                 utils::parseFloat(diffuseArray[2]));
 
-        float alpha = utils::parseFloat(diffuseArray[3]);
+        const float alpha = utils::parseFloat(diffuseArray[3]);
         if (alpha < 1) {
             mtl->transparent = true;
             mtl->opacity = alpha;
@@ -101,7 +103,7 @@ namespace {
             bool packageFound = false;
             auto packagePath = basePath;
             for (int i = 0; i < 10; ++i) {
-                if (exists(packagePath / "package.xml")) {
+                if (exists(packagePath / "package.xml") || exists(packagePath / "source-information.json")) {
                     packageFound = true;
                     break;
                 }
@@ -111,7 +113,16 @@ namespace {
                 return "";
             }
 
-            return packagePath.parent_path().string() + "/" + fileName;
+            std::filesystem::path path = packagePath / fileName;
+            if (exists(path)) {
+                return path;
+            }
+            path = packagePath.parent_path() / fileName;
+            if (exists(path)) {
+                return path;
+            }
+
+            return "";
         }
 
         return basePath / fileName;
