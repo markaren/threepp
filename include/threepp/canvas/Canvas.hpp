@@ -41,6 +41,8 @@ namespace threepp {
         // returns false if application should quit, true otherwise
         bool animateOnce(const std::function<void()>& f);
 
+        [[nodiscard]] bool isOpen() const;
+
         void close();
 
         [[nodiscard]] void* windowPtr() const;

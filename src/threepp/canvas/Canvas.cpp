@@ -245,6 +245,7 @@ struct Canvas::Impl {
     bool animateOnce(const std::function<void()>& f) {
 
         if (close_ || glfwWindowShouldClose(window)) {
+            close_ = true;
             return false;
         }
 
@@ -374,6 +375,11 @@ void Canvas::animate(const std::function<void()>& f) {
 bool Canvas::animateOnce(const std::function<void()>& f) {
 
     return pimpl_->animateOnce(f);
+}
+
+bool Canvas::isOpen() const {
+
+    return !pimpl_->close_;
 }
 
 WindowSize Canvas::size() const {
