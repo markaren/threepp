@@ -457,18 +457,26 @@ if (THREEPP_WITH_GLFW)
 
         message("Using threepp's GLFW")
 
-        #https://github.com/raysan5/raylib/blob/master/cmake/GlfwImport.cmake
+        # https://github.com/microsoft/vcpkg/blob/master/ports/glfw3/portfile.cmake
+        if (UNIX AND NOT APPLE)
+            message("GLFW3 currently requires the following libraries from the system package manager:
+    xinerama
+    xcursor
+    xorg
+    libglu1-mesa
+    pkg-config
+
+These can be installed on Ubuntu systems via sudo apt install libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev pkg-config
+"
+            )
+        endif ()
+
+        # https://github.com/raysan5/raylib/blob/master/cmake/GlfwImport.cmake
         set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-        set(GLFW_BUILD_COCOA OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
-        if (THREEPP_EMBEDDED_GLFW_WITH_X11)
-            set(GLFW_BUILD_X11 ON CACHE BOOL "" FORCE)
-        else ()
-            set(GLFW_BUILD_X11 OFF CACHE BOOL "" FORCE)
-        endif ()
         set(GLFW_LIBRARY_TYPE "OBJECT" CACHE STRING "" FORCE)
         add_subdirectory("external/glfw")
 
