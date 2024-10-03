@@ -138,7 +138,7 @@ struct GLRenderer::Impl {
 
     gl::GLShadowMap shadowMap;
 
-    Impl(GLRenderer& scope, WindowSize size, const Parameters& parameters)
+    Impl(GLRenderer& scope, const std::pair<int, int>& size, const Parameters& parameters)
         : scope(scope), _size(size),
           cubemaps(scope),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
@@ -157,7 +157,7 @@ struct GLRenderer::Impl {
           _emptyScene(std::make_unique<Scene>()),
           onMaterialDispose(this) {
 
-        this->setViewport(0, 0, size.width(), size.height());
+        this->setViewport(0, 0, _size.width(), _size.height());
         this->setScissor(0, 0, _size.width(), _size.height());
     }
 
@@ -1103,11 +1103,12 @@ struct GLRenderer::Impl {
         state.unbindTexture();
     }
 
-    void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
+    void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
         const auto glFormat = gl::toGLFormat(format);
 
-        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width(), size.width(), glFormat, GL_UNSIGNED_BYTE, data);
+        // this was size.width(), size.width() before refactor.. I assume it was an error
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, GL_UNSIGNED_BYTE, data);
     }
 
     void copyTextureToImage(Texture& texture) {
@@ -1116,7 +1117,7 @@ struct GLRenderer::Impl {
 
         auto& image = texture.image();
         auto& data = image.data();
-        auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
+        const auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
         data.resize(newSize);
 
         glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
@@ -1162,7 +1163,7 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters) {
+GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
 
 #ifndef EMSCRIPTEN
     loadGlad();// if Glad has yet to be loaded, do it now
@@ -1338,7 +1339,7 @@ void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& text
     pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
-void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
+void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
     pimpl_->readPixels(position, size, format, data);
 }

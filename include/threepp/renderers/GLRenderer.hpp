@@ -73,7 +73,7 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
-        explicit GLRenderer(WindowSize size = {}, const Parameters& parameters = {});
+        explicit GLRenderer(std::pair<int, int> size = {}, const Parameters& parameters = {});
 
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
@@ -150,7 +150,7 @@ namespace threepp {
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
-        void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
+        void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data);
 
         // Experimental threepp function
         void copyTextureToImage(Texture& texture);

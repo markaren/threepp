@@ -49,7 +49,7 @@ void MapNode::loadData() {
         return;
     }
 
-    auto image = mapView->getProvider()->fetchTile(this->level, this->x, this->y);
+    const auto image = mapView->getProvider()->fetchTile(this->level, this->x, this->y);
 
     if (this->disposed) {
         return;

@@ -30,7 +30,7 @@ namespace {
         hudSprite4->center.set(1, 0);
         hudSprite4->scale.set(75, 75, 1);
 
-        hud.add(hudSprite1, HUD::Options().setNormalizedPosition({0, 1}).setMargin({}).onMouseUp([hudSprite1](int) {
+        hud.add(hudSprite1, HUD::Options().setNormalizedPosition({0, 1}).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 1" << std::endl;
         }));
         hud.add(hudSprite2, HUD::Options().setNormalizedPosition({1, 1}).setMargin({}).onMouseUp([](int) {
@@ -89,17 +89,17 @@ int main() {
     HUD hud(&canvas);
     createHudSprites(hud);
 
-    canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.aspect();
+    canvas.onWindowResize([&](WindowSize newSize) {
+        camera->aspect = newSize.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer.setSize(newSize);
 
-        hud.setSize(size);
+        hud.setSize(newSize);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](auto& pos) {
-        auto size = canvas.size();
+        const auto size = canvas.size();
         mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
     });
@@ -118,7 +118,7 @@ int main() {
         material->rotation += 1 * clock.getDelta();
 
         raycaster.setFromCamera(mouse, *camera);
-        auto intersects = raycaster.intersectObjects(sprites->children, true);
+        const auto intersects = raycaster.intersectObjects(sprites->children, true);
         if (!intersects.empty()) {
             const auto& intersection = intersects.front();
             helper->position.copy(intersection.point);

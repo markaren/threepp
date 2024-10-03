@@ -2,11 +2,11 @@
 #ifndef THREEPP_HUD_HPP
 #define THREEPP_HUD_HPP
 
-#include "threepp/canvas/WindowSize.hpp"
 #include "threepp/input/PeripheralsEventSource.hpp"
 
 #include <functional>
 #include <memory>
+#include <utility>
 
 namespace threepp {
 
@@ -70,13 +70,13 @@ namespace threepp {
                 return *this;
             }
 
-            void updateElement(Object3D& o, WindowSize size);
+            void updateElement(Object3D& o, std::pair<int, int> size);
 
         private:
             friend class HUD;
 
             Vector2 pos;
-            Vector2 margin_{5, 5};
+            Vector2 margin_;
             std::function<void(int)> onMouseDown_ = [](int) {};
             std::function<void(int)> onMouseUp_ = [](int) {};
 
@@ -84,7 +84,7 @@ namespace threepp {
             HorizontalAlignment horizontalAlignment_;
         };
 
-        explicit HUD(WindowSize size);
+        explicit HUD(std::pair<int, int> size);
         explicit HUD(PeripheralsEventSource* eventSource);
 
         void apply(GLRenderer& renderer);
@@ -95,7 +95,7 @@ namespace threepp {
 
         void remove(Object3D& object);
 
-        void setSize(WindowSize size);
+        void setSize(std::pair<int, int> size);
 
         void needsUpdate(Object3D& o);
 

@@ -6,9 +6,9 @@
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/loaders/FontLoader.hpp"
+#include "threepp/objects/HUD.hpp"
 #include "threepp/objects/Text.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
-#include "threepp/scenes/Scene.hpp"
 
 namespace threepp {
 
@@ -16,9 +16,9 @@ namespace threepp {
 
     public:
         explicit DebugMapProvider(GLRenderer* renderer)
-            : renderer(renderer), hud(WindowSize(resolution, resolution)) {
+            : renderer(renderer), hud({resolution, resolution}) {
 
-            auto opts = TextGeometry::Options(loader.defaultFont(), 25);
+            const auto opts = TextGeometry::Options(loader.defaultFont(), 25);
             text1 = Text2D::create(opts);
             text1->setColor(Color::white);
 
@@ -44,7 +44,7 @@ namespace threepp {
             renderer->getClearColor(oldColor);
             renderer->setClearColor(Color(Color::green).lerpHSL(Color::red, static_cast<float>(zoom - minZoom) / static_cast<float>(maxZoom - minZoom)));
 
-            auto oldSize = renderer->size();
+            const auto oldSize = renderer->size();
             renderer->setSize({resolution, resolution});
 
             std::vector<unsigned char> data(resolution * resolution * 4);
@@ -61,11 +61,11 @@ namespace threepp {
             renderer->setClearColor(oldColor);
             renderer->clear();
 
-            return Image(data, resolution, resolution);
+            return {data, resolution, resolution};
         }
 
     private:
-        int resolution = 256;
+        unsigned int resolution = 256;
 
         OrthographicCamera camera;
         GLRenderer* renderer;
