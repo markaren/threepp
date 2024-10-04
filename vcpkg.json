@@ -23,12 +23,6 @@
       "dependencies": [
         "physx"
       ]
-    },
-    "curl": {
-      "description": "Enable curl in examples",
-      "dependencies": [
-        "curl"
-      ]
     }
   }
 }
