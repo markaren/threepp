@@ -2,7 +2,7 @@
 #include "threepp/geometries/CircleGeometry.hpp"
 
 #include <cmath>
-#include <list>
+#include <vector>
 
 using namespace threepp;
 
@@ -11,10 +11,10 @@ CircleGeometry::CircleGeometry(const Params& params) {
 
     // buffers
 
-    std::list<unsigned int> indices;
+    std::vector<unsigned int> indices;
     std::vector<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
+    std::vector<float> normals;
+    std::vector<float> uvs;
 
     // helper variables
 

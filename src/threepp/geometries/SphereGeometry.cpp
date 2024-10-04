@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <list>
 #include <vector>
 
 using namespace threepp;
@@ -11,10 +10,10 @@ using namespace threepp;
 SphereGeometry::SphereGeometry(const Params& params)
     : radius(params.radius) {
 
-    std::list<unsigned int> indices;
-    std::list<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
+    std::vector<unsigned int> indices;
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> uvs;
 
     unsigned int widthSegments = std::max(3u, params.widthSegments);
     unsigned int heightSegments = std::max(2u, params.heightSegments);

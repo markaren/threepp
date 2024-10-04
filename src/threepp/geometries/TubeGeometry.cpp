@@ -3,7 +3,7 @@
 
 #include <cmath>
 #include <functional>
-#include <list>
+#include <vector>
 
 using namespace threepp;
 
@@ -21,10 +21,10 @@ TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
 
     // buffer
 
-    std::list<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
-    std::list<unsigned int> indices;
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> uvs;
+    std::vector<unsigned int> indices;
 
     // functions
 
