@@ -108,6 +108,8 @@ namespace threepp {
 
         void setViewport(int x, int y, int width, int height);
 
+        void setViewport(const std::pair<int, int>& pos, const std::pair<int ,int>& size);
+
         void getScissor(Vector4& target);
 
         void setScissor(const Vector4& v);

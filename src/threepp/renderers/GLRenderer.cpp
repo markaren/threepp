@@ -1242,12 +1242,17 @@ void GLRenderer::getViewport(Vector4& target) const {
 
 void GLRenderer::setViewport(const Vector4& v) {
 
-    setViewport(v.x, v.y, v.z, v.w);
+    pimpl_->setViewport(v.x, v.y, v.z, v.w);
 }
 
 void GLRenderer::setViewport(int x, int y, int width, int height) {
 
     pimpl_->setViewport(x, y, width, height);
+}
+
+void GLRenderer::setViewport(const std::pair<int, int>& pos, const std::pair<int, int>& size) {
+
+    pimpl_->setViewport(pos.first, pos.second, size.first, size.second);
 }
 
 void GLRenderer::getScissor(Vector4& target) {
@@ -1257,7 +1262,7 @@ void GLRenderer::getScissor(Vector4& target) {
 
 void GLRenderer::setScissor(const Vector4& v) {
 
-    setScissor(v.x, v.y, v.z, v.w);
+    pimpl_->setScissor(v.x, v.y, v.z, v.w);
 }
 
 void GLRenderer::setScissor(int x, int y, int width, int height) {
