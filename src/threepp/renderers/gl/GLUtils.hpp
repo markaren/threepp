@@ -25,7 +25,7 @@ namespace threepp::gl {
         return result;
     }
 
-    constexpr inline GLuint toGLFormat(Format p) {
+    constexpr GLuint toGLFormat(Format p) {
 
         switch (p) {
             case Format::Alpha:
@@ -34,6 +34,8 @@ namespace threepp::gl {
                 return GL_RGB;
             case Format::RGBA:
                 return GL_RGBA;
+            case Format::BGRA:
+                return GL_BGRA;
             case Format::Luminance:
                 return GL_LUMINANCE;
             case Format::LuminanceAlpha:
