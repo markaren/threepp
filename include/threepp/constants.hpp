@@ -142,6 +142,8 @@ namespace threepp {
         Alpha,
         RGB,
         RGBA,
+        BGR,
+        BGRA,
         Luminance,
         LuminanceAlpha,
         Depth,
