@@ -10,7 +10,7 @@ struct MyGui: ImguiContext {
     bool colorChanged = false;
 
     explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m)
-        : ImguiContext(canvas.windowPtr(), true) {
+        : ImguiContext(canvas.windowPtr()) {
         colorBuf_[0] = m.color.r;
         colorBuf_[1] = m.color.g;
         colorBuf_[2] = m.color.b;
@@ -145,6 +145,7 @@ int main() {
     });
 
     MyGui ui(canvas, *planeMaterial);
+    ui.makeDpiAware();
 
     Clock clock;
     canvas.animate([&]() {
