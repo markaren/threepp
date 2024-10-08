@@ -94,11 +94,11 @@ namespace threepp {
 
         [[nodiscard]] WindowSize size() const;
 
-        void setSize(std::pair<int, int> size);
+        void setSize(const std::pair<int, int>& size);
 
         void getDrawingBufferSize(Vector2& target) const;
 
-        void setDrawingBufferSize(std::pair<int, int> size, int pixelRatio);
+        void setDrawingBufferSize(const std::pair<int, int>& size, int pixelRatio);
 
         void getCurrentViewport(Vector4& target) const;
 
@@ -115,6 +115,8 @@ namespace threepp {
         void setScissor(const Vector4& v);
 
         void setScissor(int x, int y, int width, int height);
+
+        void setScissor(const std::pair<int, int>& pos, const std::pair<int, int>& size);
 
         [[nodiscard]] bool getScissorTest() const;
 

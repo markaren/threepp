@@ -1209,7 +1209,7 @@ WindowSize GLRenderer::size() const {
     return pimpl_->_size;
 }
 
-void GLRenderer::setSize(std::pair<int, int> size) {
+void GLRenderer::setSize(const std::pair<int, int>& size) {
 
     pimpl_->_size = size;
 
@@ -1221,7 +1221,7 @@ void GLRenderer::getDrawingBufferSize(Vector2& target) const {
     target.set(static_cast<float>(pimpl_->_size.width() * pimpl_->_pixelRatio), static_cast<float>(pimpl_->_size.height() * pimpl_->_pixelRatio)).floor();
 }
 
-void GLRenderer::setDrawingBufferSize(std::pair<int, int> size, int pixelRatio) {
+void GLRenderer::setDrawingBufferSize(const std::pair<int, int>& size, int pixelRatio) {
 
     pimpl_->_size = size;
 
@@ -1268,6 +1268,11 @@ void GLRenderer::setScissor(const Vector4& v) {
 void GLRenderer::setScissor(int x, int y, int width, int height) {
 
     pimpl_->setScissor(x, y, width, height);
+}
+
+void GLRenderer::setScissor(const std::pair<int, int>& pos, const std::pair<int, int >& size) {
+
+    pimpl_->setScissor(pos.first, pos.second, size.first, size.second);
 }
 
 bool GLRenderer::getScissorTest() const {
