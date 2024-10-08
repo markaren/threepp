@@ -83,7 +83,7 @@ namespace threepp {
 
         void dispose();
 
-        void transformUv(Vector2& uv) const;
+        // void transformUv(Vector2& uv) const;
 
         void needsUpdate();
 
