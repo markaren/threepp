@@ -4,7 +4,6 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
-#include "threepp/textures/CubeTexture.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 
@@ -202,8 +201,6 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
     }
 
     textureProperties->version = texture.version();
-
-    if (texture.onUpdate) texture.onUpdate.value()(texture);
 }
 
 void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& texture) {
@@ -379,9 +376,6 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
     }
 
     textureProperties->version = texture.version();
-    if (texture.onUpdate) {
-        texture.onUpdate.value()(texture);
-    }
 }
 
 void gl::GLTextures::setupFrameBufferTexture(

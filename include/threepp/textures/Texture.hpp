@@ -63,8 +63,6 @@ namespace threepp {
         Texture(Texture&&) = delete;
         Texture& operator=(Texture&&) = delete;
 
-        std::optional<std::function<void(Texture&)>> onUpdate;
-
         [[nodiscard]] const std::string& uuid() const;
 
         Image& image();
