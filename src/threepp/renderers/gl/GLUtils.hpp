@@ -34,6 +34,8 @@ namespace threepp::gl {
                 return GL_RGB;
             case Format::RGBA:
                 return GL_RGBA;
+            case Format::BGR:
+                return GL_BGR;
             case Format::BGRA:
                 return GL_BGRA;
             case Format::Luminance:
