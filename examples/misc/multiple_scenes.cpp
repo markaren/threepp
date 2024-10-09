@@ -93,12 +93,12 @@ int main() {
     canvas.addMouseListener(listener);
 
     canvas.animate([&]() {
-        auto size = canvas.size();
+        const auto size = canvas.size();
 
         renderer.setScissor(0, 0, sliderPos, size.height());
         renderer.render(sceneLeft, *camera);
 
-        renderer.setScissor(sliderPos, 0, size.width() - sliderPos,size.height());
+        renderer.setScissor(sliderPos, 0, size.width() - sliderPos, size.height());
         renderer.render(sceneRight, *camera);
     });
 }
