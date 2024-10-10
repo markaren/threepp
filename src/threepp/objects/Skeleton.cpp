@@ -143,7 +143,7 @@ Skeleton& Skeleton::computeBoneTexture() {
         boneMatrices[i] = this->boneMatrices[i];
     }
 
-    auto boneTexture = DataTexture::create(boneMatrices, sizei, sizei);
+    auto boneTexture = DataTexture<float>::create(boneMatrices, sizei, sizei);
     boneTexture->format = Format::RGBA;
     boneTexture->type = Type::Float;
 
