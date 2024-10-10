@@ -33,7 +33,6 @@ namespace threepp {
             bool generateMipmaps{false};
             bool depthBuffer{true};
             bool stencilBuffer{false};
-            std::shared_ptr<DepthTexture> depthTexture;
 
             Options() = default;
         };
