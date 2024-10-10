@@ -512,11 +512,7 @@ target_compile_features(threepp PUBLIC "cxx_std_20")
 if (UNIX)
     target_link_libraries(threepp PRIVATE pthread dl)
 endif ()
-if (APPLE)
-    target_link_libraries(threepp PRIVATE "-framework IOKit")
-    target_link_libraries(threepp PRIVATE "-framework Cocoa")
-    target_link_libraries(threepp PRIVATE "-framework OpenGL")
-endif ()
+
 target_include_directories(threepp
         PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>"
@@ -543,6 +539,11 @@ if (NOT DEFINED EMSCRIPTEN)
         target_link_libraries(threepp PRIVATE glfw::glfw)
     else ()
         target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")
+        if (APPLE)
+            target_link_libraries(threepp PRIVATE "-framework IOKit")
+            target_link_libraries(threepp PRIVATE "-framework Cocoa")
+            target_link_libraries(threepp PRIVATE "-framework OpenGL")
+        endif ()
     endif ()
 
 endif ()
