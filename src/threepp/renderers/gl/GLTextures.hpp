@@ -56,9 +56,6 @@ namespace threepp::gl {
 
         void setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget);
 
-        // Setup resources for a Depth Texture for a FBO (needs an extension)
-        void setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget);
-
         // Setup GL resources for a non-texture depth buffer
         void setupDepthRenderbuffer(GLRenderTarget* renderTarget);
 
