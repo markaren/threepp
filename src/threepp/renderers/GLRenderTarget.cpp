@@ -62,7 +62,6 @@ GLRenderTarget& GLRenderTarget::copy(const GLRenderTarget& source) {
 
     this->depthBuffer = source.depthBuffer;
     this->stencilBuffer = source.stencilBuffer;
-    this->depthTexture = source.depthTexture;
 
     return *this;
 }

@@ -1,7 +1,7 @@
 // https://github.com/mrdoob/three.js/blob/r129/src/renderers/WebGLRenderTarget.js
 
-#ifndef THREEPPGLRENDERTARGETHPP
-#define THREEPPGLRENDERTARGETHPP
+#ifndef THREEPP_GLRENDERTARGET_HPP
+#define THREEPP_GLRENDERTARGET_HPP
 
 #include "threepp/core/EventDispatcher.hpp"
 
@@ -12,8 +12,6 @@
 #include <optional>
 
 namespace threepp {
-
-    class DepthTexture;
 
     class GLRenderTarget: public EventDispatcher {
 
@@ -52,7 +50,6 @@ namespace threepp {
 
         bool depthBuffer;
         bool stencilBuffer;
-        std::shared_ptr<DepthTexture> depthTexture;
 
         GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
 
@@ -77,4 +74,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPPGLRENDERTARGETHPP
+#endif//THREEPP_GLRENDERTARGET_HPP
