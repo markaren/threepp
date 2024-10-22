@@ -307,6 +307,21 @@ Vector3& Vector3::clamp(const Vector3& min, const Vector3& max) {
     return *this;
 }
 
+Vector3& Vector3::clampLength(float min, float max) {
+
+    const auto length = this->length();
+
+    return this->divideScalar(length != 0 ? length : 1).multiplyScalar(std::max(min, std::min(max, length)));
+}
+
+Vector3& Vector3::clampScalar(float minVal, float maxVal) {
+    this->x = std::max(minVal, std::min(maxVal, this->x));
+    this->y = std::max(minVal, std::min(maxVal, this->y));
+    this->z = std::max(minVal, std::min(maxVal, this->z));
+
+    return *this;
+}
+
 Vector3& Vector3::floor() {
 
     this->x = std::floor(this->x);

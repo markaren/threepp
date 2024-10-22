@@ -95,6 +95,16 @@ TEST_CASE("angleTo") {
     CHECK(std::abs(_x.angleTo(Vector3(1, 1, 0)) - (math::PI / 4)) < 0.0000001);
 }
 
+TEST_CASE("clampScalar") {
+    Vector3 a ( - 0.01, 0.5, 1.5 );
+    Vector3 clamped( 0.1, 0.5, 1.0 );
+
+    a.clampScalar( 0.1, 1.0 );
+    CHECK(std::abs( a.x - clamped.x ) <= 0.001);
+    CHECK( std::abs( a.y - clamped.y ) <= 0.001);
+    CHECK( std::abs( a.z - clamped.z ) <= 0.001);
+}
+
 TEST_CASE("from arraylike") {
 
     std::array<float, 3> arr{1, 2, 3};
