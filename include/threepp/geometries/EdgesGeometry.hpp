@@ -3,7 +3,7 @@
 #ifndef THREEPP_EDGESGEOMETRY_HPP
 #define THREEPP_EDGESGEOMETRY_HPP
 
-#include <threepp/core/BufferGeometry.hpp>
+#include "threepp/core/BufferGeometry.hpp"
 
 namespace threepp {
 

@@ -2,6 +2,7 @@
 #include "threepp/math/Triangle.hpp"
 
 #include <cmath>
+#include <string>
 
 using namespace threepp;
 
@@ -20,6 +21,7 @@ const Vector3& Triangle::a() const {
 
     return a_;
 }
+
 const Vector3& Triangle::b() const {
 
     return b_;
@@ -128,27 +130,27 @@ void Triangle::getMidpoint(Vector3& target) {
 
 void Triangle::getNormal(Vector3& target) {
 
-    return Triangle::getNormal(this->a_, this->b_, this->c_, target);
+    return getNormal(this->a_, this->b_, this->c_, target);
 }
 
 void Triangle::getBarycoord(Vector3& point, Vector3& target) {
 
-    return Triangle::getBarycoord(point, this->a_, this->b_, this->c_, target);
+    return getBarycoord(point, this->a_, this->b_, this->c_, target);
 }
 
 void Triangle::getUV(const Vector3& point, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target) {
 
-    return Triangle::getUV(point, this->a_, this->b_, this->c_, uv1, uv2, uv3, target);
+    return getUV(point, this->a_, this->b_, this->c_, uv1, uv2, uv3, target);
 }
 
 bool Triangle::containsPoint(const Vector3& point) {
 
-    return Triangle::containsPoint(point, this->a_, this->b_, this->c_);
+    return containsPoint(point, this->a_, this->b_, this->c_);
 }
 
 bool Triangle::isFrontFacing(const Vector3& direction) {
 
-    return Triangle::isFrontFacing(this->a_, this->b_, this->c_, direction);
+    return isFrontFacing(this->a_, this->b_, this->c_, direction);
 }
 
 void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) {

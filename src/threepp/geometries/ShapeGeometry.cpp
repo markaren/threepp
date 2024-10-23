@@ -3,6 +3,7 @@
 #include "threepp/extras/ShapeUtils.hpp"
 
 #include <functional>
+#include <algorithm>
 
 using namespace threepp;
 

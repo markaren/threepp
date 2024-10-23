@@ -2,7 +2,6 @@
 #ifndef THREEPP_COLOR_HPP
 #define THREEPP_COLOR_HPP
 
-#include <cstdint>
 #include <ostream>
 
 namespace threepp {

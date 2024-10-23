@@ -108,11 +108,14 @@ namespace threepp {
 
     // Implementing get function template
     template<std::size_t N>
-    inline auto get(const Vector4& p) {
+    auto get(const Vector4& p) {
         if constexpr (N == 0) return p.x;
-        else if constexpr (N == 1) return p.y;
-        else if constexpr (N == 2) return p.z;
-        else if constexpr (N == 3) return p.w;
+        else if constexpr (N == 1)
+            return p.y;
+        else if constexpr (N == 2)
+            return p.z;
+        else if constexpr (N == 3)
+            return p.w;
     }
 
 }// namespace threepp

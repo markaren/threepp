@@ -5,7 +5,6 @@
 
 #include "threepp/math/Vector2.hpp"
 
-#include <algorithm>
 #include <vector>
 
 namespace threepp::shapeutils {

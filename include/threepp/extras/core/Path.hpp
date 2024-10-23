@@ -5,8 +5,6 @@
 
 #include "threepp/extras/core/CurvePath.hpp"
 
-#include <optional>
-
 namespace threepp {
 
     class Path: public CurvePath<Vector2> {

@@ -6,11 +6,6 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/interfaces.hpp"
 
-#include "threepp/math/Color.hpp"
-#include "threepp/textures/Texture.hpp"
-
-#include <optional>
-
 namespace threepp {
 
     class MeshBasicMaterial

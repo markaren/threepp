@@ -7,6 +7,7 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #include <fstream>
+#include <functional>
 #include <utility>
 
 using namespace threepp;

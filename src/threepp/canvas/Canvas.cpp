@@ -346,7 +346,7 @@ struct Canvas::Impl {
 
     static void drop_callback(GLFWwindow* w, int count, const char** paths) {
 
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
         std::vector<std::string> v;
         for (int i = 0; i < count; ++i) {
@@ -510,10 +510,10 @@ Canvas::Parameters& Canvas::Parameters::resizable(bool flag) {
 
 Canvas::Parameters& Canvas::Parameters::favicon(const std::filesystem::path& path) {
 
-    if (std::filesystem::exists(path)) {
+    if (exists(path)) {
         favicon_ = path;
     } else {
-        std::cerr << "Invalid favicon path: " << std::filesystem::absolute(path) << std::endl;
+        std::cerr << "Invalid favicon path: " << absolute(path) << std::endl;
     }
 
     return *this;

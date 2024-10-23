@@ -3,8 +3,6 @@
 #ifndef THREEPP_WATER_HPP
 #define THREEPP_WATER_HPP
 
-#include <utility>
-
 #include "threepp/objects/Mesh.hpp"
 
 namespace threepp {

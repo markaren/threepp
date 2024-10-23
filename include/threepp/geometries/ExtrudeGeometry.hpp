@@ -6,7 +6,6 @@
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/core/Curve.hpp"
 
-
 namespace threepp {
 
     class Shape;
