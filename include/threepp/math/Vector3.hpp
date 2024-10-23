@@ -303,7 +303,7 @@ namespace threepp {
 
     // Implementing get function template
     template<std::size_t N>
-    inline auto get(const Vector3& p) {
+    auto get(const Vector3& p) {
         if constexpr (N == 0) return p.x;
         else if constexpr (N == 1)
             return p.y;

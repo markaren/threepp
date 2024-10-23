@@ -12,7 +12,7 @@
 
 #include "threepp/textures/Image.hpp"
 
-#include <functional>
+#include <memory>
 #include <optional>
 
 namespace threepp {

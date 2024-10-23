@@ -9,7 +9,6 @@
 #include "threepp/objects/ObjectWithMaterials.hpp"
 
 #include <memory>
-#include <utility>
 #include <vector>
 
 namespace threepp {

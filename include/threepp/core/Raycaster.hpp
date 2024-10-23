@@ -9,7 +9,6 @@
 #include "threepp/math/Vector2.hpp"
 
 #include <limits>
-#include <memory>
 #include <vector>
 
 namespace threepp {

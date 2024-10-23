@@ -5,7 +5,6 @@
 
 #include "threepp/core/Object3D.hpp"
 
-#include <utility>
 
 namespace threepp {
 

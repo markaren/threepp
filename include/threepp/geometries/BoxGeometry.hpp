@@ -5,7 +5,6 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
-
 namespace threepp {
 
     class BoxGeometry: public BufferGeometry {
