@@ -141,9 +141,15 @@ std::string BoxGeometry::type() const {
 
     return "BoxGeometry";
 }
-std::shared_ptr<BoxGeometry> BoxGeometry::create(const BoxGeometry::Params& params) {
+
+std::shared_ptr<BoxGeometry> BoxGeometry::create(const Params& params) {
 
     return std::shared_ptr<BoxGeometry>(new BoxGeometry(params));
+}
+
+std::shared_ptr<BoxGeometry> BoxGeometry::create(const Vector3& size, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments) {
+
+    return create(Params(size.x, size.y, size.z, widthSegments, heightSegments, depthSegments));
 }
 
 std::shared_ptr<BoxGeometry> BoxGeometry::create(float width, float height, float depth, unsigned int widthSegments, unsigned int heightSegments, unsigned int depthSegments) {
