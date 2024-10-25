@@ -154,6 +154,8 @@ namespace threepp {
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
+        [[nodiscard]] std::vector<unsigned char> readRGBPixels();
+
         void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data);
 
         // Experimental threepp function
@@ -164,6 +166,8 @@ namespace threepp {
         [[nodiscard]] const gl::GLInfo& info() const;
 
         [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const;
+
+        void writeFramebuffer(const std::filesystem::path& filename);
 
         ~GLRenderer();
 

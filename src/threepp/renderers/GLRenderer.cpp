@@ -31,13 +31,18 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
+#include "threepp/utils/ImageUtils.hpp"
+
 #ifndef EMSCRIPTEN
 #include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
 #endif
 
-#include <cmath>
+#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+#endif
 
 
 using namespace threepp;
@@ -1103,6 +1108,17 @@ struct GLRenderer::Impl {
         state.unbindTexture();
     }
 
+    std::vector<unsigned char> readRGBPixels() {
+
+        const auto [width, height] = _size;
+
+        std::vector<unsigned char> data(width * height * 3);
+
+        readPixels({0, 0}, _size, Format::RGB, data.data());
+
+        return data;
+    }
+
     void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
         const auto glFormat = gl::toGLFormat(format);
@@ -1137,6 +1153,35 @@ struct GLRenderer::Impl {
         _scissor.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
 
         state.scissor(_currentScissor.copy(_scissor).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
+    }
+
+    void writeFramebuffer(const std::filesystem::path& filename) {
+        auto ext = filename.extension().string();
+        std::ranges::transform(ext, ext.begin(), ::tolower);
+        std::vector<unsigned char> data;
+        const auto [width, height] = _size;
+        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
+            data = readRGBPixels();
+            flipImage(data, 3, width, height);
+        } else {
+            throw std::runtime_error("Unsupported file format");
+        }
+        if (!exists(filename.parent_path())) {
+            create_directories(filename.parent_path());
+        }
+        bool sucess = false;
+        if (ext == ".png") {
+            sucess = stbi_write_png(filename.string().c_str(), width, height, 3, data.data(), width * 3);
+        }
+        if (ext == ".jpg" || ext == ".jpeg") {
+            sucess = stbi_write_jpg(filename.string().c_str(), width, height, 3, data.data(), 100);
+        }
+        if (ext == ".bmp") {
+            sucess = stbi_write_bmp(filename.string().c_str(), width, height, 3, data.data());
+        }
+        if (sucess) {
+            std::cout << "Saved file to " << absolute(filename) << std::endl;
+        }
     }
 
     void dispose() {
@@ -1270,7 +1315,7 @@ void GLRenderer::setScissor(int x, int y, int width, int height) {
     pimpl_->setScissor(x, y, width, height);
 }
 
-void GLRenderer::setScissor(const std::pair<int, int>& pos, const std::pair<int, int >& size) {
+void GLRenderer::setScissor(const std::pair<int, int>& pos, const std::pair<int, int>& size) {
 
     pimpl_->setScissor(pos.first, pos.second, size.first, size.second);
 }
@@ -1349,6 +1394,11 @@ void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& text
     pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
+std::vector<unsigned char> GLRenderer::readRGBPixels() {
+
+    return pimpl_->readRGBPixels();
+}
+
 void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
     pimpl_->readPixels(position, size, format, data);
@@ -1387,6 +1437,11 @@ GLRenderTarget* GLRenderer::getRenderTarget() {
 std::optional<unsigned int> GLRenderer::getGlTextureId(Texture& texture) const {
 
     return pimpl_->getGlTextureId(texture);
+}
+
+void GLRenderer::writeFramebuffer(const std::filesystem::path& filename) {
+
+    pimpl_->writeFramebuffer(filename);
 }
 
 GLRenderer::~GLRenderer() = default;
