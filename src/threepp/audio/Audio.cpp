@@ -2,7 +2,7 @@
 #include "threepp/audio/Audio.hpp"
 
 
-#ifndef STB_IMAGE_IMPLEMENTATION
+#ifndef MINIAUDIO_IMPLEMENTATION
 
 #if defined(__GNUC__) || defined(__clang__)
 // Temporarily disable specific warnings
