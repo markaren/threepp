@@ -155,3 +155,38 @@ jobs:
         run: |
           cmake . -B build -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
+
+  linux-emscripten:
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04 ]
+        compiler_version: [ 11 ]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config
+
+      - uses: mymindstorm/setup-emsdk@v14
+
+      - name: Configure and build
+        run: |
+          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EM_CACHE_FOLDER}}/libexec/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake --build build
+
+      - name: Test
+        run: |
+          cd build/tests
+          ctest --output-on-failure
