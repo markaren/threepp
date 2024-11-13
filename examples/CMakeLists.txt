@@ -5,7 +5,7 @@ include(LibConfig.cmake)
 add_subdirectory(libs)
 
 add_example(NAME "demo" LINK_IMGUI WEB WEB_EMBED
-        "../data/fonts@data/fonts"
+        "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
 )
 
 add_subdirectory(animation)
