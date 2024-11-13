@@ -1,6 +1,6 @@
 
 add_example(NAME "geometries" WEB WEB_EMBED
-        "../data/textures/uv_grid_opengl.jpg@/data/textures/uv_grid_opengl.jpg"
+        "${PROJECT_SOURCE_DIR}/data/textures/uv_grid_opengl.jpg@/data/textures/uv_grid_opengl.jpg"
 )
 add_example(NAME "lathe_geometry" WEB)
 add_example(NAME "tube_geometry" WEB)
