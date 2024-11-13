@@ -1128,7 +1128,10 @@ struct GLRenderer::Impl {
     }
 
     void copyTextureToImage(Texture& texture) {
-
+#ifdef __EMSCRIPTEN__
+        std::cerr << "[GLRenderer] copyTextureToImage not available with Emscripten" << std::endl;
+        return;
+#endif
         textures.setTexture2D(texture, 0);
 
         auto& image = texture.image();
@@ -1136,10 +1139,10 @@ struct GLRenderer::Impl {
         const auto newSize = image.width * image.height * (texture.format == Format::RGB || texture.format == Format::BGR ? 3 : 4);
         data.resize(newSize);
 
-        #ifndef __EMSCRIPTEN__
+
         // Only run this on desktop OpenGL, not in WebGL
         glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
-        #endif
+
 
         state.unbindTexture();
     }
