@@ -185,8 +185,3 @@ jobs:
         run: |
           cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EM_CACHE_FOLDER}}/libexec/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
-
-      - name: Test
-        run: |
-          cd build/tests
-          ctest --output-on-failure
