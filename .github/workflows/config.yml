@@ -156,7 +156,9 @@ jobs:
           cmake . -B build -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
 
+
   linux-emscripten:
+
     runs-on: ${{ matrix.os }}
     env:
       CC: gcc-${{ matrix.compiler_version }}
@@ -180,8 +182,11 @@ jobs:
           pkg-config
 
       - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.71
+          actions-cache-folder: 'emsdk-cache'
 
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EM_CACHE_FOLDER}}/libexec/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
