@@ -56,7 +56,7 @@ cmake --build build
 However, some of the examples (and headers) require additional dependencies. 
 To make use of all features and to enable/build all examples, the use of [vcpkg](https://vcpkg.io/en/index.html) is encouraged.
 
-#### vcpkg (using manifest mode)
+#### Using vcpkg for getting optional dependecies (using manifest mode)
 
 Call CMake with `-DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcpkg.cmake`
 
