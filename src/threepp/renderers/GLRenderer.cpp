@@ -1172,8 +1172,12 @@ struct GLRenderer::Impl {
         } else {
             throw std::runtime_error("Unsupported file format");
         }
-        if (!exists(filename.parent_path())) {
-            create_directories(filename.parent_path());
+        if (filename.has_parent_path() && !exists(filename.parent_path())) {
+            std::error_code ec;
+            create_directories(filename.parent_path(), ec);
+            if (ec) {
+                std::cerr << "Error creating directories: " << ec.message() << '\n';
+            }
         }
         bool sucess = false;
         if (ext == ".png") {
@@ -1186,7 +1190,7 @@ struct GLRenderer::Impl {
             sucess = stbi_write_bmp(filename.string().c_str(), width, height, 3, data.data());
         }
         if (sucess) {
-            std::cout << "Saved file to " << absolute(filename) << std::endl;
+            std::cout << "Saved framebuffer to '" << absolute(filename) << "'" << std::endl;
         }
     }
 
