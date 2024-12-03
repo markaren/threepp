@@ -5,6 +5,7 @@
 #include "threepp/extras/core/Shape.hpp"
 #include "threepp/math/MathUtils.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 
