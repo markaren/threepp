@@ -36,6 +36,20 @@ namespace threepp {
         Vector3();
         Vector3(float x, float y, float z);
 
+        Vector3(const Vector3& other) = default;
+
+        // enable implicit conversions from Vector3 like objects
+        template<typename T>
+            requires requires(T t) {
+                { t.x } -> std::convertible_to<float>;
+                { t.y } -> std::convertible_to<float>;
+                { t.z } -> std::convertible_to<float>;
+            }
+        Vector3(const T& other)
+            : x(static_cast<float>(other.x)),
+              y(static_cast<float>(other.y)),
+              z(static_cast<float>(other.z)) {}
+
         // Sets the x, y and z components of this vector.
         Vector3& set(float x, float y, float z);
 

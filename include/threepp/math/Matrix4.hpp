@@ -24,6 +24,13 @@ namespace threepp {
                 0.f, 0.f, 0.f, 1.f};
 
         Matrix4() = default;
+        Matrix4(const std::array<float, 16>& elements);
+
+        Matrix4(const Matrix4&) = default;
+
+        operator std::array<float, 16>() const {
+            return elements;
+        }
 
         float& operator[](unsigned int index);
 
