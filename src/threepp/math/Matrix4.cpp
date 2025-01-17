@@ -13,6 +13,8 @@
 
 using namespace threepp;
 
+Matrix4::Matrix4(const std::array<float, 16>& elements): elements(elements) {}
+
 float& Matrix4::operator[](unsigned int index) {
 
     if (index >= 16) throw std::runtime_error("index out of bounds: " + std::to_string(index));
