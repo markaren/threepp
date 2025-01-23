@@ -22,6 +22,13 @@ float& Matrix4::operator[](unsigned int index) {
     return elements[index];
 }
 
+const float& Matrix4::operator[](unsigned int index) const {
+
+    if (index >= 16) throw std::runtime_error("index out of bounds: " + std::to_string(index));
+
+    return elements[index];
+}
+
 Matrix4& Matrix4::set(float n11, float n12, float n13, float n14, float n21, float n22, float n23, float n24, float n31,
                       float n32, float n33, float n34, float n41, float n42, float n43, float n44) {
 
