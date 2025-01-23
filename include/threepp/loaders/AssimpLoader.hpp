@@ -12,6 +12,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <assimp/version.h>
 
 #include <filesystem>
 #include <sstream>
@@ -22,6 +23,22 @@ namespace threepp {
     class AssimpLoader: public Loader<Group> {
 
     public:
+        struct AssimpVersion {
+            unsigned int major;
+            unsigned int minor;
+            unsigned int patch;
+
+            friend std::ostream& operator<<(std::ostream& os, const AssimpVersion& v) {
+                os << v.major << "." << v.minor << "." << v.patch;
+                return os;
+            }
+        };
+
+        [[nodiscard]] static AssimpVersion getVersion() {
+            return {aiGetVersionMajor(), aiGetVersionMinor(), aiGetVersionPatch()};
+        }
+
+
         std::shared_ptr<Group> load(const std::filesystem::path& path) override {
 
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
