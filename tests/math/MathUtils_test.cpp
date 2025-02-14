@@ -4,6 +4,7 @@
 
 #include "threepp/math/MathUtils.hpp"
 
+#include <cmath>
 #include <regex>
 
 using namespace threepp;
