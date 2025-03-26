@@ -46,7 +46,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
-    camera->position.set(float(maxAmount), float(maxAmount), float(maxAmount));
+    camera->position.set(static_cast<float>(maxAmount), static_cast<float>(maxAmount), static_cast<float>(maxAmount));
 
     OrbitControls controls{*camera, canvas};
 
@@ -58,7 +58,6 @@ int main() {
     auto geometry = IcosahedronGeometry::create(0.5f, 2);
     auto mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(maxAmount, 3)));
     mesh->instanceMatrix()->setUsage(DrawUsage::Dynamic);
-    mesh->setCount(static_cast<int>(std::pow(amount, 3)));
     setupInstancedMesh(*mesh, amount);
     scene->add(mesh);
 
