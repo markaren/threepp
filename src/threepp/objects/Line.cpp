@@ -125,7 +125,7 @@ void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
             const auto distance = raycaster.ray.origin.distanceTo(interRay);
 
-            if (distance < raycaster.near || distance > raycaster.far) continue;
+            if (distance < raycaster.nearPlane || distance > raycaster.farPlane) continue;
 
             Intersection intersection;
             intersection.distance = distance;
@@ -154,7 +154,7 @@ void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
             const auto distance = raycaster.ray.origin.distanceTo(interRay);
 
-            if (distance < raycaster.near || distance > raycaster.far) continue;
+            if (distance < raycaster.nearPlane || distance > raycaster.farPlane) continue;
 
             Intersection intersection;
             intersection.distance = distance;

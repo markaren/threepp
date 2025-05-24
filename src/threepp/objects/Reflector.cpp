@@ -111,7 +111,7 @@ struct Reflector::Impl {
             virtualCamera.up.applyMatrix4(rotationMatrix);
             virtualCamera.up.reflect(normal);
             virtualCamera.lookAt(target);
-            virtualCamera.far = camera->far;// Used in WebGLBackground
+            virtualCamera.farPlane = camera->farPlane;// Used in WebGLBackground
 
             virtualCamera.updateMatrixWorld();
             virtualCamera.projectionMatrix.copy(camera->projectionMatrix);// Update the texture matrix

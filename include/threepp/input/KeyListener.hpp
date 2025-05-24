@@ -119,7 +119,7 @@ namespace threepp {
         TAB,
         BACKSPACE,
         INSERT,
-        DELETE,
+        DEL,
         RIGHT,
         LEFT,
         DOWN,

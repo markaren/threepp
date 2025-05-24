@@ -845,7 +845,7 @@ struct GLRenderer::Impl {
 
             if (gl::GLCapabilities::instance().logarithmicDepthBuffer) {
 
-                p_uniforms->setValue("logDepthBufFC", 2.f / (std::log(camera->far + 1.f) / math::LN2));
+                p_uniforms->setValue("logDepthBufFC", 2.f / (std::log(camera->farPlane + 1.f) / math::LN2));
             }
 
             if (_currentCamera != camera) {

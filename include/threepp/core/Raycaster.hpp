@@ -34,8 +34,8 @@ namespace threepp {
     class Raycaster {
 
     public:
-        float near;
-        float far;
+        float nearPlane;
+        float farPlane;
 
         Ray ray;
         Camera* camera;
@@ -47,8 +47,7 @@ namespace threepp {
         };
         Params params;
 
-        explicit Raycaster(const Vector3& origin = Vector3(), const Vector3& direction = Vector3(), float near = 0, float far = std::numeric_limits<float>::infinity())
-            : near(near), far(far), ray(origin, direction), camera(nullptr) {}
+        explicit Raycaster(const Vector3& origin = Vector3(), const Vector3& direction = Vector3(), float _near = 0, float _far = std::numeric_limits<float>::infinity());
 
         void set(const Vector3& origin, const Vector3& direction);
 

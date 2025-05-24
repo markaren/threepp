@@ -3,9 +3,8 @@
 
 using namespace threepp;
 
-
-Camera::Camera(float near, float far)
-    : near(near), far(far) {}
+Camera::Camera(float _near, float _far)
+    : nearPlane(_near), farPlane(_far) {}
 
 void Camera::getWorldDirection(Vector3& target) {
 

@@ -25,7 +25,7 @@ namespace threepp {
 
         explicit OrthographicCamera(float left = -1, float right = 1,
                                     float top = 1, float bottom = -1,
-                                    float near = 0.1f, float far = 2000);
+                                    float nearPlane = 0.1f, float farPlane = 2000);
 
         // Sets an offset in a larger viewing frustum.
         // This is useful for multi-window or multi-monitor/multi-machine setups.

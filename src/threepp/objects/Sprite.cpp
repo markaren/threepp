@@ -155,7 +155,7 @@ void Sprite::raycast(const Raycaster& raycaster, std::vector<Intersection>& inte
 
     auto distance = raycaster.ray.origin.distanceTo(_intersectPoint);
 
-    if (distance < raycaster.near || distance > raycaster.far) return;
+    if (distance < raycaster.nearPlane || distance > raycaster.farPlane) return;
 
     Intersection intersection{};
     intersection.distance = distance;

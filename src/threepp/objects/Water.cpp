@@ -205,7 +205,7 @@ struct Water::Impl {
             mirrorCamera->up.applyMatrix4(rotationMatrix);
             mirrorCamera->up.reflect(normal);
             mirrorCamera->lookAt(target);
-            mirrorCamera->far = camera->far;// Used in WebGLBackground
+            mirrorCamera->farPlane = camera->farPlane;// Used in WebGLBackground
 
             mirrorCamera->updateMatrixWorld();
             mirrorCamera->projectionMatrix.copy(camera->projectionMatrix);// Update the texture matrix
