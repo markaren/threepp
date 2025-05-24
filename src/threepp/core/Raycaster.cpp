@@ -37,6 +37,11 @@ namespace {
 }// namespace
 
 
+Raycaster::Raycaster(const Vector3 &origin, const Vector3 &direction, float _near, float _far): nearPlane(_near), farPlane(_far), ray(origin, direction), camera(nullptr) {
+
+}
+
+
 void Raycaster::set(const Vector3& origin, const Vector3& direction) {
 
     // direction is assumed to be normalized (for accurate distance calculations)
@@ -79,7 +84,7 @@ void Raycaster::setFromCamera(const Vector2& coords, Camera& camera) {
 
     } else if (camera.is<OrthographicCamera>()) {
 
-        this->ray.origin.set(coords.x, coords.y, (camera.near + camera.far) / (camera.near - camera.far)).unproject(camera);// set origin in plane of camera
+        this->ray.origin.set(coords.x, coords.y, (camera.nearPlane + camera.farPlane) / (camera.nearPlane - camera.farPlane)).unproject(camera);// set origin in plane of camera
         this->ray.direction.set(0, 0, -1).transformDirection(*camera.matrixWorld);
         this->camera = &camera;
 

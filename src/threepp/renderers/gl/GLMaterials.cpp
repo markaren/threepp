@@ -463,8 +463,8 @@ struct GLMaterials::Impl {
             auto& f = std::get<Fog>(fog);
             uniforms.at("fogColor").value<Color>().copy(f.color);
 
-            uniforms.at("fogNear").value<float>() = f.near;
-            uniforms.at("fogFar").value<float>() = f.far;
+            uniforms.at("fogNear").value<float>() = f.nearPlane;
+            uniforms.at("fogFar").value<float>() = f.farPlane;
         } else {
 
             auto& f = std::get<FogExp2>(fog);

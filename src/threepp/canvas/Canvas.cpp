@@ -128,7 +128,7 @@ namespace {
             case GLFW_KEY_TAB: return Key::TAB;
             case GLFW_KEY_BACKSPACE: return Key::BACKSPACE;
             case GLFW_KEY_INSERT: return Key::INSERT;
-            case GLFW_KEY_DELETE: return Key::DELETE;
+            case GLFW_KEY_DELETE: return Key::DEL;
 
             default: return Key::UNKNOWN;
 

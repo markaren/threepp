@@ -34,7 +34,7 @@ namespace {
 
             const auto distance = raycaster.ray.origin.distanceTo(intersectPoint);
 
-            if (distance < raycaster.near || distance > raycaster.far) return;
+            if (distance < raycaster.nearPlane || distance > raycaster.farPlane) return;
 
             Intersection intersection;
             intersection.distance = distance;

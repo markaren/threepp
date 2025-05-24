@@ -40,7 +40,7 @@ namespace {
 
         const auto distance = raycaster.ray.origin.distanceTo(_intersectionPointWorld);
 
-        if (distance < raycaster.near || distance > raycaster.far) return std::nullopt;
+        if (distance < raycaster.nearPlane || distance > raycaster.farPlane) return std::nullopt;
 
         Intersection intersection{};
         intersection.distance = distance;
