@@ -26,8 +26,8 @@ int main() {
     light->angle = math::PI / 9;
 
     light->castShadow = true;
-    light->shadow->camera->near = 10;
-    light->shadow->camera->far = 100;
+    light->shadow->camera->nearPlane = 10;
+    light->shadow->camera->farPlane = 100;
     light->shadow->mapSize.x = 1024;
     light->shadow->mapSize.y = 1024;
 

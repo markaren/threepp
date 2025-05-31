@@ -27,8 +27,8 @@ int main() {
     spotLight->penumbra = 0.2;
     spotLight->position.set(2, 3, 3);
     spotLight->castShadow = true;
-    spotLight->shadow->camera->near = 3;
-    spotLight->shadow->camera->far = 10;
+    spotLight->shadow->camera->nearPlane = 3;
+    spotLight->shadow->camera->farPlane = 10;
     spotLight->shadow->mapSize.x = 1024;
     spotLight->shadow->mapSize.y = 1024;
     scene->add(spotLight);
@@ -36,8 +36,8 @@ int main() {
     auto dirLight = DirectionalLight::create(0x55505a, 1.f);
     dirLight->position.set(0, 3, 0);
     dirLight->castShadow = true;
-    dirLight->shadow->camera->near = 1;
-    dirLight->shadow->camera->far = 10;
+    dirLight->shadow->camera->nearPlane = 1;
+    dirLight->shadow->camera->farPlane = 10;
 
     dirLight->shadow->camera->as<OrthographicCamera>()->right = 1;
     dirLight->shadow->camera->as<OrthographicCamera>()->left = -1;
