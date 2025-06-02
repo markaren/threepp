@@ -146,6 +146,7 @@ set(publicHeaders
         "threepp/math/Quaternion.hpp"
 
         "threepp/objects/Bone.hpp"
+        "threepp/objects/BVH.hpp"
         "threepp/objects/Group.hpp"
         "threepp/objects/HUD.hpp"
         "threepp/objects/InstancedMesh.hpp"
@@ -370,6 +371,7 @@ set(sources
         "threepp/scenes/Fog.cpp"
         "threepp/scenes/FogExp2.cpp"
 
+        "threepp/objects/BVH.cpp"
         "threepp/objects/Group.cpp"
         "threepp/objects/HUD.cpp"
         "threepp/objects/Line.cpp"
