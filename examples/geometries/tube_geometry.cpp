@@ -58,7 +58,7 @@ int main() {
     const auto tubeObject1 = createTubeObject();
     const auto tubeObject2 = createTubeObject();
 
-    tubeObject1->position.x = -5;
+    tubeObject1->position.x = -15;
     tubeObject2->position.x = 5;
 
     scene->add(tubeObject1);
@@ -70,7 +70,15 @@ int main() {
     BVH bvh2;
     bvh2.build(*tubeObject2->geometry());
 
-    auto result = bvh1.intersect(bvh2);
+    std::vector<std::pair<Box3, Vector3>> boxes;
+    bvh1.collectBoxes(boxes);
+
+    for (const auto& box : boxes) {
+        auto size = box.first.getSize();
+        auto boxMesh = Mesh::create(BoxGeometry::create(size.x, size.y, size.z), MeshBasicMaterial::create({{"color", 0x00ff00}, {"wireframe", true}}));
+        boxMesh->position.copy(box.second);
+        tubeObject1->add(boxMesh);
+    }
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
