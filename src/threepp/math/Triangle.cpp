@@ -123,37 +123,37 @@ float Triangle::getArea() const {
     return _v0.cross(_v1).length() * 0.5f;
 }
 
-void Triangle::getMidpoint(Vector3& target) {
+void Triangle::getMidpoint(Vector3& target) const  {
 
     target.addVectors(this->a_, this->b_).add(this->c_).multiplyScalar(1.0f / 3);
 }
 
-void Triangle::getNormal(Vector3& target) {
+void Triangle::getNormal(Vector3& target) const {
 
     return getNormal(this->a_, this->b_, this->c_, target);
 }
 
-void Triangle::getBarycoord(Vector3& point, Vector3& target) {
+void Triangle::getBarycoord(Vector3& point, Vector3& target) const {
 
     return getBarycoord(point, this->a_, this->b_, this->c_, target);
 }
 
-void Triangle::getUV(const Vector3& point, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target) {
+void Triangle::getUV(const Vector3& point, const Vector2& uv1, const Vector2& uv2, const Vector2& uv3, Vector2& target) const {
 
     return getUV(point, this->a_, this->b_, this->c_, uv1, uv2, uv3, target);
 }
 
-bool Triangle::containsPoint(const Vector3& point) {
+bool Triangle::containsPoint(const Vector3& point) const {
 
     return containsPoint(point, this->a_, this->b_, this->c_);
 }
 
-bool Triangle::isFrontFacing(const Vector3& direction) {
+bool Triangle::isFrontFacing(const Vector3& direction) const {
 
     return isFrontFacing(this->a_, this->b_, this->c_, direction);
 }
 
-void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) {
+void Triangle::closestPointToPoint(const Vector3& p, Vector3& target) const {
 
     const auto a = this->a_, b = this->b_, c = this->c_;
     float v, w;
