@@ -425,7 +425,7 @@ namespace threepp {
 
                 float opacity;
                 if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity)) {
-                    material.transparent = true;
+                    material.transparent = (opacity < 1.f);
                     material.opacity = opacity;
                 }
             }
