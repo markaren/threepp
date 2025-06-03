@@ -1,9 +1,7 @@
 
 #include "threepp/threepp.hpp"
-#include "threepp/objects/BVH.hpp"
 
 #include <cmath>
-#include <iostream>
 
 using namespace threepp;
 
@@ -25,23 +23,6 @@ namespace {
         float scale;
     };
 
-    std::shared_ptr<Object3D> createTubeObject() {
-        auto curve = std::make_shared<CustomSineCurve>(10.f);
-
-        const auto geometry = TubeGeometry::create(curve);
-        const auto material = MeshBasicMaterial::create({{"color", 0xff0000},
-                                                         {"side", Side::Double}});
-        auto mesh = Mesh::create(geometry, material);
-
-        auto lineMaterial = LineBasicMaterial::create({{"depthTest", false},
-                                                       {"opacity", 0.5f},
-                                                       {"transparent", true}});
-        auto line = LineSegments::create(WireframeGeometry::create(*geometry), lineMaterial);
-        mesh->add(line);
-
-        return mesh;
-    }
-
 }// namespace
 
 int main() {
@@ -55,30 +36,19 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    const auto tubeObject1 = createTubeObject();
-    const auto tubeObject2 = createTubeObject();
+    auto curve = std::make_shared<CustomSineCurve>(10.f);
 
-    tubeObject1->position.x = -15;
-    tubeObject2->position.x = 5;
+    const auto geometry = TubeGeometry::create(curve);
+    const auto material = MeshBasicMaterial::create({{"color", 0xff0000},
+                                                     {"side", Side::Double}});
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
 
-    scene->add(tubeObject1);
-    scene->add(tubeObject2);
-
-    BVH bvh1;
-    bvh1.build(*tubeObject1->geometry());
-
-    BVH bvh2;
-    bvh2.build(*tubeObject2->geometry());
-
-    std::vector<std::pair<Box3, Vector3>> boxes;
-    bvh1.collectBoxes(boxes);
-
-    for (const auto& box : boxes) {
-        auto size = box.first.getSize();
-        auto boxMesh = Mesh::create(BoxGeometry::create(size.x, size.y, size.z), MeshBasicMaterial::create({{"color", 0x00ff00}, {"wireframe", true}}));
-        boxMesh->position.copy(box.second);
-        tubeObject1->add(boxMesh);
-    }
+    auto lineMaterial = LineBasicMaterial::create({{"depthTest", false},
+                                                   {"opacity", 0.5f},
+                                                   {"transparent", true}});
+    auto line = LineSegments::create(WireframeGeometry::create(*geometry), lineMaterial);
+    mesh->add(line);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -88,20 +58,12 @@ int main() {
 
 
     Clock clock;
-    float rotationSpeed = 1.0f;
-    const auto count = tubeObject1->geometry()->getIndex()->count();
+    const auto count = geometry->getIndex()->count();
     canvas.animate([&]() {
-        tubeObject1->rotation.y += rotationSpeed * clock.getDelta();
-        tubeObject2->rotation.y -= rotationSpeed * clock.getDelta();
+        mesh->rotation.y += 1 * clock.getDelta();
 
-        const auto map = math::mapLinear(std::sin(clock.elapsedTime), -1, 1, 0, static_cast<float>(count));
-        tubeObject1->geometry()->setDrawRange(0, static_cast<int>(map));
-
-        if (BVH::intersects(bvh1, *tubeObject1->matrixWorld, bvh2, *tubeObject2->matrixWorld)) {
-            tubeObject2->material()->as<MaterialWithColor>()->color = Color(0x00ff00);
-        } else {
-            tubeObject2->material()->as<MaterialWithColor>()->color = Color(0xff0000);
-        }
+        auto map = math::mapLinear(std::sin(clock.elapsedTime), -1, 1, 0, static_cast<float>(count));
+        geometry->setDrawRange(0, static_cast<int>(map));
 
         renderer.render(*scene, *camera);
     });
