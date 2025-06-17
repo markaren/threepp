@@ -14,17 +14,17 @@ namespace {
 
     void updateGroupGeometry(Mesh& mesh, const CylinderGeometry::Params& params) {
 
-        auto g = CylinderGeometry::create(params);
-        mesh.setGeometry(g);
+        const auto geometry = CylinderGeometry::create(params);
+        mesh.setGeometry(geometry);
 
         mesh.children[0]->removeFromParent();
-        mesh.add(createWireframe(*g));
+        mesh.add(createWireframe(*geometry));
     }
 
     std::shared_ptr<Mesh> createMesh(const CylinderGeometry::Params& params) {
 
-        auto geometry = CylinderGeometry::create(params);
-        auto material = MeshBasicMaterial::create({{"side", Side::Double}});
+        const auto geometry = CylinderGeometry::create(params);
+        const auto material = MeshBasicMaterial::create({{"side", Side::Double}});
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
@@ -39,14 +39,14 @@ int main() {
     Canvas canvas("CylinderGeometry", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
 
-    auto scene = Scene::create();
+    const auto scene = Scene::create();
     scene->background = Color::blue;
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
+    const auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100);
     camera->position.z = 5;
 
     CylinderGeometry::Params params{};
 
-    auto mesh = createMesh(params);
+    const auto mesh = createMesh(params);
     scene->add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -81,7 +81,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         mesh->rotation.y += 0.8f * dt;
         mesh->rotation.x += 0.5f * dt;

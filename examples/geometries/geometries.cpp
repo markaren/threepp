@@ -9,14 +9,14 @@ using namespace threepp;
 
 namespace {
 
-    struct CustomSineCurve: Curve3 {
+    struct CustomSineCurve final: Curve3 {
 
         explicit CustomSineCurve(float scale): scale(scale) {}
 
         void getPoint(float t, Vector3& target) const override {
-            float tx = t * 3 - 1.5f;
-            float ty = std::sin(math::TWO_PI * t);
-            float tz = 0;
+            const float tx = t * 3 - 1.5f;
+            const float ty = std::sin(math::TWO_PI * t);
+            const float tz = 0;
 
             target.set(tx, ty, tz).multiplyScalar(scale);
         }
@@ -28,7 +28,7 @@ namespace {
     auto createBox(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = BoxGeometry::create();
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -36,7 +36,7 @@ namespace {
     auto createSphere(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = SphereGeometry::create(0.5f);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -44,7 +44,7 @@ namespace {
     auto createPlane(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = PlaneGeometry::create();
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -52,7 +52,7 @@ namespace {
     auto createCylinder(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = CylinderGeometry::create(0.5f, 0.5f, 1.f);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -60,7 +60,7 @@ namespace {
     auto createCone(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = ConeGeometry::create(0.5f, 1.f);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -68,7 +68,7 @@ namespace {
     auto createRing(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = RingGeometry::create(0.25f, 0.5f);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -76,7 +76,7 @@ namespace {
     auto createCircle(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = CircleGeometry::create(0.5f);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -84,7 +84,7 @@ namespace {
     auto createTorus(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = TorusGeometry::create(0.5, 0.1);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -92,16 +92,16 @@ namespace {
     auto createTorusKnot(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
         const auto geometry = TorusKnotGeometry::create(0.5, 0.1);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
 
     auto createTube(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-        auto curve = std::make_shared<CustomSineCurve>(0.5f);
+        const auto curve = std::make_shared<CustomSineCurve>(0.5f);
         const auto geometry = TubeGeometry::create(curve, 32, 0.1f);
         auto mesh = Mesh::create(geometry, m1);
-        auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
+        const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);
         return mesh;
     }
@@ -118,11 +118,11 @@ int main() {
     camera->position.z = 8;
 
     TextureLoader tl;
-    auto material = MeshBasicMaterial::create();
+    const auto material = MeshBasicMaterial::create();
     material->map = tl.load("data/textures/uv_grid_opengl.jpg");
     material->side = Side::Double;
 
-    auto lineMaterial = LineBasicMaterial::create();
+    const auto lineMaterial = LineBasicMaterial::create();
     lineMaterial->color = Color::black;
     lineMaterial->opacity = 0.8f;
     lineMaterial->transparent = true;
@@ -168,9 +168,9 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
-        for (auto& m : meshes) {
+        for (const auto& m : meshes) {
             m->rotation.y += 1 * dt;
         }
 

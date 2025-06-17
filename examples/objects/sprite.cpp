@@ -10,23 +10,23 @@ namespace {
 
     void createHudSprites(HUD& hud) {
         TextureLoader tl;
-        auto hudMaterial = SpriteMaterial::create();
+        const auto hudMaterial = SpriteMaterial::create();
         hudMaterial->map = tl.load("data/textures/sprite0.png");
         hudMaterial->map->offset.set(0.5, 0.5);
 
-        auto hudSprite1 = Sprite::create(hudMaterial);
+        const auto hudSprite1 = Sprite::create(hudMaterial);
         hudSprite1->center.set(0, 1);
         hudSprite1->scale.set(75, 75, 1);
 
-        auto hudSprite2 = Sprite::create(hudMaterial);
+        const auto hudSprite2 = Sprite::create(hudMaterial);
         hudSprite2->center.set(1, 1);
         hudSprite2->scale.set(75, 75, 1);
 
-        auto hudSprite3 = Sprite::create(hudMaterial);
+        const auto hudSprite3 = Sprite::create(hudMaterial);
         hudSprite3->center.set(0, 0);
         hudSprite3->scale.set(75, 75, 1);
 
-        auto hudSprite4 = Sprite::create(hudMaterial);
+        const auto hudSprite4 = Sprite::create(hudMaterial);
         hudSprite4->center.set(1, 0);
         hudSprite4->scale.set(75, 75, 1);
 

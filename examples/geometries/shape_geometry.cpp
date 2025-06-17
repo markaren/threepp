@@ -64,26 +64,26 @@ auto createSmiley() {
 }
 
 std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
-    auto shapeGeometry = ShapeGeometry::create(shape);
+    const auto shapeGeometry = ShapeGeometry::create(shape);
     shapeGeometry->center();
     shapeGeometry->scale(scale, scale, scale);
 
     auto shapeMesh = Mesh::create(shapeGeometry, MeshPhongMaterial::create({{"color", Color::orange},
                                                                             {"side", Side::Double}}));
-    auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
+    const auto wireframe = LineSegments::create(WireframeGeometry::create(*shapeGeometry));
     wireframe->position.z = -5;
     shapeMesh->add(wireframe);
 
-    auto edges = LineSegments::create(EdgesGeometry::create(*shapeGeometry));
+    const auto edges = LineSegments::create(EdgesGeometry::create(*shapeGeometry));
     edges->position.z = -10;
     shapeMesh->add(edges);
 
     ExtrudeGeometry::Options opts;
     opts.depth = 3;
-    auto extrudeGeometry = ExtrudeGeometry::create({shape}, opts);
+    const auto extrudeGeometry = ExtrudeGeometry::create({shape}, opts);
     extrudeGeometry->center();
     extrudeGeometry->scale(scale, scale, scale);
-    auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create({{"color", Color::orange}, {"flatShading", true}}));
+    const auto extrudeMesh = Mesh::create(extrudeGeometry, MeshPhongMaterial::create({{"color", Color::orange}, {"flatShading", true}}));
     extrudeMesh->position.z = 10;
 
     shapeMesh->add(extrudeMesh);
@@ -135,7 +135,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         group->rotation.y += 0.8f * dt;
 
