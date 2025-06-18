@@ -24,9 +24,9 @@ namespace {
     };
 
     auto makeTubeMesh() {
-        const auto curve = std::make_shared<CustomSineCurve>(10.f);
+        auto curve = std::make_unique<CustomSineCurve>(10.f);
 
-        const auto geometry = TubeGeometry::create(curve);
+        const auto geometry = TubeGeometry::create(std::move(curve));
         const auto material = MeshBasicMaterial::create(
                 {{"color", 0xff0000},
                  {"side", Side::Double}});

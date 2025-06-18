@@ -98,8 +98,8 @@ namespace {
     }
 
     auto createTube(const std::shared_ptr<Material>& m1, const std::shared_ptr<LineBasicMaterial>& m2) {
-        const auto curve = std::make_shared<CustomSineCurve>(0.5f);
-        const auto geometry = TubeGeometry::create(curve, 32, 0.1f);
+        auto curve = std::make_unique<CustomSineCurve>(0.5f);
+        const auto geometry = TubeGeometry::create(std::move(curve), 32, 0.1f);
         auto mesh = Mesh::create(geometry, m1);
         const auto wire = LineSegments::create(WireframeGeometry::create(*geometry), m2);
         mesh->add(wire);

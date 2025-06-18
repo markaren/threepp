@@ -7,7 +7,7 @@
 
 using namespace threepp;
 
-TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
+TubeGeometry::TubeGeometry(std::unique_ptr<Curve3> path, const Params& params)
     : radius(params.radius), path(std::move(path)) {
 
     this->frames = FrenetFrames::compute(*this->path, params.tubularSegments, params.closed);
@@ -135,14 +135,14 @@ std::string TubeGeometry::type() const {
     return "TubeGeometry";
 }
 
-std::shared_ptr<TubeGeometry> TubeGeometry::create(const std::shared_ptr<Curve3>& path, const Params& params) {
+std::shared_ptr<TubeGeometry> TubeGeometry::create(std::unique_ptr<Curve3> path, const Params& params) {
 
-    return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, params));
+    return std::shared_ptr<TubeGeometry>(new TubeGeometry(std::move(path), params));
 }
 
-std::shared_ptr<TubeGeometry> TubeGeometry::create(const std::shared_ptr<Curve3>& path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed) {
+std::shared_ptr<TubeGeometry> TubeGeometry::create(std::unique_ptr<Curve3> path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed) {
 
-    return create(path, Params(tubularSegments, radius, radialSegments, closed));
+    return create(std::move(path), Params(tubularSegments, radius, radialSegments, closed));
 }
 
 TubeGeometry::Params::Params(unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed)
