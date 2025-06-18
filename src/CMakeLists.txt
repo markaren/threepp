@@ -343,6 +343,7 @@ set(sources
         "threepp/math/Frustum.cpp"
         "threepp/math/ImprovedNoise.cpp"
         "threepp/math/Line3.cpp"
+        "threepp/math/Lut.cpp"
         "threepp/math/MathUtils.cpp"
         "threepp/math/Matrix3.cpp"
         "threepp/math/Matrix4.cpp"
@@ -394,6 +395,7 @@ set(sources
         "threepp/textures/DataTexture3D.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
+        "threepp/utils/ImageUtils.cpp"
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/TaskManager.cpp"
 

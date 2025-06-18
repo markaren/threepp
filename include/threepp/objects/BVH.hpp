@@ -31,7 +31,7 @@ namespace threepp {
         // Simple true/false intersection test with another BVH
         [[nodiscard]] static bool intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2);
 
-        void collectBoxes(std::vector<std::pair<Box3, Vector3>>& boxes) const {
+        void collectBoxes(std::vector<Box3>& boxes) const {
             collectBoxes(root.get(), boxes);
         }
 
@@ -60,10 +60,7 @@ namespace threepp {
         // Tests intersection between two BVH nodes
         void intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vector<std::pair<int, int>>& results) const;
 
-        // Simple triangle-triangle intersection test
-        static bool trianglesIntersect(const Triangle& a, const Triangle& b);
-
-        static void collectBoxes(const BVHNode* node, std::vector<std::pair<Box3, Vector3>>& boxes);
+        static void collectBoxes(const BVHNode* node, std::vector<Box3>& boxes);
     };
 
 

@@ -327,7 +327,8 @@ void BVH::intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vec
     }
 }
 
-bool BVH::trianglesIntersect(const Triangle& a, const Triangle& b) {
+// Simple triangle-triangle intersection test
+bool trianglesIntersect(const Triangle& a, const Triangle& b) {
     // For simplicity, we're using a bounding box test
     // A more accurate triangle-triangle intersection test could be implemented
     Box3 boxA, boxB;
@@ -337,10 +338,10 @@ bool BVH::trianglesIntersect(const Triangle& a, const Triangle& b) {
     return boxA.intersectsBox(boxB);
 }
 
-void BVH::collectBoxes(const BVHNode* node, std::vector<std::pair<Box3, Vector3>>& boxes) {
+void BVH::collectBoxes(const BVHNode* node, std::vector<Box3>& boxes) {
     if (!node) return;
     Box3 bb = node->boundingBox;
-    boxes.emplace_back(bb, bb.getCenter());
+    boxes.emplace_back(bb);
     collectBoxes(node->left.get(), boxes);
     collectBoxes(node->right.get(), boxes);
 }
