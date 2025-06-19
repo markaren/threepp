@@ -30,7 +30,7 @@ std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int dept
     }
 
     // Stopping criteria: max depth reached or few enough triangles
-    if (depth >= maxSubdivisions || indices.size() <= maxTrianglesPerNode) {
+    if (depth >= maxSubdivisions || static_cast<int>(indices.size()) <= maxTrianglesPerNode) {
         node->triangleIndices = indices;
         return node;
     }
