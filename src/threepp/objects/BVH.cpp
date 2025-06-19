@@ -44,7 +44,7 @@ std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int dept
     if (size.z > size[axis]) axis = 2;
 
     // Sort triangle indices along the longest axis
-    std::sort(indices.begin(), indices.end(), [this, axis](int a, int b) {
+    std::ranges::sort(indices, [this, axis](int a, int b) {
         Vector3 centerA, centerB;
         triangles[a].getMidpoint(centerA);
         triangles[b].getMidpoint(centerB);
@@ -52,7 +52,7 @@ std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int dept
     });
 
     // Split triangles into two groups
-    auto mid = indices.size() / 2;
+    const auto mid = static_cast<int>(indices.size() / 2);
     std::vector<int> leftIndices(indices.begin(), indices.begin() + mid);
     std::vector<int> rightIndices(indices.begin() + mid, indices.end());
 
@@ -74,9 +74,9 @@ void BVH::build(const BufferGeometry& geom) {
     if (geom.hasIndex()) {
         const auto index = geom.getIndex();
         for (int i = 0; i < index->count(); i += 3) {
-            int a = index->getX(i);
-            int b = index->getX(i + 1);
-            int c = index->getX(i + 2);
+            const auto a = index->getX(i);
+            const auto b = index->getX(i + 1);
+            const auto c = index->getX(i + 2);
 
             Triangle tri(
                     Vector3(posAttr->getX(a), posAttr->getY(a), posAttr->getZ(a)),
@@ -84,7 +84,7 @@ void BVH::build(const BufferGeometry& geom) {
                     Vector3(posAttr->getX(c), posAttr->getY(c), posAttr->getZ(c)));
 
             triangles.push_back(tri);
-            indices.push_back(triangles.size() - 1);
+            indices.push_back(static_cast<int>(triangles.size()) - 1);
         }
     } else {
         for (int i = 0; i < posAttr->count(); i += 3) {
@@ -94,7 +94,7 @@ void BVH::build(const BufferGeometry& geom) {
                     Vector3(posAttr->getX(i + 2), posAttr->getY(i + 2), posAttr->getZ(i + 2)));
 
             triangles.push_back(tri);
-            indices.push_back(triangles.size() - 1);
+            indices.push_back(static_cast<int>(triangles.size()) - 1);
         }
     }
 
@@ -158,7 +158,7 @@ std::vector<int> BVH::intersect(const Sphere& sphere) const {
             for (int idx : node->triangleIndices) {
                 Vector3 closestPoint;
                 triangles[idx].closestPointToPoint(sphere.center, closestPoint);
-                float distSq = closestPoint.distanceToSquared(sphere.center);
+                const float distSq = closestPoint.distanceToSquared(sphere.center);
 
                 if (distSq <= (sphere.radius * sphere.radius)) {
                     results.push_back(idx);
@@ -301,8 +301,8 @@ void BVH::intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vec
     Vector3 sizeA, sizeB;
     nodeA->boundingBox.getSize(sizeA);
     nodeB->boundingBox.getSize(sizeB);
-    float volumeA = sizeA.x * sizeA.y * sizeA.z;
-    float volumeB = sizeB.x * sizeB.y * sizeB.z;
+    const float volumeA = sizeA.x * sizeA.y * sizeA.z;
+    const float volumeB = sizeB.x * sizeB.y * sizeB.z;
 
     if (volumeA < volumeB) {
         // A is smaller, descend A
