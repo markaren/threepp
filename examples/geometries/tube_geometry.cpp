@@ -1,7 +1,10 @@
 
 #include "threepp/threepp.hpp"
 
+#include "threepp/objects/BVH.hpp"
+
 #include <cmath>
+#include <iostream>
 
 using namespace threepp;
 
@@ -55,9 +58,35 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    auto curve = makeTubeMesh();
-    const auto geometry = curve->geometry();
-    scene->add(curve);
+    auto tube = makeTubeMesh();
+    const auto geometry = tube->geometry();
+    scene->add(tube);
+
+    BVH bvh;
+    bvh.build(*tube->geometry());
+
+    std::vector<Box3> boxes;
+    bvh.collectBoxes(boxes);
+
+    Group boxesGroup;
+    boxesGroup.visible = false; // Start with boxes hidden
+    for (const auto& box : boxes) {
+        auto helper = Box3Helper::create(box);
+        box.getCenter(helper->position);
+        boxesGroup.add(helper);
+    }
+    tube->add(boxesGroup);
+
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](const KeyEvent& evt) {
+        static bool show = boxesGroup.visible;
+        if (evt.key == Key::B) {
+            show = !show;
+            boxesGroup.visible = show;
+        }
+    });
+    std::cout << "Press 'B' to toggle BVH visibility." << std::endl;
+
+    canvas.addKeyListener(keyAdapter);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -68,7 +97,7 @@ int main() {
     Clock clock;
     const auto count = static_cast<float>(geometry->getIndex()->count());
     canvas.animate([&]() {
-        curve->rotation.y += 1 * clock.getDelta();
+        tube->rotation.y += 1 * clock.getDelta();
 
         const auto map = math::mapLinear(std::sin(clock.elapsedTime), -1, 1, 0, count);
         geometry->setDrawRange(0, static_cast<int>(map));
