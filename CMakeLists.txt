@@ -10,6 +10,7 @@ option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
+option(THREEPP_CORE_ONLY "Build only the core library (no window or rendering)" OFF)
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
 cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFINED EMSCRIPTEN" ON)
@@ -37,13 +38,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
 # ==============================================================================
 
 
-if (DEFINED EMSCRIPTEN)
+if (DEFINED EMSCRIPTEN AND NOT THREEPP_CORE_ONLY)
     if ("${CMAKE_SYSTEM}" MATCHES "Linux" OR "${CMAKE_SYSTEM}" MATCHES "Darwin-*")
         find_package(OpenGL REQUIRED)
     endif ()
 else ()
 
-    if (THREEPP_USE_EXTERNAL_GLFW)
+    if (THREEPP_USE_EXTERNAL_GLFW AND NOT THREEPP_CORE_ONLY)
         find_package(glfw3 CONFIG REQUIRED)
 
         if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
@@ -60,7 +61,7 @@ endif ()
 
 add_subdirectory(src)
 
-if (THREEPP_BUILD_EXAMPLES)
+if (THREEPP_BUILD_EXAMPLES AND NOT THREEPP_CORE_ONLY)
     add_subdirectory(examples)
 endif ()
 

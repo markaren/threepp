@@ -2,7 +2,7 @@
 
 include(CMakeFindDependencyMacro)
 
-if (NOT DEFINED EMSCRIPTEN AND @THREEPP_USE_EXTERNAL_GLFW@)
+if (NOT DEFINED EMSCRIPTEN AND @THREEPP_USE_EXTERNAL_GLFW@ AND NOT @THREEPP_CORE_ONLY@)
     find_dependency(glfw3 CONFIG)
 
     if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
