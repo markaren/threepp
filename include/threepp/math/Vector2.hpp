@@ -170,15 +170,9 @@ namespace threepp {
             array[offset + 1] = this->y;
         }
 
-        operator std::pair<int, int>() const {
+        operator std::pair<int, int>() const;
 
-            return {static_cast<int>(x), static_cast<int>(y)};
-        }
-
-        operator std::pair<float, float>() const {
-
-            return {x, y};
-        }
+        operator std::pair<float, float>() const;
 
         friend std::ostream& operator<<(std::ostream& os, const Vector2& v) {
             os << "Vector2(x=" << v.x << ", y=" << v.y << ")";
@@ -190,7 +184,8 @@ namespace threepp {
     template<std::size_t N>
     auto get(const Vector2& p) {
         if constexpr (N == 0) return p.x;
-        else if constexpr (N == 1) return p.y;
+        else if constexpr (N == 1)
+            return p.y;
     }
 
 }// namespace threepp
