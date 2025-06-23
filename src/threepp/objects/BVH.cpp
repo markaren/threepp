@@ -1,5 +1,7 @@
 #include "threepp/objects/BVH.hpp"
 
+#include "threepp/core/BufferGeometry.hpp"
+
 #include <algorithm>
 #include <functional>
 
@@ -261,6 +263,10 @@ bool BVH::intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matr
     };
 
     return testNodes(b1.root.get(), b2.root.get());
+}
+
+void BVH::collectBoxes(std::vector<Box3>& boxes) const {
+    collectBoxes(root.get(), boxes);
 }
 
 void BVH::intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vector<std::pair<int, int>>& results) const {

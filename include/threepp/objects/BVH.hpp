@@ -7,10 +7,12 @@
 #include <memory>
 #include <vector>
 
-#include "threepp/core/BufferGeometry.hpp"
+#include "threepp/math/Box3.hpp"
 #include "threepp/math/Triangle.hpp"
 
 namespace threepp {
+
+    class BufferGeometry;
 
     class BVH {
 
@@ -31,9 +33,7 @@ namespace threepp {
         // Simple true/false intersection test with another BVH
         [[nodiscard]] static bool intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2);
 
-        void collectBoxes(std::vector<Box3>& boxes) const {
-            collectBoxes(root.get(), boxes);
-        }
+        void collectBoxes(std::vector<Box3>& boxes) const;
 
         [[nodiscard]] const BufferGeometry* getGeometry() const;
 
