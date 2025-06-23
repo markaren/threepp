@@ -5,10 +5,6 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
-        "threepp/canvas/Canvas.hpp"
-        "threepp/canvas/Monitor.hpp"
-        "threepp/canvas/WindowSize.hpp"
-
         "threepp/controls/DragControls.hpp"
         "threepp/controls/FlyControls.hpp"
         "threepp/controls/OrbitControls.hpp"
@@ -191,17 +187,6 @@ set(publicHeaders
         "threepp/lights/SpotLight.hpp"
         "threepp/lights/SpotLightShadow.hpp"
 
-        "threepp/renderers/GLRenderer.hpp"
-        "threepp/renderers/GLRenderTarget.hpp"
-
-        "threepp/renderers/gl/GLInfo.hpp"
-        "threepp/renderers/gl/GLShadowMap.hpp"
-        "threepp/renderers/gl/GLState.hpp"
-
-        "threepp/renderers/shaders/ShaderChunk.hpp"
-        "threepp/renderers/shaders/ShaderLib.hpp"
-        "threepp/renderers/shaders/UniformsLib.hpp"
-
 )
 
 set(publicHeadersFull)
@@ -212,31 +197,6 @@ endforeach ()
 set(privateHeaders
 
         "threepp/materials/MeshDistanceMaterial.hpp"
-
-        "threepp/renderers/GLCubeRenderTarget.hpp"
-
-        "threepp/renderers/gl/Buffer.hpp"
-        "threepp/renderers/gl/GLAttributes.hpp"
-        "threepp/renderers/gl/GLBackground.hpp"
-        "threepp/renderers/gl/GLBindingStates.hpp"
-        "threepp/renderers/gl/GLBufferRenderer.hpp"
-        "threepp/renderers/gl/GLCapabilities.hpp"
-        "threepp/renderers/gl/GLCubeMaps.hpp"
-        "threepp/renderers/gl/GLClipping.hpp"
-        "threepp/renderers/gl/GLGeometries.hpp"
-        "threepp/renderers/gl/GLLights.hpp"
-        "threepp/renderers/gl/GLMaterials.hpp"
-        "threepp/renderers/gl/GLMorphTargets.hpp"
-        "threepp/renderers/gl/GLObjects.hpp"
-        "threepp/renderers/gl/GLProperties.hpp"
-        "threepp/renderers/gl/GLProgram.hpp"
-        "threepp/renderers/gl/GLPrograms.hpp"
-        "threepp/renderers/gl/GLRenderLists.hpp"
-        "threepp/renderers/gl/GLRenderStates.hpp"
-        "threepp/renderers/gl/GLTextures.hpp"
-        "threepp/renderers/gl/GLUniforms.hpp"
-        "threepp/renderers/gl/GLUtils.hpp"
-        "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/RegexUtil.hpp"
 )
@@ -399,33 +359,85 @@ set(sources
         "threepp/utils/StringUtils.cpp"
         "threepp/utils/TaskManager.cpp"
 
-        "threepp/renderers/GLRenderer.cpp"
-        "threepp/renderers/GLRenderTarget.cpp"
-
-        "threepp/renderers/gl/GLAttributes.cpp"
-        "threepp/renderers/gl/GLBackground.cpp"
-        "threepp/renderers/gl/GLBindingStates.cpp"
-        "threepp/renderers/gl/GLBufferRenderer.cpp"
-        "threepp/renderers/gl/GLClipping.cpp"
-        "threepp/renderers/gl/GLCubeMaps.cpp"
-        "threepp/renderers/gl/GLGeometries.cpp"
-        "threepp/renderers/gl/GLInfo.cpp"
-        "threepp/renderers/gl/GLLights.cpp"
-        "threepp/renderers/gl/GLObjects.cpp"
-        "threepp/renderers/gl/GLProgram.cpp"
-        "threepp/renderers/gl/GLPrograms.cpp"
-        "threepp/renderers/gl/GLMaterials.cpp"
-        "threepp/renderers/gl/GLRenderLists.cpp"
-        "threepp/renderers/gl/GLRenderStates.cpp"
-        "threepp/renderers/gl/GLShadowMap.cpp"
-        "threepp/renderers/gl/GLState.cpp"
-        "threepp/renderers/gl/GLTextures.cpp"
-        "threepp/renderers/gl/GLUniforms.cpp"
-        "threepp/renderers/gl/ProgramParameters.cpp"
-
-        "threepp/renderers/shaders/ShaderLib.cpp"
-
 )
+
+if (NOT THREEPP_CORE_ONLY)
+
+    list(APPEND publicHeaders
+
+            "threepp/canvas/Monitor.hpp"
+            "threepp/canvas/WindowSize.hpp"
+
+            "threepp/renderers/GLRenderer.hpp"
+            "threepp/renderers/GLRenderTarget.hpp"
+
+            "threepp/renderers/gl/GLInfo.hpp"
+            "threepp/renderers/gl/GLShadowMap.hpp"
+            "threepp/renderers/gl/GLState.hpp"
+
+            "threepp/renderers/shaders/ShaderChunk.hpp"
+            "threepp/renderers/shaders/ShaderLib.hpp"
+            "threepp/renderers/shaders/UniformsLib.hpp"
+    )
+
+
+    list(APPEND privateHeaders
+
+            "threepp/renderers/GLCubeRenderTarget.hpp"
+
+            "threepp/renderers/gl/Buffer.hpp"
+            "threepp/renderers/gl/GLAttributes.hpp"
+            "threepp/renderers/gl/GLBackground.hpp"
+            "threepp/renderers/gl/GLBindingStates.hpp"
+            "threepp/renderers/gl/GLBufferRenderer.hpp"
+            "threepp/renderers/gl/GLCapabilities.hpp"
+            "threepp/renderers/gl/GLCubeMaps.hpp"
+            "threepp/renderers/gl/GLClipping.hpp"
+            "threepp/renderers/gl/GLGeometries.hpp"
+            "threepp/renderers/gl/GLLights.hpp"
+            "threepp/renderers/gl/GLMaterials.hpp"
+            "threepp/renderers/gl/GLMorphTargets.hpp"
+            "threepp/renderers/gl/GLObjects.hpp"
+            "threepp/renderers/gl/GLProperties.hpp"
+            "threepp/renderers/gl/GLProgram.hpp"
+            "threepp/renderers/gl/GLPrograms.hpp"
+            "threepp/renderers/gl/GLRenderLists.hpp"
+            "threepp/renderers/gl/GLRenderStates.hpp"
+            "threepp/renderers/gl/GLTextures.hpp"
+            "threepp/renderers/gl/GLUniforms.hpp"
+            "threepp/renderers/gl/GLUtils.hpp"
+            "threepp/renderers/gl/UniformUtils.hpp"
+    )
+
+
+    list(APPEND sources
+
+            "threepp/renderers/GLRenderer.cpp"
+            "threepp/renderers/GLRenderTarget.cpp"
+
+            "threepp/renderers/gl/GLAttributes.cpp"
+            "threepp/renderers/gl/GLBackground.cpp"
+            "threepp/renderers/gl/GLBindingStates.cpp"
+            "threepp/renderers/gl/GLBufferRenderer.cpp"
+            "threepp/renderers/gl/GLClipping.cpp"
+            "threepp/renderers/gl/GLCubeMaps.cpp"
+            "threepp/renderers/gl/GLGeometries.cpp"
+            "threepp/renderers/gl/GLInfo.cpp"
+            "threepp/renderers/gl/GLLights.cpp"
+            "threepp/renderers/gl/GLObjects.cpp"
+            "threepp/renderers/gl/GLProgram.cpp"
+            "threepp/renderers/gl/GLPrograms.cpp"
+            "threepp/renderers/gl/GLMaterials.cpp"
+            "threepp/renderers/gl/GLRenderLists.cpp"
+            "threepp/renderers/gl/GLRenderStates.cpp"
+            "threepp/renderers/gl/GLShadowMap.cpp"
+            "threepp/renderers/gl/GLState.cpp"
+            "threepp/renderers/gl/GLTextures.cpp"
+            "threepp/renderers/gl/GLUniforms.cpp"
+            "threepp/renderers/gl/ProgramParameters.cpp"
+
+            "threepp/renderers/shaders/ShaderLib.cpp")
+endif ()
 
 if (THREEPP_WITH_SVG)
     list(APPEND publicHeaders
@@ -438,7 +450,7 @@ if (THREEPP_WITH_SVG)
     )
 endif ()
 
-if (THREEPP_WITH_AUDIO)
+if (THREEPP_WITH_AUDIO AND NOT THREEPP_CORE_ONLY)
     list(APPEND publicHeaders
             "threepp/audio/Audio.hpp"
     )
@@ -448,7 +460,7 @@ if (THREEPP_WITH_AUDIO)
     )
 endif ()
 
-if (THREEPP_WITH_GLFW)
+if (THREEPP_WITH_GLFW AND NOT THREEPP_CORE_ONLY)
     list(APPEND publicHeaders
             "threepp/canvas/Canvas.hpp"
     )
@@ -492,7 +504,7 @@ These can be installed on Ubuntu systems via sudo apt install libxinerama-dev li
     endif ()
 endif ()
 
-if (NOT DEFINED EMSCRIPTEN)
+if (NOT DEFINED EMSCRIPTEN AND NOT THREEPP_CORE_ONLY)
     list(APPEND privateHeaders
             "threepp/utils/LoadGlad.hpp"
     )
@@ -502,12 +514,14 @@ if (NOT DEFINED EMSCRIPTEN)
     )
 endif ()
 
-include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
+if (NOT THREEPP_CORE_ONLY)
+    include("${PROJECT_SOURCE_DIR}/cmake/embed.cmake")
 
-list(APPEND sources
-        "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp"
-        "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
-)
+    list(APPEND sources
+            "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp"
+            "${generatedSourcesDir}/threepp/renderers/shaders/ShaderChunk.cpp"
+    )
+endif ()
 
 add_library(threepp ${sources} ${privateHeaders} ${publicHeadersFull})
 add_library(threepp::threepp ALIAS threepp)
@@ -525,14 +539,22 @@ target_include_directories(threepp
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/earcut"
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/nlohmann"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
 )
 
-if (NOT DEFINED EMSCRIPTEN)
+if (NOT THREEPP_CORE_ONLY)
+
+    target_include_directories(threepp
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
+    )
+
+endif ()
+
+if (NOT DEFINED EMSCRIPTEN AND NOT THREEPP_CORE_ONLY)
 
     target_include_directories(threepp
             PRIVATE

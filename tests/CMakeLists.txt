@@ -13,5 +13,9 @@ add_subdirectory(cameras)
 add_subdirectory(core)
 add_subdirectory(math)
 add_subdirectory(utils)
-add_subdirectory(renderers)
 add_subdirectory(loaders)
+
+if (NOT THREEPP_CORE_ONLY)
+    add_subdirectory(renderers)
+endif ()
+
