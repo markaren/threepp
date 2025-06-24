@@ -525,12 +525,24 @@ target_include_directories(threepp
         "${generatedSourcesDir}"
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/earcut"
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/nlohmann"
-        "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
 )
+
+if (THREEPP_WITH_SVG)
+    target_include_directories(threepp
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
+    )
+endif ()
+
+if (THREEPP_WITH_AUDIO)
+    target_include_directories(threepp
+            PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/external/miniaudio"
+    )
+endif ()
 
 if (NOT DEFINED EMSCRIPTEN)
 
