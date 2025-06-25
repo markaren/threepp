@@ -17,18 +17,24 @@ namespace threepp {
     class BVH {
 
     public:
+        struct IntersectionResult {
+            int idxA;
+            int idxB;
+            Vector3 position;// Center of intersection region
+        };
+
         BVH(int maxTrianglesPerNode = 8, int maxSubdivisions = 10)
             : maxTrianglesPerNode(maxTrianglesPerNode), maxSubdivisions(maxSubdivisions) {}
 
         void build(const BufferGeometry& geometry);
 
-        // Intersect this BVH with another BVH
-        [[nodiscard]] std::vector<std::pair<int, int>> intersect(const BVH& other) const;
-
         // Helper methods for single-shape intersections
         [[nodiscard]] std::vector<int> intersect(const Box3& box) const;
 
         [[nodiscard]] std::vector<int> intersect(const Sphere& sphere) const;
+
+        // Intersect this BVH with another BVH
+        [[nodiscard]] static std::vector<IntersectionResult> intersect(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2);
 
         // Simple true/false intersection test with another BVH
         [[nodiscard]] static bool intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2);
@@ -58,7 +64,7 @@ namespace threepp {
         std::unique_ptr<BVHNode> buildNode(std::vector<int>& indices, int depth);
 
         // Tests intersection between two BVH nodes
-        void intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vector<std::pair<int, int>>& results) const;
+        static void intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& m1, const BVH& b2, const BVHNode* nodeB, const Matrix4& m2, std::vector<IntersectionResult>& results);
 
         static void collectBoxes(const BVHNode* node, std::vector<Box3>& boxes);
     };

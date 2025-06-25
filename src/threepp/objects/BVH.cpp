@@ -104,11 +104,11 @@ void BVH::build(const BufferGeometry& geom) {
     root = buildNode(indices, 0);
 }
 
-std::vector<std::pair<int, int>> BVH::intersect(const BVH& other) const {
-    std::vector<std::pair<int, int>> results;
+std::vector<BVH::IntersectionResult> BVH::intersect(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2) {
+    std::vector<IntersectionResult> results;
 
     // Test intersection between the two BVH trees
-    intersectBVHNodes(root.get(), other.root.get(), results);
+    intersectBVHNodes(b1, b1.root.get(), m1, b2, b2.root.get(), m2, results);
 
     return results;
 }
@@ -269,11 +269,16 @@ void BVH::collectBoxes(std::vector<Box3>& boxes) const {
     collectBoxes(root.get(), boxes);
 }
 
-void BVH::intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vector<std::pair<int, int>>& results) const {
-    if (!nodeA || !nodeB) return;
+void BVH::intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& m1, const BVH& b2, const BVHNode* nodeB, const Matrix4& m2, std::vector<BVH::IntersectionResult>& results) {
+
+    Box3 bb1 = nodeA->boundingBox.clone();
+    bb1.applyMatrix4(m1);
+
+    Box3 bb2 = nodeB->boundingBox.clone();
+    bb2.applyMatrix4(m2);
 
     // Quick rejection test using bounding boxes
-    if (!nodeA->boundingBox.intersectsBox(nodeB->boundingBox)) {
+    if (!bb1.intersectsBox(bb2)) {
         return;
     }
 
@@ -287,16 +292,29 @@ void BVH::intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vec
                 // For now, using bounding box test as an approximation
                 Box3 boxA, boxB;
                 boxA.setFromPoints(std::vector{
-                        triangles[idxA].a(),
-                        triangles[idxA].b(),
-                        triangles[idxA].c()});
+                        b1.triangles[idxA].a(),
+                        b1.triangles[idxA].b(),
+                        b1.triangles[idxA].c()});
                 boxB.setFromPoints(std::vector{
-                        triangles[idxB].a(),
-                        triangles[idxB].b(),
-                        triangles[idxB].c()});
+                        b2.triangles[idxB].a(),
+                        b2.triangles[idxB].b(),
+                        b2.triangles[idxB].c()});
+
+                boxA.applyMatrix4(m1);
+                boxB.applyMatrix4(m2);
 
                 if (boxA.intersectsBox(boxB)) {
-                    results.emplace_back(idxA, idxB);
+                    // Compute intersection box
+                    Box3 intersectionBox;
+                    intersectionBox.set({std::max(boxA.min().x, boxB.min().x),
+                                         std::max(boxA.min().y, boxB.min().y),
+                                         std::max(boxA.min().z, boxB.min().z)},
+                                        {std::min(boxA.max().x, boxB.max().x),
+                                         std::min(boxA.max().y, boxB.max().y),
+                                         std::min(boxA.max().z, boxB.max().z)});
+
+                    Vector3 center = (intersectionBox.min() + intersectionBox.max()) * 0.5f;
+                    results.emplace_back(idxA, idxB, center);
                 }
             }
         }
@@ -313,22 +331,22 @@ void BVH::intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vec
     if (volumeA < volumeB) {
         // A is smaller, descend A
         if (nodeA->left && nodeA->right) {
-            intersectBVHNodes(nodeA->left.get(), nodeB, results);
-            intersectBVHNodes(nodeA->right.get(), nodeB, results);
+            intersectBVHNodes(b1, nodeA->left.get(), m1, b2, nodeB, m2, results);
+            intersectBVHNodes(b1, nodeA->right.get(), m1, b2, nodeB, m2, results);
         } else {
             // B must have children, descend B
-            intersectBVHNodes(nodeA, nodeB->left.get(), results);
-            intersectBVHNodes(nodeA, nodeB->right.get(), results);
+            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->left.get(), m2, results);
+            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->right.get(), m2, results);
         }
     } else {
         // B is smaller, descend B
         if (nodeB->left && nodeB->right) {
-            intersectBVHNodes(nodeA, nodeB->left.get(), results);
-            intersectBVHNodes(nodeA, nodeB->right.get(), results);
+            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->left.get(), m2, results);
+            intersectBVHNodes(b1, nodeA, m1, b2, nodeB->right.get(), m2, results);
         } else {
             // A must have children, descend A
-            intersectBVHNodes(nodeA->left.get(), nodeB, results);
-            intersectBVHNodes(nodeA->right.get(), nodeB, results);
+            intersectBVHNodes(b1, nodeA->left.get(), m1, b2, nodeB, m2, results);
+            intersectBVHNodes(b1, nodeA->right.get(), m1, b2, nodeB, m2, results);
         }
     }
 }
