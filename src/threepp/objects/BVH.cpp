@@ -314,7 +314,7 @@ void BVH::intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& 
                                          std::min(boxA.max().z, boxB.max().z)});
 
                     Vector3 center = (intersectionBox.min() + intersectionBox.max()) * 0.5f;
-                    results.emplace_back(idxA, idxB, center);
+                    results.emplace_back(IntersectionResult{idxA, idxB, center});
                 }
             }
         }
