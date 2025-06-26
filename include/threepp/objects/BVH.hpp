@@ -34,7 +34,7 @@ namespace threepp {
         [[nodiscard]] std::vector<int> intersect(const Sphere& sphere) const;
 
         // Intersect this BVH with another BVH
-        [[nodiscard]] static std::vector<IntersectionResult> intersect(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2);
+        [[nodiscard]] static std::vector<IntersectionResult> intersect(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2, bool accurate = false);
 
         // Simple true/false intersection test with another BVH
         [[nodiscard]] static bool intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2);
@@ -64,7 +64,7 @@ namespace threepp {
         std::unique_ptr<BVHNode> buildNode(std::vector<int>& indices, int depth);
 
         // Tests intersection between two BVH nodes
-        static void intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& m1, const BVH& b2, const BVHNode* nodeB, const Matrix4& m2, std::vector<IntersectionResult>& results);
+        static void intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& m1, const BVH& b2, const BVHNode* nodeB, const Matrix4& m2, std::vector<IntersectionResult>& results, bool accurate);
 
         static void collectBoxes(const BVHNode* node, std::vector<Box3>& boxes);
     };
