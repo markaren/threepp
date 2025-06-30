@@ -16,6 +16,12 @@ namespace threepp {
 
     class BufferGeometry;
 
+    struct BVHBox3: Box3 {
+        bool isLeaf{false};
+
+        BVHBox3(Box3 bb): Box3(bb) {}
+    };
+
     class BVH {
 
     public:
@@ -35,7 +41,7 @@ namespace threepp {
         // Simple true/false intersection test with another BVH
         [[nodiscard]] static bool intersects(const BVH& b1, const BVH& b2, const Matrix4& m1 = Matrix4(), const Matrix4& m2 = Matrix4());
 
-        void collectBoxes(std::vector<Box3>& boxes) const;
+        void collectBoxes(std::vector<BVHBox3>& boxes) const;
 
         [[nodiscard]] const BufferGeometry* getGeometry() const;
 
@@ -48,6 +54,10 @@ namespace threepp {
             std::vector<int> triangleIndices;
 
             BVHNode() = default;
+
+            [[nodiscard]] bool isLeaf() const {
+                return left == nullptr && right == nullptr;
+            }
         };
 
         std::unique_ptr<BVHNode> root;
@@ -62,7 +72,7 @@ namespace threepp {
         // Tests intersection between two BVH nodes
         void intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vector<std::pair<int, int>>& results) const;
 
-        static void collectBoxes(const BVHNode* node, std::vector<Box3>& boxes);
+        static void collectBoxes(const BVHNode* node, std::vector<BVHBox3>& boxes);
     };
 
 

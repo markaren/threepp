@@ -85,8 +85,8 @@ void BVH::build(const BufferGeometry& geom) {
                     Vector3(posAttr->getX(b), posAttr->getY(b), posAttr->getZ(b)),
                     Vector3(posAttr->getX(c), posAttr->getY(c), posAttr->getZ(c)));
 
-            triangles.push_back(tri);
-            indices.push_back(static_cast<int>(triangles.size()) - 1);
+            triangles.emplace_back(tri);
+            indices.emplace_back(static_cast<int>(triangles.size()) - 1);
         }
     } else {
         for (int i = 0; i < posAttr->count(); i += 3) {
@@ -95,8 +95,8 @@ void BVH::build(const BufferGeometry& geom) {
                     Vector3(posAttr->getX(i + 1), posAttr->getY(i + 1), posAttr->getZ(i + 1)),
                     Vector3(posAttr->getX(i + 2), posAttr->getY(i + 2), posAttr->getZ(i + 2)));
 
-            triangles.push_back(tri);
-            indices.push_back(static_cast<int>(triangles.size()) - 1);
+            triangles.emplace_back(tri);
+            indices.emplace_back(static_cast<int>(triangles.size()) - 1);
         }
     }
 
@@ -272,7 +272,7 @@ bool BVH::intersects(const BVH& b1, const BVH& b2, const Matrix4& m1, const Matr
     return testNodes(b1.root.get(), b2.root.get());
 }
 
-void BVH::collectBoxes(std::vector<Box3>& boxes) const {
+void BVH::collectBoxes(std::vector<BVHBox3>& boxes) const {
     collectBoxes(root.get(), boxes);
 }
 
@@ -340,20 +340,10 @@ void BVH::intersectBVHNodes(const BVHNode* nodeA, const BVHNode* nodeB, std::vec
     }
 }
 
-// Simple triangle-triangle intersection test
-bool trianglesIntersect(const Triangle& a, const Triangle& b) {
-    // For simplicity, we're using a bounding box test
-    // A more accurate triangle-triangle intersection test could be implemented
-    Box3 boxA, boxB;
-    boxA.setFromPoints(std::vector{a.a(), a.b(), a.c()});
-    boxB.setFromPoints(std::vector{b.a(), b.b(), b.c()});
-
-    return boxA.intersectsBox(boxB);
-}
-
-void BVH::collectBoxes(const BVHNode* node, std::vector<Box3>& boxes) {
+void BVH::collectBoxes(const BVHNode* node, std::vector<BVHBox3>& boxes) {
     if (!node) return;
-    Box3 bb = node->boundingBox;
+    BVHBox3 bb = node->boundingBox;
+    bb.isLeaf = node->isLeaf();
     boxes.emplace_back(bb);
     collectBoxes(node->left.get(), boxes);
     collectBoxes(node->right.get(), boxes);
