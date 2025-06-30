@@ -65,13 +65,13 @@ int main() {
     BVH bvh;
     bvh.build(*tube->geometry());
 
-    std::vector<Box3> boxes;
+    std::vector<BVHBox3> boxes;
     bvh.collectBoxes(boxes);
 
     Group boxesGroup;
     boxesGroup.visible = false; // Start with boxes hidden
     for (const auto& box : boxes) {
-        auto helper = Box3Helper::create(box);
+        auto helper = Box3Helper::create(box, box.isLeaf() ? Color::green : Color::red);
         box.getCenter(helper->position);
         boxesGroup.add(helper);
     }

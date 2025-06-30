@@ -17,9 +17,16 @@ namespace threepp {
     class BufferGeometry;
 
     struct BVHBox3: Box3 {
-        bool isLeaf{false};
 
-        BVHBox3(Box3 bb): Box3(bb) {}
+
+        BVHBox3(Box3 bb, bool isLeaf): Box3(bb), isLeaf_(isLeaf) {}
+
+        [[nodiscard]] bool isLeaf() const {
+            return isLeaf_;
+        }
+
+    private:
+        bool isLeaf_{false};
     };
 
     class BVH {

@@ -374,9 +374,8 @@ void BVH::intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& 
 
 void BVH::collectBoxes(const BVHNode* node, std::vector<BVHBox3>& boxes) {
     if (!node) return;
-    BVHBox3 bb = node->boundingBox;
-    bb.isLeaf = node->isLeaf();
-    boxes.emplace_back(bb);
+
+    boxes.emplace_back(node->boundingBox, node->isLeaf());
     collectBoxes(node->left.get(), boxes);
     collectBoxes(node->right.get(), boxes);
 }
