@@ -23,9 +23,9 @@ std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int dept
         // Union with remaining triangles
         for (size_t i = 1; i < indices.size(); i++) {
             tmpBox.makeEmpty();
-            tmpBox.expandByPoint(triangles[indices[0]].a());
-            tmpBox.expandByPoint(triangles[indices[0]].b());
-            tmpBox.expandByPoint(triangles[indices[0]].c());
+            tmpBox.expandByPoint(triangles[indices[i]].a());
+            tmpBox.expandByPoint(triangles[indices[i]].b());
+            tmpBox.expandByPoint(triangles[indices[i]].c());
             node->boundingBox.union_(tmpBox);
         }
     }
