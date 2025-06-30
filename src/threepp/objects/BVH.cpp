@@ -14,20 +14,19 @@ std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int dept
     // Calculate bounding box for all triangles in this node
     if (!indices.empty()) {
         // Initialize with first triangle's bounding box
-        Box3 box;
-        box.setFromPoints(std::vector{
-                triangles[indices[0]].a(),
-                triangles[indices[0]].b(),
-                triangles[indices[0]].c()});
-        node->boundingBox = box;
+        Box3 tmpBox;
+        tmpBox.expandByPoint(triangles[indices[0]].a());
+        tmpBox.expandByPoint(triangles[indices[0]].b());
+        tmpBox.expandByPoint(triangles[indices[0]].c());
+        node->boundingBox = tmpBox;
 
         // Union with remaining triangles
         for (size_t i = 1; i < indices.size(); i++) {
-            box.setFromPoints(std::vector{
-                    triangles[indices[i]].a(),
-                    triangles[indices[i]].b(),
-                    triangles[indices[i]].c()});
-            node->boundingBox.union_(box);
+            tmpBox.makeEmpty();
+            tmpBox.expandByPoint(triangles[indices[0]].a());
+            tmpBox.expandByPoint(triangles[indices[0]].b());
+            tmpBox.expandByPoint(triangles[indices[0]].c());
+            node->boundingBox.union_(tmpBox);
         }
     }
 
@@ -46,8 +45,8 @@ std::unique_ptr<BVH::BVHNode> BVH::buildNode(std::vector<int>& indices, int dept
     if (size.z > size[axis]) axis = 2;
 
     // Sort triangle indices along the longest axis
-    std::ranges::sort(indices, [this, axis](int a, int b) {
-        Vector3 centerA, centerB;
+    Vector3 centerA, centerB;
+    std::ranges::sort(indices, [this, axis, &centerA, &centerB](int a, int b) {
         triangles[a].getMidpoint(centerA);
         triangles[b].getMidpoint(centerB);
         return centerA[axis] < centerB[axis];
@@ -158,14 +157,17 @@ std::vector<int> BVH::intersect(const Sphere& sphere, const Matrix4& m) const {
             return;
         }
 
-        if (node->left == nullptr && node->right == nullptr) {
+        if (node->isLeaf()) {
+
+            Vector3 a, b, c;
             Vector3 closestPoint;
             Triangle worldTri;
-            for (int idx : node->triangleIndices) {
+            for (const int idx : node->triangleIndices) {
+                const Triangle& tri = triangles[idx];
                 worldTri.set(
-                        triangles[idx].a().clone().applyMatrix4(m),
-                        triangles[idx].b().clone().applyMatrix4(m),
-                        triangles[idx].c().clone().applyMatrix4(m));
+                        a.copy(tri.a()).applyMatrix4(m),
+                        b.copy(tri.b()).applyMatrix4(m),
+                        c.copy(tri.c()).applyMatrix4(m));
                 worldTri.closestPointToPoint(sphere.center, closestPoint);
                 const float distSq = closestPoint.distanceToSquared(sphere.center);
 
@@ -196,19 +198,21 @@ bool BVH::intersects(const BVH& b1, const BVH& b2, const Matrix4& m1, const Matr
         return false;
     }
 
+    Box3 boxA, boxB;
+    Vector3 sizeA, sizeB;
+
     // Helper function to test transformed triangles
-    std::function<bool(const BVHNode*, const BVHNode*)> testNodes = [&b1, &b2, &m1, &m2, &testNodes](const BVHNode* nodeA, const BVHNode* nodeB) -> bool {
+    std::function<bool(const BVHNode*, const BVHNode*)> testNodes = [&](const BVHNode* nodeA, const BVHNode* nodeB) -> bool {
         // Transform bounding boxes for this test
-        const Box3 boxA = nodeA->boundingBox.clone().applyMatrix4(m1);
-        const Box3 boxB = nodeB->boundingBox.clone().applyMatrix4(m2);
+        boxA.copy(nodeA->boundingBox).applyMatrix4(m1);
+        boxB.copy(nodeB->boundingBox).applyMatrix4(m2);
 
         if (!boxA.intersectsBox(boxB)) {
             return false;
         }
 
         // If both nodes are leaves, test triangles
-        if (nodeA->left == nullptr && nodeA->right == nullptr &&
-            nodeB->left == nullptr && nodeB->right == nullptr) {
+        if (nodeA->isLeaf() && nodeB->isLeaf()) {
 
             Box3 boxTriA, boxTriB;
             for (const int idxA : nodeA->triangleIndices) {
@@ -240,7 +244,7 @@ bool BVH::intersects(const BVH& b1, const BVH& b2, const Matrix4& m1, const Matr
         }
 
         // Recursively descend into smaller node first (heuristic)
-        Vector3 sizeA, sizeB;
+
         boxA.getSize(sizeA);
         boxB.getSize(sizeB);
         const float volumeA = sizeA.x * sizeA.y * sizeA.z;
@@ -290,30 +294,35 @@ void BVH::intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& 
     }
 
     // If both nodes are leaves, test all triangle pairs
-    if (nodeA->left == nullptr && nodeA->right == nullptr &&
-        nodeB->left == nullptr && nodeB->right == nullptr) {
+    if (nodeA->isLeaf() && nodeB->isLeaf()) {
 
+        Vector3 center;
         if (accurate) {
-            for (int idxA : nodeA->triangleIndices) {
-                for (int idxB : nodeB->triangleIndices) {
+            Box3 boxA, boxB, intersectionBox;
+            for (const int idxA : nodeA->triangleIndices) {
+
+                const Triangle& triA = b1.triangles[idxA];
+
+                boxA.makeEmpty();
+                boxA.expandByPoint(triA.a());
+                boxA.expandByPoint(triA.b());
+                boxA.expandByPoint(triA.c());
+                boxA.applyMatrix4(m1);
+
+                for (const int idxB : nodeB->triangleIndices) {
                     // Could implement detailed triangle-triangle intersection here
                     // For now, using bounding box test as an approximation
-                    Box3 boxA, boxB;
-                    boxA.setFromPoints(std::vector{
-                            b1.triangles[idxA].a(),
-                            b1.triangles[idxA].b(),
-                            b1.triangles[idxA].c()});
-                    boxB.setFromPoints(std::vector{
-                            b2.triangles[idxB].a(),
-                            b2.triangles[idxB].b(),
-                            b2.triangles[idxB].c()});
 
-                    boxA.applyMatrix4(m1);
+                    const Triangle& triB = b2.triangles[idxB];
+
+                    boxB.makeEmpty();
+                    boxB.expandByPoint(triB.a());
+                    boxB.expandByPoint(triB.b());
+                    boxB.expandByPoint(triB.c());
                     boxB.applyMatrix4(m2);
 
                     if (boxA.intersectsBox(boxB)) {
                         // Compute intersection box
-                        Box3 intersectionBox;
                         intersectionBox.set({std::max(boxA.min().x, boxB.min().x),
                                              std::max(boxA.min().y, boxB.min().y),
                                              std::max(boxA.min().z, boxB.min().z)},
@@ -321,21 +330,22 @@ void BVH::intersectBVHNodes(const BVH& b1, const BVHNode* nodeA, const Matrix4& 
                                              std::min(boxA.max().y, boxB.max().y),
                                              std::min(boxA.max().z, boxB.max().z)});
 
-                        Vector3 center = (intersectionBox.min() + intersectionBox.max()) * 0.5f;
+
+                        intersectionBox.getCenter(center);
                         results.emplace_back(IntersectionResult{idxA, idxB, center});
                     }
                 }
             }
         } else {
-            Box3 intersectionBox;
-            intersectionBox.set(
+            const Box3 intersectionBox(
                     {std::max(bb1.min().x, bb2.min().x),
                      std::max(bb1.min().y, bb2.min().y),
                      std::max(bb1.min().z, bb2.min().z)},
                     {std::min(bb1.max().x, bb2.max().x),
                      std::min(bb1.max().y, bb2.max().y),
                      std::min(bb1.max().z, bb2.max().z)});
-            Vector3 center = (intersectionBox.min() + intersectionBox.max()) * 0.5f;
+
+            intersectionBox.getCenter(center);
             // Use -1 for idxA/idxB to indicate node-level intersection
             results.emplace_back(IntersectionResult{-1, -1, center});
         }

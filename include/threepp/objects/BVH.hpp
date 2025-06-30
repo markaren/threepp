@@ -18,7 +18,6 @@ namespace threepp {
 
     struct BVHBox3: Box3 {
 
-
         BVHBox3(Box3 bb, bool isLeaf): Box3(bb), isLeaf_(isLeaf) {}
 
         [[nodiscard]] bool isLeaf() const {
@@ -38,7 +37,7 @@ namespace threepp {
             Vector3 position;// Center of intersection region
         };
 
-        BVH(int maxTrianglesPerNode = 8, int maxSubdivisions = 10)
+        explicit BVH(int maxTrianglesPerNode = 8, int maxSubdivisions = 10)
             : maxTrianglesPerNode(maxTrianglesPerNode), maxSubdivisions(maxSubdivisions) {}
 
         void build(const BufferGeometry& geometry);

@@ -45,6 +45,19 @@ namespace {
         return mesh;
     }
 
+    auto makeBoxes(const std::vector<BVHBox3>& boxes) {
+
+        auto boxesGroup = Group::create();
+        boxesGroup->visible = false;// Start with boxes hidden
+        for (const auto& box : boxes) {
+            auto helper = Box3Helper::create(box, box.isLeaf() ? Color::green : Color::red);
+            box.getCenter(helper->position);
+            boxesGroup->add(helper);
+        }
+
+        return boxesGroup;
+    }
+
 }// namespace
 
 int main() {
@@ -68,20 +81,14 @@ int main() {
     std::vector<BVHBox3> boxes;
     bvh.collectBoxes(boxes);
 
-    Group boxesGroup;
-    boxesGroup.visible = false; // Start with boxes hidden
-    for (const auto& box : boxes) {
-        auto helper = Box3Helper::create(box, box.isLeaf() ? Color::green : Color::red);
-        box.getCenter(helper->position);
-        boxesGroup.add(helper);
-    }
+    auto boxesGroup = makeBoxes(boxes);
     tube->add(boxesGroup);
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](const KeyEvent& evt) {
-        static bool show = boxesGroup.visible;
+        static bool show = boxesGroup->visible;
         if (evt.key == Key::B) {
             show = !show;
-            boxesGroup.visible = show;
+            boxesGroup->visible = show;
         }
     });
     std::cout << "Press 'B' to toggle BVH visibility." << std::endl;
