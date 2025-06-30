@@ -113,26 +113,28 @@ std::vector<std::pair<int, int>> BVH::intersect(const BVH& other) const {
     return results;
 }
 
-std::vector<int> BVH::intersect(const Box3& box) const {
+std::vector<int> BVH::intersect(const Box3& box, const Matrix4& m) const {
     std::vector<int> results;
 
     std::function<void(const BVHNode*)> traverse = [&](const BVHNode* node) {
         if (!node) return;
 
-        if (!node->boundingBox.intersectsBox(box)) {
+        if (!node->boundingBox.clone().applyMatrix4(m).intersectsBox(box)) {
             return;
         }
 
         if (node->left == nullptr && node->right == nullptr) {
+            Box3 triBox;
+
             for (int idx : node->triangleIndices) {
-                Box3 triBox;
-                triBox.setFromPoints(std::vector{
-                        triangles[idx].a(),
-                        triangles[idx].b(),
-                        triangles[idx].c()});
+                triBox.makeEmpty();
+                triBox.expandByPoint(triangles[idx].a());
+                triBox.expandByPoint(triangles[idx].b());
+                triBox.expandByPoint(triangles[idx].c());
+                triBox.applyMatrix4(m);
 
                 if (box.intersectsBox(triBox)) {
-                    results.push_back(idx);
+                    results.emplace_back(idx);
                 }
             }
             return;
@@ -146,20 +148,25 @@ std::vector<int> BVH::intersect(const Box3& box) const {
     return results;
 }
 
-std::vector<int> BVH::intersect(const Sphere& sphere) const {
+std::vector<int> BVH::intersect(const Sphere& sphere, const Matrix4& m) const {
     std::vector<int> results;
 
     std::function<void(const BVHNode*)> traverse = [&](const BVHNode* node) {
         if (!node) return;
 
-        if (!node->boundingBox.intersectsSphere(sphere)) {
+        if (!node->boundingBox.clone().applyMatrix4(m).intersectsSphere(sphere)) {
             return;
         }
 
         if (node->left == nullptr && node->right == nullptr) {
+            Vector3 closestPoint;
+            Triangle worldTri;
             for (int idx : node->triangleIndices) {
-                Vector3 closestPoint;
-                triangles[idx].closestPointToPoint(sphere.center, closestPoint);
+                worldTri.set(
+                        triangles[idx].a().clone().applyMatrix4(m),
+                        triangles[idx].b().clone().applyMatrix4(m),
+                        triangles[idx].c().clone().applyMatrix4(m));
+                worldTri.closestPointToPoint(sphere.center, closestPoint);
                 const float distSq = closestPoint.distanceToSquared(sphere.center);
 
                 if (distSq <= (sphere.radius * sphere.radius)) {
@@ -177,12 +184,12 @@ std::vector<int> BVH::intersect(const Sphere& sphere) const {
     return results;
 }
 
-bool BVH::intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2) {
+bool BVH::intersects(const BVH& b1, const BVH& b2, const Matrix4& m1, const Matrix4& m2) {
     if (!b1.root || !b2.root) return false;
 
     // Create transformed copies of the bounding boxes
-    Box3 thisRootBox = b1.root->boundingBox.clone().applyMatrix4(m1);
-    Box3 otherRootBox = b2.root->boundingBox.clone().applyMatrix4(m2);
+    const Box3 thisRootBox = b1.root->boundingBox.clone().applyMatrix4(m1);
+    const Box3 otherRootBox = b2.root->boundingBox.clone().applyMatrix4(m2);
 
     // Quick rejection test
     if (!thisRootBox.intersectsBox(otherRootBox)) {
@@ -192,8 +199,8 @@ bool BVH::intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matr
     // Helper function to test transformed triangles
     std::function<bool(const BVHNode*, const BVHNode*)> testNodes = [&b1, &b2, &m1, &m2, &testNodes](const BVHNode* nodeA, const BVHNode* nodeB) -> bool {
         // Transform bounding boxes for this test
-        Box3 boxA = nodeA->boundingBox.clone().applyMatrix4(m1);
-        Box3 boxB = nodeB->boundingBox.clone().applyMatrix4(m2);
+        const Box3 boxA = nodeA->boundingBox.clone().applyMatrix4(m1);
+        const Box3 boxB = nodeB->boundingBox.clone().applyMatrix4(m2);
 
         if (!boxA.intersectsBox(boxB)) {
             return false;
@@ -203,26 +210,26 @@ bool BVH::intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matr
         if (nodeA->left == nullptr && nodeA->right == nullptr &&
             nodeB->left == nullptr && nodeB->right == nullptr) {
 
-            for (int idxA : nodeA->triangleIndices) {
-                // Transform triangle A to world space
-                Triangle triA = b1.triangles[idxA];
-                Vector3 a = triA.a().clone().applyMatrix4(m1);
-                Vector3 b = triA.b().clone().applyMatrix4(m1);
-                Vector3 c = triA.c().clone().applyMatrix4(m1);
-                Triangle worldTriA(a, b, c);
+            Box3 boxTriA, boxTriB;
+            for (const int idxA : nodeA->triangleIndices) {
 
-                for (int idxB : nodeB->triangleIndices) {
-                    // Transform triangle B to world space
-                    Triangle triB = b2.triangles[idxB];
-                    Vector3 d = triB.a().clone().applyMatrix4(m2);
-                    Vector3 e = triB.b().clone().applyMatrix4(m2);
-                    Vector3 f = triB.c().clone().applyMatrix4(m2);
-                    Triangle worldTriB(d, e, f);
+                const Triangle& triA = b1.triangles[idxA];
 
-                    // Use bounding box test for simplicity
-                    Box3 boxTriA, boxTriB;
-                    boxTriA.setFromPoints(std::vector{a, b, c});
-                    boxTriB.setFromPoints(std::vector{d, e, f});
+                boxTriA.makeEmpty();
+                boxTriA.expandByPoint(triA.a());
+                boxTriA.expandByPoint(triA.b());
+                boxTriA.expandByPoint(triA.c());
+                boxTriA.applyMatrix4(m1);
+
+                for (const int idxB : nodeB->triangleIndices) {
+
+                    const Triangle& triB = b2.triangles[idxB];
+
+                    boxTriB.makeEmpty();
+                    boxTriB.expandByPoint(triB.a());
+                    boxTriB.expandByPoint(triB.b());
+                    boxTriB.expandByPoint(triB.c());
+                    boxTriB.applyMatrix4(m2);
 
                     if (boxTriA.intersectsBox(boxTriB)) {
                         return true;
@@ -236,8 +243,8 @@ bool BVH::intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matr
         Vector3 sizeA, sizeB;
         boxA.getSize(sizeA);
         boxB.getSize(sizeB);
-        float volumeA = sizeA.x * sizeA.y * sizeA.z;
-        float volumeB = sizeB.x * sizeB.y * sizeB.z;
+        const float volumeA = sizeA.x * sizeA.y * sizeA.z;
+        const float volumeB = sizeB.x * sizeB.y * sizeB.z;
 
         if (volumeA < volumeB) {
             // A is smaller, descend A

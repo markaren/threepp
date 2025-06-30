@@ -10,6 +10,8 @@
 #include "threepp/math/Box3.hpp"
 #include "threepp/math/Triangle.hpp"
 
+#include <threepp/math/Matrix4.hpp>
+
 namespace threepp {
 
     class BufferGeometry;
@@ -26,12 +28,12 @@ namespace threepp {
         [[nodiscard]] std::vector<std::pair<int, int>> intersect(const BVH& other) const;
 
         // Helper methods for single-shape intersections
-        [[nodiscard]] std::vector<int> intersect(const Box3& box) const;
+        [[nodiscard]] std::vector<int> intersect(const Box3& box, const Matrix4& m = Matrix4()) const;
 
-        [[nodiscard]] std::vector<int> intersect(const Sphere& sphere) const;
+        [[nodiscard]] std::vector<int> intersect(const Sphere& sphere, const Matrix4& m = Matrix4()) const;
 
         // Simple true/false intersection test with another BVH
-        [[nodiscard]] static bool intersects(const BVH& b1, const Matrix4& m1, const BVH& b2, const Matrix4& m2);
+        [[nodiscard]] static bool intersects(const BVH& b1, const BVH& b2, const Matrix4& m1 = Matrix4(), const Matrix4& m2 = Matrix4());
 
         void collectBoxes(std::vector<Box3>& boxes) const;
 
