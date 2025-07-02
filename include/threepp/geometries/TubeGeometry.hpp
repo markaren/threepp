@@ -29,6 +29,10 @@ namespace threepp {
 
         [[nodiscard]] std::string type() const override;
 
+        [[nodiscard]] const FrenetFrames& getFrenetFrames() const {
+            return frames;
+        }
+
         static std::shared_ptr<TubeGeometry> create(
                 std::unique_ptr<Curve3> path,
                 const Params& params);
