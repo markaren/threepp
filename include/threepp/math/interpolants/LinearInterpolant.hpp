@@ -13,15 +13,15 @@ namespace threepp {
         explicit LinearInterpolant(Args&&... args): Interpolant(std::forward<Args>(args)...) {}
 
         Sample interpolate_(size_t i1, float t0, float t, float t1) override {
-            auto result = this->resultBuffer;
-            auto values = this->sampleValues;
-            auto stride = this->valueSize;
+            const auto result = this->resultBuffer;
+            const auto& values = this->sampleValues;
+            const auto stride = this->valueSize;
 
-            auto offset1 = i1 * stride;
-            auto offset0 = offset1 - stride;
+            const auto offset1 = i1 * stride;
+            const auto offset0 = offset1 - stride;
 
-            auto weight1 = (t - t0) / (t1 - t0);
-            auto weight0 = 1 - weight1;
+            const auto weight1 = (t - t0) / (t1 - t0);
+            const auto weight0 = 1 - weight1;
 
             for (auto i = 0; i != stride; ++i) {
 

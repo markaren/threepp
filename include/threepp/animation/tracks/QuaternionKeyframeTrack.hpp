@@ -3,6 +3,7 @@
 #define THREEPP_QUATERNIONKEYFRAMETRACK_HPP
 
 #include "threepp/animation/KeyframeTrack.hpp"
+#include "threepp/math/interpolants/QuaternionLinearInterpolant.hpp"
 
 namespace threepp {
 
@@ -15,6 +16,11 @@ namespace threepp {
         [[nodiscard]] std::string ValueTypeName() const override {
 
             return "quaternion";
+        }
+
+        std::unique_ptr<Interpolant> InterpolantFactoryMethodLinear(const Sample& times, const Sample& values, int valueSize, Sample* result) override {
+
+            return std::make_unique<QuaternionLinearInterpolant>(times, values, valueSize, result);
         }
     };
 

@@ -59,7 +59,7 @@ int main() {
     scene.add(model);
 
     auto mixer = AnimationMixer(*model);
-    mixer.clipAction(model->animations.front())->play();
+    mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
 
     auto skeletonHelper = SkeletonHelper::create(*model);
     skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;

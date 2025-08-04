@@ -9,30 +9,21 @@ namespace {
 
     using MixFunction = std::function<void(PropertyMixer*, std::vector<float>&, int, int, float, int)>;
     using MixFunctionAdditive = MixFunction;
-    using SetIdentity = std::function<void()>;
+    using SetIdentity = std::function<void(PropertyMixer*)>;
 
 
 }// namespace
 
 struct PropertyMixer::Impl {
 
-    size_t valueSize;
-
-    int _origIndex = 3;
-    int _addIndex = 4;
-    int _workIndex = -1;
-
-    float cumulativeWeight = 0;
-    float cumulativeWeightAdditive = 0;
-
-    MixFunction mixFunction;
-    MixFunctionAdditive mixFunctionAdditive;
-    SetIdentity setIdentity;
+    MixFunction _mixBufferRegion;
+    MixFunctionAdditive _mixBufferRegionAdditive;
+    SetIdentity _setIdentity;
 
     PropertyMixer& scope;
 
-    Impl(PropertyMixer& scope, const std::string& typeName, size_t valueSize)
-        : scope(scope), valueSize(valueSize) {
+    Impl(PropertyMixer& scope, const std::string& typeName)
+        : scope(scope) {
 
 
         // buffer layout: [ incoming | accu0 | accu1 | orig | addAccu | (optional work) ]
@@ -51,11 +42,16 @@ struct PropertyMixer::Impl {
         // 'work' is optional and is only present for quaternion types. It is used
         // to store intermediate quaternion multiplication results
 
+        MixFunction mixFunction;
+        MixFunctionAdditive mixFunctionAdditive;
+        SetIdentity setIdentity;
+
         if (typeName == "quaternion") {
             mixFunction = _slerp;
             mixFunctionAdditive = _slerpAdditive;
-            this->scope.buffer = std::vector<float>(valueSize * 6);
-            this->_workIndex = 5;
+            setIdentity = _setAdditiveIdentityQuaternion;
+            scope.buffer = std::vector<float>(scope.valueSize * 6);
+            scope._workIndex = 5;
 
         } else if (typeName == "string" || typeName == "bool") {
 
@@ -65,25 +61,29 @@ struct PropertyMixer::Impl {
             // additive is not relevant for non-numeric types
             mixFunctionAdditive = _select;
 
-            this->scope.buffer = std::vector<float>(valueSize * 5);
+            this->scope.buffer = std::vector<float>(scope.valueSize * 5);
         } else {
             mixFunction = _lerp;
             mixFunctionAdditive = _lerpAdditive;
 
-            scope.buffer = std::vector<float>(valueSize * 5);
+            scope.buffer = std::vector<float>(scope.valueSize * 5);
         }
+
+        this->_mixBufferRegion = mixFunction;
+        this->_mixBufferRegionAdditive = mixFunctionAdditive;
+        this->_setIdentity = setIdentity;
     }
 
-    void accumulate(int accuIndex, float weight) {
+    void accumulate(int accuIndex, float weight) const {
 
         // note: happily accumulating nothing when weight = 0, the caller knows
         // the weight and shouldn't have made the call in the first place
 
-        auto& buffer = this->scope.buffer;
-        const auto stride = this->valueSize;
+        auto& buffer = scope.buffer;
+        const auto stride = scope.valueSize;
         const auto offset = accuIndex * stride + stride;
 
-        auto currentWeight = this->cumulativeWeight;
+        auto currentWeight = scope.cumulativeWeight;
 
         if (currentWeight == 0) {
 
@@ -102,44 +102,59 @@ struct PropertyMixer::Impl {
 
             currentWeight += weight;
             const auto mix = weight / currentWeight;
-            //            this._mixBufferRegion( buffer, offset, 0, mix, stride );
+            _mixBufferRegion(&scope, buffer, offset, 0, mix, stride);
         }
 
-        this->cumulativeWeight = currentWeight;
+        scope.cumulativeWeight = currentWeight;
     }
 
-    void accumulateAdditive(float weight) {
+    void accumulateAdditive(float weight) const {
+        auto& buffer = scope.buffer;
+        const auto stride = scope.valueSize;
+        const auto offset = stride * scope._addIndex;
+
+        if (scope.cumulativeWeightAdditive == 0) {
+
+            // add = identity
+
+            _setIdentity(&scope);
+        }
+
+        // add := add + incoming * weight
+
+        this->_mixBufferRegionAdditive(&scope, buffer, offset, 0, weight, stride);
+        scope.cumulativeWeightAdditive += weight;
     }
 
-    void apply(int accuIndex) {
+    void apply(int accuIndex) const {
 
-        const auto stride = this->valueSize;
-        const auto& buffer = this->scope.buffer;
+        const auto stride = scope.valueSize;
+        auto& buffer = this->scope.buffer;
         const auto offset = accuIndex * stride + stride;
 
-        const auto weight = this->cumulativeWeight;
-        const auto weightAdditive = this->cumulativeWeightAdditive;
+        const auto weight = scope.cumulativeWeight;
+        const auto weightAdditive = scope.cumulativeWeightAdditive;
 
         auto& binding = this->scope.binding;
 
-        this->cumulativeWeight = 0;
-        this->cumulativeWeightAdditive = 0;
+        scope.cumulativeWeight = 0;
+        scope.cumulativeWeightAdditive = 0;
 
         if (weight < 1) {
 
             // accuN := accuN + original * ( 1 - cumulativeWeight )
 
-            const auto originalValueOffset = stride * this->_origIndex;
+            const auto originalValueOffset = stride * scope._origIndex;
 
-            //                                this->_mixBufferRegion(
-            //                                        buffer, offset, originalValueOffset, 1 - weight, stride);
+            this->_mixBufferRegion(&scope,
+                                   buffer, offset, originalValueOffset, 1 - weight, stride);
         }
 
         if (weightAdditive > 0) {
 
             // accuN := accuN + additive accuN
 
-            //                    this->_mixBufferRegionAdditive(buffer, offset, this->_addIndex * stride, 1, stride);
+            this->_mixBufferRegionAdditive(&scope, buffer, offset, scope._addIndex * stride, 1, stride);
         }
 
         for (unsigned i = stride, e = stride + stride; i != e; ++i) {
@@ -154,16 +169,13 @@ struct PropertyMixer::Impl {
         }
     }
 
-    void restoreOriginalState() {
-    }
-
-    void saveOriginalState() {
+    void saveOriginalState() const {
         auto& binding = this->scope.binding;
 
         auto& buffer = this->scope.buffer;
-        const auto stride = this->valueSize;
+        const auto stride = scope.valueSize;
 
-        const auto originalValueOffset = stride * this->_origIndex;
+        const auto originalValueOffset = stride * scope._origIndex;
 
         binding->getValue(buffer, originalValueOffset);
 
@@ -174,19 +186,24 @@ struct PropertyMixer::Impl {
         }
 
         // Add to identity for additive
-        this->setIdentity();
+        _setIdentity(&scope);
 
-        this->cumulativeWeight = 0;
-        this->cumulativeWeightAdditive = 0;
+        scope.cumulativeWeight = 0;
+        scope.cumulativeWeightAdditive = 0;
+    }
+
+    void restoreOriginalState() const {
+        const auto originalValueOffset = scope.valueSize * 3;
+        scope.binding->setValue(scope.buffer, originalValueOffset);
     }
 };
 
 
 PropertyMixer::PropertyMixer(const std::shared_ptr<PropertyBinding>& binding, const std::string& typeName, size_t valueSize)
-    : binding(binding), pimpl_(std::make_unique<Impl>(*this, typeName, valueSize)) {}
+    : binding(binding), valueSize(valueSize), pimpl_(std::make_unique<Impl>(*this, typeName)) {}
 
 
-void PropertyMixer::accumulate(int accuIndex, float weight) {
+void PropertyMixer::accumulate(int accuIndex, float weight) const {
 
     pimpl_->accumulate(accuIndex, weight);
 }

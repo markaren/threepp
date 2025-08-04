@@ -201,7 +201,7 @@ struct AnimationMixer::Impl {
 
         ClipAction actionsForClip;
 
-        if (!actionsByClip.count(clipUuid)) {
+        if (!actionsByClip.contains(clipUuid)) {
 
             actionsForClip = ClipAction{
                     {action.get()},
@@ -227,7 +227,7 @@ struct AnimationMixer::Impl {
         actionsForClip.actionByRoot[rootUuid] = action.get();
     }
 
-    void stopAllAction() {
+    void stopAllAction() const {
 
         auto& actions = this->_actions;
         const auto nActions = this->_nActiveActions;
@@ -254,7 +254,7 @@ struct AnimationMixer::Impl {
 
         for (auto i = 0; i != nActions; ++i) {
 
-            auto& action = actions[i];
+            const auto& action = actions[i];
 
             action->_update(time, deltaTime, timeDirection, accuIndex);
         }
@@ -295,9 +295,7 @@ struct AnimationMixer::Impl {
             const auto& bindings = action->_propertyBindings;
 
             // increment reference counts / sort out state
-            for (unsigned i = 0, n = bindings.size(); i != n; ++i) {
-
-                auto& binding = bindings[i];
+            for (const auto & binding : bindings) {
 
                 if (binding->useCount++ == 0) {
 
@@ -317,9 +315,7 @@ struct AnimationMixer::Impl {
             const auto& bindings = action->_propertyBindings;
 
             // decrement reference counts / sort out state
-            for (unsigned i = 0, n = bindings.size(); i != n; ++i) {
-
-                const auto& binding = bindings[i];
+            for (const auto & binding : bindings) {
 
                 if (--binding->useCount == 0) {
 
@@ -390,7 +386,7 @@ struct AnimationMixer::Impl {
 
         //        auto& actionsForClip = actionsByClip[ clipUuid ];
 
-        if (!actionsByClip.count(clipUuid)) {
+        if (!actionsByClip.contains(clipUuid)) {
 
             ClipAction actionsForClip = {
 
@@ -429,7 +425,7 @@ struct AnimationMixer::Impl {
         bindings.emplace_back(binding);
     }
 
-    void _removeInactiveBinding(std::shared_ptr<PropertyMixer> binding) {
+    void _removeInactiveBinding(const std::shared_ptr<PropertyMixer>& binding) {
 
         auto& bindings = this->_bindings;
         auto& propBinding = binding->binding;
@@ -503,32 +499,32 @@ AnimationMixer::AnimationMixer(Object3D& root)
 
 AnimationAction* AnimationMixer::clipAction(const std::shared_ptr<AnimationClip>& clip,
                                             Object3D* optionalRoot,
-                                            std::optional<AnimationBlendMode> blendMode) {
+                                            std::optional<AnimationBlendMode> blendMode) const {
 
     return pimpl_->clipAction(clip, optionalRoot, blendMode);
 }
 
-void AnimationMixer::stopAllAction() {
+void AnimationMixer::stopAllAction() const {
 
     pimpl_->stopAllAction();
 }
 
-void AnimationMixer::update(float dt) {
+void AnimationMixer::update(float dt) const {
 
     pimpl_->update(dt);
 }
 
-bool AnimationMixer::_isActiveAction(AnimationAction& action) {
+bool AnimationMixer::_isActiveAction(AnimationAction& action) const {
 
     return pimpl_->_isActiveAction(action);
 }
 
-void AnimationMixer::_activateAction(const std::shared_ptr<AnimationAction>& action) {
+void AnimationMixer::_activateAction(const std::shared_ptr<AnimationAction>& action) const {
 
     pimpl_->_activateAction(action);
 }
 
-void AnimationMixer::_deactivateAction(const std::shared_ptr<AnimationAction>& action) {
+void AnimationMixer::_deactivateAction(const std::shared_ptr<AnimationAction>& action) const {
 
     pimpl_->_deactivateAction(action);
 }

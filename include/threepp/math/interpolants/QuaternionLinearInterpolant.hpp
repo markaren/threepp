@@ -14,15 +14,15 @@ namespace threepp {
         explicit QuaternionLinearInterpolant(Args&&... args): Interpolant(std::forward<Args>(args)...) {}
 
         Sample interpolate_(size_t i1, float t0, float t, float t1) override {
-            auto result = this->resultBuffer;
-            auto values = this->sampleValues;
+            const auto result = this->resultBuffer;
+            const auto& values = this->sampleValues;
             const auto stride = this->valueSize;
 
-            auto alpha = (t - t0) / (t1 - t0);
+            const auto alpha = (t - t0) / (t1 - t0);
 
             auto offset = i1 * stride;
 
-            for (auto end = offset + stride; offset != end; offset += 4) {
+            for (const auto end = offset + stride; offset != end; offset += 4) {
 
                 Quaternion::slerpFlat(*result, 0, values, offset - stride, values, offset, alpha);
             }

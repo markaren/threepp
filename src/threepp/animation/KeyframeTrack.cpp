@@ -1,19 +1,30 @@
 
 #include "threepp/animation/KeyframeTrack.hpp"
 
+#include "threepp/animation/AnimationUtils.hpp"
 #include "threepp/math/interpolants/CubicInterpolant.hpp"
 #include "threepp/math/interpolants/DiscreteInterpolant.hpp"
 #include "threepp/math/interpolants/LinearInterpolant.hpp"
 
+#include <iostream>
+#include <stdexcept>
+
 using namespace threepp;
+
+namespace {
+
+
+}// namespace
 
 Interpolation KeyframeTrack::defaultInterpolation = Interpolation::Linear;
 
 KeyframeTrack::KeyframeTrack(std::string name, const std::vector<float>& times, const std::vector<float>& values, std::optional<Interpolation> interpolation)
     : name_(std::move(name)),
       times_(times),
-      values_(values),
-      interpolation_(interpolation.value_or(defaultInterpolation)) {}
+      values_(values) {
+
+    setInterpolation(interpolation.value_or(defaultInterpolation));
+}
 
 KeyframeTrack& KeyframeTrack::shift(float timeOffset) {
 
@@ -178,18 +189,56 @@ KeyframeTrack& KeyframeTrack::optimize() {
 
 std::unique_ptr<Interpolant> KeyframeTrack::createInterpolant(std::vector<float>* result) {
 
-    switch (interpolation_) {
-        case Interpolation::Linear:
-            return std::make_unique<LinearInterpolant>(times_, values_, getValueSize(), result);
-        case Interpolation::Smooth:
-            return std::make_unique<CubicInterpolant>(times_, values_, getValueSize(), result);
-        case Interpolation::Discrete:
-            return std::make_unique<DiscreteInterpolant>(times_, values_, getValueSize(), result);
-    }
+   return createInterpolant_(times_, values_, getValueSize(), result);
+}
 
-    return nullptr;
+size_t KeyframeTrack::getValueSize() const {
+
+    return values_.size() / times_.size();
 }
 
 void KeyframeTrack::setInterpolation(Interpolation interpolation) {
 
+    std::optional<InterpolantFactory> factoryMethod;
+
+    switch (interpolation) {
+        case Interpolation::Discrete:
+            factoryMethod = [this](const std::vector<float>& times, const std::vector<float>& values, int valueSize, std::vector<float>* result) {
+                return this->InterpolantFactoryMethodDiscrete(times, values, valueSize, result);
+            };
+            break;
+        case Interpolation::Linear:
+            factoryMethod = [this](const std::vector<float>& times, const std::vector<float>& values, int valueSize, std::vector<float>* result) {
+                return this->InterpolantFactoryMethodLinear(times, values, valueSize, result);
+            };
+            break;
+        case Interpolation::Smooth:
+            factoryMethod = [this](const std::vector<float>& times, const std::vector<float>& values, int valueSize, std::vector<float>* result) {
+                return this->InterpolantFactoryMethodSmooth(times, values, valueSize, result);
+            };
+            break;
+    }
+
+    if (!factoryMethod) {
+
+        const std::string message{"KeyframeTrack: Unsupported interpolation type: " +
+                                  ValueTypeName() + "keyframe track named " + name_};
+
+        if (!createInterpolant_) {
+
+            // fall back to default, unless the default itself is messed up
+            if (interpolation != defaultInterpolation) {
+
+                setInterpolation(defaultInterpolation);
+            } else {
+
+                throw std::runtime_error(message);
+            }
+        }
+
+        std::cerr << "THREE.KeyframeTrack: " << message << std::endl;
+        return;
+    }
+
+    createInterpolant_ = *factoryMethod;
 }

@@ -5,7 +5,6 @@
 #include "threepp/animation/PropertyBinding.hpp"
 
 #include <memory>
-#include <optional>
 #include <string>
 
 namespace threepp {
@@ -15,7 +14,7 @@ namespace threepp {
     public:
         PropertyMixer(const std::shared_ptr<PropertyBinding>& binding, const std::string& typeName, size_t valueSize);
 
-        void accumulate(int accuIndex, float weight);
+        void accumulate(int accuIndex, float weight) const;
 
         void accumulateAdditive(float weight);
 
@@ -36,6 +35,14 @@ namespace threepp {
         size_t referenceCount{0};
         size_t _cacheIndex{0};
         std::vector<float> buffer;
+
+        size_t valueSize;
+
+        int _origIndex = 3;
+        int _addIndex = 4;
+
+        float cumulativeWeight = 0;
+        float cumulativeWeightAdditive = 0;
 
         std::shared_ptr<PropertyBinding> binding;
 
@@ -92,6 +99,24 @@ namespace threepp {
 
             // Slerp to the intermediate result
             Quaternion::slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, workOffset, t);
+        }
+
+        static void _setAdditiveIdentityNumeric(PropertyMixer* that) {
+
+            const auto startIndex = that->_addIndex * that->valueSize;
+            const auto endIndex = startIndex + that->valueSize;
+
+            for (auto i = startIndex; i < endIndex; i++) {
+
+                that->buffer[i] = 0;
+            }
+        }
+
+
+        static void _setAdditiveIdentityQuaternion(PropertyMixer* that) {
+
+            that->_setAdditiveIdentityNumeric(that);
+            that->buffer[that->_addIndex * that->valueSize + 3] = 1;
         }
     };
 

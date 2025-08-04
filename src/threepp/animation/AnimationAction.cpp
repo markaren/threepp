@@ -104,8 +104,10 @@ AnimationAction& AnimationAction::stopFading() {
 
     if (weightInterpolant) {
 
-        //        this->_weightInterpolant = nullptr;
-        //        this->_mixer._takeBackControlInterpolant(weightInterpolant);
+        // TODO
+
+        // this->_weightInterpolant = nullptr;
+        // this->_mixer._takeBackControlInterpolant(weightInterpolant);
     }
 
     return *this;
@@ -119,7 +121,7 @@ AnimationAction& AnimationAction::setEffectiveTimeScale(float timeScale) {
     return this->stopWarping();
 }
 
-float AnimationAction::getEffectiveTimeScale() {
+float AnimationAction::getEffectiveTimeScale() const {
 
     return this->_effectiveTimeScale;
 }
@@ -154,7 +156,7 @@ AnimationAction& AnimationAction::warp(float startTimeScale, float endTimeScale,
 
     if (!interpolant) {
 
-        //        interpolant = mixer._lendControlInterpolant();
+        // interpolant = mixer._lendControlInterpolant();
         //        this->_timeScaleInterpolant = interpolant;
     }
 

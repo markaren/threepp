@@ -32,7 +32,9 @@ namespace threepp {
 
         Sample evaluate(float t);
 
-        Sample copySampleValue_(size_t index);
+        Sample copySampleValue_(size_t index) const;
+
+        virtual ~Interpolant() = default;
 
     protected:
         size_t _cachedIndex{0};

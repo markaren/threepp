@@ -18,11 +18,11 @@ namespace threepp {
 
         AnimationAction* clipAction(const std::shared_ptr<AnimationClip>& clip,
                                     Object3D* optionalRoot = nullptr,
-                                    std::optional<AnimationBlendMode> blendMode = std::nullopt);
+                                    std::optional<AnimationBlendMode> blendMode = std::nullopt) const;
 
-        void stopAllAction();
+        void stopAllAction() const;
 
-        void update(float dt);
+        void update(float dt) const;
 
         ~AnimationMixer() override;
 
@@ -30,11 +30,11 @@ namespace threepp {
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
 
-        bool _isActiveAction(AnimationAction& action);
+        bool _isActiveAction(AnimationAction& action) const;
 
-        void _activateAction(const std::shared_ptr<AnimationAction>& action);
+        void _activateAction(const std::shared_ptr<AnimationAction>& action) const;
 
-        void _deactivateAction(const std::shared_ptr<AnimationAction>& action);
+        void _deactivateAction(const std::shared_ptr<AnimationAction>& action) const;
 
         friend class AnimationAction;
     };

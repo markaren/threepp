@@ -85,17 +85,17 @@ namespace threepp {
 
         struct SceneInfo;
 
-        std::shared_ptr<QuaternionKeyframeTrack> loadRotationTrack(const aiNodeAnim* aiNodeAnim) {
+        static std::shared_ptr<QuaternionKeyframeTrack> loadRotationTrack(const aiNodeAnim* aiNodeAnim) {
             std::vector<float> times;
             std::vector<float> values;
             std::string name(aiNodeAnim->mNodeName.data);
-            name.erase(std::remove(name.begin(), name.end(), '.'), name.end());
+            std::erase(name, '.');
             for (auto k = 0; k < aiNodeAnim->mNumRotationKeys; k++) {
 
                 const auto key = aiNodeAnim->mRotationKeys[k];
-                times.emplace_back(float(key.mTime/1000));
-                values.insert(values.end(), {(float(key.mValue.x)), float(key.mValue.y),
-                                             float(key.mValue.z), float(key.mValue.w)});
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z), static_cast<float>(key.mValue.w)});
             }
 
             return std::make_shared<QuaternionKeyframeTrack>(name, times, values);

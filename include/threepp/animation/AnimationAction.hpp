@@ -61,7 +61,7 @@ namespace threepp {
         AnimationAction& setEffectiveTimeScale(float timeScale);
 
         // return the time scale considering warping and .paused
-        float getEffectiveTimeScale();
+        float getEffectiveTimeScale() const;
 
         AnimationAction& setDuration(float duration);
 
