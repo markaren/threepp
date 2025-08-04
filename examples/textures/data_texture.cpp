@@ -17,6 +17,22 @@ namespace {
         sprite.position.set(-halfWidth + halfImageWidth, halfHeight - halfImageHeight, 1);
     }
 
+    void addGrid(Scene& scene) {
+        auto grid1 = GridHelper::create(5);
+        grid1->rotateX(math::PI / 2);
+        grid1->position.z = -2.5;
+        scene.add(grid1);
+
+        auto grid2 = GridHelper::create(5);
+        grid2->rotateX(math::PI / 2).rotateZ(math::PI / 2);
+        grid2->position.x = -2.5;
+        scene.add(grid2);
+
+        auto grid3 = GridHelper::create(5);
+        grid3->position.y = -2.5;
+        scene.add(grid3);
+    }
+
 }// namespace
 
 int main() {
@@ -39,7 +55,7 @@ int main() {
     OrbitControls controls{camera, canvas};
 
     unsigned int textureSize = 128;
-    auto texture = DataTexture::create(std::vector<unsigned char>(textureSize * textureSize * 3), textureSize, textureSize);
+    auto texture = DataTexture::create(3, textureSize, textureSize);
     texture->format = Format::RGB;
     texture->minFilter = Filter::Nearest;
     texture->magFilter = Filter::Nearest;
@@ -61,24 +77,13 @@ int main() {
     scene.add(sphere);
 
     const auto boxGeometry = BoxGeometry::create(1, 1, 1);
-    const auto boxMaterial = MeshBasicMaterial::create({{"map", tl.load("data/textures/crate.gif")}});
+    const auto boxMaterial = MeshBasicMaterial::create(
+            {{"map", tl.load("data/textures/crate.gif")}});
     Mesh box(boxGeometry, boxMaterial);
     box.position.x = -1;
     scene.add(box);
 
-    auto grid1 = GridHelper::create(5);
-    grid1->rotateX(math::PI / 2);
-    grid1->position.z = -2.5;
-    scene.add(grid1);
-
-    auto grid2 = GridHelper::create(5);
-    grid2->rotateX(math::PI / 2).rotateZ(math::PI / 2);
-    grid2->position.x = -2.5;
-    scene.add(grid2);
-
-    auto grid3 = GridHelper::create(5);
-    grid3->position.y = -2.5;
-    scene.add(grid3);
+    addGrid(scene);
 
     canvas.onWindowResize([&](WindowSize newSize) {
         camera.aspect = newSize.aspect();

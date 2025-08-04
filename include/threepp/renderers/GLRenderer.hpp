@@ -73,7 +73,7 @@ namespace threepp {
 
         bool checkShaderErrors = false;
 
-        explicit GLRenderer(WindowSize size = {}, const Parameters& parameters = {});
+        explicit GLRenderer(std::pair<int, int> size = {}, const Parameters& parameters = {});
 
         GLRenderer(GLRenderer&&) = delete;
         GLRenderer(const GLRenderer&) = delete;
@@ -94,11 +94,11 @@ namespace threepp {
 
         [[nodiscard]] WindowSize size() const;
 
-        void setSize(std::pair<int, int> size);
+        void setSize(const std::pair<int, int>& size);
 
         void getDrawingBufferSize(Vector2& target) const;
 
-        void setDrawingBufferSize(std::pair<int, int> size, int pixelRatio);
+        void setDrawingBufferSize(const std::pair<int, int>& size, int pixelRatio);
 
         void getCurrentViewport(Vector4& target) const;
 
@@ -108,11 +108,15 @@ namespace threepp {
 
         void setViewport(int x, int y, int width, int height);
 
+        void setViewport(const std::pair<int, int>& pos, const std::pair<int ,int>& size);
+
         void getScissor(Vector4& target);
 
         void setScissor(const Vector4& v);
 
         void setScissor(int x, int y, int width, int height);
+
+        void setScissor(const std::pair<int, int>& pos, const std::pair<int, int>& size);
 
         [[nodiscard]] bool getScissorTest() const;
 
@@ -150,7 +154,9 @@ namespace threepp {
 
         void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
 
-        void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data);
+        [[nodiscard]] std::vector<unsigned char> readRGBPixels();
+
+        void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data);
 
         // Experimental threepp function
         void copyTextureToImage(Texture& texture);
@@ -160,6 +166,8 @@ namespace threepp {
         [[nodiscard]] const gl::GLInfo& info() const;
 
         [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const;
+
+        void writeFramebuffer(const std::filesystem::path& filename);
 
         ~GLRenderer();
 

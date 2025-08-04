@@ -6,7 +6,6 @@
 #include "threepp/objects/LineSegments.hpp"
 #include "threepp/objects/Skeleton.hpp"
 
-
 namespace threepp {
 
     class SkeletonHelper: public LineSegments {

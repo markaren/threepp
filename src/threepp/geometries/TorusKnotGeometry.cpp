@@ -4,7 +4,7 @@
 #include "threepp/math/MathUtils.hpp"
 
 #include <cmath>
-#include <list>
+#include <vector>
 
 using namespace threepp;
 
@@ -28,10 +28,10 @@ TorusKnotGeometry::TorusKnotGeometry(float radius, float tube, unsigned int tubu
 
     // buffers
 
-    std::list<unsigned int> indices;
-    std::list<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
+    std::vector<unsigned int> indices;
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> uvs;
 
     // helper variables
 

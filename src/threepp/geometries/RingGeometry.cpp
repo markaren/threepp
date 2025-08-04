@@ -2,7 +2,7 @@
 #include "threepp/geometries/RingGeometry.hpp"
 
 #include <cmath>
-#include <list>
+#include <vector>
 
 using namespace threepp;
 
@@ -12,10 +12,10 @@ RingGeometry::RingGeometry(const Params& params) {
     unsigned int thetaSegments = std::max(3u, params.thetaSegments);
     unsigned int phiSegments = std::max(1u, params.phiSegments);
 
-    std::list<unsigned int> indices;
-    std::list<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
+    std::vector<unsigned int> indices;
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> uvs;
 
     // some helper variables
 

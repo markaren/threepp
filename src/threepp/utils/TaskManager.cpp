@@ -14,8 +14,6 @@ struct TaskManager::Impl {
 
     void handleTasks() {
 
-        if (tasks_.empty()) return;
-
         if (previousTime_ < 0) {
             previousTime_ = getCurrentTimeInSeconds();// first invocation
         }
@@ -25,7 +23,9 @@ struct TaskManager::Impl {
         time_ += deltaTime;
         previousTime_ = currentTime;
 
-        std::unique_lock<decltype(m_)> lock(m_);
+        std::unique_lock lock(m_);
+        if (tasks_.empty()) return;
+
         while (!tasks_.empty()) {
             if (tasks_.top().second < time_) {
                 auto task = tasks_.top();
@@ -41,7 +41,7 @@ struct TaskManager::Impl {
 
     void invokeLater(const Task& task, double delay) {
 
-        std::lock_guard<decltype(m_)> lock(m_);
+        std::lock_guard lock(m_);
         tasks_.emplace(task, time_ + delay);
     }
 

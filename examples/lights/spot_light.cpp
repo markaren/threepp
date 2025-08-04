@@ -79,8 +79,8 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
-        float t = clock.elapsedTime;
+        const auto dt = clock.getDelta();
+        const auto t = clock.elapsedTime;
 
         knot->rotation.y += 0.5f * dt;
 

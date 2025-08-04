@@ -55,10 +55,9 @@ namespace threepp {
         void addJoint(const std::shared_ptr<Object3D>& joint, const JointInfo& info) {
             joints_.emplace_back(joint);
             jointInfos_.emplace_back(info);
+            origPose_.emplace(std::make_pair(joint.get(), std::make_pair(joint->position.clone(), joint->quaternion.clone())));
             if (info.type != JointType::Fixed) {
-                size_t idx = joints_.size() - 1;
-                articulatedJoints_.emplace(idx, std::make_pair(joint.get(), info));
-                origPose_.emplace(idx, std::make_pair(joint->position.clone(), joint->quaternion.clone()));
+                articulatedJoints_.emplace_back(joint.get(), info);
             }
         }
 
@@ -70,16 +69,17 @@ namespace threepp {
                 const auto& joint = joints_.at(i);
                 const auto& info = jointInfos_.at(i);
 
+                auto jointTransform = Matrix4()
+                                              .makeRotationFromQuaternion(origPose_.at(joint.get()).second)
+                                              .setPosition(origPose_.at(joint.get()).first);
+
                 switch (info.type) {
 
                     case JointType::Fixed: {
-                        result.multiply(*joint->matrix);
+                        result.multiply(jointTransform);
                         break;
                     }
                     case JointType::Revolute: {
-                        auto jointTransform = Matrix4()
-                                                      .makeRotationFromQuaternion(origPose_.at(j).second)
-                                                      .setPosition(origPose_.at(j).first);
                         auto value = values[j++];
                         value = deg ? math::degToRad(value) : value;
                         if (info.range.has_value()) {
@@ -90,10 +90,7 @@ namespace threepp {
                         break;
                     }
                     case JointType::Prismatic: {
-                        auto jointTransform = Matrix4()
-                                                      .makeRotationFromQuaternion(origPose_.at(j).second)
-                                                      .setPosition(origPose_.at(j).first);
-                        auto value = values[j++];
+                        const auto value = values[j++];
                         result.multiply(jointTransform.multiply(Matrix4().makeTranslation(info.axis.clone().multiplyScalar(value))));
                         break;
                     }
@@ -128,18 +125,18 @@ namespace threepp {
         }
 
         void setJointValues(const std::vector<float>& values) {
-            for (unsigned i = 0; i < values.size(); ++i) {
+            for (size_t i = 0; i < values.size(); ++i) {
                 setJointValue(i, values[i]);
             }
         }
 
-        void setJointValue(int index, float value, bool deg = false) {
+        void setJointValue(size_t index, float value, bool deg = false) {
 
             const auto& joint = articulatedJoints_.at(index).first;
             const auto& info = articulatedJoints_.at(index).second;
 
-            const auto& origPos = origPose_.at(index).first;
-            const auto& origQuat = origPose_.at(index).second;
+            const auto& origPos = origPose_.at(joint).first;
+            const auto& origQuat = origPose_.at(joint).second;
 
             switch (info.type) {
                 case JointType::Revolute: {
@@ -187,7 +184,7 @@ namespace threepp {
             return values;
         }
 
-        [[nodiscard]] std::pair<float, float> getJointRange(int index, bool deg = false) const {
+        [[nodiscard]] std::pair<float, float> getJointRange(size_t index, bool deg = false) const {
             const auto& info = articulatedJoints_.at(index).second;
             const auto type = articulatedJoints_.at(index).second.type;
             if (!info.range) {
@@ -213,7 +210,7 @@ namespace threepp {
             return info;
         }
 
-        [[nodiscard]] float getJointValue(int index, bool deg = false) const {
+        [[nodiscard]] float getJointValue(size_t index, bool deg = false) const {
             const auto& info = articulatedJoints_.at(index).second;
             if (deg && info.type == JointType::Revolute) {
                 return math::radToDeg(jointValues_[index]);
@@ -228,8 +225,8 @@ namespace threepp {
         std::vector<std::shared_ptr<Object3D>> links_;
         std::vector<std::shared_ptr<Object3D>> colliders_;
         std::vector<std::shared_ptr<Object3D>> joints_;
-        std::unordered_map<size_t, std::pair<Object3D*, JointInfo>> articulatedJoints_;
-        std::unordered_map<size_t, std::pair<Vector3, Quaternion>> origPose_;
+        std::vector<std::pair<Object3D*, JointInfo>> articulatedJoints_;
+        std::unordered_map<Object3D* , std::pair<Vector3, Quaternion>> origPose_;
     };
 
 }// namespace threepp

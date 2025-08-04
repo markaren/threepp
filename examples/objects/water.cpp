@@ -113,7 +113,7 @@ int main() {
     Clock clock;
     auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+        const auto t = clock.getElapsedTime();
 
         sphere->position.y = std::sin(t) * 20 + 5;
         sphere->rotation.x = t * 0.05f;

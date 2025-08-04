@@ -38,6 +38,9 @@ Because fun.
 
 Use CMake for project configuration and building.
 
+Do note that you may also use a system installation of GLFW3 if you want or have issues with the bundled setup by passing
+`-DTHREEPP_USE_EXTERNAL_GLFW=ON` to CMake.
+
 ###### Windows
 ```shell
 cmake . -A x64 -B build -DCMAKE_BUILD_TYPE="Release"
@@ -53,7 +56,7 @@ cmake --build build
 However, some of the examples (and headers) require additional dependencies. 
 To make use of all features and to enable/build all examples, the use of [vcpkg](https://vcpkg.io/en/index.html) is encouraged.
 
-#### vcpkg (using manifest mode)
+#### Using vcpkg for getting optional dependecies (using manifest mode)
 
 Call CMake with `-DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcpkg.cmake`
 

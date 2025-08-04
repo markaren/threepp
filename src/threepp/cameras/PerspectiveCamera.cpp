@@ -86,7 +86,7 @@ void PerspectiveCamera::clearViewOffset() {
 
 void PerspectiveCamera::updateProjectionMatrix() {
 
-    float top = near * std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom;
+    float top = nearPlane * std::tan(math::DEG2RAD * 0.5f * this->fov) / this->zoom;
     float height = 2.f * top;
     float width = this->aspect * height;
     float left = -0.5f * width;
@@ -104,10 +104,10 @@ void PerspectiveCamera::updateProjectionMatrix() {
 
     const auto skew = this->filmOffset;
     if (skew != 0) {
-        left += (near * skew / this->getFilmWidth());
+        left += (nearPlane * skew / this->getFilmWidth());
     }
 
-    this->projectionMatrix.makePerspective(left, (left + width), top, (top - height), near, far);
+    this->projectionMatrix.makePerspective(left, (left + width), top, (top - height), nearPlane, farPlane);
 
     this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
 }

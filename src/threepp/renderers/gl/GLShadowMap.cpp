@@ -223,7 +223,7 @@ struct GLShadowMap::Impl {
 
                             if (groupMaterial && groupMaterial->visible) {
 
-                                const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, groupMaterial, light, shadowCamera->near, shadowCamera->far);
+                                const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, groupMaterial, light, shadowCamera->nearPlane, shadowCamera->farPlane);
 
                                 _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, group);
                             }
@@ -232,7 +232,7 @@ struct GLShadowMap::Impl {
 
                 } else if (material.front()->visible) {
 
-                    const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front().get(), light, shadowCamera->near, shadowCamera->far);
+                    const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front().get(), light, shadowCamera->nearPlane, shadowCamera->farPlane);
 
                     _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, std::nullopt);
                 }

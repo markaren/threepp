@@ -37,7 +37,7 @@ namespace {
 int main() {
 
     int amount = 10;
-    const int maxAmount = 25;
+    constexpr int maxAmount = 25;
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
     GLRenderer renderer(canvas.size());
@@ -46,7 +46,7 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
-    camera->position.set(float(maxAmount), float(maxAmount), float(maxAmount));
+    camera->position.set(static_cast<float>(maxAmount), static_cast<float>(maxAmount), static_cast<float>(maxAmount));
 
     OrbitControls controls{*camera, canvas};
 
@@ -58,7 +58,6 @@ int main() {
     auto geometry = IcosahedronGeometry::create(0.5f, 2);
     auto mesh = InstancedMesh::create(geometry, material, static_cast<int>(std::pow(maxAmount, 3)));
     mesh->instanceMatrix()->setUsage(DrawUsage::Dynamic);
-    mesh->setCount(static_cast<int>(std::pow(amount, 3)));
     setupInstancedMesh(*mesh, amount);
     scene->add(mesh);
 
@@ -107,7 +106,7 @@ int main() {
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
     MouseMoveListener l([&](auto& pos) {
-        auto size = canvas.size();
+        const auto size = canvas.size();
         mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
         mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
     });
@@ -120,10 +119,10 @@ int main() {
     long long it{0};
     canvas.animate([&]() {
         raycaster.setFromCamera(mouse, *camera);
-        auto intersects = raycaster.intersectObject(*mesh);
+        const auto intersects = raycaster.intersectObject(*mesh);
 
         if (!intersects.empty()) {
-            auto instanceId = intersects.front().instanceId;
+            const auto instanceId = intersects.front().instanceId;
             if (instanceId && !colorMap[*instanceId]) {
                 mesh->setColorAt(*instanceId, Color().randomize());
                 mesh->instanceColor()->needsUpdate();

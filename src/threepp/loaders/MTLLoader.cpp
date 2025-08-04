@@ -6,7 +6,9 @@
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#include <algorithm>
 #include <fstream>
+#include <functional>
 #include <utility>
 
 using namespace threepp;

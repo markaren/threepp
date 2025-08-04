@@ -7,6 +7,8 @@
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include <algorithm>
+
 using namespace threepp;
 using namespace threepp::gl;
 

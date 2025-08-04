@@ -70,7 +70,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         engine.update(dt * 0.5f);
         renderer.render(scene, camera);

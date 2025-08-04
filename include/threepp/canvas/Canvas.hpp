@@ -41,6 +41,8 @@ namespace threepp {
         // returns false if application should quit, true otherwise
         bool animateOnce(const std::function<void()>& f);
 
+        [[nodiscard]] bool isOpen() const;
+
         void close();
 
         [[nodiscard]] void* windowPtr() const;
@@ -74,6 +76,8 @@ namespace threepp {
 
             Parameters& exitOnKeyEscape(bool flag);
 
+            Parameters& headless(bool flag);
+
         private:
             std::optional<WindowSize> size_;
             int antialiasing_{2};
@@ -81,9 +85,10 @@ namespace threepp {
             bool vsync_{true};
             bool resizable_{true};
             bool exitOnKeyEscape_{true};
+            bool headless_{false};
             std::optional<std::filesystem::path> favicon_;
 
-            friend struct Canvas::Impl;
+            friend struct Impl;
         };
     };
 

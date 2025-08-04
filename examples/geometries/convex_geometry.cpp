@@ -39,7 +39,7 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    int numPoints = 100;
+    constexpr int numPoints = 100;
     std::vector<Vector3> pts;
     pts.reserve(numPoints);
     for (auto i = 0; i < numPoints; i++) {
@@ -81,7 +81,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         convex->rotation.y += 0.2f * dt;
 

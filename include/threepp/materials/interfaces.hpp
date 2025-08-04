@@ -2,8 +2,6 @@
 #ifndef THREEPP_INTERFACES_HPP
 #define THREEPP_INTERFACES_HPP
 
-#include <utility>
-
 #include "threepp/materials/Material.hpp"
 
 #include "threepp/textures/Texture.hpp"

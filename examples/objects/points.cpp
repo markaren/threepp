@@ -20,12 +20,12 @@ int main() {
         renderer.setSize(size);
     });
 
-    const int numParticles = 500000;
+    constexpr int numParticles = 500000;
     std::vector<float> positions(numParticles * 3);
     std::vector<float> colors(numParticles * 3);
 
-    const float n = 1000;
-    const float n2 = n / 2;
+    constexpr float n = 1000;
+    constexpr float n2 = n / 2;
 
     for (int i = 0; i < numParticles; i += 3) {
         positions[i] = (math::randFloat() * n - n2);
@@ -43,16 +43,16 @@ int main() {
 
     geometry->computeBoundingSphere();
 
-    auto material = PointsMaterial::create();
+    const auto material = PointsMaterial::create();
     material->size = 2;
     material->vertexColors = true;
 
-    auto points = Points::create(geometry, material);
+    const auto points = Points::create(geometry, material);
     scene->add(points);
 
     Clock clock;
     canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+        const auto t = clock.getElapsedTime();
 
         points->rotation.x = t * 0.25f;
         points->rotation.y = t * 0.5f;

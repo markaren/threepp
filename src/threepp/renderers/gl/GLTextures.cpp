@@ -4,9 +4,7 @@
 #include "threepp/renderers/gl/GLCapabilities.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
-#include "threepp/textures/CubeTexture.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
-#include "threepp/textures/DepthTexture.hpp"
 
 #if EMSCRIPTEN
 #include <GLES3/gl32.h>
@@ -202,8 +200,6 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
     }
 
     textureProperties->version = texture.version();
-
-    if (texture.onUpdate) texture.onUpdate.value()(texture);
 }
 
 void gl::GLTextures::initTexture(TextureProperties* textureProperties, Texture& texture) {
@@ -249,11 +245,6 @@ void gl::GLTextures::deallocateRenderTarget(GLRenderTarget* renderTarget) {
         glDeleteTextures(1, &textureProperties->glTexture.value());
 
         info->memory.textures--;
-    }
-
-    if (renderTarget->depthTexture) {
-
-        renderTarget->depthTexture->dispose();
     }
 
     glDeleteFramebuffers(1, &renderTargetProperties->glFramebuffer.value());
@@ -379,9 +370,6 @@ void gl::GLTextures::uploadCubeTexture(TextureProperties* textureProperties, Tex
     }
 
     textureProperties->version = texture.version();
-    if (texture.onUpdate) {
-        texture.onUpdate.value()(texture);
-    }
 }
 
 void gl::GLTextures::setupFrameBufferTexture(
@@ -443,59 +431,15 @@ void gl::GLTextures::setupRenderBufferStorage(unsigned int renderbuffer, GLRende
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
 }
 
-void gl::GLTextures::setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget) {
-
-    state->bindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-
-    if (!(renderTarget->depthTexture && renderTarget->depthTexture)) {
-
-        throw std::runtime_error("renderTarget.depthTexture must be an instance of THREE.DepthTexture");
-    }
-
-    // upload an empty depth texture with framebuffer size
-    if (!properties->textureProperties.get(renderTarget->depthTexture.get())->glTexture ||
-        renderTarget->depthTexture->image().width != renderTarget->width ||
-        renderTarget->depthTexture->image().height != renderTarget->height) {
-
-        renderTarget->depthTexture->image().width = renderTarget->width;
-        renderTarget->depthTexture->image().height = renderTarget->height;
-        renderTarget->depthTexture->needsUpdate();
-    }
-
-    setTexture2D(*renderTarget->depthTexture, 0);
-
-    const auto glDepthTexture = properties->textureProperties.get(renderTarget->depthTexture.get())->glTexture;
-
-    if (renderTarget->depthTexture->format == Format::Depth) {
-
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, *glDepthTexture, 0);
-
-    } else if (renderTarget->depthTexture->format == Format::DepthStencil) {
-
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, *glDepthTexture, 0);
-
-    } else {
-
-        throw std::runtime_error("Unknown depthTexture format");
-    }
-}
-
 void gl::GLTextures::setupDepthRenderbuffer(GLRenderTarget* renderTarget) {
 
-    auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
+    const auto renderTargetProperties = properties->renderTargetProperties.get(renderTarget);
 
-    if (renderTarget->depthTexture) {
-
-        setupDepthTexture(*renderTargetProperties->glFramebuffer, renderTarget);
-
-    } else {
-
-        state->bindFramebuffer(GL_FRAMEBUFFER, renderTargetProperties->glFramebuffer.value());
-        GLuint glDepthbuffer;
-        glGenRenderbuffers(1, &glDepthbuffer);
-        renderTargetProperties->glDepthbuffer = glDepthbuffer;
-        setupRenderBufferStorage(*renderTargetProperties->glDepthbuffer, renderTarget);
-    }
+    state->bindFramebuffer(GL_FRAMEBUFFER, renderTargetProperties->glFramebuffer.value());
+    GLuint glDepthbuffer;
+    glGenRenderbuffers(1, &glDepthbuffer);
+    renderTargetProperties->glDepthbuffer = glDepthbuffer;
+    setupRenderBufferStorage(*renderTargetProperties->glDepthbuffer, renderTarget);
 
     state->bindFramebuffer(GL_FRAMEBUFFER, 0);
 }

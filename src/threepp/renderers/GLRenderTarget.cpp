@@ -16,7 +16,7 @@ GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const Op
       width(width), height(height),
       scissor(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
       viewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
-      depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
+      depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer),
       texture(Texture::create({Image({}, width, height)})) {
 
     if (options.mapping) texture->mapping = *options.mapping;
@@ -62,7 +62,6 @@ GLRenderTarget& GLRenderTarget::copy(const GLRenderTarget& source) {
 
     this->depthBuffer = source.depthBuffer;
     this->stencilBuffer = source.stencilBuffer;
-    this->depthTexture = source.depthTexture;
 
     return *this;
 }

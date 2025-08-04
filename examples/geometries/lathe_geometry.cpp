@@ -15,11 +15,11 @@ namespace {
     }
 
     std::shared_ptr<Mesh> createLathe() {
-        auto geometry = LatheGeometry::create(generateLathePoints());
-        auto material = MeshNormalMaterial::create({{"side", Side::Double}});
+        const auto geometry = LatheGeometry::create(generateLathePoints());
+        const auto material = MeshNormalMaterial::create({{"side", Side::Double}});
         auto mesh = Mesh::create(geometry, material);
 
-        auto line = LineSegments::create(WireframeGeometry::create(*geometry));
+        const auto line = LineSegments::create(WireframeGeometry::create(*geometry));
         mesh->add(line);
 
         return mesh;
@@ -27,11 +27,11 @@ namespace {
 
     std::shared_ptr<Mesh> createCapsule() {
 
-        auto geometry = CapsuleGeometry::create();
-        auto material = MeshNormalMaterial::create();
+        const auto geometry = CapsuleGeometry::create();
+        const auto material = MeshNormalMaterial::create();
         auto mesh = Mesh::create(geometry, material);
 
-        auto line = LineSegments::create(WireframeGeometry::create(*geometry));
+        const auto line = LineSegments::create(WireframeGeometry::create(*geometry));
         mesh->add(line);
 
         return mesh;
@@ -68,7 +68,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         lathe->rotation.y += 0.8f * dt;
         lathe->rotation.x += 0.5f * dt;

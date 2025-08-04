@@ -23,7 +23,7 @@ int main() {
     scene.add(sphere);
 
     unsigned int textureSizeXY = 256;
-    auto texture = DataTexture::create(std::vector<unsigned char>(textureSizeXY * textureSizeXY * 3), textureSizeXY, textureSizeXY);
+    auto texture = DataTexture::create(3, textureSizeXY, textureSizeXY);
     texture->format = Format::RGB;
     texture->minFilter = Filter::Nearest;
     texture->magFilter = Filter::Nearest;

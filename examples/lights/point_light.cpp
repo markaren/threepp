@@ -36,27 +36,27 @@ namespace {
     }
 
     auto addLights(Scene& scene) {
-        auto light1 = PointLight::create(Color::yellow);
+        const auto light1 = PointLight::create(Color::yellow);
         light1->castShadow = true;
         light1->shadow->bias = -0.005f;
         light1->distance = 8;
         light1->position.y = 4;
 
-        auto light2 = PointLight::create(Color::white);
+        const auto light2 = PointLight::create(Color::white);
         light2->castShadow = true;
         light2->shadow->bias = -0.005f;
         light2->distance = 8;
         light2->position.y = 4;
 
-        auto light3 = PointLight::create(Color::purple);
+        const auto light3 = PointLight::create(Color::purple);
         light3->castShadow = true;
         light3->shadow->bias = -0.005f;
         light3->distance = 10;
         light3->position.y = 7;
 
-        auto lightHelper1 = PointLightHelper::create(*light1, 0.25f);
-        auto lightHelper2 = PointLightHelper::create(*light2, 0.25f);
-        auto lightHelper3 = PointLightHelper::create(*light3, 0.25f);
+        const auto lightHelper1 = PointLightHelper::create(*light1, 0.25f);
+        const auto lightHelper2 = PointLightHelper::create(*light2, 0.25f);
+        const auto lightHelper3 = PointLightHelper::create(*light3, 0.25f);
 
         light1->name = "light1";
         light2->name = "light2";
@@ -105,8 +105,8 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        const float dt = clock.getDelta();
-        const float t = clock.elapsedTime;
+        const auto dt = clock.getDelta();
+        const auto t = clock.elapsedTime;
 
         knot->rotation.y += 0.5f * dt;
 

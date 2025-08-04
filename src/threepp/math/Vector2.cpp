@@ -398,3 +398,13 @@ Vector2 Vector2::operator/(float value) const {
 
     return Vector2(x, y).divideScalar(value);
 }
+
+Vector2::operator std::pair<int, int>() const {
+
+    return {static_cast<int>(x), static_cast<int>(y)};
+}
+
+Vector2::operator std::pair<float, float>() const {
+
+    return {x, y};
+}

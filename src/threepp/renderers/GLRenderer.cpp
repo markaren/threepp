@@ -31,13 +31,18 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 #include "threepp/objects/Sprite.hpp"
 
+#include "threepp/utils/ImageUtils.hpp"
+
 #ifndef EMSCRIPTEN
 #include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
 #endif
 
-#include <cmath>
+#ifndef STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+#endif
 
 
 using namespace threepp;
@@ -138,7 +143,7 @@ struct GLRenderer::Impl {
 
     gl::GLShadowMap shadowMap;
 
-    Impl(GLRenderer& scope, WindowSize size, const Parameters& parameters)
+    Impl(GLRenderer& scope, const std::pair<int, int>& size, const Parameters& parameters)
         : scope(scope), _size(size),
           cubemaps(scope),
           bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
@@ -157,7 +162,7 @@ struct GLRenderer::Impl {
           _emptyScene(std::make_unique<Scene>()),
           onMaterialDispose(this) {
 
-        this->setViewport(0, 0, size.width(), size.height());
+        this->setViewport(0, 0, _size.width(), _size.height());
         this->setScissor(0, 0, _size.width(), _size.height());
     }
 
@@ -840,7 +845,7 @@ struct GLRenderer::Impl {
 
             if (gl::GLCapabilities::instance().logarithmicDepthBuffer) {
 
-                p_uniforms->setValue("logDepthBufFC", 2.f / (std::log(camera->far + 1.f) / math::LN2));
+                p_uniforms->setValue("logDepthBufFC", 2.f / (std::log(camera->farPlane + 1.f) / math::LN2));
             }
 
             if (_currentCamera != camera) {
@@ -1103,23 +1108,41 @@ struct GLRenderer::Impl {
         state.unbindTexture();
     }
 
-    void readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
+    std::vector<unsigned char> readRGBPixels() {
+
+        const auto [width, height] = _size;
+
+        std::vector<unsigned char> data(width * height * 3);
+
+        readPixels({0, 0}, _size, Format::RGB, data.data());
+
+        return data;
+    }
+
+    void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
         const auto glFormat = gl::toGLFormat(format);
 
-        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.width(), size.width(), glFormat, GL_UNSIGNED_BYTE, data);
+        // this was size.width(), size.width() before refactor.. I assume it was an error
+        glReadPixels(static_cast<int>(position.x), static_cast<int>(position.y), size.first, size.second, glFormat, GL_UNSIGNED_BYTE, data);
     }
 
     void copyTextureToImage(Texture& texture) {
-
+#ifdef __EMSCRIPTEN__
+        std::cerr << "[GLRenderer] copyTextureToImage not available with Emscripten" << std::endl;
+        return;
+#endif
         textures.setTexture2D(texture, 0);
 
         auto& image = texture.image();
         auto& data = image.data();
-        auto newSize = image.width * image.height * (texture.format == Format::RGB ? 3 : 4);
+        const auto newSize = image.width * image.height * (texture.format == Format::RGB || texture.format == Format::BGR ? 3 : 4);
         data.resize(newSize);
 
+
+        // Only run this on desktop OpenGL, not in WebGL
         glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
+
 
         state.unbindTexture();
     }
@@ -1136,6 +1159,39 @@ struct GLRenderer::Impl {
         _scissor.set(static_cast<float>(x), static_cast<float>(y), static_cast<float>(width), static_cast<float>(height));
 
         state.scissor(_currentScissor.copy(_scissor).multiplyScalar(static_cast<float>(_pixelRatio)).floor());
+    }
+
+    void writeFramebuffer(const std::filesystem::path& filename) {
+        auto ext = filename.extension().string();
+        std::ranges::transform(ext, ext.begin(), ::tolower);
+        std::vector<unsigned char> data;
+        const auto [width, height] = _size;
+        if (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp") {
+            data = readRGBPixels();
+            flipImage(data, 3, width, height);
+        } else {
+            throw std::runtime_error("Unsupported file format");
+        }
+        if (filename.has_parent_path() && !exists(filename.parent_path())) {
+            std::error_code ec;
+            create_directories(filename.parent_path(), ec);
+            if (ec) {
+                std::cerr << "Error creating directories: " << ec.message() << '\n';
+            }
+        }
+        bool sucess = false;
+        if (ext == ".png") {
+            sucess = stbi_write_png(filename.string().c_str(), width, height, 3, data.data(), width * 3);
+        }
+        if (ext == ".jpg" || ext == ".jpeg") {
+            sucess = stbi_write_jpg(filename.string().c_str(), width, height, 3, data.data(), 100);
+        }
+        if (ext == ".bmp") {
+            sucess = stbi_write_bmp(filename.string().c_str(), width, height, 3, data.data());
+        }
+        if (sucess) {
+            std::cout << "Saved framebuffer to '" << absolute(filename) << "'" << std::endl;
+        }
     }
 
     void dispose() {
@@ -1162,7 +1218,7 @@ struct GLRenderer::Impl {
 };
 
 
-GLRenderer::GLRenderer(WindowSize size, const GLRenderer::Parameters& parameters) {
+GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
 
 #ifndef EMSCRIPTEN
     loadGlad();// if Glad has yet to be loaded, do it now
@@ -1208,7 +1264,7 @@ WindowSize GLRenderer::size() const {
     return pimpl_->_size;
 }
 
-void GLRenderer::setSize(std::pair<int, int> size) {
+void GLRenderer::setSize(const std::pair<int, int>& size) {
 
     pimpl_->_size = size;
 
@@ -1220,7 +1276,7 @@ void GLRenderer::getDrawingBufferSize(Vector2& target) const {
     target.set(static_cast<float>(pimpl_->_size.width() * pimpl_->_pixelRatio), static_cast<float>(pimpl_->_size.height() * pimpl_->_pixelRatio)).floor();
 }
 
-void GLRenderer::setDrawingBufferSize(std::pair<int, int> size, int pixelRatio) {
+void GLRenderer::setDrawingBufferSize(const std::pair<int, int>& size, int pixelRatio) {
 
     pimpl_->_size = size;
 
@@ -1241,12 +1297,17 @@ void GLRenderer::getViewport(Vector4& target) const {
 
 void GLRenderer::setViewport(const Vector4& v) {
 
-    setViewport(v.x, v.y, v.z, v.w);
+    pimpl_->setViewport(v.x, v.y, v.z, v.w);
 }
 
 void GLRenderer::setViewport(int x, int y, int width, int height) {
 
     pimpl_->setViewport(x, y, width, height);
+}
+
+void GLRenderer::setViewport(const std::pair<int, int>& pos, const std::pair<int, int>& size) {
+
+    pimpl_->setViewport(pos.first, pos.second, size.first, size.second);
 }
 
 void GLRenderer::getScissor(Vector4& target) {
@@ -1256,12 +1317,17 @@ void GLRenderer::getScissor(Vector4& target) {
 
 void GLRenderer::setScissor(const Vector4& v) {
 
-    setScissor(v.x, v.y, v.z, v.w);
+    pimpl_->setScissor(v.x, v.y, v.z, v.w);
 }
 
 void GLRenderer::setScissor(int x, int y, int width, int height) {
 
     pimpl_->setScissor(x, y, width, height);
+}
+
+void GLRenderer::setScissor(const std::pair<int, int>& pos, const std::pair<int, int>& size) {
+
+    pimpl_->setScissor(pos.first, pos.second, size.first, size.second);
 }
 
 bool GLRenderer::getScissorTest() const {
@@ -1338,7 +1404,12 @@ void GLRenderer::copyFramebufferToTexture(const Vector2& position, Texture& text
     pimpl_->copyFramebufferToTexture(position, texture, level);
 }
 
-void GLRenderer::readPixels(const Vector2& position, const WindowSize& size, Format format, unsigned char* data) {
+std::vector<unsigned char> GLRenderer::readRGBPixels() {
+
+    return pimpl_->readRGBPixels();
+}
+
+void GLRenderer::readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data) {
 
     pimpl_->readPixels(position, size, format, data);
 }
@@ -1376,6 +1447,11 @@ GLRenderTarget* GLRenderer::getRenderTarget() {
 std::optional<unsigned int> GLRenderer::getGlTextureId(Texture& texture) const {
 
     return pimpl_->getGlTextureId(texture);
+}
+
+void GLRenderer::writeFramebuffer(const std::filesystem::path& filename) {
+
+    pimpl_->writeFramebuffer(filename);
 }
 
 GLRenderer::~GLRenderer() = default;

@@ -2,7 +2,7 @@
 #include "threepp/geometries/CylinderGeometry.hpp"
 
 #include <cmath>
-#include <list>
+#include <vector>
 
 using namespace threepp;
 
@@ -12,10 +12,10 @@ CylinderGeometry::CylinderGeometry(const Params& params)
       radiusBottom(params.radiusBottom),
       height(params.height) {
 
-    std::list<unsigned int> indices;
-    std::list<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
+    std::vector<unsigned int> indices;
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> uvs;
 
     unsigned int index = 0;
     const auto halfHeight = height / 2;

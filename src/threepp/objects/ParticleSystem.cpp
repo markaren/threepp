@@ -458,7 +458,7 @@ void ParticleSystem::Settings::makeDefault() {
 
     texture = nullptr;
 
-    size = {};
-    opacity = {};
-    color = {};
+    size = {{}, {}};
+    opacity = {{}, {}};
+    color = {{}, {}};
 }

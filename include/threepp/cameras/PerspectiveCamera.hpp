@@ -28,7 +28,7 @@ namespace threepp {
         float filmOffset = 0;// horizontal film offset (same unit as gauge)
 
         explicit PerspectiveCamera(float fov = 60, float aspect = 1,
-                                   float near = 0.1, float far = 2000);
+                                   float nearPlane = 0.1, float farPlane = 2000);
 
         /**
          * Sets the FOV by focal length in respect to the current .filmGauge.

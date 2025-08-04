@@ -15,8 +15,6 @@ option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
 cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFINED EMSCRIPTEN" ON)
 # Force THREEPP_USE_EXTERNAL_GLFW OFF if NOT THREEPP_WITH_GLFW
 cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" OFF "THREEPP_WITH_GLFW" OFF)
-# Build embedded GLFW with X11 support on UNIX systems
-cmake_dependent_option(THREEPP_EMBEDDED_GLFW_WITH_X11 "Build GLFW with X11 support" OFF "NOT THREEPP_USE_EXTERNAL_GLFW;UNIX;NOT APPLE" OFF)
 
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 

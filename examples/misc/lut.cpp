@@ -5,17 +5,19 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <ranges>
 
 using namespace threepp;
 
 namespace {
 
-    const float maxHeight = 2;
-    const float gridSize = 4;
+    constexpr float maxHeight = 2;
+    constexpr float gridSize = 4;
 
     void normalizeAndApplyLut(BufferGeometry& geometry) {
 
-        auto pos = geometry.getAttribute<float>("position");
+        const auto pos = geometry.getAttribute<float>("position");
 
         std::vector<float> yValues;
         yValues.reserve(pos->count());
@@ -29,12 +31,12 @@ namespace {
         }
 
         Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
-        Lut lut("rainbow", 256 * 256);
+        const Lut lut("rainbow", 256 * 256);
         auto colors = std::vector<float>(pos->count() * 3);
 
         for (auto i = 0, j = 0; i < pos->count(); i++, j += 3) {
 
-            float y = pos->getY(i);
+            const float y = pos->getY(i);
 
             Color c = lut.getColor(math::mapLinear(y, 0, maxHeight, 0, 1));
             c.toArray(colors, j);
@@ -52,7 +54,7 @@ namespace {
         x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -2, 2);
         z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -1, 3);
 
-        float a = 1, b = 100;
+        constexpr float a = 1, b = 100;
         return ((a - x) * (a - x)) + b * ((z - (x * x)) * (z - (x * x)));
     }
 
@@ -131,11 +133,11 @@ namespace {
 
     void applyFunc(BufferGeometry& geometry, const std::function<float(float, float)>& func) {
 
-        auto pos = geometry.getAttribute<float>("position");
+        const auto pos = geometry.getAttribute<float>("position");
 
         for (auto i = 0; i < pos->count(); i++) {
-            auto x = pos->getX(i);
-            auto z = pos->getZ(i);
+            const auto x = pos->getX(i);
+            const auto z = pos->getZ(i);
             pos->setY(i, func(x, z));
         }
 
@@ -201,7 +203,7 @@ int main() {
 
         ImGui::Begin("Lut");
         if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {
-            for (const auto& [name, functor] : functions) {
+            for (const auto& name : functions | std::views::keys) {
                 if (ImGui::Selectable(name.c_str())) {
 
                     changeFunction(name);

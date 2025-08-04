@@ -5,7 +5,6 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 
-
 #include <vector>
 
 namespace threepp {

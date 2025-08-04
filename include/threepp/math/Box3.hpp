@@ -6,8 +6,6 @@
 #include "threepp/math/Vector3.hpp"
 #include "threepp/math/infinity.hpp"
 
-#include <vector>
-
 namespace threepp {
 
     class Triangle;

@@ -1,4 +1,4 @@
 
 add_example(NAME "fonts" LINK_IMGUI WEB WEB_EMBED
-        "../data/fonts@data/fonts"
+        "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
 )

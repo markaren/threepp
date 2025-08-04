@@ -126,9 +126,9 @@ namespace {
 
             case GLFW_KEY_ENTER: return Key::ENTER;
             case GLFW_KEY_TAB: return Key::TAB;
-            case GLFW_KEY_BACKSPACE: return Key::BACKSLASH;
+            case GLFW_KEY_BACKSPACE: return Key::BACKSPACE;
             case GLFW_KEY_INSERT: return Key::INSERT;
-            case GLFW_KEY_DELETE: return Key::DELETE;
+            case GLFW_KEY_DELETE: return Key::DEL;
 
             default: return Key::UNKNOWN;
 
@@ -168,7 +168,7 @@ struct Canvas::Impl {
 
     std::optional<std::function<void(WindowSize)>> resizeListener;
 
-    explicit Impl(Canvas& scope, const Canvas::Parameters& params)
+    explicit Impl(Canvas& scope, const Parameters& params)
         : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
 
         initGLfw();
@@ -186,6 +186,9 @@ struct Canvas::Impl {
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
+
+        glfwWindowHint(GLFW_VISIBLE, params.headless_ ? GLFW_FALSE : GLFW_TRUE);
+
 #endif
 
         if (params.antialiasing_ > 0) {
@@ -245,6 +248,7 @@ struct Canvas::Impl {
     bool animateOnce(const std::function<void()>& f) {
 
         if (close_ || glfwWindowShouldClose(window)) {
+            close_ = true;
             return false;
         }
 
@@ -345,7 +349,7 @@ struct Canvas::Impl {
 
     static void drop_callback(GLFWwindow* w, int count, const char** paths) {
 
-        auto p = static_cast<Canvas::Impl*>(glfwGetWindowUserPointer(w));
+        auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
 
         std::vector<std::string> v;
         for (int i = 0; i < count; ++i) {
@@ -374,6 +378,11 @@ void Canvas::animate(const std::function<void()>& f) {
 bool Canvas::animateOnce(const std::function<void()>& f) {
 
     return pimpl_->animateOnce(f);
+}
+
+bool Canvas::isOpen() const {
+
+    return !pimpl_->close_;
 }
 
 WindowSize Canvas::size() const {
@@ -435,8 +444,7 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
 
         } else if (key == "size") {
 
-            auto _size = std::get<WindowSize>(value);
-            size(_size);
+            size(std::get<WindowSize>(value));
             used = true;
 
         } else if (key == "favicon") {
@@ -448,6 +456,11 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
         } else if (key == "exitOnKeyEscape") {
 
             exitOnKeyEscape(std::get<bool>(value));
+            used = true;
+
+        } else if (key == "headless") {
+
+            headless(std::get<bool>(value));
             used = true;
         }
 
@@ -504,10 +517,10 @@ Canvas::Parameters& Canvas::Parameters::resizable(bool flag) {
 
 Canvas::Parameters& Canvas::Parameters::favicon(const std::filesystem::path& path) {
 
-    if (std::filesystem::exists(path)) {
+    if (exists(path)) {
         favicon_ = path;
     } else {
-        std::cerr << "Invalid favicon path: " << std::filesystem::absolute(path) << std::endl;
+        std::cerr << "Invalid favicon path: " << absolute(path) << std::endl;
     }
 
     return *this;
@@ -516,6 +529,13 @@ Canvas::Parameters& Canvas::Parameters::favicon(const std::filesystem::path& pat
 Canvas::Parameters& Canvas::Parameters::exitOnKeyEscape(bool flag) {
 
     exitOnKeyEscape_ = flag;
+
+    return *this;
+}
+
+Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
+
+    headless_ = flag;
 
     return *this;
 }

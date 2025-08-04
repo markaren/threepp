@@ -2,6 +2,8 @@
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/threepp.hpp>
 
+#include <iostream>
+
 using namespace threepp;
 
 namespace {
@@ -52,15 +54,16 @@ int main() {
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
     camera->position.set(0, 100, 175);
 
-    float sep = 50;
+    std::cout << "Assimp version: " << AssimpLoader::getVersion() << std::endl;
     AssimpLoader loader;
-    auto glb = loadGlb(loader);
-    auto obj = loadObj(loader);
-    auto stl = loadStl(loader);
+    const auto glb = loadGlb(loader);
+    const auto obj = loadObj(loader);
+    const auto stl = loadStl(loader);
 
     Box3 bb;
     bb.setFromObject(*obj);
 
+    constexpr float sep = 50;
     obj->position.x = -sep;
 
     bb.getCenter(glb->position);
@@ -83,9 +86,9 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
-        for (auto& child : scene->children) {
+        for (const auto& child : scene->children) {
 
             child->rotation.y += 1 * dt;
         }

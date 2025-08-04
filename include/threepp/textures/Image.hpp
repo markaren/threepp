@@ -17,16 +17,11 @@ namespace threepp {
         unsigned int height;
         unsigned int depth;
 
-        Image(ImageData data, unsigned int width, unsigned int height, bool flipped = true)
-            : width(width), height(height), depth(0), flipped_(flipped), data_(std::move(data)){};
+        Image(ImageData data, unsigned int width, unsigned int height)
+            : width(width), height(height), depth(0), data_(std::move(data)){};
 
-        Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
-            : width(width), height(height), depth(depth), flipped_(flipped), data_(std::move(data)){};
-
-        [[nodiscard]] bool flipped() const {
-
-            return flipped_;
-        }
+        Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth)
+            : width(width), height(height), depth(depth), data_(std::move(data)){};
 
         void setData(ImageData data) {
 
@@ -40,7 +35,6 @@ namespace threepp {
         }
 
     private:
-        bool flipped_;
         ImageData data_;
     };
 

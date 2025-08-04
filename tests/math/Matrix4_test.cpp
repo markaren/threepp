@@ -11,6 +11,7 @@
 
 #include "../equals_util.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <cmath>
 
 using namespace threepp;
@@ -344,4 +345,21 @@ TEST_CASE("equals") {
     a.copy(b);
     REQUIRE(a.equals(b));
     REQUIRE(b.equals(a));
+}
+
+TEST_CASE("conversions") {
+
+    Matrix4 m;
+    m.setPosition(1, 2, 3);
+
+    std::array<float, 16> array = m;
+    CHECK(array[12] == Catch::Approx(1.0));
+    CHECK(array[13] == Catch::Approx(2.0));
+    CHECK(array[14] == Catch::Approx(3.0));
+
+    Vector3 v;
+    v.setFromMatrixPosition(array);
+    CHECK(v.x == Catch::Approx(1.0));
+    CHECK(v.y == Catch::Approx(2.0));
+    CHECK(v.z == Catch::Approx(3.0));
 }
