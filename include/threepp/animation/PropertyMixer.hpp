@@ -16,13 +16,13 @@ namespace threepp {
 
         void accumulate(int accuIndex, float weight) const;
 
-        void accumulateAdditive(float weight);
+        void accumulateAdditive(float weight) const;
 
-        void apply(int accuIndex);
+        void apply(int accuIndex) const;
 
-        void restoreOriginalState();
+        void restoreOriginalState() const;
 
-        void saveOriginalState();
+        void saveOriginalState() const;
 
         ~PropertyMixer();
 
@@ -112,11 +112,19 @@ namespace threepp {
             }
         }
 
-
         static void _setAdditiveIdentityQuaternion(PropertyMixer* that) {
 
             that->_setAdditiveIdentityNumeric(that);
             that->buffer[that->_addIndex * that->valueSize + 3] = 1;
+        }
+
+        static void _setAdditiveIdentityOther(PropertyMixer* that) {
+            const size_t startIndex = that->_origIndex * that->valueSize;
+            const size_t targetIndex = that->_addIndex * that->valueSize;
+
+            for (size_t i = 0; i < that->valueSize; ++i) {
+                that->buffer[targetIndex + i] = that->buffer[startIndex + i];
+            }
         }
     };
 

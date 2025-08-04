@@ -4,6 +4,7 @@
 
 #include "threepp/animation/AnimationClip.hpp"
 #include "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
+#include "threepp/animation/tracks/VectorKeyframeTrack.hpp"
 #include "threepp/loaders/Loader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -67,9 +68,13 @@ namespace threepp {
 
                     const auto aiNodeAnim = aiAnim->mChannels[j];
 
-                    if (auto track = loadRotationTrack(aiNodeAnim)){
-                        tracks.emplace_back(track);
+                    if (auto rotationTrack = loadRotationTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(rotationTrack));
                     }
+
+                    // if (auto positionTrack = loadPositionTrack(aiNodeAnim)){
+                    //     tracks.emplace_back(std::move(positionTrack));
+                    // }
                 }
 
                 auto clip = std::make_shared<AnimationClip>(name, duration, tracks);
@@ -85,7 +90,7 @@ namespace threepp {
 
         struct SceneInfo;
 
-        static std::shared_ptr<QuaternionKeyframeTrack> loadRotationTrack(const aiNodeAnim* aiNodeAnim) {
+        static std::unique_ptr<KeyframeTrack> loadRotationTrack(const aiNodeAnim* aiNodeAnim) {
             std::vector<float> times;
             std::vector<float> values;
             std::string name(aiNodeAnim->mNodeName.data);
@@ -98,7 +103,23 @@ namespace threepp {
                                              static_cast<float>(key.mValue.z), static_cast<float>(key.mValue.w)});
             }
 
-            return std::make_shared<QuaternionKeyframeTrack>(name, times, values);
+            return std::make_unique<QuaternionKeyframeTrack>(name, times, values);
+        }
+
+        static std::unique_ptr<KeyframeTrack> loadPositionTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            std::erase(name, '.');
+            for (auto k = 0; k < aiNodeAnim->mNumPositionKeys; k++) {
+
+                const auto key = aiNodeAnim->mPositionKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z)});
+            }
+
+            return std::make_unique<VectorKeyframeTrack>(name, times, values);
         }
 
         void parseNodes(const SceneInfo& info, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {

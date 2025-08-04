@@ -62,7 +62,7 @@ struct AnimationMixer::Impl {
             const auto& track = tracks[i];
             const auto trackName = track->getName();
 
-            if (bindingsByName.count(trackName)) {
+            if (bindingsByName.contains(trackName)) {
 
                 bindings[i] = bindingsByName[trackName];
 
@@ -155,11 +155,11 @@ struct AnimationMixer::Impl {
             }
         }
 
-        if (this->_actionsByClip.count(clipUuid)) {
+        if (this->_actionsByClip.contains(clipUuid)) {
 
             auto actionsForClip = this->_actionsByClip[clipUuid];
 
-            if (actionsForClip.actionByRoot.count(rootUuid)) {
+            if (actionsForClip.actionByRoot.contains(rootUuid)) {
 
                 const auto existingAction = actionsForClip.actionByRoot.at(rootUuid);
                 if (existingAction->blendMode == blendMode) {
@@ -283,7 +283,7 @@ struct AnimationMixer::Impl {
                 const auto clipUuid = action->_clip->uuid();
 
                 AnimationAction* prototypeAction = nullptr;
-                if (this->_actionsByClip.count(clipUuid)) {
+                if (this->_actionsByClip.contains(clipUuid)) {
                     prototypeAction = this->_actionsByClip[clipUuid].knownActions[0];
                 }
                 this->_bindAction(action,

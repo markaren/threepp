@@ -68,7 +68,7 @@ namespace threepp {
         KeyframeTrack(std::string name,
                       const std::vector<float>& times,
                       const std::vector<float>& values,
-                      std::optional<Interpolation> interpolation);
+                      const std::optional<Interpolation>& interpolation = {});
 
     private:
         std::string name_;

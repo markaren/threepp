@@ -88,7 +88,7 @@ namespace threepp {
 
             if (that->propertyName == "quaternion") {
                 std::get<Object3D*>(that->targetObject)->quaternion.toArray(buffer, offset);
-            } else if (that->propertyName == "position") {
+            } else if (that->propertyName == "vector") {
                 std::get<Object3D*>(that->targetObject)->position.toArray(buffer, offset);
             } else {
                 std::cerr << that->propertyName << " is not readable." << std::endl;
@@ -125,7 +125,7 @@ namespace threepp {
 
             if (that->propertyName == "quaternion") {
                 std::get<Object3D*>(that->targetObject)->quaternion.fromArray(buffer, offset);
-            } else if (that->propertyName == "position") {
+            } else if (that->propertyName == "vector") {
                 std::get<Object3D*>(that->targetObject)->position.fromArray(buffer, offset);
             } else {
                 std::cerr << that->propertyName << " is not writable." << std::endl;

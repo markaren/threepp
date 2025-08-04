@@ -18,7 +18,7 @@ namespace {
 
 Interpolation KeyframeTrack::defaultInterpolation = Interpolation::Linear;
 
-KeyframeTrack::KeyframeTrack(std::string name, const std::vector<float>& times, const std::vector<float>& values, std::optional<Interpolation> interpolation)
+KeyframeTrack::KeyframeTrack(std::string name, const std::vector<float>& times, const std::vector<float>& values, const std::optional<Interpolation>& interpolation)
     : name_(std::move(name)),
       times_(times),
       values_(values) {

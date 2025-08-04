@@ -50,6 +50,7 @@ struct PropertyMixer::Impl {
             mixFunction = _slerp;
             mixFunctionAdditive = _slerpAdditive;
             setIdentity = _setAdditiveIdentityQuaternion;
+
             scope.buffer = std::vector<float>(scope.valueSize * 6);
             scope._workIndex = 5;
 
@@ -61,10 +62,13 @@ struct PropertyMixer::Impl {
             // additive is not relevant for non-numeric types
             mixFunctionAdditive = _select;
 
+            setIdentity = _setAdditiveIdentityOther;
+
             this->scope.buffer = std::vector<float>(scope.valueSize * 5);
         } else {
             mixFunction = _lerp;
             mixFunctionAdditive = _lerpAdditive;
+            setIdentity = _setAdditiveIdentityNumeric;
 
             scope.buffer = std::vector<float>(scope.valueSize * 5);
         }
@@ -208,22 +212,22 @@ void PropertyMixer::accumulate(int accuIndex, float weight) const {
     pimpl_->accumulate(accuIndex, weight);
 }
 
-void PropertyMixer::accumulateAdditive(float weight) {
+void PropertyMixer::accumulateAdditive(float weight) const {
 
     pimpl_->accumulateAdditive(weight);
 }
 
-void PropertyMixer::apply(int accuIndex) {
+void PropertyMixer::apply(int accuIndex) const {
 
     pimpl_->apply(accuIndex);
 }
 
-void PropertyMixer::restoreOriginalState() {
+void PropertyMixer::restoreOriginalState() const {
 
     pimpl_->restoreOriginalState();
 }
 
-void PropertyMixer::saveOriginalState() {
+void PropertyMixer::saveOriginalState() const {
 
     pimpl_->saveOriginalState();
 }
