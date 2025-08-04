@@ -7,14 +7,14 @@ namespace {
 
     auto createWireframe(const BufferGeometry& geometry) {
 
-        auto material = LineBasicMaterial::create({{"color", Color::black}});
+        const auto material = LineBasicMaterial::create({{"color", Color::black}});
         return LineSegments::create(WireframeGeometry::create(geometry), material);
     }
 
     auto createMesh(const BoxGeometry::Params& params) {
 
-        auto geometry = BoxGeometry::create(params);
-        auto material = MeshBasicMaterial::create();
+        const auto geometry = BoxGeometry::create(params);
+        const auto material = MeshBasicMaterial::create();
 
         auto mesh = Mesh::create(geometry, material);
         mesh->add(createWireframe(*geometry));
@@ -24,11 +24,11 @@ namespace {
 
     void updateGroupGeometry(Mesh& mesh, const BoxGeometry::Params& params) {
 
-        auto g = BoxGeometry::create(params);
-        mesh.setGeometry(g);
+        const auto geometry = BoxGeometry::create(params);
+        mesh.setGeometry(geometry);
 
         mesh.children[0]->removeFromParent();
-        mesh.add(createWireframe(*g));
+        mesh.add(createWireframe(*geometry));
     }
 
 
@@ -46,7 +46,7 @@ int main() {
 
     BoxGeometry::Params params{};
 
-    auto mesh = createMesh(params);
+    const auto mesh = createMesh(params);
     scene.add(mesh);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -77,7 +77,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         mesh->rotation.y += 0.8f * dt;
         mesh->rotation.x += 0.5f * dt;

@@ -4,11 +4,8 @@
 #include "threepp/objects/Sky.hpp"
 #include "threepp/threepp.hpp"
 
-#include <cmath>
-
-#ifdef HAS_IMGUI
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#endif
+#include <cmath>
 
 using namespace threepp;
 
@@ -90,8 +87,6 @@ int main() {
         renderer.setSize(size);
     });
 
-#ifdef HAS_IMGUI
-
     ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
@@ -114,12 +109,11 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
-#endif
 
     Clock clock;
     auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+        const auto t = clock.getElapsedTime();
 
         sphere->position.y = std::sin(t) * 20 + 5;
         sphere->rotation.x = t * 0.05f;
@@ -129,8 +123,6 @@ int main() {
 
         renderer.render(*scene, *camera);
 
-#ifdef HAS_IMGUI
         ui.render();
-#endif
     });
 }

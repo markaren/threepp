@@ -1,11 +1,9 @@
 
-
 #ifndef THREEPP_UNIFORMSUTIL_HPP
 #define THREEPP_UNIFORMSUTIL_HPP
 
 #include "threepp/core/Uniform.hpp"
 
-#include <string>
 #include <unordered_map>
 #include <vector>
 

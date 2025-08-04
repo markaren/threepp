@@ -100,7 +100,7 @@ std::vector<SVGLoader::SVGData> SVGLoader::load(const std::filesystem::path& fil
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_file(filePath.string().c_str());
     if (!result) {
-        throw std::runtime_error("Unable to parse modelDescription.xml");
+        throw std::runtime_error("Unable to load XML:  " + filePath.string());
     }
 
     return pimpl_->load(doc);
@@ -111,7 +111,7 @@ std::vector<SVGLoader::SVGData> SVGLoader::parse(const std::string& text) {
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_string(text.c_str());
     if (!result) {
-        throw std::runtime_error("Unable to parse modelDescription.xml");
+        throw std::runtime_error("Unable to parse XML content");
     }
 
     return pimpl_->load(doc);
@@ -185,7 +185,7 @@ std::vector<Shape> SVGLoader::createShapes(const SVGData& data) {
         }
     }
 
-    for (int identifier = 0; identifier < simplePaths.size(); identifier++) {
+    for (unsigned identifier = 0; identifier < simplePaths.size(); identifier++) {
 
         simplePaths[identifier].identifier = identifier;
     }
@@ -1000,7 +1000,7 @@ float SVGLoader::Impl::parseFloatWithUnits(const std::string& str) const {
 
     std::string theUnit = "px";
 
-    float value;
+    float value{0};
 
     if (!utils::isNumber(str)) {
 
@@ -1048,7 +1048,7 @@ Matrix3 SVGLoader::Impl::parseNodeTransform(const pugi::xml_node& node) const {
 
     Matrix3 transform;
     Matrix3 currentTransform;
-    Matrix3 tempTransform0;
+    // Matrix3 tempTransform0;
     Matrix3 tempTransform1;
     Matrix3 tempTransform2;
     Matrix3 tempTransform3;
@@ -1063,9 +1063,9 @@ Matrix3 SVGLoader::Impl::parseNodeTransform(const pugi::xml_node& node) const {
 
     if (node.attribute("transform")) {
 
-        auto transformsTexts = utils::split(node.attribute("transform").value(), ')');
+        const auto transformsTexts = utils::split(node.attribute("transform").value(), ')');
 
-        for (int tIndex = transformsTexts.size() - 1; tIndex >= 0; tIndex--) {
+        for (int tIndex = static_cast<int>(transformsTexts.size()) - 1; tIndex >= 0; tIndex--) {
 
             const auto transformText = utils::trim(transformsTexts[tIndex]);
 

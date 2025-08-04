@@ -9,15 +9,15 @@ using namespace threepp;
 namespace {
 
     auto createSphere() {
-        auto sphereGeometry = SphereGeometry::create(1, 10, 10);
-        auto sphereMaterial = MeshBasicMaterial::create();
+        const auto sphereGeometry = SphereGeometry::create(1, 10, 10);
+        const auto sphereMaterial = MeshBasicMaterial::create();
         auto sphereMesh = Mesh::create(sphereGeometry, sphereMaterial);
         sphereMesh->position.z = -8;
 
-        auto sphereMaterialWireframe = MeshBasicMaterial::create({{"color", Color::black}, {"wireframe", true}});
+        const auto sphereMaterialWireframe = MeshBasicMaterial::create({{"color", Color::black}, {"wireframe", true}});
         sphereMaterialWireframe->wireframe = true;
         sphereMaterialWireframe->color = Color::black;
-        auto sphereMeshWireframe = Mesh::create(sphereGeometry, sphereMaterialWireframe);
+        const auto sphereMeshWireframe = Mesh::create(sphereGeometry, sphereMaterialWireframe);
         sphereMesh->add(sphereMeshWireframe);
 
         return sphereMesh;
@@ -57,18 +57,18 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        auto size = canvas.size();
+        const auto size = canvas.size();
 
         renderer.clear();
 
         helper->visible = false;
 
-        renderer.setViewport({size.width / 2, 0, size.width / 2, size.height});
+        renderer.setViewport({size.width() / 2, 0, size.width() / 2, size.height()});
         renderer.render(*scene, *camera);
 
         helper->visible = true;
 
-        renderer.setViewport({0, 0, size.width / 2, size.height});
+        renderer.setViewport({0, 0, size.width() / 2, size.height()});
         renderer.render(*scene, *camera2);
 
         camera->position.z = 4 * std::sin(math::TWO_PI * 0.1f * clock.getElapsedTime());

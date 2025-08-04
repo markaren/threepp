@@ -81,7 +81,7 @@ namespace threepp::svg {
             current = input[i];
 
             // check for flags
-            if (!flags.empty() && std::find(flags.begin(), flags.end(), result.size() % stride) != flags.end() && std::regex_match(current, RE::FLAGS)) {
+            if (!flags.empty() && std::ranges::find(flags, result.size() % stride) != flags.end() && std::regex_match(current, RE::FLAGS)) {
 
                 state = INT;
                 number = current;
@@ -461,7 +461,7 @@ namespace threepp::svg {
 
                 const auto intersection = findEdgeIntersection(path1EdgeStart, path1EdgeEnd, path2EdgeStart, path2EdgeEnd);
 
-                if (intersection && std::find_if(intersectionsRaw.begin(), intersectionsRaw.end(), [&](auto& i) {
+                if (intersection && std::ranges::find_if(intersectionsRaw, [&](auto& i) {
                                         return i.t <= intersection->t + std::numeric_limits<float>::epsilon() &&
                                                i.t >= intersection->t - std::numeric_limits<float>::epsilon();
                                     }) == intersectionsRaw.end()) {
@@ -498,7 +498,7 @@ namespace threepp::svg {
             }
         }
 
-        std::sort(allIntersections.begin(), allIntersections.end(), [](const auto& i1, const auto& i2) {
+        std::ranges::sort(allIntersections, [](const auto& i1, const auto& i2) {
             return i1.point.x < i2.point.x;
         });
 
@@ -515,11 +515,11 @@ namespace threepp::svg {
         Vector2 centerBoundingBox;
         simplePath.boundingBox.getCenter(centerBoundingBox);
 
-        const std::vector<Vector2> scanline{Vector2(scanlineMinX, centerBoundingBox.y), Vector2(scanlineMaxX, centerBoundingBox.y)};
+        const std::vector scanline{Vector2(scanlineMinX, centerBoundingBox.y), Vector2(scanlineMaxX, centerBoundingBox.y)};
 
         auto scanlineIntersections = getScanlineIntersections(scanline, simplePath.boundingBox, allPaths);
 
-        std::sort(scanlineIntersections.begin(), scanlineIntersections.end(), [](const auto& i1, const auto& i2) {
+        std::ranges::sort(scanlineIntersections, [](const auto& i1, const auto& i2) {
             return i1.point.x < i2.point.x;
         });
 
@@ -755,7 +755,7 @@ namespace threepp::svg {
         Matrix3 tempTransform0;
         Matrix3 tempTransform1;
         Matrix3 tempTransform2;
-        Matrix3 tempTransform3;
+        // Matrix3 tempTransform3;
 
         // For math description see:
         // https://math.stackexchange.com/questions/4544164
@@ -871,7 +871,7 @@ namespace threepp::svg {
             v2.set(tempV3.x, tempV3.y);
         };
 
-        const auto isRotated = isTransformRotated(m);
+        // const auto isRotated = isTransformRotated(m);
 
         const auto& subPaths = path.subPaths;
 

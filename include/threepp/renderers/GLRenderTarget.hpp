@@ -1,7 +1,7 @@
 // https://github.com/mrdoob/three.js/blob/r129/src/renderers/WebGLRenderTarget.js
 
-#ifndef THREEPPGLRENDERTARGETHPP
-#define THREEPPGLRENDERTARGETHPP
+#ifndef THREEPP_GLRENDERTARGET_HPP
+#define THREEPP_GLRENDERTARGET_HPP
 
 #include "threepp/core/EventDispatcher.hpp"
 
@@ -12,8 +12,6 @@
 #include <optional>
 
 namespace threepp {
-
-    class DepthTexture;
 
     class GLRenderTarget: public EventDispatcher {
 
@@ -30,10 +28,11 @@ namespace threepp {
             std::optional<int> anisotropy;
             std::optional<Encoding> encoding;
 
-            bool generateMipmaps = false;
-            bool depthBuffer = true;
-            bool stencilBuffer = false;
-            std::shared_ptr<DepthTexture> depthTexture;
+            bool generateMipmaps{false};
+            bool depthBuffer{true};
+            bool stencilBuffer{false};
+
+            Options() = default;
         };
 
         const std::string uuid;
@@ -51,13 +50,13 @@ namespace threepp {
 
         bool depthBuffer;
         bool stencilBuffer;
-        std::shared_ptr<DepthTexture> depthTexture;
 
         GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
 
+        GLRenderTarget(GLRenderTarget&&) = delete;
         GLRenderTarget(const GLRenderTarget&) = delete;
-        GLRenderTarget(const GLRenderTarget&&) = delete;
-        GLRenderTarget operator=(const GLRenderTarget&) = delete;
+        GLRenderTarget& operator=(GLRenderTarget&&) = delete;
+        GLRenderTarget& operator=(const GLRenderTarget&) = delete;
 
         void setSize(unsigned int width, unsigned int height, unsigned int depth = 1);
 
@@ -71,9 +70,8 @@ namespace threepp {
 
     protected:
         bool disposed = false;
-
     };
 
 }// namespace threepp
 
-#endif//THREEPPGLRENDERTARGETHPP
+#endif//THREEPP_GLRENDERTARGET_HPP

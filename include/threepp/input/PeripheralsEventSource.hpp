@@ -51,11 +51,7 @@ namespace threepp {
 
         void onKeyEvent(KeyEvent evt, KeyAction action);
 
-        void onDropEvent(std::vector<std::string> paths) {
-            if (dropListener_ && !paths.empty()) {
-                dropListener_(std::move(paths));
-            }
-        }
+        void onDropEvent(std::vector<std::string> paths);
 
     private:
         IOCapture* ioCapture_ = nullptr;

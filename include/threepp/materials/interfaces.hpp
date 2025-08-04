@@ -2,8 +2,6 @@
 #ifndef THREEPP_INTERFACES_HPP
 #define THREEPP_INTERFACES_HPP
 
-#include <utility>
-
 #include "threepp/materials/Material.hpp"
 
 #include "threepp/textures/Texture.hpp"
@@ -107,7 +105,7 @@ namespace threepp {
 
     struct MaterialWithEnvMap: virtual Material {
 
-        float envMapIntensity; // Only used by MeshStandardMaterial
+        float envMapIntensity;// Only used by MeshStandardMaterial
         std::shared_ptr<Texture> envMap;
 
         explicit MaterialWithEnvMap(std::optional<float> envMapIntensity = std::nullopt): envMapIntensity(envMapIntensity.value_or(1)) {}

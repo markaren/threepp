@@ -44,20 +44,20 @@ PointLightShadow::PointLightShadow()
                                       Vector4(1, 0, 1, 1)};
 }
 
-void PointLightShadow::updateMatrices(PointLight* light, size_t viewportIndex) {
+void PointLightShadow::updateMatrices(PointLight& light, size_t viewportIndex) {
 
     auto& camera = this->camera;
     auto& shadowMatrix = this->matrix;
 
-    auto far = (light->distance > 0) ? light->distance : camera->far;
+    auto far = (light.distance > 0) ? light.distance : camera->farPlane;
 
-    if (far != camera->far) {
+    if (far != camera->farPlane) {
 
-        camera->far = far;
+        camera->farPlane = far;
         camera->updateProjectionMatrix();
     }
 
-    _lightPositionWorld.setFromMatrixPosition(*light->matrixWorld);
+    _lightPositionWorld.setFromMatrixPosition(*light.matrixWorld);
     camera->position.copy(_lightPositionWorld);
 
     _lookTarget.copy(camera->position);

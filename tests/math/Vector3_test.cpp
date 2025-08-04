@@ -6,6 +6,7 @@
 #include "threepp/math/Vector3.hpp"
 
 #include <array>
+#include <catch2/catch_approx.hpp>
 #include <vector>
 
 using namespace threepp;
@@ -17,6 +18,17 @@ namespace {
     const float z = 4;
 
 }// namespace
+
+TEST_CASE("structured binding") {
+
+    Vector3 v{x, y, z};
+
+    auto [a, b, c] = v;
+
+    CHECK(a == x);
+    CHECK(b == y);
+    CHECK(c == z);
+}
 
 TEST_CASE("add") {
 
@@ -84,6 +96,16 @@ TEST_CASE("angleTo") {
     CHECK(std::abs(_x.angleTo(Vector3(1, 1, 0)) - (math::PI / 4)) < 0.0000001);
 }
 
+TEST_CASE("clampScalar") {
+    Vector3 a(-0.01, 0.5, 1.5);
+    Vector3 clamped(0.1, 0.5, 1.0);
+
+    a.clampScalar(0.1, 1.0);
+    CHECK(std::abs(a.x - clamped.x) <= 0.001);
+    CHECK(std::abs(a.y - clamped.y) <= 0.001);
+    CHECK(std::abs(a.z - clamped.z) <= 0.001);
+}
+
 TEST_CASE("from arraylike") {
 
     std::array<float, 3> arr{1, 2, 3};
@@ -114,4 +136,20 @@ TEST_CASE("equals") {
     v2.copy(v1);
 
     REQUIRE(v1 == v2);
+}
+
+TEST_CASE("conversion") {
+
+    struct Point {
+        double x;
+        double y;
+        double z;
+    };
+    const Point p{1, 2, 3};
+
+    const Vector3 v = p;
+
+    CHECK(v.x == Catch::Approx(p.x));
+    CHECK(v.y == Catch::Approx(p.y));
+    CHECK(v.z == Catch::Approx(p.z));
 }

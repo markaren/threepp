@@ -17,6 +17,16 @@ namespace {
 
 }// namespace
 
+TEST_CASE("structured binding") {
+
+    Vector2 v{x, y};
+
+    auto [a, b] = v;
+
+    CHECK(a == x);
+    CHECK(b == y);
+}
+
 TEST_CASE("add") {
 
     Vector2 a{x, y};
@@ -107,4 +117,22 @@ TEST_CASE("equals") {
     v2.copy(v1);
 
     REQUIRE(v1 == v2);
+}
+
+TEST_CASE("Convertible to std::pair<int, int>") {
+    std::pair<int, int> pair = Vector2(1, 1);
+    REQUIRE(pair.first == 1);
+    REQUIRE(pair.second == 1);
+}
+
+TEST_CASE("Convertible to std::pair<float, float>") {
+    std::pair<float, float> pair = Vector2(1.1f, 1.2f);
+    REQUIRE_THAT(pair.first, Catch::Matchers::WithinRel(1.1f));
+    REQUIRE_THAT(pair.second, Catch::Matchers::WithinRel(1.2f));
+}
+
+TEST_CASE("Structural binding") {
+    auto [x,y] = Vector2(1.1f, 1.2f);
+    REQUIRE_THAT(x, Catch::Matchers::WithinRel(1.1f));
+    REQUIRE_THAT(y, Catch::Matchers::WithinRel(1.2f));
 }

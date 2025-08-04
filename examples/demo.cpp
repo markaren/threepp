@@ -1,16 +1,16 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
 
-#ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
 
-struct MyGui: public ImguiContext {
+struct MyGui final: ImguiContext {
 
     bool colorChanged = false;
 
-    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m): ImguiContext(canvas.windowPtr()) {
+    explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m)
+        : ImguiContext(canvas.windowPtr()) {
         colorBuf_[0] = m.color.r;
         colorBuf_[1] = m.color.g;
         colorBuf_[2] = m.color.b;
@@ -20,7 +20,7 @@ struct MyGui: public ImguiContext {
     void onRender() override {
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Plane transform");
         ImGui::SliderFloat3("position", posBuf_.data(), -5.f, 5.f);
         ImGui::SliderFloat3("rotation", eulerBuf_.data(), -180.f, 180.f);
@@ -40,7 +40,7 @@ struct MyGui: public ImguiContext {
         return euler_;
     }
 
-    const std::array<float, 4>& color() {
+    [[nodiscard]] const std::array<float, 4>& color() const {
         return colorBuf_;
     }
 
@@ -52,7 +52,6 @@ private:
     std::array<float, 3> eulerBuf_{};
     std::array<float, 4> colorBuf_{0, 0, 0, 1};
 };
-#endif
 
 auto createBox() {
 
@@ -123,18 +122,18 @@ int main() {
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
 
-    TextGeometry::Options opts1(font1, 40);
+    TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
     auto hudText1 = Text2D(opts1, "Hello World!");
     hudText1.setColor(Color::black);
     hud.add(hudText1, HUD::Options());
 
-    TextGeometry::Options opts2(font2, 10, 1);
+    TextGeometry::Options opts2(font2, 10 * monitor::contentScale().first, 1);
     auto hudText2 = Text2D(opts2);
     hudText2.setColor(Color::red);
     hud.add(hudText2, HUD::Options()
                               .setNormalizedPosition({1, 1})
-                              .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
-                              .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
+                              .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
+                              .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -145,13 +144,12 @@ int main() {
         hud.setSize(size);
     });
 
-#ifdef HAS_IMGUI
     MyGui ui(canvas, *planeMaterial);
-#endif
+    ui.makeDpiAware();
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
 
@@ -162,7 +160,6 @@ int main() {
         renderer.render(*scene, *camera);
         hud.apply(renderer);
 
-#ifdef HAS_IMGUI
         ui.render();
 
         plane->position.copy(ui.position());
@@ -174,6 +171,5 @@ int main() {
             planeMaterial->opacity = c[3];
             planeMaterial->transparent = c[3] != 1;
         }
-#endif
     });
 }

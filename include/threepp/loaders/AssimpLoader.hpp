@@ -4,6 +4,7 @@
 
 #include "threepp/animation/AnimationClip.hpp"
 #include "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
+#include "threepp/loaders/Loader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Group.hpp"
@@ -13,6 +14,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <assimp/version.h>
 
 #include <filesystem>
 #include <sstream>
@@ -20,10 +22,26 @@
 
 namespace threepp {
 
-    class AssimpLoader {
+    class AssimpLoader: public Loader<Group> {
 
     public:
-        std::shared_ptr<Group> load(const std::filesystem::path& path) {
+        struct AssimpVersion {
+            unsigned int major;
+            unsigned int minor;
+            unsigned int patch;
+
+            friend std::ostream& operator<<(std::ostream& os, const AssimpVersion& v) {
+                os << v.major << "." << v.minor << "." << v.patch;
+                return os;
+            }
+        };
+
+        [[nodiscard]] static AssimpVersion getVersion() {
+            return {aiGetVersionMajor(), aiGetVersionMinor(), aiGetVersionPatch()};
+        }
+
+
+        std::shared_ptr<Group> load(const std::filesystem::path& path) override {
 
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
@@ -37,7 +55,6 @@ namespace threepp {
             auto group = Group::create();
             group->name = path.filename().stem().string();
             parseNodes(info, aiScene, aiScene->mRootNode, *group);
-
 
             for (unsigned i = 0; i < aiScene->mNumAnimations; i++) {
                 const auto aiAnim = aiScene->mAnimations[i];
@@ -446,7 +463,7 @@ namespace threepp {
 
                 float opacity;
                 if (AI_SUCCESS == aiGetMaterialFloat(mat, AI_MATKEY_OPACITY, &opacity)) {
-                    material.transparent = true;
+                    material.transparent = (opacity < 1.f);
                     material.opacity = opacity;
                 }
             }

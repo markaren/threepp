@@ -23,6 +23,7 @@ namespace threepp::gl {
         bool glInit{};
         std::optional<int> maxMipLevel{};
         std::optional<unsigned int> glTexture{};
+        std::optional<int> currentAnisotropy{};
         unsigned int version{};
     };
 
@@ -82,12 +83,13 @@ namespace threepp::gl {
         }
 
     private:
-        friend struct GLProperties;
+        friend class GLProperties;
         std::unordered_map<E*, T> properties_;
     };
 
-    struct GLProperties {
+    class GLProperties {
 
+    public:
         GLTypeProperties<Texture, TextureProperties> textureProperties;
         GLTypeProperties<Material, MaterialProperties> materialProperties;
         GLTypeProperties<GLRenderTarget, RenderTargetProperties> renderTargetProperties;

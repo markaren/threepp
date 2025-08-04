@@ -63,7 +63,7 @@ namespace threepp {
 
         Quaternion& slerp(const Quaternion& qb, float t);
 
-        void slerpQuaternions(const Quaternion& qa, const Quaternion& qb, float t );
+        void slerpQuaternions(const Quaternion& qa, const Quaternion& qb, float t);
 
         [[nodiscard]] Quaternion clone() const;
 

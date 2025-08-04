@@ -1,7 +1,9 @@
 
 #include "threepp/geometries/WireframeGeometry.hpp"
 
-#include <list>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 using namespace threepp;
 
@@ -9,7 +11,7 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
     // buffer
 
-    std::list<float> vertices;
+    std::vector<float> vertices;
 
     // helper variables
 
@@ -48,7 +50,7 @@ WireframeGeometry::WireframeGeometry(const BufferGeometry& geometry) {
 
                     std::string key = std::to_string(edge.first) + ',' + std::to_string(edge.second);
 
-                    if (!edges.count(key)) {
+                    if (!edges.contains(key)) {
 
                         edges[key] = edge;
                     }

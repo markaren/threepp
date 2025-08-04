@@ -19,39 +19,39 @@ using namespace threepp;
 namespace {
 
     std::optional<Intersection> checkIntersection(
-            Object3D* object, Material* material, const Raycaster& raycaster, const Ray& ray,
+            Object3D& object, Material& material, const Raycaster& raycaster, const Ray& ray,
             const Vector3& pA, const Vector3& pB, const Vector3& pC, Vector3& point) {
 
         static Vector3 _intersectionPointWorld{};
 
-        if (material->side == Side::Back) {
+        if (material.side == Side::Back) {
 
             ray.intersectTriangle(pC, pB, pA, true, point);
 
         } else {
 
-            ray.intersectTriangle(pA, pB, pC, material->side != Side::Double, point);
+            ray.intersectTriangle(pA, pB, pC, material.side != Side::Double, point);
         }
 
         if (point.isNan()) return std::nullopt;
 
         _intersectionPointWorld.copy(point);
-        _intersectionPointWorld.applyMatrix4(*object->matrixWorld);
+        _intersectionPointWorld.applyMatrix4(*object.matrixWorld);
 
         const auto distance = raycaster.ray.origin.distanceTo(_intersectionPointWorld);
 
-        if (distance < raycaster.near || distance > raycaster.far) return std::nullopt;
+        if (distance < raycaster.nearPlane || distance > raycaster.farPlane) return std::nullopt;
 
         Intersection intersection{};
         intersection.distance = distance;
         intersection.point = _intersectionPointWorld;
-        intersection.object = object;
+        intersection.object = &object;
 
         return intersection;
     }
 
     std::optional<Intersection> checkBufferGeometryIntersection(
-            Object3D* object, Material* material,
+            Object3D& object, Material& material,
             const Raycaster& raycaster, const Ray& ray,
             const FloatBufferAttribute& position,
             const std::vector<std::shared_ptr<BufferAttribute>>* morphPosition,
@@ -71,9 +71,9 @@ namespace {
 
         if (morphPosition) {
 
-            if (auto morphObject = object->as<ObjectWithMorphTargetInfluences>()) {
+            if (auto morphObject = object.as<ObjectWithMorphTargetInfluences>()) {
 
-                if (auto morphMaterial = material->as<MaterialWithMorphTargets>()) {
+                if (auto morphMaterial = material.as<MaterialWithMorphTargets>()) {
 
                     if (morphMaterial->morphTargets) {
 
@@ -123,7 +123,7 @@ namespace {
             }
         }
 
-        if (auto skinned = object->as<SkinnedMesh>()) {
+        if (auto skinned = object.as<SkinnedMesh>()) {
             skinned->boneTransform(a, _vA);
             skinned->boneTransform(b, _vB);
             skinned->boneTransform(c, _vC);
@@ -177,8 +177,7 @@ Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> m
       ObjectWithMaterials({material ? std::move(material) : MeshBasicMaterial::create()}) {}
 
 Mesh::Mesh(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials)
-    : geometry_(std::move(geometry)), ObjectWithMaterials{std::move(materials)} {
-}
+    : geometry_(std::move(geometry)), ObjectWithMaterials{std::move(materials)} {}
 
 void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& intersects) {
 
@@ -229,7 +228,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
             for (auto& group : groups) {
 
-                auto groupMaterial = materials_[group.materialIndex].get();
+                auto& groupMaterial = materials_[group.materialIndex];
 
                 const auto start = std::max(group.start, drawRange.start);
                 const auto end = std::min((group.start + group.count), (drawRange.start + drawRange.count));
@@ -241,7 +240,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
                     const auto c = index->getX(j + 2);
 
                     intersection = checkBufferGeometryIntersection(
-                            this, groupMaterial, raycaster, _ray, *position,
+                            *this, *groupMaterial, raycaster, _ray, *position,
                             morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                     if (intersection) {
@@ -265,7 +264,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
                 const auto c = index->getX(i + 2);
 
                 intersection = checkBufferGeometryIntersection(
-                        this, material(), raycaster, _ray, *position,
+                        *this, *material(), raycaster, _ray, *position,
                         morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                 if (intersection) {
@@ -284,7 +283,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
 
             for (auto& group : groups) {
 
-                auto groupMaterial = materials_[group.materialIndex].get();
+                auto& groupMaterial = materials_[group.materialIndex];
 
                 const auto start = std::max(group.start, drawRange.start);
                 const auto end = std::min((group.start + group.count), (drawRange.start + drawRange.count));
@@ -296,7 +295,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
                     const auto c = j + 2;
 
                     intersection = checkBufferGeometryIntersection(
-                            this, groupMaterial, raycaster, _ray, *position,
+                            *this, *groupMaterial, raycaster, _ray, *position,
                             morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                     if (intersection) {
@@ -320,7 +319,7 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
                 const int c = i + 2;
 
                 intersection = checkBufferGeometryIntersection(
-                        this, material(), raycaster, _ray, *position,
+                        *this, *material(), raycaster, _ray, *position,
                         morphPosition, morphTargetsRelative, uv, uv2, a, b, c);
 
                 if (intersection) {
@@ -333,27 +332,14 @@ void Mesh::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
     }
 }
 
-std::shared_ptr<Object3D> Mesh::clone(bool recursive) {
-
-    auto clone = create(geometry_, materials_);
-    clone->copy(*this, recursive);
-
-    return clone;
-}
-
 std::string Mesh::type() const {
 
     return "Mesh";
 }
 
-BufferGeometry* Mesh::geometry() {
+std::shared_ptr<BufferGeometry> Mesh::geometry() const {
 
-    return geometry_.get();
-}
-
-const BufferGeometry* Mesh::geometry() const {
-
-    return geometry_.get();
+    return geometry_;
 }
 
 void Mesh::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
@@ -369,4 +355,20 @@ std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std
 std::shared_ptr<Mesh> Mesh::create(std::shared_ptr<BufferGeometry> geometry, std::vector<std::shared_ptr<Material>> materials) {
 
     return std::make_shared<Mesh>(std::move(geometry), std::move(materials));
+}
+
+void Mesh::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto m = source.as<Mesh>()) {
+
+        // TODO morphs
+
+        materials_ = m->materials_;
+        geometry_ = m->geometry_;
+    }
+}
+
+std::shared_ptr<Object3D> Mesh::createDefault() {
+    return create();
 }

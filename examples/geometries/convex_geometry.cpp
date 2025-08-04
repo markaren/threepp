@@ -39,10 +39,10 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    int numPoints = 100;
+    constexpr int numPoints = 100;
     std::vector<Vector3> pts;
     pts.reserve(numPoints);
-    for (unsigned i = 0; i < numPoints; i++) {
+    for (auto i = 0; i < numPoints; i++) {
         pts.emplace_back(math::randFloatSpread(20), math::randFloatSpread(20), math::randFloatSpread(20));
     }
 
@@ -59,7 +59,7 @@ int main() {
     auto convex = Mesh::create(convexGeometry, convexMaterial);
     scene->add(convex);
 
-    for (unsigned i = 0; i < numPoints; i++) {
+    for (auto i = 0; i < numPoints; i++) {
         const auto& p = pts[i];
         if (convexGeometry->containsPoint(p, -0.1)) {
             pointsGeometry->getAttribute<float>("color")->setXYZ(i, 0, 0, 0);
@@ -81,7 +81,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         convex->rotation.y += 0.2f * dt;
 

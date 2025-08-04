@@ -10,15 +10,13 @@ void PeripheralsEventSource::setIOCapture(IOCapture* capture) {
 }
 
 void PeripheralsEventSource::addKeyListener(KeyListener& listener) {
-    auto find = std::find(keyListeners_.begin(), keyListeners_.end(), &listener);
-    if (find == keyListeners_.end()) {
+    if (const auto find = std::ranges::find(keyListeners_, &listener); find == keyListeners_.end()) {
         keyListeners_.emplace_back(&listener);
     }
 }
 
 bool PeripheralsEventSource::removeKeyListener(const KeyListener& listener) {
-    auto find = std::find(keyListeners_.begin(), keyListeners_.end(), &listener);
-    if (find != keyListeners_.end()) {
+    if (const auto find = std::ranges::find(keyListeners_, &listener); find != keyListeners_.end()) {
         keyListeners_.erase(find);
         return true;
     }
@@ -26,22 +24,20 @@ bool PeripheralsEventSource::removeKeyListener(const KeyListener& listener) {
 }
 
 void PeripheralsEventSource::addMouseListener(MouseListener& listener) {
-    auto find = std::find(mouseListeners_.begin(), mouseListeners_.end(), &listener);
-    if (find == mouseListeners_.end()) {
+    if (const auto find = std::ranges::find(mouseListeners_, &listener); find == mouseListeners_.end()) {
         mouseListeners_.emplace_back(&listener);
     }
 }
 
 bool PeripheralsEventSource::removeMouseListener(const MouseListener& listener) {
-    auto find = std::find(mouseListeners_.begin(), mouseListeners_.end(), &listener);
-    if (find != mouseListeners_.end()) {
+    if (const auto find = std::ranges::find(mouseListeners_, &listener); find != mouseListeners_.end()) {
         mouseListeners_.erase(find);
         return true;
     }
     return false;
 }
 
-void PeripheralsEventSource::onMousePressedEvent(int button, const Vector2& pos, PeripheralsEventSource::MouseAction action) {
+void PeripheralsEventSource::onMousePressedEvent(int button, const Vector2& pos, MouseAction action) {
     if (ioCapture_ && ioCapture_->preventMouseEvent()) return;
 
     auto listeners = mouseListeners_;//copy - IMPORTANT
@@ -102,4 +98,10 @@ void PeripheralsEventSource::onKeyEvent(KeyEvent evt, PeripheralsEventSource::Ke
 
 void PeripheralsEventSource::onDrop(std::function<void(std::vector<std::string>)> paths) {
     dropListener_ = std::move(paths);
+}
+
+void PeripheralsEventSource::onDropEvent(std::vector<std::string> paths) {
+    if (dropListener_ && !paths.empty()) {
+        dropListener_(std::move(paths));
+    }
 }

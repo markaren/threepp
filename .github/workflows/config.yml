@@ -17,7 +17,7 @@ jobs:
         compiler_version: [ 11 ]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install prerequisites
         run: |
@@ -53,7 +53,7 @@ jobs:
         compiler_version: [ 11 ]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Install prerequisites
         run: |
@@ -87,7 +87,7 @@ jobs:
         compiler_version: [11]
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Install prerequisites
       run: |
@@ -109,7 +109,7 @@ jobs:
 
     - name: Configure and build
       run: |
-        cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui;assimp" -DCMAKE_BUILD_TYPE="Release"
+        cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="assimp" -DCMAKE_BUILD_TYPE="Release"
         cmake --build build
 
     - name: Test
@@ -118,7 +118,7 @@ jobs:
         ctest --output-on-failure
 
 
-  vcpkg-on-windows:
+  windows:
 
     runs-on: ${{ matrix.os }}
     strategy:
@@ -127,20 +127,11 @@ jobs:
         os: [windows-2022]
 
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Restore artifacts, or run vcpkg, build (and cache artifacts as post step)
-        uses: lukka/run-vcpkg@v10
-        id: runvcpkg
-        with:
-          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
-          vcpkgJsonGlob: 'vcpkg.json'
-          appendedCacheKey: vcpkginstall
+      - uses: actions/checkout@v4
 
       - name: Configure and build
         run: |
-          cmake . -A x64 -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="imgui" -DCMAKE_BUILD_TYPE="Release"
+          cmake . -A x64 -B build -DTHREEPP_TREAT_WARNINGS_AS_ERRORS=ON -DCMAKE_BUILD_TYPE="Release"
           cmake --build build --config Release
 
       - name: Test
@@ -149,31 +140,53 @@ jobs:
           ctest -C Release --output-on-failure
 
 
-  vcpkg-on-darwin:
+  darwin:
 
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-12]
+        os: [macos-13]
 
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Restore artifacts, or run vcpkg, build (and cache artifacts as post step)
-        uses: lukka/run-vcpkg@v10
-        id: runvcpkg
-        with:
-          vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-          vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
-          vcpkgJsonGlob: 'vcpkg.json'
-          appendedCacheKey: vcpkginstall
-
-      - name: Install prerequisites
-        run: |
-          brew install pkg-config
+      - uses: actions/checkout@v4
 
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake . -B build -DTHREEPP_BUILD_EXAMPLES=OFF -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake --build build
+
+
+  linux-emscripten:
+
+    runs-on: ${{ matrix.os }}
+    env:
+      CC: gcc-${{ matrix.compiler_version }}
+      CXX: g++-${{ matrix.compiler_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-22.04 ]
+        compiler_version: [ 11 ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+          libxinerama-dev \
+          libxcursor-dev \
+          xorg-dev \
+          libglu1-mesa-dev \
+          pkg-config
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 3.1.71
+          actions-cache-folder: 'emsdk-cache'
+
+      - name: Configure and build
+        run: |
+          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build

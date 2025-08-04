@@ -2,7 +2,6 @@
 #ifndef THREEPP_IMAGE_HPP
 #define THREEPP_IMAGE_HPP
 
-#include <memory>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -18,16 +17,11 @@ namespace threepp {
         unsigned int height;
         unsigned int depth;
 
-        Image(ImageData data, unsigned int width, unsigned int height, bool flipped = true)
-            : data_(std::move(data)), width(width), height(height), depth(0), flipped_(flipped){};
+        Image(ImageData data, unsigned int width, unsigned int height)
+            : width(width), height(height), depth(0), data_(std::move(data)){};
 
-        Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth, bool flipped = true)
-            : data_(std::move(data)), width(width), height(height), depth(depth), flipped_(flipped){};
-
-        [[nodiscard]] bool flipped() const {
-
-            return flipped_;
-        }
+        Image(ImageData data, unsigned int width, unsigned int height, unsigned int depth)
+            : width(width), height(height), depth(depth), data_(std::move(data)){};
 
         void setData(ImageData data) {
 
@@ -41,7 +35,6 @@ namespace threepp {
         }
 
     private:
-        bool flipped_;
         ImageData data_;
     };
 

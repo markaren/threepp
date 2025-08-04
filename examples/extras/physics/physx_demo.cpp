@@ -215,6 +215,8 @@ int main() {
 
     OrbitControls controls(camera, canvas);
 
+    TaskManager tm;
+
     bool run = false;
     KeyAdapter adapter(KeyAdapter::Mode::KEY_PRESSED | KeyAdapter::KEY_REPEAT, [&](KeyEvent evt) {
         run = true;
@@ -229,10 +231,10 @@ int main() {
             camera.getWorldDirection(world);
             rb->addForce(toPxVector3(world * 10000));
 
-            renderer.invokeLater([&, obj] {
+            tm.invokeLater([&, obj] {
                 scene.remove(*obj);
             },
-                               2);// remove after 2 seconds
+                                 2);// remove after 2 seconds
         } else if (evt.key == Key::D) {
             engine.debugVisualisation = !engine.debugVisualisation;
         }
@@ -252,7 +254,9 @@ int main() {
 
     Clock clock;
     canvas.animate([&] {
-        auto dt = clock.getDelta();
+        const auto dt = clock.getDelta();
+
+        tm.handleTasks();
 
         renderer.render(scene, camera);
 

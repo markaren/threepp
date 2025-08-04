@@ -20,7 +20,7 @@ namespace threepp::gl {
 
         LightUniforms* get(const Light& light) {
 
-            if (lights.count(light.id)) {
+            if (lights.contains(light.id)) {
 
                 return &lights.at(light.id);
             }
@@ -73,7 +73,7 @@ namespace threepp::gl {
 
         LightUniforms* get(const Light& light) {
 
-            if (lights.count(light.id)) {
+            if (lights.contains(light.id)) {
 
                 return &lights.at(light.id);
             }

@@ -5,8 +5,6 @@
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#include "threepp/core/InstancedBufferGeometry.hpp"
-
 #ifndef EMSCRIPTEN
 #include <glad/glad.h>
 #else
@@ -39,12 +37,12 @@ struct GLGeometries::Impl {
                 scope_->attributes_.remove(value.get());
             }
 
-            geometry->removeEventListener("dispose", this);
+            geometry->removeEventListener("dispose", *this);
 
             scope_->geometries_.erase(geometry);
 
 
-            if (scope_->wireframeAttributes_.count(geometry)) {
+            if (scope_->wireframeAttributes_.contains(geometry)) {
 
                 const auto& attribute = scope_->wireframeAttributes_.at(geometry);
 
@@ -54,9 +52,9 @@ struct GLGeometries::Impl {
 
             scope_->bindingStates_.releaseStatesOfGeometry(geometry);
 
-            if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
-                ig->_maxInstanceCount = 0;
-            }
+            //            if (auto ig = dynamic_cast<InstancedBufferGeometry*>(geometry)) {
+            //                ig->_maxInstanceCount = 0;
+            //            }
 
             --scope_->info_.memory.geometries;
         }
@@ -80,11 +78,11 @@ struct GLGeometries::Impl {
           bindingStates_(bindingStates),
           onGeometryDispose_(this) {}
 
-    void get(Object3D* object, BufferGeometry* geometry) {
+    void get(Object3D* /*object*/, BufferGeometry* geometry) {
 
-        if (geometries_.count(geometry) && geometries_.at(geometry)) return;
+        if (geometries_.contains(geometry) && geometries_.at(geometry)) return;
 
-        geometry->addEventListener("dispose", &onGeometryDispose_);
+        geometry->addEventListener("dispose", onGeometryDispose_);
 
         geometries_[geometry] = true;
 
@@ -159,7 +157,7 @@ struct GLGeometries::Impl {
 
         // Updating index buffer in VAO now. See WebGLBindingStates
 
-        if (wireframeAttributes_.count(geometry)) {
+        if (wireframeAttributes_.contains(geometry)) {
             auto previousAttribute = wireframeAttributes_.at(geometry).get();
             attributes_.remove(previousAttribute);
         }
@@ -169,7 +167,7 @@ struct GLGeometries::Impl {
 
     IntBufferAttribute* getWireframeAttribute(BufferGeometry* geometry) {
 
-        if (wireframeAttributes_.count(geometry)) {
+        if (wireframeAttributes_.contains(geometry)) {
 
             const auto& currentAttribute = wireframeAttributes_.at(geometry);
 

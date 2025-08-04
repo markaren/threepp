@@ -54,12 +54,12 @@ ProgramParameters::ProgramParameters(
     auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
     auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
     auto definesMaterial = dynamic_cast<MaterialWithDefines*>(material);
-    auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
+    // auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
     auto roughnessMaterial = dynamic_cast<MaterialWithRoughness*>(material);
     auto metallnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
 
     std::string vShader, fShader;
-    if (shaderIDs.count(material->type())) {
+    if (shaderIDs.contains(material->type())) {
 
         shaderID = shaderIDs.at(material->type());
         const auto shader = shaders::ShaderLib::instance().get(*shaderID);
@@ -97,7 +97,7 @@ ProgramParameters::ProgramParameters(
     matcap = matcapMaterial && matcapMaterial->matcap;
     matcapEncoding = getTextureEncodingFromMap(matcap ? matcapMaterial->matcap : nullptr);
     envMap = envmapMaterial && envmapMaterial->envMap;
-    if (envMap){
+    if (envMap) {
         envMapMode = as_integer(envmapMaterial->envMap->mapping);
     }
     envMapEncoding = getTextureEncodingFromMap(envMap ? envmapMaterial->envMap : nullptr);
@@ -157,7 +157,7 @@ ProgramParameters::ProgramParameters(
     sizeAttenuation = sizeMaterial ? sizeMaterial->sizeAttenuation : false;
 
     skinning = object->is<SkinnedMesh>();
-    maxBones = 64;    // TODO
+    maxBones = 64;// TODO
     useVertexTexture = GLCapabilities::instance().floatVertexTextures;
 
     if (auto m = material->as<MaterialWithMorphTargets>()) {

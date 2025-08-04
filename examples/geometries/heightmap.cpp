@@ -16,10 +16,10 @@ namespace {
         std::ifstream file("data/models/terrain/aalesund.bin", std::ios::binary);
 
         file.seekg(0, std::ios_base::end);
-        auto size = file.tellg();
+        const auto size = file.tellg();
         file.seekg(0, std::ios_base::beg);
         std::vector<uint16_t> raw(size / sizeof(uint16_t));
-        file.read((char*) &raw[0], static_cast<std::streamsize>(size));
+        file.read(reinterpret_cast<char*>(&raw[0]), static_cast<std::streamsize>(size));
         file.close();
 
         std::vector<float> data(raw.size());
@@ -45,7 +45,7 @@ namespace {
 
     auto createWater(const DirectionalLight& light, bool fog) {
         TextureLoader textureLoader{};
-        auto texture = textureLoader.load("data/textures/waternormals.jpg");
+        const auto texture = textureLoader.load("data/textures/waternormals.jpg");
         texture->wrapS = TextureWrapping::Repeat;
         texture->wrapT = TextureWrapping::Repeat;
 
@@ -60,7 +60,7 @@ namespace {
         opt.waterColor = 0x001e0f;
         opt.fog = fog;
 
-        auto waterGeometry = PlaneGeometry::create(5041, 5041);
+        const auto waterGeometry = PlaneGeometry::create(5041, 5041);
 
         auto water = Water::create(waterGeometry, opt);
         water->rotateX(math::degToRad(-90));
@@ -105,35 +105,41 @@ int main() {
     hud.add(hudText);
 
     auto material = MeshPhongMaterial::create();
+
     auto mesh = Mesh::create(BufferGeometry::create(), material);
     scene->add(mesh);
 
-    auto future = std::async(std::launch::async, [&] {
-        const auto data = loadHeights();
+    TaskManager tm;
 
+    auto future = std::async(std::launch::async, [&] {
         auto geometry = PlaneGeometry::create(5041, 5041, 1023, 1023);
         geometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-        auto pos = geometry->getAttribute<float>("position");
-        for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
-            pos->setY(i, data[i]);
-        }
+        tm.invokeLater([&] {
+            mesh->setGeometry(geometry);
+        });
+
+        const auto data = loadHeights();
 
         TextureLoader tl;
         auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
 
-        renderer.invokeLater([&, texture, geometry] {
+        tm.invokeLater([&, data, texture, geometry] {
+            const auto pos = geometry->getAttribute<float>("position");
+            for (unsigned i = 0, j = 0, l = data.size(); i < l; ++i, j += 3) {
+                pos->setY(i, data[i]);
+            }
+            pos->needsUpdate();
 
             material->map = texture;
             material->needsUpdate();
-            mesh->setGeometry(geometry);
 
             hudText.setText("Terrain loaded..", opts);
         });
 
-        renderer.invokeLater([&] {
+        tm.invokeLater([&] {
             hud.remove(hudText);
         },
-                           2);
+                             2);
     });
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -145,13 +151,14 @@ int main() {
     Clock clock;
     auto& timeUniform = water->material()->as<ShaderMaterial>()->uniforms.at("time");
     canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+        const auto t = clock.getElapsedTime();
         timeUniform.setValue(t);
+
+        tm.handleTasks();
 
         renderer.clear();
         renderer.render(*scene, *camera);
 
         hud.apply(renderer);
     });
-
 }

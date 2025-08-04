@@ -17,8 +17,8 @@ namespace threepp {
         class GLAttributes;
         class GLBindingStates;
 
-        struct GLGeometries {
-
+        class GLGeometries {
+        public:
             GLGeometries(GLAttributes& attributes, GLInfo& info, GLBindingStates& bindingStates);
 
             void get(Object3D* object, BufferGeometry* geometry);

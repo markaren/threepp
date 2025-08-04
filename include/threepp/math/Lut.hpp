@@ -5,92 +5,28 @@
 
 #include "threepp/math/Color.hpp"
 
-#include <algorithm>
-#include <cmath>
 #include <unordered_map>
 #include <vector>
+#include <utility>
 
 namespace threepp {
 
     class Lut {
 
     public:
-        explicit Lut(const std::string& colormap, int numberofcolors = 32) {
+        explicit Lut(const std::string& colormap, int numberofcolors = 32);
 
-            this->setColorMap(colormap, numberofcolors);
-        }
+        Lut& setMin(float min);
 
-        Lut& setMin(float min) {
+        Lut& setMax(float max);
 
-            this->minV = min;
+        Lut& setColorMap(const std::string& colormap, int numberofcolors = 32);
 
-            return *this;
-        }
+        void copy(const Lut& lut);
 
-        Lut& setMax(float max) {
+        Color getColor(float alpha) const;
 
-            this->maxV = max;
-
-            return *this;
-        }
-
-        Lut& setColorMap(const std::string& colormap, int numberofcolors = 32) {
-            this->map = ColorMapKeywords[colormap];
-            this->n = numberofcolors;
-
-            float step = 1.f / static_cast<float>(this->n);
-
-
-            this->lut.clear();
-
-            // sample at 0
-            this->lut.emplace_back(this->map[0].second);
-
-            // sample at 1/n, ..., (n-1)/n
-            for (int i = 1; i < numberofcolors; i++) {
-                float alpha = static_cast<float>(i) * step;
-
-                for (int j = 0; j < this->map.size() - 1; j++) {
-                    if (alpha > this->map[j].first && alpha <= this->map[j + 1].first) {
-                        float min = this->map[j].first;
-                        float max = this->map[j + 1].first;
-
-                        Color minColor(this->map[j].second);
-                        Color maxColor(this->map[j + 1].second);
-
-                        Color color = minColor.lerp(maxColor, (alpha - min) / (max - min));
-
-                        this->lut.emplace_back(color);
-                    }
-                }
-            }
-
-            // sample at 1
-            this->lut.emplace_back(this->map[this->map.size() - 1].second);
-
-            return *this;
-        }
-
-        void copy(const Lut& lut) {
-            this->lut = lut.lut;
-            this->map = lut.map;
-            this->n = lut.n;
-            this->minV = lut.minV;
-            this->maxV = lut.maxV;
-        }
-
-        Color getColor(float alpha) {
-            alpha = std::clamp(alpha, this->minV, this->maxV);
-            alpha = (alpha - this->minV) / (this->maxV - this->minV);
-            int colorPosition = static_cast<int>(std::round(alpha * this->n));
-
-            return this->lut[colorPosition];
-        }
-
-        static void addColorMap(const std::string& name, const std::vector<std::pair<float, Color>>& arrayOfColors) {
-
-            ColorMapKeywords[name] = arrayOfColors;
-        }
+        static void addColorMap(const std::string& name, const std::vector<std::pair<float, Color>>& arrayOfColors);
 
     private:
         std::vector<Color> lut;

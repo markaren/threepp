@@ -89,7 +89,7 @@ namespace {
             : times(vectimeArray), values(valueArray) {}
 
         [[nodiscard]] T lerp(float t) const {
-            int i = 0;
+            unsigned i = 0;
             auto n = this->times.size();
             while (i < n && t > this->times[i]) {
                 i++;
@@ -111,8 +111,9 @@ namespace {
         std::vector<T> values;
     };
 
-    struct Particle {
+    class Particle {
 
+    public:
         Vector3 position;
         Vector3 velocity;
         Vector3 acceleration;
@@ -271,7 +272,7 @@ struct ParticleSystem::Impl {
         }
 
         // link particle data with geometry/material data
-        for (auto i = 0; i < particleCount; i++) {
+        for (unsigned i = 0; i < particleCount; i++) {
             // remove duplicate code somehow, here and in update function below.
             this->particleArray.emplace_back(createParticle());
 
@@ -314,7 +315,7 @@ struct ParticleSystem::Impl {
         auto customColor = this->particleGeometry->getAttribute<float>("customColor");
 
         // update particle data
-        for (auto i = 0; i < this->particleCount; i++) {
+        for (unsigned i = 0; i < this->particleCount; i++) {
             if (this->particleArray[i].alive) {
                 this->particleArray[i].update(dt);
 
@@ -348,12 +349,12 @@ struct ParticleSystem::Impl {
         if (this->emitterAge < settings.particleDeathAge) {
             // determine indices of particles to activate
             const auto startIndex = static_cast<int>(std::round(settings.particlesPerSecond * (this->emitterAge + 0)));
-            auto endIndex = static_cast<int>(std::round(settings.particlesPerSecond * (this->emitterAge + dt)));
+            auto endIndex = static_cast<size_t>(std::round(settings.particlesPerSecond * (this->emitterAge + dt)));
             if (endIndex > this->particleCount) {
                 endIndex = this->particleCount;
             }
 
-            for (auto i = startIndex; i < endIndex; i++)
+            for (unsigned i = startIndex; i < endIndex; i++)
                 this->particleArray[i].alive = true;
         }
 
@@ -457,7 +458,7 @@ void ParticleSystem::Settings::makeDefault() {
 
     texture = nullptr;
 
-    size = {};
-    opacity = {};
-    color = {};
+    size = {{}, {}};
+    opacity = {{}, {}};
+    color = {{}, {}};
 }

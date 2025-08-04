@@ -13,4 +13,14 @@ std::string Light::type() const {
     return "Light";
 }
 
+void Light::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (const auto l = source.as<Light>()) {
+
+        color.copy(l->color);
+        intensity = l->intensity;
+    }
+}
+
 void Light::dispose() {}

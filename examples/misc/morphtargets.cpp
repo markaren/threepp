@@ -112,8 +112,8 @@ int main() {
         // (-1 to +1) for both components
 
         auto size = canvas.size();
-        mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-        mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+        mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
+        mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
     });
     canvas.addMouseListener(l);
 
@@ -124,7 +124,6 @@ int main() {
 
     Raycaster raycaster;
     canvas.animate([&] {
-
         box.setFromObject(*mesh);
 
         raycaster.setFromCamera(mouse, *camera);

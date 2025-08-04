@@ -1,12 +1,10 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include <threepp/core/Raycaster.hpp>
 #include <threepp/geometries/DecalGeometry.hpp>
 #include <threepp/loaders/AssimpLoader.hpp>
 #include <threepp/threepp.hpp>
 
-#ifdef HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
-#endif
 
 using namespace threepp;
 
@@ -41,9 +39,9 @@ namespace {
             if (mouseDown) {
                 mouseDown = false;
                 return true;
-            } else {
-                return false;
             }
+
+            return false;
         }
 
         void onMouseDown(int button, const Vector2& pos) override {
@@ -61,14 +59,11 @@ namespace {
         bool mouseDown = false;
 
         void updateMousePos(Vector2 pos) {
-            auto size = canvas.size();
-            mouse.x = (pos.x / static_cast<float>(size.width)) * 2 - 1;
-            mouse.y = -(pos.y / static_cast<float>(size.height)) * 2 + 1;
+            const auto size = canvas.size();
+            mouse.x = (pos.x / static_cast<float>(size.width())) * 2 - 1;
+            mouse.y = -(pos.y / static_cast<float>(size.height())) * 2 + 1;
         }
     };
-
-
-#ifdef HAS_IMGUI
 
     struct MyGui: public ImguiContext {
 
@@ -87,18 +82,17 @@ namespace {
             ImGui::End();
         }
     };
-#endif
 
     void addLights(Scene& scene) {
 
-        auto light = AmbientLight::create(0x443333, 0.8f);
+        const auto light = AmbientLight::create(0x443333, 0.8f);
         scene.add(light);
 
-        auto light2 = DirectionalLight::create(0xffddcc, 1.f);
+        const auto light2 = DirectionalLight::create(0xffddcc, 1.f);
         light2->position.set(1, 0.75, 0.5);
         scene.add(light2);
 
-        auto light3 = DirectionalLight::create(0xccccff, 1.f);
+        const auto light3 = DirectionalLight::create(0xccccff, 1.f);
         light3->position.set(-1, 0.75, -0.5);
         scene.add(light3);
     }
@@ -125,7 +119,7 @@ int main() {
     Mesh* mesh = nullptr;
     model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
-        auto mat = MeshPhongMaterial::create({{
+        const auto mat = MeshPhongMaterial::create({{
                 {"map", tl.load(folder / "Map-COL.jpg", false)},
                 {"specularMap", tl.load(folder / "Map-SPEC.jpg", false)},
                 {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false)},
@@ -149,7 +143,6 @@ int main() {
         renderer.setSize(size);
     });
 
-#ifdef HAS_IMGUI
     MyGui ui(canvas);
     std::vector<Mesh*> decals;
 
@@ -158,7 +151,6 @@ int main() {
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
-#endif
 
     Matrix4 mouseHelper;
     Vector3 position;
@@ -169,7 +161,7 @@ int main() {
     Raycaster raycaster;
     canvas.animate([&]() {
         raycaster.setFromCamera(mouseListener.mouse, *camera);
-        auto intersects = raycaster.intersectObject(*mesh, false);
+        const auto intersects = raycaster.intersectObject(*mesh, false);
 
         bool click = mouseListener.mouseClick();
 
@@ -190,9 +182,9 @@ int main() {
 
             if (click) {
 
-                Vector3 scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
+                const auto scale = Vector3::ONES() * math::randFloat(0.6f, 1.2f);
 
-                auto mat = decalMat->clone()->as_shared<MeshPhongMaterial>();
+                const auto mat = decalMat->clone<MeshPhongMaterial>();
                 mat->color.randomize();
                 orientation.z = math::PI * math::randFloat();
                 auto m = Mesh::create(DecalGeometry::create(*mesh, position, orientation, scale), mat);
@@ -203,8 +195,6 @@ int main() {
 
         renderer.render(*scene, *camera);
 
-#ifdef HAS_IMGUI
-
         if (ui.clear) {
             for (auto decal : decals) {
                 decal->removeFromParent();
@@ -213,7 +203,5 @@ int main() {
             ui.clear = false;
         }
         ui.render();
-
-#endif
     });
 }

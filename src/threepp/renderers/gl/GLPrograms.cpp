@@ -7,6 +7,8 @@
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
+#include <algorithm>
+
 using namespace threepp;
 using namespace threepp::gl;
 
@@ -95,7 +97,7 @@ std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const Pro
 
 UniformMap* GLPrograms::getUniforms(Material& material) {
 
-    if (shaderIDs.count(material.type())) {
+    if (shaderIDs.contains(material.type())) {
 
         auto shaderID = shaderIDs.at(material.type());
 
@@ -139,11 +141,11 @@ void GLPrograms::releaseProgram(GLProgram* program) {
 
     if (--(program->usedTimes) == 0) {
 
-        auto it = find_if(programs.begin(), programs.end(), [program](auto& p) {
-            return p->id == program->id;
-        });
+        if (const auto it = std::ranges::find_if(programs, [program](auto& p) {
+                return p->id == program->id;
+            });
+            it != programs.end()) {
 
-        if (it != programs.end()) {
             program->destroy();
             programs.erase(it);// Remove the element from the vector
         }

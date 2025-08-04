@@ -11,10 +11,10 @@ namespace threepp {
 
     struct MouseListener {
 
-        virtual void onMouseDown(int button, const Vector2& pos) {}
-        virtual void onMouseUp(int button, const Vector2& pos) {}
-        virtual void onMouseMove(const Vector2& pos) {}
-        virtual void onMouseWheel(const Vector2& delta) {}
+        virtual void onMouseDown(int /*button*/, const Vector2& /*pos*/) {}
+        virtual void onMouseUp(int /*button*/, const Vector2& /*pos*/) {}
+        virtual void onMouseMove(const Vector2& /*pos*/) {}
+        virtual void onMouseWheel(const Vector2& /*delta*/) {}
 
         virtual ~MouseListener() = default;
     };

@@ -3,8 +3,6 @@
 #ifndef THREEPP_REFLECTOR_HPP
 #define THREEPP_REFLECTOR_HPP
 
-#include <utility>
-
 #include "threepp/core/Shader.hpp"
 #include "threepp/objects/Mesh.hpp"
 

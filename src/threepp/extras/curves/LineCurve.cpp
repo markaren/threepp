@@ -28,7 +28,7 @@ void LineCurveT<T>::getPointAt(float u, T& target) const {
 }
 
 template<class T>
-void LineCurveT<T>::getTangent(float t, T& tangent) const {
+void LineCurveT<T>::getTangent(float /*t*/, T& tangent) const {
 
     tangent.copy(this->v2).sub(this->v1).normalize();
 }

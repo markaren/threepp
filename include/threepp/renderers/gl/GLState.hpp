@@ -195,7 +195,7 @@ namespace threepp {
 
             //
 
-            void reset(int width, int height);
+            void reset(std::pair<int, int> size);
         };
 
     }// namespace gl

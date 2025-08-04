@@ -11,10 +11,10 @@ namespace threepp {
 
     public:
         Color color;
-        float near;
-        float far;
+        float nearPlane;
+        float farPlane;
 
-        explicit Fog(const Color& color, float near = 1, float far = 1000);
+        explicit Fog(const Color& color, float _near = 1, float _far = 1000);
 
         bool operator==(const Fog& f) const;
     };

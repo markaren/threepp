@@ -12,10 +12,8 @@
 
 #include "threepp/textures/Image.hpp"
 
-#include <functional>
 #include <memory>
 #include <optional>
-#include <utility>
 
 namespace threepp {
 
@@ -28,10 +26,7 @@ namespace threepp {
 
         std::string name;
 
-        std::vector<Image> image;
-        std::vector<Image> mipmaps;
-
-        Mapping mapping = Texture::DEFAULT_MAPPING;
+        Mapping mapping = DEFAULT_MAPPING;
 
         TextureWrapping wrapS{TextureWrapping::ClampToEdge};
         TextureWrapping wrapT{TextureWrapping::ClampToEdge};
@@ -45,9 +40,9 @@ namespace threepp {
         std::optional<std::string> internalFormat;
         Type type{Type::UnsignedByte};
 
-        Vector2 offset = Vector2(0, 0);
-        Vector2 repeat = Vector2(1, 1);
-        Vector2 center = Vector2(0, 0);
+        Vector2 offset{0, 0};
+        Vector2 repeat{1, 1};
+        Vector2 center{0, 0};
         float rotation = 0;
 
         bool matrixAutoUpdate = true;
@@ -68,15 +63,25 @@ namespace threepp {
         Texture(Texture&&) = delete;
         Texture& operator=(Texture&&) = delete;
 
-        std::optional<std::function<void(Texture&)>> onUpdate;
-
         [[nodiscard]] const std::string& uuid() const;
+
+        Image& image();
+
+        [[nodiscard]] const Image& image() const;
+
+        [[nodiscard]] std::vector<Image>& images();
+
+        [[nodiscard]] const std::vector<Image>& images() const;
+
+        [[nodiscard]] std::vector<Image>& mipmaps();
+
+        [[nodiscard]] const std::vector<Image>& mipmaps() const;
 
         void updateMatrix();
 
         void dispose();
 
-        void transformUv(Vector2& uv) const;
+        // void transformUv(Vector2& uv) const;
 
         void needsUpdate();
 
@@ -99,11 +104,13 @@ namespace threepp {
 
     private:
         std::string uuid_;
+        std::vector<Image> images_;
+        std::vector<Image> mipmaps_;
 
-        bool disposed_ = false;
-        unsigned int version_ = 0;
+        bool disposed_{false};
+        unsigned int version_{0};
 
-        inline static unsigned int textureId = 0;
+        inline static unsigned int textureId{0};
     };
 
 }// namespace threepp

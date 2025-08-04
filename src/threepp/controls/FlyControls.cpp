@@ -210,7 +210,7 @@ struct FlyControls::Impl {
 
         explicit MouseDownListener(FlyControls& scope): scope(scope) {}
 
-        void onMouseDown(int button, const Vector2& pos) override {
+        void onMouseDown(int button, const Vector2&) override {
 
             if (scope.dragToLook) {
 
@@ -243,8 +243,8 @@ struct FlyControls::Impl {
 
             if (!scope.dragToLook || scope.pimpl_->mouseStatus > 0) {
 
-                const float halfWidth = static_cast<float>(scope.pimpl_->eventSource.size().width) / 2;
-                const float halfHeight = static_cast<float>(scope.pimpl_->eventSource.size().height) / 2;
+                const float halfWidth = static_cast<float>(scope.pimpl_->eventSource.size().width()) / 2;
+                const float halfHeight = static_cast<float>(scope.pimpl_->eventSource.size().height()) / 2;
 
                 scope.pimpl_->moveState.yawLeft = -((pos.x) - halfWidth) / halfWidth;
                 scope.pimpl_->moveState.pitchDown = ((pos.y) - halfHeight) / halfHeight;
@@ -260,7 +260,7 @@ struct FlyControls::Impl {
 
         explicit MouseUpListener(FlyControls& scope): scope(scope) {}
 
-        void onMouseUp(int button, const Vector2& pos) override {
+        void onMouseUp(int button, const Vector2&) override {
 
             if (scope.dragToLook) {
 
@@ -303,8 +303,8 @@ private:
     Vector3 moveVector;
     Vector3 rotationVector;
 
-    KeyUpListener keydown;
     KeyDownListener keyUp;
+    KeyUpListener keydown;
 
     MouseDownListener mouseDown;
     MouseMoveListener mouseMove;

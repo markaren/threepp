@@ -1,5 +1,7 @@
 
+#if defined(_MSVC_VER)
 #pragma warning(disable : 4312)
+#endif
 
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 

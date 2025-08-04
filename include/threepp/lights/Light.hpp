@@ -16,9 +16,9 @@ namespace threepp {
         Color color;
         float intensity;
 
-        Light(const Light&) = delete;
-
         [[nodiscard]] std::string type() const override;
+
+        void copy(const Object3D& source, bool recursive) override;
 
         virtual void dispose();
 

@@ -27,6 +27,11 @@ namespace threepp {
 
             this->transparent = true;
         }
+
+        std::shared_ptr<Material> createDefault() const override {
+
+            return std::shared_ptr<ShadowMaterial>(new ShadowMaterial());
+        }
     };
 
 }// namespace threepp

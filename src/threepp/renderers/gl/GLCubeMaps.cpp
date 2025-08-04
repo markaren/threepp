@@ -40,7 +40,7 @@ void GLCubeMaps::get(Texture* texture) {
 
             } else {
 
-                const auto& image = texture->image.front();
+                const auto& image = texture->image();
 
                 if (image.height > 0) {
 
@@ -59,7 +59,6 @@ void GLCubeMaps::get(Texture* texture) {
             }
         }
     }
-
 }
 
 void GLCubeMaps::dispose() {

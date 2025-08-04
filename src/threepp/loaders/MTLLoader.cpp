@@ -6,7 +6,9 @@
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
+#include <algorithm>
 #include <fstream>
+#include <functional>
 #include <utility>
 
 using namespace threepp;
@@ -58,10 +60,10 @@ namespace {
     }
 
     TexParams getTextureParams(const std::string& value, MeshPhongMaterial& params) {
-        TexParams texParams{Vector2(1, 1), Vector2(0, 0)};
+        TexParams texParams{.scale = Vector2(1, 1), .offset = Vector2(0, 0)};
 
         auto items = utils::split(value, ' ');
-        auto pos = std::find(items.begin(), items.end(), "-bm");
+        auto pos = std::ranges::find(items, "-bm");
 
         if (pos != items.end()) {
 
@@ -69,7 +71,7 @@ namespace {
             items.erase(pos, pos + 2);
         }
 
-        pos = std::find(items.begin(), items.end(), "-s");
+        pos = std::ranges::find(items, "-s");
 
         if (pos != items.end()) {
 
@@ -77,7 +79,7 @@ namespace {
             items.erase(pos, pos + 4);
         }
 
-        pos = std::find(items.begin(), items.end(), "-o");
+        pos = std::ranges::find(items, "-o");
 
         if (pos != items.end()) {
 

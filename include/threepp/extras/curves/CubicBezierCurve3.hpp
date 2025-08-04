@@ -5,7 +5,6 @@
 
 #include "threepp/extras/core/Curve.hpp"
 
-
 namespace threepp {
 
     class CubicBezierCurve3: public Curve3 {

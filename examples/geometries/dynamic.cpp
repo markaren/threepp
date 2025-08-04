@@ -9,15 +9,16 @@ namespace {
 
     auto createPlane() {
 
-        auto geometry = PlaneGeometry::create(200, 200, 50, 50);
+        const auto geometry = PlaneGeometry::create(200, 200, 50, 50);
         geometry->applyMatrix4(Matrix4().makeRotationX(math::degToRad(90)));
-        auto material = MeshBasicMaterial::create();
+        const auto material = MeshBasicMaterial::create();
         material->side = Side::Double;
         material->color = Color::navy;
 
         auto mesh = Mesh::create(geometry, material);
-        auto wireframe = Mesh::create(geometry, MeshBasicMaterial::create({{"wireframe", true},
-                                                                           {"color", Color::darkgray}}));
+        const auto wireframe = Mesh::create(geometry, MeshBasicMaterial::create(
+                                                              {{"wireframe", true},
+                                                               {"color", Color::darkgray}}));
         mesh->add(wireframe);
 
         return mesh;
@@ -37,7 +38,7 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    auto plane = createPlane();
+    const auto plane = createPlane();
     scene->add(plane);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -47,16 +48,16 @@ int main() {
     });
 
     Clock clock;
-    auto position = plane->geometry()->getAttribute<float>("position");
-    position->setUsage(threepp::DrawUsage::Dynamic);
+    const auto position = plane->geometry()->getAttribute<float>("position");
+    position->setUsage(DrawUsage::Dynamic);
     canvas.animate([&]() {
-        float time = clock.getElapsedTime();
+        const auto time = clock.getElapsedTime();
 
         renderer.render(*scene, *camera);
 
-        for (unsigned i = 0; i < position->count(); i++) {
+        for (auto i = 0; i < position->count(); i++) {
 
-            float y = 2 * std::sin(static_cast<float>(i) / 5.f + (time * 20 + static_cast<float>(i)) / 7.f);
+            const float y = 2 * std::sin(static_cast<float>(i) / 5.f + (time * 20 + static_cast<float>(i)) / 7.f);
             position->setY(i, y);
 
             position->needsUpdate();

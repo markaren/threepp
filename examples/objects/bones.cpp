@@ -64,7 +64,7 @@ namespace {
         for (unsigned i = 0; i < sizing.segmentCount; i++) {
 
             auto bone = Bone::create();
-            bone->position.y = float(sizing.segmentHeight);
+            bone->position.y = static_cast<float>(sizing.segmentHeight);
             bones.emplace_back(bone);
             prevBone->add(bone);
             prevBone = bone;
@@ -82,13 +82,13 @@ namespace {
 
         auto mesh = SkinnedMesh::create(geometry, material);
         mesh->castShadow = true;
-        auto skeleton = Skeleton::create(bones);
+        const auto skeleton = Skeleton::create(bones);
 
         mesh->add(bones[0]);
 
         mesh->bind(skeleton);
 
-        auto skeletonHelper = SkeletonHelper::create(*mesh);
+        const auto skeletonHelper = SkeletonHelper::create(*mesh);
         skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
         mesh->add(skeletonHelper);
 
@@ -96,16 +96,16 @@ namespace {
     }
 
     auto initBones() {
-        float segmentHeight = 8;
-        int segmentCount = 4;
-        float height = segmentHeight * float(segmentCount);
-        float halfHeight = height * 0.5f;
+        constexpr float segmentHeight = 8;
+        constexpr int segmentCount = 4;
+        constexpr float height = segmentHeight * float(segmentCount);
+        constexpr float halfHeight = height * 0.5f;
 
-        Sizing sizing{segmentHeight, segmentCount, height, halfHeight};
+        const Sizing sizing{segmentHeight, segmentCount, height, halfHeight};
 
-        auto geometry = createGeometry(sizing);
-        geometry->applyMatrix4(Matrix4().makeTranslation(0,halfHeight,0));
-        auto bones = createBones(sizing);
+        const auto geometry = createGeometry(sizing);
+        geometry->applyMatrix4(Matrix4().makeTranslation(0, halfHeight, 0));
+        const auto bones = createBones(sizing);
 
         auto mesh = createMesh(geometry, bones);
         mesh->scale.multiplyScalar(1);
@@ -114,15 +114,15 @@ namespace {
     }
 
     auto initPlane() {
-        int gridSize = 100;
+        constexpr int gridSize = 100;
         auto grid = GridHelper::create(gridSize, 10, Color::yellow);
 
-        auto geometry = PlaneGeometry::create(gridSize, gridSize);
-        auto material = ShadowMaterial::create();
+        const auto geometry = PlaneGeometry::create(gridSize, gridSize);
+        const auto material = ShadowMaterial::create();
         material->color = 0x000000;
         material->opacity = 0.2f;
 
-        auto plane = Mesh::create(geometry, material);
+        const auto plane = Mesh::create(geometry, material);
         plane->rotation.x = -math::PI / 2;
         plane->receiveShadow = true;
         grid->add(plane);
@@ -190,7 +190,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&] {
-        auto time = clock.getElapsedTime();
+        const auto time = clock.getElapsedTime();
 
         renderer.render(scene, camera);
         ui.render();

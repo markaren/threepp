@@ -22,9 +22,11 @@ namespace threepp {
             return "MeshDepthMaterial";
         }
 
-        std::shared_ptr<Material> clone() const override {
-            auto m = create();
-            copyInto(m.get());
+        void copyInto(Material& material) const override {
+
+            Material::copyInto(material);
+
+            auto m = material.as<MeshDepthMaterial>();
 
             m->depthPacking = depthPacking;
 
@@ -40,8 +42,6 @@ namespace threepp {
             m->wireframeLinewidth = 1;
 
             m->fog = false;
-
-            return m;
         }
 
         static std::shared_ptr<MeshDepthMaterial> create() {
@@ -56,6 +56,11 @@ namespace threepp {
               MaterialWithWireframe(false, 1) {
 
             this->fog = false;
+        }
+
+        std::shared_ptr<Material> createDefault() const override {
+
+            return std::shared_ptr<MeshDepthMaterial>(new MeshDepthMaterial());
         }
     };
 

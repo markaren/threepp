@@ -5,8 +5,8 @@ using namespace threepp;
 namespace {
 
     std::shared_ptr<Mesh> createBox(const Vector3 &pos, const Color &color) {
-        auto geometry = BoxGeometry::create();
-        auto material = MeshBasicMaterial::create();
+        const auto geometry = BoxGeometry::create();
+        const auto material = MeshBasicMaterial::create();
         material->color.copy(color);
         auto mesh = Mesh::create(geometry, material);
         mesh->position.copy(pos);
@@ -14,17 +14,17 @@ namespace {
         return mesh;
     }
 
-    std::unique_ptr<HUD> createHUD(PeripheralsEventSource &canvas) {
-        auto hud = std::make_unique<HUD>(canvas);
+    std::unique_ptr<HUD> createHUD(WindowSize size) {
+        auto hud = std::make_unique<HUD>(size);
         FontLoader fontLoader;
         const auto font = fontLoader.defaultFont();
         TextGeometry::Options opts(font, 20, 5);
-        auto hudText2 = Text2D::create(opts, "Hello World!");
+        const auto hudText2 = Text2D::create(opts, "Hello World!");
         hudText2->setColor(Color::gray);
         hud->add(hudText2, HUD::Options()
                                   .setNormalizedPosition({1, 1})
-                                  .setHorizontalAlignment(threepp::HUD::HorizontalAlignment::RIGHT)
-                                  .setVerticalAlignment(threepp::HUD::VerticalAlignment::TOP));
+                                  .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
+                                  .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
         return hud;
     }
@@ -50,9 +50,9 @@ int main() {
     group->add(createBox({1, 0, 0}, Color::blue));
     scene->add(group);
 
-    auto hud = createHUD(canvas);
+    const auto hud = createHUD(canvas.size());
 
-    canvas.onWindowResize([&](WindowSize size) {
+    canvas.onWindowResize([&](const WindowSize &size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);

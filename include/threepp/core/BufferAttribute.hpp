@@ -75,7 +75,6 @@ namespace threepp {
 
         void copy(const BufferAttribute& source) {
 
-            //            this->name = source.name;
             this->itemSize_ = source.itemSize_;
             this->normalized_ = source.normalized_;
 
@@ -385,35 +384,29 @@ namespace threepp {
             target.set(minX, minY, minZ, maxX, maxY, maxZ);
         }
 
-        void copy(const TypedBufferAttribute<T>& source) {
+        void copy(const TypedBufferAttribute& source) {
             BufferAttribute::copy(source);
 
             this->count_ = source.count_;
             this->array_ = source.array_;
         }
 
-        [[nodiscard]] std::unique_ptr<TypedBufferAttribute<T>> clone() const {
-            auto clone = std::unique_ptr<TypedBufferAttribute<T>>(new TypedBufferAttribute<T>());
+        [[nodiscard]] std::unique_ptr<TypedBufferAttribute> clone() const {
+            auto clone = std::unique_ptr<TypedBufferAttribute>(new TypedBufferAttribute());
             clone->copy(*this);
 
             return clone;
         }
 
-        static std::unique_ptr<TypedBufferAttribute<T>> create(std::initializer_list<T>&& array, int itemSize, bool normalized = false) {
+        static std::unique_ptr<TypedBufferAttribute> create(std::initializer_list<T>&& array, int itemSize, bool normalized = false) {
 
-            return create(array.begin(), array.end(), itemSize, normalized);
+            return create(std::vector<T>{array.begin(), array.end()}, itemSize, normalized);
         }
 
-        template<class ArrayLike>
-        static std::unique_ptr<TypedBufferAttribute<T>> create(const ArrayLike& array, int itemSize, bool normalized = false) {
+        template<std::ranges::range Range>
+        static std::unique_ptr<TypedBufferAttribute> create(const Range& range, int itemSize, bool normalized = false) {
 
-            return create(array.begin(), array.end(), itemSize, normalized);
-        }
-
-        template<class It>
-        static std::unique_ptr<TypedBufferAttribute<T>> create(It begin, It end, int itemSize, bool normalized = false) {
-
-            return std::unique_ptr<TypedBufferAttribute<T>>(new TypedBufferAttribute<T>({begin, end}, itemSize, normalized));
+            return std::unique_ptr<TypedBufferAttribute>(new TypedBufferAttribute({std::ranges::begin(range), std::ranges::end(range)}, itemSize, normalized));
         }
 
     protected:

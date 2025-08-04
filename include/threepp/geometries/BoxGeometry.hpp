@@ -5,7 +5,6 @@
 
 #include "threepp/core/BufferGeometry.hpp"
 
-
 namespace threepp {
 
     class BoxGeometry: public BufferGeometry {
@@ -35,6 +34,8 @@ namespace threepp {
         [[nodiscard]] std::string type() const override;
 
         static std::shared_ptr<BoxGeometry> create(const Params& params);
+
+        static std::shared_ptr<BoxGeometry> create(const Vector3& size, unsigned int widthSegments, unsigned int heightSegments = 1, unsigned int depthSegments = 1);
 
         static std::shared_ptr<BoxGeometry> create(float width = 1, float height = 1, float depth = 1, unsigned int widthSegments = 1, unsigned int heightSegments = 1, unsigned int depthSegments = 1);
 

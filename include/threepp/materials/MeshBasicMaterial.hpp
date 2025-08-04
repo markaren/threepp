@@ -6,11 +6,6 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/materials/interfaces.hpp"
 
-#include "threepp/math/Color.hpp"
-#include "threepp/textures/Texture.hpp"
-
-#include <optional>
-
 namespace threepp {
 
     class MeshBasicMaterial
@@ -30,12 +25,14 @@ namespace threepp {
     public:
         [[nodiscard]] std::string type() const override;
 
-        std::shared_ptr<Material> clone() const override;
-
         static std::shared_ptr<MeshBasicMaterial> create(const std::unordered_map<std::string, MaterialValue>& values = {});
 
     protected:
         MeshBasicMaterial();
+
+        std::shared_ptr<Material> createDefault() const override;
+
+        void copyInto(Material& m) const override;
 
         bool setValue(const std::string& key, const MaterialValue& value) override;
     };

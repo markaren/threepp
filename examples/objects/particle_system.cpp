@@ -1,10 +1,7 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/objects/ParticleSystem.hpp"
 #include "threepp/threepp.hpp"
-
-#if HAS_IMGUI
-#include "threepp/extras/imgui/ImguiContext.hpp"
-#endif
 
 using namespace threepp;
 
@@ -44,8 +41,6 @@ int main() {
         renderer.setSize(size);
     });
 
-#if HAS_IMGUI
-
     int selectedIndex = 0;
     std::vector<std::pair<std::string, std::function<void(ParticleSystem::Settings&)>>> demos{
             {"fountain", initFountain},
@@ -71,18 +66,16 @@ int main() {
         }
         ImGui::End();
     });
-#endif
+
 
     Clock clock;
     canvas.animate([&]() {
-        float dt = clock.getDelta();
+        const auto dt = clock.getDelta();
 
         engine.update(dt * 0.5f);
         renderer.render(scene, camera);
 
-#if HAS_IMGUI
         ui.render();
-#endif
     });
 }
 

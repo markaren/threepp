@@ -14,7 +14,7 @@ namespace threepp {
 
     namespace gl {
 
-        class GLState;
+        struct GLState;
         class GLObjects;
         class GLCubeMaps;
         struct GLRenderList;

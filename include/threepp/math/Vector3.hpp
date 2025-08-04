@@ -36,6 +36,20 @@ namespace threepp {
         Vector3();
         Vector3(float x, float y, float z);
 
+        Vector3(const Vector3& other) = default;
+
+        // enable implicit conversions from Vector3 like objects
+        template<typename T>
+            requires requires(T t) {
+                { t.x } -> std::convertible_to<float>;
+                { t.y } -> std::convertible_to<float>;
+                { t.z } -> std::convertible_to<float>;
+            }
+        Vector3(const T& other)
+            : x(static_cast<float>(other.x)),
+              y(static_cast<float>(other.y)),
+              z(static_cast<float>(other.z)) {}
+
         // Sets the x, y and z components of this vector.
         Vector3& set(float x, float y, float z);
 
@@ -120,8 +134,16 @@ namespace threepp {
         Vector3& max(const Vector3& v);
 
         // If this vector's x, y or z value is greater than the max vector's x, y or z value, it is replaced by the corresponding value.
-        //If this vector's x, y or z value is less than the min vector's x, y or z value, it is replaced by the corresponding value.
+        // If this vector's x, y or z value is less than the min vector's x, y or z value, it is replaced by the corresponding value.
         Vector3& clamp(const Vector3& min, const Vector3& max);
+
+        // If this vector's length is greater than the max value, the vector will be scaled down so its length is the max value.
+        // If this vector's length is less than the min value, the vector will be scaled up so its length is the min value.
+        Vector3& clampLength(float min, float max);
+
+        //If this vector's x, y or z values are greater than the max value, they are replaced by the max value.
+        // If this vector's x, y or z values are less than the min value, they are replaced by the min value.
+        Vector3& clampScalar(float minVal, float maxVal);
 
         // The components of this vector are rounded down to the nearest integer value.
         Vector3& floor();
@@ -272,27 +294,36 @@ namespace threepp {
             return os;
         }
 
-        inline static Vector3 X() {
+        static Vector3 X() {
             return {1, 0, 0};
         }
 
-        inline static Vector3 Y() {
+        static Vector3 Y() {
             return {0, 1, 0};
         }
 
-        inline static Vector3 Z() {
+        static Vector3 Z() {
             return {0, 0, 1};
         }
 
-        inline static Vector3 ZEROS() {
+        static Vector3 ZEROS() {
             return {0, 0, 0};
         }
 
-        inline static Vector3 ONES() {
+        static Vector3 ONES() {
             return {1, 1, 1};
         }
     };
 
+    // Implementing get function template
+    template<std::size_t N>
+    auto get(const Vector3& p) {
+        if constexpr (N == 0) return p.x;
+        else if constexpr (N == 1)
+            return p.y;
+        else if constexpr (N == 2)
+            return p.z;
+    }
 
 }// namespace threepp
 

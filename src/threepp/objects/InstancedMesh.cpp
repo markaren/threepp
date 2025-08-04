@@ -89,7 +89,7 @@ void InstancedMesh::raycast(const Raycaster& raycaster, std::vector<Intersection
 
     if (!_mesh.material()) return;
 
-    for (int instanceId = 0; instanceId < raycastTimes; instanceId++) {
+    for (unsigned instanceId = 0; instanceId < raycastTimes; instanceId++) {
 
         // calculate the world matrix for each instance
 

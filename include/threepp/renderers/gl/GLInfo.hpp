@@ -3,9 +3,7 @@
 #ifndef THREEPP_GLINFO_HPP
 #define THREEPP_GLINFO_HPP
 
-#include <memory>
 #include <ostream>
-#include <vector>
 
 namespace threepp::gl {
 
@@ -34,8 +32,9 @@ namespace threepp::gl {
         }
     };
 
-    struct GLInfo {
+    class GLInfo {
 
+    public:
         MemoryInfo memory{};
         RenderInfo render{};
 

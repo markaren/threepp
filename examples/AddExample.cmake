@@ -1,18 +1,13 @@
 
 function(add_example)
 
-    set(flags TRY_LINK_IMGUI LINK_IMGUI LINK_ASSIMP LINK_XML LINK_PHYSX WEB)
+    set(flags LINK_IMGUI LINK_ASSIMP LINK_XML LINK_PHYSX WEB)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES WEB_EMBED)
 
     cmake_parse_arguments(arg "${flags}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     if (EMSCRIPTEN AND NOT arg_WEB)
-        return()
-    endif ()
-
-    if (arg_LINK_IMGUI AND NOT imgui_FOUND)
-        message(AUTHOR_WARNING "imgui not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
@@ -26,7 +21,6 @@ function(add_example)
         return()
     endif ()
 
-
     if (NOT arg_SOURCES)
         add_executable("${arg_NAME}" "${arg_NAME}.cpp")
     else ()
@@ -35,7 +29,7 @@ function(add_example)
 
     target_link_libraries("${arg_NAME}" PRIVATE threepp)
 
-    if ((arg_TRY_LINK_IMGUI OR arg_LINK_IMGUI) AND imgui_FOUND)
+    if (arg_LINK_IMGUI)
         target_link_libraries("${arg_NAME}" PRIVATE imgui::imgui)
     endif ()
 
@@ -52,7 +46,7 @@ function(add_example)
         set(LINK_FLAGS " --bind -sUSE_GLFW=3 -sGL_DEBUG=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3 -sASSERTIONS -sALLOW_MEMORY_GROWTH -sNO_DISABLE_EXCEPTION_CATCHING -sWASM=1")
         if (arg_WEB_EMBED)
             foreach (path ${arg_WEB_EMBED})
-                set(LINK_FLAGS "${LINK_FLAGS} --embed-file ${path}")
+                set(LINK_FLAGS "${LINK_FLAGS} --embed-file \"${path}\"")
             endforeach ()
         endif ()
 

@@ -21,11 +21,11 @@ namespace threepp {
 
     struct KeyListener {
 
-        virtual void onKeyPressed(KeyEvent evt) {}
+        virtual void onKeyPressed(KeyEvent) {}
 
-        virtual void onKeyReleased(KeyEvent evt) {}
+        virtual void onKeyReleased(KeyEvent) {}
 
-        virtual void onKeyRepeat(KeyEvent evt) {}
+        virtual void onKeyRepeat(KeyEvent) {}
 
         virtual ~KeyListener() = default;
     };
@@ -119,7 +119,7 @@ namespace threepp {
         TAB,
         BACKSPACE,
         INSERT,
-        DELETE,
+        DEL,
         RIGHT,
         LEFT,
         DOWN,

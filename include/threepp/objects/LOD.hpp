@@ -5,7 +5,6 @@
 
 #include "threepp/core/Object3D.hpp"
 
-#include <utility>
 
 namespace threepp {
 
@@ -25,8 +24,6 @@ namespace threepp {
     public:
         bool autoUpdate = true;
 
-        LOD() = default;
-
         [[nodiscard]] std::string type() const override;
 
         LOD& addLevel(Object3D& object, float distance = 0);
@@ -37,7 +34,12 @@ namespace threepp {
 
         void update(Camera& camera);
 
+        void copy(const Object3D& source, bool recursive = false) override;
+
         static std::shared_ptr<LOD> create();
+
+    protected:
+        std::shared_ptr<Object3D> createDefault() override;
 
     private:
         size_t _currentLevel = 0;

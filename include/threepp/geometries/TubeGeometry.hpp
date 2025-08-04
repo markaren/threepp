@@ -3,8 +3,6 @@
 #ifndef THREEPP_TUBEGEOMETRY_HPP
 #define THREEPP_TUBEGEOMETRY_HPP
 
-#include <utility>
-
 #include "threepp/core/BufferGeometry.hpp"
 #include "threepp/extras/core/Curve.hpp"
 #include "threepp/math/MathUtils.hpp"
@@ -27,25 +25,29 @@ namespace threepp {
         };
 
         const float radius;
-        const std::shared_ptr<Curve3> path;
+        const std::unique_ptr<Curve3> path;
 
         [[nodiscard]] std::string type() const override;
 
+        [[nodiscard]] const FrenetFrames& getFrenetFrames() const {
+            return frames;
+        }
+
         static std::shared_ptr<TubeGeometry> create(
-                const std::shared_ptr<Curve3>& path,
+                std::unique_ptr<Curve3> path,
                 const Params& params);
 
         static std::shared_ptr<TubeGeometry> create(
-                const std::shared_ptr<Curve3>& path,
+                std::unique_ptr<Curve3> path,
                 unsigned int tubularSegments = 64,
                 float radius = 1,
                 unsigned int radialSegments = 16,
                 bool closed = false);
 
     private:
-        Curve3::FrenetFrames frames;
+        FrenetFrames frames;
 
-        TubeGeometry(std::shared_ptr<Curve3> path, const Params& params);
+        TubeGeometry(std::unique_ptr<Curve3> path, const Params& params);
     };
 
 }// namespace threepp

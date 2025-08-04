@@ -2,8 +2,8 @@
 #ifndef THREEPP_GLCUBEMAPS_HPP
 #define THREEPP_GLCUBEMAPS_HPP
 
-#include "threepp/textures/CubeTexture.hpp"
 #include "threepp/renderers/GLCubeRenderTarget.hpp"
+#include "threepp/textures/CubeTexture.hpp"
 
 #include <unordered_map>
 

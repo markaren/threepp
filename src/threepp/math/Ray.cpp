@@ -482,3 +482,13 @@ Ray& Ray::applyMatrix4(const Matrix4& matrix4) {
 
     return *this;
 }
+
+bool Ray::equals(const Ray& ray) const {
+
+    return ray.origin.equals( this->origin ) && ray.direction.equals( this->direction );
+}
+
+Ray Ray::clone() const {
+
+    return Ray().copy(*this);
+}

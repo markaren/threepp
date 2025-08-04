@@ -2,15 +2,22 @@
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/threepp.hpp"
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
+
 #include <algorithm>
+#include <cmath>
+#include <ranges>
 
 using namespace threepp;
 
 namespace {
 
-    void normalizeAndApplyLut(BufferGeometry& geometry, float maxHeight) {
+    constexpr float maxHeight = 2;
+    constexpr float gridSize = 4;
 
-        auto pos = geometry.getAttribute<float>("position");
+    void normalizeAndApplyLut(BufferGeometry& geometry) {
+
+        const auto pos = geometry.getAttribute<float>("position");
 
         std::vector<float> yValues;
         yValues.reserve(pos->count());
@@ -24,12 +31,12 @@ namespace {
         }
 
         Lut::addColorMap("rainbow", {{0.f, 0x0000ff}, {0.001f, 0x00ffff}, {0.02f, 0xffff00}, {0.2f, 0xff0000}, {1.f, Color::darkred}});
-        Lut lut("rainbow", 256 * 256);
+        const Lut lut("rainbow", 256 * 256);
         auto colors = std::vector<float>(pos->count() * 3);
 
         for (auto i = 0, j = 0; i < pos->count(); i++, j += 3) {
 
-            float y = pos->getY(i);
+            const float y = pos->getY(i);
 
             Color c = lut.getColor(math::mapLinear(y, 0, maxHeight, 0, 1));
             c.toArray(colors, j);
@@ -44,46 +51,49 @@ namespace {
 
     float rosenbrock(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -2, 2);
-        z = math::mapLinear(z, -2, 2, -1, 3);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -2, 2);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -1, 3);
 
-        float a = 1, b = 100;
+        constexpr float a = 1, b = 100;
         return ((a - x) * (a - x)) + b * ((z - (x * x)) * (z - (x * x)));
     }
 
     float ackleys(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -5, 5);
-        z = math::mapLinear(z, -2, 2, -5, 5);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -5, 5);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -5, 5);
 
         return -20 * std::exp(-0.2 * std::sqrt(0.5 * (x * x + z * z))) - std::exp(0.5 * (std::cos(2 * math::PI * x) + std::cos(2 * math::PI * z))) + 20 + std::exp(1);
     }
 
     float holderTable(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -10, 10);
-        z = math::mapLinear(z, -2, 2, -10, 10);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -10, 10);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -10, 10);
 
         return -std::abs(std::sin(x) * std::cos(z) * std::exp(std::abs(1 - std::sqrt(x * x + z * z) / math::PI)));
     }
 
     float rastrigin(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -5.12, 5.12);
-        z = math::mapLinear(z, -2, 2, -5.12, 5.12);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -5.12, 5.12);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -5.12, 5.12);
 
         return 20 + x * x - 10 * std::cos(2 * math::PI * x) + z * z - 10 * std::cos(2 * math::PI * z);
     }
 
     float beale(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -4.5, 4.5);
-        z = math::mapLinear(z, -2, 2, -4.5, 4.5);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -4.5, 4.5);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -4.5, 4.5);
 
         return std::pow(1.5 - x + x * z, 2) + std::pow(2.25 - x + x * z * z, 2) + std::pow(2.625 - x + x * z * z * z, 2);
     }
 
     float goldsteinPrice(float x, float z) {
+
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -2, 2);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -2, 2);
 
         return (1 + std::pow(x + z + 1, 2) * (19 - 14 * x + 3 * x * x - 14 * z + 6 * x * z + 3 * z * z)) *
                (30 + std::pow(2 * x - 3 * z, 2) * (18 - 32 * x + 12 * x * x + 48 * z - 36 * x * z + 27 * z * z));
@@ -91,35 +101,43 @@ namespace {
 
     float booth(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -10, 10);
-        z = math::mapLinear(z, -2, 2, -10, 10);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -10, 10);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -10, 10);
 
         return std::pow(x + 2 * z - 7, 2) + std::pow(2 * x + z - 5, 2);
     }
 
     float levino13(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -10, 10);
-        z = math::mapLinear(z, -2, 2, -10, 10);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -10, 10);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -10, 10);
 
         return std::pow(x, 2) + std::pow(z, 2) + 2 * std::pow(std::sin(2 * math::PI * x), 2) + 2 * std::pow(std::sin(2 * math::PI * z), 2);
     }
 
     float himmelblaus(float x, float z) {
 
-        x = math::mapLinear(x, -2, 2, -5, 5);
-        z = math::mapLinear(z, -2, 2, -5, 5);
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -5, 5);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -5, 5);
 
         return std::pow(x * x + z - 11, 2) + std::pow(x + z * z - 7, 2);
     }
 
+    float eggholder(float x, float z) {
+
+        x = math::mapLinear(x, -gridSize / 2, gridSize / 2, -512, 512);
+        z = math::mapLinear(z, -gridSize / 2, gridSize / 2, -512, 512);
+
+        return -(z + 47) * std::sin(std::sqrt(std::abs(z + x / 2 + 47))) - x * std::sin(std::sqrt(std::abs(x - (z + 47))));
+    }
+
     void applyFunc(BufferGeometry& geometry, const std::function<float(float, float)>& func) {
 
-        auto pos = geometry.getAttribute<float>("position");
+        const auto pos = geometry.getAttribute<float>("position");
 
         for (auto i = 0; i < pos->count(); i++) {
-            auto x = pos->getX(i);
-            auto z = pos->getZ(i);
+            const auto x = pos->getX(i);
+            const auto z = pos->getZ(i);
             pos->setY(i, func(x, z));
         }
 
@@ -141,16 +159,10 @@ int main() {
 
     OrbitControls controls(camera, canvas);
 
-    auto planeGeometry = PlaneGeometry::create(4, 4, 200, 200);
-    auto planeGeometry2 = PlaneGeometry::create(4, 4, 50, 50);
+    auto planeGeometry = PlaneGeometry::create(gridSize, gridSize, 200, 200);
+    auto planeGeometry2 = PlaneGeometry::create(gridSize, gridSize, 50, 50);
     planeGeometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
     planeGeometry2->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
-
-    applyFunc(*planeGeometry, rosenbrock);
-    applyFunc(*planeGeometry2, rosenbrock);
-
-    normalizeAndApplyLut(*planeGeometry, 2);
-    normalizeAndApplyLut(*planeGeometry2, 2);
 
     auto plane = Mesh::create(planeGeometry, MeshBasicMaterial::create({{"vertexColors", true}}));
     auto wireframe = Mesh::create(planeGeometry2, MeshBasicMaterial::create({{"wireframe", true}}));
@@ -161,38 +173,88 @@ int main() {
     plane->add(wireframe);
     scene.add(plane);
 
+    std::string selectedFunction;
+    std::unordered_map<std::string, std::function<float(float, float)>> functions{
+            {"Rosenbrock", rosenbrock},
+            {"Ackleys", ackleys},
+            {"Holder Table", holderTable},
+            {"Rastrigin", rastrigin},
+            {"Beale", beale},
+            {"Goldstein Price", goldsteinPrice},
+            {"Booth", booth},
+            {"Levino 13", levino13},
+            {"Himmelblaus", himmelblaus},
+            {"Eggholder", eggholder}};
+
+    auto changeFunction = [&](const std::string& name) {
+        selectedFunction = name;
+        applyFunc(*planeGeometry, functions[name]);
+        applyFunc(*planeGeometry2, functions[name]);
+
+        normalizeAndApplyLut(*planeGeometry);
+        normalizeAndApplyLut(*planeGeometry2);
+    };
+
+    changeFunction(functions.begin()->first);
+
+    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({230, 0}, 0);
+
+        ImGui::Begin("Lut");
+        if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {
+            for (const auto& name : functions | std::views::keys) {
+                if (ImGui::Selectable(name.c_str())) {
+
+                    changeFunction(name);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::End();
+    });
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    capture.preventScrollEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
+
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
+        std::optional<size_t> key;
         if (evt.key == Key::NUM_1) {
-            applyFunc(*planeGeometry, rosenbrock);
-            applyFunc(*planeGeometry2, rosenbrock);
+            key = 0;
         } else if (evt.key == Key::NUM_2) {
-            applyFunc(*planeGeometry, ackleys);
-            applyFunc(*planeGeometry2, ackleys);
+            key = 1;
         } else if (evt.key == Key::NUM_3) {
-            applyFunc(*planeGeometry, holderTable);
-            applyFunc(*planeGeometry2, holderTable);
+            key = 2;
         } else if (evt.key == Key::NUM_4) {
-            applyFunc(*planeGeometry, rastrigin);
-            applyFunc(*planeGeometry2, rastrigin);
-        }  else if (evt.key == Key::NUM_5) {
-            applyFunc(*planeGeometry, beale);
-            applyFunc(*planeGeometry2, beale);
+            key = 3;
+        } else if (evt.key == Key::NUM_5) {
+            key = 4;
         } else if (evt.key == Key::NUM_6) {
-            applyFunc(*planeGeometry, goldsteinPrice);
-            applyFunc(*planeGeometry2, goldsteinPrice);
+            key = 5;
         } else if (evt.key == Key::NUM_7) {
-            applyFunc(*planeGeometry, booth);
-            applyFunc(*planeGeometry2, booth);
+            key = 6;
         } else if (evt.key == Key::NUM_8) {
-            applyFunc(*planeGeometry, levino13);
-            applyFunc(*planeGeometry2, levino13);
+            key = 7;
         } else if (evt.key == Key::NUM_9) {
-            applyFunc(*planeGeometry, himmelblaus);
-            applyFunc(*planeGeometry2, himmelblaus);
+            key = 8;
+        } else if (evt.key == Key::NUM_0) {
+            key = 9;
         }
 
-        normalizeAndApplyLut(*planeGeometry, 2);
-        normalizeAndApplyLut(*planeGeometry2, 2);
+        if (key) {
+            if (*key >= functions.size()) return;
+
+            auto it = functions.begin();
+            std::advance(it, *key);
+
+            changeFunction(it->first);
+        }
     });
     canvas.addKeyListener(keyAdapter);
 
@@ -205,5 +267,6 @@ int main() {
 
     canvas.animate([&] {
         renderer.render(scene, camera);
+        ui.render();
     });
 }

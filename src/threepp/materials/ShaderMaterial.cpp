@@ -32,3 +32,8 @@ std::shared_ptr<ShaderMaterial> ShaderMaterial::create() {
 
     return std::shared_ptr<ShaderMaterial>(new ShaderMaterial());
 }
+
+std::shared_ptr<Material> ShaderMaterial::createDefault() const {
+
+    return std::shared_ptr<ShaderMaterial>(new ShaderMaterial());
+}

@@ -32,7 +32,7 @@ struct GLMaterials::Impl {
         auto metalnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
         auto alphaMaterial = dynamic_cast<MaterialWithAlphaMap*>(material);
         auto emissiveMaterial = dynamic_cast<MaterialWithEmissive*>(material);
-        auto spriteMaterial = dynamic_cast<SpriteMaterial*>(material);
+        // auto spriteMaterial = dynamic_cast<SpriteMaterial*>(material);
         // TODO clearcoat
 
         auto aoMaterial = dynamic_cast<MaterialWithAoMap*>(material);
@@ -463,8 +463,8 @@ struct GLMaterials::Impl {
             auto& f = std::get<Fog>(fog);
             uniforms.at("fogColor").value<Color>().copy(f.color);
 
-            uniforms.at("fogNear").value<float>() = f.near;
-            uniforms.at("fogFar").value<float>() = f.far;
+            uniforms.at("fogNear").value<float>() = f.nearPlane;
+            uniforms.at("fogFar").value<float>() = f.farPlane;
         } else {
 
             auto& f = std::get<FogExp2>(fog);

@@ -135,6 +135,17 @@ Vector4& Vector4::divideScalar(float scalar) {
     return this->multiplyScalar(1.f / scalar);
 }
 
+Vector4& Vector4::setFromMatrixPosition(const Matrix4& m) {
+    const auto& e = m.elements;
+
+    this->x = e[12];
+    this->y = e[13];
+    this->z = e[14];
+    this->w = e[15];
+
+    return *this;
+}
+
 Vector4& Vector4::floor() {
 
     this->x = std::floor(this->x);

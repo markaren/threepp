@@ -539,7 +539,7 @@ Color& Color::setStyle(const std::string& style) {
 
 Color& Color::setColorName(const std::string& style) {
 
-    if (!colorKeywords.count(style)) {
+    if (!colorKeywords.contains(style)) {
         std::cerr << "THREE.Color: Unknown color '" + style + "'" << std::endl;
         return *this;
     }

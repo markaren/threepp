@@ -46,7 +46,7 @@ void GLLights::setup(std::vector<Light*>& lights) {
     int numPointShadows = 0;
     int numSpotShadows = 0;
 
-    std::sort(lights.begin(), lights.end(), shadowCastingLightsFirst);
+    std::ranges::stable_sort(lights, shadowCastingLightsFirst);
 
     for (auto light : lights) {
 
@@ -155,8 +155,8 @@ void GLLights::setup(std::vector<Light*>& lights) {
                 shadowUniforms->at("shadowNormalBias") = shadow->normalBias;
                 shadowUniforms->at("shadowRadius") = shadow->radius;
                 std::get<Vector2>(shadowUniforms->at("shadowMapSize")).copy(shadow->mapSize);
-                shadowUniforms->at("shadowCameraNear") = shadow->camera->near;
-                shadowUniforms->at("shadowCameraFar") = shadow->camera->far;
+                shadowUniforms->at("shadowCameraNear") = shadow->camera->nearPlane;
+                shadowUniforms->at("shadowCameraFar") = shadow->camera->farPlane;
 
                 ensureCapacity(state.pointShadow, pointLength + 1);
                 ensureCapacity(state.pointShadowMap, pointLength + 1);

@@ -6,18 +6,18 @@
 using namespace threepp;
 
 
-std::unique_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const GLRenderTarget::Options& options) {
+std::unique_ptr<GLRenderTarget> GLRenderTarget::create(unsigned int width, unsigned int height, const Options& options) {
 
     return std::make_unique<GLRenderTarget>(width, height, options);
 }
 
-GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const GLRenderTarget::Options& options)
+GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const Options& options)
     : uuid(math::generateUUID()),
       width(width), height(height),
-      scissor(0.f, 0.f, (float) width, (float) height),
-      viewport(0.f, 0.f, (float) width, (float) height),
-      depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer), depthTexture(options.depthTexture),
-      texture(Texture::create({})) {
+      scissor(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
+      viewport(0.f, 0.f, static_cast<float>(width), static_cast<float>(height)),
+      depthBuffer(options.depthBuffer), stencilBuffer(options.stencilBuffer),
+      texture(Texture::create({Image({}, width, height)})) {
 
     if (options.mapping) texture->mapping = *options.mapping;
     if (options.wrapS) texture->wrapS = *options.wrapS;
@@ -38,15 +38,15 @@ void GLRenderTarget::setSize(unsigned int width, unsigned int height, unsigned i
         this->height = height;
         this->depth = depth;
 
-        this->texture->image.front().width = width;
-        this->texture->image.front().height = height;
-        this->texture->image.front().depth = depth;
+        this->texture->image().width = width;
+        this->texture->image().height = height;
+        this->texture->image().depth = depth;
 
         this->dispose();
     }
 
-    this->viewport.set(0, 0, (float) width, (float) height);
-    this->scissor.set(0, 0, (float) width, (float) height);
+    this->viewport.set(0, 0, static_cast<float>(width), static_cast<float>(height));
+    this->scissor.set(0, 0, static_cast<float>(width), static_cast<float>(height));
 }
 
 GLRenderTarget& GLRenderTarget::copy(const GLRenderTarget& source) {
@@ -62,7 +62,6 @@ GLRenderTarget& GLRenderTarget::copy(const GLRenderTarget& source) {
 
     this->depthBuffer = source.depthBuffer;
     this->stencilBuffer = source.stencilBuffer;
-    this->depthTexture = source.depthTexture;
 
     return *this;
 }

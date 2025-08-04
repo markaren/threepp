@@ -31,24 +31,27 @@ namespace {
 
                 index = indices[i] * itemSize;
 
-                for (unsigned j = 0; j < itemSize; j++) {
+                for (auto j = 0; j < itemSize; j++) {
 
                     array2[index2++] = array[index++];
                 }
             }
 
             return FloatBufferAttribute::create(array2, itemSize, normalized);
-
-        } else {
-
-            throw std::runtime_error("Unsupported operation");
         }
+
+        throw std::runtime_error("Unsupported operation");
     }
 
 }// namespace
 
 BufferGeometry::BufferGeometry()
     : uuid(math::generateUUID()) {}
+
+std::string BufferGeometry::type() const {
+
+    return "BufferGeometry";
+}
 
 bool BufferGeometry::hasIndex() const {
 
@@ -113,7 +116,7 @@ void BufferGeometry::deleteAttribute(const std::string& name) {
 
 bool BufferGeometry::hasAttribute(const std::string& name) const {
 
-    return attributes_.count(name);
+    return attributes_.contains(name);
 }
 
 void BufferGeometry::addGroup(int start, int count, unsigned int materialIndex) {

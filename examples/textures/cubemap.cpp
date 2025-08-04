@@ -1,9 +1,7 @@
 
 #include "threepp/loaders/CubeTextureLoader.hpp"
-#include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 #include "threepp/threepp.hpp"
-#include <iostream>
 
 using namespace threepp;
 

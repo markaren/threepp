@@ -3,14 +3,14 @@
 
 #include <cmath>
 #include <functional>
-#include <list>
+#include <vector>
 
 using namespace threepp;
 
-TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
-    : path(std::move(path)), radius(params.radius) {
+TubeGeometry::TubeGeometry(std::unique_ptr<Curve3> path, const Params& params)
+    : radius(params.radius), path(std::move(path)) {
 
-    this->frames = this->path->computeFrenetFrames(params.tubularSegments, params.closed);
+    this->frames = FrenetFrames::compute(*this->path, params.tubularSegments, params.closed);
 
     // helper variables
 
@@ -21,14 +21,14 @@ TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
 
     // buffer
 
-    std::list<float> vertices;
-    std::list<float> normals;
-    std::list<float> uvs;
-    std::list<unsigned int> indices;
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> uvs;
+    std::vector<unsigned int> indices;
 
     // functions
 
-    auto generateSegment = std::function<void(unsigned int)>([&](unsigned int i) {
+    auto generateSegment = std::function([&](unsigned int i) {
         // we use getPointAt to sample evenly distributed points from the given path
 
         this->path->getPointAt(static_cast<float>(i) / static_cast<float>(params.tubularSegments), P);
@@ -66,7 +66,7 @@ TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
         }
     });
 
-    auto generateIndices = std::function<void()>([&] {
+    auto generateIndices = std::function([&] {
         for (unsigned j = 1; j <= params.tubularSegments; j++) {
 
             for (unsigned i = 1; i <= params.radialSegments; i++) {
@@ -84,7 +84,7 @@ TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
         }
     });
 
-    auto generateUVs = std::function<void()>([&] {
+    auto generateUVs = std::function([&] {
         for (unsigned i = 0; i <= params.tubularSegments; i++) {
 
             for (unsigned j = 0; j <= params.radialSegments; j++) {
@@ -97,7 +97,7 @@ TubeGeometry::TubeGeometry(std::shared_ptr<Curve3> path, const Params& params)
         }
     });
 
-    auto generateBufferData = std::function<void()>([&] {
+    auto generateBufferData = std::function([&] {
         for (unsigned i = 0; i < params.tubularSegments; i++) {
 
             generateSegment(i);
@@ -135,14 +135,14 @@ std::string TubeGeometry::type() const {
     return "TubeGeometry";
 }
 
-std::shared_ptr<TubeGeometry> TubeGeometry::create(const std::shared_ptr<Curve3>& path, const TubeGeometry::Params& params) {
+std::shared_ptr<TubeGeometry> TubeGeometry::create(std::unique_ptr<Curve3> path, const Params& params) {
 
-    return std::shared_ptr<TubeGeometry>(new TubeGeometry(path, params));
+    return std::shared_ptr<TubeGeometry>(new TubeGeometry(std::move(path), params));
 }
 
-std::shared_ptr<TubeGeometry> TubeGeometry::create(const std::shared_ptr<Curve3>& path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed) {
+std::shared_ptr<TubeGeometry> TubeGeometry::create(std::unique_ptr<Curve3> path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed) {
 
-    return create(path, Params(tubularSegments, radius, radialSegments, closed));
+    return create(std::move(path), Params(tubularSegments, radius, radialSegments, closed));
 }
 
 TubeGeometry::Params::Params(unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed)

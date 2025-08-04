@@ -15,10 +15,17 @@ namespace threepp {
 
         void dispose() override;
 
+        void copy(const Object3D& source, bool recursive) override;
+
         static std::shared_ptr<DirectionalLight> create(const Color& color = 0xffffff, std::optional<float> intensity = std::nullopt);
 
     protected:
         DirectionalLight(const Color& color, std::optional<float> intensity);
+
+        std::shared_ptr<Object3D> createDefault() override {
+
+            return create();
+        }
     };
 
 }// namespace threepp

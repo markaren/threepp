@@ -15,6 +15,12 @@ public:
     [[nodiscard]] std::string type() const override {
         return "";
     }
+
+protected:
+    std::shared_ptr<Material> createDefault() const override {
+
+        return {};
+    }
 };
 
 class DummyProgram: public GLProgram {};

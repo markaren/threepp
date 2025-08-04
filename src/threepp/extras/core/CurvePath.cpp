@@ -36,7 +36,7 @@ void CurvePath<T>::getPoint(float t, T& target) const {
 
     auto d = t * this->getLength();
     auto curveLengths = this->getCurveLengths();
-    int i = 0;
+    size_t i = 0;
 
     // To think about boundaries points.
 

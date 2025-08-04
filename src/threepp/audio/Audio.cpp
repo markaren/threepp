@@ -1,8 +1,26 @@
 
 #include "threepp/audio/Audio.hpp"
 
+
+#ifndef MINIAUDIO_IMPLEMENTATION
+
+#if defined(__GNUC__) || defined(__clang__)
+// Temporarily disable specific warnings
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wall"    // Disables all warnings
+#pragma GCC diagnostic ignored "-Wextra"  // Disables extra warnings
+#pragma GCC diagnostic ignored "-Wpedantic"  // Disables pedantic warnings
+#endif
+
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
+
+#if defined(__GNUC__) || defined(__clang__)
+// Re-enable the warnings
+#pragma GCC diagnostic pop
+#endif
+
+#endif
 
 #include <stdexcept>
 

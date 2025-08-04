@@ -29,6 +29,11 @@ std::string MeshStandardMaterial::type() const {
     return "MeshStandardMaterial";
 }
 
+std::shared_ptr<Material> MeshStandardMaterial::createDefault() const {
+
+    return std::shared_ptr<MeshStandardMaterial>(new MeshStandardMaterial());
+}
+
 std::shared_ptr<MeshStandardMaterial> MeshStandardMaterial::create(const std::unordered_map<std::string, MaterialValue>& values) {
 
     auto m = std::shared_ptr<MeshStandardMaterial>(new MeshStandardMaterial());
@@ -37,10 +42,11 @@ std::shared_ptr<MeshStandardMaterial> MeshStandardMaterial::create(const std::un
     return m;
 }
 
-std::shared_ptr<Material> MeshStandardMaterial::clone() const {
+void MeshStandardMaterial::copyInto(Material& material) const {
 
-    auto m = create();
-    copyInto(m.get());
+    Material::copyInto(material);
+
+    auto m = material.as<MeshStandardMaterial>();
 
     m->defines["STANDARD"] = "";
 
@@ -88,8 +94,6 @@ std::shared_ptr<Material> MeshStandardMaterial::clone() const {
     m->flatShading = flatShading;
 
     m->vertexTangents = vertexTangents;
-
-    return m;
 }
 
 bool MeshStandardMaterial::setValue(const std::string& key, const MaterialValue& value) {

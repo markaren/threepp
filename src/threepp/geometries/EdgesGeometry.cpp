@@ -36,12 +36,12 @@ EdgesGeometry::EdgesGeometry(const BufferGeometry& geometry, float thresholdAngl
     const auto indexCount = indexAttr ? indexAttr->count() : positionAttr->count();
 
     std::vector<unsigned int> indexArr{0, 0, 0};
-    std::vector<char> vertKeys{'a', 'b', 'c'};
+    std::vector vertKeys{'a', 'b', 'c'};
     std::vector<std::string> hashes(3);
 
     std::unordered_map<std::string, std::optional<EdgeData>> edgeData;
     std::vector<float> vertices;
-    for (unsigned i = 0; i < indexCount; i += 3) {
+    for (int i = 0; i < indexCount; i += 3) {
 
         if (indexAttr) {
 
@@ -98,7 +98,7 @@ EdgesGeometry::EdgesGeometry(const BufferGeometry& geometry, float thresholdAngl
             const auto reverseHash = ss.str();
             ss.str(std::string());
 
-            if (edgeData.count(reverseHash) && edgeData[reverseHash]) {
+            if (edgeData.contains(reverseHash) && edgeData.at(reverseHash)) {
 
                 // if we found a sibling edge add it into the vertex array if
                 // it meets the angle threshold and delete the edge from the map.

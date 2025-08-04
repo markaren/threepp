@@ -32,9 +32,9 @@ namespace {
         for (auto& [str_key, value] : json["glyphs"].items()) {
             char key = str_key[0];
             glyphs[key] = Font::Glyph{
-                    value["x_min"].get<float>(),
-                    value["x_max"].get<float>(),
-                    value["ha"]};
+                    .x_min = value["x_min"].get<float>(),
+                    .x_max = value["x_max"].get<float>(),
+                    .ha = value["ha"]};
             if (value.contains("o")) {
                 std::string o = value["o"].get<std::string>();
                 glyphs[key].o = utils::split(o, ' ');

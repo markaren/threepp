@@ -18,8 +18,6 @@ namespace threepp {
 
         void computeLineDistances() override;
 
-        std::shared_ptr<Object3D> clone(bool recursive = true) override;
-
         static std::shared_ptr<LineSegments> create(
                 const std::shared_ptr<BufferGeometry>& geometry = nullptr,
                 const std::shared_ptr<Material>& material = nullptr);

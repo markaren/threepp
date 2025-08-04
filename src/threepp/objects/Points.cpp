@@ -34,7 +34,7 @@ namespace {
 
             const auto distance = raycaster.ray.origin.distanceTo(intersectPoint);
 
-            if (distance < raycaster.near || distance > raycaster.far) return;
+            if (distance < raycaster.nearPlane || distance > raycaster.farPlane) return;
 
             Intersection intersection;
             intersection.distance = distance;
@@ -56,20 +56,14 @@ std::string Points::type() const {
     return "Points";
 }
 
-BufferGeometry* Points::geometry() {
+std::shared_ptr<BufferGeometry> Points::geometry() const {
 
-    return geometry_.get();
+    return geometry_;
 }
 
 void Points::setGeometry(const std::shared_ptr<BufferGeometry>& geometry) {
+
     this->geometry_ = geometry;
-}
-
-std::shared_ptr<Object3D> Points::clone(bool recursive) {
-    auto clone = create(geometry_, materials_.front());
-    clone->copy(*this, recursive);
-
-    return clone;
 }
 
 std::shared_ptr<Points> Points::create(std::shared_ptr<BufferGeometry> geometry, std::shared_ptr<Material> material) {
@@ -130,4 +124,19 @@ void Points::raycast(const Raycaster& raycaster, std::vector<Intersection>& inte
             testPoint(_position, i, localThresholdSq, *matrixWorld, raycaster, intersects, this);
         }
     }
+}
+
+void Points::copy(const Object3D& source, bool recursive) {
+    Object3D::copy(source, recursive);
+
+    if (auto p = source.as<Points>()) {
+
+        materials_ = p->materials_;
+        geometry_ = p->geometry_;
+    }
+}
+
+std::shared_ptr<Object3D> Points::createDefault() {
+
+    return create();
 }

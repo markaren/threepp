@@ -13,7 +13,7 @@ using namespace threepp;
 struct DragControls::Impl: public MouseListener {
 
     Impl(DragControls& scope, const std::vector<Object3D*>& objects, Camera& camera, PeripheralsEventSource& eventSource)
-        : scope(&scope), _objects(objects), _camera(&camera), eventSource(&eventSource) {
+        : scope(&scope), _camera(&camera), eventSource(&eventSource), _objects(objects) {
 
         activate();
     }
@@ -28,7 +28,7 @@ struct DragControls::Impl: public MouseListener {
         }
     }
 
-    void onMouseUp(int button, const Vector2& pos) override {
+    void onMouseUp(int button, const Vector2&) override {
         if (button == 0) {
             onPointerCancel();
         }
@@ -170,8 +170,8 @@ struct DragControls::Impl: public MouseListener {
 
         const auto rect = eventSource->size();
 
-        _pointer.x = (pos.x / rect.width) * 2 - 1;
-        _pointer.y = -(pos.y / rect.height) * 2 + 1;
+        _pointer.x = (pos.x / static_cast<float>(rect.width())) * 2 - 1;
+        _pointer.y = -(pos.y / static_cast<float>(rect.height())) * 2 + 1;
     }
 
     Object3D* findGroup(Object3D* obj, Object3D* group = nullptr) {
@@ -208,7 +208,7 @@ private:
 
     std::vector<Intersection> _intersections;
 
-    Mode mode{Mode::Translate};
+    // Mode mode{Mode::Translate};
 
     Plane _plane;
     Raycaster _raycaster;

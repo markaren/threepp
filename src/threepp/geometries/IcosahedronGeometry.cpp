@@ -7,7 +7,7 @@ using namespace threepp;
 
 namespace {
 
-    std::vector<float> generateVertices(float radius) {
+    std::vector<float> generateVertices() {
 
         const auto t = (1.f + std::sqrt(5.f)) / 2.f;
 
@@ -30,7 +30,7 @@ namespace {
 
 
 IcosahedronGeometry::IcosahedronGeometry(float radius, unsigned int detail)
-    : PolyhedronGeometry(generateVertices(radius), generateIndices(), radius, detail) {}
+    : PolyhedronGeometry(generateVertices(), generateIndices(), radius, detail) {}
 
 std::string IcosahedronGeometry::type() const {
 

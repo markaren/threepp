@@ -67,7 +67,7 @@ void OrthographicCamera::updateProjectionMatrix() {
         bottom = top - scaleH * static_cast<float>(this->view->height);
     }
 
-    this->projectionMatrix.makeOrthographic(left,  right, top, bottom, this->near, this->far);
+    this->projectionMatrix.makeOrthographic(left, right, top, bottom, this->nearPlane, this->farPlane);
 
     this->projectionMatrixInverse.copy(this->projectionMatrix).invert();
 }

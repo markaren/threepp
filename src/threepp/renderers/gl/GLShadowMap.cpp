@@ -95,7 +95,7 @@ struct GLShadowMap::Impl {
     }
 
     MeshDepthMaterial* getDepthMaterialVariant(bool useMorphing) {
-        int index = useMorphing << 0;
+        unsigned index = useMorphing << 0;
 
         if (index >= _depthMaterials.size()) {
 
@@ -105,14 +105,13 @@ struct GLShadowMap::Impl {
             _depthMaterials.emplace_back(material);
 
             return material.get();
-        } else {
-
-            return _depthMaterials[index].get();
         }
+
+        return _depthMaterials[index].get();
     }
 
     MeshDistanceMaterial* getDistanceMaterialVariant(bool useMorphing) {
-        int index = useMorphing << 0;
+        unsigned index = useMorphing << 0;
 
         if (index >= _distanceMaterials.size()) {
 
@@ -121,14 +120,12 @@ struct GLShadowMap::Impl {
             _distanceMaterials.emplace_back(material);
 
             return material.get();
-
-        } else {
-
-            return _distanceMaterials[index].get();
         }
+
+        return _distanceMaterials[index].get();
     }
 
-    Material* getDepthMaterial(GLRenderer& _renderer, Object3D* object, BufferGeometry* geometry, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar) {
+    Material* getDepthMaterial(GLRenderer& _renderer, Object3D* /*object*/, BufferGeometry* /*geometry*/, Material* material, Light* light, float shadowCameraNear, float shadowCameraFar) {
 
         Material* result;
 
@@ -222,11 +219,11 @@ struct GLShadowMap::Impl {
                     for (const auto& group : groups) {
 
                         if (material.size() > group.materialIndex) {
-                            const auto groupMaterial = material[group.materialIndex];
+                            const auto groupMaterial = material[group.materialIndex].get();
 
                             if (groupMaterial && groupMaterial->visible) {
 
-                                const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, groupMaterial, light, shadowCamera->near, shadowCamera->far);
+                                const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, groupMaterial, light, shadowCamera->nearPlane, shadowCamera->farPlane);
 
                                 _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, group);
                             }
@@ -235,7 +232,7 @@ struct GLShadowMap::Impl {
 
                 } else if (material.front()->visible) {
 
-                    auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front(), light, shadowCamera->near, shadowCamera->far);
+                    const auto depthMaterial = getDepthMaterial(_renderer, object, geometry, material.front().get(), light, shadowCamera->nearPlane, shadowCamera->farPlane);
 
                     _renderer.renderBufferDirect(shadowCamera, nullptr, geometry, depthMaterial, object, std::nullopt);
                 }
@@ -354,7 +351,7 @@ struct GLShadowMap::Impl {
                 _state.viewport(_viewport);
 
                 if (auto pointLightShadow = std::dynamic_pointer_cast<PointLightShadow>(shadow)) {
-                    pointLightShadow->updateMatrices(light->as<PointLight>(), vp);
+                    pointLightShadow->updateMatrices(*light->as<PointLight>(), vp);
                 } else {
                     shadow->updateMatrices(*light);
                 }

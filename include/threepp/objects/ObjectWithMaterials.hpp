@@ -5,7 +5,6 @@
 #include "threepp/core/Object3D.hpp"
 #include "threepp/materials/Material.hpp"
 
-
 #include <vector>
 
 namespace threepp {
@@ -13,11 +12,11 @@ namespace threepp {
     class ObjectWithMaterials: public virtual Object3D {
 
     public:
-        Material* material() override;
+        std::shared_ptr<Material> material() const override;
 
         void setMaterial(const std::shared_ptr<Material>& material);
 
-        std::vector<Material*> materials();
+        const std::vector<std::shared_ptr<Material>>& materials() const;
 
         void setMaterials(const std::vector<std::shared_ptr<Material>>& materials);
 

@@ -2,6 +2,8 @@
 #include "threepp/controls/DragControls.hpp"
 #include "threepp/threepp.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 int main() {
@@ -9,7 +11,7 @@ int main() {
     Canvas canvas("Drag controls");
     GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = threepp::ShadowMap::PFC;
+    renderer.shadowMap().type = ShadowMap::PFC;
 
     PerspectiveCamera camera(60, canvas.aspect());
     camera.position.z = 25;
@@ -24,8 +26,8 @@ int main() {
     light->angle = math::PI / 9;
 
     light->castShadow = true;
-    light->shadow->camera->near = 10;
-    light->shadow->camera->far = 100;
+    light->shadow->camera->nearPlane = 10;
+    light->shadow->camera->farPlane = 100;
     light->shadow->mapSize.x = 1024;
     light->shadow->mapSize.y = 1024;
 
@@ -83,10 +85,10 @@ int main() {
 
     } hoverListener;
 
-    controls.addEventListener("hoveron", &hoverListener);
-    controls.addEventListener("hoveroff", &hoverListener);
+    controls.addEventListener("hoveron", hoverListener);
+    controls.addEventListener("hoveroff", hoverListener);
 
-    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt){
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent evt) {
         if (evt.key == Key::M) {
             if (controls.mode == DragControls::Mode::Translate) {
                 controls.mode = DragControls::Mode::Rotate;
@@ -103,6 +105,8 @@ int main() {
 
         renderer.setSize(size);
     });
+
+    std::cout << "Press 'm' to switch between translate and rotate mode" << std::endl;
 
     canvas.animate([&] {
         renderer.render(scene, camera);

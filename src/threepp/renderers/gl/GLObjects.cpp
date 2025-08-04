@@ -25,7 +25,7 @@ struct GLObjects::Impl {
         void onEvent(Event& event) override {
             auto instancedMesh = static_cast<InstancedMesh*>(event.target);
 
-            instancedMesh->removeEventListener("dispose", this);
+            instancedMesh->removeEventListener("dispose", *this);
 
             scope->attributes_.remove(instancedMesh->instanceMatrix());
 
@@ -53,12 +53,12 @@ struct GLObjects::Impl {
 
         const auto frame = info_.render.frame;
 
-        auto geometry = object->geometry();
+        const auto geometry = object->geometry().get();
         geometries_.get(object, geometry);
 
         // Update once per frame
 
-        if (!updateMap_.count(geometry) || updateMap_[geometry] != frame) {
+        if (!updateMap_.contains(geometry) || updateMap_[geometry] != frame) {
 
             geometries_.update(geometry);
 
@@ -67,9 +67,9 @@ struct GLObjects::Impl {
 
         if (auto instancedMesh = object->as<InstancedMesh>()) {
 
-            if (!object->hasEventListener("dispose", &onInstancedMeshDispose)) {
+            if (!object->hasEventListener("dispose", onInstancedMeshDispose)) {
 
-                object->addEventListener("dispose", &onInstancedMeshDispose);
+                object->addEventListener("dispose", onInstancedMeshDispose);
             }
 
             attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);

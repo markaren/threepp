@@ -25,7 +25,7 @@ struct HemisphereLightHelper::Impl {
     std::shared_ptr<MeshBasicMaterial> material;
 
     Impl(HemisphereLightHelper& scope, HemisphereLight& light, float size)
-        : scope(scope), light(light) {
+        : light(light), scope(scope) {
 
         this->light.updateMatrixWorld();
         this->scope.matrix = light.matrixWorld;
@@ -93,19 +93,19 @@ struct HemisphereLightHelper::Impl {
 };
 
 HemisphereLightHelper::HemisphereLightHelper(HemisphereLight& light, float size, const std::optional<Color>& color)
-    : pimpl_(std::make_unique<Impl>(*this, light, size)), color(color) {}
+    : color(color), pimpl_(std::make_unique<Impl>(*this, light, size)) {}
 
-void threepp::HemisphereLightHelper::update() {
+void HemisphereLightHelper::update() {
 
     pimpl_->update();
 }
 
-void threepp::HemisphereLightHelper::dispose() {
+void HemisphereLightHelper::dispose() {
 
     pimpl_->dispose();
 }
 
-std::shared_ptr<HemisphereLightHelper> threepp::HemisphereLightHelper::create(HemisphereLight& light, float size, const std::optional<Color>& color) {
+std::shared_ptr<HemisphereLightHelper> HemisphereLightHelper::create(HemisphereLight& light, float size, const std::optional<Color>& color) {
 
     return std::shared_ptr<HemisphereLightHelper>(new HemisphereLightHelper(light, size, color));
 }

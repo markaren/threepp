@@ -8,7 +8,6 @@
 
 #include "threepp/core/BufferAttribute.hpp"
 #include "threepp/core/InterleavedBuffer.hpp"
-#include "threepp/math/Matrix4.hpp"
 
 namespace threepp {
 

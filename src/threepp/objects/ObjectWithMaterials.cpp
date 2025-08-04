@@ -10,9 +10,9 @@ ObjectWithMaterials::ObjectWithMaterials(std::vector<std::shared_ptr<Material>> 
     : materials_(std::move(materials)) {}
 
 
-Material* ObjectWithMaterials::material() {
+std::shared_ptr<Material> ObjectWithMaterials::material() const {
 
-    return materials_.front().get();
+    return materials_.front();
 }
 
 void ObjectWithMaterials::setMaterial(const std::shared_ptr<Material>& material) {
@@ -20,11 +20,9 @@ void ObjectWithMaterials::setMaterial(const std::shared_ptr<Material>& material)
     setMaterials({material});
 }
 
-std::vector<Material*> ObjectWithMaterials::materials() {
-    std::vector<Material*> res(materials_.size());
-    std::transform(materials_.begin(), materials_.end(), res.begin(), [](auto& m) { return m.get(); });
+const std::vector<std::shared_ptr<Material>>& ObjectWithMaterials::materials() const {
 
-    return res;
+    return materials_;
 }
 
 void ObjectWithMaterials::setMaterials(const std::vector<std::shared_ptr<Material>>& materials) {
