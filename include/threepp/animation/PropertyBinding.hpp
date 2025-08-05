@@ -85,7 +85,6 @@ namespace threepp {
 
         static void _getValue_direct(PropertyBinding* that, std::vector<float>& buffer, size_t offset) {
 
-
             if (that->propertyName == "quaternion") {
                 std::get<Object3D*>(that->targetObject)->quaternion.toArray(buffer, offset);
             } else if (that->propertyName == "vector") {
@@ -137,6 +136,18 @@ namespace threepp {
             std::get<Material*>(that->targetObject)->needsUpdate();
         }
 
+        static void _setValue_direct_setMatrixWorldNeedsUpdate(PropertyBinding* that, const std::vector<float>& buffer, size_t offset) {
+
+            if (that->propertyName == "quaternion") {
+                std::get<Object3D*>(that->targetObject)->quaternion.fromArray(buffer, offset);
+            } else  if (that->propertyName == "vector") {
+                std::get<Object3D*>(that->targetObject)->position.fromArray(buffer, offset);
+            } else {
+                std::cerr << that->propertyName << " is not writable." << std::endl;
+            }
+            std::get<Object3D*>(that->targetObject)->matrixWorldNeedsUpdate = true;
+        }
+
         void bind();
 
         void unbind();
@@ -176,6 +187,7 @@ namespace threepp {
                     return (*objPtr)->matrixWorld.get();
                 }
             }
+            throw std::runtime_error("resolveProperty: Internal error");
         }
     };
 

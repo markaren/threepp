@@ -162,21 +162,21 @@ void PropertyBinding::bind() {
     }
 
     // set fail state so we can just 'return' on error
-    this->_getValue = this->_getValue_unavailable;
-    this->_setValue = this->_setValue_unavailable;
+    this->_getValue = _getValue_unavailable;
+    this->_setValue = _setValue_unavailable;
 
     // ensure there is a value node
     if (std::holds_alternative<std::monostate>(targetObject)) {
 
-        std::cerr << "THREE.PropertyBinding: Trying to update node for track: " << this->path << " but it wasn\'t found." << std::endl;
+        std::cerr << "THREE.PropertyBinding: Trying to update node for track: " << this->path << " but it wasn't found." << std::endl;
         return;
     }
 
-    std::cout << "ObjectName: " << objectName.value_or("empty") << std::endl;
+    // std::cout << "ObjectName: " << objectName.value_or("empty") << std::endl;
 
     if (objectName && !objectName->empty()) {
 
-        const auto& objectIndex = parsedPath.objectIndex;
+        auto objectIndex = parsedPath.objectIndex;
 
         // special cases were we need to reach deeper into the hierarchy to get the face materials....
         if (objectName == "materials") {
@@ -194,7 +194,7 @@ void PropertyBinding::bind() {
             //            }
             //
             //            targetObject = targetObject.material.materials;
-            } else if (objectName == "bones") {
+        } else if (objectName == "bones") {
 
             //             if (!targetObject.skeleton) {
             //
@@ -205,18 +205,19 @@ void PropertyBinding::bind() {
             //            // potential future optimization: skip this if propertyIndex is already an integer
             //            // and convert the integer string to a true integer.
             //
-            targetObject = std::get<Object3D*>(targetObject)->as<SkinnedMesh>()->skeleton->bones;
-            //
-            //            // support resolving morphTarget names into indices.
-            //            for (let i = 0; i < targetObject.length; i++) {
-            //
-            //                if (targetObject[i].name == = objectIndex) {
-            //
-            //                    objectIndex = i;
-            //                    break;
-            //                }
-            //            }
-            //
+            auto bones = std::get<Object3D*>(targetObject)->as<SkinnedMesh>()->skeleton->bones;
+            targetObject = bones;
+
+            // support resolving morphTarget names into indices.
+            for (auto i = 0; i < bones.size(); i++) {
+
+                if (bones[i]->name == objectIndex) {
+
+                    objectIndex = std::to_string(i);
+                    break;
+                }
+            }
+
         } else {
             //
             //            if (targetObject[objectName] == = undefined) {
@@ -242,7 +243,7 @@ void PropertyBinding::bind() {
     }
     //
     // resolve property
-    std::cout << "propertyName=" << propertyName << std::endl;
+    // std::cout << "propertyName=" << propertyName << std::endl;
     // const auto& nodeProperty = targetObject[propertyName];
     //
     //    if (nodeProperty == = undefined) {
@@ -264,7 +265,7 @@ void PropertyBinding::bind() {
 
         versioning = Versioning::NeedsUpdate;
 
-    } else if (std::holds_alternative<Object3D*>(targetObject) && std::get<Object3D*>(targetObject)->matrixWorldNeedsUpdate) {// node transform
+    } else if (std::holds_alternative<Object3D*>(targetObject)) {// node transform
 
         versioning = Versioning::MatrixWorldNeedsUpdate;
     }
@@ -349,12 +350,10 @@ const PropertyBinding::GetterFn PropertyBinding::GetterByBindingType[] = {
 };
 
 const PropertyBinding::SetterFn PropertyBinding::SetterByBindingTypeAndVersioning[4][3] = {
-        {
-                // Direct
-                &PropertyBinding::_setValue_direct,
-                &PropertyBinding::_setValue_direct_setNeedsUpdate,
-                // &PropertyBinding::_setValue_direct_setMatrixWorldNeedsUpdate
-        },
+        {// Direct
+         &PropertyBinding::_setValue_direct,
+         &PropertyBinding::_setValue_direct_setNeedsUpdate,
+         &PropertyBinding::_setValue_direct_setMatrixWorldNeedsUpdate},
         // { // EntireArray
         //     &PropertyBinding::_setValue_array,
         //     &PropertyBinding::_setValue_array_setNeedsUpdate,

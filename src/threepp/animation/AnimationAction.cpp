@@ -329,147 +329,93 @@ float AnimationAction::_updateTime(float deltaTime) {
     const auto duration = this->_clip->duration;
     const auto loop = this->loop;
 
-    auto time = this->time + deltaTime;
-    auto loopCount = this->_loopCount;
+    float time = this->time + deltaTime;
+    int loopCount = this->_loopCount;
 
-    const auto pingPong = (loop == Loop::PingPong);
+    const bool pingPong = (loop == Loop::PingPong);
 
     if (deltaTime == 0) {
-
         if (loopCount == -1) return time;
-
         return (pingPong && (loopCount & 1) == 1) ? duration - time : time;
     }
 
     if (loop == Loop::Once) {
-
         if (loopCount == -1) {
-
             // just started
-
             this->_loopCount = 0;
             this->_setEndings(true, true, false);
         }
 
-    handle_stop: {
-
         if (time >= duration) {
-
             time = duration;
-
         } else if (time < 0) {
-
             time = 0;
-
         } else {
-
             this->time = time;
-
-            goto handle_stop;
+            return time;
         }
 
         if (this->clampWhenFinished) this->paused = true;
-        else
-            this->enabled = false;
+        else this->enabled = false;
 
         this->time = time;
 
-        //        this->_mixer.dispatchEvent({
-        //                                            type: 'finished',
-        //                                            action: this,
-        //                                            direction: deltaTime < 0 ? -1 : 1
-        //                                    });
+        // Dispatch finished event if needed
+        // this->_mixer.dispatchEvent({ ... });
+
+        return time;
     }
 
-    } else {// repetitive Repeat or PingPong
-
-        if (loopCount == -1) {
-
-            // just started
-
-            if (deltaTime >= 0) {
-
-                loopCount = 0;
-
-                this->_setEndings(true, this->repetitions == 0, pingPong);
-
-            } else {
-
-                // when looping in reverse direction, the initial
-                // transition through zero counts as a repetition,
-                // so leave loopCount at -1
-
-                this->_setEndings(this->repetitions == 0, true, pingPong);
-            }
-        }
-
-        if (time >= duration || time < 0) {
-
-            // wrap around
-
-            const auto loopDelta = std::floor(time / duration);// signed
-            time -= duration * loopDelta;
-
-            loopCount += std::abs(loopDelta);
-
-            const auto pending = this->repetitions - loopCount;
-
-            if (pending <= 0) {
-
-                // have to stop (switch state, clamp time, fire event)
-
-                if (this->clampWhenFinished) this->paused = true;
-                else
-                    this->enabled = false;
-
-                time = deltaTime > 0 ? duration : 0;
-
-                this->time = time;
-
-                //                this->_mixer.dispatchEvent({
-                //                                                    type: 'finished',
-                //                                                    action: this,
-                //                                                    direction: deltaTime > 0 ? 1 : -1
-                //                                            });
-
-            } else {
-
-                // keep running
-
-                if (pending == 1) {
-
-                    // entering the last round
-
-                    const auto atStart = deltaTime < 0;
-                    this->_setEndings(atStart, !atStart, pingPong);
-
-                } else {
-
-                    this->_setEndings(false, false, pingPong);
-                }
-
-                this->_loopCount = loopCount;
-
-                this->time = time;
-
-                //                this->_mixer.dispatchEvent({
-                //                                                    type: 'loop',
-                //                                                    action: this,
-                //                                                    loopDelta: loopDelta
-                //                                            });
-            }
-
+    // Repeat or PingPong
+    if (loopCount == -1) {
+        // just started
+        if (deltaTime >= 0) {
+            loopCount = 0;
+            this->_setEndings(true, this->repetitions == 0, pingPong);
         } else {
+            this->_setEndings(this->repetitions == 0, true, pingPong);
+        }
+    }
 
+    if (time >= duration || time < 0) {
+        // wrap around
+        int loopDelta = static_cast<int>(std::floor(time / duration));
+        time -= duration * loopDelta;
+        loopCount += std::abs(loopDelta);
+
+        int pending = (this->repetitions == -1) ? 1 : (this->repetitions - loopCount);
+
+        if (this->repetitions != -1 && pending <= 0) {
+            if (this->clampWhenFinished) this->paused = true;
+            else this->enabled = false;
+
+            time = deltaTime > 0 ? duration : 0;
             this->time = time;
+
+            // Dispatch finished event if needed
+            // this->_mixer.dispatchEvent({ ... });
+
+            return time;
+        } else {
+            if (pending == 1) {
+                bool atStart = deltaTime < 0;
+                this->_setEndings(atStart, !atStart, pingPong);
+            } else {
+                this->_setEndings(false, false, pingPong);
+            }
+
+            this->_loopCount = loopCount;
+            this->time = time;
+
+            // Dispatch loop event if needed
+            // this->_mixer.dispatchEvent({ ... });
         }
+    } else {
+        this->time = time;
+    }
 
-        if (pingPong && (loopCount & 1) == 1) {
-
-            // invert time for the "pong round"
-
-            return duration - time;
-        }
+    if (pingPong && (loopCount & 1) == 1) {
+        return duration - time;
     }
 
     return time;

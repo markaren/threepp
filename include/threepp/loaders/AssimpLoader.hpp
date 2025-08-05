@@ -61,7 +61,7 @@ namespace threepp {
                 const auto aiAnim = aiScene->mAnimations[i];
 
                 std::string name(aiAnim->mName.data);
-                auto duration = static_cast<float>(aiAnim->mDuration);
+                auto duration = static_cast<float>(aiAnim->mDuration / aiAnim->mTicksPerSecond);
 
                 std::vector<std::shared_ptr<KeyframeTrack>> tracks;
                 for (unsigned j = 0; j < aiAnim->mNumChannels; j++) {
@@ -72,9 +72,9 @@ namespace threepp {
                         tracks.emplace_back(std::move(rotationTrack));
                     }
 
-                    // if (auto positionTrack = loadPositionTrack(aiNodeAnim)){
-                    //     tracks.emplace_back(std::move(positionTrack));
-                    // }
+                    if (auto positionTrack = loadPositionTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(positionTrack));
+                    }
                 }
 
                 auto clip = std::make_shared<AnimationClip>(name, duration, tracks);
@@ -357,7 +357,7 @@ namespace threepp {
                 pairs.emplace_back(indexes[i], weights[i]);
             }
 
-            std::stable_sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) {
+            std::ranges::stable_sort(pairs, [](const auto& a, const auto& b) {
                 return b.second < a.second;
             });
 
@@ -383,7 +383,7 @@ namespace threepp {
             }
         }
 
-        void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
+        static void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
 
             aiTextureMapMode wrapS;
             if (AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
@@ -523,7 +523,7 @@ namespace threepp {
             return tex;
         }
 
-        Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
+        static Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
             Matrix4 m;
             m.set(t.a1, t.a2, t.a3, t.a4,
                   t.b1, t.b2, t.b3, t.b4,
@@ -533,7 +533,7 @@ namespace threepp {
             return m;
         }
 
-        void setTransform(Object3D& obj, const aiMatrix4x4& t) {
+        static void setTransform(Object3D& obj, const aiMatrix4x4& t) {
             aiVector3t<float> pos;
             aiQuaterniont<float> quat;
             aiVector3t<float> scale;

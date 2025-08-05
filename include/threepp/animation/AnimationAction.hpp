@@ -39,7 +39,7 @@ namespace threepp {
 
         AnimationAction& startAt(float time);
 
-        AnimationAction& setLoop(Loop mode, int repetitions);
+        AnimationAction& setLoop(Loop mode, int repetitions = -1);
 
         // Weight
 
@@ -107,7 +107,7 @@ namespace threepp {
         float weight = 1;
         float _effectiveWeight = 1;
 
-        int repetitions = std::numeric_limits<int>::infinity();// no. of repetitions when looping
+        int repetitions = -1;// no. of repetitions when looping
 
         bool paused = false;// true -> zero effective time scale
         bool enabled = true;// false -> zero effective weight

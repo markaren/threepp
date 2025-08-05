@@ -51,15 +51,21 @@ int main() {
 
     AssimpLoader loader;
 
-    auto model = loader.load("data/models/gltf/SimpleSkinning.gltf");
+    auto model = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
     model->traverseType<SkinnedMesh>([](auto& m) {
         m.receiveShadow = true;
         m.castShadow = true;
+
+        if (auto mat = m.material()->as<MaterialWithMap>()) {
+            mat->map->wrapS = TextureWrapping::Repeat;
+            mat->map->wrapT = TextureWrapping::Repeat;
+        }
     });
     scene.add(model);
 
     auto mixer = AnimationMixer(*model);
-    mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
+    // mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
+    mixer.clipAction(model->animations.front())->setLoop(Loop::Repeat).play();
 
     auto skeletonHelper = SkeletonHelper::create(*model);
     skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
