@@ -162,14 +162,23 @@ namespace threepp {
         PingPong = 2202
     };
 
-    const int InterpolateDiscrete = 2300;
-    const int InterpolateLinear = 2301;
-    const int InterpolateSmooth = 2302;
-    const int ZeroCurvatureEnding = 2400;
-    const int ZeroSlopeEnding = 2401;
-    const int WrapAroundEnding = 2402;
-    const int NormalAnimationBlendMode = 2500;
-    const int AdditiveAnimationBlendMode = 2501;
+    enum class Interpolation {
+        Discrete,
+        Linear,
+        Smooth
+    };
+
+    enum class Ending {
+        ZeroCurvature,
+        ZeroSlope,
+        WrapAround
+    };
+
+    enum class AnimationBlendMode {
+        Normal,
+        Additive
+    };
+
     const int TrianglesDrawMode = 0;
     const int TriangleStripDrawMode = 1;
     const int TriangleFanDrawMode = 2;

@@ -2,6 +2,9 @@
 #ifndef THREEPP_ASSIMPLOADER_HPP
 #define THREEPP_ASSIMPLOADER_HPP
 
+#include "threepp/animation/AnimationClip.hpp"
+#include "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
+#include "threepp/animation/tracks/VectorKeyframeTrack.hpp"
 #include "threepp/loaders/Loader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -54,6 +57,34 @@ namespace threepp {
             group->name = path.filename().stem().string();
             parseNodes(info, aiScene, aiScene->mRootNode, *group);
 
+            for (unsigned i = 0; i < aiScene->mNumAnimations; i++) {
+                const auto aiAnim = aiScene->mAnimations[i];
+
+                std::string name(aiAnim->mName.data);
+                auto duration = static_cast<float>(aiAnim->mDuration / aiAnim->mTicksPerSecond);
+
+                std::vector<std::shared_ptr<KeyframeTrack>> tracks;
+                for (unsigned j = 0; j < aiAnim->mNumChannels; j++) {
+
+                    const auto aiNodeAnim = aiAnim->mChannels[j];
+
+                    if (auto rotationTrack = loadRotationTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(rotationTrack));
+                    }
+
+                    if (auto positionTrack = loadPositionTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(positionTrack));
+                    }
+
+                    if (auto scaleTrack = loadScaleTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(scaleTrack));
+                    }
+                }
+
+                auto clip = std::make_shared<AnimationClip>(name, duration, tracks);
+                group->animations.emplace_back(clip);
+            }
+
             return group;
         }
 
@@ -62,6 +93,58 @@ namespace threepp {
         Assimp::Importer importer_;
 
         struct SceneInfo;
+
+        static std::unique_ptr<KeyframeTrack> loadRotationTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            // std::erase(name, '.');
+
+            for (auto k = 0; k < aiNodeAnim->mNumRotationKeys; k++) {
+
+                const auto key = aiNodeAnim->mRotationKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z), static_cast<float>(key.mValue.w)});
+            }
+
+            return std::make_unique<QuaternionKeyframeTrack>(name + ".quaternion", times, values);
+        }
+
+        static std::unique_ptr<KeyframeTrack> loadPositionTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            // std::erase(name, '.');
+
+            for (auto k = 0; k < aiNodeAnim->mNumPositionKeys; k++) {
+
+                const auto key = aiNodeAnim->mPositionKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z)});
+            }
+
+            return std::make_unique<VectorKeyframeTrack>(name + ".position", times, values);
+        }
+
+        static std::unique_ptr<KeyframeTrack> loadScaleTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            // std::erase(name, '.');
+
+            for (auto k = 0; k < aiNodeAnim->mNumScalingKeys; k++) {
+
+                const auto key = aiNodeAnim->mScalingKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z)});
+            }
+
+            return std::make_unique<VectorKeyframeTrack>(name + ".scale", times, values);
+        }
+
 
         void parseNodes(const SceneInfo& info, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 
@@ -298,7 +381,7 @@ namespace threepp {
                 pairs.emplace_back(indexes[i], weights[i]);
             }
 
-            std::stable_sort(pairs.begin(), pairs.end(), [](const auto& a, const auto& b) {
+            std::ranges::stable_sort(pairs, [](const auto& a, const auto& b) {
                 return b.second < a.second;
             });
 
@@ -324,7 +407,7 @@ namespace threepp {
             }
         }
 
-        void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
+        static void handleWrapping(const aiMaterial* mat, aiTextureType mode, Texture& tex) {
 
             aiTextureMapMode wrapS;
             if (AI_SUCCESS == mat->Get(AI_MATKEY_MAPPINGMODE_U(mode, 0), wrapS)) {
@@ -464,7 +547,7 @@ namespace threepp {
             return tex;
         }
 
-        Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
+        static Matrix4 aiMatrixToMatrix4(const aiMatrix4x4& t) {
             Matrix4 m;
             m.set(t.a1, t.a2, t.a3, t.a4,
                   t.b1, t.b2, t.b3, t.b4,
@@ -474,7 +557,7 @@ namespace threepp {
             return m;
         }
 
-        void setTransform(Object3D& obj, const aiMatrix4x4& t) {
+        static void setTransform(Object3D& obj, const aiMatrix4x4& t) {
             aiVector3t<float> pos;
             aiQuaterniont<float> quat;
             aiVector3t<float> scale;

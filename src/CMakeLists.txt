@@ -5,6 +5,16 @@ set(publicHeaders
         "threepp/constants.hpp"
         "threepp/threepp.hpp"
 
+        "threepp/animation/AnimationAction.hpp"
+        "threepp/animation/AnimationClip.hpp"
+        "threepp/animation/AnimationMixer.hpp"
+        "threepp/animation/AnimationUtils.hpp"
+        "threepp/animation/KeyframeTrack.hpp"
+        "threepp/animation/PropertyBinding.hpp"
+        "threepp/animation/PropertyMixer.hpp"
+
+        "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
+
         "threepp/canvas/Canvas.hpp"
         "threepp/canvas/Monitor.hpp"
         "threepp/canvas/WindowSize.hpp"
@@ -129,6 +139,7 @@ set(publicHeaders
         "threepp/math/float_view.hpp"
         "threepp/math/Frustum.hpp"
         "threepp/math/ImprovedNoise.hpp"
+        "threepp/math/Interpolant.hpp"
         "threepp/math/Line3.hpp"
         "threepp/math/Lut.hpp"
         "threepp/math/MathUtils.hpp"
@@ -243,6 +254,13 @@ set(privateHeaders
 
 set(sources
 
+        "threepp/animation/AnimationAction.cpp"
+        "threepp/animation/AnimationClip.cpp"
+        "threepp/animation/AnimationMixer.cpp"
+        "threepp/animation/KeyframeTrack.cpp"
+        "threepp/animation/PropertyBinding.cpp"
+        "threepp/animation/PropertyMixer.cpp"
+
         "threepp/cameras/Camera.cpp"
         "threepp/cameras/PerspectiveCamera.cpp"
         "threepp/cameras/OrthographicCamera.cpp"
@@ -342,6 +360,7 @@ set(sources
         "threepp/math/Euler.cpp"
         "threepp/math/Frustum.cpp"
         "threepp/math/ImprovedNoise.cpp"
+        "threepp/math/Interpolant.cpp"
         "threepp/math/Line3.cpp"
         "threepp/math/Lut.cpp"
         "threepp/math/MathUtils.cpp"

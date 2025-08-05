@@ -11,10 +11,10 @@ int main() {
     Canvas canvas("Simple skinning", {{"aa", 8}});
     GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFCSoft;
+    renderer.shadowMap().type = threepp::ShadowMap::PFCSoft;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1, 10000);
-    camera.position.set(0, 6, -15);
+    camera.position.set(0, 6, -10);
 
     Scene scene;
     scene.background = Color(0xa0a0a0);
@@ -51,21 +51,38 @@ int main() {
 
     AssimpLoader loader;
 
-    auto model = loader.load("data/models/gltf/SimpleSkinning.gltf");
-    model->traverseType<SkinnedMesh>([](auto& m) {
+    auto soldier = loader.load("data/models/gltf/Soldier.glb");
+    soldier->traverseType<Mesh>([](Mesh& m) {
+        m.receiveShadow = true;
+        m.castShadow = true;
+    });
+    scene.add(soldier);
+    soldier->scale *= 2;
+    soldier->position.x = -2;
 
+    auto skeletonHelperSoldier = SkeletonHelper::create(*soldier);
+    skeletonHelperSoldier->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene.add(skeletonHelperSoldier);
+
+    //
+
+    auto stormTropper = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
+    stormTropper->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
 
+        if (auto mat = m.material()->as<MaterialWithMap>()) {
+            mat->map->wrapS = TextureWrapping::Repeat;
+            mat->map->wrapT = TextureWrapping::Repeat;
+        }
     });
-    scene.add(model);
+    scene.add(stormTropper);
+    stormTropper->scale *= 0.6;
+    stormTropper->position.x = 2;
 
-    auto mixer = AnimationMixer(*model);
-    mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
-
-    auto skeletonHelper = SkeletonHelper::create(*model);
-    skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
-    scene.add(skeletonHelper);
+    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTropper);
+    skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene.add(skeletonHelperTrooper);
 
     //
 
@@ -81,13 +98,21 @@ int main() {
         renderer.setSize(size);
     });
 
+    auto solderMixer = AnimationMixer(*soldier);
+    solderMixer.clipAction(soldier->animations.back())->setLoop(Loop::Repeat).play();
+
+    auto trooperMixer = AnimationMixer(*stormTropper);
+    trooperMixer.clipAction(stormTropper->animations.front())->setLoop(Loop::Repeat).play();
+
 
     Clock clock;
     canvas.animate([&] {
+        renderer.render(scene, camera);
+
         const auto dt = clock.getDelta();
 
-        mixer.update(dt);
+        solderMixer.update(dt);
+        trooperMixer.update(dt);
 
-        renderer.render(scene, camera);
     });
 }
