@@ -1,5 +1,6 @@
 
 #include "threepp/animation/AnimationMixer.hpp"
+
 #include "threepp/animation/AnimationAction.hpp"
 #include "threepp/animation/AnimationClip.hpp"
 #include "threepp/animation/PropertyMixer.hpp"
@@ -295,7 +296,7 @@ struct AnimationMixer::Impl {
             const auto& bindings = action->_propertyBindings;
 
             // increment reference counts / sort out state
-            for (const auto & binding : bindings) {
+            for (const auto& binding : bindings) {
 
                 if (binding->useCount++ == 0) {
 
@@ -315,7 +316,7 @@ struct AnimationMixer::Impl {
             const auto& bindings = action->_propertyBindings;
 
             // decrement reference counts / sort out state
-            for (const auto & binding : bindings) {
+            for (const auto& binding : bindings) {
 
                 if (--binding->useCount == 0) {
 

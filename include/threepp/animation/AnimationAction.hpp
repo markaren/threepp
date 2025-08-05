@@ -3,16 +3,13 @@
 #define THREEPP_ANIMATIONACTION_HPP
 
 #include "threepp/animation/AnimationClip.hpp"
-#include "threepp/animation/AnimationMixer.hpp"
-
 #include "threepp/math/Interpolant.hpp"
-
-#include "PropertyMixer.hpp"
 #include "threepp/constants.hpp"
 
 namespace threepp {
 
     class AnimationMixer;
+    class PropertyMixer;
 
     class AnimationAction: public std::enable_shared_from_this<AnimationAction> {
 

@@ -2,6 +2,7 @@
 #include "threepp/animation/AnimationClip.hpp"
 
 #include "threepp/animation/AnimationAction.hpp"
+#include "threepp/core/Object3D.hpp"
 
 #include <utility>
 

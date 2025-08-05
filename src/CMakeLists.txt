@@ -10,9 +10,8 @@ set(publicHeaders
         "threepp/animation/AnimationMixer.hpp"
         "threepp/animation/AnimationUtils.hpp"
         "threepp/animation/KeyframeTrack.hpp"
-        "threepp/animation/PropertyBinding.hpp"
-        "threepp/animation/PropertyMixer.hpp"
 
+        "threepp/animation/tracks/VectorKeyframeTrack.hpp"
         "threepp/animation/tracks/QuaternionKeyframeTrack.hpp"
 
         "threepp/canvas/Canvas.hpp"
@@ -221,6 +220,9 @@ foreach (header IN LISTS publicHeaders)
 endforeach ()
 
 set(privateHeaders
+
+        "threepp/animation/PropertyBinding.hpp"
+        "threepp/animation/PropertyMixer.hpp"
 
         "threepp/materials/MeshDistanceMaterial.hpp"
 

@@ -1,6 +1,9 @@
 
 #include "threepp/animation/AnimationAction.hpp"
 
+#include "threepp/animation/AnimationMixer.hpp"
+#include "threepp/animation/PropertyMixer.hpp"
+
 using namespace threepp;
 
 AnimationAction::AnimationAction(AnimationMixer& mixer,
@@ -356,7 +359,8 @@ float AnimationAction::_updateTime(float deltaTime) {
         }
 
         if (this->clampWhenFinished) this->paused = true;
-        else this->enabled = false;
+        else
+            this->enabled = false;
 
         this->time = time;
 
@@ -387,7 +391,8 @@ float AnimationAction::_updateTime(float deltaTime) {
 
         if (this->repetitions != -1 && pending <= 0) {
             if (this->clampWhenFinished) this->paused = true;
-            else this->enabled = false;
+            else
+                this->enabled = false;
 
             time = deltaTime > 0 ? duration : 0;
             this->time = time;
