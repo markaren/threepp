@@ -21,6 +21,7 @@ however much remains to be done..
 * Water and Sky shaders
 * Built-in text rendering and font loading [typeface.json, TTF]
 * Loaders [Binary STL, OBJ/MTL, SVG, URDF]
+* Animations (limited to transforms)
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
 * Easy integration with [Dear ImGui](https://github.com/ocornut/imgui)
