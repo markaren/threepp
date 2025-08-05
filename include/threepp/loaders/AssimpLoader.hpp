@@ -75,6 +75,10 @@ namespace threepp {
                     if (auto positionTrack = loadPositionTrack(aiNodeAnim)){
                         tracks.emplace_back(std::move(positionTrack));
                     }
+
+                    if (auto scaleTrack = loadScaleTrack(aiNodeAnim)){
+                        tracks.emplace_back(std::move(scaleTrack));
+                    }
                 }
 
                 auto clip = std::make_shared<AnimationClip>(name, duration, tracks);
@@ -94,7 +98,8 @@ namespace threepp {
             std::vector<float> times;
             std::vector<float> values;
             std::string name(aiNodeAnim->mNodeName.data);
-            std::erase(name, '.');
+            // std::erase(name, '.');
+
             for (auto k = 0; k < aiNodeAnim->mNumRotationKeys; k++) {
 
                 const auto key = aiNodeAnim->mRotationKeys[k];
@@ -103,14 +108,15 @@ namespace threepp {
                                              static_cast<float>(key.mValue.z), static_cast<float>(key.mValue.w)});
             }
 
-            return std::make_unique<QuaternionKeyframeTrack>(name, times, values);
+            return std::make_unique<QuaternionKeyframeTrack>(name + ".quaternion", times, values);
         }
 
         static std::unique_ptr<KeyframeTrack> loadPositionTrack(const aiNodeAnim* aiNodeAnim) {
             std::vector<float> times;
             std::vector<float> values;
             std::string name(aiNodeAnim->mNodeName.data);
-            std::erase(name, '.');
+            // std::erase(name, '.');
+
             for (auto k = 0; k < aiNodeAnim->mNumPositionKeys; k++) {
 
                 const auto key = aiNodeAnim->mPositionKeys[k];
@@ -119,8 +125,26 @@ namespace threepp {
                                              static_cast<float>(key.mValue.z)});
             }
 
-            return std::make_unique<VectorKeyframeTrack>(name, times, values);
+            return std::make_unique<VectorKeyframeTrack>(name + ".position", times, values);
         }
+
+        static std::unique_ptr<KeyframeTrack> loadScaleTrack(const aiNodeAnim* aiNodeAnim) {
+            std::vector<float> times;
+            std::vector<float> values;
+            std::string name(aiNodeAnim->mNodeName.data);
+            // std::erase(name, '.');
+
+            for (auto k = 0; k < aiNodeAnim->mNumScalingKeys; k++) {
+
+                const auto key = aiNodeAnim->mScalingKeys[k];
+                times.emplace_back(static_cast<float>(key.mTime / 1000));
+                values.insert(values.end(), {static_cast<float>(key.mValue.x), static_cast<float>(key.mValue.y),
+                                             static_cast<float>(key.mValue.z)});
+            }
+
+            return std::make_unique<VectorKeyframeTrack>(name + ".scale", times, values);
+        }
+
 
         void parseNodes(const SceneInfo& info, const aiScene* aiScene, aiNode* aiNode, Object3D& parent) {
 

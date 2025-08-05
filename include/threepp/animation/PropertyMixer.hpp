@@ -51,81 +51,21 @@ namespace threepp {
 
         // mix functions
 
-        static void _select(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
+        static void _select(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride);
 
-            if (t >= 0.5) {
+        static void _slerp(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride);
 
-                for (auto i = 0; i != stride; ++i) {
+        static void _lerp(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride);
 
-                    buffer[dstOffset + i] = buffer[srcOffset + i];
-                }
-            }
-        }
+        static void _lerpAdditive(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride);
 
-        static void _slerp(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
+        static void _slerpAdditive(PropertyMixer* that, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride);
 
-            Quaternion::slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, srcOffset, t);
-        }
+        static void _setAdditiveIdentityNumeric(PropertyMixer* that);
 
+        static void _setAdditiveIdentityQuaternion(PropertyMixer* that);
 
-        static void _lerp(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
-
-            const auto s = 1 - t;
-
-            for (auto i = 0; i != stride; ++i) {
-
-                const auto j = dstOffset + i;
-
-                buffer[j] = buffer[j] * s + buffer[srcOffset + i] * t;
-            }
-        }
-
-        static void _lerpAdditive(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
-
-            for (auto i = 0; i != stride; ++i) {
-
-                const auto j = dstOffset + i;
-
-                buffer[j] = buffer[j] + buffer[srcOffset + i] * t;
-            }
-        }
-
-        static void _slerpAdditive(PropertyMixer* that, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
-
-            const auto workOffset = that->_workIndex * stride;
-
-            // Store result in intermediate buffer offset
-            Quaternion::multiplyQuaternionsFlat(buffer, workOffset, buffer, dstOffset, buffer, srcOffset);
-
-            // Slerp to the intermediate result
-            Quaternion::slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, workOffset, t);
-        }
-
-        static void _setAdditiveIdentityNumeric(PropertyMixer* that) {
-
-            const auto startIndex = that->_addIndex * that->valueSize;
-            const auto endIndex = startIndex + that->valueSize;
-
-            for (auto i = startIndex; i < endIndex; i++) {
-
-                that->buffer[i] = 0;
-            }
-        }
-
-        static void _setAdditiveIdentityQuaternion(PropertyMixer* that) {
-
-            that->_setAdditiveIdentityNumeric(that);
-            that->buffer[that->_addIndex * that->valueSize + 3] = 1;
-        }
-
-        static void _setAdditiveIdentityOther(PropertyMixer* that) {
-            const size_t startIndex = that->_origIndex * that->valueSize;
-            const size_t targetIndex = that->_addIndex * that->valueSize;
-
-            for (size_t i = 0; i < that->valueSize; ++i) {
-                that->buffer[targetIndex + i] = that->buffer[startIndex + i];
-            }
-        }
+        static void _setAdditiveIdentityOther(PropertyMixer* that);
     };
 
 }// namespace threepp

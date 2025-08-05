@@ -1,5 +1,5 @@
+#include "threepp/animation/AnimationMixer.hpp"
 #include "threepp/helpers/SkeletonHelper.hpp"
-#include "threepp/lights/LightShadow.hpp"
 #include "threepp/loaders/AssimpLoader.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/threepp.hpp"
@@ -98,19 +98,21 @@ int main() {
         renderer.setSize(size);
     });
 
-    auto& soldierBones = skeletonHelperSoldier->getBones();
-    auto& trooperBones = skeletonHelperTrooper->getBones();
+    auto solderMixer = AnimationMixer(*soldier);
+    solderMixer.clipAction(soldier->animations.back())->setLoop(Loop::Repeat).play();
+
+    auto trooperMixer = AnimationMixer(*stormTropper);
+    trooperMixer.clipAction(stormTropper->animations.front())->setLoop(Loop::Repeat).play();
+
 
     Clock clock;
     canvas.animate([&] {
         renderer.render(scene, camera);
 
-        auto time = clock.getElapsedTime();
-        for (auto i = 0; i < soldierBones.size(); i++) {
-            soldierBones[i]->rotation.y = std::sin(time) * 5 / float(soldierBones.size());
-        }
-        for (auto i = 0; i < trooperBones.size(); i++) {
-            trooperBones[i]->rotation.y = std::sin(time) * 5 / float(trooperBones.size());
-        }
+        const auto dt = clock.getDelta();
+
+        solderMixer.update(dt);
+        trooperMixer.update(dt);
+
     });
 }

@@ -8,7 +8,6 @@ set(publicHeaders
         "threepp/animation/AnimationAction.hpp"
         "threepp/animation/AnimationClip.hpp"
         "threepp/animation/AnimationMixer.hpp"
-        "threepp/animation/AnimationObjectGroup.hpp"
         "threepp/animation/AnimationUtils.hpp"
         "threepp/animation/KeyframeTrack.hpp"
         "threepp/animation/PropertyBinding.hpp"

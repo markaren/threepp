@@ -11,7 +11,7 @@ namespace threepp {
 
     public:
         QuaternionKeyframeTrack(const std::string& name, const std::vector<float>& times, const std::vector<float>& values, const std::optional<Interpolation>& interpolation = {})
-            : KeyframeTrack(name + ".quaternion", times, values, Interpolation::Linear) {}
+            : KeyframeTrack(name, times, values, Interpolation::Linear) {}
 
         [[nodiscard]] std::string ValueTypeName() const override {
 

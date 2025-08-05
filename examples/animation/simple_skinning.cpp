@@ -14,7 +14,7 @@ int main() {
     renderer.shadowMap().type = ShadowMap::PFCSoft;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1, 10000);
-    camera.position.set(0, 6, -10);
+    camera.position.set(0, 6, -15);
 
     Scene scene;
     scene.background = Color(0xa0a0a0);
@@ -51,21 +51,17 @@ int main() {
 
     AssimpLoader loader;
 
-    auto model = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
+    auto model = loader.load("data/models/gltf/SimpleSkinning.gltf");
     model->traverseType<SkinnedMesh>([](auto& m) {
+
         m.receiveShadow = true;
         m.castShadow = true;
 
-        if (auto mat = m.material()->as<MaterialWithMap>()) {
-            mat->map->wrapS = TextureWrapping::Repeat;
-            mat->map->wrapT = TextureWrapping::Repeat;
-        }
     });
     scene.add(model);
 
     auto mixer = AnimationMixer(*model);
-    // mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
-    mixer.clipAction(model->animations.front())->setLoop(Loop::Repeat).play();
+    mixer.clipAction(AnimationClip::findByName(model->animations, "Take 01"))->play();
 
     auto skeletonHelper = SkeletonHelper::create(*model);
     skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;

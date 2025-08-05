@@ -187,7 +187,7 @@ KeyframeTrack& KeyframeTrack::optimize() {
     return *this;
 }
 
-std::unique_ptr<Interpolant> KeyframeTrack::createInterpolant(std::vector<float>* result) {
+std::unique_ptr<Interpolant> KeyframeTrack::createInterpolant(std::vector<float>* result) const {
 
    return createInterpolant_(times_, values_, getValueSize(), result);
 }

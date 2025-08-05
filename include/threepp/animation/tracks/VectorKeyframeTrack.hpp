@@ -12,7 +12,7 @@ namespace threepp {
 
     public:
         VectorKeyframeTrack(const std::string& name, const std::vector<float>& times, const std::vector<float>& values, const std::optional<Interpolation>& interpolation = {})
-            : KeyframeTrack(name + ".vector", times, values) {}
+            : KeyframeTrack(name, times, values) {}
 
         [[nodiscard]] std::string ValueTypeName() const override {
 

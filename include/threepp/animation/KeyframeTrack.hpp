@@ -60,7 +60,7 @@ namespace threepp {
 
         KeyframeTrack& optimize();
 
-        std::unique_ptr<Interpolant> createInterpolant(std::vector<float>* result);
+        std::unique_ptr<Interpolant> createInterpolant(std::vector<float>* result) const;
 
         virtual ~KeyframeTrack() = default;
 
