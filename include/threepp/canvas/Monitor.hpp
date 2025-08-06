@@ -1,6 +1,6 @@
 
-#ifndef MONITOR_HPP
-#define MONITOR_HPP
+#ifndef THREEPP_MONITOR_HPP
+#define THREEPP_MONITOR_HPP
 
 #include "threepp/canvas/WindowSize.hpp"
 
@@ -14,4 +14,4 @@ namespace threepp::monitor {
 
 }
 
-#endif //MONITOR_HPP
+#endif //THREEPP_MONITOR_HPP
