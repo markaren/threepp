@@ -21,4 +21,6 @@ add_subdirectory(objects)
 add_subdirectory(shaders)
 add_subdirectory(textures)
 
-add_subdirectory(projects)
+if (THREEPP_BUILD_EXAMPLE_PROJECTS)
+    add_subdirectory(projects)
+endif ()
