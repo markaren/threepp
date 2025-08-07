@@ -13,3 +13,5 @@ add_example(NAME "box_geometry" LINK_IMGUI WEB)
 add_example(NAME "cylinder_geometry" LINK_IMGUI WEB)
 add_example(NAME "plane_geometry" LINK_IMGUI WEB)
 add_example(NAME "sphere_geometry" LINK_IMGUI WEB)
+
+target_link_libraries(tube_geometry PRIVATE bvh)

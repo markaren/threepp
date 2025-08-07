@@ -21,3 +21,10 @@ add_library(optimization INTERFACE
         "${CMAKE_CURRENT_SOURCE_DIR}/optimization/Optimizer.hpp"
 )
 target_include_directories(optimization INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_library(bvh
+        bvh/BVH.hpp
+        bvh/BVH.cpp
+)
+target_link_libraries(bvh PUBLIC threepp)
+target_include_directories(bvh PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")

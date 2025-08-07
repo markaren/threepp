@@ -1,4 +1,4 @@
-#include "threepp/objects/BVH.hpp"
+#include "BVH.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 
