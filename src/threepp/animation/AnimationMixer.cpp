@@ -50,13 +50,6 @@ struct AnimationMixer::Impl {
 
         auto& bindingsByName = bindingsByRoot[rootUuid];//insert
 
-        //                if (!bindingsByRoot.count(rootUuid)) {
-        //
-        //                    std::unordered_map<std::string, PropertyMixer*> bindingsByName;
-        //                    bindingsByRoot[rootUuid] = bindingsByName;
-        //                }
-
-
         std::shared_ptr<PropertyMixer> binding;
         for (auto i = 0; i != nTracks; ++i) {
 
@@ -66,6 +59,7 @@ struct AnimationMixer::Impl {
             if (bindingsByName.contains(trackName)) {
 
                 bindings[i] = bindingsByName[trackName];
+                binding = bindings[i];
 
             } else {
 
