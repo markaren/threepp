@@ -39,16 +39,11 @@ std::shared_ptr<AnimationClip> AnimationClip::findByName(const std::vector<std::
     return nullptr;
 }
 
-std::shared_ptr<AnimationClip> AnimationClip::findByName(Object3D* object, const std::string& name) {
+std::shared_ptr<AnimationClip> AnimationClip::findByName(const Object3D& object, const std::string& name) {
 
-    std::vector<std::shared_ptr<AnimationClip>>* clipArray = nullptr;
-    if (auto geometry = object->geometry()) {
-        clipArray = &object->animations;
-    }
+    if (!object.geometry()) return nullptr;
 
-    if (!clipArray) return nullptr;
-
-    for (auto& clip : *clipArray) {
+    for (auto& clip : object.animations) {
 
         if (clip->name == name) {
 

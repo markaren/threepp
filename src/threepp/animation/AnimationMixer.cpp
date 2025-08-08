@@ -126,8 +126,8 @@ struct AnimationMixer::Impl {
 
     AnimationAction* clipAction(const std::string& clipName, Object3D* optionalRoot, std::optional<AnimationBlendMode> blendMode) {
 
-        auto root = optionalRoot ? optionalRoot : this->_root;
-        auto clip = AnimationClip::findByName(root, clipName);
+        const auto root = optionalRoot ? optionalRoot : this->_root;
+        const auto clip = AnimationClip::findByName(*root, clipName);
 
         return clipAction(clip, root, blendMode);
     }
@@ -137,7 +137,7 @@ struct AnimationMixer::Impl {
     // previously unknown clip/root combination is specified)
     AnimationAction* clipAction(std::shared_ptr<AnimationClip> clipObject, Object3D* optionalRoot, std::optional<AnimationBlendMode> blendMode) {
 
-        auto root = optionalRoot ? optionalRoot : this->_root;
+        const auto root = optionalRoot ? optionalRoot : this->_root;
         const auto rootUuid = root->uuid;
 
         const auto clipUuid = clipObject->uuid();

@@ -27,7 +27,7 @@ namespace threepp {
 
         void resetDuration();
 
-        static std::shared_ptr<AnimationClip> findByName(Object3D* object, const std::string& name);
+        static std::shared_ptr<AnimationClip> findByName(const Object3D& object, const std::string& name);
         static std::shared_ptr<AnimationClip> findByName(const std::vector<std::shared_ptr<AnimationClip>>& clipArray, const std::string& name);
 
     private:

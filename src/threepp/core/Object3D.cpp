@@ -1,6 +1,8 @@
 
 #include "threepp/core/Object3D.hpp"
 
+#include "threepp/animation/AnimationClip.hpp"
+
 #include "threepp/cameras/Camera.hpp"
 
 #include "threepp/math/MathUtils.hpp"
