@@ -145,5 +145,5 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DTHREEPP_FETCH_ASSIMP=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build
