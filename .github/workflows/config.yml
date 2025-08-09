@@ -74,49 +74,6 @@ jobs:
           cd build/tests
           ctest --output-on-failure
 
-  vcpkg-on-linux:
-
-    runs-on: ${{ matrix.os }}
-    env:
-      CC: gcc-${{ matrix.compiler_version }}
-      CXX: g++-${{ matrix.compiler_version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04]
-        compiler_version: [11]
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install prerequisites
-      run: |
-        sudo apt-get update && sudo apt-get install -y \
-        libxinerama-dev \
-        libxcursor-dev \
-        xorg-dev \
-        libglu1-mesa-dev \
-        pkg-config
-
-    - name: Restore artifacts, or run vcpkg, build (and cache artifacts as post step)
-      uses: lukka/run-vcpkg@v10
-      id: runvcpkg
-      with:
-        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
-        vcpkgGitCommitId: '4cac260c4b7331538d31886f57739fea0bffa27e'
-        vcpkgJsonGlob: 'vcpkg.json'
-        appendedCacheKey: vcpkginstall
-
-    - name: Configure and build
-      run: |
-        cmake . -B build -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_MANIFEST_FEATURES="assimp" -DCMAKE_BUILD_TYPE="Release"
-        cmake --build build
-
-    - name: Test
-      run: |
-        cd build/tests
-        ctest --output-on-failure
-
 
   windows:
 
@@ -188,5 +145,5 @@ jobs:
 
       - name: Configure and build
         run: |
-          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="Release"
+          cmake . -B build -DCMAKE_TOOLCHAIN_FILE=${{env.EMSDK}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake -DTHREEPP_BUILD_TESTS=OFF -DTHREEPP_FETCH_ASSIMP=OFF -DCMAKE_BUILD_TYPE="Release"
           cmake --build build

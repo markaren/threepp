@@ -54,40 +54,20 @@ cmake . -B build -DCMAKE_BUILD_TYPE="Release"
 cmake --build build
 ```
 
-However, some of the examples (and headers) require additional dependencies. 
-To make use of all features and to enable/build all examples, the use of [vcpkg](https://vcpkg.io/en/index.html) is encouraged.
-
-#### Using vcpkg for getting optional dependecies (using manifest mode)
-
-Call CMake with `-DCMAKE_TOOLCHAIN_FILE=[path to vcpkg]/scripts/buildsystems/vcpkg.cmake`
-
-Add optional features by listing them with `-DVCPKG_MANIFEST_FEATURES=feature1;feature2`
-
-See [vcpkg.json](vcpkg.json) for available features.
-
-Note, however, that under MinGW you'll need to specify the vcpkg triplet:
-```shell
--DVCPKG_TARGET_TRIPLET=x64-mingw-[static|dynamic]  # choose either `static` or `dynamic`.
--DVCPKG_HOST_TRIPLET=x64-mingw-[static|dynamic]    # <-- needed only if MSVC cannot be found. 
-```
-
 ##### Building examples with Emscripten
 
 Pass to CMake:
 ```shell
 -DCMAKE_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
 ```
-When using vcpkg, however, do:
-```shell
--DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
-```
+
 This will generate .html versions of a subset of the examples to be loaded in a browser.
 
 
 ##### Optional downstream dependencies
 
 When consuming `threepp` in your own application, 
-some headers will require additional dependencies in order to compile.
+some headers will require additional dependencies to compile.
 
 | **Header**   | **Dependency** | **Description**                               |
 |--------------|----------------|-----------------------------------------------|

@@ -1,7 +1,7 @@
 
 function(add_example)
 
-    set(flags LINK_IMGUI LINK_ASSIMP LINK_XML LINK_PHYSX WEB)
+    set(flags LINK_IMGUI LINK_ASSIMP LINK_XML WEB)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES WEB_EMBED)
 
@@ -11,13 +11,8 @@ function(add_example)
         return()
     endif ()
 
-    if (arg_LINK_ASSIMP AND NOT assimp_FOUND)
+    if (arg_LINK_ASSIMP AND (TARGET(assimp::assimp)))
         message(AUTHOR_WARNING "assimp not found, skipping '${arg_NAME}' example..")
-        return()
-    endif ()
-
-    if (arg_LINK_PHYSX AND NOT unofficial-omniverse-physx-sdk_FOUND)
-        message(AUTHOR_WARNING "physx not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
 
@@ -33,12 +28,8 @@ function(add_example)
         target_link_libraries("${arg_NAME}" PRIVATE imgui::imgui)
     endif ()
 
-    if (arg_LINK_ASSIMP AND assimp_FOUND)
+    if (arg_LINK_ASSIMP)
         target_link_libraries("${arg_NAME}" PRIVATE assimp::assimp)
-    endif ()
-
-    if (arg_LINK_PHYSX AND unofficial-omniverse-physx-sdk_FOUND)
-        target_link_libraries("${arg_NAME}" PRIVATE unofficial::omniverse-physx-sdk::sdk)
     endif ()
 
     if (DEFINED EMSCRIPTEN)
