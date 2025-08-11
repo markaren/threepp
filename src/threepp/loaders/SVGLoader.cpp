@@ -3,10 +3,12 @@
 
 #include "threepp/extras/ShapeUtils.hpp"
 #include "threepp/loaders/svg/SVGFunctions.hpp"
+#include "threepp/utils/StringUtils.hpp"
 
 #include "pugixml.hpp"
 
 #include <algorithm>
+
 
 using namespace threepp;
 

@@ -22,7 +22,7 @@ namespace threepp::svg {
         BEYOND
     };
 
-    struct ClassifyResult {
+    inline struct ClassifyResult {
         IntersectionLocationType loc = IntersectionLocationType::ORIGIN;
         float t = 0;
     } classifyResult;
