@@ -61,7 +61,7 @@ int main() {
     camera.position.z = -5;
 
     AudioListener listener;
-    PositionalAudio audio(listener, "data/sounds/376737_Skullbeatz___Bad_Cat_Maste.mp3");
+    PositionalAudio audio(listener, std::string(DATA_FOLDER) + "/sounds/376737_Skullbeatz___Bad_Cat_Maste.mp3");
     audio.setLooping(true);
     audio.play();
 

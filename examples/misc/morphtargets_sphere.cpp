@@ -26,14 +26,14 @@ int main() {
     scene.add(AmbientLight::create(0x111111));
 
     AssimpLoader loader;
-    auto gltf = loader.load("data/models/gltf/AnimatedMorphSphere/AnimatedMorphSphere.gltf");
+    auto gltf = loader.load(std::string(DATA_FOLDER) + "/models/gltf/AnimatedMorphSphere/AnimatedMorphSphere.gltf");
     scene.add(gltf);
 
     auto pointsMaterial = PointsMaterial::create();
     pointsMaterial->size = 10;
     pointsMaterial->sizeAttenuation = false;
     pointsMaterial->alphaTest = 0.5;
-    pointsMaterial->map = TextureLoader().load("data/textures/sprites/disc.png");
+    pointsMaterial->map = TextureLoader().load(std::string(DATA_FOLDER) + "/textures/sprites/disc.png");
     pointsMaterial->morphTargets = true;
 
     Mesh* mesh;

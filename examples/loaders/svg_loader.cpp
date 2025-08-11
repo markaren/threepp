@@ -55,7 +55,7 @@ namespace {
     auto loadSvg(const std::string& name = "tiger.svg") {
 
         SVGLoader loader;
-        auto svgData = loader.load("data/models/svg/" + name);
+        auto svgData = loader.load(std::string(DATA_FOLDER) + "/models/svg/" + name);
 
         auto svg = Group::create();
         svg->name = std::filesystem::path(name).stem().string();

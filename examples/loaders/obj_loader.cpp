@@ -27,13 +27,13 @@ int main() {
     camera->position.set(0, 100, 150);
 
     OBJLoader loader;
-    auto obj1 = loader.load("data/models/obj/female02/female02.obj");
+    auto obj1 = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
     obj1->position.x = -30;
     scene->add(obj1);
 
     TextureLoader tl;
-    auto tex = tl.load("data/textures/uv_grid_opengl.jpg");
-    auto obj2 = loader.load("data/models/obj/female02/female02.obj", false);
+    auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg");
+    auto obj2 = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj", false);
     obj2->position.x = 30;
     obj2->traverseType<Mesh>([tex](Mesh& child) {
         auto m = MeshPhongMaterial::create();

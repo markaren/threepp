@@ -10,12 +10,21 @@ set(THREEPP_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
         threepp
         GIT_REPOSITORY https://github.com/markaren/threepp.git
-        GIT_TAG 860a50e9715f40796afb46fa1f40a731a72f5356
+        GIT_TAG ddb9941d1de641757152a4070e8bcf78184c6db1
 )
 FetchContent_MakeAvailable(threepp)
 
 add_executable(threepp_demo main.cpp)
 target_link_libraries(threepp_demo PRIVATE threepp::threepp)
+
+# Copy DLL after build (Windows only)
+if (WIN32 AND BUILD_SHARED_LIBS)
+    add_custom_command(TARGET threepp_demo POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:threepp::threepp>
+            $<TARGET_FILE_DIR:threepp_demo>
+    )
+endif()
 
 
 ######### Emscripten #######

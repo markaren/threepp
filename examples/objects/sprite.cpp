@@ -11,7 +11,7 @@ namespace {
     void createHudSprites(HUD& hud) {
         TextureLoader tl;
         const auto hudMaterial = SpriteMaterial::create();
-        hudMaterial->map = tl.load("data/textures/sprite0.png");
+        hudMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/sprite0.png");
         hudMaterial->map->offset.set(0.5, 0.5);
 
         const auto hudSprite1 = Sprite::create(hudMaterial);
@@ -61,7 +61,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", "data/textures/three.png"s}}};
+    Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", std::string(DATA_FOLDER) + "/textures/three.png"s}}};
     auto size = canvas.size();
     GLRenderer renderer(size);
     renderer.autoClear = false;
@@ -75,7 +75,7 @@ int main() {
 
     TextureLoader loader;
     auto material = SpriteMaterial::create();
-    material->map = loader.load("data/textures/three.png");
+    material->map = loader.load(std::string(DATA_FOLDER) + "/textures/three.png");
     material->map->offset.set(0.5, 0.5);
 
     auto pickMaterial = material->clone<SpriteMaterial>();

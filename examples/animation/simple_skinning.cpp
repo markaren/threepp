@@ -51,7 +51,7 @@ int main() {
 
     AssimpLoader loader;
 
-    auto model = loader.load("data/models/gltf/SimpleSkinning.gltf");
+    auto model = loader.load(std::string(DATA_FOLDER) + "/models/gltf/SimpleSkinning.gltf");
     model->traverseType<SkinnedMesh>([](auto& m) {
 
         m.receiveShadow = true;

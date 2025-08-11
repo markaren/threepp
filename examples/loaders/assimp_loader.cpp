@@ -10,20 +10,20 @@ namespace {
 
     auto loadGlb(AssimpLoader& loader) {
 
-        auto model = loader.load("data/models/gltf/zedm.glb");
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/gltf/zedm.glb");
         model->scale *= 50;
         return model;
     }
 
     auto loadObj(AssimpLoader& loader) {
 
-        auto model = loader.load("data/models/obj/female02/female02.obj");
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
         return model;
     }
 
     auto loadStl(AssimpLoader& loader) {
 
-        auto model = loader.load("data/models/stl/pr2_head_pan.stl");
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/stl/pr2_head_pan.stl");
         model->scale *= 100;
         return model;
     }

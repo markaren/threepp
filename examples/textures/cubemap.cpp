@@ -14,7 +14,7 @@ int main() {
     PerspectiveCamera camera(50, canvas.aspect(), 0.1, 1000);
     camera.position.z = 10;
 
-    std::filesystem::path path("data/textures/cube/Bridge2");
+    std::filesystem::path path(std::string(DATA_FOLDER) + "/textures/cube/Bridge2");
     std::array<std::filesystem::path, 6> urls{
             // clang-format off
             path / "posx.jpg", path / "negx.jpg",

@@ -51,7 +51,7 @@ int main() {
 
     AssimpLoader loader;
 
-    auto soldier = loader.load("data/models/gltf/Soldier.glb");
+    auto soldier = loader.load(std::string(DATA_FOLDER) + "/models/gltf/Soldier.glb");
     soldier->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
@@ -66,7 +66,7 @@ int main() {
 
     //
 
-    auto stormTropper = loader.load("data/models/collada/stormtrooper/stormtrooper.dae");
+    auto stormTropper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
     stormTropper->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;

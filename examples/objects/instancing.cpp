@@ -87,7 +87,7 @@ int main() {
 
     HUD hud(canvas.size());
     FontLoader fontLoader;
-    const auto font = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
+    const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/helvetiker_regular.typeface.json");
 
     TextGeometry::Options opts(font, 20, 2);
     auto handle = Text2D(opts);

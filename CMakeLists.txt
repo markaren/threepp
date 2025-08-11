@@ -31,7 +31,7 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 
 # ==============================================================================
@@ -89,19 +89,6 @@ if (NOT DEFINED EMSCRIPTEN AND THREEPP_BUILD_TESTS)
 
     enable_testing()
     add_subdirectory(tests)
-endif ()
-
-
-# ==============================================================================
-# Application resources
-# ==============================================================================
-
-if (NOT DEFINED EMSCRIPTEN)
-    # Data files
-    file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/models" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
-    file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/textures" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
-    file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/fonts" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
-    file(COPY "${CMAKE_CURRENT_LIST_DIR}/data/sounds" DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/bin/data)
 endif ()
 
 
