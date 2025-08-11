@@ -20,8 +20,6 @@ cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" 
 cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" ON "THREEPP_BUILD_EXAMPLES" OFF)
 cmake_dependent_option(THREEPP_FETCH_ASSIMP "Make assimp available for examples" ON "THREEPP_BUILD_EXAMPLES" OFF)
 
-option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
-
 
 # ==============================================================================
 # Global internal configuration
