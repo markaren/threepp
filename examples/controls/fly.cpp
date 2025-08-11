@@ -9,9 +9,9 @@ namespace {
         TextureLoader loader;
         auto materialNormalMap = MeshPhongMaterial::create({{"specular", 0x333333},
                                                             {"shininess", 10.f},
-                                                            {"map", loader.load("data/textures/planets/earth_atmos_2048.jpg")},
-                                                            {"specularMap", loader.load("data/textures/planets/earth_specular_2048.jpg")},
-                                                            {"normalMap", loader.load("data/textures/planets/earth_normal_2048.jpg")},
+                                                            {"map", loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_atmos_2048.jpg")},
+                                                            {"specularMap", loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_specular_2048.jpg")},
+                                                            {"normalMap", loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_normal_2048.jpg")},
                                                             {"normalScale", Vector2(0.85f, -0.85f)}});
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
@@ -26,7 +26,7 @@ namespace {
     auto createMoon(float radius, float moonScale) {
         TextureLoader loader;
         auto materialMoon = MeshPhongMaterial::create({{
-                {"map", loader.load("data/textures/planets/moon_1024.jpg")},
+                {"map", loader.load(std::string(DATA_FOLDER) + "/textures/planets/moon_1024.jpg")},
         }});
 
         auto geometry = SphereGeometry::create(radius, 100, 50);
@@ -41,7 +41,7 @@ namespace {
 
     auto createClouds(float radius) {
         TextureLoader loader;
-        auto materialMoon = MeshLambertMaterial::create({{{"map", loader.load("data/textures/planets/earth_clouds_1024.png")},
+        auto materialMoon = MeshLambertMaterial::create({{{"map", loader.load(std::string(DATA_FOLDER) + "/textures/planets/earth_clouds_1024.png")},
                                                           {"transparent", true}}});
 
         auto geometry = SphereGeometry::create(radius, 100, 50);

@@ -43,7 +43,7 @@ int main() {
 
     HUD hud(canvas.size());
     FontLoader fontLoader;
-    const auto font = *fontLoader.load("data/fonts/gentilis_bold.typeface.json");
+    const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/gentilis_bold.typeface.json");
 
     TextGeometry::Options opts(font, 20, 5);
 

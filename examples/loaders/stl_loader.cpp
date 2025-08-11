@@ -16,7 +16,7 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     STLLoader loader;
-    auto geometry = loader.load("data/models/stl/pr2_head_pan.stl");
+    auto geometry = loader.load(std::string(DATA_FOLDER) + "/models/stl/pr2_head_pan.stl");
     auto material = MeshPhongMaterial::create({{"flatShading", true}, {"color", Color::brown}});
     auto mesh = Mesh::create(geometry, material);
     mesh->scale *= 2;

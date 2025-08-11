@@ -13,7 +13,7 @@ namespace {
 
     std::vector<float> loadHeights() {
 
-        std::ifstream file("data/models/terrain/aalesund.bin", std::ios::binary);
+        std::ifstream file(std::string(DATA_FOLDER) + "/models/terrain/aalesund.bin", std::ios::binary);
 
         file.seekg(0, std::ios_base::end);
         const auto size = file.tellg();
@@ -45,7 +45,7 @@ namespace {
 
     auto createWater(const DirectionalLight& light, bool fog) {
         TextureLoader textureLoader{};
-        const auto texture = textureLoader.load("data/textures/waternormals.jpg");
+        const auto texture = textureLoader.load(std::string(DATA_FOLDER) + "/textures/waternormals.jpg");
         texture->wrapS = TextureWrapping::Repeat;
         texture->wrapT = TextureWrapping::Repeat;
 
@@ -121,7 +121,7 @@ int main() {
         const auto data = loadHeights();
 
         TextureLoader tl;
-        auto texture = tl.load("data/textures/terrain/aalesund_terrain.png");
+        auto texture = tl.load(std::string(DATA_FOLDER) + "/textures/terrain/aalesund_terrain.png");
 
         tm.invokeLater([&, data, texture, geometry] {
             const auto pos = geometry->getAttribute<float>("position");

@@ -32,6 +32,8 @@ function(add_example)
         target_link_libraries("${arg_NAME}" PRIVATE assimp::assimp)
     endif ()
 
+    target_compile_definitions(${arg_NAME} PRIVATE DATA_FOLDER="${PROJECT_SOURCE_DIR}/data")
+
     if (DEFINED EMSCRIPTEN)
 
         set(LINK_FLAGS " --bind -sUSE_GLFW=3 -sGL_DEBUG=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3 -sASSERTIONS -sALLOW_MEMORY_GROWTH -sNO_DISABLE_EXCEPTION_CATCHING -sWASM=1")

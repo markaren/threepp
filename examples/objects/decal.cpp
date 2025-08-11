@@ -15,8 +15,8 @@ namespace {
         TextureLoader tl;
         auto decalMaterial = MeshPhongMaterial::create();
         decalMaterial->specular = 0x444444;
-        decalMaterial->map = tl.load("data/textures/decal/decal-diffuse.png");
-        decalMaterial->normalMap = tl.load("data/textures/decal/decal-normal.jpg");
+        decalMaterial->map = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-diffuse.png");
+        decalMaterial->normalMap = tl.load(std::string(DATA_FOLDER) + "/textures/decal/decal-normal.jpg");
         decalMaterial->normalScale.set(1, 1);
         decalMaterial->shininess = 30;
         decalMaterial->depthTest = true;
@@ -114,7 +114,7 @@ int main() {
 
     TextureLoader tl;
     AssimpLoader loader;
-    std::filesystem::path folder = "data/models/gltf/LeePerrySmith";
+    std::filesystem::path folder = std::string(DATA_FOLDER) + "/models/gltf/LeePerrySmith";
     auto model = loader.load(folder / "LeePerrySmith.glb");
     Mesh* mesh = nullptr;
     model->traverseType<Mesh>([&](Mesh& _) {

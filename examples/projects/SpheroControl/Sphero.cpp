@@ -81,7 +81,7 @@ Sphero::Sphero()
     : tofReadings_{std::numeric_limits<float>::infinity(), std::numeric_limits<float>::infinity()} {
 
     TextureLoader tl;
-    const auto tex = tl.load("data/textures/rubber_texture.jpg");
+    const auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/rubber_texture.jpg");
     tex->wrapS = tex->wrapT = threepp::TextureWrapping::Repeat;
 
     auto body = BoxGeometry::create(1, 0.5, 2);
