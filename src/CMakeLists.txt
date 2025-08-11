@@ -499,15 +499,21 @@ These can be installed on Ubuntu systems via sudo apt install libxinerama-dev li
         set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
         set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "" FORCE)
-        set(GLFW_LIBRARY_TYPE "OBJECT" CACHE STRING "" FORCE)
+        if (BUILD_SHARED_LIBS)
+            set(GLFW_LIBRARY_TYPE "SHARED" CACHE STRING "" FORCE)
+        else()
+            set(GLFW_LIBRARY_TYPE "OBJECT" CACHE STRING "" FORCE)
+        endif()
         add_subdirectory("external/glfw")
 
         # Hide glfw's symbols when building a shared lib
         if (BUILD_SHARED_LIBS)
             set_property(TARGET glfw PROPERTY C_VISIBILITY_PRESET hidden)
+        else ()
+            list(APPEND sources $<TARGET_OBJECTS:glfw>)
         endif ()
 
-        list(APPEND sources $<TARGET_OBJECTS:glfw>)
+
     endif ()
 endif ()
 
@@ -570,8 +576,8 @@ if (NOT DEFINED EMSCRIPTEN)
             "${CMAKE_CURRENT_SOURCE_DIR}/external/glad"
     )
 
-    if (THREEPP_USE_EXTERNAL_GLFW)
-        target_link_libraries(threepp PRIVATE glfw::glfw)
+    if (THREEPP_USE_EXTERNAL_GLFW OR BUILD_SHARED_LIBS)
+        target_link_libraries(threepp PRIVATE glfw)
     else ()
         target_include_directories(threepp PRIVATE BEFORE SYSTEM "external/glfw/include")
         if (APPLE)

@@ -49,10 +49,6 @@ else ()
 
     if (THREEPP_USE_EXTERNAL_GLFW)
         find_package(glfw3 CONFIG REQUIRED)
-
-        if (NOT TARGET "glfw::glfw" AND TARGET "glfw")
-            add_library(glfw::glfw ALIAS glfw)
-        endif ()
     endif ()
 
 endif ()
@@ -131,6 +127,9 @@ install(
         DESTINATION
         ${CMAKE_INSTALL_DATADIR}/threepp)
 
+if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
+    install(TARGETS glfw EXPORT threepp-targets)
+endif ()
 install(TARGETS threepp EXPORT threepp-targets)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT threepp-targets
