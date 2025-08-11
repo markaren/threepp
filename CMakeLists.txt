@@ -31,7 +31,7 @@ set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 
 # ==============================================================================
@@ -97,26 +97,26 @@ endif ()
 # ==============================================================================
 
 configure_package_config_file(cmake/config.cmake.in
-        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake
-        INSTALL_DESTINATION ${CMAKE_INSTALL_DATADIR}/threepp
+        "${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake"
+        INSTALL_DESTINATION "${CMAKE_INSTALL_DATADIR}/threepp"
         PATH_VARS THREEPP_USE_EXTERNAL_GLFW
         NO_SET_AND_CHECK_MACRO)
 write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake
+        "${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake"
         VERSION ${CMAKE_PROJECT_VERSION}
         COMPATIBILITY SameMajorVersion)
 install(
         FILES
-        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake
-        ${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake
+        "${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake"
         DESTINATION
-        ${CMAKE_INSTALL_DATADIR}/threepp)
+        "${CMAKE_INSTALL_DATADIR}/threepp")
 
 if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
 endif ()
 install(TARGETS threepp EXPORT threepp-targets)
-install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT threepp-targets
         NAMESPACE threepp::
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/threepp)
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/threepp")
