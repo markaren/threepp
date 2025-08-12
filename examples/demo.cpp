@@ -1,6 +1,5 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
-#include "threepp/objects/TextNode.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -117,31 +116,24 @@ int main() {
     auto plane = createPlane();
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
-    //
-    // HUD hud(canvas.size());
-    // FontLoader fontLoader;
-    // const auto font1 = fontLoader.defaultFont();
-    // const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/helvetiker_regular.typeface.json");
-    //
-    // TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
-    // auto hudText1 = Text2D(opts1, "Hello World!");
-    // hudText1.setColor(Color::black);
-    // hud.add(hudText1, HUD::Options());
-    //
-    // TextGeometry::Options opts2(font2, 10 * monitor::contentScale().first, 1);
-    // auto hudText2 = Text2D(opts2);
-    // hudText2.setColor(Color::red);
-    // hud.add(hudText2, HUD::Options()
-    //                           .setNormalizedPosition({1, 1})
-    //                           .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
-    //                           .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
-    TextNode txt("C:/Windows/Fonts/arial.ttf");
-    txt.setText("Hello there!   joda. mer tekst her borte");
-    txt.setColor(Color::red);
-    sphere->add(txt);
+    HUD hud(canvas.size());
+    FontLoader fontLoader;
+    const auto font1 = fontLoader.defaultFont();
+    const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/helvetiker_regular.typeface.json");
 
-    auto controls = OrbitControls{*camera, canvas};
+    TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
+    auto hudText1 = Text2D(opts1, "Hello World!");
+    hudText1.setColor(Color::black);
+    hud.add(hudText1, HUD::Options());
+
+    TextGeometry::Options opts2(font2, 10 * monitor::contentScale().first, 1);
+    auto hudText2 = Text2D(opts2);
+    hudText2.setColor(Color::red);
+    hud.add(hudText2, HUD::Options()
+                              .setNormalizedPosition({1, 1})
+                              .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
+                              .setVerticalAlignment(HUD::VerticalAlignment::TOP));
 
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -149,7 +141,7 @@ int main() {
         camera->updateProjectionMatrix();
         renderer.setSize(size);
 
-        // hud.setSize(size);
+        hud.setSize(size);
     });
 
     MyGui ui(canvas, *planeMaterial);
@@ -161,14 +153,14 @@ int main() {
 
         box->rotation.y += 0.5f * dt;
 
-        // hudText2.setText("Delta=" + std::to_string(dt));
-        // hud.needsUpdate(hudText2);
+        hudText2.setText("Delta=" + std::to_string(dt));
+        hud.needsUpdate(hudText2);
 
         renderer.clear();
         renderer.render(*scene, *camera);
-        // hud.apply(renderer);
+        hud.apply(renderer);
 
-       // ui.render();
+       ui.render();
 
         plane->position.copy(ui.position());
         plane->rotation.copy(ui.rotation());

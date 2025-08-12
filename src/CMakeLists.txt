@@ -180,7 +180,6 @@ set(publicHeaders
         "threepp/textures/CubeTexture.hpp"
         "threepp/textures/DataTexture.hpp"
         "threepp/textures/DataTexture3D.hpp"
-        "threepp/textures/FontTexture.hpp"
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
@@ -415,7 +414,6 @@ set(sources
 
         "threepp/textures/Texture.cpp"
         "threepp/textures/DataTexture3D.cpp"
-        "threepp/textures/FontTexture.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/ImageUtils.cpp"

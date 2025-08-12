@@ -30,9 +30,9 @@ struct TextNode::Impl {
         that->material()->as<SpriteMaterial>()->opacity = 1;
     }
 
-    void setText(const std::string& text) {
+    void setText(const std::string& text, float worldScale) {
         auto material = that->material()->as<MaterialWithMap>();
-        material->map->image() = createText(text);
+        material->map->image() = createText(text, worldScale);
         material->map->needsUpdate();
     }
 
@@ -47,7 +47,7 @@ struct TextNode::Impl {
         map->needsUpdate();
     }
 
-    Image createText(const std::string& text) {
+    Image createText(const std::string& text, float worldScale = 1) {
         // Use stb_truetype to render the text into the texture
         // This method should update the texture data based on the provided text
 
@@ -56,7 +56,7 @@ struct TextNode::Impl {
         }
 
         // Calculate scale
-        const float scale = stbtt_ScaleForPixelHeight(&font_, fontSize_);
+        const float scale = stbtt_ScaleForPixelHeight(&font_, 128);
 
         int ascent, descent, lineGap;
         stbtt_GetFontVMetrics(&font_, &ascent, &descent, &lineGap);
@@ -147,9 +147,8 @@ struct TextNode::Impl {
 
         flipImage(rgba, 4, width, height);
 
-        auto factor = width / height;
-
-        that->scale.set(factor, 1, 1);
+        const auto aspect = (float) width / height;
+        that->scale.set(worldScale * aspect, worldScale, 1);
 
         return {rgba, static_cast<unsigned int>(width), static_cast<unsigned int>(height)};
     }
@@ -157,7 +156,7 @@ struct TextNode::Impl {
 private:
     Sprite* that;
 
-    float fontSize_{32};
+    // float fontSize_{1};
 
     stbtt_fontinfo font_{};
     std::vector<unsigned char> fontBuffer;
@@ -167,8 +166,8 @@ TextNode::TextNode(const std::filesystem::path& fontPath)
     : Sprite(nullptr), pimpl_(std::make_unique<Impl>(this, fontPath)) {
 }
 
-void TextNode::setText(const std::string& text) {
-    pimpl_->setText(text);
+void TextNode::setText(const std::string& text, float worldScale) {
+    pimpl_->setText(text, worldScale);
 }
 std::shared_ptr<TextNode> TextNode::create(const std::filesystem::path& fontPath) {
     return std::make_shared<TextNode>(fontPath);
