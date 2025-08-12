@@ -49,7 +49,6 @@ struct TextNode::Impl {
 
     Image createText(const std::string& text, float worldScale = 1) {
         // Use stb_truetype to render the text into the texture
-        // This method should update the texture data based on the provided text
 
         if (text.empty()) {
             return {std::vector<unsigned char>(4, 255), 1, 1};
@@ -155,8 +154,6 @@ struct TextNode::Impl {
 
 private:
     Sprite* that;
-
-    // float fontSize_{1};
 
     stbtt_fontinfo font_{};
     std::vector<unsigned char> fontBuffer;
