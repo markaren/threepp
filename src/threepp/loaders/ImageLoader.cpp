@@ -62,7 +62,7 @@ std::optional<Image> ImageLoader::load(const std::filesystem::path& imagePath, i
             image.get(),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
-            flipY};
+            0};
 }
 
 std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, int channels, bool flipY) {
@@ -73,5 +73,5 @@ std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, i
             image.get(),
             static_cast<unsigned int>(image.width),
             static_cast<unsigned int>(image.height),
-            flipY};
+            0};
 }
