@@ -174,11 +174,13 @@ set(publicHeaders
         "threepp/objects/Points.hpp"
         "threepp/objects/Reflector.hpp"
         "threepp/objects/Text.hpp"
+        "threepp/objects/TextNode.hpp"
         "threepp/objects/Water.hpp"
 
         "threepp/textures/CubeTexture.hpp"
         "threepp/textures/DataTexture.hpp"
         "threepp/textures/DataTexture3D.hpp"
+        "threepp/textures/FontTexture.hpp"
         "threepp/textures/Image.hpp"
         "threepp/textures/Texture.hpp"
 
@@ -408,10 +410,12 @@ set(sources
         "threepp/objects/Sky.cpp"
         "threepp/objects/Sprite.cpp"
         "threepp/objects/Reflector.cpp"
+        "threepp/objects/TextNode.cpp"
         "threepp/objects/Water.cpp"
 
         "threepp/textures/Texture.cpp"
         "threepp/textures/DataTexture3D.cpp"
+        "threepp/textures/FontTexture.cpp"
 
         "threepp/utils/BufferGeometryUtils.cpp"
         "threepp/utils/ImageUtils.cpp"

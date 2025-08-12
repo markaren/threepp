@@ -60,6 +60,49 @@ int main() {
         hud->setSize(size);
     });
 
+    // Load font file into memory
+    std::vector<unsigned char> fontBuffer;
+    {
+        std::ifstream file("C:/Windows/Fonts/arial.ttf", std::ios::binary);
+        fontBuffer = std::vector<unsigned char>(std::istreambuf_iterator<char>(file), {});
+    }
+
+    stbtt_fontinfo font;
+    stbtt_InitFont(&font, fontBuffer.data(), stbtt_GetFontOffsetForIndex(fontBuffer.data(), 0));
+
+    // Set up text and size
+    std::string text = "Hello, stb!";
+    float fontSize = 32.0f;
+    int width = 256, height = 64;
+    std::vector<unsigned char> pixels(width * height, 0);
+
+    // Calculate scale
+    float scale = stbtt_ScaleForPixelHeight(&font, fontSize);
+
+    // Draw text
+    int x = 0, y = int(fontSize);
+    for (char c : text) {
+        int ax, lsb;
+        stbtt_GetCodepointHMetrics(&font, c, &ax, &lsb);
+
+        int c_x1, c_y1, c_x2, c_y2;
+        stbtt_GetCodepointBitmapBox(&font, c, scale, scale, &c_x1, &c_y1, &c_x2, &c_y2);
+
+        int byteOffset = x + lsb * scale + (y + c_y1) * width;
+        stbtt_MakeCodepointBitmap(&font, pixels.data() + byteOffset, c_x2 - c_x1, c_y2 - c_y1, width, scale, scale, c);
+
+        x += ax * scale;
+    }
+
+    // Convert grayscale to RGBA
+    std::vector<unsigned char> rgba(width * height * 4, 0);
+    for (int i = 0; i < width * height; ++i) {
+        rgba[i * 4 + 0] = 255;
+        rgba[i * 4 + 1] = 255;
+        rgba[i * 4 + 2] = 255;
+        rgba[i * 4 + 3] = pixels[i];
+    }
+
     Clock clock;
     float rotationSpeed = 1;
     canvas.animate([&] {
