@@ -160,7 +160,7 @@ int main() {
         renderer.render(*scene, *camera);
         hud.apply(renderer);
 
-       ui.render();
+        ui.render();
 
         plane->position.copy(ui.position());
         plane->rotation.copy(ui.rotation());
