@@ -10,7 +10,6 @@
 #include "threepp/extras/curves/QuadraticBezierCurve.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/math/Matrix3.hpp"
-#include "threepp/utils/StringUtils.hpp"
 
 #include "SVGTypes.hpp"
 
@@ -18,8 +17,8 @@
 #include <iostream>
 #include <regex>
 #include <string>
-#include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 
 namespace threepp::svg {
@@ -237,7 +236,7 @@ namespace threepp::svg {
         return result;
     }
 
-    float svgAngle(float ux, float uy, float vx, float vy) {
+    inline float svgAngle(float ux, float uy, float vx, float vy) {
 
         const auto dot = ux * vx + uy * vy;
         const auto len = std::sqrt(ux * ux + uy * uy) * std::sqrt(vx * vx + vy * vy);
@@ -254,7 +253,7 @@ namespace threepp::svg {
      * To
      * aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation
      */
-    void parseArcCommand(ShapePath& path, float rx, float ry, float x_axis_rotation, bool large_arc_flag, bool sweep_flag, const Vector2& start, const Vector2& end) {
+    inline void parseArcCommand(ShapePath& path, float rx, float ry, float x_axis_rotation, bool large_arc_flag, bool sweep_flag, const Vector2& start, const Vector2& end) {
 
         if (rx == 0 || ry == 0) {
 
@@ -312,7 +311,7 @@ namespace threepp::svg {
         path.currentPath->absellipse(cx, cy, rx, ry, theta, theta + delta, sweep_flag == 0, x_axis_rotation);
     }
 
-    void classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
+    inline void classifyPoint(const Vector2& p, const Vector2& edgeStart, const Vector2& edgeEnd) {
 
         const auto ax = edgeEnd.x - edgeStart.x;
         const auto ay = edgeEnd.y - edgeStart.y;
@@ -373,7 +372,7 @@ namespace threepp::svg {
         classifyResult.t = t;
     }
 
-    std::optional<EdgeIntersection> findEdgeIntersection(const Vector2& a0, const Vector2& a1, const Vector2& b0, const Vector2& b1) {
+    inline std::optional<EdgeIntersection> findEdgeIntersection(const Vector2& a0, const Vector2& a1, const Vector2& b0, const Vector2& b1) {
         const auto x1 = a0.x;
         const auto x2 = a1.x;
         const auto x3 = b0.x;
@@ -444,7 +443,7 @@ namespace threepp::svg {
     }
 
 
-    std::vector<Vector2> getIntersections(const std::vector<Vector2>& path1, const std::vector<Vector2>& path2) {
+    inline std::vector<Vector2> getIntersections(const std::vector<Vector2>& path1, const std::vector<Vector2>& path2) {
 
         std::vector<EdgeIntersection> intersectionsRaw;
         std::vector<Vector2> intersections;
@@ -475,7 +474,7 @@ namespace threepp::svg {
         return intersections;
     }
 
-    std::vector<svg::Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, const std::vector<SimplePath>& paths) {
+    inline std::vector<svg::Intersection> getScanlineIntersections(const std::vector<Vector2>& scanline, const Box2& boundingBox, const std::vector<SimplePath>& paths) {
 
         Vector2 center;
         boundingBox.getCenter(center);
@@ -505,7 +504,7 @@ namespace threepp::svg {
         return allIntersections;
     }
 
-    std::optional<AHole> isHoleTo(const SimplePath& simplePath, const std::vector<SimplePath>& allPaths, float scanlineMinX, float scanlineMaxX, std::string fillRule) {
+    inline std::optional<AHole> isHoleTo(const SimplePath& simplePath, const std::vector<SimplePath>& allPaths, float scanlineMinX, float scanlineMaxX, std::string fillRule) {
 
         if (fillRule.empty()) {
 
@@ -600,7 +599,7 @@ namespace threepp::svg {
         }
     }
 
-    void removeDuplicatedPoints(std::vector<Vector2>& points, float minDistance) {
+    inline void removeDuplicatedPoints(std::vector<Vector2>& points, float minDistance) {
 
         // Creates a new array if necessary with duplicated points removed.
         // This does not remove duplicated initial and ending points of a closed path.
@@ -633,36 +632,36 @@ namespace threepp::svg {
         points = newPoints;
     }
 
-    Vector2& getNormal(const Vector2& p1, const Vector2& p2, Vector2& result) {
+    inline Vector2& getNormal(const Vector2& p1, const Vector2& p2, Vector2& result) {
 
         result.subVectors(p2, p1);
         return result.set(-result.y, result.x).normalize();
     }
 
-    bool isTransformRotated(const Matrix3& m) {
+    inline bool isTransformRotated(const Matrix3& m) {
 
         return m.elements[1] != 0 || m.elements[3] != 0;
     }
 
-    bool isTransformFlipped(const Matrix3& m) {
+    inline bool isTransformFlipped(const Matrix3& m) {
 
         const auto& te = m.elements;
         return te[0] * te[4] - te[1] * te[3] < 0;
     }
 
-    float getTransformScaleX(const Matrix3& m) {
+    inline float getTransformScaleX(const Matrix3& m) {
 
         const auto& te = m.elements;
         return std::sqrt(te[0] * te[0] + te[1] * te[1]);
     }
 
-    float getTransformScaleY(const Matrix3& m) {
+    inline float getTransformScaleY(const Matrix3& m) {
 
         const auto& te = m.elements;
         return std::sqrt(te[3] * te[3] + te[4] * te[4]);
     }
 
-    bool isTransformSkewed(const Matrix3& m) {
+    inline bool isTransformSkewed(const Matrix3& m) {
 
         const auto& te = m.elements;
         const auto basisDot = te[0] * te[3] + te[1] * te[4];
@@ -686,7 +685,7 @@ namespace threepp::svg {
     //
     // Adapted from: https://www.mpi-hd.mpg.de/personalhomes/globes/3x3/index.html
     // -> Algorithms for real symmetric matrices -> Analytical (2x2 symmetric)
-    EigenDecomposition eigenDecomposition(float A, float B, float C) {
+    inline EigenDecomposition eigenDecomposition(float A, float B, float C) {
 
         float rt1{}, rt2{}, cs{}, sn{}, t{};
         const auto sm = A + C;
@@ -750,7 +749,7 @@ namespace threepp::svg {
         return {rt1, rt2, cs, sn};
     }
 
-    void transfEllipseGeneric(EllipseCurve& curve, const Matrix3& m) {
+    inline void transfEllipseGeneric(EllipseCurve& curve, const Matrix3& m) {
 
         Matrix3 tempTransform0;
         Matrix3 tempTransform1;
@@ -827,7 +826,7 @@ namespace threepp::svg {
         }
     }
 
-    void transfEllipseNoSkew(EllipseCurve& curve, const Matrix3& m) {
+    inline void transfEllipseNoSkew(EllipseCurve& curve, const Matrix3& m) {
 
         // Faster shortcut if no skew is applied
         // (e.g, a euclidean transform of a group containing the ellipse)
@@ -860,7 +859,7 @@ namespace threepp::svg {
         }
     }
 
-    void transformPath(ShapePath& path, const Matrix3& m) {
+    inline void transformPath(ShapePath& path, const Matrix3& m) {
 
         Vector2 tempV2;
         Vector3 tempV3;

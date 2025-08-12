@@ -119,7 +119,7 @@ int main() {
 
     TextureLoader tl;
     const auto material = MeshBasicMaterial::create();
-    material->map = tl.load("data/textures/uv_grid_opengl.jpg");
+    material->map = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg");
     material->side = Side::Double;
 
     const auto lineMaterial = LineBasicMaterial::create();

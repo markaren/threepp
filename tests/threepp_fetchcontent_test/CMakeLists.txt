@@ -3,6 +3,8 @@ project(threepp_fetchcontent_demo)
 
 set(CMAKE_CXX_STANDARD 20)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bin")
+
 include(FetchContent)
 
 set(THREEPP_BUILD_TESTS OFF)
@@ -10,7 +12,7 @@ set(THREEPP_BUILD_EXAMPLES OFF)
 FetchContent_Declare(
         threepp
         GIT_REPOSITORY https://github.com/markaren/threepp.git
-        GIT_TAG b61aa93bb7fb6f9f4b7e89f237c96efc282bab10
+        GIT_TAG 8c8f1c992dcc63525c9b7f067014f93a2c36cac7
 )
 FetchContent_MakeAvailable(threepp)
 

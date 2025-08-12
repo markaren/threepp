@@ -101,10 +101,10 @@ std::shared_ptr<Crane3R> Crane3R::create() {
     auto parent = Group::create();
 
     OBJLoader loader;
-    auto part1 = loader.load("data/models/obj/Crane3R/4200/4200.obj");
-    auto part2 = loader.load("data/models/obj/Crane3R/7000/7000.obj");
+    auto part1 = loader.load(std::string(DATA_FOLDER) + "/models/obj/Crane3R/4200/4200.obj");
+    auto part2 = loader.load(std::string(DATA_FOLDER) + "/models/obj/Crane3R/7000/7000.obj");
     part2->position.set(0, 0, 4.2);
-    auto part3 = loader.load("data/models/obj/Crane3R/5200/5200.obj");
+    auto part3 = loader.load(std::string(DATA_FOLDER) + "/models/obj/Crane3R/5200/5200.obj");
     part3->position.set(7, 0, 0);
 
     part1->add(part2);

@@ -120,7 +120,7 @@ int main() {
     HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
-    const auto font2 = *fontLoader.load("data/fonts/helvetiker_regular.typeface.json");
+    const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/helvetiker_regular.typeface.json");
 
     TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
     auto hudText1 = Text2D(opts1, "Hello World!");
