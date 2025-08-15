@@ -256,6 +256,8 @@ set(privateHeaders
 
 set(sources
 
+        "external/pugixml/pugixml.cpp"
+
         "threepp/animation/AnimationAction.cpp"
         "threepp/animation/AnimationClip.cpp"
         "threepp/animation/AnimationMixer.cpp"
@@ -455,7 +457,6 @@ if (THREEPP_WITH_SVG)
 
     list(APPEND sources
             "threepp/loaders/SVGLoader.cpp"
-            "external/pugixml/pugixml.cpp"
     )
 endif ()
 
@@ -555,14 +556,8 @@ target_include_directories(threepp
         "${CMAKE_CURRENT_SOURCE_DIR}/external/nlohmann"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/quickhull"
         "${CMAKE_CURRENT_SOURCE_DIR}/external/stb"
+        "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
 )
-
-if (THREEPP_WITH_SVG)
-    target_include_directories(threepp
-            PRIVATE
-            "${CMAKE_CURRENT_SOURCE_DIR}/external/pugixml"
-    )
-endif ()
 
 if (THREEPP_WITH_AUDIO)
     target_include_directories(threepp

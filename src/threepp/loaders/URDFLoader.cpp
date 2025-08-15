@@ -12,7 +12,6 @@
 
 #include "pugixml.hpp"
 
-#include <iostream>
 
 using namespace threepp;
 
