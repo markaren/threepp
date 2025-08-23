@@ -7,10 +7,10 @@
 
 using namespace threepp;
 
-TubeGeometry::TubeGeometry(std::unique_ptr<Curve3> path, const Params& params)
-    : radius(params.radius), path(std::move(path)) {
+TubeGeometry::TubeGeometry(std::variant<Curve3*, std::shared_ptr<Curve3>> path, const Params& params)
+    : radius(params.radius), path_(std::move(path)) {
 
-    this->frames = FrenetFrames::compute(*this->path, params.tubularSegments, params.closed);
+    this->frames_ = FrenetFrames::compute(*getPath(), params.tubularSegments, params.closed);
 
     // helper variables
 
@@ -31,12 +31,12 @@ TubeGeometry::TubeGeometry(std::unique_ptr<Curve3> path, const Params& params)
     auto generateSegment = std::function([&](unsigned int i) {
         // we use getPointAt to sample evenly distributed points from the given path
 
-        this->path->getPointAt(static_cast<float>(i) / static_cast<float>(params.tubularSegments), P);
+        this->getPath()->getPointAt(static_cast<float>(i) / static_cast<float>(params.tubularSegments), P);
 
         // retrieve corresponding normal and binormal
 
-        const Vector3& N = frames.normals[i];
-        const Vector3& B = frames.binormals[i];
+        const Vector3& N = frames_.normals[i];
+        const Vector3& B = frames_.binormals[i];
 
         // generate normals and vertices for the current segment
 
@@ -135,12 +135,12 @@ std::string TubeGeometry::type() const {
     return "TubeGeometry";
 }
 
-std::shared_ptr<TubeGeometry> TubeGeometry::create(std::unique_ptr<Curve3> path, const Params& params) {
+std::shared_ptr<TubeGeometry> TubeGeometry::create(std::variant<Curve3*, std::shared_ptr<Curve3>> path, const Params& params) {
 
     return std::shared_ptr<TubeGeometry>(new TubeGeometry(std::move(path), params));
 }
 
-std::shared_ptr<TubeGeometry> TubeGeometry::create(std::unique_ptr<Curve3> path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed) {
+std::shared_ptr<TubeGeometry> TubeGeometry::create(std::variant<Curve3*, std::shared_ptr<Curve3>> path, unsigned int tubularSegments, float radius, unsigned int radialSegments, bool closed) {
 
     return create(std::move(path), Params(tubularSegments, radius, radialSegments, closed));
 }
