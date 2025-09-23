@@ -11,7 +11,7 @@ function(add_example)
         return()
     endif ()
 
-    if (arg_LINK_ASSIMP AND (TARGET(assimp::assimp)))
+    if (arg_LINK_ASSIMP AND (NOT TARGET assimp::assimp))
         message(AUTHOR_WARNING "assimp not found, skipping '${arg_NAME}' example..")
         return()
     endif ()
