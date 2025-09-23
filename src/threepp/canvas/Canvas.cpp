@@ -42,6 +42,10 @@ namespace {
 #else
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
 
+#ifdef __APPLE__
+        return; // operation is not supported on macOS
+#endif
+
         ImageLoader imageLoader;
         std::optional<Image> favicon;
         if (customIcon) {
