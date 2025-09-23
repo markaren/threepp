@@ -19,6 +19,7 @@
 #include "threepp/renderers/gl/GLUtils.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
+#include "threepp/canvas/Monitor.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 
 #include "threepp/objects/Group.hpp"
@@ -164,6 +165,11 @@ struct GLRenderer::Impl {
 
         this->setViewport(0, 0, _size.width(), _size.height());
         this->setScissor(0, 0, _size.width(), _size.height());
+
+        const auto [xScale, yScale] = monitor::contentScale();
+        if (xScale != 1 && xScale == yScale) {
+            scope.setPixelRatio(static_cast<int>(xScale));
+        }
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
