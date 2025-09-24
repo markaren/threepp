@@ -170,7 +170,8 @@ struct Canvas::Impl {
     bool close_{false};
     bool exitOnKeyEscape_;
 
-    std::optional<std::function<void(WindowSize)>> resizeListener;
+    std::vector<std::function<void(WindowSize)>> resizeListener;
+    std::vector<std::function<void(int monitor)>> monitorChangesListener;
 
     explicit Impl(Canvas& scope, const Parameters& params)
         : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
@@ -223,6 +224,7 @@ struct Canvas::Impl {
         glfwSetCursorPosCallback(window, cursor_callback);
         glfwSetScrollCallback(window, scroll_callback);
         glfwSetWindowSizeCallback(window, window_size_callback);
+        glfwSetWindowPosCallback(window, window_pos_callback);
         glfwSetDropCallback(window, drop_callback);
 
         glfwMakeContextCurrent(window);
@@ -274,7 +276,11 @@ struct Canvas::Impl {
     }
 
     void onWindowResize(std::function<void(WindowSize)> f) {
-        this->resizeListener = std::move(f);
+        this->resizeListener.emplace_back(std::move(f));
+    }
+
+    void onMonitorChange(std::function<void(int)> f) {
+        this->monitorChangesListener.emplace_back(std::move(f));
     }
 
     void close() {
@@ -287,10 +293,39 @@ struct Canvas::Impl {
         glfwTerminate();
     }
 
+
+    static void window_pos_callback(GLFWwindow* w, int wx, int wy) {
+
+        auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
+
+        int count;
+        GLFWmonitor** monitors = glfwGetMonitors(&count);
+
+        // For each monitor, get its bounds
+        for (int i = 0; i < count; ++i) {
+            int mx, my;
+            glfwGetMonitorPos(monitors[i], &mx, &my);
+            const GLFWvidmode* mode = glfwGetVideoMode(monitors[i]);
+            const int mw = mode->width;
+            const int mh = mode->height;
+
+            // Check if window is within this monitor's bounds
+            if (wx >= mx && wx < mx + mw && wy >= my && wy < my + mh) {
+                for (const auto& listener : p->monitorChangesListener) {
+                    listener(i);
+                }
+                break;
+            }
+        }
+    }
+
+
     static void window_size_callback(GLFWwindow* w, int width, int height) {
         auto p = static_cast<Impl*>(glfwGetWindowUserPointer(w));
         p->size_ = {width, height};
-        if (p->resizeListener) p->resizeListener.value().operator()(p->size_);
+        for (const auto& listener : p->resizeListener) {
+            listener(p->size_);
+        }
     }
 
 
@@ -407,6 +442,11 @@ void Canvas::setSize(std::pair<int, int> size) {
 void Canvas::onWindowResize(std::function<void(WindowSize)> f) {
 
     pimpl_->onWindowResize(std::move(f));
+}
+
+void Canvas::onMonitorChange(std::function<void(int)> f) const {
+
+    pimpl_->onMonitorChange(std::move(f));
 }
 
 void Canvas::close() {
@@ -545,7 +585,7 @@ Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
 }
 
 
-WindowSize monitor::monitorSize() {
+WindowSize monitor::monitorSize(int monitor) {
 
 #if EMSCRIPTEN
     int width = EM_ASM_INT({
@@ -561,23 +601,25 @@ WindowSize monitor::monitorSize() {
 
     initGLfw();
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    int count;
+    auto monitors = glfwGetMonitors(&count);
+    const GLFWvidmode* mode = glfwGetVideoMode(monitors[monitor]);
 
     return {mode->width, mode->height};
 #endif
 }
 
-std::pair<float, float> monitor::contentScale() {
+std::pair<float, float> monitor::contentScale(int monitor) {
 #if EMSCRIPTEN
     return {1, 1};//TODO
 #else
     initGLfw();
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    int count;
+    auto monitors = glfwGetMonitors(&count);
 
     float xscale, yscale;
-    glfwGetMonitorContentScale(monitor, &xscale, &yscale);
+    glfwGetMonitorContentScale(monitors[monitor], &xscale, &yscale);
 
     return {xscale, yscale};
 #endif

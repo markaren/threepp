@@ -1,4 +1,5 @@
 
+#include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/threepp.hpp"
 
@@ -10,7 +11,7 @@ struct MyGui final: ImguiContext {
     bool colorChanged = false;
 
     explicit MyGui(const Canvas& canvas, const MeshBasicMaterial& m)
-        : ImguiContext(canvas.windowPtr()) {
+        : ImguiContext(canvas) {
         colorBuf_[0] = m.color.r;
         colorBuf_[1] = m.color.g;
         colorBuf_[2] = m.color.b;
@@ -145,7 +146,7 @@ int main() {
     });
 
     MyGui ui(canvas, *planeMaterial);
-    ui.makeDpiAware();
+
 
     Clock clock;
     canvas.animate([&]() {

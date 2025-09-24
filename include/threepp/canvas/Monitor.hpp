@@ -6,11 +6,11 @@
 
 namespace threepp::monitor {
 
-    //the size of the (primary) Monitor
-    [[nodiscard]] WindowSize monitorSize();
+    //the size of the Monitor
+    [[nodiscard]] WindowSize monitorSize(int monitor = 0);
 
-    // query the dpi scale of the (primary) Monitor
-    [[nodiscard]] std::pair<float, float> contentScale();
+    // query the dpi scale of the Monitor
+    [[nodiscard]] std::pair<float, float> contentScale(int monitor = 0);
 
 }
 

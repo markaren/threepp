@@ -18,7 +18,7 @@ namespace threepp::gl {
 
         void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog);
 
-        void refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height);
+        void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height);
 
         ~GLMaterials();
 

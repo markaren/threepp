@@ -65,11 +65,11 @@ namespace {
         }
     };
 
-    struct MyGui: public ImguiContext {
+    struct MyGui: ImguiContext {
 
         bool clear = false;
 
-        explicit MyGui(const Canvas& canvas): ImguiContext(canvas.windowPtr()) {}
+        explicit MyGui(const Canvas& canvas): ImguiContext(canvas) {}
 
         void onRender() override {
 

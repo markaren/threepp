@@ -97,7 +97,7 @@ struct GLRenderer::Impl {
 
     WindowSize _size;
 
-    int _pixelRatio = 1;
+    float _pixelRatio = 1;
 
     Vector4 _viewport;
     Vector4 _scissor;
@@ -169,13 +169,13 @@ struct GLRenderer::Impl {
 #ifdef __APPLE__
         const auto [xScale, yScale] = monitor::contentScale();
         if (xScale != 1 && xScale == yScale) {
-            setPixelRatio(static_cast<int>(xScale));
+            setPixelRatio(xScale);
         }
 #endif
 
     }
 
-    void setPixelRatio(int value) {
+    void setPixelRatio(float value) {
 
         _pixelRatio = value;
         setSize(_size);
@@ -1270,12 +1270,12 @@ gl::GLState& GLRenderer::state() {
     return pimpl_->state;
 }
 
-int GLRenderer::getTargetPixelRatio() const {
+float GLRenderer::getTargetPixelRatio() const {
 
     return pimpl_->_pixelRatio;
 }
 
-void GLRenderer::setPixelRatio(int value) {
+void GLRenderer::setPixelRatio(float value) {
 
     pimpl_->setPixelRatio(value);
 }

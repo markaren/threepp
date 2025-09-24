@@ -36,6 +36,8 @@ namespace threepp {
 
         void onWindowResize(std::function<void(WindowSize)> f);
 
+        void onMonitorChange(std::function<void(int)> f) const;
+
         void animate(const std::function<void()>& f);
 
         // returns false if application should quit, true otherwise

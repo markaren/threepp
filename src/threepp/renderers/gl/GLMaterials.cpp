@@ -372,11 +372,11 @@ struct GLMaterials::Impl {
         uniforms.at("opacity").value<float>() = material->opacity;
     }
 
-    void refreshUniformsPoints(UniformMap& uniforms, PointsMaterial* material, int pixelRatio, float height) {
+    void refreshUniformsPoints(UniformMap& uniforms, PointsMaterial* material, float pixelRatio, float height) {
 
         uniforms.at("diffuse").value<Color>().copy(material->color);
         uniforms.at("opacity").value<float>() = material->opacity;
-        uniforms.at("size").value<float>() = material->size * static_cast<float>(pixelRatio);
+        uniforms.at("size").value<float>() = material->size * pixelRatio;
         uniforms.at("scale").value<float>() = height * 0.5f;
 
         if (material->map) {
@@ -474,7 +474,7 @@ struct GLMaterials::Impl {
         }
     }
 
-    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height) {
+    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height) {
 
         const auto type = material->type();
 
@@ -536,7 +536,7 @@ struct GLMaterials::Impl {
 
         } else if (type == "ShadowMaterial") {
 
-            auto m = material->as<ShadowMaterial>();
+            const auto m = material->as<ShadowMaterial>();
             uniforms.at("color").value<Color>().copy(m->color);
             uniforms.at("opacity").value<float>() = material->opacity;
 
@@ -559,7 +559,7 @@ void GLMaterials::refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
     return pimpl_->refreshFogUniforms(uniforms, fog);
 }
 
-void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, int pixelRatio, int height) {
+void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height) {
 
     pimpl_->refreshMaterialUniforms(uniforms, material, pixelRatio, height);
 }

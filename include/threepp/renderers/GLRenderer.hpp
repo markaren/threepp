@@ -88,9 +88,9 @@ namespace threepp {
 
         gl::GLState& state();
 
-        [[nodiscard]] int getTargetPixelRatio() const;
+        [[nodiscard]] float getTargetPixelRatio() const;
 
-        void setPixelRatio(int value);
+        void setPixelRatio(float value);
 
         [[nodiscard]] WindowSize size() const;
 
