@@ -42,8 +42,12 @@ public:
 
     void render() {
         if (!dpiAwareIsConfigured_) {
-            ImGuiIO& io = ImGui::GetIO();
-            io.FontGlobalScale = dpiScale_;
+
+            ImGuiStyle& style = ImGui::GetStyle();
+            style = ImGuiStyle();
+            style.FontScaleDpi = dpiScale_;
+            style.ScaleAllSizes(dpiScale_);
+
             dpiAwareIsConfigured_ = true;
         }
 

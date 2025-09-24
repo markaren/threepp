@@ -48,7 +48,7 @@ int main() {
         if (auto textureId = renderer.getGlTextureId(*texture)) {
             ImVec2 pos = ImGui::GetCursorScreenPos();
             ImGui::GetWindowDrawList()->AddImage(
-                    reinterpret_cast<ImTextureID>(textureId.value()),
+                    textureId.value(),
                     ImVec2(pos.x, pos.y),
                     ImVec2(pos.x + static_cast<float>(textureSizeXY), pos.y + static_cast<float>(textureSizeXY)),
                     ImVec2(0, 1),
