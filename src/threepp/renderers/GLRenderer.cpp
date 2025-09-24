@@ -166,10 +166,26 @@ struct GLRenderer::Impl {
         this->setViewport(0, 0, _size.width(), _size.height());
         this->setScissor(0, 0, _size.width(), _size.height());
 
+#ifdef __APPLE__
         const auto [xScale, yScale] = monitor::contentScale();
         if (xScale != 1 && xScale == yScale) {
-            scope.setPixelRatio(static_cast<int>(xScale));
+            setPixelRatio(static_cast<int>(xScale));
         }
+#endif
+
+    }
+
+    void setPixelRatio(int value) {
+
+        _pixelRatio = value;
+        setSize(_size);
+    }
+
+    void setSize(const std::pair<int, int>& size) {
+
+        _size = size;
+
+        this->setViewport(0, 0, size.first, size.second);
     }
 
     [[nodiscard]] std::optional<unsigned int> getGlTextureId(Texture& texture) const {
@@ -1261,8 +1277,7 @@ int GLRenderer::getTargetPixelRatio() const {
 
 void GLRenderer::setPixelRatio(int value) {
 
-    pimpl_->_pixelRatio = value;
-    this->setSize(pimpl_->_size);
+    pimpl_->setPixelRatio(value);
 }
 
 WindowSize GLRenderer::size() const {
@@ -1272,9 +1287,7 @@ WindowSize GLRenderer::size() const {
 
 void GLRenderer::setSize(const std::pair<int, int>& size) {
 
-    pimpl_->_size = size;
-
-    this->setViewport(0, 0, size.first, size.second);
+    pimpl_->setSize(size);
 }
 
 void GLRenderer::getDrawingBufferSize(Vector2& target) const {
