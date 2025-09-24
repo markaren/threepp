@@ -77,9 +77,9 @@ int main() {
     renderer.localClippingEnabled = true;
 
     bool globalClipping = !renderer.clippingPlanes.empty();
-    auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
 
         ImGui::Begin("Local clipping");
         ImGui::Checkbox("Enabled", &renderer.localClippingEnabled);

@@ -166,9 +166,9 @@ int main() {
 
 
     float searchSpeed = 0.7;
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({320, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
 
         ImGui::Begin("Optimization");
         ImGui::SliderFloat("Search speed", &searchSpeed, 0.1, 1);

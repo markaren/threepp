@@ -56,9 +56,9 @@ int main() {
     });
 
     bool paramsChanged = false;
-    auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("SphereGeometry");
         ImGui::SliderFloat("radius", &params.radius, 0.1f, 2);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();

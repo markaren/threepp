@@ -12,6 +12,7 @@
 #include <functional>
 #include <iostream>
 
+#include <threepp/canvas/Canvas.hpp>
 #include <threepp/canvas/Monitor.hpp>
 
 class ImguiContext {
@@ -31,7 +32,7 @@ public:
 
     explicit ImguiContext(const threepp::Canvas& canvas): ImguiContext(canvas.windowPtr()) {
         canvas.onMonitorChange([this](int monitor) {
-           setFontScale(threepp::monitor::contentScale(monitor).first);
+            setFontScale(threepp::monitor::contentScale(monitor).first);
         });
     }
 
@@ -40,10 +41,10 @@ public:
     ImguiContext& operator=(const ImguiContext&) = delete;
 
     void render() {
-        if (!dpiAwareIsConfigured) {
+        if (!dpiAwareIsConfigured_) {
             ImGuiIO& io = ImGui::GetIO();
-            io.FontGlobalScale = dpiScale;
-            dpiAwareIsConfigured = true;
+            io.FontGlobalScale = dpiScale_;
+            dpiAwareIsConfigured_ = true;
         }
 
         ImGui_ImplOpenGL3_NewFrame();
@@ -63,8 +64,8 @@ public:
     }
 
     void setFontScale(float scale) {
-        dpiAwareIsConfigured = false;
-        dpiScale = scale;
+        dpiAwareIsConfigured_ = false;
+        dpiScale_ = scale;
     }
 
     void makeDpiAware() {
@@ -72,12 +73,16 @@ public:
         std::cerr << "Deprecated function. Use setFontScale instead." << std::endl;
     }
 
+    [[nodiscard]] float dpiScale() const {
+        return dpiScale_;
+    }
+
 protected:
     virtual void onRender() = 0;
 
 private:
-    bool dpiAwareIsConfigured = true;
-    float dpiScale = 1.f;
+    bool dpiAwareIsConfigured_ = true;
+    float dpiScale_ = 1.f;
 };
 
 class ImguiFunctionalContext: public ImguiContext {
@@ -87,6 +92,9 @@ public:
         : ImguiContext(window),
           f_(std::move(f)) {}
 
+    explicit ImguiFunctionalContext(const threepp::Canvas& canvas, std::function<void()> f)
+        : ImguiContext(canvas),
+          f_(std::move(f)) {}
 
 protected:
     void onRender() override {

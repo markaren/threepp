@@ -134,7 +134,7 @@ int main() {
     });
 
     auto& params = controller.params();
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({}, 0, {});
         ImGui::SetNextWindowSize({}, 0);
         ImGui::Begin("Motor Controller");

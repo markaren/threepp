@@ -56,9 +56,9 @@ int main() {
     });
 
     bool paramsChanged = false;
-    auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("PlaneGeometry");
         ImGui::SliderFloat("width", &params.width, 0.1, 2);
         paramsChanged = paramsChanged || ImGui::IsItemEdited();

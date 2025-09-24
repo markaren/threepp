@@ -197,9 +197,9 @@ int main() {
 
     changeFunction(functions.begin()->first);
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
 
         ImGui::Begin("Lut");
         if (ImGui::BeginCombo("Functions", selectedFunction.c_str())) {

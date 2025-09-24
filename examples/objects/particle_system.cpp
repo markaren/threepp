@@ -48,9 +48,9 @@ int main() {
             {"fireball", initFireball},
             {"firework", initFirework}};
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Make selection");
         if (ImGui::BeginCombo("Demos", demos[selectedIndex].first.c_str())) {
             for (int index = 0; index < demos.size(); ++index) {

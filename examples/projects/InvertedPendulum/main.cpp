@@ -42,11 +42,11 @@ int main() {
         renderer.setSize(size);
     });
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         externalForce = 0;
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Inverted Pendulum");
         ImGui::Checkbox("Apply control", &applyControl);
         if (ImGui::Button("Push left")) {

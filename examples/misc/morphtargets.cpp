@@ -84,9 +84,9 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    auto ui = ImguiFunctionalContext(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
 
         ImGui::Begin("Morphing");
         ImGui::SliderFloat("sphere", &mesh->morphTargetInfluences().at(0), 0, 1);

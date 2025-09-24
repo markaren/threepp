@@ -60,9 +60,9 @@ int main(int argc, char** argv) {
         labels.emplace_back("j" + std::to_string(i + 1));
     }
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({}, 0, {});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
 
         ImGui::Begin("Settings");
 

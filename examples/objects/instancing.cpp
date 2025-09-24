@@ -63,8 +63,8 @@ int main() {
 
     std::unordered_map<int, bool> colorMap;
 
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
-        float width = 230;
+    ImguiFunctionalContext ui(canvas, [&] {
+        float width = 230 * ui.dpiScale();
         ImGui::SetNextWindowPos({float(canvas.size().width()) - width, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({width, 0}, 0);
 

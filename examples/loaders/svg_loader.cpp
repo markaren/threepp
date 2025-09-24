@@ -25,7 +25,7 @@ namespace {
             lastSelectedIndex = selectedIndex;
 
             ImGui::SetNextWindowPos({}, 0, {});
-            ImGui::SetNextWindowSize({250, 0}, 0);
+            ImGui::SetNextWindowSize({250 * dpiScale(), 0}, 0);
 
             ImGui::Begin("SVGLoader");
 

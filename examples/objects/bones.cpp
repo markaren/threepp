@@ -174,9 +174,9 @@ int main() {
     });
 
     bool animate{false};
-    ImguiFunctionalContext ui(canvas.windowPtr(), [&] {
+    ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Options");
         ImGui::Checkbox("animate", &animate);
         ImGui::End();
