@@ -135,25 +135,30 @@ Sphere& Sphere::translate(const Vector3& offset) {
 
 Sphere& Sphere::expandByPoint(const Vector3& point) {
 
-    // from https://github.com/juj/MathGeoLib/blob/2940b99b99cfe575dd45103ef20f4019dee15b54/src/Geometry/Sphere.cpp#L649-L671
+    if (this->isEmpty()) {
 
-    Vector3 _toPoint{};
+        this->center.copy(point);
+        this->radius = 0;
 
-    _toPoint.subVectors(point, this->center);
+        return *this;
+    }
 
-    const float lengthSq = _toPoint.lengthSq();
+    Vector3 _v1;
+    _v1.subVectors(point, this->center);
+
+    const auto lengthSq = _v1.lengthSq();
 
     if (lengthSq > (this->radius * this->radius)) {
 
-        const float length = std::sqrt(lengthSq);
-        const float missingRadiusHalf = (length - this->radius) * 0.5f;
+        // calculate the minimal sphere
 
-        // Nudge this sphere towards the target point. Add half the missing distance to radius,
-        // and the other half to position. This gives a tighter enclosure, instead of if
-        // the whole missing distance were just added to radius.
+        const auto length = std::sqrt(lengthSq);
 
-        this->center.add(_toPoint.multiplyScalar(missingRadiusHalf / length));
-        this->radius += missingRadiusHalf;
+        const auto delta = (length - this->radius) * 0.5f;
+
+        this->center.addScaledVector(_v1, delta / length);
+
+        this->radius += delta;
     }
 
     return *this;
@@ -161,18 +166,32 @@ Sphere& Sphere::expandByPoint(const Vector3& point) {
 
 Sphere& Sphere::union_(const Sphere& sphere) {
 
-    // from https://github.com/juj/MathGeoLib/blob/2940b99b99cfe575dd45103ef20f4019dee15b54/src/Geometry/Sphere.cpp#L759-L769
+    if (sphere.isEmpty()) {
 
-    // To enclose another sphere into this sphere, we only need to enclose two points:
-    // 1) Enclose the farthest point on the other sphere into this sphere.
-    // 2) Enclose the opposite point of the farthest point into this sphere.
+        return *this;
+    }
 
-    Vector3 _v1{};
-    Vector3 _toFarthestPoint{};
-    _toFarthestPoint.subVectors(sphere.center, this->center).normalize().multiplyScalar(sphere.radius);
+    if (this->isEmpty()) {
 
-    this->expandByPoint(_v1.copy(sphere.center).add(_toFarthestPoint));
-    this->expandByPoint(_v1.copy(sphere.center).sub(_toFarthestPoint));
+        this->copy(sphere);
+
+        return *this;
+    }
+
+    if (this->center.equals(sphere.center) == true) {
+
+        this->radius = std::max(this->radius, sphere.radius);
+
+    } else {
+
+        Vector3 _v1, _v2;
+
+        _v2.subVectors(sphere.center, this->center).setLength(sphere.radius);
+
+        this->expandByPoint(_v1.copy(sphere.center).add(_v2));
+
+        this->expandByPoint(_v1.copy(sphere.center).sub(_v2));
+    }
 
     return *this;
 }
