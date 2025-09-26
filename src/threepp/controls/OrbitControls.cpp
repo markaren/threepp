@@ -91,7 +91,7 @@ struct OrbitControls::Impl {
         // angle from z-axis around y-axis
         spherical.setFromVector3(offset);
 
-        if (scope.autoRotate && state == State::NONE) {
+        if (scope.autoRotate && state == NONE) {
 
             rotateLeft(scope.getAutoRotationAngle());
         }
@@ -172,6 +172,11 @@ struct OrbitControls::Impl {
         }
 
         return false;
+    }
+
+    [[nodiscard]] float getDistance() const {
+
+        return this->camera.position.distanceTo(this->scope.target);
     }
 
     void rotateLeft(float angle) {
@@ -426,17 +431,17 @@ struct OrbitControls::Impl {
             if (controls.enabled) {
 
                 switch (controls.pimpl_->state) {
-                    case State::ROTATE:
+                    case ROTATE:
                         if (controls.enableRotate) {
                             controls.pimpl_->handleMouseMoveRotate(pos);
                         }
                         break;
-                    case State::DOLLY:
+                    case DOLLY:
                         if (controls.enableZoom) {
                             controls.pimpl_->handleMouseMoveDolly(pos);
                         }
                         break;
-                    case State::PAN:
+                    case PAN:
                         if (controls.enablePan) {
                             controls.pimpl_->handleMouseMovePan(pos);
                         }
@@ -483,26 +488,26 @@ struct OrbitControls::Impl {
                     case 0:// LEFT
                         if (scope.enableRotate) {
                             scope.pimpl_->handleMouseDownRotate(pos);
-                            scope.pimpl_->state = State::ROTATE;
+                            scope.pimpl_->state = ROTATE;
                         }
                         break;
                     case 1:// RIGHT
                         if (scope.enablePan) {
                             scope.pimpl_->handleMouseDownRotate(pos);
                             scope.pimpl_->handleMouseDownPan(pos);
-                            scope.pimpl_->state = State::PAN;
+                            scope.pimpl_->state = PAN;
                         }
                         break;
                     case 2:// MIDDLE
                         if (scope.enableZoom) {
                             scope.pimpl_->handleMouseDownDolly(pos);
-                            scope.pimpl_->state = State::DOLLY;
+                            scope.pimpl_->state = DOLLY;
                         }
                         break;
                 }
             }
 
-            if (scope.pimpl_->state != State::NONE) {
+            if (scope.pimpl_->state != NONE) {
 
                 scope.pimpl_->canvas.addMouseListener(mouseMoveListener);
                 scope.pimpl_->canvas.addMouseListener(mouseUpListener);
@@ -534,6 +539,11 @@ float OrbitControls::getAutoRotationAngle() const {
 float OrbitControls::getZoomScale() const {
 
     return std::pow(0.95f, this->zoomSpeed);
+}
+
+float OrbitControls::getDistance() const {
+
+    return this->pimpl_->getDistance();
 }
 
 OrbitControls::~OrbitControls() = default;
