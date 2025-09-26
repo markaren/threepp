@@ -6,12 +6,12 @@
 
 #include <vector>
 
-namespace {
+namespace threepp::gl {
 
-    std::vector<std::vector<float>> arrayCacheF32;
-    std::vector<std::vector<int>> arrayCacheI32;
+    inline std::vector<std::vector<float>> arrayCacheF32;
+    inline std::vector<std::vector<int>> arrayCacheI32;
 
-    void ensureCapacity(std::vector<float>& v, unsigned int size) {
+    inline void ensureCapacity(std::vector<float>& v, unsigned int size) {
 
         while (v.size() < size) {
             v.emplace_back();
@@ -86,7 +86,7 @@ namespace {
 
     // Texture unit allocation
 
-    std::vector<int>& allocTexUnits(threepp::gl::GLTextures& textures, size_t n) {
+    inline std::vector<int>& allocTexUnits(GLTextures& textures, size_t n) {
 
         while (n >= arrayCacheI32.size()) {
             arrayCacheI32.emplace_back(arrayCacheI32.size());
@@ -108,6 +108,6 @@ namespace {
         return r;
     }
 
-}// namespace
+}// namespace threepp::gl
 
 #endif//THREEPP_UNIFORMUTILS_HPP

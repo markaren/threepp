@@ -110,26 +110,26 @@ struct GLMaterials::Impl {
         // 12. clearcoat roughnessMap map
 
 
-        std::shared_ptr<Texture> uvScaleMap = nullptr;
+        Texture* uvScaleMap = nullptr;
 
         if (mapMaterial && mapMaterial->map) {
-            uvScaleMap = mapMaterial->map;
+            uvScaleMap = mapMaterial->map.get();
         } else if (specularMaterial && specularMaterial->specularMap) {
-            uvScaleMap = specularMaterial->specularMap;
+            uvScaleMap = specularMaterial->specularMap.get();
         } else if (displacementMaterial && displacementMaterial->displacementMap) {
-            uvScaleMap = displacementMaterial->displacementMap;
+            uvScaleMap = displacementMaterial->displacementMap.get();
         } else if (normalMaterial && normalMaterial->normalMap) {
-            uvScaleMap = normalMaterial->normalMap;
+            uvScaleMap = normalMaterial->normalMap.get();
         } else if (bumpMaterial && bumpMaterial->bumpMap) {
-            uvScaleMap = bumpMaterial->bumpMap;
+            uvScaleMap = bumpMaterial->bumpMap.get();
         } else if (roughnessMaterial && roughnessMaterial->roughnessMap) {
-            uvScaleMap = roughnessMaterial->roughnessMap;
+            uvScaleMap = roughnessMaterial->roughnessMap.get();
         } else if (metalnessMaterial && metalnessMaterial->metalnessMap) {
-            uvScaleMap = metalnessMaterial->metalnessMap;
+            uvScaleMap = metalnessMaterial->metalnessMap.get();
         } else if (alphaMaterial && alphaMaterial->alphaMap) {
-            uvScaleMap = alphaMaterial->alphaMap;
+            uvScaleMap = alphaMaterial->alphaMap.get();
         } else if (emissiveMaterial && emissiveMaterial->emissiveMap) {
-            uvScaleMap = emissiveMaterial->emissiveMap;
+            uvScaleMap = emissiveMaterial->emissiveMap.get();
         }
         // TODO clearcoat
 

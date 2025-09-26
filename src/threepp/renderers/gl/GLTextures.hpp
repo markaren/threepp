@@ -7,12 +7,8 @@
 #include "threepp/renderers/gl/GLProperties.hpp"
 #include "threepp/renderers/gl/GLState.hpp"
 
-#include "GLUniforms.hpp"
 #include "threepp/renderers/GLRenderTarget.hpp"
-#include "threepp/textures/Texture.hpp"
 
-#include <memory>
-#include <unordered_map>
 
 namespace threepp::gl {
 

@@ -4,6 +4,7 @@
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/utils/StringUtils.hpp"
+#include "threepp/renderers/gl/GLCapabilities.hpp"
 
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 

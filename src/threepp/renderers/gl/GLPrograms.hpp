@@ -3,23 +3,17 @@
 #ifndef THREEPP_GLPROGRAMS_HPP
 #define THREEPP_GLPROGRAMS_HPP
 
-#include "GLCapabilities.hpp"
 #include "GLClipping.hpp"
 #include "GLLights.hpp"
 #include "GLProgram.hpp"
 #include "ProgramParameters.hpp"
 
 #include "threepp/core/Object3D.hpp"
-#include "threepp/materials/Material.hpp"
-#include "threepp/scenes/Scene.hpp"
-#include "threepp/textures/Texture.hpp"
-
-#include <map>
-#include <memory>
-#include <optional>
-#include <string>
 #include <threepp/core/Uniform.hpp>
-#include <unordered_map>
+
+#include <memory>
+#include <string>
+
 #include <vector>
 
 namespace threepp {

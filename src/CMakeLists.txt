@@ -249,6 +249,7 @@ set(privateHeaders
         "threepp/renderers/gl/GLTextures.hpp"
         "threepp/renderers/gl/GLUniforms.hpp"
         "threepp/renderers/gl/GLUtils.hpp"
+        "threepp/renderers/gl/ProgramParameters.hpp"
         "threepp/renderers/gl/UniformUtils.hpp"
 
         "threepp/utils/RegexUtil.hpp"
