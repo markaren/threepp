@@ -1,6 +1,8 @@
 
 #include "threepp/threepp.hpp"
 
+#include <threepp/extras/imgui/ImguiContext.hpp>
+
 using namespace threepp;
 
 int main() {
@@ -20,7 +22,9 @@ int main() {
         renderer.setSize(size);
     });
 
-    constexpr int numParticles = 500000;
+    constexpr std::pair minMaxParticles = {1000, 500000};
+
+    int numParticles = minMaxParticles.second;
     std::vector<float> positions(numParticles * 3);
     std::vector<float> colors(numParticles * 3);
 
@@ -37,6 +41,9 @@ int main() {
         colors[i + 2] = ((positions[i + 2] / n) + 0.5f);
     }
 
+    std::vector<float> positions_clone = positions;
+    std::vector<float> colors_clone = colors;
+
     auto geometry = BufferGeometry::create();
     geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
     geometry->setAttribute("color", FloatBufferAttribute::create(colors, 3));
@@ -50,6 +57,29 @@ int main() {
     const auto points = Points::create(geometry, material);
     scene->add(points);
 
+    ImguiFunctionalContext ui(canvas, [&] {
+        ImGui::SetNextWindowPos({});
+        ImGui::SetNextWindowSize({}, {});
+
+        ImGui::Begin("Settings");
+        if (ImGui::SliderInt("Num points", &numParticles, minMaxParticles.first, minMaxParticles.second)) {
+            auto& pos = geometry->getAttribute<float>("position")->array();
+            for (int i = 0; i < numParticles; i += 3) {
+                pos[i] = positions_clone[i];
+                pos[i + 1] = positions_clone[i + 1];
+                pos[i + 2] = positions_clone[i + 2];
+            }
+            for (int i = numParticles; i < minMaxParticles.second; i += 3) {
+                pos[i] = positions_clone[0];
+                pos[i + 1] = positions_clone[0];
+                pos[i + 2] = positions_clone[0];
+            }
+
+            geometry->getAttribute<float>("position")->needsUpdate();
+        }
+        ImGui::End();
+    });
+
     Clock clock;
     canvas.animate([&]() {
         const auto t = clock.getElapsedTime();
@@ -58,5 +88,7 @@ int main() {
         points->rotation.y = t * 0.5f;
 
         renderer.render(*scene, *camera);
+
+        ui.render();
     });
 }
