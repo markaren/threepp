@@ -61,7 +61,7 @@ namespace threepp {
             }
         }
 
-        Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false) {
+        [[nodiscard]] Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false) const {
             Matrix4 result;
 
             for (unsigned i = 0, j = 0; i < joints_.size(); ++i) {
@@ -124,9 +124,9 @@ namespace threepp {
             jointValues_.resize(numDOF());
         }
 
-        void setJointValues(const std::vector<float>& values) {
+        void setJointValues(const std::vector<float>& values, float deg = false) {
             for (size_t i = 0; i < values.size(); ++i) {
-                setJointValue(i, values[i]);
+                setJointValue(i, values[i], deg);
             }
         }
 
@@ -166,13 +166,11 @@ namespace threepp {
             return articulatedJoints_.size();
         }
 
-        [[nodiscard]] const std::vector<float>& jointValues() const {
+        [[nodiscard]] std::vector<float> jointValues(bool convertToDeg = false) const {
 
-            return jointValues_;
-        }
-
-        [[nodiscard]] std::vector<float> jointValuesWithConversionFromRadiansToDeg() const {
-
+            if (!convertToDeg) {
+                return jointValues_;
+            }
             std::vector<float> values = jointValues_;
             for (unsigned i = 0; i < numDOF(); i++) {
                 const auto type = articulatedJoints_.at(i).second.type;
@@ -184,7 +182,7 @@ namespace threepp {
             return values;
         }
 
-        [[nodiscard]] std::pair<float, float> getJointRange(size_t index, bool deg = false) const {
+        [[nodiscard]] JointRange getJointRange(size_t index, bool deg = false) const {
             const auto& info = articulatedJoints_.at(index).second;
             const auto type = articulatedJoints_.at(index).second.type;
             if (!info.range) {
@@ -200,6 +198,14 @@ namespace threepp {
             }
 
             return {min, max};
+        }
+
+        [[nodiscard]] std::vector<JointRange> getJointRanges(bool deg = false) const {
+            std::vector<JointRange> ranges(numDOF());
+            for (unsigned i = 0; i < numDOF(); i++) {
+                ranges[i] = getJointRange(i, deg);
+            }
+            return ranges;
         }
 
         [[nodiscard]] std::vector<JointInfo> getArticulatedJointInfo() const {

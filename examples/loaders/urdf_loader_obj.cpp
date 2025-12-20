@@ -1,20 +1,17 @@
 
 #include <iostream>
 #include <threepp/extras/imgui/ImguiContext.hpp>
-#include <threepp/loaders/AssimpLoader.hpp>
+#include <threepp/loaders/OBJLoader.hpp>
 #include <threepp/loaders/URDFLoader.hpp>
 #include <threepp/threepp.hpp>
 
+#include <cmath>
+
 using namespace threepp;
 
-int main(int argc, char** argv) {
+int main() {
 
-    if (argc != 2) {
-        std::cerr << "Usage: " << argv[0] << " <urdf file>" << std::endl;
-        return 1;
-    }
-
-    std::filesystem::path urdfPath = argv[1];
+    std::filesystem::path urdfPath = std::string(DATA_FOLDER) + "/urdf/crane3r.urdf";
     if (!exists(urdfPath)) {
         std::cerr << "File not found: " << urdfPath << std::endl;
         return 1;
@@ -34,10 +31,20 @@ int main(int argc, char** argv) {
     scene->add(light);
 
     URDFLoader loader;
-    AssimpLoader assimpLoader;
-    auto robot = loader.load(assimpLoader, urdfPath);
+    OBJLoader objLoader;
+    auto robot = loader.load(objLoader, urdfPath);
     robot->rotation.x = -math::PI / 2;
     robot->showColliders(false);
+    auto ranges = robot->getJointRanges();
+    std::vector<float> midValues(ranges.size());
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        if (std::isinf(ranges[i].min) && std::isinf(ranges[i].max)) {
+            midValues[i] = 0.f;
+        } else {
+            midValues[i] = (ranges[i].min + ranges[i].max) / 2.f;
+        }
+    }
+    robot->setJointValues(midValues);
     scene->add(robot);
 
     Box3 bb;
@@ -51,6 +58,7 @@ int main(int argc, char** argv) {
     bool showColliders{false};
     const auto info = robot->getArticulatedJointInfo();
     std::vector<float> jointValues = robot->jointValues(true);
+
 
     auto axis = AxesHelper::create(size.length() * 0.1f);
     scene->add(axis);
@@ -92,10 +100,10 @@ int main(int argc, char** argv) {
     };
     canvas.setIOCapture(&capture);
 
-    canvas.onWindowResize([&](WindowSize size) {
-        camera->aspect = size.aspect();
+    canvas.onWindowResize([&](const WindowSize& sz) {
+        camera->aspect = sz.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer.setSize(sz);
     });
 
     Clock clock;
@@ -108,7 +116,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        auto m = robot->computeEndEffectorTransform(jointValues, true);
+        const auto m = robot->computeEndEffectorTransform(jointValues, true);
         axis->position.setFromMatrixPosition(m);
         axis->quaternion.setFromRotationMatrix(m);
 

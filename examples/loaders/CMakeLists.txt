@@ -8,6 +8,7 @@ add_example(NAME "obj_loader" WEB WEB_EMBED
 )
 add_example(NAME "assimp_loader" LINK_ASSIMP)
 add_example(NAME "urdf_loader" LINK_ASSIMP LINK_IMGUI)
+add_example(NAME "urdf_loader_obj" LINK_IMGUI)
 
 if (THREEPP_WITH_SVG)
     add_example(NAME "svg_loader" LINK_IMGUI)

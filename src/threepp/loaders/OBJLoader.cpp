@@ -555,7 +555,7 @@ struct OBJLoader::Impl {
     }
 };
 
-threepp::OBJLoader::OBJLoader()
+OBJLoader::OBJLoader()
     : pimpl_(std::make_unique<Impl>(*this)) {}
 
 std::shared_ptr<Group> OBJLoader::load(const std::filesystem::path& path, bool tryLoadMtl) {
@@ -568,7 +568,7 @@ void OBJLoader::clearCache() {
     pimpl_->cache_.clear();
 }
 
-OBJLoader& threepp::OBJLoader::setMaterials(const std::shared_ptr<MaterialCreator>& materials) {
+OBJLoader& OBJLoader::setMaterials(const std::shared_ptr<MaterialCreator>& materials) {
 
     pimpl_->materials = materials;
 

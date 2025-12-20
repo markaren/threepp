@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<robot name="crane3r">
+  <!-- Links -->
+  <link name="world"/>
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <mesh filename="../models/obj/Crane3R/4200/4200.obj"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="boom_link">
+    <visual>
+      <geometry>
+        <mesh filename="../models/obj/Crane3R/7000/7000.obj"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="jib_link">
+    <visual>
+      <geometry>
+        <mesh filename="../models/obj/Crane3R/5200/5200.obj"/>
+      </geometry>
+    </visual>
+  </link>
+  <link name="end_effector"/>
+
+  <!-- base_joint: rotates about Z between world -> base_link -->
+  <joint name="base_joint" type="revolute">
+    <parent link="world"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="1.0" velocity="1.0"/>
+  </joint>
+
+  <!-- boom_joint: offset (0,0,4.2), rotates about Y (pitch) base_link -> boom_link -->
+  <joint name="boom_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="boom_link"/>
+    <origin xyz="0 0 4.2" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.396" upper="0" effort="1.0" velocity="1.0"/>
+  </joint>
+
+  <!-- jib_joint: offset (7,0,0), rotates about Y (pitch) boom_link -> jib_link -->
+  <joint name="jib_joint" type="revolute">
+    <parent link="boom_link"/>
+    <child link="jib_link"/>
+    <origin xyz="7 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.69" upper="2.44" effort="1.0" velocity="1.0"/>
+  </joint>
+
+  <!-- end effector fixed offset (5.2,0,0) -->
+  <joint name="ee_fixed" type="fixed">
+    <parent link="jib_link"/>
+    <child link="end_effector"/>
+    <origin xyz="5.2 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>
