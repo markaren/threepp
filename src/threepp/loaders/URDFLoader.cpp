@@ -98,6 +98,10 @@ namespace {
 
             fileName = fileName.substr(10);
 
+            if (std::filesystem::exists(basePath / fileName)) {
+                return basePath / fileName;
+            }
+
             //find parent path with package.xml
             bool packageFound = false;
             auto packagePath = basePath;
@@ -177,11 +181,24 @@ namespace {
 struct URDFLoader::Impl {
 
     static std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path) {
-
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_file(path.string().c_str());
 
         if (!result) return nullptr;
+
+        return loadFromXml(loader, doc, path);
+    }
+
+    static std::shared_ptr<Robot> parse(Loader<Group>& loader, const std::filesystem::path& baseDir, const std::string& urdf) {
+        pugi::xml_document doc;
+        pugi::xml_parse_result result = doc.load_string(urdf.c_str());
+
+        if (!result) return nullptr;
+
+        return loadFromXml(loader, doc, baseDir);
+    }
+
+    static std::shared_ptr<Robot> loadFromXml(Loader<Group>& loader, const pugi::xml_document& doc, const std::filesystem::path& path) {
 
         const auto root = doc.child("robot");
         if (!root) return nullptr;
@@ -269,6 +286,11 @@ URDFLoader::URDFLoader()
 std::shared_ptr<Robot> URDFLoader::load(Loader<Group>& loader, const std::filesystem::path& path) {
 
     return pimpl_->load(loader, path);
+}
+
+std::shared_ptr<Robot> URDFLoader::parse(Loader<Group>& loader, const std::filesystem::path& baseDir, const std::string& xml) {
+
+    return pimpl_->parse(loader, baseDir, xml);
 }
 
 URDFLoader::~URDFLoader() = default;

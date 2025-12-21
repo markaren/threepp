@@ -19,6 +19,8 @@ namespace threepp {
 
         std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path);
 
+        std::shared_ptr<Robot> parse(Loader<Group>& loader, const std::filesystem::path& baseDir, const std::string& xml);
+
         ~URDFLoader();
 
     private:
