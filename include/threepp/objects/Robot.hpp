@@ -61,6 +61,12 @@ namespace threepp {
             }
         }
 
+        [[nodiscard]] Matrix4 getEndEffectorTransform() const {
+            auto end = joints_.back();
+            end->updateMatrixWorld(true);
+            return *end->matrixWorld;
+        }
+
         [[nodiscard]] Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false) const {
             Matrix4 result;
 

@@ -116,7 +116,7 @@ int main() {
             }
         }
 
-        const auto m = robot->computeEndEffectorTransform(jointValues, true);
+        const auto m = robot->getEndEffectorTransform();
         axis->position.setFromMatrixPosition(m);
         axis->quaternion.setFromRotationMatrix(m);
 
