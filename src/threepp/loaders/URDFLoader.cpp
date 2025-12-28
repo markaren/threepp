@@ -87,6 +87,7 @@ namespace {
         return {
                 .axis = axis.normalize(),
                 .type = getType(node.attribute("type").value()),
+                .name = node.attribute("name").value(),
                 .range = getRange(node),
                 .parent = node.child("parent").attribute("link").value(),
                 .child = node.child("child").attribute("link").value()};

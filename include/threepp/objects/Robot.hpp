@@ -34,6 +34,7 @@ namespace threepp {
         struct JointInfo {
             Vector3 axis;
             JointType type;
+            std::string name;
             std::optional<JointRange> range;
 
             std::string parent;
