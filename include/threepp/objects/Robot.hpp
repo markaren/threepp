@@ -67,7 +67,7 @@ namespace threepp {
             return *end->matrixWorld;
         }
 
-        [[nodiscard]] Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false) const {
+        [[nodiscard]] Matrix4 computeEndEffectorTransform(const std::vector<float>& values, bool deg = false, bool enforceLimits = true) const {
             Matrix4 result;
 
             for (unsigned i = 0, j = 0; i < joints_.size(); ++i) {
@@ -88,7 +88,7 @@ namespace threepp {
                     case JointType::Revolute: {
                         auto value = values[j++];
                         value = deg ? math::degToRad(value) : value;
-                        if (info.range.has_value()) {
+                        if (enforceLimits && info.range.has_value()) {
                             value = info.range->clamp(value);
                         }
 
@@ -96,7 +96,10 @@ namespace threepp {
                         break;
                     }
                     case JointType::Prismatic: {
-                        const auto value = values[j++];
+                        auto value = values[j++];
+                        if (enforceLimits && info.range.has_value()) {
+                            value = info.range->clamp(value);
+                        }
                         result.multiply(jointTransform.multiply(Matrix4().makeTranslation(info.axis.clone().multiplyScalar(value))));
                         break;
                     }
@@ -111,11 +114,11 @@ namespace threepp {
                 const auto& info = jointInfos_[i];
                 const auto& joint = joints_[i];
 
-                auto parent = std::ranges::find_if(links_, [&](auto link) {
+                auto parent = std::ranges::find_if(links_, [&](const auto& link) {
                     return link->name == info.parent;
                 });
 
-                auto child = std::ranges::find_if(links_, [&](auto link) {
+                auto child = std::ranges::find_if(links_, [&](const auto& link) {
                     return link->name == info.child;
                 });
 
