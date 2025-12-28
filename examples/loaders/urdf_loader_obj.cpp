@@ -31,8 +31,8 @@ int main() {
     scene->add(light);
 
     URDFLoader loader;
-    OBJLoader objLoader;
-    auto robot = loader.load(objLoader, urdfPath);
+    loader.setGeometryLoader(std::make_shared<OBJLoader>());
+    auto robot = loader.load(urdfPath);
     robot->rotation.x = -math::PI / 2;
     robot->showColliders(false);
     auto ranges = robot->getJointRanges();
@@ -112,7 +112,7 @@ int main() {
         if (animate) {
             for (auto i = 0; i < robot->numDOF(); ++i) {
                 jointValues[i] = robot->getJointValue(i, true);
-                robot->setJointValue(i, std::sin(clock.getElapsedTime()) * 0.5f);
+                robot->setJointValue(i, robot->getJointRange(i).mid() + std::sin(clock.getElapsedTime()) * 0.5f);
             }
         }
 

@@ -34,8 +34,8 @@ int main(int argc, char** argv) {
     scene->add(light);
 
     URDFLoader loader;
-    AssimpLoader assimpLoader;
-    auto robot = loader.load(assimpLoader, urdfPath);
+    loader.setGeometryLoader(std::make_shared<AssimpLoader>());
+    auto robot = loader.load(urdfPath);
     robot->rotation.x = -math::PI / 2;
     robot->showColliders(false);
     scene->add(robot);

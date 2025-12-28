@@ -180,25 +180,27 @@ namespace {
 
 struct URDFLoader::Impl {
 
-    static std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path) {
+    std::shared_ptr<Loader<Group>> loader = nullptr;
+
+    std::shared_ptr<Robot> load(const std::filesystem::path& path) {
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_file(path.string().c_str());
 
         if (!result) return nullptr;
 
-        return loadFromXml(loader, doc, path);
+        return loadFromXml(doc, path);
     }
 
-    static std::shared_ptr<Robot> parse(Loader<Group>& loader, const std::filesystem::path& baseDir, const std::string& urdf) {
+    std::shared_ptr<Robot> parse(const std::filesystem::path& baseDir, const std::string& urdf) {
         pugi::xml_document doc;
         pugi::xml_parse_result result = doc.load_string(urdf.c_str());
 
         if (!result) return nullptr;
 
-        return loadFromXml(loader, doc, baseDir);
+        return loadFromXml(doc, baseDir);
     }
 
-    static std::shared_ptr<Robot> loadFromXml(Loader<Group>& loader, const pugi::xml_document& doc, const std::filesystem::path& path) {
+    std::shared_ptr<Robot> loadFromXml(const pugi::xml_document& doc, const std::filesystem::path& path) {
 
         const auto root = doc.child("robot");
         if (!root) return nullptr;
@@ -219,8 +221,10 @@ struct URDFLoader::Impl {
                     applyRotation(group, parseTupleString(origin.attribute("rpy").value()));
                 }
 
-                if (auto visualObject = parseGeometryNode(path, loader, visual.child("geometry"))) {
-                    group->add(visualObject);
+                if (loader) {
+                    if (auto visualObject = parseGeometryNode(path, *loader, visual.child("geometry"))) {
+                        group->add(visualObject);
+                    }
                 }
 
                 if (const auto material = visual.child("material")) {
@@ -247,12 +251,14 @@ struct URDFLoader::Impl {
                 const auto material = MeshBasicMaterial::create();
                 material->wireframe = true;
 
-                if (auto colliderObject = parseGeometryNode(path, loader, collider.child("geometry"))) {
-                    group->add(colliderObject);
+                if (loader) {
+                    if (auto colliderObject = parseGeometryNode(path, *loader, collider.child("geometry"))) {
+                        group->add(colliderObject);
 
-                    colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
-                        mesh.setMaterial(material);
-                    });
+                        colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
+                            mesh.setMaterial(material);
+                        });
+                    }
                 }
 
                 linkObject->add(group);
@@ -283,14 +289,20 @@ struct URDFLoader::Impl {
 URDFLoader::URDFLoader()
     : pimpl_(std::make_unique<Impl>()) {}
 
-std::shared_ptr<Robot> URDFLoader::load(Loader<Group>& loader, const std::filesystem::path& path) {
+URDFLoader& URDFLoader::setGeometryLoader(std::shared_ptr<Loader<Group>> loader) {
+    pimpl_->loader = std::move(loader);
 
-    return pimpl_->load(loader, path);
+    return *this;
 }
 
-std::shared_ptr<Robot> URDFLoader::parse(Loader<Group>& loader, const std::filesystem::path& baseDir, const std::string& xml) {
+std::shared_ptr<Robot> URDFLoader::load(const std::filesystem::path& path) {
 
-    return pimpl_->parse(loader, baseDir, xml);
+    return pimpl_->load(path);
+}
+
+std::shared_ptr<Robot> URDFLoader::parse(const std::filesystem::path& baseDir, const std::string& xml) {
+
+    return pimpl_->parse(baseDir, xml);
 }
 
 URDFLoader::~URDFLoader() = default;

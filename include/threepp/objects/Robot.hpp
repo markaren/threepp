@@ -16,6 +16,10 @@ namespace threepp {
             float min;
             float max;
 
+            [[nodiscard]] float mid() const {
+                return (min + max) / 2;
+            }
+
             [[nodiscard]] float clamp(float value) const {
                 return std::clamp(value, min, max);
             }

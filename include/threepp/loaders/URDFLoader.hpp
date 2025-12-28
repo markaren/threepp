@@ -17,9 +17,11 @@ namespace threepp {
     public:
         explicit URDFLoader();
 
-        std::shared_ptr<Robot> load(Loader<Group>& loader, const std::filesystem::path& path);
+        URDFLoader& setGeometryLoader(std::shared_ptr<Loader<Group>> loader);
 
-        std::shared_ptr<Robot> parse(Loader<Group>& loader, const std::filesystem::path& baseDir, const std::string& xml);
+        std::shared_ptr<Robot> load(const std::filesystem::path& path);
+
+        std::shared_ptr<Robot> parse(const std::filesystem::path& baseDir, const std::string& xml);
 
         ~URDFLoader();
 
