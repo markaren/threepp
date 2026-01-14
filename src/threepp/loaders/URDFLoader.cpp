@@ -12,6 +12,8 @@
 
 #include "pugixml.hpp"
 
+#include <iostream>
+
 
 using namespace threepp;
 
@@ -132,14 +134,19 @@ namespace {
         return basePath / fileName;
     }
 
-    std::shared_ptr<Object3D> parseGeometryNode(const std::filesystem::path& path, Loader<Group>& loader, const pugi::xml_node& geometry) {
+    std::shared_ptr<Object3D> parseGeometryNode(const std::filesystem::path& path, Loader<Group>* loader, const pugi::xml_node& geometry) {
         if (const auto mesh = geometry.child("mesh")) {
             const auto fileName = getModelPath(path.parent_path(), mesh.attribute("filename").value());
             if (fileName.empty()) {
                 return nullptr;
             }
 
-            if (auto obj = loader.load(fileName)) {
+            if (!loader) {
+                std::cerr << "[URDFLoader] No geometry loader set, cannot load " << fileName << std::endl;
+                return nullptr;
+            }
+
+            if (auto obj = loader->load(fileName)) {
                 if (const auto scale = mesh.attribute("scale")) {
                     obj->scale.copy(parseTupleString(scale.value()));
                 }
@@ -170,7 +177,7 @@ namespace {
             const auto radius = utils::parseFloat(cylinder.attribute("radius").value());
             const auto length = utils::parseFloat(cylinder.attribute("length").value());
             auto obj = Mesh::create(CylinderGeometry::create(radius, radius, length));
-
+            obj->rotateX(math::PI / 2);
             return obj;
         }
 
@@ -222,10 +229,8 @@ struct URDFLoader::Impl {
                     applyRotation(group, parseTupleString(origin.attribute("rpy").value()));
                 }
 
-                if (loader) {
-                    if (auto visualObject = parseGeometryNode(path, *loader, visual.child("geometry"))) {
-                        group->add(visualObject);
-                    }
+                if (auto visualObject = parseGeometryNode(path, loader.get(), visual.child("geometry"))) {
+                    group->add(visualObject);
                 }
 
                 if (const auto material = visual.child("material")) {
@@ -251,15 +256,14 @@ struct URDFLoader::Impl {
 
                 const auto material = MeshBasicMaterial::create();
                 material->wireframe = true;
+                material->color = Color::white;
 
-                if (loader) {
-                    if (auto colliderObject = parseGeometryNode(path, *loader, collider.child("geometry"))) {
-                        group->add(colliderObject);
+                if (auto colliderObject = parseGeometryNode(path, loader.get(), collider.child("geometry"))) {
+                    group->add(colliderObject);
 
-                        colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
-                            mesh.setMaterial(material);
-                        });
-                    }
+                    colliderObject->traverseType<Mesh>([material](Mesh& mesh) {
+                        mesh.setMaterial(material);
+                    });
                 }
 
                 linkObject->add(group);
