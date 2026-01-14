@@ -33,6 +33,7 @@ int main() {
     URDFLoader loader;
     auto robot = loader.load(urdfPath);
     robot->rotation.x = -math::PI / 2;
+    robot->rotation.z = math::PI / 2;
     robot->showColliders(false);
     scene->add(robot);
 
