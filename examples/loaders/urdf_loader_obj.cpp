@@ -51,7 +51,7 @@ int main() {
     bb.setFromObject(*robot);
 
     Vector3 size = bb.getSize();
-    camera->position.set(0, size.y * 1.5f, size.z * 3.f);
+    camera->position.set(0, size.y * 1.5f, size.x);
     controls.update();
 
     bool animate{false};
@@ -108,7 +108,6 @@ int main() {
 
     Clock clock;
     canvas.animate([&]() {
-
         if (animate) {
             for (auto i = 0; i < robot->numDOF(); ++i) {
                 jointValues[i] = robot->getJointValue(i, true);
