@@ -29,7 +29,8 @@ Lut& Lut::setColorMap(const std::string& colormap, int numberofcolors) {
     this->map = ColorMapKeywords[colormap];
     this->n = numberofcolors;
 
-    // Validate input: need at least 1 color
+    // Validate input: need at least 1 color. Clamp to 1 to prevent division by zero.
+    // Using silent correction to maintain backward compatibility with existing code.
     if (this->n <= 0) {
         this->n = 1;
     }
@@ -86,8 +87,11 @@ Color Lut::getColor(float alpha) const {
         alpha = 0.0f;
     }
     const int colorPosition = static_cast<int>(std::round(alpha * static_cast<float>(this->n)));
+    
+    // Clamp colorPosition to valid range [0, n-1] to prevent out-of-bounds access
+    const int clampedPosition = std::min(colorPosition, static_cast<int>(this->n - 1));
 
-    return this->lut[colorPosition];
+    return this->lut[clampedPosition];
 }
 
 void Lut::addColorMap(const std::string& name, const std::vector<std::pair<float, Color>>& arrayOfColors) {

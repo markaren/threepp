@@ -408,7 +408,9 @@ namespace threepp {
                     weights[i] = pairs[i].second;
                 }
             } else {
-                // If all weights are zero, distribute equally
+                // Fallback: If all weights are zero (degenerate case), distribute equally.
+                // This maintains compatibility with downstream code expecting 4 weights,
+                // though in practice this should rarely occur in well-formed models.
                 for (unsigned i = 0; i < 4; i++) {
 
                     pairs[i].second = 0.25f;
