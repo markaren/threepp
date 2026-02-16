@@ -8,6 +8,11 @@ using namespace threepp;
 
 LatheGeometry::LatheGeometry(const std::vector<Vector2>& points, unsigned int segments, float phiStart, float phiLength) {
 
+    // Validate input: need at least 2 points to create geometry
+    if (points.size() < 2) {
+        return;
+    }
+
     // clamp phiLength so it's in range of [ 0, 2PI ]
 
     phiLength = std::clamp(phiLength, 0.f, math::TWO_PI);

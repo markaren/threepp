@@ -29,6 +29,11 @@ Lut& Lut::setColorMap(const std::string& colormap, int numberofcolors) {
     this->map = ColorMapKeywords[colormap];
     this->n = numberofcolors;
 
+    // Validate input: need at least 1 color
+    if (this->n <= 0) {
+        this->n = 1;
+    }
+
     const float step = 1.f / static_cast<float>(this->n);
 
 
@@ -49,7 +54,9 @@ Lut& Lut::setColorMap(const std::string& colormap, int numberofcolors) {
                 Color minColor(this->map[j].second);
                 Color maxColor(this->map[j + 1].second);
 
-                Color color = minColor.lerp(maxColor, (alpha - min) / (max - min));
+                // Avoid division by zero if min == max
+                float t = (max - min > 0.0f) ? (alpha - min) / (max - min) : 0.0f;
+                Color color = minColor.lerp(maxColor, t);
 
                 this->lut.emplace_back(color);
             }
@@ -72,7 +79,12 @@ void Lut::copy(const Lut& lut) {
 
 Color Lut::getColor(float alpha) const {
     alpha = std::clamp(alpha, this->minV, this->maxV);
-    alpha = (alpha - this->minV) / (this->maxV - this->minV);
+    // Avoid division by zero if minV == maxV
+    if (this->maxV - this->minV > 0.0f) {
+        alpha = (alpha - this->minV) / (this->maxV - this->minV);
+    } else {
+        alpha = 0.0f;
+    }
     const int colorPosition = static_cast<int>(std::round(alpha * static_cast<float>(this->n)));
 
     return this->lut[colorPosition];

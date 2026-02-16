@@ -363,9 +363,14 @@ namespace threepp::svg {
 
             t = bx / ax;
 
-        } else {
+        } else if (ay != 0) {
 
             t = by / ay;
+            
+        } else {
+            // Both ax and ay are 0, degenerate case
+            classifyResult.loc = IntersectionLocationType::BEHIND;
+            return;
         }
 
         classifyResult.loc = IntersectionLocationType::BETWEEN;
