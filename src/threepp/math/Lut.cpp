@@ -87,7 +87,7 @@ Color Lut::getColor(float alpha) const {
         alpha = 0.0f;
     }
     const int colorPosition = static_cast<int>(std::round(alpha * static_cast<float>(this->n)));
-    
+
     // Clamp colorPosition to valid range [0, n-1] to prevent out-of-bounds access
     const int clampedPosition = std::min(colorPosition, static_cast<int>(this->n - 1));
 
