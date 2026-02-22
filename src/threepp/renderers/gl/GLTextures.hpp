@@ -52,6 +52,8 @@ namespace threepp::gl {
 
         void setupRenderBufferStorage(unsigned int renderbuffer, GLRenderTarget* renderTarget);
 
+        void setupDepthTexture(unsigned int framebuffer, GLRenderTarget* renderTarget);
+
         // Setup GL resources for a non-texture depth buffer
         void setupDepthRenderbuffer(GLRenderTarget* renderTarget);
 

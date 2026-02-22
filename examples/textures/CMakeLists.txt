@@ -11,3 +11,5 @@ add_example(NAME "data_texture" WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/textures/crate.gif@data/textures/crate.gif"
 )
 add_example(NAME "imgui_framebuffer" LINK_IMGUI WEB)
+
+add_example(NAME "depth_texture")

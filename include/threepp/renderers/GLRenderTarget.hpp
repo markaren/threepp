@@ -8,6 +8,7 @@
 #include "threepp/textures/Texture.hpp"
 
 #include "threepp/math/Vector4.hpp"
+#include "threepp/textures/DepthTexture.hpp"
 
 #include <optional>
 
@@ -32,6 +33,8 @@ namespace threepp {
             bool depthBuffer{true};
             bool stencilBuffer{false};
 
+            std::shared_ptr<DepthTexture> depthTexture;
+
             Options() = default;
         };
 
@@ -50,6 +53,8 @@ namespace threepp {
 
         bool depthBuffer;
         bool stencilBuffer;
+
+        std::shared_ptr<DepthTexture> depthTexture;
 
         GLRenderTarget(unsigned int width, unsigned int height, const Options& options);
 

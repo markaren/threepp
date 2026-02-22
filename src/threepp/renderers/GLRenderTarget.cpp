@@ -28,6 +28,9 @@ GLRenderTarget::GLRenderTarget(unsigned int width, unsigned int height, const Op
     if (options.type) texture->type = *options.type;
     if (options.anisotropy) texture->anisotropy = *options.anisotropy;
     if (options.encoding) texture->encoding = *options.encoding;
+
+    if (options.depthTexture) depthTexture = options.depthTexture;
+
 }
 
 void GLRenderTarget::setSize(unsigned int width, unsigned int height, unsigned int depth) {
@@ -62,6 +65,7 @@ GLRenderTarget& GLRenderTarget::copy(const GLRenderTarget& source) {
 
     this->depthBuffer = source.depthBuffer;
     this->stencilBuffer = source.stencilBuffer;
+    this->depthTexture = source.depthTexture;
 
     return *this;
 }
