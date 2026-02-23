@@ -43,7 +43,7 @@ namespace threepp::gl {
             case Format::LuminanceAlpha:
                 return GL_LUMINANCE_ALPHA;
             case Format::Depth:
-                return GL_DEPTH;
+                return GL_DEPTH_COMPONENT;
             case Format::DepthStencil:
                 return GL_DEPTH_STENCIL;
             case Format::Red:
@@ -63,7 +63,7 @@ namespace threepp::gl {
         }
     }
 
-    constexpr inline GLuint toGLType(Type p) {
+    constexpr GLuint toGLType(Type p) {
 
         switch (p) {
             case Type::UnsignedByte:
