@@ -10,10 +10,10 @@ namespace threepp {
     class DepthTexture: public Texture {
 
     public:
-        static std::shared_ptr<DepthTexture> create(unsigned width, unsigned height, std::optional<Type> type = std::nullopt, Format format = Format::Depth);
+        static std::shared_ptr<DepthTexture> create(std::optional<Type> type = std::nullopt, Format format = Format::Depth);
 
     private:
-        DepthTexture(unsigned width, unsigned height, std::optional<Type> type, Format format);
+        DepthTexture(std::optional<Type> type, Format format);
     };
 
 }// namespace threepp

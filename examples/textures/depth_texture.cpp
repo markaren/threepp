@@ -60,9 +60,9 @@ int main() {
     options.stencilBuffer = false;
     options.depthBuffer = true;
 
-    options.depthTexture = DepthTexture::create(0,0);
+    options.depthTexture = DepthTexture::create();
     options.depthTexture->format = Format::Depth;
-    options.depthTexture->type = Type::UnsignedShort;
+    options.depthTexture->type = Type::Float;
 
 
     GLRenderTarget target(canvas.size().width(), canvas.size().height(), options);
@@ -72,13 +72,13 @@ int main() {
     postMaterial->vertexShader = R"(
         varying vec2 vUv;
 
-			void main() {
-				vUv = uv;
-				gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-			}
+		void main() {
+			vUv = uv;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+		}
     )";
     postMaterial->fragmentShader = R"(
-       #include <packing>
+            #include <packing>
 
 			varying vec2 vUv;
 			uniform sampler2D tDiffuse;
@@ -95,7 +95,7 @@ int main() {
 
 			void main() {
 				//vec3 diffuse = texture2D( tDiffuse, vUv ).rgb;
-				float depth = readDepth( tDepth, vUv )*100000;
+				float depth = readDepth( tDepth, vUv );
 
 				gl_FragColor.rgb = 1 - vec3( depth );
 				gl_FragColor.a = 1.0;

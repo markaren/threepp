@@ -3,8 +3,8 @@
 
 using namespace threepp;
 
-DepthTexture::DepthTexture(unsigned width, unsigned height,std::optional<Type> type, Format format)
-    : Texture({Image(std::vector<unsigned char>(width * height * 4, 255), width, height)}) {
+DepthTexture::DepthTexture(std::optional<Type> type, Format format)
+    : Texture({Image({}, 0, 0)}) {
 
     if ( !type && format == Format::Depth ) type = Type::UnsignedShort;
     if ( !type && format == Format::DepthStencil ) type = Type::UnsignedInt248;
@@ -15,6 +15,6 @@ DepthTexture::DepthTexture(unsigned width, unsigned height,std::optional<Type> t
     generateMipmaps = false;
 }
 
-std::shared_ptr<DepthTexture> DepthTexture::create(unsigned width, unsigned height, std::optional<Type> type, Format format) {
-    return std::shared_ptr<DepthTexture>(new DepthTexture(width, height, type, format));
+std::shared_ptr<DepthTexture> DepthTexture::create(std::optional<Type> type, Format format) {
+    return std::shared_ptr<DepthTexture>(new DepthTexture(type, format));
 }
