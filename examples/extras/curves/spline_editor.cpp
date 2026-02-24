@@ -1,8 +1,11 @@
 
+#include "../../external/imgui/imgui.h"
 
-#include "threepp/extras/curves/CatmullRomCurve3.hpp"
+
 #include <threepp/controls/OrbitControls.hpp>
 #include <threepp/controls/TransformControls.hpp>
+#include <threepp/extras/curves/CatmullRomCurve3.hpp>
+#include <threepp/extras/imgui/ImguiContext.hpp>
 #include <threepp/threepp.hpp>
 
 #include <map>
@@ -26,12 +29,17 @@ int main() {
     scene->add(camera);
 
     // Lights
-    scene->add(AmbientLight::create(0xf0f0f0, 3.f));
-    auto light = SpotLight::create(0xffffff, 4.5f);
+    scene->add(AmbientLight::create(0xf0f0f0, 0.5f));
+    auto light = SpotLight::create(0xffffff, 1.5f);
     light->position.set(0, 1500, 200);
     light->angle = math::PI * 0.2f;
     light->decay = 0;
     light->castShadow = true;
+    light->shadow->camera->nearPlane = 200;
+    light->shadow->camera->farPlane = 2000;
+    light->shadow->bias = -0.00022f;
+    light->shadow->mapSize.x = 1024;
+    light->shadow->mapSize.y = 1024;
     scene->add(light);
 
     // Ground
@@ -65,7 +73,8 @@ int main() {
 
     auto createSplineLine = [&](const std::string& type, const Color& color) {
         auto curve = std::make_unique<CatmullRomCurve3>(positions);
-        if (type == "centripetal") curve->curveType = CatmullRomCurve3::CurveType::catmullrom;
+        if (type == "uniform") curve->curveType = CatmullRomCurve3::CurveType::catmullrom;
+        if (type == "centripetal") curve->curveType = CatmullRomCurve3::CurveType::centripetal;
         if (type == "chordal") curve->curveType = CatmullRomCurve3::CurveType::chordal;
 
         auto geom = BufferGeometry::create();
@@ -84,14 +93,21 @@ int main() {
     // Helper objects (control points)
     auto boxGeo = BoxGeometry::create(20, 20, 20);
     std::vector<Object3D*> splineHelpers;
-    for (auto& pos : positions) {
+
+
+    auto createSplineHelper = [&](const Vector3& pos) {
         auto mat = MeshLambertMaterial::create({{"color", Color().randomize()}});
         auto obj = Mesh::create(boxGeo, mat);
         obj->position.copy(pos);
         obj->castShadow = true;
         obj->receiveShadow = true;
         scene->add(obj);
-        splineHelpers.push_back(obj.get());
+        splineHelpers.emplace_back(obj.get());
+        return obj;
+    };
+
+    for (auto& pos : positions) {
+        createSplineHelper(pos);
     }
 
     // Orbit controls
@@ -160,9 +176,50 @@ int main() {
 
     canvas.addMouseListener(mouseListener);
 
+
+    ImguiFunctionalContext ui(canvas, [&] {
+        ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({0, 0}, 0);
+        ImGui::Begin("Spline Editor");
+        ImGui::Checkbox("uniform", &splines["uniform"]->visible);
+        if (ImGui::SliderFloat("tension", &uniformCurve->tension, 0, 1)) {
+            updateSplines();
+        }
+        ImGui::Checkbox("centripetal", &splines["centripetal"]->visible);
+        ImGui::Checkbox("chordal", &splines["chordal"]->visible);
+        if (ImGui::Button("addPoint")) {
+            positions.emplace_back(math::randFloat() * 1000 - 500, math::randFloat() * 600, math::randFloat() * 800 - 400);
+            createSplineHelper(positions.back());
+            updateSplines();
+        }
+        if (ImGui::Button("removePoint")) {
+            if (positions.size() > 2) {
+                positions.pop_back();
+                scene->remove(*splineHelpers.back());
+                splineHelpers.pop_back();
+                updateSplines();
+            }
+        }
+        ImGui::End();
+    });
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [&] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
+
+    canvas.onWindowResize([&](WindowSize size) {
+        renderer.setSize(size);
+        camera->aspect = size.aspect();
+        camera->updateProjectionMatrix();
+    });
+
     updateSplines();
     canvas.animate([&] {
         controls.update();
         renderer.render(*scene, *camera);
+
+        ui.render();
     });
 }
