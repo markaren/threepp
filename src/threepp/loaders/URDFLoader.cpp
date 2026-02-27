@@ -151,9 +151,10 @@ namespace {
                     obj->scale.copy(parseTupleString(scale.value()));
                 }
 
-                if (utils::toLower(fileName.extension().string()) == ".dae") {
+                const auto ext = utils::toLower(fileName.extension().string());
+                if (ext == ".dae") {
                     obj->traverseType<Mesh>([](const Mesh& mesh) {
-                        mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(math::PI / 2));
+                        mesh.geometry()->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
                     });
                 }
 
