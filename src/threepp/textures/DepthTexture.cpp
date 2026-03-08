@@ -6,6 +6,8 @@ using namespace threepp;
 DepthTexture::DepthTexture(std::optional<Type> type, Format format)
     : Texture({Image({}, 0, 0)}) {
 
+    this->format = format;
+
     if ( !type && format == Format::Depth ) type = Type::UnsignedShort;
     if ( !type && format == Format::DepthStencil ) type = Type::UnsignedInt248;
 
