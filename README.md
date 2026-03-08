@@ -20,7 +20,7 @@ however much remains to be done..
 * Controls [Orbit, Fly, Drag, Transform]
 * Water and Sky shaders
 * Built-in text rendering and font loading [typeface.json, TTF]
-* Loaders [Binary STL, OBJ/MTL, SVG, URDF]
+* Loaders [Binary STL, OBJ/MTL, GLTF, SVG, URDF]
 * Animations (limited to transforms)
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
@@ -61,7 +61,8 @@ Pass to CMake:
 -DCMAKE_TOOLCHAIN_FILE="[path to emscripten]\emsdk\upstream\emscripten\cmake\Modules\Platform\Emscripten.cmake"
 ```
 
-This will generate .html versions of a subset of the examples to be loaded in a browser.
+This will generate .html versions of a subset of the examples to be loaded in a browser. <br>
+**You can run a collection of them online [here](https://laht.folk.ntnu.no/web/threepp_examples/)*.**
 
 
 ##### Optional downstream dependencies
@@ -143,7 +144,7 @@ int main() {
     });
     
     Clock clock;
-    canvas.animate([&]() {
+    canvas.animate([&] {
         
         float dt = clock.getDelta();
         group->rotation.y += 1.f * dt;
@@ -184,11 +185,15 @@ See also [this demo](https://github.com/markaren/threepp_wxwidgets), which addit
 
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
+![Spline Editor](doc/screenshots/spline_editor.png)
 ![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
+![Cubemap](doc/screenshots/cubemap.png)
 ![Shadows](doc/screenshots/Shadows.PNG)
 ![FlyControls](doc/screenshots/fly.PNG)
 ![Crane](doc/screenshots/crane.png)
 ![Optimization](doc/screenshots/Optimization.PNG)
-![Physics](doc/screenshots/instanced_physics.PNG)
+![Animation](doc/screenshots/animation.png)
 ![Water](doc/screenshots/OlympicOctopus.PNG)
 ![MotorController](doc/screenshots/motor_controller.PNG)
+![SVG](doc/screenshots/tiger_svg.png)
+![smoke](doc/screenshots/smoke.png)
