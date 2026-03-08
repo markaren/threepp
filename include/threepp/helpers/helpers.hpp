@@ -6,5 +6,6 @@
 #include "AxesHelper.hpp"
 #include "Box3Helper.hpp"
 #include "GridHelper.hpp"
+#include "Lidar.hpp"
 
 #endif//THREEPP_HELPERS_HPP

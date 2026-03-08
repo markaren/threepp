@@ -1163,7 +1163,9 @@ struct GLRenderer::Impl {
 
         auto& image = texture.image();
         auto& data = image.data();
-        const auto newSize = image.width * image.height * (texture.format == Format::RGB || texture.format == Format::BGR ? 3 : 4);
+        auto newSize = image.width * image.height * (texture.format == Format::RGB || texture.format == Format::BGR ? 3 : 4);
+
+        if (texture.format == Format::RG) newSize = image.width * image.height * 2;
         data.resize(newSize);
 
 
