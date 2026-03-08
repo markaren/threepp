@@ -1,4 +1,5 @@
 
+#include "threepp/helpers/SkeletonHelper.hpp"
 #include "threepp/loaders/GLTFLoader.hpp"
 #include "threepp/threepp.hpp"
 
@@ -12,7 +13,7 @@ int main() {
     renderer.outputEncoding = Encoding::sRGB;
     renderer.shadowMap().enabled = true;
 
-    auto scene  = Scene::create();
+    auto scene = Scene::create();
     scene->background = Color::aliceblue;
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 100.f);
     camera->position.set(0, 2, -4);
@@ -36,8 +37,10 @@ int main() {
 
     scene->add(result->scene);
 
+    auto skeletonHelper = SkeletonHelper::create(*result->scene);
+    skeletonHelper->material()->as<LineBasicMaterial>()->linewidth = 2;
+    scene->add(skeletonHelper);
 
-    // ---- Render loop ----
     canvas.animate([&] {
         renderer.render(*scene, *camera);
     });

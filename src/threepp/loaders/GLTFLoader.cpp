@@ -13,7 +13,11 @@
 #include <vector>
 
 #include <threepp/loaders/ImageLoader.hpp>
-#include <threepp/textures/DataTexture.hpp>
+#include <threepp/objects/Bone.hpp>
+#include <threepp/objects/Skeleton.hpp>
+#include <threepp/objects/SkinnedMesh.hpp>
+
+#include <unordered_set>
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -116,6 +120,12 @@ namespace threepp {
             // Cache to avoid duplicate GPU uploads
             std::unordered_map<int, std::shared_ptr<Texture>> textureCache;
             std::unordered_map<int, std::shared_ptr<Material>> materialCache;
+
+            // Skeleton support
+            std::unordered_set<int> jointNodeSet;
+            std::unordered_map<int, std::shared_ptr<Object3D>> nodeObjects;
+            std::unordered_map<int, std::shared_ptr<Skeleton>> skinCache;
+            std::unordered_set<int> builtNodes;
 
             // -----------------------------------------------------------------------
             //  Buffer/accessor helpers
@@ -235,6 +245,120 @@ namespace threepp {
                     out.push_back(val);
                 }
                 return out;
+            }
+
+            // Read JOINTS_0 accessor as float without normalisation
+            std::vector<float> readJointIndicesAsFloat(int accessorIdx) {
+                auto [ptr, stride, count, ct, nc] = getAccessor(accessorIdx);
+                std::vector<float> out;
+                out.reserve(count * nc);
+                for (size_t i = 0; i < count; ++i) {
+                    const uint8_t* row = ptr + i * stride;
+                    for (int j = 0; j < nc; ++j) {
+                        const uint8_t* src = row + j * componentSize(ct);
+                        float val = 0.f;
+                        if (ct == COMP_UNSIGNED_BYTE)
+                            val = static_cast<float>(*src);
+                        else if (ct == COMP_UNSIGNED_SHORT) {
+                            uint16_t tmp;
+                            std::memcpy(&tmp, src, 2);
+                            val = static_cast<float>(tmp);
+                        }
+                        out.push_back(val);
+                    }
+                }
+                return out;
+            }
+
+            // -----------------------------------------------------------------------
+            //  Skeleton helpers
+            // -----------------------------------------------------------------------
+
+            void gatherJoints() {
+                if (!gltf.contains("skins")) return;
+                for (const auto& skin : gltf["skins"]) {
+                    if (!skin.contains("joints")) continue;
+                    for (int ji : skin["joints"].get<std::vector<int>>())
+                        jointNodeSet.insert(ji);
+                }
+            }
+
+            void applyNodeTransform(const std::shared_ptr<Object3D>& obj, const json& nodeDef) {
+                if (nodeDef.contains("matrix")) {
+                    auto m = nodeDef["matrix"].get<std::vector<float>>();
+                    Matrix4 mat4;
+                    mat4.set(m[0], m[4], m[8],  m[12],
+                             m[1], m[5], m[9],  m[13],
+                             m[2], m[6], m[10], m[14],
+                             m[3], m[7], m[11], m[15]);
+                    obj->applyMatrix4(mat4);
+                } else {
+                    if (nodeDef.contains("translation")) {
+                        auto t = nodeDef["translation"].get<std::vector<float>>();
+                        obj->position.set(t[0], t[1], t[2]);
+                    }
+                    if (nodeDef.contains("rotation")) {
+                        auto r = nodeDef["rotation"].get<std::vector<float>>();
+                        obj->quaternion.set(r[0], r[1], r[2], r[3]);
+                    }
+                    if (nodeDef.contains("scale")) {
+                        auto s = nodeDef["scale"].get<std::vector<float>>();
+                        obj->scale.set(s[0], s[1], s[2]);
+                    }
+                }
+            }
+
+            // Pre-create all nodes so Bone objects exist before skin binding
+            void preCreateNodes() {
+                if (!gltf.contains("nodes")) return;
+                int n = static_cast<int>(gltf["nodes"].size());
+                for (int i = 0; i < n; ++i) {
+                    const auto& nodeDef = gltf["nodes"][i];
+                    std::shared_ptr<Object3D> obj;
+                    if (jointNodeSet.count(i))
+                        obj = Bone::create();
+                    else
+                        obj = Group::create();
+                    obj->name = nodeDef.value("name", "");
+                    applyNodeTransform(obj, nodeDef);
+                    nodeObjects[i] = obj;
+                }
+            }
+
+            std::shared_ptr<Skeleton> loadSkin(int skinIdx) {
+                auto it = skinCache.find(skinIdx);
+                if (it != skinCache.end()) return it->second;
+
+                const auto& skinDef = gltf["skins"][skinIdx];
+                auto jointIndices = skinDef["joints"].get<std::vector<int>>();
+
+                std::vector<std::shared_ptr<Bone>> bones;
+                for (int ji : jointIndices) {
+                    auto nit = nodeObjects.find(ji);
+                    if (nit != nodeObjects.end()) {
+                        if (auto bone = std::dynamic_pointer_cast<Bone>(nit->second))
+                            bones.push_back(bone);
+                    }
+                }
+
+                std::vector<Matrix4> ibms;
+                if (skinDef.contains("inverseBindMatrices")) {
+                    auto floats = readFloats(skinDef["inverseBindMatrices"].get<int>());
+                    for (size_t i = 0; i < bones.size(); ++i) {
+                        const float* f = floats.data() + i * 16;
+                        Matrix4 m;
+                        // glTF is column-major; Matrix4::set takes row-major
+                        m.set(f[0], f[4], f[8],  f[12],
+                              f[1], f[5], f[9],  f[13],
+                              f[2], f[6], f[10], f[14],
+                              f[3], f[7], f[11], f[15]);
+                        ibms.push_back(m);
+                    }
+                }
+
+                auto skel = Skeleton::create(bones, ibms);
+                skinCache[skinIdx] = skel;
+                return skel;
             }
 
             // -----------------------------------------------------------------------
@@ -391,7 +515,7 @@ namespace threepp {
             //  Mesh
             // -----------------------------------------------------------------------
 
-            std::shared_ptr<Object3D> loadMesh(int meshIdx) {
+            std::shared_ptr<Object3D> loadMesh(int meshIdx, bool hasSkin = false) {
                 const auto& meshDef = gltf["meshes"][meshIdx];
                 const auto& primitives = meshDef["primitives"];
 
@@ -421,6 +545,15 @@ namespace threepp {
                     addFloatAttr("COLOR_0", "color", 4);// may be RGB or RGBA; 4 is safe
                     addFloatAttr("TANGENT", "tangent", 4);
 
+                    if (hasSkin) {
+                        if (attrs.contains("JOINTS_0")) {
+                            auto data = readJointIndicesAsFloat(attrs["JOINTS_0"].get<int>());
+                            geometry->setAttribute("skinIndex",
+                                    FloatBufferAttribute::create(std::move(data), 4));
+                        }
+                        addFloatAttr("WEIGHTS_0", "skinWeight", 4);
+                    }
+
                     // --- Indices ---
                     if (prim.contains("indices")) {
                         auto indices = readIndices(prim["indices"].get<int>());
@@ -441,12 +574,16 @@ namespace threepp {
                         mat = MeshStandardMaterial::create();
                     }
 
-                    auto mesh = Mesh::create(geometry, mat);
+                    std::shared_ptr<Mesh> mesh;
+                    if (hasSkin && attrs.contains("JOINTS_0"))
+                        mesh = SkinnedMesh::create(geometry, mat);
+                    else
+                        mesh = Mesh::create(geometry, mat);
                     group->add(mesh);
                 }
 
-                // If only one primitive, unwrap the group
-                if (group->children.size() == 1) {
+                // If only one primitive and not skinned, unwrap the group
+                if (group->children.size() == 1 && !hasSkin) {
                     auto child = group->children[0];
                     child->name = group->name;
                     return child->clone();
@@ -458,50 +595,34 @@ namespace threepp {
             //  Node / Scene hierarchy
             // -----------------------------------------------------------------------
 
-            std::shared_ptr<Object3D> loadNode(int nodeIdx) {
+            // Build node hierarchy using pre-created node objects
+            void buildNode(int nodeIdx) {
+                if (!builtNodes.insert(nodeIdx).second) return; // already built
                 const auto& nodeDef = gltf["nodes"][nodeIdx];
-                std::shared_ptr<Object3D> obj;
+                auto& obj = nodeObjects[nodeIdx];
 
-                if (nodeDef.contains("mesh")) {
-                    obj = loadMesh(nodeDef["mesh"].get<int>());
-                } else {
-                    obj = Group::create();
+                if (nodeDef.contains("mesh") && gltf.contains("meshes")) {
+                    int meshIdx = nodeDef["mesh"].get<int>();
+                    int skinIdx = nodeDef.value("skin", -1);
+                    bool hasSkin = skinIdx >= 0 && gltf.contains("skins");
+
+                    auto meshObj = loadMesh(meshIdx, hasSkin);
+
+                    if (hasSkin) {
+                        auto skel = loadSkin(skinIdx);
+                        // meshObj is always a Group when hasSkin (no unwrap)
+                        for (auto child : meshObj->children) {
+                            if (auto sm = dynamic_cast<SkinnedMesh*>(child))
+                                sm->bind(skel, Matrix4());
+                        }
+                    }
+                    obj->add(meshObj);
                 }
 
-                obj->name = nodeDef.value("name", "");
-
-                // Transform — matrix takes priority over TRS
-                if (nodeDef.contains("matrix")) {
-                    auto m = nodeDef["matrix"].get<std::vector<float>>();
-                    Matrix4 mat4;
-                    mat4.set(m[0], m[4], m[8], m[12],
-                             m[1], m[5], m[9], m[13],
-                             m[2], m[6], m[10], m[14],
-                             m[3], m[7], m[11], m[15]);
-                    obj->applyMatrix4(mat4);
-                } else {
-                    if (nodeDef.contains("translation")) {
-                        auto t = nodeDef["translation"].get<std::vector<float>>();
-                        obj->position.set(t[0], t[1], t[2]);
-                    }
-                    if (nodeDef.contains("rotation")) {
-                        auto r = nodeDef["rotation"].get<std::vector<float>>();
-                        obj->quaternion.set(r[0], r[1], r[2], r[3]);
-                    }
-                    if (nodeDef.contains("scale")) {
-                        auto s = nodeDef["scale"].get<std::vector<float>>();
-                        obj->scale.set(s[0], s[1], s[2]);
-                    }
-                }
-
-                // Recurse children
                 if (nodeDef.contains("children")) {
-                    for (int childIdx : nodeDef["children"].get<std::vector<int>>()) {
-                        obj->add(loadNode(childIdx));
-                    }
+                    for (int ci : nodeDef["children"].get<std::vector<int>>())
+                        obj->add(nodeObjects[ci]);
                 }
-
-                return obj;
             }
 
             std::shared_ptr<Group> loadScene(int sceneIdx) {
@@ -510,9 +631,11 @@ namespace threepp {
                 root->name = sceneDef.value("name", "Scene");
 
                 if (sceneDef.contains("nodes")) {
-                    for (int nodeIdx : sceneDef["nodes"].get<std::vector<int>>()) {
-                        root->add(loadNode(nodeIdx));
-                    }
+                    int numNodes = gltf.contains("nodes") ? static_cast<int>(gltf["nodes"].size()) : 0;
+                    for (int i = 0; i < numNodes; ++i) buildNode(i);
+
+                    for (int nodeIdx : sceneDef["nodes"].get<std::vector<int>>())
+                        root->add(nodeObjects[nodeIdx]);
                 }
                 return root;
             }
@@ -527,6 +650,9 @@ namespace threepp {
                 // Pre-allocate buffer slots
                 int numBuffers = gltf.contains("buffers") ? static_cast<int>(gltf["buffers"].size()) : 0;
                 buffers.resize(numBuffers);
+
+                gatherJoints();
+                preCreateNodes();
 
                 GLTFResult result;
                 int defaultScene = gltf.value("scene", 0);
@@ -584,6 +710,9 @@ namespace threepp {
                 gltf = json::parse(jsonText);
                 int numBuffers = gltf.contains("buffers") ? static_cast<int>(gltf["buffers"].size()) : 0;
                 if (static_cast<int>(buffers.size()) < numBuffers) buffers.resize(numBuffers);
+
+                gatherJoints();
+                preCreateNodes();
 
                 GLTFResult result;
                 int defaultScene = gltf.value("scene", 0);
