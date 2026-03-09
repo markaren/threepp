@@ -28,9 +28,14 @@ however much remains to be done..
 
 Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
+> And ROS2 users: threepp makes a natural visualization companion — lightweight,
+> no browser required, and fits right into a C++ ROS2 node.
+
 ### But, but why?
 
-Because fun. 
+Because C++ deserves nice things too. And this one delivers.
+
+Also, because fun.
 
 
 ### How to build
