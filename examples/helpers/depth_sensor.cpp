@@ -4,6 +4,9 @@
 #include "threepp/objects/Points.hpp"
 #include "threepp/threepp.hpp"
 
+#include <cmath>
+#include <random>
+
 using namespace threepp;
 
 namespace {
