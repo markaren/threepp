@@ -12,4 +12,4 @@ add_example(NAME "data_texture" WEB WEB_EMBED
 )
 add_example(NAME "imgui_framebuffer" LINK_IMGUI WEB)
 
-add_example(NAME "depth_texture")
+add_example(NAME "depth_texture" WEB)

@@ -1155,23 +1155,64 @@ struct GLRenderer::Impl {
     }
 
     void copyTextureToImage(Texture& texture) {
-#ifdef __EMSCRIPTEN__
-        std::cerr << "[GLRenderer] copyTextureToImage not available with Emscripten" << std::endl;
-        return;
-#endif
         textures.setTexture2D(texture, 0);
 
         auto& image = texture.image();
         auto& data = image.data();
-        auto newSize = image.width * image.height * (texture.format == Format::RGB || texture.format == Format::BGR ? 3 : 4);
-
-        if (texture.format == Format::RG) newSize = image.width * image.height * 2;
+        const auto channels = gl::numChannels(texture.format);
+        const auto newSize = static_cast<size_t>(image.width) * image.height * channels;
         data.resize(newSize);
 
+#ifdef __EMSCRIPTEN__
+        // WebGL lacks glGetTexImage; use a temporary FBO and glReadPixels instead.
+        // glReadPixels in WebGL only reliably supports GL_RGBA/GL_UNSIGNED_BYTE.
+        const auto texId = textures.getGlTexture(texture);
+        if (!texId) {
+            state.unbindTexture();
+            return;
+        }
 
-        // Only run this on desktop OpenGL, not in WebGL
+        // Unbind the texture from all texture units before attaching it to the
+        // temporary FBO.  WebGL2's framebuffer-completeness rules treat having
+        // the same texture simultaneously bound to a texture unit AND attached
+        // to the draw framebuffer as a feedback loop, which makes the FBO
+        // incomplete and causes glReadPixels to fail silently (all zeros).
+        state.unbindTexture();
+
+        GLuint fbo;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texId, 0);
+
+        const int npixels = static_cast<int>(image.width) * static_cast<int>(image.height);
+
+        if (channels == 4) {
+            glReadPixels(0, 0, image.width, image.height, GL_RGBA, GL_UNSIGNED_BYTE, data.data());
+        } else if (channels == 3) {
+            std::vector<unsigned char> rgba(npixels * 4);
+            glReadPixels(0, 0, image.width, image.height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            for (int i = 0; i < npixels; ++i) {
+                data[i * 3 + 0] = rgba[i * 4 + 0];
+                data[i * 3 + 1] = rgba[i * 4 + 1];
+                data[i * 3 + 2] = rgba[i * 4 + 2];
+            }
+        } else {
+            // GL_RG/GL_RED readback is not guaranteed by WebGL2.
+            // Use the guaranteed RGBA path and pack into the target channel count.
+            std::vector<unsigned char> rgba(npixels * 4);
+            glReadPixels(0, 0, image.width, image.height, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+            for (int i = 0; i < npixels; ++i) {
+                for (int c = 0; c < channels; ++c) {
+                    data[i * channels + c] = rgba[i * 4 + c];
+                }
+            }
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &fbo);
+#else
         glGetTexImage(GL_TEXTURE_2D, 0, gl::toGLFormat(texture.format), gl::toGLType(texture.type), data.data());
-
+#endif
 
         state.unbindTexture();
     }

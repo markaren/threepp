@@ -58,6 +58,13 @@ namespace {
             if (glType == GL_UNSIGNED_BYTE) internalFormat = GL_R8;
         }
 
+        if (glFormat == GL_RG) {
+
+            if (glType == GL_FLOAT) internalFormat = GL_RG32F;
+            if (glType == GL_HALF_FLOAT) internalFormat = GL_RG16F;
+            if (glType == GL_UNSIGNED_BYTE) internalFormat = GL_RG8;
+        }
+
         if (glFormat == GL_RGB) {
 
             if (glType == GL_FLOAT) internalFormat = GL_RGB32F;
@@ -162,7 +169,12 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         } else {
 
+#if EMSCRIPTEN
+            glInternalFormat = GL_DEPTH_COMPONENT16;
+#else
             glInternalFormat = GL_DEPTH_COMPONENT24;
+#endif
+
         }
 
         //
