@@ -97,7 +97,7 @@ int main() {
 				//vec3 diffuse = texture2D( tDiffuse, vUv ).rgb;
 				float depth = readDepth( tDepth, vUv );
 
-				gl_FragColor.rgb = 1 - vec3( depth );
+				gl_FragColor.rgb = 1.0 - vec3( depth );
 				gl_FragColor.a = 1.0;
 			}
         )";

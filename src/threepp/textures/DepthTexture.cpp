@@ -11,6 +11,8 @@ DepthTexture::DepthTexture(std::optional<Type> type, Format format)
     if ( !type && format == Format::Depth ) type = Type::UnsignedShort;
     if ( !type && format == Format::DepthStencil ) type = Type::UnsignedInt248;
 
+    if (type) this->type = *type;
+
     magFilter = Filter::Nearest;
     minFilter = Filter::Nearest;
 
