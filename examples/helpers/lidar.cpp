@@ -48,6 +48,7 @@ namespace {
         Matrix4 m;
         int i = 0;
         for (const auto& p : cloud) {
+            m.identity();
             points.setMatrixAt(i, m.setPosition(p.x, p.y, p.z));
             points.setColorAt(i, c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f));
             i++;
@@ -57,7 +58,7 @@ namespace {
         points.instanceMatrix()->needsUpdate();
         points.instanceColor()->needsUpdate();
 
-        // points.computeBoundingSphere();
+        //points.computeBoundingSphere();
 
     }
 
@@ -67,17 +68,17 @@ int main() {
 
     Canvas canvas("Lidar", {{"antialiasing", 4}});
     GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color(0x111122));
 
     auto scene = Scene::create();
+    scene->background = Color(0x111122);
+
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 200.f);
     camera->position.set(0, 12, 18);
 
     setupScene(*scene);
 
     // --- Lidar sensor ---
-    // 90° vertical FOV, 128×32 resolution, 20m range
-    Lidar lidar(90.f, 128, 32, 0.5f, 20.f);
+    Lidar lidar(90.f, 512, 256, 0.5f, 20.f);
     lidar.position.set(0, 1, 0);
     scene->add(lidar);
 
@@ -92,8 +93,9 @@ int main() {
     // --- Point cloud visualisation ---
     auto pcMaterial = MeshBasicMaterial::create();
     auto geom = SphereGeometry::create(0.025f);
-    auto points = InstancedMesh::create(geom, pcMaterial, 128 * 32);
-
+    auto points = InstancedMesh::create(geom, pcMaterial, lidar.width() * lidar.height());
+    points->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+    //points->frustumCulled = false;
     scene->add(points);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -103,6 +105,7 @@ int main() {
     });
 
     Clock clock;
+    std::vector<Vector3> cloud;
     canvas.animate([&] {
         const float t = clock.getElapsedTime();
 
@@ -111,7 +114,7 @@ int main() {
         // lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
 
         // Scan the scene and update the visualised point cloud
-        auto cloud = lidar.scan(renderer, *scene);
+        lidar.scan(renderer, *scene, cloud);
 
         Vector3 sensorWorld;
         lidar.getWorldPosition(sensorWorld);

@@ -17,6 +17,7 @@
 #include <memory>
 #include <random>
 #include <vector>
+#include <iostream>
 
 namespace threepp {
 
@@ -112,7 +113,7 @@ namespace threepp {
          *
          * The renderer's active render target is restored to nullptr after the scan.
          */
-        std::vector<Vector3> scan(GLRenderer& renderer, Scene& scene) {
+         void scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& claud) {
             // Sync internal camera to this object's world transform
             this->updateWorldMatrix(true, true);
 
@@ -130,7 +131,7 @@ namespace threepp {
             // 4. Restore default render target
             renderer.setRenderTarget(nullptr);
 
-            return unprojectPoints();
+            unprojectPoints(claud);
         }
 
         // Gaussian range noise standard deviation in metres (0 = perfect sensor)
@@ -157,14 +158,14 @@ namespace threepp {
         std::mt19937 rng_{std::random_device{}()};
 
 
-        std::vector<Vector3> unprojectPoints() {
+        void unprojectPoints(std::vector<Vector3>& points) {
             const float far = camera_.farPlane;
             const float tanHalfFovY = std::tan(math::degToRad(camera_.fov) * 0.5f);
             const float tanHalfFovX = tanHalfFovY * camera_.aspect;
             const auto fw = static_cast<float>(width_);
             const auto fh = static_cast<float>(height_);
 
-            std::vector<Vector3> points;
+            points.clear();
 
             const auto& pixels = readbackTarget_->texture->image().data();
 
@@ -199,7 +200,6 @@ namespace threepp {
                 }
             }
 
-            return points;
         }
     };
 
