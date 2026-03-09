@@ -95,6 +95,28 @@ namespace threepp::gl {
         }
     }
 
+    constexpr int numChannels(Format f) {
+        switch (f) {
+            case Format::Red:
+            case Format::RedInteger:
+            case Format::Alpha:
+            case Format::Luminance:
+            case Format::Depth:
+                return 1;
+            case Format::RG:
+            case Format::RGInteger:
+            case Format::LuminanceAlpha:
+            case Format::DepthStencil:
+                return 2;
+            case Format::RGB:
+            case Format::BGR:
+            case Format::RGBInteger:
+                return 3;
+            default:
+                return 4;
+        }
+    }
+
 }// namespace threepp::gl
 
 #endif//THREEPP_GLUTILS_HPP
