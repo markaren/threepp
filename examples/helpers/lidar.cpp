@@ -44,30 +44,20 @@ namespace {
                           const Vector3& sensorPos, float maxDist) {
 
 
-        // auto pos = points.geometry()->getAttribute<float>("position");
-        // auto color = points.geometry()->getAttribute<float>("color");
-
-        int i = 0;
-        Matrix4 m;
         Color c;
+        Matrix4 m;
+        int i = 0;
         for (const auto& p : cloud) {
-            m.identity();
             points.setMatrixAt(i, m.setPosition(p.x, p.y, p.z));
             points.setColorAt(i, c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f));
-
-            // pos->setXYZ(i, p.x, p.y, p.z);
-
-            const float t = std::min(p.distanceTo(sensorPos) / maxDist, 1.f);
-            // green (near) → red (far)
-            // color->setXYZ(i, t, 1.f - t, 0.);
             i++;
         }
 
         points.setCount(i);
         points.instanceMatrix()->needsUpdate();
         points.instanceColor()->needsUpdate();
-        // pos->needsUpdate();
-        // color->needsUpdate();
+
+        // points.computeBoundingSphere();
 
     }
 
@@ -88,7 +78,7 @@ int main() {
     // --- Lidar sensor ---
     // 90° vertical FOV, 128×32 resolution, 20m range
     Lidar lidar(90.f, 128, 32, 0.5f, 20.f);
-    lidar.position.set(0, 2, 0);
+    lidar.position.set(0, 1, 0);
     scene->add(lidar);
 
     OrbitControls controls{*camera, canvas};
@@ -99,11 +89,11 @@ int main() {
     lidar.add(sensorAxes);
 
 
-
     // --- Point cloud visualisation ---
-    auto pcMaterial = PointsMaterial::create();
-    auto geom = SphereGeometry::create(0.05f);
+    auto pcMaterial = MeshBasicMaterial::create();
+    auto geom = SphereGeometry::create(0.025f);
     auto points = InstancedMesh::create(geom, pcMaterial, 128 * 32);
+
     scene->add(points);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -118,7 +108,7 @@ int main() {
 
         // Slowly sweep the sensor in yaw and pitch
         lidar.rotation.y = t * 0.4f;
-        lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
+        // lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
 
         // Scan the scene and update the visualised point cloud
         auto cloud = lidar.scan(renderer, *scene);
@@ -128,7 +118,6 @@ int main() {
         updatePointCloud(*points, cloud, sensorWorld, lidar.far());
 
         renderer.render(*scene, *camera);
-        // renderer.render(lidar->postScene_, lidar->postCamera_);
 
     });
 }

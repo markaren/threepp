@@ -11,13 +11,11 @@
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
-#include "threepp/textures/DataTexture.hpp"
 #include "threepp/textures/DepthTexture.hpp"
-#include "threepp/utils/ImageUtils.hpp"
 
 #include <cmath>
-#include <iostream>
 #include <memory>
+#include <random>
 #include <vector>
 
 namespace threepp {
@@ -135,6 +133,9 @@ namespace threepp {
             return unprojectPoints();
         }
 
+        // Gaussian range noise standard deviation in metres (0 = perfect sensor)
+        float rangeNoise{0.02f};
+
         [[nodiscard]] unsigned int width() const { return width_; }
         [[nodiscard]] unsigned int height() const { return height_; }
         [[nodiscard]] float fov() const { return camera_.fov; }
@@ -152,6 +153,8 @@ namespace threepp {
         std::unique_ptr<GLRenderTarget> sceneTarget_;
         std::unique_ptr<GLRenderTarget> readbackTarget_;
         std::shared_ptr<ShaderMaterial> postMaterial_;
+
+        std::mt19937 rng_{std::random_device{}()};
 
 
         std::vector<Vector3> unprojectPoints() {
@@ -177,7 +180,11 @@ namespace threepp {
                     // Skip background (depth at or beyond the far plane)
                     if (normalizedDepth >= 0.9999f) continue;
 
-                    const float viewZ = -normalizedDepth * far;
+                    float viewZ = -normalizedDepth * far;
+                    if (rangeNoise > 0.f) {
+                        viewZ += std::normal_distribution{0.f, rangeNoise}(rng_);
+                        if (viewZ >= 0.f || -viewZ > far) continue;
+                    }
 
                     // NDC: OpenGL convention, y=0 in pixel buffer = bottom = ndcY=-1
                     const float ndcX = (static_cast<float>(x) + 0.5f) / fw * 2.0f - 1.0f;
