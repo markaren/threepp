@@ -650,7 +650,7 @@ GLProgram::GLProgram(const GLRenderer* renderer, std::string cacheKey, const Pro
     fragmentShader = unrollLoops(fragmentShader);
 
     std::string glslVersion{"330 core"};
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
     glslVersion = "300 es";
 #endif
 

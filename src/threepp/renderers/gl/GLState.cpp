@@ -4,7 +4,7 @@
 #include "threepp/materials/Material.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
 #include <GLES3/gl32.h>
 #endif
 

@@ -6,7 +6,7 @@
 
 #include "threepp/textures/DataTexture3D.hpp"
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
 #include <GLES3/gl32.h>
 #endif
 
@@ -169,7 +169,7 @@ void gl::GLTextures::uploadTexture(TextureProperties* textureProperties, Texture
 
         } else {
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
             glInternalFormat = GL_DEPTH_COMPONENT16;
 #else
             glInternalFormat = GL_DEPTH_COMPONENT24;

@@ -3,7 +3,7 @@
 
 #include <iostream>
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
 #include <GL/gl.h>
 #else
 #include <glad/glad.h>

@@ -22,7 +22,7 @@ using namespace threepp;
 
 namespace {
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
     struct FunctionWrapper {
         std::function<void()> loopFunction;
 
@@ -210,7 +210,7 @@ struct Canvas::Impl {
             exit(EXIT_FAILURE);
         }
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdollar-in-identifier-extension"
         EM_ASM({ document.title = UTF8ToString($0); }, params.title_.c_str());
@@ -271,7 +271,7 @@ struct Canvas::Impl {
     }
 
     void animate(const std::function<void()>& f) {
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
         FunctionWrapper wrapper(f);
         emscripten_set_main_loop_arg(&emscriptenLoop, &wrapper, 0, true);
 #else
@@ -595,7 +595,7 @@ Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
 
 WindowSize monitor::monitorSize(int monitor) {
 
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
     int width = EM_ASM_INT({
         return window.innerWidth;
     });
@@ -618,7 +618,7 @@ WindowSize monitor::monitorSize(int monitor) {
 }
 
 std::pair<float, float> monitor::contentScale(int monitor) {
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
     return {1, 1};//TODO
 #else
     initGLfw();

@@ -18,7 +18,7 @@ public:
     explicit ImguiContext(void* window) {
         ImGui::CreateContext();
         ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(window), true);
-#if EMSCRIPTEN
+#ifdef __EMSCRIPTEN__
         ImGui_ImplOpenGL3_Init("#version 300 es");
 #else
         ImGui_ImplOpenGL3_Init("#version 330 core");
