@@ -35,10 +35,10 @@ namespace threepp {
      *   // ...
      *   auto points = lidar->scan(renderer, scene);
      */
-    class DepthSenor: public Object3D {
+    class DepthSensor: public Object3D {
 
     public:
-        DepthSenor(float fovY, unsigned int width, unsigned int height,
+        DepthSensor(float fovY, unsigned int width, unsigned int height,
               float near = 0.1f, float far = 100.f)
             : width_(width),
               height_(height),
@@ -102,7 +102,7 @@ namespace threepp {
 
             postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
 
-            DepthSenor::add(camera_);
+            DepthSensor::add(camera_);
         }
 
         /**

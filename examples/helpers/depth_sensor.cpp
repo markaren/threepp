@@ -1,6 +1,6 @@
 
 #include "threepp/helpers/AxesHelper.hpp"
-#include "threepp/helpers/DepthSenor.hpp"
+#include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/threepp.hpp"
 
@@ -77,7 +77,7 @@ int main() {
     setupScene(*scene);
 
     // --- Lidar sensor ---
-    DepthSenor lidar(90.f, 512, 256, 0.5f, 20.f);
+    DepthSensor lidar(90.f, 512, 256, 0.5f, 20.f);
     lidar.position.set(0, 1, 0);
     scene->add(lidar);
 
