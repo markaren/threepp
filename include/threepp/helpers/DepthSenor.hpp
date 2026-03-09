@@ -22,7 +22,7 @@
 namespace threepp {
 
     /**
-     * Simulates a LiDAR sensor using GPU depth rendering.
+     * Simulates a depth sensor using GPU depth rendering.
      *
      * Renders the scene from the sensor's viewpoint into a depth texture,
      * linearizes the result via a post-process shader, reads back the pixels,
@@ -35,10 +35,10 @@ namespace threepp {
      *   // ...
      *   auto points = lidar->scan(renderer, scene);
      */
-    class Lidar: public Object3D {
+    class DepthSenor: public Object3D {
 
     public:
-        Lidar(float fovY, unsigned int width, unsigned int height,
+        DepthSenor(float fovY, unsigned int width, unsigned int height,
               float near = 0.1f, float far = 100.f)
             : width_(width),
               height_(height),
@@ -58,7 +58,7 @@ namespace threepp {
 
             // Readback target: packed linear depth in RGBA8
             GLRenderTarget::Options readOpts;
-            readOpts.format = Format::RGBA;
+            readOpts.format = Format::RG;
             readOpts.minFilter = Filter::Nearest;
             readOpts.magFilter = Filter::Nearest;
             readOpts.generateMipmaps = false;
@@ -91,7 +91,7 @@ namespace threepp {
                     float d = clamp(-viewZ / cameraFar, 0.0, 1.0);
                     float r = floor(d * 255.0) / 255.0;
                     float g = fract(d * 255.0);
-                    gl_FragColor = vec4(r, g, 0.0, 1.0);
+                    gl_FragColor = vec4(r, g, 0, 1.0);
                 }
             )";
 
@@ -102,7 +102,7 @@ namespace threepp {
 
             postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
 
-            Lidar::add(camera_);
+            DepthSenor::add(camera_);
         }
 
         /**
@@ -171,7 +171,7 @@ namespace threepp {
 
             for (unsigned y = 0; y < height(); ++y) {
                 for (unsigned x = 0; x < width(); ++x) {
-                    const int idx = static_cast<int>((y * width() + x) * 4);
+                    const int idx = static_cast<int>((y * width() + x) * 2);
 
                     // Unpack 16-bit normalised depth from RG channels
                     const float r = static_cast<float>(pixels[idx + 0]) / 255.f;

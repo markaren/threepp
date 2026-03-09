@@ -1,6 +1,6 @@
 
 #include "threepp/helpers/AxesHelper.hpp"
-#include "threepp/helpers/Lidar.hpp"
+#include "threepp/helpers/DepthSenor.hpp"
 #include "threepp/objects/Points.hpp"
 #include "threepp/threepp.hpp"
 
@@ -58,15 +58,14 @@ namespace {
         points.instanceMatrix()->needsUpdate();
         points.instanceColor()->needsUpdate();
 
-        //points.computeBoundingSphere();
-
+        points.computeBoundingSphere();
     }
 
 }// namespace
 
 int main() {
 
-    Canvas canvas("Lidar", {{"antialiasing", 4}});
+    Canvas canvas("Depth sensor", {{"antialiasing", 4}});
     GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
@@ -78,7 +77,7 @@ int main() {
     setupScene(*scene);
 
     // --- Lidar sensor ---
-    Lidar lidar(90.f, 512, 256, 0.5f, 20.f);
+    DepthSenor lidar(90.f, 512, 256, 0.5f, 20.f);
     lidar.position.set(0, 1, 0);
     scene->add(lidar);
 
@@ -95,7 +94,6 @@ int main() {
     auto geom = SphereGeometry::create(0.025f);
     auto points = InstancedMesh::create(geom, pcMaterial, lidar.width() * lidar.height());
     points->instanceMatrix()->setUsage(DrawUsage::Dynamic);
-    //points->frustumCulled = false;
     scene->add(points);
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -111,16 +109,17 @@ int main() {
 
         // Slowly sweep the sensor in yaw and pitch
         lidar.rotation.y = t * 0.4f;
-        // lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
+        lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
 
         // Scan the scene and update the visualised point cloud
+        points->visible = false;
         lidar.scan(renderer, *scene, cloud);
+        points->visible = true;
 
         Vector3 sensorWorld;
         lidar.getWorldPosition(sensorWorld);
         updatePointCloud(*points, cloud, sensorWorld, lidar.far());
 
         renderer.render(*scene, *camera);
-
     });
 }
