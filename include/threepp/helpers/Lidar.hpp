@@ -13,6 +13,7 @@
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/DataTexture.hpp"
 #include "threepp/textures/DepthTexture.hpp"
+#include "threepp/utils/ImageUtils.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -115,9 +116,7 @@ namespace threepp {
          */
         std::vector<Vector3> scan(GLRenderer& renderer, Scene& scene) {
             // Sync internal camera to this object's world transform
-            this->updateWorldMatrix(true, false);
-            // camera_.matrixWorld->copy(*matrixWorld);
-            // camera_.matrixWorldInverse.copy(*matrixWorld).invert();
+            this->updateWorldMatrix(true, true);
 
             // 1. Render scene from sensor viewpoint to capture depth
             renderer.setRenderTarget(sceneTarget_.get());
@@ -164,34 +163,31 @@ namespace threepp {
 
             std::vector<Vector3> points;
 
-            auto pixels = readbackTarget_->texture->image().data();
+            const auto& pixels = readbackTarget_->texture->image().data();
 
-            // camera_.updateMatrixWorld(true);
-            for (unsigned y = 0; y < width(); ++y) {
-                for (unsigned x = 0; x < height(); ++x) {
-                    const int idx = static_cast<int>((y * height() + x) * 4);
+            for (unsigned y = 0; y < height(); ++y) {
+                for (unsigned x = 0; x < width(); ++x) {
+                    const int idx = static_cast<int>((y * width() + x) * 4);
 
                     // Unpack 16-bit normalised depth from RG channels
-                    const float r = pixels[idx + 0] /255.f;
-                    const float g = pixels[idx + 1] /255.f;
-                    const float normalizedDepth = r + g /255.f;
+                    const float r = static_cast<float>(pixels[idx + 0]) / 255.f;
+                    const float g = static_cast<float>(pixels[idx + 1]) / 255.f;
+                    const float normalizedDepth = r + g / 255.f;
 
                     // Skip background (depth at or beyond the far plane)
                     if (normalizedDepth >= 0.9999f) continue;
 
-                    const float absZ = normalizedDepth * far;// actual distance along -Z
+                    const float viewZ = -normalizedDepth * far;
 
                     // NDC: OpenGL convention, y=0 in pixel buffer = bottom = ndcY=-1
                     const float ndcX = (static_cast<float>(x) + 0.5f) / fw * 2.0f - 1.0f;
                     const float ndcY = (static_cast<float>(y) + 0.5f) / fh * 2.0f - 1.0f;
 
-                    // View-space hit position (camera looks along -Z)
-                    Vector3 p(ndcX * absZ * tanHalfFovX,
-                              ndcY * absZ * tanHalfFovY,
-                              -absZ);
+                    Vector3 p(ndcX * -viewZ * tanHalfFovX,
+                              ndcY * -viewZ * tanHalfFovY,
+                              viewZ);
 
-                    // Transform to world space via camera's world matrix
-                    // localToWorld(p);
+                    p.applyMatrix4(*matrixWorld);
                     points.push_back(p);
                 }
             }

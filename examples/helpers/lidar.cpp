@@ -40,34 +40,35 @@ namespace {
 
     // Update a Points object's position and color attributes from a point cloud.
     // Colors are mapped by distance: near=green, far=red.
-    void updatePointCloud(Points& points, const std::vector<Vector3>& cloud,
+    void updatePointCloud(InstancedMesh& points, const std::vector<Vector3>& cloud,
                           const Vector3& sensorPos, float maxDist) {
-        std::vector<float> positions;
-        std::vector<float> colors;
-        positions.reserve(cloud.size() * 3);
-        colors.reserve(cloud.size() * 3);
 
+
+        // auto pos = points.geometry()->getAttribute<float>("position");
+        // auto color = points.geometry()->getAttribute<float>("color");
+
+        int i = 0;
+        Matrix4 m;
+        Color c;
         for (const auto& p : cloud) {
-            positions.insert(positions.end(), {p.x, p.y, p.z});
+            m.identity();
+            points.setMatrixAt(i, m.setPosition(p.x, p.y, p.z));
+            points.setColorAt(i, c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f));
 
-            float t = std::min(p.distanceTo(sensorPos) / maxDist, 1.f);
+            // pos->setXYZ(i, p.x, p.y, p.z);
+
+            const float t = std::min(p.distanceTo(sensorPos) / maxDist, 1.f);
             // green (near) → red (far)
-            colors.insert(colors.end(), {t, 1.f - t, 0.f});
+            // color->setXYZ(i, t, 1.f - t, 0.);
+            i++;
         }
 
-        auto buf = BufferGeometry::create();
+        points.setCount(i);
+        points.instanceMatrix()->needsUpdate();
+        points.instanceColor()->needsUpdate();
+        // pos->needsUpdate();
+        // color->needsUpdate();
 
-        buf->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-        buf->setAttribute("color", FloatBufferAttribute::create(colors, 3));
-
-        points.setGeometry(buf);
-        // if (positions.empty()) {
-        //     geo->deleteAttribute("position");
-        //     geo->deleteAttribute("color");
-        // } else {
-        //     geo->setAttribute("position", FloatBufferAttribute::create(positions, 3));
-        //     geo->setAttribute("color", FloatBufferAttribute::create(colors, 3));
-        // }
     }
 
 }// namespace
@@ -86,21 +87,24 @@ int main() {
 
     // --- Lidar sensor ---
     // 90° vertical FOV, 128×32 resolution, 20m range
-    auto lidar = std::make_shared<Lidar>(90.f, 128, 32, 0.5f, 20.f);
-    lidar->position.set(0, 6, 0);
+    Lidar lidar(90.f, 128, 32, 0.5f, 20.f);
+    lidar.position.set(0, 2, 0);
     scene->add(lidar);
 
-    OrbitControls controls{lidar->postCamera_, canvas};
+    OrbitControls controls{*camera, canvas};
 
     // Small axes gizmo so the sensor orientation is visible
     auto sensorAxes = AxesHelper::create(0.5f);
-    lidar->add(sensorAxes);
+    sensorAxes->rotateY(math::PI);
+    lidar.add(sensorAxes);
+
+
 
     // --- Point cloud visualisation ---
-    auto pcMaterial = PointsMaterial::create({{"size", 0.12f}, {"vertexColors", true}});
-    auto pointCloud = Points::create(BufferGeometry::create(), pcMaterial);
-    pointCloud->frustumCulled = false;// geometry is rebuilt every frame
-    scene->add(pointCloud);
+    auto pcMaterial = PointsMaterial::create();
+    auto geom = SphereGeometry::create(0.05f);
+    auto points = InstancedMesh::create(geom, pcMaterial, 128 * 32);
+    scene->add(points);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -113,19 +117,18 @@ int main() {
         const float t = clock.getElapsedTime();
 
         // Slowly sweep the sensor in yaw and pitch
-        lidar->rotation.y = t * 0.4f;
-        lidar->rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
+        lidar.rotation.y = t * 0.4f;
+        lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
 
         // Scan the scene and update the visualised point cloud
-        auto cloud = lidar->scan(renderer, *scene);
+        auto cloud = lidar.scan(renderer, *scene);
 
         Vector3 sensorWorld;
-        lidar->getWorldPosition(sensorWorld);
-        updatePointCloud(*pointCloud, cloud, sensorWorld, lidar->far());
+        lidar.getWorldPosition(sensorWorld);
+        updatePointCloud(*points, cloud, sensorWorld, lidar.far());
 
         renderer.render(*scene, *camera);
         // renderer.render(lidar->postScene_, lidar->postCamera_);
 
-        controls.update();
     });
 }
