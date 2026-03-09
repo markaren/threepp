@@ -15,9 +15,9 @@
 using namespace threepp;
 
 DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, float near, float far)
-    : postCamera_(-1, 1, 1, -1, 0, 1),
-      width_(width),
+    : width_(width),
       height_(height),
+      postCamera_(-1, 1, 1, -1, 0, 1),
       camera_(fovY, static_cast<float>(width) / static_cast<float>(height), near, far) {
 
     // Scene render target: renders geometry and captures depth
@@ -78,6 +78,21 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
     postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
 
     DepthSensor::add(camera_);
+
+    // Precompute per-column/row view-space ray direction factors.
+    // view point = (xDir_[x] * depth, yDir_[y] * depth, -depth)
+    const float tanHalfFovY = std::tan(math::degToRad(camera_.fov) * 0.5f);
+    const float tanHalfFovX = tanHalfFovY * camera_.aspect;
+    const auto fw = static_cast<float>(width_);
+    const auto fh = static_cast<float>(height_);
+
+    xDir_.resize(width_);
+    for (unsigned x = 0; x < width_; ++x)
+        xDir_[x] = ((static_cast<float>(x) + 0.5f) / fw * 2.f - 1.f) * tanHalfFovX;
+
+    yDir_.resize(height_);
+    for (unsigned y = 0; y < height_; ++y)
+        yDir_[y] = ((static_cast<float>(y) + 0.5f) / fh * 2.f - 1.f) * tanHalfFovY;
 }
 
 void DepthSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
@@ -100,46 +115,48 @@ void DepthSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>&
 }
 
 void DepthSensor::unprojectPoints(std::vector<Vector3>& points) const {
-    const float far = camera_.farPlane;
-    const float tanHalfFovY = std::tan(math::degToRad(camera_.fov) * 0.5f);
-    const float tanHalfFovX = tanHalfFovY * camera_.aspect;
-    const auto fw = static_cast<float>(width_);
-    const auto fh = static_cast<float>(height_);
-
     static std::mt19937 rng_{std::random_device{}()};
 
     points.clear();
+    points.reserve(width_ * height_);
 
     const auto& pixels = readbackTarget_->texture->image().data();
+    const auto* px = pixels.data();
 
-    for (unsigned y = 0; y < height(); ++y) {
-        for (unsigned x = 0; x < width(); ++x) {
-            const int idx = static_cast<int>((y * width() + x) * 2);
+    // Hoist matrix elements (column-major): transform view point (vx,vy,-depth,1)
+    const auto& me = matrixWorld->elements;
+    const float m0 = me[0], m1 = me[1], m2 = me[2];
+    const float m4 = me[4], m5 = me[5], m6 = me[6];
+    const float m8 = me[8], m9 = me[9], m10 = me[10];
+    const float m12 = me[12], m13 = me[13], m14 = me[14];
 
+    const float far = camera_.farPlane;
+    const bool addNoise = rangeNoise > 0.f;
+    std::normal_distribution noiseDist{0.f, rangeNoise};
+
+    for (unsigned y = 0; y < height_; ++y) {
+        // Hoist row-constant contributions from yDir_[y]
+        const float yd = yDir_[y];
+        const float ry0 = m4 * yd, ry1 = m5 * yd, ry2 = m6 * yd;
+
+        for (unsigned x = 0; x < width_; ++x, px += 2) {
             // Unpack 16-bit normalised depth from RG channels
-            const float r = static_cast<float>(pixels[idx + 0]) / 255.f;
-            const float g = static_cast<float>(pixels[idx + 1]) / 255.f;
-            const float normalizedDepth = r + g / 255.f;
+            const float normalizedDepth = static_cast<float>(px[0]) * (1.f / 255.f) + static_cast<float>(px[1]) * (1.f / 65025.f);
 
-            // Skip background (depth at or beyond the far plane)
             if (normalizedDepth >= 0.9999f) continue;
 
-            float viewZ = -normalizedDepth * far;
-            if (rangeNoise > 0.f) {
-                viewZ += std::normal_distribution{0.f, rangeNoise}(rng_);
-                if (viewZ >= 0.f || -viewZ > far) continue;
+            float depth = normalizedDepth * far;// positive distance along view axis
+            if (addNoise) {
+                depth += noiseDist(rng_);
+                if (depth <= 0.f || depth > far) continue;
             }
 
-            // NDC: OpenGL convention, y=0 in pixel buffer = bottom = ndcY=-1
-            const float ndcX = (static_cast<float>(x) + 0.5f) / fw * 2.0f - 1.0f;
-            const float ndcY = (static_cast<float>(y) + 0.5f) / fh * 2.0f - 1.0f;
-
-            Vector3 p(ndcX * -viewZ * tanHalfFovX,
-                      ndcY * -viewZ * tanHalfFovY,
-                      viewZ);
-
-            p.applyMatrix4(*matrixWorld);
-            points.push_back(p);
+            // Inline world-space transform: view point = (xDir*depth, yDir*depth, -depth)
+            const float xd = xDir_[x];
+            points.emplace_back(
+                    (m0 * xd + ry0 - m8) * depth + m12,
+                    (m1 * xd + ry1 - m9) * depth + m13,
+                    (m2 * xd + ry2 - m10) * depth + m14);
         }
     }
 }

@@ -59,6 +59,10 @@ namespace threepp {
         std::unique_ptr<GLRenderTarget> readbackTarget_;
         std::shared_ptr<ShaderMaterial> postMaterial_;
 
+        // Precomputed per-column and per-row view-space ray direction factors
+        std::vector<float> xDir_;
+        std::vector<float> yDir_;
+
         void unprojectPoints(std::vector<Vector3>& points) const;
     };
 
