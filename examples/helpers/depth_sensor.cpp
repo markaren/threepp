@@ -5,7 +5,8 @@
 #include "threepp/threepp.hpp"
 
 #include <cmath>
-#include <random>
+#include <cstdlib>
+#include <iostream>
 
 using namespace threepp;
 
@@ -43,25 +44,25 @@ namespace {
 
     // Update a Points object's position and color attributes from a point cloud.
     // Colors are mapped by distance: near=green, far=red.
-    void updatePointCloud(InstancedMesh& points, const std::vector<Vector3>& cloud,
+    void updatePointCloud(Points& points, const std::vector<Vector3>& cloud,
                           const Vector3& sensorPos, float maxDist) {
 
+        auto& geom = *points.geometry();
+        auto* posAttr = geom.getAttribute<float>("position");
+        auto* colAttr = geom.getAttribute<float>("color");
 
         Color c;
-        Matrix4 m;
         int i = 0;
         for (const auto& p : cloud) {
-            m.identity();
-            points.setMatrixAt(i, m.setPosition(p.x, p.y, p.z));
-            points.setColorAt(i, c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f));
-            i++;
+            posAttr->setXYZ(i, p.x, p.y, p.z);
+            c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f);
+            colAttr->setXYZ(i, c.r, c.g, c.b);
+            ++i;
         }
 
-        points.setCount(i);
-        points.instanceMatrix()->needsUpdate();
-        points.instanceColor()->needsUpdate();
-
-        points.computeBoundingSphere();
+        geom.setDrawRange(0, i);
+        posAttr->needsUpdate();
+        colAttr->needsUpdate();
     }
 
 }// namespace
@@ -93,10 +94,16 @@ int main() {
 
 
     // --- Point cloud visualisation ---
-    auto pcMaterial = MeshBasicMaterial::create();
-    auto geom = SphereGeometry::create(0.025f);
-    auto points = InstancedMesh::create(geom, pcMaterial, lidar.width() * lidar.height());
-    points->instanceMatrix()->setUsage(DrawUsage::Dynamic);
+    const size_t maxPoints = lidar.width() * lidar.height();
+    auto pcGeom = BufferGeometry::create();
+    pcGeom->setAttribute("position", FloatBufferAttribute::create(std::vector<float>(maxPoints * 3), 3));
+    pcGeom->setAttribute("color", FloatBufferAttribute::create(std::vector<float>(maxPoints * 3), 3));
+    pcGeom->getAttribute<float>("position")->setUsage(DrawUsage::Dynamic);
+    pcGeom->getAttribute<float>("color")->setUsage(DrawUsage::Dynamic);
+
+    auto pcMaterial = PointsMaterial::create({{"size", 0.1f}, {"vertexColors", true}});
+    auto points = Points::create(pcGeom, pcMaterial);
+    points->frustumCulled = false;
     scene->add(points);
 
     canvas.onWindowResize([&](WindowSize size) {
