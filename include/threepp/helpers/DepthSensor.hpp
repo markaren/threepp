@@ -27,13 +27,6 @@ namespace threepp {
      * Renders the scene from the sensor's viewpoint into a depth texture,
      * linearizes the result via a post-process shader, reads back the pixels,
      * and reprojects them into world-space 3D points.
-     *
-     * Usage:
-     *   auto lidar = std::make_shared<Lidar>(90.f, 256, 64);
-     *   scene.add(lidar);
-     *   lidar->position.set(0, 1, 0);
-     *   // ...
-     *   auto points = lidar->scan(renderer, scene);
      */
     class DepthSensor: public Object3D {
 
@@ -113,25 +106,23 @@ namespace threepp {
          *
          * The renderer's active render target is restored to nullptr after the scan.
          */
-         void scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& claud) {
-            // Sync internal camera to this object's world transform
-            this->updateWorldMatrix(true, true);
+         void scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
 
-            // 1. Render scene from sensor viewpoint to capture depth
+            // Render scene from sensor viewpoint to capture depth
             renderer.setRenderTarget(sceneTarget_.get());
             renderer.render(scene, camera_);
 
-            // 2. Linearize depth into packed RGBA8
+            // Linearize depth into packed RGBA8
             postMaterial_->uniforms.at("tDepth").setValue(sceneTarget_->depthTexture.get());
             renderer.setRenderTarget(readbackTarget_.get());
             renderer.render(postScene_, postCamera_);
 
             renderer.copyTextureToImage(*readbackTarget_->texture);
 
-            // 4. Restore default render target
+            // Restore default render target
             renderer.setRenderTarget(nullptr);
 
-            unprojectPoints(claud);
+            unprojectPoints(cloud);
         }
 
         // Gaussian range noise standard deviation in metres (0 = perfect sensor)
