@@ -66,7 +66,7 @@ Pass to CMake:
 ```
 
 This will generate .html versions of a subset of the examples to be loaded in a browser. <br>
-**You can run a collection of them online [here](https://laht.folk.ntnu.no/web/threepp_examples/)*.**
+**You can run a collection of them online [here](https://laht.folk.ntnu.no/web/threepp_examples/).**
 
 
 ##### Optional downstream dependencies
