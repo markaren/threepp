@@ -161,7 +161,7 @@ int main() {
 
 ## Consuming threepp
 
-Threepp is available as a CMake package and can be consumed in a number of ways.
+Threepp is mainly available as a CMake package and can be consumed in a number of ways. It's also available as a [Conan](https://conan.io/center/recipes?value=threepp) package, so it can be consumed using [conan](https://conan.io/_) or [xmake](https://xmake.io/).
 
 #### CMake FetchContent (recommended)
 
@@ -191,6 +191,54 @@ This is the preferred approach, as it enables users to update the targeted three
 An example is provided [here](tests/threepp_fetchcontent_test). <br>
 
 See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses [WxWidgets](https://wxwidgets.org/) as the Window system.
+
+#### Using Conan
+
+Example `conanfile.py` :
+
+```python
+from conan import ConanFile
+from conan.tools.cmake import CMake, cmake_layout
+
+
+class ExampleRecipe(ConanFile):
+    settings = "os", "compiler", "build_type", "arch"
+    generators = "CMakeDeps", "CMakeToolchain"
+
+    def requirements(self):
+        self.requires("threepp/0.0.20260310")
+
+    def layout(self):
+        cmake_layout(self)
+
+    def build(self):
+        cmake = CMake(self)
+        cmake.configure()
+        cmake.build()
+```
+
+#### Xmake
+
+Example `xmake.lua` file:
+
+```lua
+add_rules("mode.debug", "mode.release")
+add_requires("imgui", {configs = {glfw_opengl3 = true}}) -- optional dependency for UI widgets
+add_requires("assimp") -- optional dependency for importing assembly models (.glb/.dae)
+add_requires("conan::threepp/0.0.20260310", {
+    alias = "threepp",
+    configs = {
+        settings = {"compiler.cppstd=20"}
+    }
+})
+target("example")
+set_kind("binary")
+add_files("src/*.cpp")
+add_packages("imgui", "threepp", "assimp")
+set_languages("c++20")
+```
+
+
 
 
 ### Screenshots
