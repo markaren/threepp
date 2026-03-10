@@ -116,7 +116,7 @@ int main() {
 
     HUD hud(canvas.size());
     FontLoader fontLoader;
-    const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/helvetiker_regular.typeface.json");
+    const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
     TextGeometry::Options opts(font, 40, 2);
     auto handle = Text2D(opts, "Loading Crane3R..");

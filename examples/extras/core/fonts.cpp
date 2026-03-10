@@ -9,6 +9,21 @@ using namespace threepp;
 
 namespace {
 
+    std::vector<std::string> fonts{
+        "gentilis_bold.typeface.json", "gentilis_regular.typeface.json", "helvetiker_bold.typeface.json",
+        "helvetiker_regular.typeface.json", "optimer_bold.typeface.json", "optimer_regular.typeface.json",
+        "Roboto-Regular.ttf", "Roboto-Bold.ttf"
+    };
+
+    std::filesystem::path getFontPath(const std::string& fontName) {
+        std::filesystem::path fontPath{std::string(DATA_FOLDER) + "/fonts"};
+        if (fontName.ends_with(".typeface.json")) {
+            return fontPath / "typeface" / fontName;
+        } else {
+            return fontPath / "truetype"  / fontName;
+        }
+    }
+
     class MyUI: public ImguiContext {
 
     public:
@@ -19,7 +34,7 @@ namespace {
         }
 
         [[nodiscard]] std::string selected() const {
-            return names[selectedIndex];
+            return fonts[selectedIndex];
         }
 
     protected:
@@ -32,10 +47,10 @@ namespace {
 
             ImGui::Begin("Font");
 
-            if (ImGui::BeginCombo("Select Font", names[selectedIndex].c_str())) {
-                for (unsigned i = 0; i < names.size(); ++i) {
+            if (ImGui::BeginCombo("Select Font", fonts[selectedIndex].c_str())) {
+                for (unsigned i = 0; i < fonts.size(); ++i) {
                     const auto isSelected = (selectedIndex == i);
-                    if (ImGui::Selectable(names[i].c_str(), isSelected)) {
+                    if (ImGui::Selectable(fonts[i].c_str(), isSelected)) {
                         selectedIndex = i;
                     }
                 }
@@ -48,9 +63,7 @@ namespace {
     private:
         int lastSelectedIndex = -1;
         int selectedIndex = 4;
-        std::vector<std::string> names{
-                "gentilis_bold", "gentilis_regular", "helvetiker_bold",
-                "helvetiker_regular", "optimer_bold", "optimer_regular"};
+
     };
 
     auto createPlane() {
@@ -87,7 +100,7 @@ namespace {
 int main() {
 
     std::string displayText = "threepp!";
-    std::filesystem::path fontPath{std::string(DATA_FOLDER) + "/fonts"};
+
 
     Canvas canvas("Fonts", {{"aa", 8}});
     GLRenderer renderer(canvas.size());
@@ -104,7 +117,7 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     FontLoader loader;
-    auto font = loader.load(fontPath / "optimer_bold.typeface.json");
+    auto font = loader.load(getFontPath(fonts.front()));
 
     float textSize = 10;
     std::shared_ptr<Text3D> textMesh3d;
@@ -145,7 +158,7 @@ int main() {
         ui.render();
 
         if (ui.newSelection()) {
-            font = loader.load(fontPath / std::string(ui.selected() + ".typeface.json"));
+            font = loader.load(getFontPath(std::string(ui.selected())));
             if (font) {
                 textMesh3d->setText(displayText, ExtrudeTextGeometry::Options(*font, textSize, 1));
                 textMesh2d->setText(displayText, TextGeometry::Options(*font, textSize));

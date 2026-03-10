@@ -6,16 +6,16 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("TextNode");
+    Canvas canvas("TextSprite");
     GLRenderer renderer(canvas.size());
 
     Scene scene;
     PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
-    camera.position.z = 5;
+    camera.position.set(0,5,5);
 
-    auto node = TextSprite::create("C:/Windows/Fonts/Arial.ttf");
+    auto node = TextSprite::create(std::string(DATA_FOLDER) + "/fonts/truetype/Roboto-Regular.ttf");
     node->setText("Hello world");
-    node->position.set(0, 10, 0);
+    node->position.set(0, 2, 0);
     scene.add(node);
 
     auto grid = GridHelper::create(20, 10);
