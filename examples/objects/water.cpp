@@ -68,7 +68,6 @@ int main() {
     shaderUniforms.at("mieDirectionalG").value<float>() = 0.8;
     scene->add(sky);
 
-    Vector3 sun;
     float elevation = 2;
     float azimuth = 180;
 
