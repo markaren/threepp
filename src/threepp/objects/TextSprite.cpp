@@ -37,10 +37,11 @@ struct TextSprite::Impl {
     void setText(const std::string& text, float worldScale) {
         const auto material = that->material()->as<MaterialWithMap>();
         material->map->image() = createText(text, worldScale);
-        material->map->needsUpdate();
+        setColor(color_);
     }
 
     void setColor(const Color& color) {
+        this->color_ = color;
         const auto& map = that->material()->as<MaterialWithMap>()->map;
         auto& image = map->image();
         for (int i = 0; i < image.width * image.height; ++i) {
@@ -142,9 +143,9 @@ struct TextSprite::Impl {
         // Convert grayscale to RGBA
         std::vector<unsigned char> rgba(width * height * 4, 0);
         for (int i = 0; i < width * height; ++i) {
-            rgba[i * 4 + 0] = 255;
-            rgba[i * 4 + 1] = 255;
-            rgba[i * 4 + 2] = 255;
+            rgba[i * 4 + 0] = color_.r * 255;
+            rgba[i * 4 + 1] = color_.g * 255;
+            rgba[i * 4 + 2] = color_.b * 255;
             rgba[i * 4 + 3] = pixels[i];
         }
 
@@ -158,7 +159,9 @@ struct TextSprite::Impl {
 
 private:
     Sprite* that;
+    Color color_;
     std::string text_{"empty"};
+
 
     stbtt_fontinfo font_{};
     std::vector<unsigned char> fontBuffer;
