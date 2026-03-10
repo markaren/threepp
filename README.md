@@ -66,7 +66,7 @@ Pass to CMake:
 ```
 
 This will generate .html versions of a subset of the examples to be loaded in a browser. <br>
-**You can run a collection of them online [here](https://laht.folk.ntnu.no/web/threepp_examples/)*.**
+**You can run a collection of them online [here](https://laht.folk.ntnu.no/web/threepp_examples/).**
 
 
 ##### Optional downstream dependencies
@@ -183,8 +183,14 @@ target_link_libraries(main PUBLIC threepp::threepp)
 
 This is the preferred approach, as it enables users to update the targeted threepp version at will.
 
-An example is provided [here](tests/threepp_fetchcontent_test).
-See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses WxWidgets as the Window system.
+> Tip: Since threepp examples bundles _imgui_, you can link against it by including:
+>```cmake
+>add_subdirectory("${threepp_SOURCE_DIR}/examples/external")
+>```
+
+An example is provided [here](tests/threepp_fetchcontent_test). <br>
+
+See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses [WxWidgets](https://wxwidgets.org/) as the Window system.
 
 
 ### Screenshots
