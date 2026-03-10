@@ -28,8 +28,7 @@ however much remains to be done..
 
 Builds on Windows, Linux, MacOS, MinGW and with Emscripten.
 
-> And ROS2 users: threepp makes a natural visualization companion — lightweight,
-> no browser required, and fits right into a C++ ROS2 node.
+> And ROS2 users: threepp is a great fit for your visualisation needs.
 
 ### But, but why?
 
@@ -191,14 +190,15 @@ See also [this demo](https://github.com/markaren/threepp_wxwidgets), which addit
 ### Screenshots
 ![Fonts](doc/screenshots/fonts.png)
 ![Spline Editor](doc/screenshots/spline_editor.png)
-![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
-![Cubemap](doc/screenshots/cubemap.png)
+![colnav](doc/screenshots/colnav.png)
 ![Shadows](doc/screenshots/Shadows.PNG)
-![FlyControls](doc/screenshots/fly.PNG)
 ![Crane](doc/screenshots/crane.png)
+![FlyControls](doc/screenshots/fly.PNG)
 ![Optimization](doc/screenshots/Optimization.PNG)
 ![Animation](doc/screenshots/animation.png)
-![Water](doc/screenshots/OlympicOctopus.PNG)
+![Water+sky](doc/screenshots/water_sky.png)
 ![MotorController](doc/screenshots/motor_controller.PNG)
 ![SVG](doc/screenshots/tiger_svg.png)
-![smoke](doc/screenshots/smoke.png)
+![Depth sensor](doc/screenshots/depth_sensor.png)
+![LeePerrySmith](doc/screenshots/LeePerrySmith.png)
+![Cubemap](doc/screenshots/cubemap.png)
