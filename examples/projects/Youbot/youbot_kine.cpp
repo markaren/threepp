@@ -7,62 +7,75 @@
 
 #include "KeyController.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/objects/TextSprite.hpp"
 
 #include <future>
 
 using namespace threepp;
 using namespace kine;
 
-struct MyUI: ImguiContext {
+namespace {
+    struct YoubotUI: ImguiContext {
 
-    bool jointMode = true;
-    bool posMode = false;
+        bool jointMode = true;
+        bool posMode = false;
 
-    Vector3 pos;
-    std::vector<KineLimit> limits;
-    std::vector<float> values;
+        Vector3 pos;
+        std::vector<KineLimit> limits;
+        std::vector<float> values;
 
-    explicit MyUI(const Canvas& canvas, Kine& kine)
-        : ImguiContext(canvas),
-          limits(kine.limits()),
-          values(kine.meanAngles()) {
+        explicit YoubotUI(const Canvas& canvas, Kine& kine)
+            : ImguiContext(canvas),
+              limits(kine.limits()),
+              values(kine.meanAngles()) {
 
-        pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(values));
+            pos.setFromMatrixPosition(kine.calculateEndEffectorTransformation(values));
+        }
+
+        void onRender() override {
+
+            ImGui::SetNextWindowPos({}, 0, {});
+            ImGui::SetNextWindowSize({}, 0);
+            ImGui::Begin("Youbot");
+
+            ImGui::Text("Target angles");
+            ImGui::SliderFloat("j1", &values[0], *limits[0].min(), *limits[0].max());
+            jointMode = jointMode || ImGui::IsItemEdited();
+            ImGui::SliderFloat("j2", &values[1], *limits[1].min(), *limits[1].max());
+            jointMode = jointMode || ImGui::IsItemEdited();
+            ImGui::SliderFloat("j3", &values[2], *limits[2].min(), *limits[2].max());
+            jointMode = jointMode || ImGui::IsItemEdited();
+            ImGui::SliderFloat("j4", &values[3], *limits[3].min(), *limits[3].max());
+            jointMode = jointMode || ImGui::IsItemEdited();
+            ImGui::SliderFloat("j5", &values[4], *limits[4].min(), *limits[4].max());
+            jointMode = jointMode || ImGui::IsItemEdited();
+
+            posMode = !jointMode;
+
+            ImGui::Text("Target pos");
+            ImGui::SliderFloat("px", &pos.x, -10, 10);
+            posMode = posMode || ImGui::IsItemEdited();
+            ImGui::SliderFloat("py", &pos.y, -10, 10);
+            posMode = posMode || ImGui::IsItemEdited();
+            ImGui::SliderFloat("pz", &pos.z, -10, 10);
+            posMode = posMode || ImGui::IsItemEdited();
+
+            jointMode = !posMode;
+
+            ImGui::End();
+        }
+    };
+
+
+    void setupLights(Scene& scene) {
+        auto light1 = DirectionalLight::create(0xffffff, 1.f);
+        light1->position.set(1, 1, 1);
+        scene.add(light1);
+
+        auto light2 = AmbientLight::create(0xffffff, 1.f);
+        scene.add(light2);
     }
-
-    void onRender() override {
-
-        ImGui::SetNextWindowPos({}, 0, {});
-        ImGui::SetNextWindowSize({}, 0);
-        ImGui::Begin("Youbot");
-
-        ImGui::Text("Target angles");
-        ImGui::SliderFloat("j1", &values[0], *limits[0].min(), *limits[0].max());
-        jointMode = jointMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("j2", &values[1], *limits[1].min(), *limits[1].max());
-        jointMode = jointMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("j3", &values[2], *limits[2].min(), *limits[2].max());
-        jointMode = jointMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("j4", &values[3], *limits[3].min(), *limits[3].max());
-        jointMode = jointMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("j5", &values[4], *limits[4].min(), *limits[4].max());
-        jointMode = jointMode || ImGui::IsItemEdited();
-
-        posMode = !jointMode;
-
-        ImGui::Text("Target pos");
-        ImGui::SliderFloat("px", &pos.x, -10, 10);
-        posMode = posMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("py", &pos.y, -10, 10);
-        posMode = posMode || ImGui::IsItemEdited();
-        ImGui::SliderFloat("pz", &pos.z, -10, 10);
-        posMode = posMode || ImGui::IsItemEdited();
-
-        jointMode = !posMode;
-
-        ImGui::End();
-    }
-};
+}// namespace
 
 int main() {
 
@@ -81,12 +94,7 @@ int main() {
     auto grid = GridHelper::create(20, 10, Color::yellowgreen);
     scene->add(grid);
 
-    auto light1 = DirectionalLight::create(0xffffff, 1.f);
-    light1->position.set(1, 1, 1);
-    scene->add(light1);
-
-    auto light2 = AmbientLight::create(0xffffff, 1.f);
-    scene->add(light2);
+    setupLights(*scene);
 
     auto endEffectorHelper = AxesHelper::create(1);
     endEffectorHelper->visible = false;
@@ -94,35 +102,46 @@ int main() {
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
 
-    HUD hud(canvas.size());
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
-    TextGeometry::Options opts(font, 30, 5);
-    auto handle = Text2D(opts, "Loading model..");
-    handle.setColor(Color::black);
-    hud.add(handle, HUD::Options()
-                            .setNormalizedPosition({0.5, 0.5})
-                            .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
-                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
+    TextSprite textHandle(font);
+    textHandle.setColor(Color::black);
+    textHandle.setText("Loading model..");
+    textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Center);
+    textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
+    textHandle.setWorldScale(50);
+
+    HUD hud(canvas.size());
+    hud.add(textHandle, HUD::Options()
+                                .setNormalizedPosition({0.5, 0.5}));
 
     TaskManager tm;
 
     std::shared_ptr<Youbot> youbot;
     std::unique_ptr<KeyController> keyController;
-    auto future = std::async([&] {
+    auto loadFuture = std::async(std::launch::async, [&] {
+        try {
+            youbot = Youbot::create(std::string(DATA_FOLDER) + "/models/collada/youbot.dae");
+            youbot->add(targetHelper);
+            youbot->add(endEffectorHelper);
+            endEffectorHelper->visible = true;
+            keyController = std::make_unique<KeyController>(*youbot);
 
-        youbot = Youbot::create(std::string(DATA_FOLDER) + "/models/collada/youbot.dae");
-        youbot->add(targetHelper);
-        youbot->add(endEffectorHelper);
-        endEffectorHelper->visible = true;
-        keyController = std::make_unique<KeyController>(*youbot);
-
-        tm.invokeLater([&] {
-            canvas.addKeyListener(*keyController);
-            scene->add(youbot);
-            hud.remove(handle);
-        });
+            tm.invokeLater([&] {
+                canvas.addKeyListener(*keyController);
+                scene->add(youbot);
+                textHandle.setText("Use WASD keys to steer robot");
+                textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);
+                textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+                hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0);
+                hud.needsUpdate(textHandle);
+            });
+        } catch (const std::exception& e) {
+            tm.invokeLater([&, msg = std::string(e.what())] {
+                textHandle.setText("Error: " + msg);
+            });
+        }
     });
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -148,7 +167,7 @@ int main() {
                         .addLink(Vector3(0, 1.225, 0))
                         .build();
 
-    MyUI ui(canvas, kine);
+    YoubotUI ui(canvas, kine);
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {
@@ -169,7 +188,7 @@ int main() {
 
             ui.render();
 
-            auto endEffectorTransformation = kine.calculateEndEffectorTransformation(ui.values);
+            const auto endEffectorTransformation = kine.calculateEndEffectorTransformation(ui.values);
             endEffectorHelper->position.setFromMatrixPosition(endEffectorTransformation);
             endEffectorHelper->quaternion.setFromRotationMatrix(endEffectorTransformation);
 
@@ -189,11 +208,11 @@ int main() {
 
             youbot->setJointValues(ui.values);
             keyController->update(dt);
-        } else {
-
-            hud.apply(renderer);
         }
+
+        hud.apply(renderer);
     });
 
-    future.get();
+    loadFuture.get();
+
 }
