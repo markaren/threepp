@@ -13,9 +13,13 @@ int main() {
     PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
     camera.position.set(0,5,5);
 
-    auto node = TextSprite::create(std::string(DATA_FOLDER) + "/fonts/truetype/Roboto-Regular.ttf");
+    FontLoader fontLoader;
+    auto font = fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_regular.typeface.json");
+    auto node = TextSprite::create(*font);
+    node->setColor(Color::red);
     node->setText("Hello world");
-    node->position.set(0, 2, 0);
+    node->position.set(0, 0, 0);
+
     scene.add(node);
 
     auto grid = GridHelper::create(20, 10);
@@ -23,7 +27,12 @@ int main() {
 
     OrbitControls controls(camera, canvas);
 
+    Clock clock;
     canvas.animate([&] {
+
+        const auto dt = clock.getDelta();
+        node->setText(std::to_string(dt));
+
         renderer.render(scene, camera);
     });
 

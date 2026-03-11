@@ -2,6 +2,7 @@
 #ifndef THREEPP_TEXTNODE_HPP
 #define THREEPP_TEXTNODE_HPP
 
+#include "threepp/extras/core/Font.hpp"
 #include "threepp/math/Color.hpp"
 #include "threepp/objects/Sprite.hpp"
 
@@ -12,19 +13,20 @@
 namespace threepp {
 
     // A class for creating 2D text sprites in a 3D scene.
-    // Only works with TrueType fonts.
     class TextSprite: public Sprite {
 
     public:
-        explicit TextSprite(const std::filesystem::path& fontPath);
-
-        void setFont(const std::filesystem::path& fontPath);
+        explicit TextSprite(const Font& font);
 
         void setColor(const Color& color);
 
         void setText(const std::string& text, float worldScale = 1);
 
-        static std::shared_ptr<TextSprite> create(const std::filesystem::path& fontPath);
+        [[nodiscard]] const Color& getColor() const;
+
+        [[nodiscard]] std::string getText() const;
+
+        static std::shared_ptr<TextSprite> create(const Font& font);
 
         ~TextSprite() override;
 
