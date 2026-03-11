@@ -161,7 +161,7 @@ int main() {
 
 ## Consuming threepp
 
-Threepp is available as a CMake package and can be consumed in a number of ways.
+Threepp is available as CMake and Conan package and can be consumed in a number of ways.
 
 #### CMake FetchContent (recommended)
 
@@ -191,6 +191,16 @@ This is the preferred approach, as it enables users to update the targeted three
 An example is provided [here](tests/threepp_fetchcontent_test). <br>
 
 See also [this demo](https://github.com/markaren/threepp_wxwidgets), which additionally uses [WxWidgets](https://wxwidgets.org/) as the Window system.
+
+#### Conan
+
+You also can download and install threepp using the [Conan](https://conan.io/) package manager:
+
+    conan install -r conancenter --requires="threepp/[*]" --build=missing
+
+The threepp package in Conan Center is kept up to date by
+[ConanCenterIndex](https://github.com/conan-io/conan-center-index) contributors.
+If the version is out of date, please create an issue or pull request on the Conan Center Index repository.
 
 
 ### Screenshots
