@@ -5,6 +5,7 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 using namespace threepp;
