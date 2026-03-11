@@ -20,4 +20,6 @@ add_example(NAME "water" LINK_IMGUI WEB WEB_EMBED
 
 add_example(NAME "particle_system" LINK_IMGUI)
 
-add_example(NAME "text_sprite")
+add_example(NAME "text_sprite" LINK_IMGUI WEB WEB_EMBED
+        "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
+)

@@ -16,11 +16,24 @@ namespace threepp {
     class TextSprite: public Sprite {
 
     public:
+        enum class HorizontalAlignment { Left, Center, Right };
+        enum class VerticalAlignment { Above, Center, Below };
+
         explicit TextSprite(const Font& font);
 
         void setColor(const Color& color);
 
-        void setText(const std::string& text, float worldScale = 1);
+        void setWorldScale(float worldScale);
+
+        void setText(const std::string& text);
+
+        // Alignment controls the sprite pivot (center property).
+        // Vertical: Above = sprite extends upward from position, Center = centered, Below = sprite extends downward.
+        void setVerticalAlignment(VerticalAlignment v);
+
+        // Alignment controls the sprite pivot (center property).
+        // Horizontal: Left = left edge at position, Center = centered, Right = right edge at position.
+        void setHorizontalAlignment(HorizontalAlignment h);
 
         [[nodiscard]] const Color& getColor() const;
 
