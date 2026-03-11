@@ -15,7 +15,7 @@
 #include <list>
 #include <vector>
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GLES3/gl32.h>

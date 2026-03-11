@@ -6,7 +6,7 @@
 #include "threepp/loaders/ImageLoader.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include "threepp/utils/LoadGlad.hpp"
 #define GLFW_INCLUDE_NONE
 #else
@@ -189,7 +189,7 @@ struct Canvas::Impl {
             size_ = {fullSize.width() / 2, fullSize.height() / 2};
         }
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
@@ -219,7 +219,7 @@ struct Canvas::Impl {
 
         glfwSetWindowUserPointer(window, this);
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
         setWindowIcon(window, params.favicon_);
 #endif
 
@@ -233,7 +233,7 @@ struct Canvas::Impl {
 
         glfwMakeContextCurrent(window);
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
         loadGlad();
         glfwSwapInterval(params.vsync_ ? 1 : 0);
 

@@ -6,7 +6,7 @@
 #include "threepp/threepp.hpp"
 #include "utility/Angle.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <future>
 #endif
 
@@ -137,7 +137,7 @@ int main() {
 
     TaskManager tm;
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
     std::shared_ptr<Crane3R> crane;
     auto future = std::async([&] {
         crane = Crane3R::create();
@@ -240,7 +240,7 @@ int main() {
         }
     });
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
     future.get();
 #endif
 }

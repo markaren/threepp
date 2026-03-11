@@ -4,7 +4,7 @@
 #include "threepp/renderers/gl/UniformUtils.hpp"
 #include "threepp/utils/StringUtils.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>

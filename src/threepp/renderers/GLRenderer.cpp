@@ -34,7 +34,7 @@
 
 #include "threepp/utils/ImageUtils.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
@@ -1290,7 +1290,7 @@ struct GLRenderer::Impl {
 
 GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
     loadGlad();// if Glad has yet to be loaded, do it now
 #endif
 
