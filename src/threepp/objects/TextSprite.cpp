@@ -28,7 +28,7 @@ struct TextSprite::Impl {
         this->text_ = text;
 
         auto image = createText(text);
-        flipImage(image.data(), 4, static_cast<int>(image.width), static_cast<int>(image.height));
+        // flipImage(image.data(), 4, static_cast<int>(image.width), static_cast<int>(image.height));
         imgAspect_ = static_cast<float>(image.width) / static_cast<float>(image.height);
 
         const auto material = that->material()->as<MaterialWithMap>();

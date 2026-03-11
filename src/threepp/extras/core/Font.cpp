@@ -179,7 +179,7 @@ Image Font::rasterize(const std::string& text, float pixelHeight, const Color& c
         xs.reserve(16);
         for (int row = 0; row < hiH; row++) {
             xs.clear();
-            const float fy = mnY + static_cast<float>(hiH - 1 - row - pad) + 0.5f;
+            const float fy = mnY + static_cast<float>(/*hiH - 1 -*/ row - pad) + 0.5f;
             for (int i = 0; i < n; i++) {
                 const Vector2& a = ring[i];
                 const Vector2& b = ring[(i + 1) % n];
