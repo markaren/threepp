@@ -27,9 +27,8 @@ int main() {
     TextGeometry::Options opts(font, 15, 5);
     auto handle = Text2D(opts, "Press 'r' to reset");
     handle.setColor(Color::red);
-    hud.add(handle, HUD::Options()
-                            .setNormalizedPosition({0, 1})
-                            .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+    hud.add(handle).setNormalizedPosition({0, 1})
+                            .setVerticalAlignment(HUD::VerticalAlignment::TOP);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->right = game.gridSize() * size.aspect();

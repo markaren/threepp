@@ -19,7 +19,7 @@ namespace threepp {
         enum class HorizontalAlignment { Left, Center, Right };
         enum class VerticalAlignment { Above, Center, Below };
 
-        explicit TextSprite(const Font& font);
+        explicit TextSprite(const Font& font, std::optional<float> worldScale = {});
 
         void setColor(const Color& color);
 
@@ -39,7 +39,7 @@ namespace threepp {
 
         [[nodiscard]] std::string getText() const;
 
-        static std::shared_ptr<TextSprite> create(const Font& font);
+        static std::shared_ptr<TextSprite> create(const Font& font, std::optional<float> worldScale = {});
 
         ~TextSprite() override;
 

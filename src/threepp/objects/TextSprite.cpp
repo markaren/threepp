@@ -10,17 +10,17 @@ using namespace threepp;
 struct TextSprite::Impl {
 
     Color color_;
-    float worldScale_{1.f};
+    float worldScale_{};
     std::string text_{"empty"};
 
-    Impl(Sprite* that, Font font): that(that), font_(std::move(font)) {
+    Impl(Sprite* that, Font font, std::optional<float> worldScale)
+        : that(that), font_(std::move(font)), worldScale_(worldScale.value_or(1.f)) {
 
         that->center.set(0, 1);
 
         const auto material = that->material()->as<MaterialWithMap>();
         material->map = Texture::create({});
         material->map->offset.set(0.5f, 0.5f);
-
     }
 
     void setText(const std::string& text) {
@@ -28,7 +28,6 @@ struct TextSprite::Impl {
         this->text_ = text;
 
         auto image = createText(text);
-        // flipImage(image.data(), 4, static_cast<int>(image.width), static_cast<int>(image.height));
         imgAspect_ = static_cast<float>(image.width) / static_cast<float>(image.height);
 
         const auto material = that->material()->as<MaterialWithMap>();
@@ -52,7 +51,7 @@ struct TextSprite::Impl {
     }
 
     [[nodiscard]] Image createText(const std::string& text) const {
-        return font_.rasterize(text, 128, color_, 4);
+        return font_.rasterize(text, 64, color_, 2);
     }
 
     void setWorldScale(float worldScale) {
@@ -70,8 +69,8 @@ private:
     float imgAspect_{1.f};
 };
 
-TextSprite::TextSprite(const Font& font)
-    : Sprite(nullptr), pimpl_(std::make_unique<Impl>(this, font)) {
+TextSprite::TextSprite(const Font& font, std::optional<float> worldScale)
+    : Sprite(nullptr), pimpl_(std::make_unique<Impl>(this, font, worldScale)) {
 }
 
 void TextSprite::setText(const std::string& text) {
@@ -86,8 +85,8 @@ std::string TextSprite::getText() const {
     return pimpl_->text_;
 }
 
-std::shared_ptr<TextSprite> TextSprite::create(const Font& fontPath) {
-    return std::make_shared<TextSprite>(fontPath);
+std::shared_ptr<TextSprite> TextSprite::create(const Font& fontPath, std::optional<float> worldScale) {
+    return std::make_shared<TextSprite>(fontPath, worldScale);
 }
 
 void TextSprite::setColor(const Color& color) {

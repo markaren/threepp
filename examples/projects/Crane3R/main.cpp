@@ -121,10 +121,9 @@ int main() {
     TextGeometry::Options opts(font, 40, 2);
     auto handle = Text2D(opts, "Loading Crane3R..");
     handle.setColor(Color::black);
-    hud.add(handle, HUD::Options()
-                            .setNormalizedPosition({0.5, 0.5})
+    hud.add(handle).setNormalizedPosition({0.5, 0.5})
                             .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
-                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
+                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER);
 
     Kine kine = KineBuilder()
                         .addRevoluteJoint(Vector3::Y(), {-90.f, 90.f})

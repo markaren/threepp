@@ -12,15 +12,15 @@
 using namespace threepp;
 
 
-void HUD::Options::updateElement(Object3D& o, std::pair<int, int> windowSize) {
+void HUD::Options::updateElement(std::pair<int, int> windowSize) {
 
     static Box3 bb;
-    bb.setFromObject(o);
+    bb.setFromObject(*object_, true);
     const auto size = bb.getSize();
 
     Vector2 offset;
     if (verticalAlignment_ == VerticalAlignment::CENTER) {
-        offset.y = (static_cast<float>(size.y) / 2);
+        offset.y = (static_cast<float>(size.y) * 0.5f);
     } else if (verticalAlignment_ == VerticalAlignment::TOP) {
         offset.y = static_cast<float>(size.y);
     } else {
@@ -30,7 +30,7 @@ void HUD::Options::updateElement(Object3D& o, std::pair<int, int> windowSize) {
     if (horizontalAlignment_ != HorizontalAlignment::LEFT) {
 
         if (horizontalAlignment_ == HorizontalAlignment::CENTER) {
-            offset.x = (size.x / 2);
+            offset.x = (size.x * 0.5f);
         } else if (horizontalAlignment_ == HorizontalAlignment::RIGHT) {
             offset.x = size.x;
         }
@@ -38,17 +38,19 @@ void HUD::Options::updateElement(Object3D& o, std::pair<int, int> windowSize) {
         offset.x = 0;
     }
 
-    o.position.x = pos.x * static_cast<float>(windowSize.first) - offset.x - margin_.x * (0.5 > pos.x ? -1.f : 1.f);
-    o.position.y = pos.y * static_cast<float>(windowSize.second) - offset.y - margin_.y * (0.5 > pos.y ? -1.f : 1.f);
+    object_->position.x = pos.x * static_cast<float>(windowSize.first) - offset.x - margin_.x * (0.5f > pos.x ? -1.f : 1.f);
+    object_->position.y = pos.y * static_cast<float>(windowSize.second) - offset.y - margin_.y * (0.5f > pos.y ? -1.f : 1.f);
 }
 
 
-struct HUD::Impl: Scene, MouseListener {
+struct HUD::Impl: MouseListener {
+
+    Scene scene;
 
     Impl(PeripheralsEventSource* eventSource, const std::pair<int, int>& size)
         : eventSource_(eventSource),
           size_(size),
-          camera_(0, size_.first, size_.second, 0, 0.1, 10) {
+          camera_(0, static_cast<float>(size_.first), static_cast<float>(size_.second), 0, 0.1f, 10.f) {
 
         if (eventSource) eventSource->addMouseListener(*this);
 
@@ -56,22 +58,28 @@ struct HUD::Impl: Scene, MouseListener {
     }
 
     void apply(GLRenderer& renderer) {
+
+        for (const auto& opt : options_) {
+            if (opt->needsUpdate_) {
+                opt->updateElement(size_);
+                opt->needsUpdate_ = false;
+            }
+        }
+
         renderer.clearDepth();
-        renderer.render(*this, camera_);
+        renderer.render(scene, camera_);
     }
 
-    void remove(Object3D& object) override {
-        Object3D::remove(object);
-
-        map_.erase(&object);
+    void remove(Object3D& object) {
+        scene.remove(object);
     }
 
     void setSize(std::pair<int, int> size) {
         camera_.right = static_cast<float>(size.first);
         camera_.top = static_cast<float>(size.second);
 
-        for (auto [obj, opts] : map_) {
-            opts.updateElement(*obj, size);
+        for (const auto& opt : options_) {
+            opt->updateElement(size);
         }
 
         camera_.updateProjectionMatrix();
@@ -79,43 +87,45 @@ struct HUD::Impl: Scene, MouseListener {
         size_ = size;
     }
 
-    void add(Object3D& object, Options opts) {
-        Object3D::add(object);
+    Options& add(Object3D& object) {
+        scene.add(object);
 
-        opts.updateElement(object, size_);
+        auto& opts = *options_.emplace_back(std::make_unique<Options>());
+        opts.object_ = &object;
 
-        map_[&object] = opts;
+        return opts;
     }
 
-    void add(const std::shared_ptr<Object3D>& object, Options opts) {
-        Object3D::add(object);
+    Options& add(const std::shared_ptr<Object3D>& object) {
+        scene.add(object);
 
-        opts.updateElement(*object, size_);
+        auto& opts = *options_.emplace_back(std::make_unique<Options>());
+        opts.object_ = object.get();
 
-        map_[object.get()] = opts;
+        return opts;
     }
 
     Options* getStoredOptions(Object3D& object) {
-        if (!map_.contains(&object)) return nullptr;
 
-        return &map_.at(&object);
-    }
-
-    void needsUpdate(Object3D& o) {
-
-        if (map_.contains(&o)) {
-            map_.at(&o).updateElement(o, size_);
+        for (const auto& opt : options_) {
+            if (opt->object_ == &object) return opt.get();
         }
+
+        return nullptr;
     }
 
     void handleMouseEvent(int button, const std::function<void(Options&, int)>& handler) {
         raycaster_.setFromCamera(mouse_, camera_);
 
-        const auto intersects = raycaster_.intersectObjects(children, false);
+        const auto intersects = raycaster_.intersectObjects(scene.children, false);
         if (!intersects.empty()) {
-            const auto front = intersects.front();
-            if (map_.contains(front.object)) {
-                handler(map_.at(front.object), button);
+            const auto& front = intersects.front();
+
+            for (const auto& opt : options_) {
+                if (opt->object_ == front.object) {
+                    handler(*opt, button);
+                    break;
+                }
             }
         }
     }
@@ -153,7 +163,7 @@ private:
     Raycaster raycaster_;
     Vector2 mouse_{-Infinity<float>, -Infinity<float>};
 
-    std::unordered_map<Object3D*, Options> map_;
+    std::vector<std::unique_ptr<Options>> options_;
 };
 
 HUD::HUD(std::pair<int, int> size)
@@ -167,12 +177,12 @@ void HUD::apply(GLRenderer& renderer) {
     pimpl_->apply(renderer);
 }
 
-void HUD::add(Object3D& object, Options opts) {
-    pimpl_->add(object, std::move(opts));
+HUD::Options& HUD::add(Object3D& object) {
+    return pimpl_->add(object);
 }
 
-void HUD::add(const std::shared_ptr<Object3D>& object, Options opts) {
-    pimpl_->add(object, std::move(opts));
+HUD::Options& HUD::add(const std::shared_ptr<Object3D>& object) {
+    return pimpl_->add(object);
 }
 
 HUD::Options* HUD::getStoredOptions(Object3D& obj) {
@@ -185,10 +195,6 @@ void HUD::remove(Object3D& object) {
 
 void HUD::setSize(std::pair<int, int> size) {
     pimpl_->setSize(size);
-}
-
-void HUD::needsUpdate(Object3D& o) {
-    pimpl_->needsUpdate(o);
 }
 
 HUD::~HUD() = default;

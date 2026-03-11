@@ -112,9 +112,8 @@ int main() {
     textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
     textHandle.setWorldScale(50);
 
-    HUD hud(canvas.size());
-    hud.add(textHandle, HUD::Options()
-                                .setNormalizedPosition({0.5, 0.5}));
+    HUD hud(renderer.size());
+    hud.add(textHandle).setNormalizedPosition({0.5, 0.5});
 
     TaskManager tm;
 
@@ -135,7 +134,6 @@ int main() {
                 textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);
                 textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
                 hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0);
-                hud.needsUpdate(textHandle);
             });
         } catch (const std::exception& e) {
             tm.invokeLater([&, msg = std::string(e.what())] {
