@@ -46,10 +46,14 @@ namespace threepp {
                 return *this;
             }
 
-            Options& setNormalizedPosition(const Vector2& pos) {
-                this->pos.copy(pos);
+            Options& setNormalizedPosition(float x, float y) {
+                this->pos.set(x, y);
 
                 return *this;
+            }
+
+            Options& setNormalizedPosition(const Vector2& pos) {
+                return setNormalizedPosition(pos.x, pos.y);
             }
 
             Options& setMargin(const Vector2& margin) {
