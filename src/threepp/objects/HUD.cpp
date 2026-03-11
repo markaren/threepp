@@ -95,6 +95,12 @@ struct HUD::Impl: Scene, MouseListener {
         map_[object.get()] = opts;
     }
 
+    Options* getStoredOptions(Object3D& object) {
+        if (!map_.contains(&object)) return nullptr;
+
+        return &map_.at(&object);
+    }
+
     void needsUpdate(Object3D& o) {
 
         if (map_.contains(&o)) {
@@ -167,6 +173,10 @@ void HUD::add(Object3D& object, Options opts) {
 
 void HUD::add(const std::shared_ptr<Object3D>& object, Options opts) {
     pimpl_->add(object, std::move(opts));
+}
+
+HUD::Options* HUD::getStoredOptions(Object3D& obj) {
+    return pimpl_->getStoredOptions(obj);
 }
 
 void HUD::remove(Object3D& object) {

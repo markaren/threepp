@@ -95,7 +95,9 @@ namespace threepp {
 
         void add(Object3D& object, Options opts = {});
 
-        void add(const std::shared_ptr<Object3D>& object, Options opts);
+        void add(const std::shared_ptr<Object3D>& object, Options opts = {});
+
+        Options* getStoredOptions(Object3D& object);
 
         void remove(Object3D& object);
 
