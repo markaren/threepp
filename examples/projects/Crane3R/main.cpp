@@ -16,7 +16,7 @@ using namespace kine;
 #include "kine/ik/CCDSolver.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
-struct YoubotUI: ImguiContext {
+struct CraneUI: ImguiContext {
 
     bool jointMode = true;
     bool posMode = false;
@@ -26,7 +26,7 @@ struct YoubotUI: ImguiContext {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit YoubotUI(const Canvas& canvas, Kine& kine)
+    explicit CraneUI(const Canvas& canvas, Kine& kine)
         : ImguiContext(canvas),
           limits(kine.limits()),
           values(kine.meanAngles()) {
@@ -180,7 +180,7 @@ int main() {
 
     auto ikSolver = std::make_unique<CCDSolver>();
 
-    YoubotUI ui(canvas, kine);
+    CraneUI ui(canvas, kine);
 
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
