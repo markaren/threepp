@@ -19,8 +19,10 @@ int main() {
 
     auto text = TextSprite::create(*font);
     text->setColor(Color::white);
-    text->setText("Hello world");
-    text->position.set(0, 0, 0);
+
+    constexpr int bufSize = 128;
+    char buf[bufSize] = "Hello world!"; //a buffer for ImGui input text
+    text->setText(buf);
 
     scene.add(text);
 
@@ -39,8 +41,8 @@ int main() {
 
         //input text
         ImGui::SameLine();
-        static char buf[128] = "Hello world!";
-        if (ImGui::InputText("Text", buf, 128)) {
+
+        if (ImGui::InputText("Text", buf, bufSize)) {
             text->setText(buf);
         }
 
