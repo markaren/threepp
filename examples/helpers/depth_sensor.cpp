@@ -1,4 +1,5 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/helpers/AxesHelper.hpp"
 #include "threepp/helpers/DepthSensor.hpp"
 #include "threepp/objects/Points.hpp"
@@ -44,7 +45,7 @@ namespace {
 
     // Update a Points object's position and color attributes from a point cloud.
     // Colors are mapped by distance: near=green, far=red.
-    void updatePointCloud(Points& points, const std::vector<Vector3>& cloud,
+    void updatePointCloud(const Points& points, const std::vector<Vector3>& cloud,
                           const Vector3& sensorPos, float maxDist) {
 
         auto& geom = *points.geometry();
@@ -81,17 +82,11 @@ int main() {
     setupScene(*scene);
 
     // --- Lidar sensor ---
-    DepthSensor lidar(90.f, 512, 256, 0.5f, 20.f);
-    lidar.position.set(0, 1, 0);
+    DepthSensor lidar(50.f, 512, 256, 0.5f, 20.f);
+    lidar.position.set(0, 2, 0);
     scene->add(lidar);
 
     OrbitControls controls{*camera, canvas};
-
-    // Small axes gizmo so the sensor orientation is visible
-    auto sensorAxes = AxesHelper::create(0.5f);
-    sensorAxes->rotateY(math::PI);
-    lidar.add(sensorAxes);
-
 
     // --- Point cloud visualisation ---
     const size_t maxPoints = lidar.width() * lidar.height();
@@ -105,6 +100,26 @@ int main() {
     auto points = Points::create(pcGeom, pcMaterial);
     points->frustumCulled = false;
     scene->add(points);
+
+    auto helper = CameraHelper::create(lidar.getCamera());
+    helper->visible = true;
+    scene->add(helper);
+
+    ImguiFunctionalContext ui(canvas, [&] {
+        ImGui::SetNextWindowPos({});
+        ImGui::SetNextWindowSize({});
+        ImGui::Begin("Settings");
+        ImGui::SliderFloat("Range noise", &lidar.rangeNoise, 0.f, 0.1f);
+        if (ImGui::Checkbox("Show sensor helper", &helper->visible)) {
+        }
+        ImGui::End();
+    });
+
+    IOCapture capture;
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
@@ -122,14 +137,18 @@ int main() {
         lidar.rotation.x = -0.4f + 0.25f * std::sin(t * 0.3f);
 
         // Scan the scene and update the visualised point cloud
+        const auto wasHelperVisible = helper->visible;
+        helper->visible = false;
         points->visible = false;
         lidar.scan(renderer, *scene, cloud);
         points->visible = true;
+        helper->visible = wasHelperVisible;
 
         Vector3 sensorWorld;
         lidar.getWorldPosition(sensorWorld);
         updatePointCloud(*points, cloud, sensorWorld, lidar.far());
 
         renderer.render(*scene, *camera);
+        ui.render();
     });
 }

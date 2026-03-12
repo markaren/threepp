@@ -1,6 +1,7 @@
 #ifndef THREEPP_LIDAR_HPP
 #define THREEPP_LIDAR_HPP
 
+#include "CameraHelper.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
@@ -47,6 +48,7 @@ namespace threepp {
         [[nodiscard]] float near() const { return camera_.nearPlane; }
         [[nodiscard]] float far() const { return camera_.farPlane; }
 
+        Camera& getCamera() { return camera_; }
 
     private:
         unsigned int width_;
