@@ -47,9 +47,9 @@ namespace threepp {
 
         void updateMatrixWorld(bool force = false) override;
 
-        void updateWorldMatrix(std::optional<bool> updateParents, std::optional<bool> updateChildren) override;
+        void updateWorldMatrix(bool updateParents, bool updateChildren) override;
 
-        virtual void updateProjectionMatrix() {};
+        virtual void updateProjectionMatrix() {}
     };
 
 }// namespace threepp

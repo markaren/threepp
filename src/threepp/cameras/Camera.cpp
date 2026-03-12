@@ -19,7 +19,7 @@ void Camera::updateMatrixWorld(bool force) {
     this->matrixWorldInverse.copy(*this->matrixWorld).invert();
 }
 
-void Camera::updateWorldMatrix(std::optional<bool> updateParents, std::optional<bool> updateChildren) {
+void Camera::updateWorldMatrix(bool updateParents, bool updateChildren) {
 
     Object3D::updateWorldMatrix(updateParents, updateChildren);
 
