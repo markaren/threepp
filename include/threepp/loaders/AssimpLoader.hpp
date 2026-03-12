@@ -395,15 +395,32 @@ namespace threepp {
             }
             sum = std::sqrt(sum);
 
-            for (unsigned i = 0; i < 4; i++) {
+            // Only normalize if sum is not zero
+            if (sum > 0.0f) {
+                for (unsigned i = 0; i < 4; i++) {
 
-                pairs[i].second = pairs[i].second / sum;
+                    pairs[i].second = pairs[i].second / sum;
 
-                while (indexes.size() <= i) indexes.emplace_back();
-                while (weights.size() <= i) weights.emplace_back();
+                    while (indexes.size() <= i) indexes.emplace_back();
+                    while (weights.size() <= i) weights.emplace_back();
 
-                indexes[i] = pairs[i].first;
-                weights[i] = pairs[i].second;
+                    indexes[i] = pairs[i].first;
+                    weights[i] = pairs[i].second;
+                }
+            } else {
+                // Fallback: If all weights are zero (degenerate case), distribute equally.
+                // This maintains compatibility with downstream code expecting 4 weights,
+                // though in practice this should rarely occur in well-formed models.
+                for (unsigned i = 0; i < 4; i++) {
+
+                    pairs[i].second = 0.25f;
+
+                    while (indexes.size() <= i) indexes.emplace_back();
+                    while (weights.size() <= i) weights.emplace_back();
+
+                    indexes[i] = pairs[i].first;
+                    weights[i] = pairs[i].second;
+                }
             }
         }
 

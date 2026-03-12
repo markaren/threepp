@@ -286,6 +286,7 @@ unsigned int pointsToStrokeWithBuffers(
 
     float strokeWidth2 = style.strokeWidth / 2;
 
+    // Safe division since we already checked numPoints >= 2
     float deltaU = 1.f / static_cast<float>(numPoints - 1);
     float u0 = 0, u1;
 
