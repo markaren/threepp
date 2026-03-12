@@ -15,7 +15,7 @@ MeshStandardMaterial::MeshStandardMaterial()
       MaterialWithBumpMap(1),
       MaterialWithEnvMap(1.f),
       MaterialWithDisplacementMap(1, 0),
-      MaterialWithReflectivityRatio(0.98),
+      MaterialWithRefractionRatio(0.98),
       MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithVertexTangents(false),
       MaterialWithFlatShading(false) {
