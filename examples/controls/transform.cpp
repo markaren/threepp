@@ -1,14 +1,16 @@
 
+#include "threepp/canvas/Monitor.hpp"
 #include "threepp/controls/TransformControls.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
 
 namespace {
 
-    class ExampleKeyListener: public KeyListener {
+    class TransformKeyListener: public KeyListener {
     public:
-        explicit ExampleKeyListener(TransformControls& controls)
+        explicit TransformKeyListener(TransformControls& controls)
             : controls_(controls) {}
 
         void onKeyPressed(KeyEvent evt) override;
@@ -23,12 +25,12 @@ namespace {
 int main() {
 
     Canvas canvas("Transform controls");
-
     canvas.exitOnKeyEscape(false);
 
     GLRenderer renderer(canvas.size());
     renderer.shadowMap().enabled = true;
     renderer.shadowMap().type = ShadowMap::PFC;
+    renderer.autoClear = false;
 
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 1000.f);
     camera.position.set(0, 5, 5);
@@ -63,8 +65,19 @@ int main() {
 
     controls.addEventListener("dragging-changed", changeListener);
 
-    ExampleKeyListener keyListener(controls);
+    TransformKeyListener keyListener(controls);
     canvas.addKeyListener(keyListener);
+
+
+    HUD hud(renderer);
+    FontLoader fontLoader;
+    TextSprite text(fontLoader.defaultFont(), 20.f * monitor::contentScale().first);
+    text.setText("Press Q to toggle space, W/E/R to change mode, X/Y/Z to toggle axis, hold SHIFT for snapping");
+    text.setColor(Color::white);
+    hud.add(text)
+            .setNormalizedPosition({0.f, 0.f})
+            .setVerticalAlignment(HUD::VerticalAlignment::ABOVE)
+            .setHorizontalAlignment(HUD::HorizontalAlignment::LEFT);
 
 
     canvas.onWindowResize([&](WindowSize size) {
@@ -75,12 +88,14 @@ int main() {
     });
 
     canvas.animate([&] {
+        renderer.clear();
         renderer.render(scene, camera);
+        hud.render();
     });
 }
 
 
-void ExampleKeyListener::onKeyPressed(KeyEvent evt) {
+void TransformKeyListener::onKeyPressed(KeyEvent evt) {
     switch (evt.key) {
         case Key::Q: {
             controls_.setSpace(controls_.getSpace() == "local" ? "world" : "local");
@@ -123,7 +138,7 @@ void ExampleKeyListener::onKeyPressed(KeyEvent evt) {
     }
 }
 
-void ExampleKeyListener::onKeyReleased(KeyEvent evt) {
+void TransformKeyListener::onKeyReleased(KeyEvent evt) {
     if (evt.key == Key::LEFT_SHIFT) {
         controls_.setTranslationSnap(std::nullopt);
         controls_.setRotationSnap(std::nullopt);
