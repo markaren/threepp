@@ -45,7 +45,7 @@ namespace {
 
     // Update a Points object's position and color attributes from a point cloud.
     // Colors are mapped by distance: near=green, far=red.
-    void updatePointCloud(const Points& points, const std::vector<Vector3>& cloud,
+    void updatePointCloud(const Points& points, const std::vector<Vector3>& cloud, const std::vector<Color>& colors,
                           const Vector3& sensorPos, float maxDist) {
 
         auto& geom = *points.geometry();
@@ -56,7 +56,11 @@ namespace {
         int i = 0;
         for (const auto& p : cloud) {
             posAttr->setXYZ(i, p.x, p.y, p.z);
-            c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f);
+            if (colors.empty()) {
+                c.setHSL(0.33f * (1.f - std::min(p.distanceTo(sensorPos) / maxDist, 1.f)), 1.f, 0.5f);
+            } else {
+                c.copy(colors[i]);
+            }
             colAttr->setXYZ(i, c.r, c.g, c.b);
             ++i;
         }
@@ -105,13 +109,15 @@ int main() {
     helper->visible = true;
     scene->add(helper);
 
+    bool withColors = false;
     ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
         ImGui::Begin("Settings");
         ImGui::SliderFloat("Range noise", &lidar.rangeNoise, 0.f, 0.1f);
-        if (ImGui::Checkbox("Show sensor helper", &helper->visible)) {
-        }
+        ImGui::Checkbox("Show sensor helper", &helper->visible);
+        ImGui::Checkbox("Sample colors", &withColors);
+
         ImGui::End();
     });
 
@@ -129,6 +135,7 @@ int main() {
 
     Clock clock;
     std::vector<Vector3> cloud;
+    std::vector<Color> colors;
     canvas.animate([&] {
         const float t = clock.getElapsedTime();
 
@@ -140,13 +147,18 @@ int main() {
         const auto wasHelperVisible = helper->visible;
         helper->visible = false;
         points->visible = false;
-        lidar.scan(renderer, *scene, cloud);
+        if (!withColors) {
+            colors.clear();
+            lidar.scan(renderer, *scene, cloud);
+        } else {
+            lidar.scan(renderer, *scene, cloud, colors);
+        }
         points->visible = true;
         helper->visible = wasHelperVisible;
 
         Vector3 sensorWorld;
         lidar.getWorldPosition(sensorWorld);
-        updatePointCloud(*points, cloud, sensorWorld, lidar.far());
+        updatePointCloud(*points, cloud, colors, sensorWorld, lidar.far());
 
         renderer.render(*scene, *camera);
         ui.render();

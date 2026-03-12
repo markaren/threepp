@@ -114,11 +114,37 @@ void DepthSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>&
     unprojectPoints(cloud);
 }
 
-void DepthSensor::unprojectPoints(std::vector<Vector3>& points) const {
+void DepthSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
+
+    // Render scene from sensor viewpoint — color buffer is captured alongside depth
+    renderer.setRenderTarget(sceneTarget_.get());
+    renderer.render(scene, camera_);
+
+    // Read back sRGB color from the scene color buffer
+    renderer.copyTextureToImage(*sceneTarget_->texture);
+
+    // Linearize depth into packed RG16
+    postMaterial_->uniforms.at("tDepth").setValue(sceneTarget_->depthTexture.get());
+    renderer.setRenderTarget(readbackTarget_.get());
+    renderer.render(postScene_, postCamera_);
+
+    renderer.copyTextureToImage(*readbackTarget_->texture);
+
+    // Restore default render target
+    renderer.setRenderTarget(nullptr);
+
+    colors.clear();
+    unprojectPoints(cloud, sceneTarget_->texture->image().data().data(), &colors);
+}
+
+void DepthSensor::unprojectPoints(std::vector<Vector3>& points,
+                                   const unsigned char* colorPixels,
+                                   std::vector<Color>* colors) const {
     static std::mt19937 rng_{std::random_device{}()};
 
     points.clear();
     points.reserve(width_ * height_);
+    if (colors) colors->reserve(width_ * height_);
 
     const auto& pixels = readbackTarget_->texture->image().data();
     const auto* px = pixels.data();
@@ -158,6 +184,11 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points) const {
                     (m0 * xd + ry0 - m8) * depth + m12,
                     (m1 * xd + ry1 - m9) * depth + m13,
                     (m2 * xd + ry2 - m10) * depth + m14);
+
+            if (colorPixels && colors) {
+                const unsigned char* cp = colorPixels + (y * width_ + x) * 3;
+                colors->emplace_back(cp[0] / 255.f, cp[1] / 255.f, cp[2] / 255.f);
+            }
         }
     }
 }
