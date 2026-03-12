@@ -35,6 +35,10 @@ namespace threepp {
         // Horizontal: Left = left edge at position, Center = centered, Right = right edge at position.
         void setHorizontalAlignment(HorizontalAlignment h);
 
+        VerticalAlignment getVerticalAlignment() const;
+
+        HorizontalAlignment getHorizontalAlignment() const;
+
         [[nodiscard]] const Color& getColor() const;
 
         [[nodiscard]] std::string getText() const;

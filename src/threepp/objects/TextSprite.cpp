@@ -111,6 +111,14 @@ void TextSprite::setHorizontalAlignment(HorizontalAlignment h) {
             break;
     }
 }
+TextSprite::VerticalAlignment TextSprite::getVerticalAlignment() const {
+    return center.y == 0.f ? VerticalAlignment::Above : (center.y == 1.f ? VerticalAlignment::Below : VerticalAlignment::Center);
+}
+
+TextSprite::HorizontalAlignment TextSprite::getHorizontalAlignment() const {
+    return center.x == 0.f ? HorizontalAlignment::Left : (center.x == 1.f ? HorizontalAlignment::Right : HorizontalAlignment::Center);
+}
+
 
 void TextSprite::setVerticalAlignment(VerticalAlignment v) {
     switch (v) {

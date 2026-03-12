@@ -15,11 +15,11 @@ namespace {
         hudMaterial->map->offset.set(0.5, 0.5);
 
         const auto hudSprite1 = Sprite::create(hudMaterial);
-        hudSprite1->center.set(0, 1);
+        hudSprite1->center.set(0, 0);
         hudSprite1->scale.set(75, 75, 1);
 
         const auto hudSprite2 = Sprite::create(hudMaterial);
-        hudSprite2->center.set(1, 1);
+        hudSprite2->center.set(0, 0);
         hudSprite2->scale.set(75, 75, 1);
 
         const auto hudSprite3 = Sprite::create(hudMaterial);
@@ -27,19 +27,19 @@ namespace {
         hudSprite3->scale.set(75, 75, 1);
 
         const auto hudSprite4 = Sprite::create(hudMaterial);
-        hudSprite4->center.set(1, 0);
+        hudSprite4->center.set(0, 0);
         hudSprite4->scale.set(75, 75, 1);
 
-        hud.add(hudSprite1).setNormalizedPosition({0, 1}).setMargin({}).onMouseUp([](int) {
+        hud.add(hudSprite1).setNormalizedPosition({0, 1}).setHorizontalAlignment(HUD::HorizontalAlignment::LEFT).setVerticalAlignment(HUD::VerticalAlignment::BELOW).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 1" << std::endl;
         });
-        hud.add(hudSprite2).setNormalizedPosition({1, 1}).setMargin({}).onMouseUp([](int) {
+        hud.add(hudSprite2).setNormalizedPosition({1, 1}).setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT).setVerticalAlignment(HUD::VerticalAlignment::BELOW).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 2" << std::endl;
         });
-        hud.add(hudSprite3).setNormalizedPosition({0, 0}).setMargin({}).onMouseUp([](int) {
+        hud.add(hudSprite3).setNormalizedPosition({0, 0}).setHorizontalAlignment(HUD::HorizontalAlignment::LEFT).setVerticalAlignment(HUD::VerticalAlignment::ABOVE).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 3" << std::endl;
         });
-        hud.add(hudSprite4).setNormalizedPosition({1, 0}).setMargin({}).onMouseUp([](int) {
+        hud.add(hudSprite4).setNormalizedPosition({1, 0}).setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT).setVerticalAlignment(HUD::VerticalAlignment::ABOVE).setMargin({}).onMouseUp([](int) {
             std::cout << "Clicked on sprite 4" << std::endl;
         });
     }

@@ -49,13 +49,11 @@ int main() {
 
     TextSprite handle1(font, 20.f * monitor::contentScale().first);
     handle1.setColor(Color::gray);
-    handle1.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
-    hud.add(handle1).setNormalizedPosition({0.f, 0.05f});
+    hud.add(handle1).setNormalizedPosition({0.f, 0.05f}).setVerticalAlignment(HUD::VerticalAlignment::ABOVE);
 
     TextSprite handle2(font, 20.f * monitor::contentScale().first);
     handle2.setColor(Color::gray);
-    handle2.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
-    hud.add(handle2);
+    hud.add(handle2).setVerticalAlignment(HUD::VerticalAlignment::ABOVE);
 
     canvas.animate([&]() {
         handle1.setText("LOD1 level: " + std::to_string(lod1.getCurrentLevel()));

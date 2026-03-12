@@ -133,10 +133,10 @@ int main() {
 
     auto hudText2 = TextSprite(font2, 10 * monitor::contentScale().first);
     hudText2.setColor(Color::red);
+    hudText2.setVerticalAlignment(TextSprite::VerticalAlignment::Below);
+    hudText2.setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);
     hud.add(hudText2)
-            .setNormalizedPosition({1, 1})
-            .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT);
-
+            .setNormalizedPosition({1, 1});
 
 
     canvas.onWindowResize([&](WindowSize size) {

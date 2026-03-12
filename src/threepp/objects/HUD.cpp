@@ -6,6 +6,7 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/core/Raycaster.hpp"
 #include "threepp/math/Box3.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -16,7 +17,23 @@ using namespace threepp;
 
 void HUD::Options::updateElement(std::pair<int, int> windowSize) {
 
-    static Box3 bb;
+    if (auto* ts = dynamic_cast<TextSprite*>(object_)) {
+        switch (verticalAlignment_) {
+            case VerticalAlignment::ABOVE:  ts->setVerticalAlignment(TextSprite::VerticalAlignment::Above);  break;
+            case VerticalAlignment::BELOW:  ts->setVerticalAlignment(TextSprite::VerticalAlignment::Below);  break;
+            case VerticalAlignment::CENTER: ts->setVerticalAlignment(TextSprite::VerticalAlignment::Center); break;
+        }
+        switch (horizontalAlignment_) {
+            case HorizontalAlignment::LEFT:   ts->setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);   break;
+            case HorizontalAlignment::RIGHT:  ts->setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);  break;
+            case HorizontalAlignment::CENTER: ts->setHorizontalAlignment(TextSprite::HorizontalAlignment::Center); break;
+        }
+        object_->position.x = pos.x * static_cast<float>(windowSize.first)  - margin_.x * (0.5f > pos.x ? -1.f : 1.f);
+        object_->position.y = pos.y * static_cast<float>(windowSize.second) - margin_.y * (0.5f > pos.y ? -1.f : 1.f);
+        return;
+    }
+
+    Box3 bb;
     bb.setFromObject(*object_, true);
     const auto size = bb.getSize();
 
@@ -30,7 +47,6 @@ void HUD::Options::updateElement(std::pair<int, int> windowSize) {
     }
 
     if (horizontalAlignment_ != HorizontalAlignment::LEFT) {
-
         if (horizontalAlignment_ == HorizontalAlignment::CENTER) {
             offset.x = (size.x * 0.5f);
         } else if (horizontalAlignment_ == HorizontalAlignment::RIGHT) {
@@ -51,7 +67,7 @@ struct HUD::Impl: MouseListener {
 
     Impl(GLRenderer& renderer, PeripheralsEventSource* eventSource)
         : renderer_(&renderer),
-    eventSource_(eventSource),
+          eventSource_(eventSource),
           camera_(0, static_cast<float>(renderer.size().first), static_cast<float>(renderer.size().second), 0, 0.1f, 10.f) {
 
         if (eventSource) eventSource->addMouseListener(*this);
@@ -80,20 +96,8 @@ struct HUD::Impl: MouseListener {
     }
 
     void remove(Object3D& object) {
+        std::erase_if(options_, [&object](const auto& opt) { return opt->object_ == &object; });
         scene.remove(object);
-    }
-
-    void setSize(std::pair<int, int> size) {
-        camera_.right = static_cast<float>(size.first);
-        camera_.top = static_cast<float>(size.second);
-
-        for (const auto& opt : options_) {
-            opt->updateElement(size);
-        }
-
-        camera_.updateProjectionMatrix();
-
-        lastSize_ = size;
     }
 
     Options& add(Object3D& object) {
@@ -101,6 +105,20 @@ struct HUD::Impl: MouseListener {
 
         auto& opts = *options_.emplace_back(std::make_unique<Options>());
         opts.object_ = &object;
+
+        if (auto* ts = dynamic_cast<TextSprite*>(&object)) {
+            switch (ts->getVerticalAlignment()) {
+                case TextSprite::VerticalAlignment::Above:  opts.setVerticalAlignment(VerticalAlignment::ABOVE);  break;
+                case TextSprite::VerticalAlignment::Below:  opts.setVerticalAlignment(VerticalAlignment::BELOW);  break;
+                case TextSprite::VerticalAlignment::Center: opts.setVerticalAlignment(VerticalAlignment::CENTER); break;
+            }
+            switch (ts->getHorizontalAlignment()) {
+                case TextSprite::HorizontalAlignment::Left:   opts.setHorizontalAlignment(HorizontalAlignment::LEFT);   break;
+                case TextSprite::HorizontalAlignment::Right:   opts.setHorizontalAlignment(HorizontalAlignment::RIGHT);   break;
+                case TextSprite::HorizontalAlignment::Center:   opts.setHorizontalAlignment(HorizontalAlignment::CENTER);   break;
+            }
+        }
+
 
         return opts;
     }
@@ -139,6 +157,37 @@ struct HUD::Impl: MouseListener {
         }
     }
 
+    ~Impl() override {
+        if (eventSource_) eventSource_->removeMouseListener(*this);
+    }
+
+private:
+    GLRenderer* renderer_;
+    PeripheralsEventSource* eventSource_;
+
+    std::pair<int, int> lastSize_;
+    OrthographicCamera camera_;
+
+    Raycaster raycaster_;
+    Vector2 mouse_{-Infinity<float>, -Infinity<float>};
+
+    std::vector<std::unique_ptr<Options>> options_;
+
+
+    void setSize(std::pair<int, int> size) {
+        camera_.right = static_cast<float>(size.first);
+        camera_.top = static_cast<float>(size.second);
+
+        for (const auto& opt : options_) {
+            opt->updateElement(size);
+        }
+
+        camera_.updateProjectionMatrix();
+
+        lastSize_ = size;
+    }
+
+
     void onMouseDown(int button, const Vector2&) override {
 
         handleMouseEvent(button, [](Options& handler, int button) {
@@ -159,22 +208,6 @@ struct HUD::Impl: MouseListener {
         mouse_.x = (pos.x / static_cast<float>(size.first)) * 2 - 1;
         mouse_.y = -(pos.y / static_cast<float>(size.second)) * 2 + 1;
     }
-
-    ~Impl() override {
-        if (eventSource_) eventSource_->removeMouseListener(*this);
-    }
-
-private:
-    GLRenderer* renderer_;
-    PeripheralsEventSource* eventSource_;
-
-    std::pair<int, int> lastSize_;
-    OrthographicCamera camera_;
-
-    Raycaster raycaster_;
-    Vector2 mouse_{-Infinity<float>, -Infinity<float>};
-
-    std::vector<std::unique_ptr<Options>> options_;
 };
 
 HUD::HUD(GLRenderer& renderer, PeripheralsEventSource* eventSource)

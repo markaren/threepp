@@ -31,7 +31,7 @@ namespace threepp {
         struct Options {
 
             Options(): margin_(5, 5),
-                       verticalAlignment_(VerticalAlignment::ABOVE),
+                       verticalAlignment_(VerticalAlignment::BELOW),
                        horizontalAlignment_(HorizontalAlignment::LEFT) {}
 
             Options& setVerticalAlignment(VerticalAlignment va) {

@@ -131,9 +131,7 @@ int main() {
                 canvas.addKeyListener(*keyController);
                 scene->add(youbot);
                 textHandle.setText("Use WASD keys to steer robot");
-                textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);
-                textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
-                hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0);
+                hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0).setVerticalAlignment(HUD::VerticalAlignment::ABOVE).setHorizontalAlignment(HUD::HorizontalAlignment::LEFT);
             });
         } catch (const std::exception& e) {
             tm.invokeLater([&, msg = std::string(e.what())] {
