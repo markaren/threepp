@@ -111,18 +111,18 @@ int main() {
     auto motorVisuals = VisualisationObject();
     scene.add(motorVisuals);
 
-    HUD hud(canvas.size());
+    HUD hud(renderer);
 
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();
 
-    auto targetText = TextSprite(font, 20.f);
+    auto targetText = TextSprite(font, 20.f*monitor::contentScale().first);
     targetText.setText("Target position: " + std::to_string(targetPosition));
     targetText.setColor(Color::black);
     targetText.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
     hud.add(targetText).setNormalizedPosition({0.f, 0.05f});
 
-    auto measuredText =  TextSprite(font, 20);
+    auto measuredText =  TextSprite(font, 20*monitor::contentScale().first);
     measuredText.setText("Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
     measuredText.setColor(Color::black);
     measuredText.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
@@ -173,7 +173,7 @@ int main() {
 
         renderer.clear();
         renderer.render(scene, camera);
-        hud.apply(renderer);
+        hud.render();
         ui.render();
 
         motorVisuals.setTargetPos(math::degToRad(targetPosition));

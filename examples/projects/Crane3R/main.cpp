@@ -3,6 +3,7 @@
 
 #include "kine/Kine.hpp"
 #include "threepp/controls/TransformControls.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 #include "utility/Angle.hpp"
 
@@ -114,12 +115,12 @@ int main() {
     scene->add(light1);
     scene->add(light2);
 
-    HUD hud(canvas.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
-    TextGeometry::Options opts(font, 40, 2);
-    auto handle = Text2D(opts, "Loading Crane3R..");
+    auto handle = TextSprite(font, 20.f * monitor::contentScale().first);
+    handle.setText("Loading model..");
     handle.setColor(Color::black);
     hud.add(handle).setNormalizedPosition({0.5, 0.5})
                             .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
@@ -167,8 +168,6 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
 
     IOCapture capture{};
@@ -235,7 +234,7 @@ int main() {
 
         } else {
 
-            hud.apply(renderer);
+            hud.render();
         }
     });
 

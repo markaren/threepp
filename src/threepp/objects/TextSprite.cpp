@@ -13,10 +13,11 @@ struct TextSprite::Impl {
     float worldScale_{};
     std::string text_{"empty"};
 
-    Impl(Sprite* that, Font font, std::optional<float> worldScale)
+    Impl(TextSprite* that, Font font, std::optional<float> worldScale)
         : that(that), font_(std::move(font)), worldScale_(worldScale.value_or(1.f)) {
 
-        that->center.set(0, 1);
+        that->setHorizontalAlignment(HorizontalAlignment::Left);
+        that->setVerticalAlignment(VerticalAlignment::Below);
 
         const auto material = that->material()->as<MaterialWithMap>();
         material->map = Texture::create({});

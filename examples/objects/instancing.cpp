@@ -87,7 +87,7 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
-    HUD hud(renderer.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
@@ -99,8 +99,6 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -136,8 +134,8 @@ int main() {
 
         renderer.clear();
         renderer.render(*scene, *camera);
-        hud.apply(renderer);
 
+        hud.render();
         ui.render();
     });
 }

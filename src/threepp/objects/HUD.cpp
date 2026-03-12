@@ -9,6 +9,8 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <iostream>
+
 using namespace threepp;
 
 
@@ -21,7 +23,7 @@ void HUD::Options::updateElement(std::pair<int, int> windowSize) {
     Vector2 offset;
     if (verticalAlignment_ == VerticalAlignment::CENTER) {
         offset.y = (static_cast<float>(size.y) * 0.5f);
-    } else if (verticalAlignment_ == VerticalAlignment::TOP) {
+    } else if (verticalAlignment_ == VerticalAlignment::BELOW) {
         offset.y = static_cast<float>(size.y);
     } else {
         offset.y = 0;
@@ -47,27 +49,34 @@ struct HUD::Impl: MouseListener {
 
     Scene scene;
 
-    Impl(PeripheralsEventSource* eventSource, const std::pair<int, int>& size)
-        : eventSource_(eventSource),
-          size_(size),
-          camera_(0, static_cast<float>(size_.first), static_cast<float>(size_.second), 0, 0.1f, 10.f) {
+    Impl(GLRenderer& renderer, PeripheralsEventSource* eventSource)
+        : renderer_(&renderer),
+    eventSource_(eventSource),
+          camera_(0, static_cast<float>(renderer.size().first), static_cast<float>(renderer.size().second), 0, 0.1f, 10.f) {
 
         if (eventSource) eventSource->addMouseListener(*this);
 
         camera_.position.z = 1;
+
+
+        if (renderer_->autoClear) {
+            std::cerr << "[HUD] Warning: autoClear is enabled on the renderer. HUD will not work properly. Please set autoClear to false." << std::endl;
+        }
     }
 
-    void apply(GLRenderer& renderer) {
+    void render() {
+
+        if (renderer_->size() != lastSize_) setSize(renderer_->size());
 
         for (const auto& opt : options_) {
             if (opt->needsUpdate_) {
-                opt->updateElement(size_);
+                opt->updateElement(renderer_->size());
                 opt->needsUpdate_ = false;
             }
         }
 
-        renderer.clearDepth();
-        renderer.render(scene, camera_);
+        renderer_->clearDepth();
+        renderer_->render(scene, camera_);
     }
 
     void remove(Object3D& object) {
@@ -84,7 +93,7 @@ struct HUD::Impl: MouseListener {
 
         camera_.updateProjectionMatrix();
 
-        size_ = size;
+        lastSize_ = size;
     }
 
     Options& add(Object3D& object) {
@@ -146,8 +155,9 @@ struct HUD::Impl: MouseListener {
 
     void onMouseMove(const Vector2& pos) override {
 
-        mouse_.x = (pos.x / static_cast<float>(size_.first)) * 2 - 1;
-        mouse_.y = -(pos.y / static_cast<float>(size_.second)) * 2 + 1;
+        const auto size = renderer_->size();
+        mouse_.x = (pos.x / static_cast<float>(size.first)) * 2 - 1;
+        mouse_.y = -(pos.y / static_cast<float>(size.second)) * 2 + 1;
     }
 
     ~Impl() override {
@@ -155,9 +165,10 @@ struct HUD::Impl: MouseListener {
     }
 
 private:
+    GLRenderer* renderer_;
     PeripheralsEventSource* eventSource_;
 
-    std::pair<int, int> size_;
+    std::pair<int, int> lastSize_;
     OrthographicCamera camera_;
 
     Raycaster raycaster_;
@@ -166,15 +177,12 @@ private:
     std::vector<std::unique_ptr<Options>> options_;
 };
 
-HUD::HUD(std::pair<int, int> size)
-    : pimpl_(std::make_unique<Impl>(nullptr, size)) {}
+HUD::HUD(GLRenderer& renderer, PeripheralsEventSource* eventSource)
+    : pimpl_(std::make_unique<Impl>(renderer, eventSource)) {}
 
 
-HUD::HUD(PeripheralsEventSource* eventSource)
-    : pimpl_(std::make_unique<Impl>(eventSource, eventSource->size())) {}
-
-void HUD::apply(GLRenderer& renderer) {
-    pimpl_->apply(renderer);
+void HUD::render() {
+    pimpl_->render();
 }
 
 HUD::Options& HUD::add(Object3D& object) {
@@ -191,10 +199,6 @@ HUD::Options* HUD::getStoredOptions(Object3D& obj) {
 
 void HUD::remove(Object3D& object) {
     pimpl_->remove(object);
-}
-
-void HUD::setSize(std::pair<int, int> size) {
-    pimpl_->setSize(size);
 }
 
 HUD::~HUD() = default;

@@ -86,15 +86,13 @@ int main() {
     auto helper = Mesh::create(SphereGeometry::create(0.1));
     scene->add(helper);
 
-    HUD hud(&canvas);
+    HUD hud(renderer, &canvas);
     createHudSprites(hud);
 
     canvas.onWindowResize([&](WindowSize newSize) {
         camera->aspect = newSize.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(newSize);
-
-        hud.setSize(newSize);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -118,7 +116,7 @@ int main() {
         material->rotation += 1 * clock.getDelta();
 
         raycaster.setFromCamera(mouse, *camera);
-        const auto intersects = raycaster.intersectObjects(sprites->children, true);
+        const auto& intersects = raycaster.intersectObjects(sprites->children, true);
         if (!intersects.empty()) {
             const auto& intersection = intersects.front();
             helper->position.copy(intersection.point);
@@ -131,6 +129,6 @@ int main() {
 
         renderer.clear();
         renderer.render(*scene, *camera);
-        hud.apply(renderer);
+        hud.render();
     });
 }

@@ -110,9 +110,9 @@ int main() {
     textHandle.setText("Loading model..");
     textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Center);
     textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
-    textHandle.setWorldScale(50);
+    textHandle.setWorldScale(20*monitor::contentScale().first);
 
-    HUD hud(renderer.size());
+    HUD hud(renderer);
     hud.add(textHandle).setNormalizedPosition({0.5, 0.5});
 
     TaskManager tm;
@@ -146,8 +146,6 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
 
     auto ikSolver = CCDSolver(1, 0.001f, 0.00001f);
@@ -208,7 +206,7 @@ int main() {
             keyController->update(dt);
         }
 
-        hud.apply(renderer);
+        hud.render();
     });
 
     loadFuture.get();

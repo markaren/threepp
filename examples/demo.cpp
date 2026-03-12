@@ -119,7 +119,7 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud(renderer.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_regular.typeface.json");
@@ -143,8 +143,6 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
 
 
@@ -159,8 +157,8 @@ int main() {
 
         renderer.clear();
         renderer.render(*scene, *camera);
-        hud.apply(renderer);
 
+        hud.render();
         ui.render();
 
         plane->position.copy(ui.position());

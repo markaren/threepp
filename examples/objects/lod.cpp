@@ -1,5 +1,6 @@
 
 #include "threepp/objects/LOD.hpp"
+#include "threepp/canvas/Monitor.hpp"
 #include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
@@ -42,16 +43,16 @@ int main() {
         renderer.setSize(size);
     });
 
-    HUD hud(renderer.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_bold.typeface.json");
 
-    TextSprite handle1(font, 20.f);
+    TextSprite handle1(font, 20.f * monitor::contentScale().first);
     handle1.setColor(Color::gray);
     handle1.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
     hud.add(handle1).setNormalizedPosition({0.f, 0.05f});
 
-    TextSprite handle2(font, 20.f);
+    TextSprite handle2(font, 20.f * monitor::contentScale().first);
     handle2.setColor(Color::gray);
     handle2.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
     hud.add(handle2);
@@ -62,6 +63,6 @@ int main() {
 
         renderer.clear();
         renderer.render(scene, camera);
-        hud.apply(renderer);
+        hud.render();
     });
 }

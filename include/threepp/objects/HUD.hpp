@@ -17,8 +17,8 @@ namespace threepp {
 
     public:
         enum class VerticalAlignment {
-            TOP,
-            BOTTOM,
+            BELOW,
+            ABOVE,
             CENTER
         };
 
@@ -31,7 +31,7 @@ namespace threepp {
         struct Options {
 
             Options(): margin_(5, 5),
-                       verticalAlignment_(VerticalAlignment::BOTTOM),
+                       verticalAlignment_(VerticalAlignment::ABOVE),
                        horizontalAlignment_(HorizontalAlignment::LEFT) {}
 
             Options& setVerticalAlignment(VerticalAlignment va) {
@@ -100,10 +100,9 @@ namespace threepp {
             Object3D* object_{nullptr};
         };
 
-        explicit HUD(std::pair<int, int> size);
-        explicit HUD(PeripheralsEventSource* eventSource);
+        explicit HUD(GLRenderer& renderer, PeripheralsEventSource* eventSource = nullptr);
 
-        void apply(GLRenderer& renderer);
+        void render();
 
         Options& add(Object3D& object);
 
@@ -112,8 +111,6 @@ namespace threepp {
         Options* getStoredOptions(Object3D& object);
 
         void remove(Object3D& object);
-
-        void setSize(std::pair<int, int> size);
 
         ~HUD();
 
