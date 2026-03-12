@@ -132,7 +132,8 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points) const {
 
     const float far = camera_.farPlane;
     const bool addNoise = rangeNoise > 0.f;
-    std::normal_distribution noiseDist{0.f, rangeNoise};
+    std::optional<std::normal_distribution<float>> noiseDist;
+    if (addNoise) noiseDist = std::normal_distribution{0.f, rangeNoise};
 
     for (unsigned y = 0; y < height_; ++y) {
         // Hoist row-constant contributions from yDir_[y]
@@ -147,7 +148,7 @@ void DepthSensor::unprojectPoints(std::vector<Vector3>& points) const {
 
             float depth = normalizedDepth * far;// positive distance along view axis
             if (addNoise) {
-                depth += noiseDist(rng_);
+                depth += (*noiseDist)(rng_);
                 if (depth <= 0.f || depth > far) continue;
             }
 
