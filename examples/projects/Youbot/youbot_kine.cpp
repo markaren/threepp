@@ -110,11 +110,10 @@ int main() {
     textHandle.setText("Loading model..");
     textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Center);
     textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
-    textHandle.setWorldScale(50);
+    textHandle.setWorldScale(20*monitor::contentScale().first);
 
-    HUD hud(canvas.size());
-    hud.add(textHandle, HUD::Options()
-                                .setNormalizedPosition({0.5, 0.5}));
+    HUD hud(renderer);
+    hud.add(textHandle).setNormalizedPosition({0.5, 0.5});
 
     TaskManager tm;
 
@@ -132,10 +131,7 @@ int main() {
                 canvas.addKeyListener(*keyController);
                 scene->add(youbot);
                 textHandle.setText("Use WASD keys to steer robot");
-                textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);
-                textHandle.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
-                hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0);
-                hud.needsUpdate(textHandle);
+                hud.getStoredOptions(textHandle)->setNormalizedPosition(0, 0).setVerticalAlignment(HUD::VerticalAlignment::ABOVE).setHorizontalAlignment(HUD::HorizontalAlignment::LEFT);
             });
         } catch (const std::exception& e) {
             tm.invokeLater([&, msg = std::string(e.what())] {
@@ -148,8 +144,6 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
 
     auto ikSolver = CCDSolver(1, 0.001f, 0.00001f);
@@ -210,7 +204,7 @@ int main() {
             keyController->update(dt);
         }
 
-        hud.apply(renderer);
+        hud.render();
     });
 
     loadFuture.get();

@@ -3,6 +3,7 @@
 #include "utility/Regulator.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
 #include <cmath>
@@ -110,19 +111,22 @@ int main() {
     auto motorVisuals = VisualisationObject();
     scene.add(motorVisuals);
 
-    HUD hud(canvas.size());
+    HUD hud(renderer);
 
     FontLoader fontLoader;
     auto font = fontLoader.defaultFont();
-    TextGeometry::Options opts(font, 20);
 
-    auto targetText = Text2D::create(opts, "Target position: " + std::to_string(targetPosition));
-    targetText->setColor(Color::black);
-    hud.add(targetText, HUD::Options().setNormalizedPosition({0.f, 0.05f}));
+    auto targetText = TextSprite(font, 20.f*monitor::contentScale().first);
+    targetText.setText("Target position: " + std::to_string(targetPosition));
+    targetText.setColor(Color::black);
+    targetText.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    hud.add(targetText).setNormalizedPosition({0.f, 0.05f});
 
-    auto measuredText = Text2D::create(opts, "Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
-    measuredText->setColor(Color::black);
-    hud.add(measuredText, HUD::Options());
+    auto measuredText =  TextSprite(font, 20*monitor::contentScale().first);
+    measuredText.setText("Measured position: " + std::to_string(math::radToDeg(motor.getPosition())));
+    measuredText.setColor(Color::black);
+    measuredText.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    hud.add(measuredText);
 
     canvas.onWindowResize([&](WindowSize size) {
         camera.left = -frustumSize * size.aspect() / 2;
@@ -141,7 +145,7 @@ int main() {
 
         ImGui::Text("Target position");
         if (ImGui::SliderFloat("deg", &targetPosition, 0, 180)) {
-            targetText->setText("Target position: " + std::to_string(targetPosition), opts);
+            targetText.setText("Target position: " + std::to_string(targetPosition));
         }
         ImGui::Text("PID gains");
         ImGui::SliderFloat("kp", &params.kp, 0.01f, 10.f);
@@ -159,7 +163,7 @@ int main() {
         double measuredPosition = motor.getPosition();
 
         if (it++ % 10 == 2) {
-            measuredText->setText("Measured position: " + std::to_string(math::radToDeg(measuredPosition)), opts);
+            measuredText.setText("Measured position: " + std::to_string(math::radToDeg(measuredPosition)));
         }
 
         double error = math::degToRad(targetPosition) - measuredPosition;
@@ -169,7 +173,7 @@ int main() {
 
         renderer.clear();
         renderer.render(scene, camera);
-        hud.apply(renderer);
+        hud.render();
         ui.render();
 
         motorVisuals.setTargetPos(math::degToRad(targetPosition));

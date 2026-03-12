@@ -1,6 +1,7 @@
 
 #include "threepp/canvas/Monitor.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -118,49 +119,46 @@ int main() {
     auto planeMaterial = plane->material()->as<MeshBasicMaterial>();
     scene->add(plane);
 
-    HUD hud(canvas.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font1 = fontLoader.defaultFont();
     const auto font2 = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_regular.typeface.json");
 
     TextGeometry::Options opts1(font1, 40 * monitor::contentScale().first);
-    auto hudText1 = Text2D(opts1, "Hello World!");
+    auto hudText1 = TextSprite(font1, 40 * monitor::contentScale().first);
+    hudText1.setText("Hello World!");
     hudText1.setColor(Color::black);
-    hud.add(hudText1, HUD::Options());
+    hudText1.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
+    hud.add(hudText1);
 
-    TextGeometry::Options opts2(font2, 10 * monitor::contentScale().first, 1);
-    auto hudText2 = Text2D(opts2);
+    auto hudText2 = TextSprite(font2, 10 * monitor::contentScale().first);
     hudText2.setColor(Color::red);
-    hud.add(hudText2, HUD::Options()
-                              .setNormalizedPosition({1, 1})
-                              .setHorizontalAlignment(HUD::HorizontalAlignment::RIGHT)
-                              .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+    hudText2.setVerticalAlignment(TextSprite::VerticalAlignment::Below);
+    hudText2.setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);
+    hud.add(hudText2)
+            .setNormalizedPosition({1, 1});
 
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
-
-    MyGui ui(canvas, *planeMaterial);
 
 
     Clock clock;
-    canvas.animate([&]() {
+    MyGui ui(canvas, *planeMaterial);
+    canvas.animate([&] {
         const auto dt = clock.getDelta();
 
         box->rotation.y += 0.5f * dt;
 
         hudText2.setText("Delta=" + std::to_string(dt));
-        hud.needsUpdate(hudText2);
 
         renderer.clear();
         renderer.render(*scene, *camera);
-        hud.apply(renderer);
 
+        hud.render();
         ui.render();
 
         plane->position.copy(ui.position());

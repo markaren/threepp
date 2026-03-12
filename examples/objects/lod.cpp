@@ -1,5 +1,7 @@
 
 #include "threepp/objects/LOD.hpp"
+#include "threepp/canvas/Monitor.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 
 using namespace threepp;
@@ -41,19 +43,17 @@ int main() {
         renderer.setSize(size);
     });
 
-    HUD hud(canvas.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/gentilis_bold.typeface.json");
 
-    TextGeometry::Options opts(font, 20, 5);
-
-    Text2D handle1(opts);
+    TextSprite handle1(font, 20.f * monitor::contentScale().first);
     handle1.setColor(Color::gray);
-    hud.add(handle1, HUD::Options().setNormalizedPosition({0.f, 0.05f}));
+    hud.add(handle1).setNormalizedPosition({0.f, 0.05f}).setVerticalAlignment(HUD::VerticalAlignment::ABOVE);
 
-    Text2D handle2(opts);
+    TextSprite handle2(font, 20.f * monitor::contentScale().first);
     handle2.setColor(Color::gray);
-    hud.add(handle2);
+    hud.add(handle2).setVerticalAlignment(HUD::VerticalAlignment::ABOVE);
 
     canvas.animate([&]() {
         handle1.setText("LOD1 level: " + std::to_string(lod1.getCurrentLevel()));
@@ -61,6 +61,6 @@ int main() {
 
         renderer.clear();
         renderer.render(scene, camera);
-        hud.apply(renderer);
+        hud.render();
     });
 }

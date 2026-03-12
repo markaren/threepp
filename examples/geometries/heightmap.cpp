@@ -1,6 +1,7 @@
 
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/objects/Sky.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/objects/Water.hpp"
 #include "threepp/threepp.hpp"
 
@@ -98,19 +99,18 @@ int main() {
 
     FontLoader fontLoader;
 
-    HUD hud(canvas.size());
-    TextGeometry::Options opts(fontLoader.defaultFont(), 40);
-    Text2D hudText(opts, "Loading terrain..");
-    hudText.material()->as<MaterialWithColor>()->color.setHex(Color::black);
+    HUD hud(renderer);
+    TextSprite hudText(fontLoader.defaultFont(), 40.f);
+    hudText.setText("Loading terrain..");
+    hudText.setColor(Color::black);
+    hudText.setVerticalAlignment(TextSprite::VerticalAlignment::Above);
     hud.add(hudText);
 
     auto material = MeshPhongMaterial::create();
-
     auto mesh = Mesh::create(BufferGeometry::create(), material);
     scene->add(mesh);
 
     TaskManager tm;
-
     auto future = std::async(std::launch::async, [&] {
         auto geometry = PlaneGeometry::create(5041, 5041, 1023, 1023);
         geometry->applyMatrix4(Matrix4().makeRotationX(-math::PI / 2));
@@ -133,7 +133,7 @@ int main() {
             material->map = texture;
             material->needsUpdate();
 
-            hudText.setText("Terrain loaded..", opts);
+            hudText.setText("Terrain loaded..");
         });
 
         tm.invokeLater([&] {
@@ -159,6 +159,8 @@ int main() {
         renderer.clear();
         renderer.render(*scene, *camera);
 
-        hud.apply(renderer);
+        hud.render();
     });
+
+    future.wait();
 }

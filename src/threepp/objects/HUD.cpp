@@ -6,31 +6,49 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/core/Raycaster.hpp"
 #include "threepp/math/Box3.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/scenes/Scene.hpp"
+
+#include <iostream>
 
 using namespace threepp;
 
 
-void HUD::Options::updateElement(Object3D& o, std::pair<int, int> windowSize) {
+void HUD::Options::updateElement(std::pair<int, int> windowSize) {
 
-    static Box3 bb;
-    bb.setFromObject(o);
+    if (auto* ts = dynamic_cast<TextSprite*>(object_)) {
+        switch (verticalAlignment_) {
+            case VerticalAlignment::ABOVE:  ts->setVerticalAlignment(TextSprite::VerticalAlignment::Above);  break;
+            case VerticalAlignment::BELOW:  ts->setVerticalAlignment(TextSprite::VerticalAlignment::Below);  break;
+            case VerticalAlignment::CENTER: ts->setVerticalAlignment(TextSprite::VerticalAlignment::Center); break;
+        }
+        switch (horizontalAlignment_) {
+            case HorizontalAlignment::LEFT:   ts->setHorizontalAlignment(TextSprite::HorizontalAlignment::Left);   break;
+            case HorizontalAlignment::RIGHT:  ts->setHorizontalAlignment(TextSprite::HorizontalAlignment::Right);  break;
+            case HorizontalAlignment::CENTER: ts->setHorizontalAlignment(TextSprite::HorizontalAlignment::Center); break;
+        }
+        object_->position.x = pos.x * static_cast<float>(windowSize.first)  - margin_.x * (0.5f > pos.x ? -1.f : 1.f);
+        object_->position.y = pos.y * static_cast<float>(windowSize.second) - margin_.y * (0.5f > pos.y ? -1.f : 1.f);
+        return;
+    }
+
+    Box3 bb;
+    bb.setFromObject(*object_, true);
     const auto size = bb.getSize();
 
     Vector2 offset;
     if (verticalAlignment_ == VerticalAlignment::CENTER) {
-        offset.y = (static_cast<float>(size.y) / 2);
-    } else if (verticalAlignment_ == VerticalAlignment::TOP) {
+        offset.y = (static_cast<float>(size.y) * 0.5f);
+    } else if (verticalAlignment_ == VerticalAlignment::BELOW) {
         offset.y = static_cast<float>(size.y);
     } else {
         offset.y = 0;
     }
 
     if (horizontalAlignment_ != HorizontalAlignment::LEFT) {
-
         if (horizontalAlignment_ == HorizontalAlignment::CENTER) {
-            offset.x = (size.x / 2);
+            offset.x = (size.x * 0.5f);
         } else if (horizontalAlignment_ == HorizontalAlignment::RIGHT) {
             offset.x = size.x;
         }
@@ -38,87 +56,137 @@ void HUD::Options::updateElement(Object3D& o, std::pair<int, int> windowSize) {
         offset.x = 0;
     }
 
-    o.position.x = pos.x * static_cast<float>(windowSize.first) - offset.x - margin_.x * (0.5 > pos.x ? -1.f : 1.f);
-    o.position.y = pos.y * static_cast<float>(windowSize.second) - offset.y - margin_.y * (0.5 > pos.y ? -1.f : 1.f);
+    object_->position.x = pos.x * static_cast<float>(windowSize.first) - offset.x - margin_.x * (0.5f > pos.x ? -1.f : 1.f);
+    object_->position.y = pos.y * static_cast<float>(windowSize.second) - offset.y - margin_.y * (0.5f > pos.y ? -1.f : 1.f);
 }
 
 
-struct HUD::Impl: Scene, MouseListener {
+struct HUD::Impl: MouseListener {
 
-    Impl(PeripheralsEventSource* eventSource, const std::pair<int, int>& size)
-        : eventSource_(eventSource),
-          size_(size),
-          camera_(0, size_.first, size_.second, 0, 0.1, 10) {
+    Scene scene;
+
+    Impl(GLRenderer& renderer, PeripheralsEventSource* eventSource)
+        : renderer_(&renderer),
+          eventSource_(eventSource),
+          camera_(0, static_cast<float>(renderer.size().first), static_cast<float>(renderer.size().second), 0, 0.1f, 10.f) {
 
         if (eventSource) eventSource->addMouseListener(*this);
 
         camera_.position.z = 1;
+
+
+        if (renderer_->autoClear) {
+            std::cerr << "[HUD] Warning: autoClear is enabled on the renderer. HUD will not work properly. Please set autoClear to false." << std::endl;
+        }
     }
 
-    void apply(GLRenderer& renderer) {
-        renderer.clearDepth();
-        renderer.render(*this, camera_);
-    }
+    void render() {
 
-    void remove(Object3D& object) override {
-        Object3D::remove(object);
+        if (renderer_->size() != lastSize_) setSize(renderer_->size());
 
-        map_.erase(&object);
-    }
-
-    void setSize(std::pair<int, int> size) {
-        camera_.right = static_cast<float>(size.first);
-        camera_.top = static_cast<float>(size.second);
-
-        for (auto [obj, opts] : map_) {
-            opts.updateElement(*obj, size);
+        for (const auto& opt : options_) {
+            if (opt->needsUpdate_) {
+                opt->updateElement(renderer_->size());
+                opt->needsUpdate_ = false;
+            }
         }
 
-        camera_.updateProjectionMatrix();
-
-        size_ = size;
+        renderer_->clearDepth();
+        renderer_->render(scene, camera_);
     }
 
-    void add(Object3D& object, Options opts) {
-        Object3D::add(object);
-
-        opts.updateElement(object, size_);
-
-        map_[&object] = opts;
+    void remove(Object3D& object) {
+        std::erase_if(options_, [&object](const auto& opt) { return opt->object_ == &object; });
+        scene.remove(object);
     }
 
-    void add(const std::shared_ptr<Object3D>& object, Options opts) {
-        Object3D::add(object);
+    Options& add(Object3D& object) {
+        scene.add(object);
 
-        opts.updateElement(*object, size_);
+        auto& opts = *options_.emplace_back(std::make_unique<Options>());
+        opts.object_ = &object;
 
-        map_[object.get()] = opts;
+        if (auto* ts = dynamic_cast<TextSprite*>(&object)) {
+            switch (ts->getVerticalAlignment()) {
+                case TextSprite::VerticalAlignment::Above:  opts.setVerticalAlignment(VerticalAlignment::ABOVE);  break;
+                case TextSprite::VerticalAlignment::Below:  opts.setVerticalAlignment(VerticalAlignment::BELOW);  break;
+                case TextSprite::VerticalAlignment::Center: opts.setVerticalAlignment(VerticalAlignment::CENTER); break;
+            }
+            switch (ts->getHorizontalAlignment()) {
+                case TextSprite::HorizontalAlignment::Left:   opts.setHorizontalAlignment(HorizontalAlignment::LEFT);   break;
+                case TextSprite::HorizontalAlignment::Right:   opts.setHorizontalAlignment(HorizontalAlignment::RIGHT);   break;
+                case TextSprite::HorizontalAlignment::Center:   opts.setHorizontalAlignment(HorizontalAlignment::CENTER);   break;
+            }
+        }
+
+
+        return opts;
+    }
+
+    Options& add(const std::shared_ptr<Object3D>& object) {
+        scene.add(object);
+
+        auto& opts = *options_.emplace_back(std::make_unique<Options>());
+        opts.object_ = object.get();
+
+        return opts;
     }
 
     Options* getStoredOptions(Object3D& object) {
-        if (!map_.contains(&object)) return nullptr;
 
-        return &map_.at(&object);
-    }
-
-    void needsUpdate(Object3D& o) {
-
-        if (map_.contains(&o)) {
-            map_.at(&o).updateElement(o, size_);
+        for (const auto& opt : options_) {
+            if (opt->object_ == &object) return opt.get();
         }
+
+        return nullptr;
     }
 
     void handleMouseEvent(int button, const std::function<void(Options&, int)>& handler) {
         raycaster_.setFromCamera(mouse_, camera_);
 
-        const auto intersects = raycaster_.intersectObjects(children, false);
+        const auto intersects = raycaster_.intersectObjects(scene.children, false);
         if (!intersects.empty()) {
-            const auto front = intersects.front();
-            if (map_.contains(front.object)) {
-                handler(map_.at(front.object), button);
+            const auto& front = intersects.front();
+
+            for (const auto& opt : options_) {
+                if (opt->object_ == front.object) {
+                    handler(*opt, button);
+                    break;
+                }
             }
         }
     }
+
+    ~Impl() override {
+        if (eventSource_) eventSource_->removeMouseListener(*this);
+    }
+
+private:
+    GLRenderer* renderer_;
+    PeripheralsEventSource* eventSource_;
+
+    std::pair<int, int> lastSize_;
+    OrthographicCamera camera_;
+
+    Raycaster raycaster_;
+    Vector2 mouse_{-Infinity<float>, -Infinity<float>};
+
+    std::vector<std::unique_ptr<Options>> options_;
+
+
+    void setSize(std::pair<int, int> size) {
+        camera_.right = static_cast<float>(size.first);
+        camera_.top = static_cast<float>(size.second);
+
+        for (const auto& opt : options_) {
+            opt->updateElement(size);
+        }
+
+        camera_.updateProjectionMatrix();
+
+        lastSize_ = size;
+    }
+
 
     void onMouseDown(int button, const Vector2&) override {
 
@@ -136,43 +204,26 @@ struct HUD::Impl: Scene, MouseListener {
 
     void onMouseMove(const Vector2& pos) override {
 
-        mouse_.x = (pos.x / static_cast<float>(size_.first)) * 2 - 1;
-        mouse_.y = -(pos.y / static_cast<float>(size_.second)) * 2 + 1;
+        const auto size = renderer_->size();
+        mouse_.x = (pos.x / static_cast<float>(size.first)) * 2 - 1;
+        mouse_.y = -(pos.y / static_cast<float>(size.second)) * 2 + 1;
     }
-
-    ~Impl() override {
-        if (eventSource_) eventSource_->removeMouseListener(*this);
-    }
-
-private:
-    PeripheralsEventSource* eventSource_;
-
-    std::pair<int, int> size_;
-    OrthographicCamera camera_;
-
-    Raycaster raycaster_;
-    Vector2 mouse_{-Infinity<float>, -Infinity<float>};
-
-    std::unordered_map<Object3D*, Options> map_;
 };
 
-HUD::HUD(std::pair<int, int> size)
-    : pimpl_(std::make_unique<Impl>(nullptr, size)) {}
+HUD::HUD(GLRenderer& renderer, PeripheralsEventSource* eventSource)
+    : pimpl_(std::make_unique<Impl>(renderer, eventSource)) {}
 
 
-HUD::HUD(PeripheralsEventSource* eventSource)
-    : pimpl_(std::make_unique<Impl>(eventSource, eventSource->size())) {}
-
-void HUD::apply(GLRenderer& renderer) {
-    pimpl_->apply(renderer);
+void HUD::render() {
+    pimpl_->render();
 }
 
-void HUD::add(Object3D& object, Options opts) {
-    pimpl_->add(object, std::move(opts));
+HUD::Options& HUD::add(Object3D& object) {
+    return pimpl_->add(object);
 }
 
-void HUD::add(const std::shared_ptr<Object3D>& object, Options opts) {
-    pimpl_->add(object, std::move(opts));
+HUD::Options& HUD::add(const std::shared_ptr<Object3D>& object) {
+    return pimpl_->add(object);
 }
 
 HUD::Options* HUD::getStoredOptions(Object3D& obj) {
@@ -181,14 +232,6 @@ HUD::Options* HUD::getStoredOptions(Object3D& obj) {
 
 void HUD::remove(Object3D& object) {
     pimpl_->remove(object);
-}
-
-void HUD::setSize(std::pair<int, int> size) {
-    pimpl_->setSize(size);
-}
-
-void HUD::needsUpdate(Object3D& o) {
-    pimpl_->needsUpdate(o);
 }
 
 HUD::~HUD() = default;

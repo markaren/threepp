@@ -2,6 +2,7 @@
 #include "SnakeScene.hpp"
 
 #include "threepp/canvas/Monitor.hpp"
+#include "threepp/objects/TextSprite.hpp"
 
 
 int main() {
@@ -17,26 +18,25 @@ int main() {
     auto scene = SnakeScene(game);
     canvas.addKeyListener(scene);
 
-    auto camera = OrthographicCamera::create(0, game.gridSize(), 0, game.gridSize());
-    camera->position.z = 1;
+    OrthographicCamera camera(
+        0, static_cast<float>(game.gridSize()),
+        0, static_cast<float>(game.gridSize()));
+    camera.position.z = 1;
 
-    HUD hud(canvas.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font = fontLoader.defaultFont();
 
-    TextGeometry::Options opts(font, 15, 5);
-    auto handle = Text2D(opts, "Press 'r' to reset");
+    TextSprite handle(font, 20.f * monitor::contentScale().first);
+    handle.setText("Press 'r' to reset");
     handle.setColor(Color::red);
-    hud.add(handle, HUD::Options()
-                            .setNormalizedPosition({0, 1})
-                            .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+    hud.add(handle).setNormalizedPosition({0, 1});
+
 
     canvas.onWindowResize([&](WindowSize size) {
-        camera->right = game.gridSize() * size.aspect();
-        camera->updateProjectionMatrix();
+        camera.right = static_cast<float>(game.gridSize()) * size.aspect();
+        camera.updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
 
     Clock clock;
@@ -50,7 +50,7 @@ int main() {
         }
 
         renderer.clear();
-        renderer.render(scene, *camera);
-        hud.apply(renderer);
+        renderer.render(scene, camera);
+        hud.render();
     });
 }

@@ -17,8 +17,8 @@ namespace threepp {
 
     public:
         enum class VerticalAlignment {
-            TOP,
-            BOTTOM,
+            BELOW,
+            ABOVE,
             CENTER
         };
 
@@ -31,11 +31,13 @@ namespace threepp {
         struct Options {
 
             Options(): margin_(5, 5),
-                       verticalAlignment_(VerticalAlignment::BOTTOM),
+                       verticalAlignment_(VerticalAlignment::BELOW),
                        horizontalAlignment_(HorizontalAlignment::LEFT) {}
 
             Options& setVerticalAlignment(VerticalAlignment va) {
                 this->verticalAlignment_ = va;
+
+                needsUpdate_ = true;
 
                 return *this;
             }
@@ -43,11 +45,15 @@ namespace threepp {
             Options& setHorizontalAlignment(HorizontalAlignment ha) {
                 this->horizontalAlignment_ = ha;
 
+                needsUpdate_ = true;
+
                 return *this;
             }
 
             Options& setNormalizedPosition(float x, float y) {
                 this->pos.set(x, y);
+
+                needsUpdate_ = true;
 
                 return *this;
             }
@@ -58,6 +64,8 @@ namespace threepp {
 
             Options& setMargin(const Vector2& margin) {
                 this->margin_.copy(margin);
+
+                needsUpdate_ = true;
 
                 return *this;
             }
@@ -74,10 +82,10 @@ namespace threepp {
                 return *this;
             }
 
-            void updateElement(Object3D& o, std::pair<int, int> size);
-
         private:
             friend class HUD;
+
+            bool needsUpdate_{true};
 
             Vector2 pos;
             Vector2 margin_;
@@ -86,24 +94,23 @@ namespace threepp {
 
             VerticalAlignment verticalAlignment_;
             HorizontalAlignment horizontalAlignment_;
+
+            void updateElement(std::pair<int, int> size);
+
+            Object3D* object_{nullptr};
         };
 
-        explicit HUD(std::pair<int, int> size);
-        explicit HUD(PeripheralsEventSource* eventSource);
+        explicit HUD(GLRenderer& renderer, PeripheralsEventSource* eventSource = nullptr);
 
-        void apply(GLRenderer& renderer);
+        void render();
 
-        void add(Object3D& object, Options opts = {});
+        Options& add(Object3D& object);
 
-        void add(const std::shared_ptr<Object3D>& object, Options opts = {});
+        Options& add(const std::shared_ptr<Object3D>& object);
 
         Options* getStoredOptions(Object3D& object);
 
         void remove(Object3D& object);
-
-        void setSize(std::pair<int, int> size);
-
-        void needsUpdate(Object3D& o);
 
         ~HUD();
 

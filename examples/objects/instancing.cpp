@@ -4,6 +4,8 @@
 #include "utility/FPSCounter.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/objects/TextSprite.hpp"
+
 #include <cmath>
 
 using namespace threepp;
@@ -19,13 +21,14 @@ namespace {
         for (int x = 0; x < amount; x++) {
             for (int y = 0; y < amount; y++) {
                 for (int z = 0; z < amount; z++) {
-                    matrix.setPosition(offset - float(x), offset - float(y), offset - float(z));
+                    matrix.setPosition(offset - static_cast<float>(x), offset - static_cast<float>(y), offset - static_cast<float>(z));
                     mesh.setMatrixAt(index, matrix);
                     mesh.setColorAt(index, color);
                     ++index;
                 }
             }
         }
+        mesh.setCount(static_cast<int>(std::pow(amount, 3)));
         mesh.instanceMatrix()->needsUpdate();
         mesh.instanceColor()->needsUpdate();
 
@@ -72,7 +75,6 @@ int main() {
         ImGui::SliderInt("Amount", &amount, 2, maxAmount);
         if (ImGui::IsItemEdited()) {
             colorMap.clear();
-            mesh->setCount(static_cast<int>(std::pow(amount, 3)));
             setupInstancedMesh(*mesh, amount);
         }
 
@@ -85,23 +87,18 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
-    HUD hud(canvas.size());
+    HUD hud(renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
-    TextGeometry::Options opts(font, 20, 2);
-    auto handle = Text2D(opts);
+    auto handle = TextSprite(font, 20.f);
     handle.setColor(Color::black);
-    hud.add(handle, HUD::Options()
-                            .setNormalizedPosition({0, 1})
-                            .setVerticalAlignment(HUD::VerticalAlignment::TOP));
+    hud.add(handle).setNormalizedPosition({0, 1});
 
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer.setSize(size);
-
-        hud.setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -119,10 +116,10 @@ int main() {
     long long it{0};
     canvas.animate([&]() {
         raycaster.setFromCamera(mouse, *camera);
-        const auto intersects = raycaster.intersectObject(*mesh);
+        const auto& intersects = raycaster.intersectObject(*mesh);
 
         if (!intersects.empty()) {
-            const auto instanceId = intersects.front().instanceId;
+            const auto& instanceId = intersects.front().instanceId;
             if (instanceId && !colorMap[*instanceId]) {
                 mesh->setColorAt(*instanceId, Color().randomize());
                 mesh->instanceColor()->needsUpdate();
@@ -133,13 +130,12 @@ int main() {
         counter.update(clock.getElapsedTime());
         if (it++ % 60 == 0) {
             handle.setText("FPS: " + std::to_string(counter.fps));
-            hud.needsUpdate(handle);
         }
 
         renderer.clear();
         renderer.render(*scene, *camera);
-        hud.apply(renderer);
 
+        hud.render();
         ui.render();
     });
 }
