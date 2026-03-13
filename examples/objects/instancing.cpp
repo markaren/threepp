@@ -116,7 +116,7 @@ int main() {
     long long it{0};
     canvas.animate([&]() {
         raycaster.setFromCamera(mouse, *camera);
-        const auto& intersects = raycaster.intersectObject(*mesh);
+        const auto intersects = raycaster.intersectObject(*mesh);
 
         if (!intersects.empty()) {
             const auto& instanceId = intersects.front().instanceId;

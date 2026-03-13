@@ -116,7 +116,7 @@ int main() {
         material->rotation += 1 * clock.getDelta();
 
         raycaster.setFromCamera(mouse, *camera);
-        const auto& intersects = raycaster.intersectObjects(sprites->children, true);
+        const auto intersects = raycaster.intersectObjects(sprites->children, true);
         if (!intersects.empty()) {
             const auto& intersection = intersects.front();
             helper->position.copy(intersection.point);

@@ -248,7 +248,7 @@ float Sphero::getTofMeasurement(const std::string& tofId) {
     tof->getWorldDirection(worldDir);
 
     raycaster_.set(worldPos, worldDir);
-    const auto& intersects = raycaster_.intersectObject(*parent, true);
+    const auto intersects = raycaster_.intersectObject(*parent, true);
     if (!intersects.empty()) {
         const auto& intersect = intersects.front();
 
