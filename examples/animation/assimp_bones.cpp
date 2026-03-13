@@ -70,11 +70,6 @@ int main() {
     stormTrooper->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
-
-        if (auto mat = m.material()->as<MaterialWithMap>()) {
-            mat->map->wrapS = TextureWrapping::Repeat;
-            mat->map->wrapT = TextureWrapping::Repeat;
-        }
     });
     scene.add(stormTrooper);
     stormTrooper->scale *= 0.6;

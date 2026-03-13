@@ -448,9 +448,10 @@ namespace threepp {
                 if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                     if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
-                        material.map = tex;
-
+                        tex->wrapS = TextureWrapping::Repeat;
+                        tex->wrapT = TextureWrapping::Repeat;
                         handleWrapping(mat, aiTextureType_DIFFUSE, *tex);
+                        material.map = tex;
                     }
                 } else {
                     C_STRUCT aiColor4D diffuse;
@@ -462,9 +463,10 @@ namespace threepp {
                 if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                     if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
-                        material.emissiveMap = tex;
-
+                        tex->wrapS = TextureWrapping::Repeat;
+                        tex->wrapT = TextureWrapping::Repeat;
                         handleWrapping(mat, aiTextureType_EMISSIVE, *tex);
+                        material.emissiveMap = tex;
                     }
                 } else {
                     C_STRUCT aiColor4D emissive;
