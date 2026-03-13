@@ -11,6 +11,7 @@ add_example(NAME "urdf_loader" LINK_ASSIMP LINK_IMGUI)
 add_example(NAME "urdf_loader_obj" LINK_IMGUI)
 add_example(NAME "urdf_loader_simple" LINK_IMGUI)
 add_example(NAME "gltf_loader")
+add_example(NAME "collada_loader")
 
 if (THREEPP_WITH_SVG)
     add_example(NAME "svg_loader" LINK_IMGUI)
