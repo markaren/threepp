@@ -110,6 +110,7 @@ set(publicHeaders
         "threepp/loaders/loaders.hpp"
         "threepp/loaders/AssimpLoader.hpp"
         "threepp/loaders/CubeTextureLoader.hpp"
+        "threepp/loaders/ColladaLoader.hpp"
         "threepp/loaders/FontLoader.hpp"
         "threepp/loaders/GLTFLoader.hpp"
         "threepp/loaders/MTLLoader.hpp"
@@ -346,6 +347,7 @@ set(sources
 
         "threepp/input/PeripheralsEventSource.cpp"
 
+        "threepp/loaders/ColladaLoader.cpp"
         "threepp/loaders/FontLoader.cpp"
         "threepp/loaders/GLTFLoader.cpp"
         "threepp/loaders/ImageLoader.cpp"
