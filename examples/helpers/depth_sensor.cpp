@@ -101,6 +101,7 @@ int main() {
 
     auto pcMaterial = PointsMaterial::create({{"size", 0.1f}, {"vertexColors", true}});
     auto points = Points::create(pcGeom, pcMaterial);
+    points->layers.set(1);
     points->frustumCulled = false;
     scene->add(points);
 
@@ -108,6 +109,7 @@ int main() {
     helper->visible = true;
     scene->add(helper);
 
+    bool sensorOnly = false;
     bool withColors = false;
     ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({});
@@ -116,6 +118,7 @@ int main() {
         ImGui::SliderFloat("Range noise", &lidar.rangeNoise, 0.f, 0.1f);
         ImGui::Checkbox("Show sensor helper", &helper->visible);
         ImGui::Checkbox("Sample colors", &withColors);
+        ImGui::Checkbox("Show sensor data only", &sensorOnly);
 
         ImGui::End();
     });
@@ -158,6 +161,12 @@ int main() {
         Vector3 sensorWorld;
         lidar.getWorldPosition(sensorWorld);
         updatePointCloud(*points, cloud, colors, sensorWorld, lidar.far());
+
+        if (sensorOnly) {
+            camera->layers.set(1);
+        } else {
+            camera->layers.enableAll();
+        }
 
         renderer.render(*scene, *camera);
         ui.render();
