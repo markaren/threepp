@@ -72,7 +72,7 @@ namespace {
 
 int main() {
 
-    Canvas canvas("Depth sensor", {{"antialiasing", 4}});
+    Canvas canvas("Lidar", {{"antialiasing", 4}});
     GLRenderer renderer(canvas.size());
 
     auto scene = Scene::create();
