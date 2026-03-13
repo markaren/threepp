@@ -11,9 +11,9 @@
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/objects/Mesh.hpp"
+#include "threepp/utils/BufferGeometryUtils.hpp"
 
 #include <cmath>
-#include <iostream>
 
 using namespace threepp;
 
@@ -35,7 +35,7 @@ namespace {
         params.thetaLength = math::PI;
         params.thetaStart = math::PI / 2;
 
-       const  auto startCap = CylinderGeometry::create(params);
+        const auto startCap = CylinderGeometry::create(params);
         startCap->applyMatrix4(Matrix4().makeTranslation(0, 0, -length / 2 + (height / 2)).premultiply(Matrix4().makeRotationZ(math::PI / 2)));
 
         params.thetaStart = -math::PI / 2;
@@ -93,6 +93,7 @@ Sphero::Sphero()
     auto leftTrackMaterial = MeshStandardMaterial::create();
     leftTrackMaterial->side = Side::Double;
     leftTrackMaterial->map = tex;
+    leftTrackMaterial->map->needsUpdate();
     auto leftTrack = Mesh::create(createTrack(trackSize.x, trackSize.y, trackSize.z), leftTrackMaterial);
     leftTrack->name = "leftTrack";
 
@@ -153,7 +154,7 @@ Sphero::Sphero()
     raycaster_.layers.set(0);
 }
 
-PerspectiveCamera &Sphero::camera() {
+PerspectiveCamera& Sphero::camera() {
 
     return *camera_;
 }
@@ -179,7 +180,7 @@ void Sphero::update(float dt) {
 
 void Sphero::driveRaw(uint8_t leftMode, uint8_t leftSpeed, uint8_t rightMode, uint8_t rightSpeed) {
 
-    float leftSpeedModifier, rightSpeedModifier;
+    float leftSpeedModifier{}, rightSpeedModifier{};
 
     switch (leftMode) {
         case 0x0: {
@@ -205,27 +206,27 @@ void Sphero::driveRaw(uint8_t leftMode, uint8_t leftSpeed, uint8_t rightMode, ui
         } break;
     }
 
-    translationDelta_ = (((float(leftSpeed) * leftSpeedModifier + float(rightSpeed) * rightSpeedModifier) / 2) / 255) * maxSpeed_;
-    rotationDelta_ = ((float(rightSpeed) * rightSpeedModifier) - (float(leftSpeed) * leftSpeedModifier)) / 255;
+    translationDelta_ = (static_cast<float>(leftSpeed) * leftSpeedModifier + static_cast<float>(rightSpeed) * rightSpeedModifier) / 2 / 255 * maxSpeed_;
+    rotationDelta_ = (static_cast<float>(rightSpeed) * rightSpeedModifier - static_cast<float>(leftSpeed) * leftSpeedModifier) / 255;
 }
 
 void Sphero::driveWithHeading(uint8_t speed, uint16_t heading, Flags flags) {
 
-    auto currentRotationY = rotation.y;
-    float targetRotationY = float(heading) * math::DEG2RAD;
+    const auto currentRotationY = rotation.y;
+    const auto targetRotationY = static_cast<float>(heading) * math::DEG2RAD;
 
     rotationDelta_ = shortest_signed_angle_path(currentRotationY, targetRotationY) * math::RAD2DEG;
     if (flags.isFlagSet(Flags::FastTurnMode)) {
         rotationDelta_ *= 3;
     }
 
-    translationDelta_ = float(speed / 255) * maxSpeed_ * (flags.isFlagSet(Flags::DriveReverse) ? -1.f : 1.f);
+    translationDelta_ = static_cast<float>(speed / 255) * maxSpeed_ * (flags.isFlagSet(Flags::DriveReverse) ? -1.f : 1.f);
     if (flags.isFlagSet(Flags::Boost)) {
         translationDelta_ *= 3;
     }
 }
 
-std::pair<float, float> Sphero::getTofMeasurements() {
+std::pair<float, float> Sphero::getTofMeasurements() const {
 
     return tofReadings_;
 }
@@ -236,7 +237,7 @@ void Sphero::updateTofMeasurements() {
     tofReadings_.second = getTofMeasurement("tof2");
 }
 
-float Sphero::getTofMeasurement(const std::string &tofId) {
+float Sphero::getTofMeasurement(const std::string& tofId) {
 
     float reading = std::numeric_limits<float>::infinity();
 
@@ -247,16 +248,16 @@ float Sphero::getTofMeasurement(const std::string &tofId) {
     tof->getWorldDirection(worldDir);
 
     raycaster_.set(worldPos, worldDir);
-    auto intersects = raycaster_.intersectObject(*parent, true);
+    const auto& intersects = raycaster_.intersectObject(*parent, true);
     if (!intersects.empty()) {
-        const auto &intersect = intersects.front();
+        const auto& intersect = intersects.front();
 
         if (intersect.distance <= 10) {
 
             reading = intersect.distance;
             tof->visible = true;
 
-            auto pos = tof->geometry()->getAttribute<float>("position");
+            const auto pos = tof->geometry()->getAttribute<float>("position");
             pos->setZ(1, intersect.distance);
             pos->needsUpdate();
         }

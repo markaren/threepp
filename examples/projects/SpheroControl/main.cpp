@@ -4,7 +4,7 @@
 #include "threepp/threepp.hpp"
 
 #include "Sphero.hpp"
-#include "KeyController.hpp"
+#include "SpheroKeyController.hpp"
 
 #include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/utils/ImageUtils.hpp"
@@ -82,7 +82,7 @@ int main() {
     auto cameraHelper = CameraHelper::create(spheroCamera);
     scene.add(cameraHelper);
 
-    KeyController keyController(sphero);
+    SpheroKeyController keyController(sphero);
     canvas.addKeyListener(keyController);
     std::cout << "Press 'r' to change driving mode. " << std::endl;
 
