@@ -5,7 +5,6 @@
 #include "threepp/loaders/ColladaLoader.hpp"
 #include "threepp/objects/Group.hpp"
 
-#include <iostream>
 
 using namespace threepp;
 
