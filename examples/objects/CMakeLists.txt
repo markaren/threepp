@@ -13,7 +13,7 @@ add_example(NAME "lod" WEBWEB_EMBED
 add_example(NAME "points" LINK_IMGUI WEB)
 
 add_example(NAME "bones" LINK_IMGUI)
-add_example(NAME "decal" LINK_IMGUI LINK_ASSIMP)
+add_example(NAME "decal" LINK_IMGUI)
 add_example(NAME "water" LINK_IMGUI WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/textures/waternormals.jpg@data/textures/waternormals.jpg"
 )
