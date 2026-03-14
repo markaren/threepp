@@ -9,13 +9,12 @@ int main() {
 
     Canvas canvas("Cubemap");
     GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
 
     PerspectiveCamera camera(50, canvas.aspect(), 0.1, 1000);
     camera.position.z = 10;
 
     std::filesystem::path path(std::string(DATA_FOLDER) + "/textures/cube/Bridge2");
-    std::array<std::filesystem::path, 6> urls{
+    std::array urls{
             // clang-format off
             path / "posx.jpg", path / "negx.jpg",
             path / "posy.jpg", path / "negy.jpg",
