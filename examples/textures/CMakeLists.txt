@@ -1,6 +1,6 @@
 
 add_example(NAME "cubemap")
-add_example(NAME "texture3d")
+add_example(NAME "texture3d" LINK_IMGUI)
 add_example(NAME "texture2d" WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/textures/crate.gif@data/textures/crate.gif"
         "${PROJECT_SOURCE_DIR}/data/textures/checker.png@data/textures/checker.png"

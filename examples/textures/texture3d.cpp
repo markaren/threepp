@@ -1,10 +1,9 @@
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/materials/RawShaderMaterial.hpp"
 #include "threepp/math/ImprovedNoise.hpp"
 #include "threepp/textures/DataTexture3D.hpp"
 #include "threepp/threepp.hpp"
-
-#include <cmath>
 
 using namespace threepp;
 
@@ -46,7 +45,7 @@ namespace {
             for (unsigned y = 0; y < size; y++) {
                 for (unsigned x = 0; x < size; x++) {
 
-                    auto d = 1.f - vector.set(x, y, z).subScalar(size / 2).divideScalar(size).length();
+                    const auto d = 1.f - vector.set(x, y, z).subScalar(size / 2).divideScalar(size).length();
                     data[i] = (128 + 128 * perlin.noise(x * scale / 1.5f, y * scale, z * scale / 1.5f)) * d * d;
                     ++i;
                 }
@@ -63,9 +62,9 @@ int main() {
     Canvas canvas("DataTexture3D", {{"aa", 4}});
     GLRenderer renderer(canvas.size());
     renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color::blue);
 
     Scene scene;
+    scene.background = Color(0x1a1a2e);
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 100);
     camera.position.z = 1.5f;
 
@@ -91,18 +90,53 @@ int main() {
         renderer.setSize(size);
     });
 
+    // UI parameters mirroring the shader uniforms
+    float threshold = 0.25f;
+    float opacity = 0.25f;
+    float range = 0.1f;
+    int steps = 100;
+    bool autoRotate = true;
+
+    ImguiFunctionalContext ui(canvas, [&] {
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
+        ImGui::SetNextWindowSize({260, 0}, ImGuiCond_Once);
+        ImGui::Begin("Volume controls");
+
+        if (ImGui::SliderFloat("Threshold", &threshold, 0.0f, 1.0f))
+            material->uniforms.at("threshold").setValue(threshold);
+        if (ImGui::SliderFloat("Opacity", &opacity, 0.0f, 1.0f))
+            material->uniforms.at("opacity").setValue(opacity);
+        if (ImGui::SliderFloat("Range", &range, 0.0f, 0.5f))
+            material->uniforms.at("range").setValue(range);
+        if (ImGui::SliderInt("Steps", &steps, 1, 300))
+            material->uniforms.at("steps").setValue(steps);
+
+        ImGui::Separator();
+        ImGui::Checkbox("Auto-rotate", &autoRotate);
+
+        ImGui::End();
+    });
+
+    IOCapture capture{};
+    capture.preventMouseEvent = [] {
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
 
     Clock clock;
     canvas.animate([&]() {
-        float t = clock.getElapsedTime();
+        const float dt = clock.getDelta();
 
         material->uniforms.at("cameraPos").value<Vector3>().copy(camera.position);
         material->uniforms.at("frame").value<int>()++;
 
-        int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t) + 50);
-        material->uniforms.at("steps").value<int>() = std::max(1, step);
+        if (autoRotate) {
+            mesh->rotation.y += 0.3f * dt;
+            mesh->rotation.x += 0.1f * dt;
+        }
 
         renderer.render(scene, camera);
+        ui.render();
     });
 }
 
