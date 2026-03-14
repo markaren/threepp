@@ -17,6 +17,7 @@ namespace threepp {
     public:
         explicit URDFLoader();
 
+        // By default, the loader uses ModelLoader to load geometry files referenced in the URDF.
         URDFLoader& setGeometryLoader(std::shared_ptr<Loader<Group>> loader);
 
         std::shared_ptr<Robot> load(const std::filesystem::path& path);

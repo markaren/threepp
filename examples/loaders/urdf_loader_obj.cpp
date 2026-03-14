@@ -31,7 +31,6 @@ int main() {
     scene->add(light);
 
     URDFLoader loader;
-    loader.setGeometryLoader(std::make_shared<OBJLoader>());
     auto robot = loader.load(urdfPath);
     robot->rotation.x = -math::PI / 2;
     robot->showColliders(false);

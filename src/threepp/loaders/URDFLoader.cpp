@@ -11,6 +11,7 @@
 #include "threepp/utils/StringUtils.hpp"
 
 #include "pugixml.hpp"
+#include "threepp/loaders/ModelLoader.hpp"
 
 #include <iostream>
 
@@ -189,7 +190,9 @@ namespace {
 
 struct URDFLoader::Impl {
 
-    std::shared_ptr<Loader<Group>> loader = nullptr;
+    std::shared_ptr<Loader<Group>> loader;
+
+    Impl(): loader(std::make_shared<ModelLoader>()) {}
 
     std::shared_ptr<Robot> load(const std::filesystem::path& path) {
         pugi::xml_document doc;

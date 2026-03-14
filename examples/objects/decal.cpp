@@ -2,7 +2,7 @@
 #include "threepp/extras/imgui/ImguiContext.hpp"
 #include <threepp/core/Raycaster.hpp>
 #include <threepp/geometries/DecalGeometry.hpp>
-#include <threepp/loaders/AssimpLoader.hpp>
+#include <threepp/loaders/ModelLoader.hpp>
 #include <threepp/threepp.hpp>
 
 
@@ -113,16 +113,16 @@ int main() {
     OrbitControls controls{*camera, canvas};
 
     TextureLoader tl;
-    AssimpLoader loader;
+    ModelLoader loader;
     std::filesystem::path folder = std::string(DATA_FOLDER) + "/models/gltf/LeePerrySmith";
     auto model = loader.load(folder / "LeePerrySmith.glb");
     Mesh* mesh = nullptr;
     model->traverseType<Mesh>([&](Mesh& _) {
         mesh = &_;
         const auto mat = MeshPhongMaterial::create({{
-                {"map", tl.load(folder / "Map-COL.jpg", false)},
-                {"specularMap", tl.load(folder / "Map-SPEC.jpg", false)},
-                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg", false)},
+                {"map", tl.load(folder / "Map-COL.jpg")},
+                {"specularMap", tl.load(folder / "Map-SPEC.jpg")},
+                {"normalMap", tl.load(folder / "Infinite-Level_02_Tangent_SmoothUV.jpg")},
                 {"shininess", 25.f},
         }});
         mesh->setMaterial(mat);
