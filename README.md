@@ -1,4 +1,4 @@
-## threepp (Work in progress)
+## threepp
 
 Cross-platform C++20 port of the popular Javascript 3D library [three.js](https://github.com/mrdoob/three.js/) [r129](https://github.com/mrdoob/three.js/tree/r129).
 
@@ -6,7 +6,10 @@ Cross-platform C++20 port of the popular Javascript 3D library [three.js](https:
 #### Current state of the project
 
 Most of the core library has been ported, including advanced rendering capabilities, 
-however much remains to be done..
+however much remains to be done.. Nevertheless, the library is **very** usable for a wide variety of rendering applications.
+
+> You get a scene graph, materials, lighting, cameras, render loop, controls, loaders, all composable, in a handful of lines.
+
 
 ##### What works?
 
@@ -20,7 +23,7 @@ however much remains to be done..
 * Controls [Orbit, Fly, Drag, Transform]
 * Water and Sky shaders
 * Built-in text rendering and font loading [typeface.json, TTF]
-* Loaders [Binary STL, OBJ/MTL, GLTF, SVG, URDF]
+* Loaders [Binary STL, OBJ/MTL, GLTF, COLLADA, SVG, URDF]
 * Animations (limited to transforms)
 * Basic Audio support using [miniaudio](https://miniaud.io/docs/manual/index.html)
 * Generic model loader based on [Assimp](https://github.com/assimp/assimp)
