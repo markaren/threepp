@@ -2,8 +2,10 @@
 #ifndef THREEPP_YOUBOUT_HPP
 #define THREEPP_YOUBOUT_HPP
 
-#include "threepp/loaders/AssimpLoader.hpp"
+#include "threepp/loaders/ColladaLoader.hpp"
 #include "threepp/objects/Group.hpp"
+
+#include <iostream>
 
 using namespace threepp;
 
@@ -12,7 +14,7 @@ class Youbot: public Object3D {
 
 public:
     void driveForwards(float dt) {
-        float scale = 100;
+        constexpr float scale = 100;
         translateX(translationSpeed * dt);
         back_left_wheel->rotateY(math::DEG2RAD * translationSpeed * scale * dt);
         back_right_wheel->rotateY(math::DEG2RAD * translationSpeed * scale * dt);
@@ -21,7 +23,7 @@ public:
     }
 
     void driveBackwards(float dt) {
-        float scale = 100;
+        constexpr float scale = 100;
         translateX(-translationSpeed * dt);
         back_left_wheel->rotateY(-math::DEG2RAD * translationSpeed * scale * dt);
         back_right_wheel->rotateY(-math::DEG2RAD * translationSpeed * scale * dt);
@@ -30,7 +32,7 @@ public:
     }
 
     void driveRight(float dt) {
-        float scale = 200;
+        constexpr float scale = 200;
         rotateY(-rotationSpeed * dt);
         back_left_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
         back_right_wheel->rotateY(-math::DEG2RAD * rotationSpeed * scale * dt);
@@ -39,7 +41,7 @@ public:
     }
 
     void driveLeft(float dt) {
-        float scale = 200;
+        constexpr float scale = 200;
         rotateY(rotationSpeed * dt);
         back_left_wheel->rotateY(-math::DEG2RAD * rotationSpeed * scale * dt);
         back_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
@@ -47,7 +49,7 @@ public:
         front_right_wheel->rotateY(math::DEG2RAD * rotationSpeed * scale * dt);
     }
 
-    void setJointValues(const std::vector<float>& vals) {
+    void setJointValues(const std::vector<float>& vals) const {
         arm_joint1->rotation.z = math::DEG2RAD * vals[0];
         arm_joint2->rotation.z = math::DEG2RAD * (vals[1] - 90);
         arm_joint3->rotation.z = math::DEG2RAD * (vals[2] - 90);
@@ -55,7 +57,7 @@ public:
         arm_joint5->rotation.z = math::DEG2RAD * vals[4];
     }
 
-    std::vector<float> getJointValues() {
+    [[nodiscard]] std::vector<float> getJointValues() const {
         return {
                 arm_joint1->rotation.z * math::RAD2DEG,
                 arm_joint2->rotation.z * math::RAD2DEG + 90,
@@ -66,8 +68,9 @@ public:
     }
 
     static std::unique_ptr<Youbot> create(const std::filesystem::path& path) {
-        AssimpLoader loader;
-        auto model = loader.load(path);
+        ColladaLoader loader;
+        const auto model = loader.load(path);
+        model->applyMatrix4(Matrix4().makeRotationAxis({1,0,0}, math::DEG2RAD * -90));
         model->scale.multiplyScalar(10);
 
         return std::unique_ptr<Youbot>(new Youbot(model));

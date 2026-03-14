@@ -568,7 +568,9 @@ struct ColladaLoader::Impl {
         std::function<void(const pugi::xml_node&, Group&)> parseNode;
         parseNode = [&](const pugi::xml_node& nodeXml, Group& parent) {
             auto group = Group::create();
-            group->name = nodeXml.attribute("name").value();
+            std::string nodeName = nodeXml.attribute("name").value();
+            if (nodeName.empty()) nodeName = nodeXml.attribute("id").value();
+            group->name = nodeName;
 
             Matrix4 localMatrix = buildNodeTransform(nodeXml);
             Vector3 pos, scale;
