@@ -7,7 +7,7 @@ if (TARGET "instancing")
 endif ()
 
 add_example(NAME "sprite")
-add_example(NAME "lod" WEBWEB_EMBED
+add_example(NAME "lod" WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
 )
 add_example(NAME "points" LINK_IMGUI WEB)
