@@ -40,8 +40,8 @@ int main() {
     });
 
     Clock clock;
-    canvas.animate([&]() {
-        float dt = clock.getDelta();
+    canvas.animate([&] {
+        const auto dt = clock.getDelta();
 
         mesh->rotation.z += 1 * dt;
 
