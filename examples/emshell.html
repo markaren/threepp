@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{{ TITLE }}}</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #0d0d0d;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        header {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: rgba(13,13,13,0.85);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+            z-index: 10;
+        }
+
+        header a {
+            color: #7eb8f7;
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+        }
+
+        header a:hover { color: #aed4ff; }
+
+        header .sep { color: rgba(255,255,255,0.2); }
+
+        header .title {
+            font-size: 0.85rem;
+            color: rgba(255,255,255,0.5);
+        }
+
+        #canvas-container {
+            position: relative;
+            margin-top: 41px; /* header height */
+            width: 100vw;
+            height: calc(100vh - 41px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            display: block;
+            outline: none;
+        }
+
+        #loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #0d0d0d;
+            gap: 16px;
+            transition: opacity 0.4s ease;
+        }
+
+        #loading.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(126,184,247,0.15);
+            border-top-color: #7eb8f7;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #loading p {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.35);
+            letter-spacing: 0.05em;
+        }
+
+        #status {
+            position: fixed;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.25);
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        #status:empty { display: none; }
+    </style>
+</head>
+<body>
+
+<header>
+    <a href="https://github.com/markaren/threepp" target="_blank">threepp</a>
+    <span class="sep">/</span>
+    <span class="title">{{{ TITLE }}}</span>
+</header>
+
+<div id="canvas-container">
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    <div id="loading">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+    </div>
+</div>
+
+<div id="status"></div>
+
+<script>
+    var canvas = document.getElementById('canvas');
+    var container = document.getElementById('canvas-container');
+
+    function syncCanvasSize() {
+        var w = container.clientWidth;
+        var h = container.clientHeight;
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        window.dispatchEvent(new Event('resize'));
+    }
+
+    // Size canvas before module loads so Emscripten picks up the right dimensions.
+    syncCanvasSize();
+
+    new ResizeObserver(syncCanvasSize).observe(container);
+
+    var Module = {
+        canvas: canvas,
+        setStatus: function(text) {
+            var el = document.getElementById('status');
+            el.textContent = text;
+        },
+        onRuntimeInitialized: function() {
+            var loading = document.getElementById('loading');
+            loading.classList.add('hidden');
+            setTimeout(function() { loading.remove(); }, 500);
+            syncCanvasSize();
+        },
+        print: function(text) { console.log(text); },
+        printErr: function(text) { console.error(text); }
+    };
+    window.onerror = function(msg) {
+        document.getElementById('status').textContent = 'Error: ' + msg;
+    };
+</script>
+
+{{{ SCRIPT }}}
+
+</body>
+</html>
