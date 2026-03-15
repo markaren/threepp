@@ -18,7 +18,11 @@ add_example(NAME "water" LINK_IMGUI WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/textures/waternormals.jpg@data/textures/waternormals.jpg"
 )
 
-add_example(NAME "particle_system" LINK_IMGUI)
+add_example(NAME "particle_system" LINK_IMGUI WEB WEB_EMBED
+        "${PROJECT_SOURCE_DIR}/data/textures/star.png@data/textures/"
+        "${PROJECT_SOURCE_DIR}/data/textures/spark.png@data/textures/"
+        "${PROJECT_SOURCE_DIR}/data/textures/smokeparticle.png@data/textures/"
+)
 
 add_example(NAME "text_sprite" LINK_IMGUI WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
