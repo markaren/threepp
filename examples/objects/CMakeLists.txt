@@ -6,7 +6,10 @@ if (TARGET "instancing")
     target_include_directories("instancing" PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
 endif ()
 
-add_example(NAME "sprite")
+add_example(NAME "sprite" WEB WEB_EMBED
+        "${PROJECT_SOURCE_DIR}/data/textures/sprite0.png@data/textures/"
+        "${PROJECT_SOURCE_DIR}/data/textures/three.png@data/textures/"
+)
 add_example(NAME "lod" WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
 )
