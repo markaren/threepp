@@ -1,9 +1,10 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title></title>
+    <title>threepp</title>
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -51,8 +52,6 @@
         header a:hover { color: #aed4ff; }
         .sep { color: var(--border); }
         .title { font-size: 0.82rem; color: var(--muted); }
-
-        /* spacer pushes controls to the right */
         .spacer { flex: 1; }
 
         /* ── Header controls ── */
@@ -62,7 +61,7 @@
             gap: 12px;
         }
 
-.btn {
+        .btn {
             padding: 3px 10px;
             font-size: 0.72rem;
             background: rgba(126,184,247,0.1);
@@ -88,6 +87,9 @@
             flex: 1;
             position: relative;
             overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         canvas {
@@ -179,10 +181,12 @@
 <header>
     <a href="https://github.com/markaren/threepp" target="_blank">threepp</a>
     <span class="sep">/</span>
+    <a href="index.html">examples</a>
+    <span class="sep">/</span>
     <span class="title" id="page-title"></span>
     <div class="spacer"></div>
     <div class="controls">
-        <button class="btn" onclick="Module.requestFullscreen(true, true)">
+        <button class="btn" onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked, document.getElementById('resize').checked)">
             Fullscreen
         </button>
         <button class="btn btn-terminal" id="btn-terminal" onclick="toggleTerminal()">
@@ -190,6 +194,10 @@
         </button>
     </div>
 </header>
+
+<!-- hidden inputs kept for Emscripten's requestFullscreen API -->
+<input type="checkbox" id="resize"      style="display:none" checked>
+<input type="checkbox" id="pointerLock" style="display:none" checked>
 
 <div id="canvas-container">
     <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
@@ -200,120 +208,98 @@
     </div>
 </div>
 
-<div id="terminal" class="hidden">
-    <div id="terminal-bar">
-        <span>STDOUT</span>
-    </div>
+<div id="terminal">
+    <div id="terminal-bar"><span>STDOUT</span></div>
     <textarea id="output" readonly></textarea>
 </div>
 
-<script>
-    var canvas    = document.getElementById('canvas');
-    var container = document.getElementById('canvas-container');
+<script type='text/javascript'>
+    var statusElement   = document.getElementById('load-status');
+    var progressElement = document.getElementById('progress');
+    var spinnerElement  = document.getElementById('spinner');
+    var canvasElement   = document.getElementById('canvas');
+    var outputElement   = document.getElementById('output');
 
-    function syncCanvasSize() {
-        if (document.fullscreenElement) return;
-        var w = container.clientWidth;
-        var h = container.clientHeight;
-        canvas.width  = w;
-        canvas.height = h;
-        canvas.style.width  = w + 'px';
-        canvas.style.height = h + 'px';
-        window.dispatchEvent(new Event('resize'));
-    }
-    syncCanvasSize();
-    new ResizeObserver(syncCanvasSize).observe(container);
-    document.addEventListener('fullscreenchange', function() {
-        if (!document.fullscreenElement) syncCanvasSize();
-    });
+    canvasElement.addEventListener('webglcontextlost', (e) => {
+        alert('WebGL context lost. You will need to reload the page.');
+        e.preventDefault();
+    }, false);
 
-    function toggleTerminal() {
-        var panel = document.getElementById('terminal');
-        var btn   = document.getElementById('btn-terminal');
-        var hidden = panel.classList.toggle('hidden');
-        btn.classList.toggle('active', !hidden);
-        syncCanvasSize();
-    }
-
-    var output = document.getElementById('output');
-
-    function appendOutput(text) {
-        output.value += text + '\n';
-        output.scrollTop = output.scrollHeight;
-    }
-
-    var statusEl   = document.getElementById('load-status');
-    var progressEl = document.getElementById('progress');
-    var spinnerEl  = document.getElementById('spinner');
+    var setStatus = (text) => {
+        if (!setStatus.last) setStatus.last = { time: Date.now(), text: '' };
+        if (text === setStatus.last.text) return;
+        var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+        var now = Date.now();
+        if (m && now - setStatus.last.time < 30) return;
+        setStatus.last.time = now;
+        setStatus.last.text = text;
+        if (m) {
+            text = m[1];
+            progressElement.value  = parseInt(m[2]) * 100;
+            progressElement.max    = parseInt(m[4]) * 100;
+            progressElement.hidden = false;
+            spinnerElement.hidden  = false;
+        } else {
+            progressElement.value  = null;
+            progressElement.max    = null;
+            progressElement.hidden = true;
+            if (!text) spinnerElement.style.display = 'none';
+        }
+        statusElement.innerHTML = text;
+    };
 
     var Module = {
-        canvas: canvas,
-
-        print: function(text) {
-            if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
-            console.log(text);
-            appendOutput(text);
-        },
-        printErr: function(text) {
-            if (arguments.length > 1) text = Array.prototype.slice.call(arguments).join(' ');
-            console.error(text);
-            appendOutput(text);
-        },
-
-        setStatus: function(text) {
-            if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
-            if (text === Module.setStatus.last.text) return;
-            var match = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
-            var now = Date.now();
-            if (match && now - Module.setStatus.last.time < 30) return;
-            Module.setStatus.last.time = now;
-            Module.setStatus.last.text = text;
-            if (match) {
-                statusEl.textContent = match[1];
-                progressEl.value  = 100 * parseInt(match[2]);
-                progressEl.max    = 100 * parseInt(match[4]);
-                progressEl.hidden = false;
-            } else {
-                progressEl.hidden = true;
-                if (!text) spinnerEl.style.display = 'none';
+        print(...args) {
+            console.log(...args);
+            if (outputElement) {
+                outputElement.value += args.join(' ') + '\n';
+                outputElement.scrollTop = outputElement.scrollHeight;
             }
-            statusEl.textContent = text;
         },
-
+        canvas: canvasElement,
+        setStatus: setStatus,
         totalDependencies: 0,
-        monitorRunDependencies: function(left) {
+        monitorRunDependencies(left) {
             this.totalDependencies = Math.max(this.totalDependencies, left);
-            Module.setStatus(left
+            setStatus(left
                 ? 'Preparing… (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')'
                 : 'All downloads complete.');
         },
-
-        onRuntimeInitialized: function() {
+        onRuntimeInitialized() {
             var loading = document.getElementById('loading');
             loading.classList.add('hidden');
-            setTimeout(function() { loading.remove(); }, 500);
-            syncCanvasSize();
+            setTimeout(() => loading.remove(), 500);
         }
     };
 
-    Module.setStatus('Downloading…');
+    setStatus('Downloading…');
 
-    window.onerror = function(msg) {
-        Module.setStatus('Exception thrown — see console');
-        spinnerEl.style.display = 'none';
-        Module.setStatus = function(m) { if (m) console.error('[post-exception] ' + m); };
+    window.onerror = (event) => {
+        setStatus('Exception thrown, see JavaScript console');
+        spinnerElement.style.display = 'none';
+        setStatus = (text) => {
+            if (text) console.error('[post-exception status] ' + text);
+        };
     };
-</script>
 
-<script>
+    // ── Terminal toggle ──
+    function toggleTerminal() {
+        var panel = document.getElementById('terminal');
+        var btn   = document.getElementById('btn-terminal');
+        panel.classList.toggle('hidden');
+        btn.classList.toggle('active', !panel.classList.contains('hidden'));
+    }
+
+    // mark terminal button active on load
+    document.getElementById('btn-terminal').classList.add('active');
+
+    // ── Page title from filename ──
     (function() {
         var name = location.pathname.split('/').pop().replace(/\.html?$/i, '');
-        document.title = name;
+        document.title = name || 'threepp';
         document.getElementById('page-title').textContent = name;
     })();
 </script>
-
 {{{ SCRIPT }}}
-
 </body>
 </html>
