@@ -291,6 +291,8 @@ struct OceanUniforms {
 @group(0) @binding(6) var s_gradientMap: sampler;
 @group(0) @binding(7) var t_heightMap: texture_2d<f32>;
 @group(0) @binding(8) var s_heightMap: sampler;
+@group(0) @binding(9) var t_reflectionMap: texture_cube<f32>;
+@group(0) @binding(10) var s_reflectionMap: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -336,7 +338,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 }
 )";
 
-// Fragment shader: Fresnel + procedural sky reflection + specular
+// Fragment shader: Fresnel + cubemap reflection + specular
 constexpr const char* waterFragmentWGSL = R"(
 
 @fragment
@@ -346,8 +348,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Light direction (from first directional light)
     let lightDirection = normalize(lights.dirDirection0);
 
-    // Diffuse lighting
-    let ndl = max(0.0, dot(normal, -lightDirection));
+    // Diffuse lighting (threepp convention: lightDirection points toward light source)
+    let ndl = max(0.0, dot(normal, lightDirection));
     let diffuseColor = vec3<f32>(0.01, 0.06, 0.1);
 
     // View ray
@@ -356,15 +358,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Fresnel (Schlick approximation)
     let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(-viewRayW, normal), 0.0), 5.0);
 
-    // Procedural sky reflection (gradient from horizon to zenith)
+    // Cubemap sky reflection
     let reflectedDir = reflect(viewRayW, normal);
-    let skyT = clamp(reflectedDir.y * 0.5 + 0.5, 0.0, 1.0);
-    let skyHorizon = vec3<f32>(0.6, 0.8, 0.95);
-    let skyZenith = vec3<f32>(0.2, 0.4, 0.8);
-    let reflectedColor = mix(skyHorizon, skyZenith, skyT);
+    let reflectedColor = textureSample(t_reflectionMap, s_reflectionMap, reflectedDir).rgb;
 
     // Specular highlight
-    let specular = pow(max(0.0, dot(reflect(-lightDirection, normal), viewRayW)), 720.0) * 210.0;
+    let specular = pow(max(0.0, dot(reflect(lightDirection, normal), viewRayW)), 720.0) * 210.0;
 
     // Final composition
     let finalColor = mix(diffuseColor * ndl, reflectedColor + specular, fresnel);

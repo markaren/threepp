@@ -27,16 +27,29 @@ namespace webtide {
               pipeline_(renderer, phillipsSpectrumWGSL, "computeSpectrum"),
               textureSize_(textureSize), tileSize_(tileSize) {
 
-            // Generate Gaussian noise texture on CPU (Box-Muller transform)
-            std::mt19937 rng(42);
-            std::normal_distribution<float> dist(0.0f, 1.0f);
+            // Generate noise matching original BabylonJS WebTide:
+            // gaussianRandom() values stored into Uint8Array (truncate + mod 256),
+            // then read by GPU as normalized [0,1] floats.
+            std::mt19937 rng(std::random_device{}());
+            std::uniform_real_distribution<float> uniform(0.0f, 1.0f);
+
+            auto gaussianRandom = [&]() -> float {
+                return std::cos(2.0f * 3.14159265f * uniform(rng))
+                     * std::sqrt(-2.0f * std::log(uniform(rng)));
+            };
+
+            // Replicate JavaScript Uint8Array truncation: trunc to int, mod 256
+            auto toUint8 = [](float v) -> uint8_t {
+                int n = static_cast<int>(std::trunc(v));
+                return static_cast<uint8_t>(((n % 256) + 256) % 256);
+            };
 
             std::vector<float> noiseData(textureSize * textureSize * 4);
             for (uint32_t i = 0; i < textureSize * textureSize; i++) {
-                noiseData[i * 4 + 0] = dist(rng); // R
-                noiseData[i * 4 + 1] = dist(rng); // G
-                noiseData[i * 4 + 2] = 0.0f;      // B (unused)
-                noiseData[i * 4 + 3] = 0.0f;      // A (unused)
+                noiseData[i * 4 + 0] = static_cast<float>(toUint8(gaussianRandom())) / 255.0f;
+                noiseData[i * 4 + 1] = static_cast<float>(toUint8(gaussianRandom())) / 255.0f;
+                noiseData[i * 4 + 2] = 0.0f;
+                noiseData[i * 4 + 3] = 0.0f;
             }
             noise_.write(noiseData.data(), noiseData.size() * sizeof(float));
 

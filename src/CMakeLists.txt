@@ -545,7 +545,12 @@ endif ()
 if (THREEPP_WITH_DAWN)
     list(APPEND sources
             "threepp/renderers/DawnRenderer.cpp"
+            "threepp/renderers/dawn/DawnBufferPool.cpp"
             "threepp/renderers/dawn/DawnGeometries.cpp"
+            "threepp/renderers/dawn/DawnMaterials.cpp"
+            "threepp/renderers/dawn/DawnPipelines.cpp"
+            "threepp/renderers/dawn/DawnShaders.cpp"
+            "threepp/renderers/dawn/DawnShadowMap.cpp"
             "threepp/renderers/dawn/DawnTextures.cpp"
             "threepp/renderers/dawn/GPUTexture.cpp"
             "threepp/renderers/dawn/GPUBuffer.cpp"

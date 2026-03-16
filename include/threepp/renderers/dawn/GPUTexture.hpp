@@ -27,6 +27,11 @@ namespace threepp {
             RGBA8Unorm
         };
 
+        enum class Dimension {
+            D2,
+            Cube
+        };
+
         enum Usage : uint32_t {
             Storage        = 1 << 0,
             TextureBinding = 1 << 1,
@@ -43,6 +48,11 @@ namespace threepp {
         GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
                    Format format, uint32_t usage = Storage | TextureBinding | CopyDst);
 
+        /// Create a GPU texture with explicit dimension (2D or Cube).
+        GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
+                   Format format, Dimension dimension,
+                   uint32_t usage = TextureBinding | CopyDst);
+
         ~GPUTexture();
 
         GPUTexture(const GPUTexture&) = delete;
@@ -52,6 +62,12 @@ namespace threepp {
 
         /// Upload CPU data to the texture.
         void write(const void* data, size_t size);
+
+        /// Upload CPU data to a single face of a cube texture.
+        /// @param face Face index (0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z)
+        /// @param data Pointer to pixel data (RGB data is automatically converted to RGBA)
+        /// @param size Size of data in bytes
+        void writeFace(uint32_t face, const void* data, size_t size);
 
         /// Get the raw WGPUTexture handle.
         [[nodiscard]] WGPUTexture texture() const { return texture_; }
@@ -65,6 +81,7 @@ namespace threepp {
         [[nodiscard]] uint32_t width() const { return width_; }
         [[nodiscard]] uint32_t height() const { return height_; }
         [[nodiscard]] Format format() const { return format_; }
+        [[nodiscard]] Dimension dimension() const { return dimension_; }
 
     private:
         WGPUDevice device_ = nullptr;
@@ -75,6 +92,7 @@ namespace threepp {
         uint32_t width_ = 0;
         uint32_t height_ = 0;
         Format format_;
+        Dimension dimension_ = Dimension::D2;
         uint32_t bytesPerPixel_ = 0;
 
         void release();

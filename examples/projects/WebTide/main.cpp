@@ -17,7 +17,9 @@
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/loaders/CubeTextureLoader.hpp"
 
 #include "threepp/renderers/dawn/GPUTexture.hpp"
 
@@ -33,8 +35,8 @@ using namespace threepp;
 int main() {
 
     constexpr uint32_t textureSize = 256;
-    constexpr float tileSize = 10.0f;
-    constexpr int tileRadius = 1; // 3x3 grid (-1..1)
+    constexpr float tileSize = 20.0f;
+    constexpr int tileRadius = 3; // 7x7 grid (-3..3)
 
     // Create window and renderer
     Canvas::Parameters params;
@@ -45,7 +47,7 @@ int main() {
     Canvas canvas(params);
 
     DawnRenderer renderer(canvas);
-    renderer.setClearColor(Color(0x87ceeb)); // Sky blue
+    renderer.setClearColor(Color::black); // Will be fully covered by skybox
 
     // Camera
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000.f);
@@ -65,7 +67,7 @@ int main() {
     scene->add(ambient);
 
     auto dirLight = DirectionalLight::create(Color(0xffffff), 0.8f);
-    dirLight->position.set(1, 1, -3);
+    dirLight->position.set(-1, 1, -3);
     scene->add(dirLight);
 
     // Initialize ocean compute pipelines
@@ -114,7 +116,7 @@ int main() {
     }
 
     // Ground plane (sand)
-    auto groundGeo = PlaneGeometry::create(tileSize * tileRadius * 6.0f, tileSize * tileRadius * 6.0f);
+    auto groundGeo = PlaneGeometry::create((1+tileRadius * 2.0f) * tileSize, (1+tileRadius * 2.0f) * tileSize);
     groundGeo->rotateX(-math::PI / 2.0f);
     auto groundMat = MeshLambertMaterial::create();
     groundMat->color = Color(0xc2b280); // Sand color
@@ -131,8 +133,69 @@ int main() {
     }
 
     auto ground = Mesh::create(groundGeo, groundMat);
-    ground->position.y = -2.0f;
+    ground->position.y = -5.0f;
     scene->add(ground);
+
+    // Skybox (Tropical Sunny Day) – 6 individual textures mapped to box faces
+    std::filesystem::path skyboxPath(std::string(DATA_FOLDER) + "/textures/skybox");
+
+    TextureLoader skyTexLoader;
+    auto texPx = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_px.jpg").string());
+    auto texNx = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_nx.jpg").string());
+    auto texPy = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_py.jpg").string());
+    auto texNy = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_ny.jpg").string());
+    auto texPz = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_pz.jpg").string());
+    auto texNz = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_nz.jpg").string());
+
+    auto skyboxGeo = BoxGeometry::create(500.f, 500.f, 500.f);
+
+    auto matPx = MeshBasicMaterial::create();
+    matPx->map = texPx;
+    matPx->side = Side::Back;
+
+    auto matNx = MeshBasicMaterial::create();
+    matNx->map = texNx;
+    matNx->side = Side::Back;
+
+    auto matPy = MeshBasicMaterial::create();
+    matPy->map = texPy;
+    matPy->side = Side::Back;
+
+    auto matNy = MeshBasicMaterial::create();
+    matNy->map = texNy;
+    matNy->side = Side::Back;
+
+    auto matPz = MeshBasicMaterial::create();
+    matPz->map = texPz;
+    matPz->side = Side::Back;
+
+    auto matNz = MeshBasicMaterial::create();
+    matNz->map = texNz;
+    matNz->side = Side::Back;
+
+    std::vector<std::shared_ptr<Material>> skyboxMats{matPx, matNx, matPy, matNy, matPz, matNz};
+    auto skybox = Mesh::create(skyboxGeo, skyboxMats);
+    scene->add(skybox);
+
+    // Create GPU cubemap from skybox images for water reflections
+    auto& faceImg = texPx->image();
+    GPUTexture reflectionMap(renderer, faceImg.width, faceImg.height,
+                             GPUTexture::Format::RGBA8Unorm, GPUTexture::Dimension::Cube);
+    // Write each face (+X, -X, +Y, -Y, +Z, -Z)
+    auto& dataPx = texPx->image().data<unsigned char>();
+    auto& dataNx = texNx->image().data<unsigned char>();
+    auto& dataPy = texPy->image().data<unsigned char>();
+    auto& dataNy = texNy->image().data<unsigned char>();
+    auto& dataPz = texPz->image().data<unsigned char>();
+    auto& dataNz = texNz->image().data<unsigned char>();
+    reflectionMap.writeFace(0, dataPx.data(), dataPx.size());
+    reflectionMap.writeFace(1, dataNx.data(), dataNx.size());
+    reflectionMap.writeFace(2, dataPy.data(), dataPy.size());
+    reflectionMap.writeFace(3, dataNy.data(), dataNy.size());
+    reflectionMap.writeFace(4, dataPz.data(), dataPz.size());
+    reflectionMap.writeFace(5, dataNz.data(), dataNz.size());
+
+    waterMaterial->customTextures["reflectionMap"] = &reflectionMap;
 
     // Animation state
     float elapsedSeconds = 60.0f; // Start at 60s to avoid startup artifacts
