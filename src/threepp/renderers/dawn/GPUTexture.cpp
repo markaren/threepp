@@ -1,0 +1,161 @@
+
+#include "threepp/renderers/dawn/GPUTexture.hpp"
+#include "threepp/renderers/DawnRenderer.hpp"
+
+#include <webgpu/webgpu.h>
+
+#include <cstring>
+#include <vector>
+
+using namespace threepp;
+
+namespace {
+
+    WGPUTextureFormat toWGPUFormat(GPUTexture::Format fmt) {
+        switch (fmt) {
+            case GPUTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
+            case GPUTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
+            case GPUTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
+        }
+        return WGPUTextureFormat_RGBA8Unorm;
+    }
+
+    uint32_t bytesPerPixel(GPUTexture::Format fmt) {
+        switch (fmt) {
+            case GPUTexture::Format::RGBA32Float: return 16;
+            case GPUTexture::Format::RG32Float:   return 8;
+            case GPUTexture::Format::RGBA8Unorm:  return 4;
+        }
+        return 4;
+    }
+
+    uint32_t toWGPUUsage(uint32_t usage) {
+        uint32_t flags = 0;
+        if (usage & GPUTexture::Storage)        flags |= WGPUTextureUsage_StorageBinding;
+        if (usage & GPUTexture::TextureBinding)  flags |= WGPUTextureUsage_TextureBinding;
+        if (usage & GPUTexture::CopyDst)         flags |= WGPUTextureUsage_CopyDst;
+        if (usage & GPUTexture::CopySrc)         flags |= WGPUTextureUsage_CopySrc;
+        return flags;
+    }
+
+}// namespace
+
+GPUTexture::GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
+                       Format format, uint32_t usage)
+    : device_(static_cast<WGPUDevice>(renderer.nativeDevice())),
+      queue_(static_cast<WGPUQueue>(renderer.nativeQueue())),
+      width_(width), height_(height), format_(format),
+      bytesPerPixel_(::bytesPerPixel(format)) {
+
+    WGPUTextureDescriptor texDesc{};
+    texDesc.label = {.data = "gpu_texture", .length = 11};
+    texDesc.size = {width, height, 1};
+    texDesc.mipLevelCount = 1;
+    texDesc.sampleCount = 1;
+    texDesc.dimension = WGPUTextureDimension_2D;
+    texDesc.format = toWGPUFormat(format);
+    texDesc.usage = toWGPUUsage(usage);
+    texture_ = wgpuDeviceCreateTexture(device_, &texDesc);
+
+    WGPUTextureViewDescriptor viewDesc{};
+    viewDesc.label = {.data = "gpu_tex_view", .length = 12};
+    viewDesc.format = toWGPUFormat(format);
+    viewDesc.dimension = WGPUTextureViewDimension_2D;
+    viewDesc.baseMipLevel = 0;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.baseArrayLayer = 0;
+    viewDesc.arrayLayerCount = 1;
+    viewDesc.aspect = WGPUTextureAspect_All;
+    view_ = wgpuTextureCreateView(texture_, &viewDesc);
+
+    WGPUSamplerDescriptor samplerDesc{};
+    samplerDesc.label = {.data = "gpu_tex_sampler", .length = 15};
+    samplerDesc.addressModeU = WGPUAddressMode_Repeat;
+    samplerDesc.addressModeV = WGPUAddressMode_Repeat;
+    samplerDesc.addressModeW = WGPUAddressMode_Repeat;
+    samplerDesc.magFilter = WGPUFilterMode_Nearest;
+    samplerDesc.minFilter = WGPUFilterMode_Nearest;
+    samplerDesc.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+    samplerDesc.maxAnisotropy = 1;
+    sampler_ = wgpuDeviceCreateSampler(device_, &samplerDesc);
+}
+
+GPUTexture::~GPUTexture() {
+    release();
+}
+
+GPUTexture::GPUTexture(GPUTexture&& other) noexcept
+    : device_(other.device_), queue_(other.queue_),
+      texture_(other.texture_), view_(other.view_), sampler_(other.sampler_),
+      width_(other.width_), height_(other.height_), format_(other.format_),
+      bytesPerPixel_(other.bytesPerPixel_) {
+    other.texture_ = nullptr;
+    other.view_ = nullptr;
+    other.sampler_ = nullptr;
+}
+
+GPUTexture& GPUTexture::operator=(GPUTexture&& other) noexcept {
+    if (this != &other) {
+        release();
+        device_ = other.device_;
+        queue_ = other.queue_;
+        texture_ = other.texture_;
+        view_ = other.view_;
+        sampler_ = other.sampler_;
+        width_ = other.width_;
+        height_ = other.height_;
+        format_ = other.format_;
+        bytesPerPixel_ = other.bytesPerPixel_;
+        other.texture_ = nullptr;
+        other.view_ = nullptr;
+        other.sampler_ = nullptr;
+    }
+    return *this;
+}
+
+void GPUTexture::write(const void* data, size_t size) {
+    WGPUTexelCopyTextureInfo dst{};
+    dst.texture = texture_;
+    dst.mipLevel = 0;
+    dst.origin = {0, 0, 0};
+    dst.aspect = WGPUTextureAspect_All;
+
+    // WebGPU requires bytesPerRow to be a multiple of 256
+    uint32_t unpaddedBytesPerRow = width_ * bytesPerPixel_;
+    uint32_t paddedBytesPerRow = ((unpaddedBytesPerRow + 255) / 256) * 256;
+
+    if (paddedBytesPerRow == unpaddedBytesPerRow) {
+        // No padding needed — upload directly
+        WGPUTexelCopyBufferLayout layout{};
+        layout.offset = 0;
+        layout.bytesPerRow = unpaddedBytesPerRow;
+        layout.rowsPerImage = height_;
+
+        WGPUExtent3D extent = {width_, height_, 1};
+        wgpuQueueWriteTexture(queue_, &dst, data, size, &layout, &extent);
+    } else {
+        // Need row padding — copy data with padded rows
+        size_t paddedSize = static_cast<size_t>(paddedBytesPerRow) * height_;
+        std::vector<uint8_t> padded(paddedSize, 0);
+        auto* src = static_cast<const uint8_t*>(data);
+        for (uint32_t row = 0; row < height_; row++) {
+            std::memcpy(padded.data() + row * paddedBytesPerRow,
+                        src + row * unpaddedBytesPerRow,
+                        unpaddedBytesPerRow);
+        }
+
+        WGPUTexelCopyBufferLayout layout{};
+        layout.offset = 0;
+        layout.bytesPerRow = paddedBytesPerRow;
+        layout.rowsPerImage = height_;
+
+        WGPUExtent3D extent = {width_, height_, 1};
+        wgpuQueueWriteTexture(queue_, &dst, padded.data(), paddedSize, &layout, &extent);
+    }
+}
+
+void GPUTexture::release() {
+    if (sampler_) { wgpuSamplerRelease(sampler_); sampler_ = nullptr; }
+    if (view_) { wgpuTextureViewRelease(view_); view_ = nullptr; }
+    if (texture_) { wgpuTextureRelease(texture_); texture_ = nullptr; }
+}
