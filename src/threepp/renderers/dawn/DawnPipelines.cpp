@@ -16,7 +16,7 @@ namespace threepp::dawn {
 
     DawnPipelines::DawnPipelines(DawnState& state) : state_(state) {}
 
-    std::vector<WGPUBindGroupLayoutEntry> DawnPipelines::buildBindGroupLayoutEntries(uint64_t features) {
+    std::vector<WGPUBindGroupLayoutEntry> DawnPipelines::buildBindGroupLayoutEntries(uint64_t features) const {
         std::vector<WGPUBindGroupLayoutEntry> entries;
         bool lit = ShaderFeatures::isLit(features);
 
@@ -66,7 +66,7 @@ namespace threepp::dawn {
             e.binding = 2;
             e.visibility = WGPUShaderStage_Fragment;
             e.buffer.type = WGPUBufferBindingType_Uniform;
-            e.buffer.minBindingSize = LIGHT_UNIFORM_SIZE;
+            e.buffer.minBindingSize = state_.lightLimits.lightUniformSize();
             entries.push_back(e);
         }
 
@@ -232,7 +232,7 @@ namespace threepp::dawn {
         PipelineEntry entry{};
 
         // Shader module
-        std::string wgsl = buildWGSL(features);
+        std::string wgsl = buildWGSL(features, state_.lightLimits);
         WGPUShaderSourceWGSL wgslSource{};
         wgslSource.chain.sType = WGPUSType_ShaderSourceWGSL;
         wgslSource.chain.next = nullptr;
@@ -452,7 +452,7 @@ namespace threepp::dawn {
                 e.binding = 1;
                 e.visibility = WGPUShaderStage_Fragment;
                 e.buffer.type = WGPUBufferBindingType_Uniform;
-                e.buffer.minBindingSize = LIGHT_UNIFORM_SIZE;
+                e.buffer.minBindingSize = state_.lightLimits.lightUniformSize();
                 bglEntries.push_back(e);
             }
 

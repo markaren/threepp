@@ -22,13 +22,16 @@ DawnLights::DawnLights(DawnState& state)
 
     WGPUBufferDescriptor d{};
     d.label = {.data = "light_buf", .length = 9};
-    d.size = LIGHT_UNIFORM_SIZE;
+    d.size = state_.lightLimits.lightUniformSize();
     d.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     lightBuffer_ = wgpuDeviceCreateBuffer(state_.device, &d);
 }
 
 void DawnLights::update(Object3D& scene) {
-    std::vector<float> data(LIGHT_UNIFORM_SIZE / sizeof(float), 0.0f);
+    auto& lim = state_.lightLimits;
+    size_t bufSize = lim.lightUniformSize();
+
+    std::vector<float> data(bufSize / sizeof(float), 0.0f);
     auto* u32 = reinterpret_cast<uint32_t*>(data.data());
 
     uint32_t nDir = 0, nPt = 0, nSp = 0, nHm = 0;
@@ -49,7 +52,7 @@ void DawnLights::update(Object3D& scene) {
             ambG += al->color.g * al->intensity;
             ambB += al->color.b * al->intensity;
         } else if (auto dl = obj.as<DirectionalLight>()) {
-            if (dirs.size() < static_cast<size_t>(MAX_DIR_LIGHTS)) {
+            if (dirs.size() < static_cast<size_t>(lim.maxDirLights)) {
                 Vector3 lightPos, targetPos;
                 lightPos.setFromMatrixPosition(*dl->matrixWorld);
                 targetPos.setFromMatrixPosition(*dl->target().matrixWorld);
@@ -57,13 +60,13 @@ void DawnLights::update(Object3D& scene) {
                 dirs.push_back({direction, Color(dl->color).multiplyScalar(dl->intensity), dl->castShadow});
             }
         } else if (auto pl = obj.as<PointLight>()) {
-            if (pts.size() < static_cast<size_t>(MAX_POINT_LIGHTS)) {
+            if (pts.size() < static_cast<size_t>(lim.maxPointLights)) {
                 Vector3 pos;
                 pos.setFromMatrixPosition(*pl->matrixWorld);
                 pts.push_back({pos, Color(pl->color).multiplyScalar(pl->intensity), pl->distance, pl->decay});
             }
         } else if (auto sl = obj.as<SpotLight>()) {
-            if (sps.size() < static_cast<size_t>(MAX_SPOT_LIGHTS)) {
+            if (sps.size() < static_cast<size_t>(lim.maxSpotLights)) {
                 Vector3 pos, targetPos;
                 pos.setFromMatrixPosition(*sl->matrixWorld);
                 targetPos.setFromMatrixPosition(*sl->target().matrixWorld);
@@ -73,7 +76,7 @@ void DawnLights::update(Object3D& scene) {
                                std::cos(sl->angle), std::cos(sl->angle * (1.0f - sl->penumbra)), sl->castShadow});
             }
         } else if (auto hl = obj.as<HemisphereLight>()) {
-            if (hms.size() < static_cast<size_t>(MAX_HEMI_LIGHTS)) {
+            if (hms.size() < static_cast<size_t>(lim.maxHemiLights)) {
                 Vector3 dir;
                 dir.setFromMatrixPosition(*hl->matrixWorld).normalize();
                 hms.push_back({dir, Color(hl->color).multiplyScalar(hl->intensity),
@@ -96,6 +99,8 @@ void DawnLights::update(Object3D& scene) {
     u32[0] = nDir; u32[1] = nPt; u32[2] = nSp; u32[3] = nHm;
     data[4] = ambR; data[5] = ambG; data[6] = ambB; data[7] = 0;
 
+    // Floats per light type in the buffer layout:
+    // DirLight: 8 floats, PointLight: 12 floats, SpotLight: 16 floats, HemiLight: 12 floats
     size_t off = 8;
     for (uint32_t i = 0; i < nDir; i++) {
         data[off+0] = dirs[i].dir.x; data[off+1] = dirs[i].dir.y; data[off+2] = dirs[i].dir.z; data[off+3] = 0;
@@ -103,7 +108,7 @@ void DawnLights::update(Object3D& scene) {
         off += 8;
     }
 
-    off = 8 + MAX_DIR_LIGHTS * 8;
+    off = 8 + lim.maxDirLights * 8;
     for (uint32_t i = 0; i < nPt; i++) {
         data[off+0] = pts[i].pos.x; data[off+1] = pts[i].pos.y; data[off+2] = pts[i].pos.z; data[off+3] = 0;
         data[off+4] = pts[i].col.r; data[off+5] = pts[i].col.g; data[off+6] = pts[i].col.b; data[off+7] = pts[i].dist;
@@ -111,7 +116,7 @@ void DawnLights::update(Object3D& scene) {
         off += 12;
     }
 
-    off = 8 + MAX_DIR_LIGHTS * 8 + MAX_POINT_LIGHTS * 12;
+    off = 8 + lim.maxDirLights * 8 + lim.maxPointLights * 12;
     for (uint32_t i = 0; i < nSp; i++) {
         data[off+0] = sps[i].pos.x; data[off+1] = sps[i].pos.y; data[off+2] = sps[i].pos.z; data[off+3] = 0;
         data[off+4] = sps[i].dir.x; data[off+5] = sps[i].dir.y; data[off+6] = sps[i].dir.z; data[off+7] = 0;
@@ -120,7 +125,7 @@ void DawnLights::update(Object3D& scene) {
         off += 16;
     }
 
-    off = 8 + MAX_DIR_LIGHTS * 8 + MAX_POINT_LIGHTS * 12 + MAX_SPOT_LIGHTS * 16;
+    off = 8 + lim.maxDirLights * 8 + lim.maxPointLights * 12 + lim.maxSpotLights * 16;
     for (uint32_t i = 0; i < nHm; i++) {
         data[off+0] = hms[i].dir.x; data[off+1] = hms[i].dir.y; data[off+2] = hms[i].dir.z; data[off+3] = 0;
         data[off+4] = hms[i].sky.r; data[off+5] = hms[i].sky.g; data[off+6] = hms[i].sky.b; data[off+7] = 0;
@@ -128,7 +133,23 @@ void DawnLights::update(Object3D& scene) {
         off += 12;
     }
 
-    wgpuQueueWriteBuffer(state_.queue, lightBuffer_, 0, data.data(), LIGHT_UNIFORM_SIZE);
+    wgpuQueueWriteBuffer(state_.queue, lightBuffer_, 0, data.data(), bufSize);
+}
+
+size_t DawnLights::lightUniformSize() const {
+    return state_.lightLimits.lightUniformSize();
+}
+
+void DawnLights::recreateBuffer() {
+    if (lightBuffer_) {
+        wgpuBufferRelease(lightBuffer_);
+        lightBuffer_ = nullptr;
+    }
+    WGPUBufferDescriptor d{};
+    d.label = {.data = "light_buf", .length = 9};
+    d.size = state_.lightLimits.lightUniformSize();
+    d.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+    lightBuffer_ = wgpuDeviceCreateBuffer(state_.device, &d);
 }
 
 void DawnLights::dispose() {

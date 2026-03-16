@@ -7,6 +7,7 @@
 
 #include "DawnState.hpp"
 
+#include <cstddef>
 #include <webgpu/webgpu.h>
 
 namespace threepp {
@@ -24,6 +25,12 @@ namespace threepp::dawn {
 
         // GPU buffer handle for bind group entries (binding 2).
         [[nodiscard]] WGPUBuffer uniformBuffer() const { return lightBuffer_; }
+
+        // Current light uniform buffer size (derived from state's light limits).
+        [[nodiscard]] size_t lightUniformSize() const;
+
+        // Recreate the GPU buffer after light limits have changed.
+        void recreateBuffer();
 
         void dispose();
 

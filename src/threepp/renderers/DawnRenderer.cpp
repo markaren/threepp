@@ -731,6 +731,7 @@ struct DawnRenderer::Impl {
 
         // Build bind group entries via subsystem
         auto& entries = bindGroups->buildCustom(perDrawTransformBuf, lights->uniformBuffer(),
+                                                 lights->lightUniformSize(),
                                                  customUniformBuf, sm);
 
         WGPUBindGroupDescriptor bgDesc{};
@@ -1114,6 +1115,7 @@ struct DawnRenderer::Impl {
             .transformBuffer = perDrawTransform,
             .materialBuffer = perDrawMaterial,
             .lightBuffer = lights->uniformBuffer(),
+            .lightUniformSize = lights->lightUniformSize(),
             .params = params,
             .textures = *textures,
             .shadowMap = shadowMap.get(),
@@ -1396,6 +1398,24 @@ void DawnRenderer::setSampleCount(uint32_t count) {
 
 uint32_t DawnRenderer::getSampleCount() const {
     return pimpl_->sampleCount_;
+}
+
+void DawnRenderer::setMaxLights(int maxDir, int maxPoint, int maxSpot, int maxHemi) {
+    auto& lim = pimpl_->dawnState.lightLimits;
+    if (lim.maxDirLights == maxDir && lim.maxPointLights == maxPoint &&
+        lim.maxSpotLights == maxSpot && lim.maxHemiLights == maxHemi)
+        return;
+
+    lim.maxDirLights = maxDir;
+    lim.maxPointLights = maxPoint;
+    lim.maxSpotLights = maxSpot;
+    lim.maxHemiLights = maxHemi;
+
+    // Recreate light GPU buffer with new size
+    if (pimpl_->lights) pimpl_->lights->recreateBuffer();
+
+    // Invalidate pipelines — shaders embed array sizes from LightLimits
+    if (pimpl_->pipelines) pimpl_->pipelines->invalidateAll();
 }
 
 void DawnRenderer::resetState() {

@@ -104,8 +104,6 @@ namespace threepp::dawn {
     // Material: diffuse(16) + specular(16) + roughnessMetalnessOpacity(16) + emissive(16)
     //         + flags(16) + fogColor(16) + fogParams(16) + clipPlane(16) = 128
     constexpr size_t MATERIAL_UNIFORM_SIZE = 128;
-    // Light: header(32) + dir(4*32) + point(4*48) + spot(4*64) + hemi(2*48) = 704
-    constexpr size_t LIGHT_UNIFORM_SIZE = 704;
 
     // Shadow map constants
     constexpr uint32_t SHADOW_MAP_SIZE = 1024;
@@ -113,14 +111,10 @@ namespace threepp::dawn {
     constexpr size_t SHADOW_UNIFORM_PER_LIGHT = 80;
     constexpr size_t SHADOW_UNIFORM_SIZE = 16 + MAX_SHADOW_LIGHTS * SHADOW_UNIFORM_PER_LIGHT;
 
-    // Per-light-type limits (baked into WGSL array declarations and C++ buffer sizing)
-    constexpr int MAX_DIR_LIGHTS = 4;
-    constexpr int MAX_POINT_LIGHTS = 4;
-    constexpr int MAX_SPOT_LIGHTS = 4;
-    constexpr int MAX_HEMI_LIGHTS = 2;
+    struct LightLimits;
 
-    // Generate the main WGSL shader source for the given feature bitmask.
-    std::string buildWGSL(uint64_t features);
+    // Generate the main WGSL shader source for the given feature bitmask and light limits.
+    std::string buildWGSL(uint64_t features, const LightLimits& limits);
 
     // Generate the depth-only WGSL shader for shadow passes.
     std::string buildDepthWGSL();

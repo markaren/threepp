@@ -1,5 +1,6 @@
 
 #include "DawnShaders.hpp"
+#include "DawnState.hpp"
 
 #include <sstream>
 #include <string>
@@ -17,7 +18,7 @@ std::string ShaderFeatures::describe(uint64_t features) {
     if (features & Lighting)        append("Lighting");
     if (features & Specular)        append("Specular");
     if (features & PBR)             append("PBR");
-    if (features & NormalMap)        append("NormalMap");
+    if (features & NormalMap)       append("NormalMap");
     if (features & Shadow)          append("Shadow");
     if (features & FogLinear)       append("FogLinear");
     if (features & FogExp2)         append("FogExp2");
@@ -78,7 +79,7 @@ std::string ShaderFeatures::describe(uint64_t features) {
     return s.str();
 }
 
-std::string threepp::dawn::buildWGSL(uint64_t features) {
+std::string threepp::dawn::buildWGSL(uint64_t features, const LightLimits& limits) {
     std::ostringstream s;
 
     s << R"(
@@ -116,10 +117,10 @@ struct MaterialUniforms {
         s << "struct LightData {\n";
         s << "  numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,\n";
         s << "  ambient: vec3<f32>, _pad: f32,\n";
-        s << "  directional: array<DirectionalLightGPU, " << MAX_DIR_LIGHTS << ">,\n";
-        s << "  point: array<PointLightGPU, " << MAX_POINT_LIGHTS << ">,\n";
-        s << "  spot: array<SpotLightGPU, " << MAX_SPOT_LIGHTS << ">,\n";
-        s << "  hemi: array<HemisphereLightGPU, " << MAX_HEMI_LIGHTS << ">,\n";
+        s << "  directional: array<DirectionalLightGPU, " << limits.maxDirLights << ">,\n";
+        s << "  point: array<PointLightGPU, " << limits.maxPointLights << ">,\n";
+        s << "  spot: array<SpotLightGPU, " << limits.maxSpotLights << ">,\n";
+        s << "  hemi: array<HemisphereLightGPU, " << limits.maxHemiLights << ">,\n";
         s << "};\n";
         s << "@group(0) @binding(2) var<uniform> lights: LightData;\n";
     }

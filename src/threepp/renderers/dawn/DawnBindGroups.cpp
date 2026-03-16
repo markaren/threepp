@@ -31,7 +31,7 @@ const std::vector<WGPUBindGroupEntry>& DawnBindGroups::buildStandard(const BindG
     // Binding 2: light uniform buffer (lit materials only)
     bool lit = SF::isLit(features);
     if (lit) {
-        WGPUBindGroupEntry e{}; e.binding = 2; e.buffer = inputs.lightBuffer; e.offset = 0; e.size = LIGHT_UNIFORM_SIZE; entries_.push_back(e);
+        WGPUBindGroupEntry e{}; e.binding = 2; e.buffer = inputs.lightBuffer; e.offset = 0; e.size = inputs.lightUniformSize; entries_.push_back(e);
     }
 
     // Binding 3-4: diffuse texture + sampler
@@ -111,13 +111,14 @@ const std::vector<WGPUBindGroupEntry>& DawnBindGroups::buildStandard(const BindG
 
 const std::vector<WGPUBindGroupEntry>& DawnBindGroups::buildCustom(
         WGPUBuffer transformBuffer, WGPUBuffer lightBuffer,
+        size_t lightUniformSize,
         WGPUBuffer customUniformBuffer, ShaderMaterial* sm) {
     entries_.clear();
 
     // Binding 0: transform
     { WGPUBindGroupEntry e{}; e.binding = 0; e.buffer = transformBuffer; e.offset = 0; e.size = TRANSFORM_UNIFORM_SIZE; entries_.push_back(e); }
     // Binding 1: lights
-    { WGPUBindGroupEntry e{}; e.binding = 1; e.buffer = lightBuffer; e.offset = 0; e.size = LIGHT_UNIFORM_SIZE; entries_.push_back(e); }
+    { WGPUBindGroupEntry e{}; e.binding = 1; e.buffer = lightBuffer; e.offset = 0; e.size = lightUniformSize; entries_.push_back(e); }
 
     // Binding 2: custom uniforms (if present)
     if (customUniformBuffer) {

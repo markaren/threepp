@@ -77,7 +77,7 @@ namespace threepp::dawn {
         std::unordered_map<uint64_t, PipelineEntry> pipelineCache_;
         std::unordered_map<unsigned int, CustomPipelineEntry> customPipelineCache_;
 
-        static std::vector<WGPUBindGroupLayoutEntry> buildBindGroupLayoutEntries(uint64_t features);
+        std::vector<WGPUBindGroupLayoutEntry> buildBindGroupLayoutEntries(uint64_t features) const;
     };
 
 }// namespace threepp::dawn

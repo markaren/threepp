@@ -31,6 +31,7 @@ namespace threepp::dawn {
         WGPUBuffer transformBuffer;
         WGPUBuffer materialBuffer;
         WGPUBuffer lightBuffer;         // may be null
+        size_t lightUniformSize;        // runtime light buffer size
         const MaterialParams& params;
         DawnTextures& textures;
         DawnShadowMap* shadowMap;       // may be null
@@ -52,6 +53,7 @@ namespace threepp::dawn {
         // Build entries for a custom ShaderMaterial draw.
         const std::vector<WGPUBindGroupEntry>& buildCustom(
                 WGPUBuffer transformBuffer, WGPUBuffer lightBuffer,
+                size_t lightUniformSize,
                 WGPUBuffer customUniformBuffer, ShaderMaterial* sm);
 
     private:

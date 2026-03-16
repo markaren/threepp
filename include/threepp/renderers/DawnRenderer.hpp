@@ -85,6 +85,11 @@ namespace threepp {
         void setSampleCount(uint32_t count);
         [[nodiscard]] uint32_t getSampleCount() const;
 
+        /// Set maximum light counts per type. Rebuilds the light GPU buffer
+        /// and invalidates all cached pipelines (shaders encode array sizes).
+        /// Call before the first render, or between frames.
+        void setMaxLights(int maxDir, int maxPoint, int maxSpot, int maxHemi);
+
         void resetState();
         void dispose() override;
 
