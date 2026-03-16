@@ -19,7 +19,7 @@ namespace threepp {
     class ShaderMaterial;
     class Mesh;
     class Camera;
-    class GPUTexture;
+    class DawnTexture;
 }// namespace threepp
 
 namespace threepp {

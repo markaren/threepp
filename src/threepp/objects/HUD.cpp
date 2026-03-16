@@ -6,7 +6,7 @@
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/core/Raycaster.hpp"
 #include "threepp/math/Box3.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/scenes/Scene.hpp"
 
 using namespace threepp;
@@ -55,7 +55,7 @@ struct HUD::Impl: Scene, MouseListener {
         camera_.position.z = 1;
     }
 
-    void apply(GLRenderer& renderer) {
+    void apply(Renderer& renderer) {
         renderer.clearDepth();
         renderer.render(*this, camera_);
     }
@@ -157,7 +157,7 @@ HUD::HUD(std::pair<int, int> size)
 HUD::HUD(PeripheralsEventSource* eventSource)
     : pimpl_(std::make_unique<Impl>(eventSource, eventSource->size())) {}
 
-void HUD::apply(GLRenderer& renderer) {
+void HUD::apply(Renderer& renderer) {
     pimpl_->apply(renderer);
 }
 

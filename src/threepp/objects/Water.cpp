@@ -7,8 +7,8 @@
 #include "threepp/core/Shader.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/renderers/shaders/UniformsLib.hpp"
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
 
@@ -150,12 +150,12 @@ struct Water::Impl {
 
         Shader shader = mirrorShader();
 
-        GLRenderTarget::Options parameters;
+        RenderTarget::Options parameters;
         parameters.minFilter = Filter::Linear;
         parameters.magFilter = Filter::Linear;
         parameters.format = Format::RGB;
 
-        renderTarget = GLRenderTarget::create(textureWidth, textureHeight, parameters);
+        renderTarget = RenderTarget::create(textureWidth, textureHeight, parameters);
 
         if (!math::isPowerOfTwo((int) textureWidth) || !math::isPowerOfTwo((int) textureHeight)) {
 
@@ -235,21 +235,21 @@ struct Water::Impl {
             projectionMatrix.elements[14] = clipPlane.w;
             eye.setFromMatrixPosition(*camera->matrixWorld);// Render
 
-            auto _renderer = static_cast<GLRenderer*>(renderer);
+            auto _renderer = static_cast<Renderer*>(renderer);
 
             const auto currentRenderTarget = _renderer->getRenderTarget();
-            const auto currentShadowAutoUpdate = _renderer->shadowMap().autoUpdate;
+            const auto currentShadowAutoUpdate = _renderer->shadowMapAutoUpdate;
             water_.visible = false;
 
-            _renderer->shadowMap().autoUpdate = false;// Avoid re-computing shadows
+            _renderer->shadowMapAutoUpdate = false;// Avoid re-computing shadows
 
             _renderer->setRenderTarget(renderTarget.get());
-            _renderer->state().depthBuffer.setMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
+            _renderer->setDepthMask(true);// make sure the depth buffer is writable so it can be properly cleared, see #18897
 
             if (!_renderer->autoClear) _renderer->clear();
             _renderer->render(*scene, *mirrorCamera);
             water_.visible = true;
-            _renderer->shadowMap().autoUpdate = currentShadowAutoUpdate;
+            _renderer->shadowMapAutoUpdate = currentShadowAutoUpdate;
             _renderer->setRenderTarget(currentRenderTarget);// Restore viewport
         });
 
@@ -278,7 +278,7 @@ private:
     std::shared_ptr<Texture> waterNormals;
 
     std::shared_ptr<PerspectiveCamera> mirrorCamera = PerspectiveCamera::create();
-    std::shared_ptr<GLRenderTarget> renderTarget;
+    std::shared_ptr<RenderTarget> renderTarget;
 };
 
 Water::Water(const std::shared_ptr<BufferGeometry>& geometry, const Water::Options& options)

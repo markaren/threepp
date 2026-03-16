@@ -24,6 +24,7 @@ namespace threepp {
     class Scene;
     class Object3D;
     class RenderTarget;
+    class Texture;
 
     class Renderer {
 
@@ -36,6 +37,8 @@ namespace threepp {
         bool autoClearStencil = true;
 
         bool sortObjects = true;
+
+        bool shadowMapAutoUpdate = true;
 
         std::vector<Plane> clippingPlanes;
         bool localClippingEnabled = false;
@@ -72,10 +75,21 @@ namespace threepp {
         virtual void setScissor(int x, int y, int width, int height) = 0;
         virtual void setScissorTest(bool boolean) = 0;
 
+        // --- Shadow map ---
+
+        virtual ShadowMapConfig& shadowMap() { return shadowMapConfig_; }
+        [[nodiscard]] virtual const ShadowMapConfig& shadowMap() const { return shadowMapConfig_; }
+
         // --- Clearing ---
 
         virtual void setClearColor(const Color& color, float alpha = 1) = 0;
+        virtual void getClearColor(Color& target) const {}
+        virtual void setClearAlpha(float alpha) {}
+        [[nodiscard]] virtual float getClearAlpha() const { return 1.f; }
         virtual void clear(bool color = true, bool depth = true, bool stencil = true) = 0;
+        virtual void clearColor() { clear(true, false, false); }
+        virtual void clearDepth() { clear(false, true, false); }
+        virtual void clearStencil() { clear(false, false, true); }
 
         // --- Render target ---
 
@@ -86,11 +100,20 @@ namespace threepp {
 
         [[nodiscard]] virtual std::vector<unsigned char> readRGBPixels() = 0;
 
+        virtual void copyTextureToImage(Texture& /*texture*/) {}
+
+        // --- Depth state ---
+
+        virtual void setDepthMask(bool /*flag*/) {}
+
         // --- Lifecycle ---
 
         virtual void dispose() = 0;
 
         virtual ~Renderer() = default;
+
+    protected:
+        ShadowMapConfig shadowMapConfig_;
     };
 
 }// namespace threepp

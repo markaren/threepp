@@ -11,7 +11,7 @@
 namespace threepp {
 
     class Object3D;
-    class GLRenderer;
+    class Renderer;
 
     class HUD {
 
@@ -87,7 +87,7 @@ namespace threepp {
         explicit HUD(std::pair<int, int> size);
         explicit HUD(PeripheralsEventSource* eventSource);
 
-        void apply(GLRenderer& renderer);
+        void apply(Renderer& renderer);
 
         void add(Object3D& object, Options opts = {});
 

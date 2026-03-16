@@ -1,5 +1,5 @@
-#ifndef THREEPP_COMPUTEPIPELINE_HPP
-#define THREEPP_COMPUTEPIPELINE_HPP
+#ifndef THREEPP_DAWNCOMPUTEPIPELINE_HPP
+#define THREEPP_DAWNCOMPUTEPIPELINE_HPP
 
 #include <cstdint>
 #include <string>
@@ -16,11 +16,11 @@ typedef struct WGPUShaderModuleImpl* WGPUShaderModule;
 namespace threepp {
 
     class DawnRenderer;
-    class GPUTexture;
-    class GPUBuffer;
+    class DawnTexture;
+    class DawnBuffer;
 
     /// Compute pipeline wrapper for dispatching WGSL compute shaders.
-    class ComputePipeline {
+    class DawnComputePipeline {
 
     public:
         /// Binding types for resources.
@@ -35,22 +35,22 @@ namespace threepp {
         /// @param renderer DawnRenderer providing the WebGPU device/queue
         /// @param wgslSource Complete WGSL shader source code
         /// @param entryPoint Name of the @compute entry point function
-        ComputePipeline(DawnRenderer& renderer, const std::string& wgslSource,
+        DawnComputePipeline(DawnRenderer& renderer, const std::string& wgslSource,
                         const std::string& entryPoint);
 
-        ~ComputePipeline();
+        ~DawnComputePipeline();
 
-        ComputePipeline(const ComputePipeline&) = delete;
-        ComputePipeline& operator=(const ComputePipeline&) = delete;
+        DawnComputePipeline(const DawnComputePipeline&) = delete;
+        DawnComputePipeline& operator=(const DawnComputePipeline&) = delete;
 
         /// Set a storage texture binding (write-only).
-        void setStorageTexture(uint32_t binding, GPUTexture& texture);
+        void setStorageTexture(uint32_t binding, DawnTexture& texture);
 
         /// Set a read-only texture binding (texture_2d).
-        void setTexture(uint32_t binding, GPUTexture& texture);
+        void setTexture(uint32_t binding, DawnTexture& texture);
 
         /// Set a uniform buffer binding.
-        void setUniformBuffer(uint32_t binding, GPUBuffer& buffer);
+        void setUniformBuffer(uint32_t binding, DawnBuffer& buffer);
 
         /// Dispatch compute workgroups.
         void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);
@@ -63,4 +63,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_COMPUTEPIPELINE_HPP
+#endif//THREEPP_DAWNCOMPUTEPIPELINE_HPP

@@ -34,6 +34,8 @@ namespace threepp::dawn {
         [[nodiscard]] const TextureEntry& getDummyTexture() const { return dummyTexture_; }
         [[nodiscard]] const TextureEntry& getDummyCubeTexture() const { return dummyCubeTexture_; }
 
+        [[nodiscard]] const TextureEntry* findTexture(unsigned int id) const;
+
         void dispose();
 
         [[nodiscard]] size_t count() const { return cache_.size(); }

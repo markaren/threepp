@@ -251,6 +251,11 @@ TextureEntry& DawnTextures::getOrCreateCubeTexture(Texture* tex) {
     return cubeCache_[tex->id];
 }
 
+const TextureEntry* DawnTextures::findTexture(unsigned int id) const {
+    auto it = cache_.find(id);
+    return it != cache_.end() ? &it->second : nullptr;
+}
+
 void DawnTextures::dispose() {
     for (auto& [id, te] : cache_) {
         if (te.view) wgpuTextureViewRelease(te.view);

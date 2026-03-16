@@ -39,6 +39,7 @@
 #include "threepp/cameras/PerspectiveCamera.hpp"
 
 #include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/RendererFactory.hpp"
 
 #include "threepp/loaders/loaders.hpp"
 

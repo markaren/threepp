@@ -408,7 +408,7 @@ private:
 };
 
 GLShadowMap::GLShadowMap(GLObjects& objects)
-    : type(ShadowMap::PFC), pimpl_(std::make_unique<Impl>(this, objects)) {}
+    : pimpl_(std::make_unique<Impl>(this, objects)) {}
 
 
 void GLShadowMap::render(GLRenderer& renderer, const std::vector<Light*>& lights, Object3D* scene, Camera* camera) {

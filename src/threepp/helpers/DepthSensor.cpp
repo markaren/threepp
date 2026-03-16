@@ -5,8 +5,8 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/math/MathUtils.hpp"
 #include "threepp/objects/Mesh.hpp"
-#include "threepp/renderers/GLRenderTarget.hpp"
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 
 #include <cmath>
@@ -21,7 +21,7 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
       camera_(fovY, static_cast<float>(width) / static_cast<float>(height), near, far) {
 
     // Scene render target: renders geometry and captures depth
-    GLRenderTarget::Options sceneOpts;
+    RenderTarget::Options sceneOpts;
     sceneOpts.format = Format::RGB;
     sceneOpts.minFilter = Filter::Nearest;
     sceneOpts.magFilter = Filter::Nearest;
@@ -29,17 +29,17 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
     sceneOpts.stencilBuffer = false;
     sceneOpts.depthBuffer = true;
     sceneOpts.depthTexture = DepthTexture::create(Type::Float);
-    sceneTarget_ = GLRenderTarget::create(width_, height_, sceneOpts);
+    sceneTarget_ = RenderTarget::create(width_, height_, sceneOpts);
 
     // Readback target: packed linear depth in RGBA8
-    GLRenderTarget::Options readOpts;
+    RenderTarget::Options readOpts;
     readOpts.format = Format::RG;
     readOpts.minFilter = Filter::Nearest;
     readOpts.magFilter = Filter::Nearest;
     readOpts.generateMipmaps = false;
     readOpts.depthBuffer = false;
     readOpts.stencilBuffer = false;
-    readbackTarget_ = GLRenderTarget::create(width_, height_, readOpts);
+    readbackTarget_ = RenderTarget::create(width_, height_, readOpts);
 
     // Post-process: linearize perspective depth, encode in RG channels
     // R = floor(d * 255) / 255  (high byte)
@@ -95,7 +95,7 @@ DepthSensor::DepthSensor(float fovY, unsigned int width, unsigned int height, fl
         yDir_[y] = ((static_cast<float>(y) + 0.5f) / fh * 2.f - 1.f) * tanHalfFovY;
 }
 
-void DepthSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
+void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud) {
 
     // Render scene from sensor viewpoint to capture depth
     renderer.setRenderTarget(sceneTarget_.get());

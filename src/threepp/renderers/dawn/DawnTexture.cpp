@@ -1,5 +1,5 @@
 
-#include "threepp/renderers/dawn/GPUTexture.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
 #include "threepp/renderers/DawnRenderer.hpp"
 
 #include <webgpu/webgpu.h>
@@ -11,36 +11,36 @@ using namespace threepp;
 
 namespace {
 
-    WGPUTextureFormat toWGPUFormat(GPUTexture::Format fmt) {
+    WGPUTextureFormat toWGPUFormat(DawnTexture::Format fmt) {
         switch (fmt) {
-            case GPUTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
-            case GPUTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
-            case GPUTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
+            case DawnTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
+            case DawnTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
+            case DawnTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
         }
         return WGPUTextureFormat_RGBA8Unorm;
     }
 
-    uint32_t bytesPerPixel(GPUTexture::Format fmt) {
+    uint32_t bytesPerPixel(DawnTexture::Format fmt) {
         switch (fmt) {
-            case GPUTexture::Format::RGBA32Float: return 16;
-            case GPUTexture::Format::RG32Float:   return 8;
-            case GPUTexture::Format::RGBA8Unorm:  return 4;
+            case DawnTexture::Format::RGBA32Float: return 16;
+            case DawnTexture::Format::RG32Float:   return 8;
+            case DawnTexture::Format::RGBA8Unorm:  return 4;
         }
         return 4;
     }
 
     uint32_t toWGPUUsage(uint32_t usage) {
         uint32_t flags = 0;
-        if (usage & GPUTexture::Storage)        flags |= WGPUTextureUsage_StorageBinding;
-        if (usage & GPUTexture::TextureBinding)  flags |= WGPUTextureUsage_TextureBinding;
-        if (usage & GPUTexture::CopyDst)         flags |= WGPUTextureUsage_CopyDst;
-        if (usage & GPUTexture::CopySrc)         flags |= WGPUTextureUsage_CopySrc;
+        if (usage & DawnTexture::Storage)        flags |= WGPUTextureUsage_StorageBinding;
+        if (usage & DawnTexture::TextureBinding)  flags |= WGPUTextureUsage_TextureBinding;
+        if (usage & DawnTexture::CopyDst)         flags |= WGPUTextureUsage_CopyDst;
+        if (usage & DawnTexture::CopySrc)         flags |= WGPUTextureUsage_CopySrc;
         return flags;
     }
 
 }// namespace
 
-GPUTexture::GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
+DawnTexture::DawnTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
                        Format format, uint32_t usage)
     : device_(static_cast<WGPUDevice>(renderer.nativeDevice())),
       queue_(static_cast<WGPUQueue>(renderer.nativeQueue())),
@@ -81,7 +81,7 @@ GPUTexture::GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
     sampler_ = wgpuDeviceCreateSampler(device_, &samplerDesc);
 }
 
-GPUTexture::GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
+DawnTexture::DawnTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
                        Format format, Dimension dimension, uint32_t usage)
     : device_(static_cast<WGPUDevice>(renderer.nativeDevice())),
       queue_(static_cast<WGPUQueue>(renderer.nativeQueue())),
@@ -124,11 +124,11 @@ GPUTexture::GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
     sampler_ = wgpuDeviceCreateSampler(device_, &samplerDesc);
 }
 
-GPUTexture::~GPUTexture() {
+DawnTexture::~DawnTexture() {
     release();
 }
 
-GPUTexture::GPUTexture(GPUTexture&& other) noexcept
+DawnTexture::DawnTexture(DawnTexture&& other) noexcept
     : device_(other.device_), queue_(other.queue_),
       texture_(other.texture_), view_(other.view_), sampler_(other.sampler_),
       width_(other.width_), height_(other.height_), format_(other.format_),
@@ -138,7 +138,7 @@ GPUTexture::GPUTexture(GPUTexture&& other) noexcept
     other.sampler_ = nullptr;
 }
 
-GPUTexture& GPUTexture::operator=(GPUTexture&& other) noexcept {
+DawnTexture& DawnTexture::operator=(DawnTexture&& other) noexcept {
     if (this != &other) {
         release();
         device_ = other.device_;
@@ -158,7 +158,7 @@ GPUTexture& GPUTexture::operator=(GPUTexture&& other) noexcept {
     return *this;
 }
 
-void GPUTexture::write(const void* data, size_t size) {
+void DawnTexture::write(const void* data, size_t size) {
     WGPUTexelCopyTextureInfo dst{};
     dst.texture = texture_;
     dst.mipLevel = 0;
@@ -199,9 +199,9 @@ void GPUTexture::write(const void* data, size_t size) {
     }
 }
 
-void GPUTexture::writeFace(uint32_t face, const void* data, size_t size) {
+void DawnTexture::writeFace(uint32_t face, const void* data, size_t size) {
     if (face >= 6) {
-        throw std::runtime_error("GPUTexture::writeFace: face index must be 0-5");
+        throw std::runtime_error("DawnTexture::writeFace: face index must be 0-5");
     }
 
     const auto* srcBytes = static_cast<const unsigned char*>(data);
@@ -258,7 +258,7 @@ void GPUTexture::writeFace(uint32_t face, const void* data, size_t size) {
     }
 }
 
-void GPUTexture::release() {
+void DawnTexture::release() {
     if (sampler_) { wgpuSamplerRelease(sampler_); sampler_ = nullptr; }
     if (view_) { wgpuTextureViewRelease(view_); view_ = nullptr; }
     if (texture_) { wgpuTextureRelease(texture_); texture_ = nullptr; }

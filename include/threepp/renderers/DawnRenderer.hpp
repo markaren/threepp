@@ -49,14 +49,14 @@ namespace threepp {
         [[nodiscard]] bool getScissorTest() const;
 
         void setClearColor(const Color& color, float alpha = 1) override;
-        void getClearColor(Color& target) const;
-        [[nodiscard]] float getClearAlpha() const;
-        void setClearAlpha(float alpha);
+        void getClearColor(Color& target) const override;
+        [[nodiscard]] float getClearAlpha() const override;
+        void setClearAlpha(float alpha) override;
 
         void clear(bool color = true, bool depth = true, bool stencil = true) override;
-        void clearColor();
-        void clearDepth();
-        void clearStencil();
+        void clearColor() override;
+        void clearDepth() override;
+        void clearStencil() override;
 
         RenderTarget* getRenderTarget() override;
         void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace = 0, int activeMipmapLevel = 0) override;
@@ -65,6 +65,8 @@ namespace threepp {
 
         std::vector<unsigned char> readRGBPixels() override;
         void readPixels(const Vector2& position, const std::pair<int, int>& size, std::vector<unsigned char>& data);
+
+        void copyTextureToImage(Texture& texture) override;
 
         void writeFramebuffer(const std::filesystem::path& filename);
 

@@ -5,7 +5,7 @@
 #include "DawnTextures.hpp"
 
 #include "threepp/materials/ShaderMaterial.hpp"
-#include "threepp/renderers/dawn/GPUTexture.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
 
 #include <algorithm>
 #include <string>
@@ -135,7 +135,7 @@ const std::vector<WGPUBindGroupEntry>& DawnBindGroups::buildCustom(
 
     uint32_t nextBinding = customUniformBuffer ? 3 : 2;
     for (auto& name : texNames) {
-        auto* gpuTex = static_cast<GPUTexture*>(sm->customTextures[name]);
+        auto* gpuTex = static_cast<DawnTexture*>(sm->customTextures[name]);
         { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.textureView = gpuTex->view(); entries_.push_back(e); }
         { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.sampler = gpuTex->sampler(); entries_.push_back(e); }
     }

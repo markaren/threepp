@@ -1,5 +1,5 @@
-#ifndef THREEPP_GPUBUFFER_HPP
-#define THREEPP_GPUBUFFER_HPP
+#ifndef THREEPP_DAWNBUFFER_HPP
+#define THREEPP_DAWNBUFFER_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -14,20 +14,20 @@ namespace threepp {
     class DawnRenderer;
 
     /// GPU-resident uniform buffer for use with compute and render pipelines.
-    class GPUBuffer {
+    class DawnBuffer {
 
     public:
         /// Create a GPU buffer.
         /// @param renderer DawnRenderer providing the WebGPU device/queue
         /// @param size Buffer size in bytes
-        GPUBuffer(DawnRenderer& renderer, size_t size);
+        DawnBuffer(DawnRenderer& renderer, size_t size);
 
-        ~GPUBuffer();
+        ~DawnBuffer();
 
-        GPUBuffer(const GPUBuffer&) = delete;
-        GPUBuffer& operator=(const GPUBuffer&) = delete;
-        GPUBuffer(GPUBuffer&&) noexcept;
-        GPUBuffer& operator=(GPUBuffer&&) noexcept;
+        DawnBuffer(const DawnBuffer&) = delete;
+        DawnBuffer& operator=(const DawnBuffer&) = delete;
+        DawnBuffer(DawnBuffer&&) noexcept;
+        DawnBuffer& operator=(DawnBuffer&&) noexcept;
 
         /// Write data to the buffer.
         void write(const void* data, size_t size, size_t offset = 0);
@@ -48,4 +48,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_GPUBUFFER_HPP
+#endif//THREEPP_DAWNBUFFER_HPP

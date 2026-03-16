@@ -33,6 +33,9 @@ namespace threepp::dawn {
 
     class DawnShadowMap {
     public:
+        bool autoUpdate = true;
+        bool needsUpdate = false;
+
         DawnShadowMap(DawnState& state, DawnGeometries& geometries);
 
         // Process shadow-casting lights and render depth passes.

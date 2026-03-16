@@ -1,7 +1,7 @@
 
-#include "threepp/renderers/dawn/ComputePipeline.hpp"
-#include "threepp/renderers/dawn/GPUTexture.hpp"
-#include "threepp/renderers/dawn/GPUBuffer.hpp"
+#include "threepp/renderers/dawn/DawnComputePipeline.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
+#include "threepp/renderers/dawn/DawnBuffer.hpp"
 #include "threepp/renderers/DawnRenderer.hpp"
 
 #include <webgpu/webgpu.h>
@@ -13,18 +13,18 @@ using namespace threepp;
 
 namespace {
 
-    WGPUTextureFormat toWGPUFormat(GPUTexture::Format fmt) {
+    WGPUTextureFormat toWGPUFormat(DawnTexture::Format fmt) {
         switch (fmt) {
-            case GPUTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
-            case GPUTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
-            case GPUTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
+            case DawnTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
+            case DawnTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
+            case DawnTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
         }
         return WGPUTextureFormat_RGBA8Unorm;
     }
 
 }// namespace
 
-struct ComputePipeline::BindingInfo {
+struct DawnComputePipeline::BindingInfo {
     BindingType type;
     // For textures
     WGPUTextureView textureView = nullptr;
@@ -34,7 +34,7 @@ struct ComputePipeline::BindingInfo {
     size_t bufferSize = 0;
 };
 
-struct ComputePipeline::Impl {
+struct DawnComputePipeline::Impl {
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
     WGPUShaderModule shaderModule = nullptr;
@@ -111,7 +111,7 @@ struct ComputePipeline::Impl {
     }
 };
 
-ComputePipeline::ComputePipeline(DawnRenderer& renderer, const std::string& wgslSource,
+DawnComputePipeline::DawnComputePipeline(DawnRenderer& renderer, const std::string& wgslSource,
                                  const std::string& entryPoint)
     : impl_(new Impl()) {
 
@@ -130,11 +130,11 @@ ComputePipeline::ComputePipeline(DawnRenderer& renderer, const std::string& wgsl
     impl_->shaderModule = wgpuDeviceCreateShaderModule(impl_->device, &shaderDesc);
 }
 
-ComputePipeline::~ComputePipeline() {
+DawnComputePipeline::~DawnComputePipeline() {
     delete impl_;
 }
 
-void ComputePipeline::setStorageTexture(uint32_t binding, GPUTexture& texture) {
+void DawnComputePipeline::setStorageTexture(uint32_t binding, DawnTexture& texture) {
     BindingInfo info{};
     info.type = BindingType::StorageTextureWrite;
     info.textureView = texture.view();
@@ -143,7 +143,7 @@ void ComputePipeline::setStorageTexture(uint32_t binding, GPUTexture& texture) {
     impl_->pipelineBuilt = false;
 }
 
-void ComputePipeline::setTexture(uint32_t binding, GPUTexture& texture) {
+void DawnComputePipeline::setTexture(uint32_t binding, DawnTexture& texture) {
     BindingInfo info{};
     info.type = BindingType::Texture;
     info.textureView = texture.view();
@@ -152,7 +152,7 @@ void ComputePipeline::setTexture(uint32_t binding, GPUTexture& texture) {
     impl_->pipelineBuilt = false;
 }
 
-void ComputePipeline::setUniformBuffer(uint32_t binding, GPUBuffer& buffer) {
+void DawnComputePipeline::setUniformBuffer(uint32_t binding, DawnBuffer& buffer) {
     BindingInfo info{};
     info.type = BindingType::UniformBuffer;
     info.buffer = buffer.buffer();
@@ -161,7 +161,7 @@ void ComputePipeline::setUniformBuffer(uint32_t binding, GPUBuffer& buffer) {
     impl_->pipelineBuilt = false;
 }
 
-void ComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
+void DawnComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     if (!impl_->pipelineBuilt) {
         impl_->buildPipeline();
     }

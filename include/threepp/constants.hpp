@@ -28,6 +28,13 @@ namespace threepp {
         VSM
     };
 
+    struct ShadowMapConfig {
+        bool enabled = false;
+        bool autoUpdate = true;
+        bool needsUpdate = false;
+        ShadowMap type = ShadowMap::PFC;
+    };
+
     enum class Side {
         Front,
         Back,

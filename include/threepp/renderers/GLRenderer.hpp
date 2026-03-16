@@ -41,9 +41,9 @@ namespace threepp {
 
         const gl::GLInfo& info();
 
-        gl::GLShadowMap& shadowMap();
+        gl::GLShadowMap& shadowMap() override;
 
-        [[nodiscard]] const gl::GLShadowMap& shadowMap() const;
+        [[nodiscard]] const gl::GLShadowMap& shadowMap() const override;
 
         gl::GLState& state();
 
@@ -103,15 +103,15 @@ namespace threepp {
 
         [[nodiscard]] bool getScissorTest() const;
 
-        void getClearColor(Color& target) const;
+        void getClearColor(Color& target) const override;
 
-        [[nodiscard]] float getClearAlpha() const;
+        [[nodiscard]] float getClearAlpha() const override;
 
-        void setClearAlpha(float clearAlpha);
+        void setClearAlpha(float clearAlpha) override;
 
-        void clearColor();
-        void clearDepth();
-        void clearStencil();
+        void clearColor() override;
+        void clearDepth() override;
+        void clearStencil() override;
 
         void renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry* geometry, Material* material, Object3D* object, std::optional<GeometryGroup> group);
 
@@ -124,7 +124,9 @@ namespace threepp {
         void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data);
 
         // Experimental threepp function
-        void copyTextureToImage(Texture& texture);
+        void copyTextureToImage(Texture& texture) override;
+
+        void setDepthMask(bool flag) override;
 
         void resetState();
 

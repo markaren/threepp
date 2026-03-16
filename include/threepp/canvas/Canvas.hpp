@@ -56,6 +56,8 @@ namespace threepp {
 
         [[nodiscard]] void* windowPtr() const;
 
+        [[nodiscard]] GraphicsAPI graphicsApi() const;
+
         ~Canvas() override;
 
     private:

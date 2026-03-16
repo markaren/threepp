@@ -206,6 +206,7 @@ set(publicHeaders
         "threepp/lights/SpotLightShadow.hpp"
 
         "threepp/renderers/Renderer.hpp"
+        "threepp/renderers/RendererFactory.hpp"
         "threepp/renderers/GLRenderer.hpp"
         "threepp/renderers/DawnRenderer.hpp"
         "threepp/renderers/RenderTarget.hpp"
@@ -442,6 +443,7 @@ set(sources
 
         "threepp/renderers/GLRenderer.cpp"
         "threepp/renderers/RenderTarget.cpp"
+        "threepp/renderers/RendererFactory.cpp"
 
         "threepp/renderers/common/Lights.cpp"
         "threepp/renderers/common/RenderLists.cpp"
@@ -543,6 +545,11 @@ These can be installed on Ubuntu systems via sudo apt install libxinerama-dev li
 endif ()
 
 if (THREEPP_WITH_DAWN)
+    list(APPEND publicHeaders
+            "threepp/renderers/dawn/DawnBuffer.hpp"
+            "threepp/renderers/dawn/DawnTexture.hpp"
+            "threepp/renderers/dawn/DawnComputePipeline.hpp"
+    )
     list(APPEND sources
             "threepp/renderers/DawnRenderer.cpp"
             "threepp/renderers/dawn/DawnBindGroups.cpp"
@@ -556,9 +563,9 @@ if (THREEPP_WITH_DAWN)
             "threepp/renderers/dawn/DawnShaders.cpp"
             "threepp/renderers/dawn/DawnShadowMap.cpp"
             "threepp/renderers/dawn/DawnTextures.cpp"
-            "threepp/renderers/dawn/GPUTexture.cpp"
-            "threepp/renderers/dawn/GPUBuffer.cpp"
-            "threepp/renderers/dawn/ComputePipeline.cpp"
+            "threepp/renderers/dawn/DawnTexture.cpp"
+            "threepp/renderers/dawn/DawnBuffer.cpp"
+            "threepp/renderers/dawn/DawnComputePipeline.cpp"
     )
     if (APPLE)
         list(APPEND sources

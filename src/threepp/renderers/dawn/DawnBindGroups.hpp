@@ -16,7 +16,7 @@
 namespace threepp {
     class ShaderMaterial;
     class Texture;
-    class GPUTexture;
+    class DawnTexture;
 }
 
 namespace threepp::dawn {

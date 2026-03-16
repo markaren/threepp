@@ -476,6 +476,11 @@ void* Canvas::windowPtr() const {
     return pimpl_->window;
 }
 
+GraphicsAPI Canvas::graphicsApi() const {
+
+    return pimpl_->graphicsApi_;
+}
+
 Canvas::~Canvas() = default;
 
 

@@ -22,7 +22,7 @@
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
-#include "threepp/renderers/dawn/GPUTexture.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
 #include "threepp/math/Matrix3.hpp"
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Mesh.hpp"
@@ -470,7 +470,9 @@ struct DawnRenderer::Impl {
         lights->update(scene);
 
         // Shadow pass (delegated to DawnShadowMap subsystem)
+        shadowMap->autoUpdate = scope.shadowMapAutoUpdate;
         shadowMap->beginFrame(scene);
+        scope.shadowMapAutoUpdate = shadowMap->autoUpdate;
 
         // Determine render target views
         WGPUTextureView colorView = nullptr;
@@ -1454,6 +1456,49 @@ void DawnRenderer::readPixels(const Vector2& position, const std::pair<int, int>
             data[dstIdx + 0] = allPixels[srcIdx + 0];
             data[dstIdx + 1] = allPixels[srcIdx + 1];
             data[dstIdx + 2] = allPixels[srcIdx + 2];
+        }
+    }
+}
+
+void DawnRenderer::copyTextureToImage(Texture& texture) {
+    if (!pimpl_->initialized) return;
+
+    auto* entry = pimpl_->textures->findTexture(texture.id);
+    if (!entry || !entry->texture) return;
+
+    auto& image = texture.image();
+    uint32_t w = image.width;
+    uint32_t h = image.height;
+    if (w == 0 || h == 0) return;
+
+    // readRGBPixels returns RGB data from a BGRA8 GPU texture
+    auto rgb = dawn::readRGBPixels(pimpl_->device, pimpl_->queue, entry->texture, w, h);
+    if (rgb.empty()) return;
+
+    auto& data = image.data();
+    // Determine the channel count the texture expects
+    size_t srcChannels = 3;// readRGBPixels always returns RGB
+    size_t dstChannels = data.size() / (static_cast<size_t>(w) * h);
+    if (dstChannels == 0) dstChannels = srcChannels;
+
+    data.resize(static_cast<size_t>(w) * h * dstChannels);
+
+    size_t npixels = static_cast<size_t>(w) * h;
+    if (dstChannels == 3) {
+        std::memcpy(data.data(), rgb.data(), npixels * 3);
+    } else if (dstChannels == 4) {
+        for (size_t i = 0; i < npixels; i++) {
+            data[i * 4 + 0] = rgb[i * 3 + 0];
+            data[i * 4 + 1] = rgb[i * 3 + 1];
+            data[i * 4 + 2] = rgb[i * 3 + 2];
+            data[i * 4 + 3] = 255;
+        }
+    } else {
+        // Fewer channels — copy first N from each RGB pixel
+        for (size_t i = 0; i < npixels; i++) {
+            for (size_t c = 0; c < dstChannels; c++) {
+                data[i * dstChannels + c] = rgb[i * 3 + c];
+            }
         }
     }
 }

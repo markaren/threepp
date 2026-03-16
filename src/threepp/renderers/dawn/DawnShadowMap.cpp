@@ -162,6 +162,8 @@ void DawnShadowMap::init() {
 }
 
 void DawnShadowMap::beginFrame(Object3D& scene) {
+    if (!autoUpdate && !needsUpdate) return;
+
     active_ = false;
     activeLightCount_ = 0;
 
@@ -267,6 +269,8 @@ void DawnShadowMap::beginFrame(Object3D& scene) {
         wgpuCommandBufferRelease(cmd);
         wgpuCommandEncoderRelease(encoder);
     }
+
+    if (needsUpdate) needsUpdate = false;
 }
 
 void DawnShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,

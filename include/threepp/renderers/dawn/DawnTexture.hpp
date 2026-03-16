@@ -1,5 +1,5 @@
-#ifndef THREEPP_GPUTEXTURE_HPP
-#define THREEPP_GPUTEXTURE_HPP
+#ifndef THREEPP_DAWNTEXTURE_HPP
+#define THREEPP_DAWNTEXTURE_HPP
 
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +18,7 @@ namespace threepp {
 
     /// GPU-resident texture that can be used with compute and render pipelines.
     /// Supports storage (read/write from compute), sampling (read from fragment), and CPU upload.
-    class GPUTexture {
+    class DawnTexture {
 
     public:
         enum class Format {
@@ -45,20 +45,20 @@ namespace threepp {
         /// @param height Texture height in pixels
         /// @param format Pixel format
         /// @param usage Bitwise OR of Usage flags
-        GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
+        DawnTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
                    Format format, uint32_t usage = Storage | TextureBinding | CopyDst);
 
         /// Create a GPU texture with explicit dimension (2D or Cube).
-        GPUTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
+        DawnTexture(DawnRenderer& renderer, uint32_t width, uint32_t height,
                    Format format, Dimension dimension,
                    uint32_t usage = TextureBinding | CopyDst);
 
-        ~GPUTexture();
+        ~DawnTexture();
 
-        GPUTexture(const GPUTexture&) = delete;
-        GPUTexture& operator=(const GPUTexture&) = delete;
-        GPUTexture(GPUTexture&&) noexcept;
-        GPUTexture& operator=(GPUTexture&&) noexcept;
+        DawnTexture(const DawnTexture&) = delete;
+        DawnTexture& operator=(const DawnTexture&) = delete;
+        DawnTexture(DawnTexture&&) noexcept;
+        DawnTexture& operator=(DawnTexture&&) noexcept;
 
         /// Upload CPU data to the texture.
         void write(const void* data, size_t size);
@@ -100,4 +100,4 @@ namespace threepp {
 
 }// namespace threepp
 
-#endif//THREEPP_GPUTEXTURE_HPP
+#endif//THREEPP_DAWNTEXTURE_HPP

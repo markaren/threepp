@@ -5,7 +5,7 @@
 #include "DawnShaders.hpp"
 
 #include "threepp/materials/ShaderMaterial.hpp"
-#include "threepp/renderers/dawn/GPUTexture.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -482,8 +482,8 @@ namespace threepp::dawn {
 
             uint32_t nextBinding = hasCustomUniforms ? 3 : 2;
             for (auto& name : texNames) {
-                auto* gpuTex = static_cast<GPUTexture*>(sm->customTextures[name]);
-                bool isCube = gpuTex->dimension() == GPUTexture::Dimension::Cube;
+                auto* gpuTex = static_cast<DawnTexture*>(sm->customTextures[name]);
+                bool isCube = gpuTex->dimension() == DawnTexture::Dimension::Cube;
                 {
                     WGPUBindGroupLayoutEntry e{};
                     e.binding = nextBinding++;
