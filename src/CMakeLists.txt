@@ -205,7 +205,10 @@ set(publicHeaders
         "threepp/lights/SpotLight.hpp"
         "threepp/lights/SpotLightShadow.hpp"
 
+        "threepp/renderers/Renderer.hpp"
         "threepp/renderers/GLRenderer.hpp"
+        "threepp/renderers/DawnRenderer.hpp"
+        "threepp/renderers/RenderTarget.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
         "threepp/renderers/gl/GLInfo.hpp"
@@ -231,6 +234,12 @@ set(privateHeaders
         "threepp/materials/MeshDistanceMaterial.hpp"
 
         "threepp/renderers/GLCubeRenderTarget.hpp"
+
+        "threepp/renderers/common/Lights.hpp"
+        "threepp/renderers/common/RenderLists.hpp"
+        "threepp/renderers/common/RenderStates.hpp"
+        "threepp/renderers/common/RendererCapabilities.hpp"
+        "threepp/renderers/common/ShadowConfig.hpp"
 
         "threepp/renderers/gl/Buffer.hpp"
         "threepp/renderers/gl/GLAttributes.hpp"
@@ -432,7 +441,11 @@ set(sources
         "threepp/utils/TaskManager.cpp"
 
         "threepp/renderers/GLRenderer.cpp"
-        "threepp/renderers/GLRenderTarget.cpp"
+        "threepp/renderers/RenderTarget.cpp"
+
+        "threepp/renderers/common/Lights.cpp"
+        "threepp/renderers/common/RenderLists.cpp"
+        "threepp/renderers/common/RenderStates.cpp"
 
         "threepp/renderers/gl/GLAttributes.cpp"
         "threepp/renderers/gl/GLBackground.cpp"
@@ -529,6 +542,22 @@ These can be installed on Ubuntu systems via sudo apt install libxinerama-dev li
     endif ()
 endif ()
 
+if (THREEPP_WITH_DAWN)
+    list(APPEND sources
+            "threepp/renderers/DawnRenderer.cpp"
+            "threepp/renderers/dawn/DawnGeometries.cpp"
+            "threepp/renderers/dawn/DawnTextures.cpp"
+            "threepp/renderers/dawn/GPUTexture.cpp"
+            "threepp/renderers/dawn/GPUBuffer.cpp"
+            "threepp/renderers/dawn/ComputePipeline.cpp"
+    )
+    if (APPLE)
+        list(APPEND sources
+                "threepp/renderers/DawnSurfaceMacOS.mm"
+        )
+    endif ()
+endif ()
+
 if (NOT DEFINED EMSCRIPTEN)
     list(APPEND privateHeaders
             "threepp/utils/LoadGlad.hpp"
@@ -593,6 +622,29 @@ if (NOT DEFINED EMSCRIPTEN)
         endif ()
     endif ()
 
+endif ()
+
+
+if (THREEPP_WITH_DAWN)
+    include(${PROJECT_SOURCE_DIR}/cmake/FetchWgpuNative.cmake)
+
+    target_include_directories(threepp PRIVATE "${WGPU_INCLUDE_DIR}")
+    target_link_libraries(threepp PUBLIC ${WGPU_LIBRARY})
+    target_compile_definitions(threepp PRIVATE THREEPP_WITH_DAWN=1)
+
+    if (APPLE)
+        target_link_libraries(threepp PRIVATE "-framework QuartzCore" "-framework Metal")
+    endif ()
+
+    # Copy wgpu_native.dll next to executables so they can find it at runtime
+    if (WIN32 AND WGPU_NATIVE_DLL)
+        add_custom_command(TARGET threepp POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${WGPU_NATIVE_DLL}"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/wgpu_native.dll"
+            COMMENT "Copying wgpu_native.dll to output directory"
+        )
+    endif ()
 endif ()
 
 

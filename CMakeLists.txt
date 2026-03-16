@@ -10,6 +10,7 @@ option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
+option(THREEPP_WITH_DAWN "Build with WebGPU/Dawn backend (via wgpu-native)" OFF)
 
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
