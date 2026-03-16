@@ -2,6 +2,7 @@
 #include "threepp/renderers/gl/GLObjects.hpp"
 
 #include "threepp/objects/InstancedMesh.hpp"
+#include <algorithm>
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
@@ -27,6 +28,9 @@ struct GLObjects::Impl {
 
             instancedMesh->removeEventListener("dispose", *this);
 
+            auto& tracked = scope->registeredInstancedMeshes_;
+            tracked.erase(std::remove(tracked.begin(), tracked.end(), instancedMesh), tracked.end());
+
             scope->attributes_.remove(instancedMesh->instanceMatrix());
 
             if (instancedMesh->instanceColor()) scope->attributes_.remove(instancedMesh->instanceColor());
@@ -43,6 +47,7 @@ struct GLObjects::Impl {
     OnInstancedMeshDispose onInstancedMeshDispose;
 
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
+    std::vector<InstancedMesh*> registeredInstancedMeshes_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
         : attributes_(attributes),
@@ -70,6 +75,7 @@ struct GLObjects::Impl {
             if (!object->hasEventListener("dispose", onInstancedMeshDispose)) {
 
                 object->addEventListener("dispose", onInstancedMeshDispose);
+                registeredInstancedMeshes_.push_back(instancedMesh);
             }
 
             attributes_.update(instancedMesh->instanceMatrix(), GL_ARRAY_BUFFER);
@@ -85,6 +91,10 @@ struct GLObjects::Impl {
 
     void dispose() {
 
+        for (auto* im : registeredInstancedMeshes_) {
+            im->removeEventListener("dispose", onInstancedMeshDispose);
+        }
+        registeredInstancedMeshes_.clear();
         updateMap_.clear();
     }
 };
