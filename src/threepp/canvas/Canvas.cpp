@@ -167,6 +167,7 @@ struct Canvas::Impl {
 
     Canvas& scope;
     GLFWwindow* window;
+    GraphicsAPI graphicsApi_;
 
     WindowSize size_;
     Vector2 lastMousePos_;
@@ -178,7 +179,7 @@ struct Canvas::Impl {
     std::vector<std::function<void(int monitor)>> monitorChangesListener;
 
     explicit Impl(Canvas& scope, const Parameters& params)
-        : scope(scope), exitOnKeyEscape_(params.exitOnKeyEscape_) {
+        : scope(scope), graphicsApi_(params.graphicsApi_), exitOnKeyEscape_(params.exitOnKeyEscape_) {
 
         initGLfw();
 
@@ -190,10 +191,14 @@ struct Canvas::Impl {
         }
 
 #ifndef EMSCRIPTEN
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        if (params.graphicsApi_ == GraphicsAPI::WebGPU) {
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+        } else {
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+            glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+            glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+            glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+        }
         glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
 
         glfwWindowHint(GLFW_VISIBLE, params.headless_ ? GLFW_FALSE : GLFW_TRUE);
@@ -231,18 +236,20 @@ struct Canvas::Impl {
         glfwSetWindowPosCallback(window, window_pos_callback);
         glfwSetDropCallback(window, drop_callback);
 
-        glfwMakeContextCurrent(window);
+        if (params.graphicsApi_ == GraphicsAPI::OpenGL) {
+            glfwMakeContextCurrent(window);
 
 #ifndef EMSCRIPTEN
-        loadGlad();
-        glfwSwapInterval(params.vsync_ ? 1 : 0);
+            loadGlad();
+            glfwSwapInterval(params.vsync_ ? 1 : 0);
 
-        if (params.antialiasing_ > 0) {
-            glEnable(GL_MULTISAMPLE);
-        }
+            if (params.antialiasing_ > 0) {
+                glEnable(GL_MULTISAMPLE);
+            }
 
-        glEnable(GL_PROGRAM_POINT_SIZE);
+            glEnable(GL_PROGRAM_POINT_SIZE);
 #endif
+        }
     }
 
     [[nodiscard]] const WindowSize& getSize() const {
@@ -264,7 +271,9 @@ struct Canvas::Impl {
 
         f();
 
-        glfwSwapBuffers(window);
+        if (graphicsApi_ == GraphicsAPI::OpenGL) {
+            glfwSwapBuffers(window);
+        }
         glfwPollEvents();
 
         return true;
@@ -588,6 +597,13 @@ Canvas::Parameters& Canvas::Parameters::exitOnKeyEscape(bool flag) {
 Canvas::Parameters& Canvas::Parameters::headless(bool flag) {
 
     headless_ = flag;
+
+    return *this;
+}
+
+Canvas::Parameters& Canvas::Parameters::graphicsApi(GraphicsAPI api) {
+
+    graphicsApi_ = api;
 
     return *this;
 }

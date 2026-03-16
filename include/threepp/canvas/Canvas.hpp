@@ -15,6 +15,11 @@
 
 namespace threepp {
 
+    enum class GraphicsAPI {
+        OpenGL,
+        WebGPU
+    };
+
     class Canvas: public PeripheralsEventSource {
 
     public:
@@ -82,6 +87,8 @@ namespace threepp {
 
             Parameters& headless(bool flag);
 
+            Parameters& graphicsApi(GraphicsAPI api);
+
         private:
             std::optional<WindowSize> size_;
             int antialiasing_{2};
@@ -90,6 +97,7 @@ namespace threepp {
             bool resizable_{true};
             bool exitOnKeyEscape_{true};
             bool headless_{false};
+            GraphicsAPI graphicsApi_{GraphicsAPI::OpenGL};
             std::optional<std::filesystem::path> favicon_;
 
             friend struct Impl;
