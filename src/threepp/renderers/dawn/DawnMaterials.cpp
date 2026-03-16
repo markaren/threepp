@@ -9,6 +9,7 @@
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
+#include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/ShadowMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
@@ -81,6 +82,10 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         p.diffuse = m->color;
     } else if (auto m = dynamic_cast<PointsMaterial*>(rawMat)) {
         p.diffuse = m->color;
+        if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
+    } else if (auto m = dynamic_cast<SpriteMaterial*>(rawMat)) {
+        p.diffuse = m->color;
+        p.opacity = m->opacity;
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
     } else if (dynamic_cast<ShadowMaterial*>(rawMat)) {
         p.skip = true;

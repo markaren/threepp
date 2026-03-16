@@ -226,14 +226,34 @@ struct ShadowLightData {
 };
 struct ShadowUniforms {
     count: u32,
+    numDirShadows: u32,
+    numSpotShadows: u32,
     _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
     lights: array<ShadowLightData, MAX_SHADOW_LIGHTS>,
 };
 @group(0) @binding(7) var<uniform> shadow: ShadowUniforms;
 @group(0) @binding(8) var t_shadowMaps: texture_depth_2d_array;
 @group(0) @binding(9) var s_shadowMap: sampler_comparison;
+
+fn sampleShadow(si: u32, worldPos: vec3<f32>) -> f32 {
+    let worldPos4 = vec4<f32>(worldPos, 1.0);
+    let lightSpacePos = shadow.lights[si].lightVP * worldPos4;
+    let projCoords = lightSpacePos.xyz / lightSpacePos.w;
+    let shadowUV = vec2<f32>(projCoords.x * 0.5 + 0.5, 1.0 - (projCoords.y * 0.5 + 0.5));
+    let currentDepth = projCoords.z - shadow.lights[si].bias;
+    if (shadowUV.x < 0.0 || shadowUV.x > 1.0 || shadowUV.y < 0.0 || shadowUV.y > 1.0 || currentDepth < 0.0 || currentDepth > 1.0) {
+        return 1.0;
+    }
+    let texelSize = 1.0 / f32(textureDimensions(t_shadowMaps).x);
+    var shadow_sum = 0.0;
+    for (var sy = -1; sy <= 1; sy++) {
+        for (var sx = -1; sx <= 1; sx++) {
+            let offset = vec2<f32>(f32(sx), f32(sy)) * texelSize;
+            shadow_sum += textureSampleCompare(t_shadowMaps, s_shadowMap, shadowUV + offset, i32(si), currentDepth);
+        }
+    }
+    return shadow_sum / 9.0;
+}
 )";
     }
 
@@ -429,12 +449,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if (features & ShaderFeatures::GradientMap) {
             s << "        NdotL = textureSample(t_gradientMap, s_gradientMap, vec2<f32>(NdotL, 0.5)).r;\n";
         }
-        s << R"(
-        diffuseLight += lights.directional[i].color * NdotL;
-)";
+        // Per-light shadow attenuation for directional lights
+        if (features & ShaderFeatures::Shadow) {
+            s << "        var dirShadow = 1.0;\n";
+            s << "        if (i < shadow.numDirShadows) { dirShadow = sampleShadow(i, in.worldPos); }\n";
+            s << "        diffuseLight += lights.directional[i].color * NdotL * dirShadow;\n";
+        } else {
+            s << "        diffuseLight += lights.directional[i].color * NdotL;\n";
+        }
         if (features & ShaderFeatures::Specular) {
             s << "        { let H = normalize(L + V); let s = pow(max(dot(N, H), 0.0), material.specularAndShininess.w);\n";
-            s << "          specularLight += lights.directional[i].color * material.specularAndShininess.rgb * s; }\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          specularLight += lights.directional[i].color * material.specularAndShininess.rgb * s * dirShadow; }\n";
+            } else {
+                s << "          specularLight += lights.directional[i].color * material.specularAndShininess.rgb * s; }\n";
+            }
         }
         if (features & ShaderFeatures::PBR) {
             s << "        { let H = normalize(L + V); let NdotH = max(dot(N, H), 0.0);\n";
@@ -445,7 +474,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             s << "          let D = a2 / (3.14159265 * denom * denom);\n";
             s << "          let F0 = mix(vec3<f32>(0.04), baseColor, m);\n";
             s << "          let F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);\n";
-            s << "          specularLight += lights.directional[i].color * F * D * NdotL; }\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          specularLight += lights.directional[i].color * F * D * NdotL * dirShadow; }\n";
+            } else {
+                s << "          specularLight += lights.directional[i].color * F * D * NdotL; }\n";
+            }
         }
         s << "    }\n";
 
@@ -496,10 +529,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if (features & ShaderFeatures::GradientMap) {
             s << "        NdotL = textureSample(t_gradientMap, s_gradientMap, vec2<f32>(NdotL, 0.5)).r;\n";
         }
-        s << "        diffuseLight += lights.spot[i].color * NdotL * att;\n";
+        // Per-light shadow attenuation for spot lights
+        if (features & ShaderFeatures::Shadow) {
+            s << "        var spotShadow = 1.0;\n";
+            s << "        if (i < shadow.numSpotShadows) { spotShadow = sampleShadow(shadow.numDirShadows + i, in.worldPos); }\n";
+            s << "        diffuseLight += lights.spot[i].color * NdotL * att * spotShadow;\n";
+        } else {
+            s << "        diffuseLight += lights.spot[i].color * NdotL * att;\n";
+        }
         if (features & ShaderFeatures::Specular) {
             s << "        { let H = normalize(L + V); let s = pow(max(dot(N, H), 0.0), material.specularAndShininess.w);\n";
-            s << "          specularLight += lights.spot[i].color * material.specularAndShininess.rgb * s * att; }\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          specularLight += lights.spot[i].color * material.specularAndShininess.rgb * s * att * spotShadow; }\n";
+            } else {
+                s << "          specularLight += lights.spot[i].color * material.specularAndShininess.rgb * s * att; }\n";
+            }
         }
         if (features & ShaderFeatures::PBR) {
             s << "        { let H = normalize(L + V); let NdotH = max(dot(N, H), 0.0);\n";
@@ -509,7 +553,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             s << "          let D = a2 / (3.14159265 * denom * denom);\n";
             s << "          let F0 = mix(vec3<f32>(0.04), baseColor, m);\n";
             s << "          let F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);\n";
-            s << "          specularLight += lights.spot[i].color * F * D * NdotL * att; }\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          specularLight += lights.spot[i].color * F * D * NdotL * att * spotShadow; }\n";
+            } else {
+                s << "          specularLight += lights.spot[i].color * F * D * NdotL * att; }\n";
+            }
         }
         s << R"(
     }
@@ -518,36 +566,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         diffuseLight += mix(lights.hemi[i].groundColor, lights.hemi[i].skyColor, w);
     }
 )";
-        // Shadow
-        if (features & ShaderFeatures::Shadow) {
-            s << R"(
-    {
-        var combinedShadow = 1.0;
-        let worldPos4 = vec4<f32>(in.worldPos, 1.0);
-        for (var si = 0u; si < shadow.count; si++) {
-            let lightSpacePos = shadow.lights[si].lightVP * worldPos4;
-            let projCoords = lightSpacePos.xyz / lightSpacePos.w;
-            let shadowUV = vec2<f32>(projCoords.x * 0.5 + 0.5, 1.0 - (projCoords.y * 0.5 + 0.5));
-            let currentDepth = projCoords.z - shadow.lights[si].bias;
-            if (shadowUV.x >= 0.0 && shadowUV.x <= 1.0 && shadowUV.y >= 0.0 && shadowUV.y <= 1.0 && currentDepth >= 0.0 && currentDepth <= 1.0) {
-                let texelSize = 1.0 / f32(textureDimensions(t_shadowMaps).x);
-                var shadow_sum = 0.0;
-                for (var sy = -1; sy <= 1; sy++) {
-                    for (var sx = -1; sx <= 1; sx++) {
-                        let offset = vec2<f32>(f32(sx), f32(sy)) * texelSize;
-                        shadow_sum += textureSampleCompare(t_shadowMaps, s_shadowMap, shadowUV + offset, i32(si), currentDepth);
-                    }
-                }
-                combinedShadow = min(combinedShadow, shadow_sum / 9.0);
-            }
-        }
-        // Shadow only attenuates diffuse/specular, not ambient/emissive
-        diffuseLight = lights.ambient + (diffuseLight - lights.ambient) * combinedShadow;
-        specularLight = specularLight * combinedShadow;
-    }
-)";
-        }
-
         // Emissive
         if (features & ShaderFeatures::EmissiveMap) {
             s << "    var emissiveColor = material.emissive.rgb * textureSample(t_emissiveMap, s_emissiveMap, in.uv).rgb;\n";

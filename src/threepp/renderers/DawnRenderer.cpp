@@ -1,10 +1,14 @@
 
 #include "threepp/renderers/DawnRenderer.hpp"
 
+#include "dawn/DawnBindGroups.hpp"
 #include "dawn/DawnBufferPool.hpp"
 #include "dawn/DawnGeometries.hpp"
+#include "dawn/DawnLights.hpp"
 #include "dawn/DawnMaterials.hpp"
 #include "dawn/DawnPipelines.hpp"
+#include "dawn/DawnReadback.hpp"
+#include "dawn/DawnRenderTargets.hpp"
 #include "dawn/DawnShaders.hpp"
 #include "dawn/DawnShadowMap.hpp"
 #include "dawn/DawnState.hpp"
@@ -129,9 +133,6 @@ struct DawnRenderer::Impl {
     struct { uint32_t x=0, y=0, w=0, h=0; } scissor_;
     bool scissorTest_ = false;
 
-    // Uniform buffers
-    WGPUBuffer lightBuffer = nullptr;       // binding 2 (per-frame, shared)
-
     // Subsystem: shared state
     dawn::DawnState dawnState;
 
@@ -150,24 +151,18 @@ struct DawnRenderer::Impl {
     // Subsystem: per-frame buffer pool (avoids per-draw GPU buffer alloc/free)
     std::unique_ptr<dawn::DawnBufferPool> bufferPool;
 
+    // Subsystem: light collection and GPU buffer packing
+    std::unique_ptr<dawn::DawnLights> lights;
+
+    // Subsystem: render target texture cache
+    std::unique_ptr<dawn::DawnRenderTargets> renderTargets;
+
+    // Subsystem: bind group assembly (hot path, reuses internal vector)
+    std::unique_ptr<dawn::DawnBindGroups> bindGroups;
+
     // Material dispose listener
     OnMaterialDispose onMaterialDispose;
 
-    // Render target cache
-    struct RTEntry {
-        WGPUTexture colorTexture = nullptr;       // resolve target (1x) — readback source
-        WGPUTextureView colorView = nullptr;
-        WGPUTexture depthTexture = nullptr;
-        WGPUTextureView depthView = nullptr;
-        // MSAA textures (only created when sampleCount > 1)
-        WGPUTexture msaaColorTexture = nullptr;   // multi-sampled render target
-        WGPUTextureView msaaColorView = nullptr;
-        WGPUTexture msaaDepthTexture = nullptr;
-        WGPUTextureView msaaDepthView = nullptr;
-        unsigned int width = 0, height = 0;
-        uint32_t sampleCount = 1;
-    };
-    std::unordered_map<std::string, RTEntry> rtCache;
     RenderTarget* currentRenderTarget_ = nullptr;
 
     // Render target state
@@ -193,6 +188,35 @@ struct DawnRenderer::Impl {
     } renderInfo;
 
     bool initialized = false;
+
+    // Shared quad geometry for rendering sprites (standard attributes, not interleaved)
+    std::shared_ptr<BufferGeometry> spriteGeometry_;
+
+    BufferGeometry* getSpriteGeometry() {
+        if (!spriteGeometry_) {
+            spriteGeometry_ = BufferGeometry::create();
+            std::vector<float> positions = {
+                -0.5f, -0.5f, 0.f,
+                 0.5f, -0.5f, 0.f,
+                 0.5f,  0.5f, 0.f,
+                -0.5f,  0.5f, 0.f};
+            std::vector<float> normals = {
+                0.f, 0.f, 1.f,
+                0.f, 0.f, 1.f,
+                0.f, 0.f, 1.f,
+                0.f, 0.f, 1.f};
+            std::vector<float> uvs = {
+                0.f, 0.f,
+                1.f, 0.f,
+                1.f, 1.f,
+                0.f, 1.f};
+            spriteGeometry_->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+            spriteGeometry_->setAttribute("normal", FloatBufferAttribute::create(normals, 3));
+            spriteGeometry_->setAttribute("uv", FloatBufferAttribute::create(uvs, 2));
+            spriteGeometry_->setIndex(std::vector<int>{0, 1, 2, 0, 2, 3});
+        }
+        return spriteGeometry_.get();
+    }
 
     explicit Impl(DawnRenderer& scope, Canvas& canvas)
         : scope(scope), canvas(canvas), size_(canvas.size()),
@@ -246,9 +270,6 @@ struct DawnRenderer::Impl {
         dawnState.queue = queue;
         dawnState.surfaceFormat = surfaceFormat;
 
-        // Create uniform buffers
-        createUniformBuffers();
-
         // Initialize subsystems
         textures = std::make_unique<dawn::DawnTextures>(dawnState);
         textures->createDummyTexture();
@@ -256,6 +277,9 @@ struct DawnRenderer::Impl {
         pipelines = std::make_unique<dawn::DawnPipelines>(dawnState);
         shadowMap = std::make_unique<dawn::DawnShadowMap>(dawnState, *geometries);
         bufferPool = std::make_unique<dawn::DawnBufferPool>(device, queue);
+        lights = std::make_unique<dawn::DawnLights>(dawnState);
+        renderTargets = std::make_unique<dawn::DawnRenderTargets>(dawnState);
+        bindGroups = std::make_unique<dawn::DawnBindGroups>();
 
         initialized = true;
         std::cout << "DawnRenderer: WebGPU initialized successfully"
@@ -395,176 +419,6 @@ struct DawnRenderer::Impl {
         wgpuSurfaceConfigure(surface, &config);
     }
 
-    void createUniformBuffers() {
-        WGPUBufferDescriptor d{};
-        d.label = {.data = "light_buf", .length = 9};
-        d.size = dawn::LIGHT_UNIFORM_SIZE;
-        d.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        lightBuffer = wgpuDeviceCreateBuffer(device, &d);
-    }
-
-    // Render target helpers
-    void releaseRTEntry(RTEntry& e) {
-        if (e.msaaColorView) wgpuTextureViewRelease(e.msaaColorView);
-        if (e.msaaColorTexture) wgpuTextureRelease(e.msaaColorTexture);
-        if (e.msaaDepthView) wgpuTextureViewRelease(e.msaaDepthView);
-        if (e.msaaDepthTexture) wgpuTextureRelease(e.msaaDepthTexture);
-        if (e.colorView) wgpuTextureViewRelease(e.colorView);
-        if (e.colorTexture) wgpuTextureRelease(e.colorTexture);
-        if (e.depthView) wgpuTextureViewRelease(e.depthView);
-        if (e.depthTexture) wgpuTextureRelease(e.depthTexture);
-    }
-
-    RTEntry& getOrCreateRT(RenderTarget* rt) {
-        auto it = rtCache.find(rt->uuid);
-        if (it != rtCache.end() && it->second.width == rt->width
-            && it->second.height == rt->height && it->second.sampleCount == sampleCount_) {
-            return it->second;
-        }
-        if (it != rtCache.end()) {
-            releaseRTEntry(it->second);
-        }
-
-        RTEntry entry{};
-        entry.width = rt->width;
-        entry.height = rt->height;
-        entry.sampleCount = sampleCount_;
-
-        WGPUTextureDescriptor ctd{};
-        ctd.label = {.data = "rt_color", .length = 8};
-        ctd.size = {rt->width, rt->height, 1};
-        ctd.mipLevelCount = 1;
-        ctd.sampleCount = 1;
-        ctd.dimension = WGPUTextureDimension_2D;
-        ctd.format = surfaceFormat;
-        ctd.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc | WGPUTextureUsage_TextureBinding;
-        entry.colorTexture = wgpuDeviceCreateTexture(device, &ctd);
-        entry.colorView = wgpuTextureCreateView(entry.colorTexture, nullptr);
-
-        WGPUTextureDescriptor dtd{};
-        dtd.label = {.data = "rt_depth", .length = 8};
-        dtd.size = {rt->width, rt->height, 1};
-        dtd.mipLevelCount = 1;
-        dtd.sampleCount = sampleCount_;
-        dtd.dimension = WGPUTextureDimension_2D;
-        dtd.format = WGPUTextureFormat_Depth24Plus;
-        dtd.usage = WGPUTextureUsage_RenderAttachment;
-        entry.depthTexture = wgpuDeviceCreateTexture(device, &dtd);
-        entry.depthView = wgpuTextureCreateView(entry.depthTexture, nullptr);
-
-        if (sampleCount_ > 1) {
-            WGPUTextureDescriptor msaaCtd{};
-            msaaCtd.label = {.data = "rt_msaa_color", .length = 13};
-            msaaCtd.size = {rt->width, rt->height, 1};
-            msaaCtd.mipLevelCount = 1;
-            msaaCtd.sampleCount = sampleCount_;
-            msaaCtd.dimension = WGPUTextureDimension_2D;
-            msaaCtd.format = surfaceFormat;
-            msaaCtd.usage = WGPUTextureUsage_RenderAttachment;
-            entry.msaaColorTexture = wgpuDeviceCreateTexture(device, &msaaCtd);
-            entry.msaaColorView = wgpuTextureCreateView(entry.msaaColorTexture, nullptr);
-        }
-
-        rtCache[rt->uuid] = entry;
-        return rtCache[rt->uuid];
-    }
-
-    // Pack light data into GPU buffer using world-space coordinates.
-    void uploadLightDataWorldSpace(Object3D& scene) {
-        std::vector<float> data(dawn::LIGHT_UNIFORM_SIZE / sizeof(float), 0.0f);
-        auto* u32 = reinterpret_cast<uint32_t*>(data.data());
-
-        uint32_t nDir = 0, nPt = 0, nSp = 0, nHm = 0;
-        float ambR = 0, ambG = 0, ambB = 0;
-
-        struct DirEntry { Vector3 dir; Color col; };
-        struct PtEntry  { Vector3 pos; Color col; float dist; float decay; };
-        struct SpEntry  { Vector3 pos; Vector3 dir; Color col; float dist; float decay; float coneCos; float penumbraCos; };
-        struct HmEntry  { Vector3 dir; Color sky; Color gnd; };
-        std::vector<DirEntry> dirs;
-        std::vector<PtEntry>  pts;
-        std::vector<SpEntry>  sps;
-        std::vector<HmEntry>  hms;
-
-        std::function<void(Object3D&)> collect = [&](Object3D& obj) {
-            if (auto al = obj.as<AmbientLight>()) {
-                ambR += al->color.r * al->intensity;
-                ambG += al->color.g * al->intensity;
-                ambB += al->color.b * al->intensity;
-            } else if (auto dl = obj.as<DirectionalLight>()) {
-                if (dirs.size() < static_cast<size_t>(dawn::MAX_DIR_LIGHTS)) {
-                    Vector3 lightPos, targetPos;
-                    lightPos.setFromMatrixPosition(*dl->matrixWorld);
-                    targetPos.setFromMatrixPosition(*dl->target().matrixWorld);
-                    Vector3 direction = lightPos.clone().sub(targetPos).normalize();
-                    dirs.push_back({direction, Color(dl->color).multiplyScalar(dl->intensity)});
-                }
-            } else if (auto pl = obj.as<PointLight>()) {
-                if (pts.size() < static_cast<size_t>(dawn::MAX_POINT_LIGHTS)) {
-                    Vector3 pos;
-                    pos.setFromMatrixPosition(*pl->matrixWorld);
-                    pts.push_back({pos, Color(pl->color).multiplyScalar(pl->intensity), pl->distance, pl->decay});
-                }
-            } else if (auto sl = obj.as<SpotLight>()) {
-                if (sps.size() < static_cast<size_t>(dawn::MAX_SPOT_LIGHTS)) {
-                    Vector3 pos, targetPos;
-                    pos.setFromMatrixPosition(*sl->matrixWorld);
-                    targetPos.setFromMatrixPosition(*sl->target().matrixWorld);
-                    Vector3 direction = pos.clone().sub(targetPos).normalize();
-                    sps.push_back({pos, direction, Color(sl->color).multiplyScalar(sl->intensity),
-                                   sl->distance, sl->decay,
-                                   std::cos(sl->angle), std::cos(sl->angle * (1.0f - sl->penumbra))});
-                }
-            } else if (auto hl = obj.as<HemisphereLight>()) {
-                if (hms.size() < static_cast<size_t>(dawn::MAX_HEMI_LIGHTS)) {
-                    Vector3 dir;
-                    dir.setFromMatrixPosition(*hl->matrixWorld).normalize();
-                    hms.push_back({dir, Color(hl->color).multiplyScalar(hl->intensity),
-                                   Color(hl->groundColor).multiplyScalar(hl->intensity)});
-                }
-            }
-            for (auto& child : obj.children) collect(*child);
-        };
-        collect(scene);
-
-        nDir = dirs.size(); nPt = pts.size(); nSp = sps.size(); nHm = hms.size();
-        u32[0] = nDir; u32[1] = nPt; u32[2] = nSp; u32[3] = nHm;
-        data[4] = ambR; data[5] = ambG; data[6] = ambB; data[7] = 0;
-
-        size_t off = 8;
-        for (uint32_t i = 0; i < nDir; i++) {
-            data[off+0] = dirs[i].dir.x; data[off+1] = dirs[i].dir.y; data[off+2] = dirs[i].dir.z; data[off+3] = 0;
-            data[off+4] = dirs[i].col.r; data[off+5] = dirs[i].col.g; data[off+6] = dirs[i].col.b; data[off+7] = 0;
-            off += 8;
-        }
-
-        off = 8 + dawn::MAX_DIR_LIGHTS * 8;
-        for (uint32_t i = 0; i < nPt; i++) {
-            data[off+0] = pts[i].pos.x; data[off+1] = pts[i].pos.y; data[off+2] = pts[i].pos.z; data[off+3] = 0;
-            data[off+4] = pts[i].col.r; data[off+5] = pts[i].col.g; data[off+6] = pts[i].col.b; data[off+7] = pts[i].dist;
-            data[off+8] = pts[i].decay; data[off+9] = 0; data[off+10] = 0; data[off+11] = 0;
-            off += 12;
-        }
-
-        off = 8 + dawn::MAX_DIR_LIGHTS * 8 + dawn::MAX_POINT_LIGHTS * 12;
-        for (uint32_t i = 0; i < nSp; i++) {
-            data[off+0] = sps[i].pos.x; data[off+1] = sps[i].pos.y; data[off+2] = sps[i].pos.z; data[off+3] = 0;
-            data[off+4] = sps[i].dir.x; data[off+5] = sps[i].dir.y; data[off+6] = sps[i].dir.z; data[off+7] = 0;
-            data[off+8] = sps[i].col.r; data[off+9] = sps[i].col.g; data[off+10] = sps[i].col.b; data[off+11] = sps[i].dist;
-            data[off+12] = sps[i].decay; data[off+13] = sps[i].coneCos; data[off+14] = sps[i].penumbraCos; data[off+15] = 0;
-            off += 16;
-        }
-
-        off = 8 + dawn::MAX_DIR_LIGHTS * 8 + dawn::MAX_POINT_LIGHTS * 12 + dawn::MAX_SPOT_LIGHTS * 16;
-        for (uint32_t i = 0; i < nHm; i++) {
-            data[off+0] = hms[i].dir.x; data[off+1] = hms[i].dir.y; data[off+2] = hms[i].dir.z; data[off+3] = 0;
-            data[off+4] = hms[i].sky.r; data[off+5] = hms[i].sky.g; data[off+6] = hms[i].sky.b; data[off+7] = 0;
-            data[off+8] = hms[i].gnd.r; data[off+9] = hms[i].gnd.g; data[off+10] = hms[i].gnd.b; data[off+11] = 0;
-            off += 12;
-        }
-
-        wgpuQueueWriteBuffer(queue, lightBuffer, 0, data.data(), dawn::LIGHT_UNIFORM_SIZE);
-    }
 
     void render(Object3D& scene, Camera& camera) {
         if (!initialized) return;
@@ -613,7 +467,7 @@ struct DawnRenderer::Impl {
         }
 
         // Upload world-space light data
-        uploadLightDataWorldSpace(scene);
+        lights->update(scene);
 
         // Shadow pass (delegated to DawnShadowMap subsystem)
         shadowMap->beginFrame(scene);
@@ -675,7 +529,7 @@ struct DawnRenderer::Impl {
             frameDepthTexture = wgpuDeviceCreateTexture(device, &dtd);
             depthView = wgpuTextureCreateView(frameDepthTexture, nullptr);
         } else {
-            auto& rt = getOrCreateRT(currentRenderTarget_);
+            auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
             depthView = rt.depthView;
             if (sampleCount_ > 1 && rt.msaaColorView) {
                 colorView = rt.msaaColorView;
@@ -851,11 +705,6 @@ struct DawnRenderer::Impl {
         constexpr auto kUniformUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         WGPUBuffer perDrawTransformBuf = bufferPool->acquire(dawn::TRANSFORM_UNIFORM_SIZE, kUniformUsage, transformData);
 
-        // Build bind group entries
-        std::vector<WGPUBindGroupEntry> entries;
-        { WGPUBindGroupEntry e{}; e.binding = 0; e.buffer = perDrawTransformBuf; e.offset = 0; e.size = dawn::TRANSFORM_UNIFORM_SIZE; entries.push_back(e); }
-        { WGPUBindGroupEntry e{}; e.binding = 1; e.buffer = lightBuffer; e.offset = 0; e.size = dawn::LIGHT_UNIFORM_SIZE; entries.push_back(e); }
-
         // Custom uniforms at binding 2
         WGPUBuffer customUniformBuf = nullptr;
         bool hasCustomUniforms = false;
@@ -878,24 +727,11 @@ struct DawnRenderer::Impl {
                 }
             }
             customUniformBuf = bufferPool->acquire(256, kUniformUsage, uboData);
-
-            WGPUBindGroupEntry e{}; e.binding = 2; e.buffer = customUniformBuf; e.offset = 0; e.size = 256;
-            entries.push_back(e);
         }
 
-        // GPU texture bindings
-        std::vector<std::string> texNames;
-        for (auto& [name, ptr] : sm->customTextures) {
-            texNames.push_back(name);
-        }
-        std::sort(texNames.begin(), texNames.end());
-
-        uint32_t nextBinding = hasCustomUniforms ? 3 : 2;
-        for (auto& name : texNames) {
-            auto* gpuTex = static_cast<GPUTexture*>(sm->customTextures[name]);
-            { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.textureView = gpuTex->view(); entries.push_back(e); }
-            { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.sampler = gpuTex->sampler(); entries.push_back(e); }
-        }
+        // Build bind group entries via subsystem
+        auto& entries = bindGroups->buildCustom(perDrawTransformBuf, lights->uniformBuffer(),
+                                                 customUniformBuf, sm);
 
         WGPUBindGroupDescriptor bgDesc{};
         bgDesc.label = {.data = "custom_bg", .length = 9};
@@ -945,7 +781,7 @@ struct DawnRenderer::Impl {
                 }
                 auto material = sprite->material().get();
                 if (material && material->visible) {
-                    renderList_.push(sprite, nullptr, material, groupOrder, _vector3.z, std::nullopt);
+                    renderList_.push(sprite, getSpriteGeometry(), material, groupOrder, _vector3.z, std::nullopt);
                 }
             }
         } else if (object.is<Mesh>() || object.is<Line>() || object.is<Points>()) {
@@ -1010,6 +846,7 @@ struct DawnRenderer::Impl {
         uint64_t features = params.features;
 
         // Object type
+        bool isSprite = object->is<Sprite>();
         bool isMesh = object->is<Mesh>();
         bool isLine = object->is<Line>();
         bool isPoints = object->is<Points>();
@@ -1103,12 +940,27 @@ struct DawnRenderer::Impl {
         // Upload transform uniforms
         float transformData[dawn::TRANSFORM_UNIFORM_SIZE / sizeof(float)];
         std::memset(transformData, 0, sizeof(transformData));
-        std::memcpy(transformData, object->matrixWorld->elements.data(), 64);
+
+        // Sprites use a billboard model matrix (always faces the camera)
+        Matrix4 modelMatrix;
+        if (isSprite) {
+            Vector3 spritePos;
+            spritePos.setFromMatrixPosition(*object->matrixWorld);
+            Vector3 spriteScale;
+            spriteScale.setFromMatrixScale(*object->matrixWorld);
+            modelMatrix.extractRotation(*camera.matrixWorld);
+            modelMatrix.scale(spriteScale);
+            modelMatrix.setPosition(spritePos);
+        } else {
+            modelMatrix.copy(*object->matrixWorld);
+        }
+
+        std::memcpy(transformData, modelMatrix.elements.data(), 64);
         std::memcpy(transformData + 16, viewMatrix.elements.data(), 64);
         std::memcpy(transformData + 32, projectionMatrix.elements.data(), 64);
 
         Matrix4 modelView;
-        modelView.multiplyMatrices(viewMatrix, *object->matrixWorld);
+        modelView.multiplyMatrices(viewMatrix, modelMatrix);
         Matrix3 normalMatrix;
         normalMatrix.setFromMatrix4(modelView);
         normalMatrix.invert();
@@ -1134,64 +986,9 @@ struct DawnRenderer::Impl {
         dawn::packMaterialUniforms(matData, params, frameCtx, rawMat);
         WGPUBuffer perDrawMaterial = bufferPool->acquire(dawn::MATERIAL_UNIFORM_SIZE, kUniformUsage, matData);
 
-        // Build bind group
-        bool lit = SF::isLit(features);
-        bool tex = features & SF::Texture;
-
-        std::vector<WGPUBindGroupEntry> entries;
-        { WGPUBindGroupEntry e{}; e.binding = 0; e.buffer = perDrawTransform; e.offset = 0; e.size = dawn::TRANSFORM_UNIFORM_SIZE; entries.push_back(e); }
-        { WGPUBindGroupEntry e{}; e.binding = 1; e.buffer = perDrawMaterial; e.offset = 0; e.size = dawn::MATERIAL_UNIFORM_SIZE; entries.push_back(e); }
-
-        if (lit) {
-            WGPUBindGroupEntry e{}; e.binding = 2; e.buffer = lightBuffer; e.offset = 0; e.size = dawn::LIGHT_UNIFORM_SIZE; entries.push_back(e);
-        }
-
-        auto* texEntry = &textures->getDummyTexture();
-        if (tex && params.diffuseMap) {
-            texEntry = &textures->getOrCreateTexture(params.diffuseMap);
-        }
-        if (tex) {
-            { WGPUBindGroupEntry e{}; e.binding = 3; e.textureView = texEntry->view; entries.push_back(e); }
-            { WGPUBindGroupEntry e{}; e.binding = 4; e.sampler = texEntry->sampler; entries.push_back(e); }
-        }
-
-        if (features & SF::NormalMap) {
-            auto* nmEntry = params.normalMap ? &textures->getOrCreateTexture(params.normalMap) : &textures->getDummyTexture();
-            { WGPUBindGroupEntry e{}; e.binding = 5; e.textureView = nmEntry->view; entries.push_back(e); }
-            { WGPUBindGroupEntry e{}; e.binding = 6; e.sampler = nmEntry->sampler; entries.push_back(e); }
-        }
-
-        if (features & SF::Shadow) {
-            { WGPUBindGroupEntry e{}; e.binding = 7; e.buffer = shadowMap->uniformBuffer(); e.offset = 0; e.size = dawn::SHADOW_UNIFORM_SIZE; entries.push_back(e); }
-            { WGPUBindGroupEntry e{}; e.binding = 8; e.textureView = shadowMap->depthArrayView(); entries.push_back(e); }
-            { WGPUBindGroupEntry e{}; e.binding = 9; e.sampler = shadowMap->comparisonSampler(); entries.push_back(e); }
-        }
-
-        auto addTexEntries = [&](uint32_t texBinding, uint32_t sampBinding, Texture* tex) {
-            auto* te = tex ? &textures->getOrCreateTexture(tex) : &textures->getDummyTexture();
-            { WGPUBindGroupEntry e{}; e.binding = texBinding; e.textureView = te->view; entries.push_back(e); }
-            { WGPUBindGroupEntry e{}; e.binding = sampBinding; e.sampler = te->sampler; entries.push_back(e); }
-        };
-
-        if (features & SF::EmissiveMap)  addTexEntries(10, 11, params.emissiveMap);
-        if (features & SF::RoughnessMap) addTexEntries(12, 13, params.roughnessMap);
-        if (features & SF::MetalnessMap) addTexEntries(14, 15, params.metalnessMap);
-        if (features & SF::AOMap)        addTexEntries(16, 17, params.aoMap);
-        if (features & SF::AlphaMap)     addTexEntries(18, 19, params.alphaMap);
-        if (features & SF::SpecularMap)  addTexEntries(20, 21, params.specularMap);
-        if (features & SF::LightMap)     addTexEntries(22, 23, params.lightMap);
-        if (features & SF::BumpMap)      addTexEntries(24, 25, params.bumpMap);
-        if (features & SF::GradientMap)  addTexEntries(26, 27, params.gradientMap);
-        if (features & SF::DisplacementMap) addTexEntries(30, 31, params.displacementMap);
-
-        if (features & SF::EnvMap) {
-            auto* te = params.envMap ? &textures->getOrCreateCubeTexture(params.envMap) : &textures->getDummyCubeTexture();
-            { WGPUBindGroupEntry e{}; e.binding = 32; e.textureView = te->view; entries.push_back(e); }
-            { WGPUBindGroupEntry e{}; e.binding = 33; e.sampler = te->sampler; entries.push_back(e); }
-        }
-
         // Instance data buffer
         WGPUBuffer instanceBuffer = nullptr;
+        size_t instanceBufSize = 0;
         if ((features & SF::Instanced) && instancedMesh) {
             bool hasColor = features & SF::InstanceColor;
             size_t instanceCount = instancedMesh->count();
@@ -1216,17 +1013,12 @@ struct DawnRenderer::Impl {
 
             constexpr auto kStorageUsage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
             instanceBuffer = bufferPool->acquire(bufSize, kStorageUsage, instanceData.data());
-
-            WGPUBindGroupEntry e{};
-            e.binding = 28;
-            e.buffer = instanceBuffer;
-            e.offset = 0;
-            e.size = bufSize;
-            entries.push_back(e);
+            instanceBufSize = bufSize;
         }
 
         // Morph target data buffer
         WGPUBuffer morphBuffer = nullptr;
+        size_t morphBufSize = 0;
         if (features & SF::MorphTargets) {
             auto mesh = object->as<Mesh>();
             auto& morphAttrs = geometry->getMorphAttributes().at("position");
@@ -1265,18 +1057,14 @@ struct DawnRenderer::Impl {
             size_t bufSize = totalFloats * sizeof(float);
             constexpr auto kStorageUsage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
             morphBuffer = bufferPool->acquire(bufSize, kStorageUsage, morphData.data());
-
-            WGPUBindGroupEntry e{};
-            e.binding = 29;
-            e.buffer = morphBuffer;
-            e.offset = 0;
-            e.size = bufSize;
-            entries.push_back(e);
+            morphBufSize = bufSize;
         }
 
         // Skinning data buffers
         WGPUBuffer skinBuffer = nullptr;
+        size_t skinBufSize = 0;
         WGPUBuffer skinVertexBuffer = nullptr;
+        size_t skinVertexBufSize = 0;
         if ((features & SF::Skinning) && skinnedMesh && skinnedMesh->skeleton) {
             auto& skel = *skinnedMesh->skeleton;
             skel.update();
@@ -1298,9 +1086,7 @@ struct DawnRenderer::Impl {
             size_t bufSize = totalFloats * sizeof(float);
             constexpr auto kStorageUsage2 = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
             skinBuffer = bufferPool->acquire(bufSize, kStorageUsage2, skinData.data());
-
-            { WGPUBindGroupEntry e{}; e.binding = 34; e.buffer = skinBuffer; e.offset = 0; e.size = bufSize;
-              entries.push_back(e); }
+            skinBufSize = bufSize;
 
             uint32_t vertexCount = static_cast<uint32_t>(geometry->getAttribute<float>("position")->count());
             auto* skinIdxAttr = geometry->getAttribute<float>("skinIndex");
@@ -1319,10 +1105,24 @@ struct DawnRenderer::Impl {
             }
             size_t vertBufSize = vertFloats * sizeof(float);
             skinVertexBuffer = bufferPool->acquire(vertBufSize, kStorageUsage2, vertData.data());
-
-            { WGPUBindGroupEntry e{}; e.binding = 35; e.buffer = skinVertexBuffer; e.offset = 0; e.size = vertBufSize;
-              entries.push_back(e); }
+            skinVertexBufSize = vertBufSize;
         }
+
+        // Build bind group entries via subsystem
+        dawn::BindGroupInputs bgInputs{
+            .features = features,
+            .transformBuffer = perDrawTransform,
+            .materialBuffer = perDrawMaterial,
+            .lightBuffer = lights->uniformBuffer(),
+            .params = params,
+            .textures = *textures,
+            .shadowMap = shadowMap.get(),
+            .instanceBuffer = instanceBuffer, .instanceSize = instanceBufSize,
+            .morphBuffer = morphBuffer, .morphSize = morphBufSize,
+            .skinBuffer = skinBuffer, .skinSize = skinBufSize,
+            .skinVertexBuffer = skinVertexBuffer, .skinVertexSize = skinVertexBufSize,
+        };
+        auto& entries = bindGroups->buildStandard(bgInputs);
 
         WGPUBindGroupDescriptor bgDesc{};
         bgDesc.label = {.data = "obj_bg", .length = 6};
@@ -1359,17 +1159,13 @@ struct DawnRenderer::Impl {
                     loopIndices.push_back(i);
                     loopIndices.push_back((i + 1) % n);
                 }
-                WGPUBufferDescriptor bd{};
-                bd.label = {.data = "lineloop_idx", .length = 12};
-                bd.size = loopIndices.size() * sizeof(uint32_t);
-                bd.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
-                WGPUBuffer loopBuf = wgpuDeviceCreateBuffer(device, &bd);
-                wgpuQueueWriteBuffer(queue, loopBuf, 0, loopIndices.data(), bd.size);
+                size_t loopBufSize = loopIndices.size() * sizeof(uint32_t);
+                constexpr auto kIndexUsage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
+                WGPUBuffer loopBuf = bufferPool->acquire(loopBufSize, kIndexUsage, loopIndices.data());
                 wgpuRenderPassEncoderSetIndexBuffer(pass, loopBuf,
-                                                     WGPUIndexFormat_Uint32, 0, bd.size);
+                                                     WGPUIndexFormat_Uint32, 0, loopBufSize);
                 uint32_t drawCount = static_cast<uint32_t>(loopIndices.size());
                 wgpuRenderPassEncoderDrawIndexed(pass, drawCount, instanceCount, 0, 0, 0);
-                wgpuBufferRelease(loopBuf);
                 renderInfo.calls++;
                 renderInfo.lines += n;
             } else if (gb.indexBuffer) {
@@ -1412,13 +1208,9 @@ struct DawnRenderer::Impl {
         if (textures) textures->dispose();
         if (pipelines) pipelines->dispose();
         if (shadowMap) shadowMap->dispose();
+        if (lights) lights->dispose();
+        if (renderTargets) renderTargets->dispose();
 
-        for (auto& [id, rt] : rtCache) {
-            releaseRTEntry(rt);
-        }
-        rtCache.clear();
-
-        if (lightBuffer) wgpuBufferRelease(lightBuffer);
         if (queue) wgpuQueueRelease(queue);
         if (device) wgpuDeviceRelease(device);
         if (adapter) wgpuAdapterRelease(adapter);
@@ -1599,10 +1391,7 @@ void DawnRenderer::setSampleCount(uint32_t count) {
     if (pimpl_->pipelines) pimpl_->pipelines->invalidateAll();
 
     // Invalidate render target cache — textures have wrong sample count
-    for (auto& [id, rt] : pimpl_->rtCache) {
-        pimpl_->releaseRTEntry(rt);
-    }
-    pimpl_->rtCache.clear();
+    if (pimpl_->renderTargets) pimpl_->renderTargets->invalidateAll();
 }
 
 uint32_t DawnRenderer::getSampleCount() const {
@@ -1616,87 +1405,8 @@ void DawnRenderer::resetState() {
 std::vector<unsigned char> DawnRenderer::readRGBPixels() {
     if (!pimpl_->initialized || !pimpl_->currentRenderTarget_) return {};
 
-    auto& rt = pimpl_->getOrCreateRT(pimpl_->currentRenderTarget_);
-    uint32_t w = rt.width;
-    uint32_t h = rt.height;
-
-    // Row alignment: WebGPU requires bytesPerRow to be a multiple of 256
-    uint32_t bytesPerPixel = 4; // BGRA8
-    uint32_t unpaddedBytesPerRow = w * bytesPerPixel;
-    uint32_t paddedBytesPerRow = ((unpaddedBytesPerRow + 255) / 256) * 256;
-    uint32_t bufferSize = paddedBytesPerRow * h;
-
-    WGPUBufferDescriptor bd{};
-    bd.label = {.data = "readback_buf", .length = 12};
-    bd.size = bufferSize;
-    bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
-    WGPUBuffer stagingBuf = wgpuDeviceCreateBuffer(pimpl_->device, &bd);
-
-    WGPUCommandEncoderDescriptor encDesc{};
-    encDesc.label = {.data = "readback_enc", .length = 12};
-    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(pimpl_->device, &encDesc);
-
-    WGPUTexelCopyTextureInfo src{};
-    src.texture = rt.colorTexture;
-
-    WGPUTexelCopyBufferInfo dst{};
-    dst.buffer = stagingBuf;
-    dst.layout.bytesPerRow = paddedBytesPerRow;
-    dst.layout.rowsPerImage = h;
-
-    WGPUExtent3D extent = {w, h, 1};
-    wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &extent);
-
-    WGPUCommandBufferDescriptor cmdDesc{};
-    cmdDesc.label = {.data = "readback_cmd", .length = 12};
-    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-    wgpuQueueSubmit(pimpl_->queue, 1, &cmd);
-
-    struct MapData { bool done = false; WGPUMapAsyncStatus status; } mapData;
-
-    WGPUBufferMapCallbackInfo mapCb{};
-    mapCb.mode = WGPUCallbackMode_AllowSpontaneous;
-    mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*msg*/, void* ud1, void* /*ud2*/) {
-        auto* d = static_cast<MapData*>(ud1);
-        d->status = status;
-        d->done = true;
-    };
-    mapCb.userdata1 = &mapData;
-    wgpuBufferMapAsync(stagingBuf, WGPUMapMode_Read, 0, bufferSize, mapCb);
-
-    auto deadline = std::chrono::steady_clock::now() + WGPU_ASYNC_TIMEOUT;
-    while (!mapData.done) {
-        if (std::chrono::steady_clock::now() > deadline) {
-            wgpuBufferRelease(stagingBuf);
-            wgpuCommandBufferRelease(cmd);
-            wgpuCommandEncoderRelease(encoder);
-            throw std::runtime_error("DawnRenderer: readRGBPixels buffer map timed out");
-        }
-        wgpuDevicePoll(pimpl_->device, true, nullptr);
-    }
-
-    std::vector<unsigned char> result;
-    if (mapData.status == WGPUMapAsyncStatus_Success) {
-        auto* mapped = static_cast<const unsigned char*>(wgpuBufferGetConstMappedRange(stagingBuf, 0, bufferSize));
-        result.resize(w * h * 3);
-        for (uint32_t row = 0; row < h; row++) {
-            for (uint32_t col = 0; col < w; col++) {
-                const auto* px = mapped + row * paddedBytesPerRow + col * 4;
-                size_t outIdx = (row * w + col) * 3;
-                // BGRA -> RGB
-                result[outIdx + 0] = px[2];
-                result[outIdx + 1] = px[1];
-                result[outIdx + 2] = px[0];
-            }
-        }
-        wgpuBufferUnmap(stagingBuf);
-    }
-
-    wgpuBufferRelease(stagingBuf);
-    wgpuCommandBufferRelease(cmd);
-    wgpuCommandEncoderRelease(encoder);
-
-    return result;
+    auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
+    return dawn::readRGBPixels(pimpl_->device, pimpl_->queue, rt.colorTexture, rt.width, rt.height);
 }
 
 void DawnRenderer::readPixels(const Vector2& position, const std::pair<int, int>& sz,
@@ -1704,7 +1414,7 @@ void DawnRenderer::readPixels(const Vector2& position, const std::pair<int, int>
     auto allPixels = readRGBPixels();
     if (allPixels.empty()) return;
 
-    auto& rt = pimpl_->getOrCreateRT(pimpl_->currentRenderTarget_);
+    auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
     int rtW = static_cast<int>(rt.width);
     int rtH = static_cast<int>(rt.height);
     int x0 = static_cast<int>(position.x);

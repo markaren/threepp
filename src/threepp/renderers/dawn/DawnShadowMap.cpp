@@ -7,6 +7,7 @@
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/objects/Mesh.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <functional>
 #include <vector>
@@ -189,11 +190,26 @@ void DawnShadowMap::beginFrame(Object3D& scene) {
     active_ = true;
     activeLightCount_ = static_cast<int>(shadowLights.size());
 
+    // Sort shadow lights: DirectionalLights first, then SpotLights
+    // (matches the order in DawnLights after stable_partition).
+    std::stable_partition(shadowLights.begin(), shadowLights.end(), [](const ShadowCaster& sc) {
+        return dynamic_cast<DirectionalLight*>(sc.light) != nullptr;
+    });
+
+    uint32_t numDirShadows = 0, numSpotShadows = 0;
+    for (auto& sc : shadowLights) {
+        if (dynamic_cast<DirectionalLight*>(sc.light)) numDirShadows++;
+        else numSpotShadows++;
+    }
+
     // Build shadow uniform buffer data:
-    // [count(u32), pad, pad, pad, light0{VP(64), bias(4), normalBias(4), pad(8)}, ...]
+    // [count(u32), numDirShadows(u32), numSpotShadows(u32), pad,
+    //  light0{VP(64), bias(4), normalBias(4), pad(8)}, ...]
     std::vector<float> shadowData(SHADOW_UNIFORM_SIZE / sizeof(float), 0.0f);
     auto countBits = static_cast<uint32_t>(shadowLights.size());
     std::memcpy(&shadowData[0], &countBits, sizeof(uint32_t));
+    std::memcpy(&shadowData[1], &numDirShadows, sizeof(uint32_t));
+    std::memcpy(&shadowData[2], &numSpotShadows, sizeof(uint32_t));
 
     for (int i = 0; i < static_cast<int>(shadowLights.size()); i++) {
         auto* light = shadowLights[i].light;

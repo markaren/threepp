@@ -2,25 +2,30 @@
 add_subdirectory(gl)
 
 if (THREEPP_WITH_DAWN)
-    # Build the test executable (but don't use add_test_executable which
-    # registers the test without xvfb-run)
-    add_executable(CrossRenderer_test CrossRenderer_test.cpp)
-    target_link_libraries(CrossRenderer_test PRIVATE threepp Catch2::Catch2WithMain)
-    target_include_directories(CrossRenderer_test PRIVATE
-            "${PROJECT_SOURCE_DIR}/src"
-            "${WGPU_INCLUDE_DIR}"
-    )
-    target_link_libraries(CrossRenderer_test PRIVATE
-            ${WGPU_LIBRARY}
-    )
-    target_compile_definitions(CrossRenderer_test PRIVATE DATA_FOLDER="${PROJECT_SOURCE_DIR}/data")
+    # Helper function to create a cross-renderer test target with Dawn/WebGPU support.
+    function(add_cross_renderer_test name source)
+        add_executable(${name} ${source})
+        target_link_libraries(${name} PRIVATE threepp Catch2::Catch2WithMain)
+        target_include_directories(${name} PRIVATE
+                "${PROJECT_SOURCE_DIR}/src"
+                "${WGPU_INCLUDE_DIR}"
+                "${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        target_link_libraries(${name} PRIVATE ${WGPU_LIBRARY})
+        target_compile_definitions(${name} PRIVATE DATA_FOLDER="${PROJECT_SOURCE_DIR}/data")
 
-    # CrossRenderer_test needs a display server (uses GLFW for Canvas).
-    # Use xvfb-run when available so it works in headless CI.
-    find_program(XVFB_RUN xvfb-run)
-    if (XVFB_RUN)
-        add_test(NAME CrossRenderer_test COMMAND ${XVFB_RUN} -a $<TARGET_FILE:CrossRenderer_test>)
-    else ()
-        add_test(NAME CrossRenderer_test COMMAND CrossRenderer_test)
-    endif ()
+        # These tests need a display server (GLFW for Canvas).
+        # Use xvfb-run when available so they work in headless CI.
+        find_program(XVFB_RUN xvfb-run)
+        if (XVFB_RUN)
+            add_test(NAME ${name} COMMAND ${XVFB_RUN} -a $<TARGET_FILE:${name}>)
+        else ()
+            add_test(NAME ${name} COMMAND ${name})
+        endif ()
+    endfunction()
+
+    add_cross_renderer_test(CrossRenderer_gl_test CrossRenderer_gl_test.cpp)
+    add_cross_renderer_test(CrossRenderer_dawn_test CrossRenderer_dawn_test.cpp)
+    add_cross_renderer_test(CrossRenderer_parity_test CrossRenderer_parity_test.cpp)
+    add_cross_renderer_test(DawnRenderer_perf_test DawnRenderer_perf_test.cpp)
 endif ()
