@@ -1,7 +1,7 @@
 
 #include "threepp/renderers/GLRenderer.hpp"
 
-#include "threepp/renderers/GLRenderTarget.hpp"
+#include "threepp/renderers/RenderTarget.hpp"
 
 #include "threepp/renderers/gl/GLAttributes.hpp"
 #include "threepp/renderers/gl/GLBackground.hpp"
@@ -17,6 +17,9 @@
 #include "threepp/renderers/gl/GLRenderStates.hpp"
 #include "threepp/renderers/gl/GLTextures.hpp"
 #include "threepp/renderers/gl/GLUtils.hpp"
+
+#include "threepp/renderers/common/RendererCapabilities.hpp"
+#include "threepp/renderers/common/ShadowConfig.hpp"
 
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/canvas/Monitor.hpp"
@@ -85,7 +88,7 @@ struct GLRenderer::Impl {
 
     int _currentActiveCubeFace = 0;
     int _currentActiveMipmapLevel = 0;
-    GLRenderTarget* _currentRenderTarget = nullptr;
+    RenderTarget* _currentRenderTarget = nullptr;
     std::optional<unsigned int> _currentMaterialId;
 
     Camera* _currentCamera = nullptr;
@@ -620,7 +623,15 @@ struct GLRenderer::Impl {
 
         auto lightsStateVersion = lights.state.version;
 
-        auto parameters = gl::GLPrograms::getParameters(scope, clipping, material, lights.state, shadowsArray.size(), scene, object);
+        ShadowConfig shadowCfg{shadowMap.enabled, shadowMap.type};
+        auto& glCaps = gl::GLCapabilities::instance();
+        RendererCapabilities caps;
+        caps.vertexTextures = glCaps.vertexTextures;
+        caps.floatVertexTextures = glCaps.floatVertexTextures;
+        caps.logarithmicDepthBuffer = glCaps.logarithmicDepthBuffer;
+        caps.maxVertexUniforms = glCaps.maxVertexUniforms;
+
+        auto parameters = gl::GLPrograms::getParameters(scope, shadowCfg, caps, clipping, material, lights.state, shadowsArray.size(), scene, object);
         auto programCacheKey = gl::GLPrograms::getProgramCacheKey(scope, parameters);
 
         auto& programs = materialProperties->programs;
@@ -1056,7 +1067,7 @@ struct GLRenderer::Impl {
                (isShaderMaterial && lights);
     }
 
-    void setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
+    void setRenderTarget(RenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
         _currentRenderTarget = renderTarget;
         _currentActiveCubeFace = activeCubeFace;
@@ -1461,7 +1472,7 @@ void GLRenderer::renderBufferDirect(Camera* camera, Scene* scene, BufferGeometry
     pimpl_->renderBufferDirect(camera, scene, geometry, material, object, group);
 }
 
-void GLRenderer::setRenderTarget(GLRenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
+void GLRenderer::setRenderTarget(RenderTarget* renderTarget, int activeCubeFace, int activeMipmapLevel) {
 
     pimpl_->setRenderTarget(renderTarget, activeCubeFace, activeMipmapLevel);
 }
@@ -1506,7 +1517,7 @@ int GLRenderer::getActiveMipmapLevel() const {
     return pimpl_->_currentActiveMipmapLevel;
 }
 
-GLRenderTarget* GLRenderer::getRenderTarget() {
+RenderTarget* GLRenderer::getRenderTarget() {
 
     return pimpl_->_currentRenderTarget;
 }

@@ -46,14 +46,16 @@ GLPrograms::GLPrograms(GLBindingStates& bindingStates, GLClipping& clipping)
 
 ProgramParameters GLPrograms::getParameters(
         const GLRenderer& renderer,
+        const ShadowConfig& shadowConfig,
+        const RendererCapabilities& capabilities,
         const GLClipping& clipping,
         Material* material,
-        const GLLights::LightState& lights,
+        const Lights::LightState& lights,
         size_t numShadows,
         Scene* scene,
         Object3D* object) {
 
-    return {renderer, clipping, lights, numShadows, object, scene, material, shaderIDs};
+    return {renderer, shadowConfig, capabilities, clipping, lights, numShadows, object, scene, material, shaderIDs};
 }
 
 std::string GLPrograms::getProgramCacheKey(const GLRenderer& renderer, const ProgramParameters& parameters) {

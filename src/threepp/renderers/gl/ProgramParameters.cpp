@@ -1,9 +1,7 @@
 
 #include "threepp/renderers/gl/ProgramParameters.hpp"
 
-#include "threepp/renderers/gl/GLCapabilities.hpp"
-
-#include "threepp/renderers/GLRenderer.hpp"
+#include "threepp/renderers/Renderer.hpp"
 #include "threepp/renderers/shaders/ShaderLib.hpp"
 
 #include "threepp/materials/RawShaderMaterial.hpp"
@@ -26,9 +24,11 @@ namespace {
 }// namespace
 
 ProgramParameters::ProgramParameters(
-        const GLRenderer& renderer,
+        const Renderer& renderer,
+        const ShadowConfig& shadowConfig,
+        const RendererCapabilities& capabilities,
         const GLClipping& clipping,
-        const GLLights::LightState& lights,
+        const Lights::LightState& lights,
         size_t numShadows,
         Object3D* object,
         Scene* scene,
@@ -89,7 +89,7 @@ ProgramParameters::ProgramParameters(
     instancing = instancedMesh != nullptr;
     instancingColor = instancedMesh != nullptr && instancedMesh->instanceColor() != nullptr;
 
-    supportsVertexTextures = GLCapabilities::instance().vertexTextures;
+    supportsVertexTextures = capabilities.vertexTextures;
     outputEncoding = renderer.outputEncoding;
 
     map = mapMaterial && mapMaterial->map;
@@ -158,7 +158,7 @@ ProgramParameters::ProgramParameters(
 
     skinning = object->is<SkinnedMesh>();
     maxBones = 64;// TODO
-    useVertexTexture = GLCapabilities::instance().floatVertexTextures;
+    useVertexTexture = capabilities.floatVertexTextures;
 
     if (auto m = material->as<MaterialWithMorphTargets>()) {
         morphTargets = m->morphTargets;
@@ -180,8 +180,8 @@ ProgramParameters::ProgramParameters(
 
     dithering = material->dithering;
 
-    shadowMapEnabled = renderer.shadowMap().enabled && numShadows > 0;
-    shadowMapType = renderer.shadowMap().type;
+    shadowMapEnabled = shadowConfig.enabled && numShadows > 0;
+    shadowMapType = shadowConfig.type;
 
     toneMapping = material->toneMapped ? renderer.toneMapping : ToneMapping::None;
     physicallyCorrectLights = renderer.physicallyCorrectLights;

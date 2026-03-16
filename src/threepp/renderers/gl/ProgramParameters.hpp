@@ -3,7 +3,9 @@
 #define THREEPP_PROGRAMPARAMETERS_HPP
 
 #include "GLClipping.hpp"
-#include "GLLights.hpp"
+#include "threepp/renderers/common/Lights.hpp"
+#include "threepp/renderers/common/RendererCapabilities.hpp"
+#include "threepp/renderers/common/ShadowConfig.hpp"
 #include "threepp/core/Uniform.hpp"
 
 #include <optional>
@@ -13,7 +15,7 @@
 namespace threepp {
 
     class Scene;
-    class GLRenderer;
+    class Renderer;
 
     namespace gl {
 
@@ -128,9 +130,11 @@ namespace threepp {
             UniformMap* uniforms = nullptr;
 
             ProgramParameters(
-                    const GLRenderer& renderer,
+                    const Renderer& renderer,
+                    const ShadowConfig& shadowConfig,
+                    const RendererCapabilities& capabilities,
                     const GLClipping& clipping,
-                    const GLLights::LightState& lights,
+                    const Lights::LightState& lights,
                     size_t numShadows,
                     Object3D* object,
                     Scene* scene,
