@@ -135,8 +135,8 @@ namespace {
 int main() {
 
     Canvas canvas("Bones");
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     Scene scene;
     scene.background = Color(0x444444);
@@ -170,7 +170,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     bool animate{false};
@@ -192,7 +192,7 @@ int main() {
     canvas.animate([&] {
         const auto time = clock.getElapsedTime();
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
 
         if (animate) {

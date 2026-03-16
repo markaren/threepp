@@ -61,9 +61,9 @@ namespace {
 int main() {
 
     Canvas canvas("DataTexture3D", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
-    renderer.setClearColor(Color::blue);
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
+    renderer->setClearColor(Color::blue);
 
     Scene scene;
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 100);
@@ -88,7 +88,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
 
@@ -102,7 +102,7 @@ int main() {
         int step = std::floor(50 * std::sin(math::TWO_PI * 0.1f * t) + 50);
         material->uniforms.at("steps").value<int>() = std::max(1, step);
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }
 

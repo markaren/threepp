@@ -30,7 +30,7 @@ namespace {
 int main() {
 
     Canvas canvas("ConvexGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color::blue;
@@ -76,7 +76,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -85,6 +85,6 @@ int main() {
 
         convex->rotation.y += 0.2f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

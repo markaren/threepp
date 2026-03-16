@@ -42,7 +42,7 @@ namespace {
 int main() {
 
     Canvas canvas("LatheGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color::gray;
@@ -63,7 +63,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -76,6 +76,6 @@ int main() {
         capsule->rotation.y += 0.8f * dt;
         capsule->rotation.x += 0.5f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

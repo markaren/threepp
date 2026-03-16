@@ -7,8 +7,8 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Texture2D", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->setClearColor(Color::aliceblue);
 
     Scene scene;
     PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
@@ -52,7 +52,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -62,6 +62,6 @@ int main() {
         box->rotation.y += 0.5f * dt;
         sphere->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

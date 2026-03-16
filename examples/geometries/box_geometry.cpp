@@ -37,7 +37,7 @@ namespace {
 int main() {
 
     Canvas canvas("BoxGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.background = Color::blue;
@@ -52,7 +52,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     bool paramsChanged = false;
@@ -82,7 +82,7 @@ int main() {
         mesh->rotation.y += 0.8f * dt;
         mesh->rotation.x += 0.5f * dt;
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         ui.render();
 

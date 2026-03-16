@@ -26,9 +26,9 @@ int main() {
 
     canvas.exitOnKeyEscape(false);
 
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFC;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFC;
 
     PerspectiveCamera camera(60, canvas.aspect(), 0.1f, 1000.f);
     camera.position.set(0, 5, 5);
@@ -71,11 +71,11 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }
 

@@ -7,7 +7,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("TextNode");
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     PerspectiveCamera camera(75, canvas.aspect(), 0.1f, 1000);
@@ -24,7 +24,7 @@ int main() {
     OrbitControls controls(camera, canvas);
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 
 }

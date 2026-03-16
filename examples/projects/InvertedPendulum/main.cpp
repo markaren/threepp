@@ -10,7 +10,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Inverted pendulum");
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
 
@@ -39,7 +39,7 @@ int main() {
         camera.top = frustumSize / 2;
         camera.bottom = -frustumSize / 2;
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     ImguiFunctionalContext ui(canvas, [&] {
@@ -64,7 +64,7 @@ int main() {
 
         ip.simulate(clock.getDelta(), externalForce, applyControl ? &regulator : nullptr);
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         ui.render();
     });

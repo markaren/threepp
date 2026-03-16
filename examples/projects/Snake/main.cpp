@@ -11,8 +11,8 @@ int main() {
     Canvas canvas("Snake");
     int height = monitor::monitorSize().height() / 2;
     canvas.setSize({height, height});
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     auto scene = SnakeScene(game);
     canvas.addKeyListener(scene);
@@ -34,7 +34,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->right = game.gridSize() * size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
 
         hud.setSize(size);
     });
@@ -49,8 +49,8 @@ int main() {
             scene.update();
         }
 
-        renderer.clear();
-        renderer.render(scene, *camera);
-        hud.apply(renderer);
+        renderer->clear();
+        renderer->render(scene, *camera);
+        hud.apply(*renderer);
     });
 }

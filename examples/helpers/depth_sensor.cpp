@@ -70,7 +70,7 @@ namespace {
 int main() {
 
     Canvas canvas("Depth sensor", {{"antialiasing", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color(0x111122);
@@ -109,7 +109,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -123,13 +123,13 @@ int main() {
 
         // Scan the scene and update the visualised point cloud
         points->visible = false;
-        lidar.scan(renderer, *scene, cloud);
+        lidar.scan(*renderer, *scene, cloud);
         points->visible = true;
 
         Vector3 sensorWorld;
         lidar.getWorldPosition(sensorWorld);
         updatePointCloud(*points, cloud, sensorWorld, lidar.far());
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

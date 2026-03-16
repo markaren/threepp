@@ -15,8 +15,8 @@ void initFirework(ParticleSystem::Settings& settings);
 int main() {
 
     Canvas canvas("Particle system", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
 
     Scene scene;
     scene.background = Color::gray;
@@ -38,7 +38,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     int selectedIndex = 0;
@@ -73,7 +73,7 @@ int main() {
         const auto dt = clock.getDelta();
 
         engine.update(dt * 0.5f);
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         ui.render();
     });

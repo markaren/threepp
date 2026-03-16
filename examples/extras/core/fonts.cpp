@@ -90,9 +90,9 @@ int main() {
     std::filesystem::path fontPath{std::string(DATA_FOLDER) + "/fonts"};
 
     Canvas canvas("Fonts", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFCSoft;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFCSoft;
 
     auto scene = Scene::create();
     scene->background = Color::black;
@@ -133,14 +133,14 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
 
     MyUI ui(canvas);
 
     canvas.animate([&]() {
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
 

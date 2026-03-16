@@ -74,9 +74,9 @@ namespace {
 int main() {
 
     Canvas canvas("Heightmap");
-    GLRenderer renderer{canvas.size()};
-    renderer.autoClear = false;
-    renderer.toneMapping = ToneMapping::ACESFilmic;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->toneMapping = ToneMapping::ACESFilmic;
 
     auto scene = Scene::create();
     scene->fog = Fog(0xcccccc, 500, 3500);
@@ -145,7 +145,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -156,9 +156,9 @@ int main() {
 
         tm.handleTasks();
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
 
-        hud.apply(renderer);
+        hud.apply(*renderer);
     });
 }

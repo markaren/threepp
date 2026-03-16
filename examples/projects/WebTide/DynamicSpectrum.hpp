@@ -4,9 +4,9 @@
 #include "shaders.hpp"
 #include "PhillipsSpectrum.hpp"
 #include "threepp/renderers/DawnRenderer.hpp"
-#include "threepp/renderers/dawn/GPUTexture.hpp"
-#include "threepp/renderers/dawn/GPUBuffer.hpp"
-#include "threepp/renderers/dawn/ComputePipeline.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
+#include "threepp/renderers/dawn/DawnBuffer.hpp"
+#include "threepp/renderers/dawn/DawnComputePipeline.hpp"
 
 #include <cstring>
 
@@ -16,15 +16,15 @@ namespace webtide {
     class DynamicSpectrum {
 
     public:
-        threepp::GPUTexture ht;
-        threepp::GPUTexture dht;
-        threepp::GPUTexture displacement;
+        threepp::DawnTexture ht;
+        threepp::DawnTexture dht;
+        threepp::DawnTexture displacement;
 
         DynamicSpectrum(threepp::DawnRenderer& renderer, PhillipsSpectrum& initialSpectrum,
                         uint32_t textureSize, float tileSize)
-            : ht(renderer, textureSize, textureSize, threepp::GPUTexture::Format::RG32Float),
-              dht(renderer, textureSize, textureSize, threepp::GPUTexture::Format::RG32Float),
-              displacement(renderer, textureSize, textureSize, threepp::GPUTexture::Format::RG32Float),
+            : ht(renderer, textureSize, textureSize, threepp::DawnTexture::Format::RG32Float),
+              dht(renderer, textureSize, textureSize, threepp::DawnTexture::Format::RG32Float),
+              displacement(renderer, textureSize, textureSize, threepp::DawnTexture::Format::RG32Float),
               uniformBuffer_(renderer, 16), // textureSize(4) + tileSize(4) + elapsedSeconds(4) + pad(4) = 16
               pipeline_(renderer, dynamicSpectrumWGSL, "computeSpectrum"),
               textureSize_(textureSize), tileSize_(tileSize) {
@@ -53,8 +53,8 @@ namespace webtide {
         }
 
     private:
-        threepp::GPUBuffer uniformBuffer_;
-        threepp::ComputePipeline pipeline_;
+        threepp::DawnBuffer uniformBuffer_;
+        threepp::DawnComputePipeline pipeline_;
         uint32_t textureSize_;
         float tileSize_;
     };

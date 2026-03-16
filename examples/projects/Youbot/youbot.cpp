@@ -12,8 +12,8 @@ using namespace threepp;
 int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot").size({1280, 720}).antialiasing(8)};
-    GLRenderer renderer{canvas.size()};
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -61,7 +61,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
 
         hud.setSize(size);
     });
@@ -72,9 +72,9 @@ int main() {
 
         tm.handleTasks();
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
-        hud.apply(renderer);
+        renderer->clear();
+        renderer->render(*scene, *camera);
+        hud.apply(*renderer);
 
         if (youbot) keyController->update(dt);
     });

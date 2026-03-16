@@ -100,6 +100,8 @@ namespace threepp {
 
         [[nodiscard]] virtual std::vector<unsigned char> readRGBPixels() = 0;
 
+        virtual void copyFramebufferToTexture(const Vector2& /*position*/, Texture& /*texture*/, int /*level*/ = 0) {}
+
         virtual void copyTextureToImage(Texture& /*texture*/) {}
 
         // --- Depth state ---

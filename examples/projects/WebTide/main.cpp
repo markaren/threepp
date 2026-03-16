@@ -21,7 +21,7 @@
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/loaders/CubeTextureLoader.hpp"
 
-#include "threepp/renderers/dawn/GPUTexture.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
 
 #include "shaders.hpp"
 #include "PhillipsSpectrum.hpp"
@@ -76,9 +76,9 @@ int main() {
     webtide::IFFT ifft(renderer, textureSize);
 
     // Output textures (spatial domain, written by IFFT)
-    GPUTexture heightMap(renderer, textureSize, textureSize, GPUTexture::Format::RG32Float);
-    GPUTexture gradientMap(renderer, textureSize, textureSize, GPUTexture::Format::RG32Float);
-    GPUTexture displacementMap(renderer, textureSize, textureSize, GPUTexture::Format::RG32Float);
+    DawnTexture heightMap(renderer, textureSize, textureSize, DawnTexture::Format::RG32Float);
+    DawnTexture gradientMap(renderer, textureSize, textureSize, DawnTexture::Format::RG32Float);
+    DawnTexture displacementMap(renderer, textureSize, textureSize, DawnTexture::Format::RG32Float);
 
     // Create water ShaderMaterial with custom WGSL shaders
     auto waterMaterial = ShaderMaterial::create();
@@ -179,8 +179,8 @@ int main() {
 
     // Create GPU cubemap from skybox images for water reflections
     auto& faceImg = texPx->image();
-    GPUTexture reflectionMap(renderer, faceImg.width, faceImg.height,
-                             GPUTexture::Format::RGBA8Unorm, GPUTexture::Dimension::Cube);
+    DawnTexture reflectionMap(renderer, faceImg.width, faceImg.height,
+                             DawnTexture::Format::RGBA8Unorm, DawnTexture::Dimension::Cube);
     // Write each face (+X, -X, +Y, -Y, +Z, -Z)
     auto& dataPx = texPx->image().data<unsigned char>();
     auto& dataNx = texNx->image().data<unsigned char>();

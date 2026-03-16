@@ -102,7 +102,7 @@ namespace {
 int main() {
 
     Canvas canvas{"Decals", {{"aa", 8}}};
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 100);
@@ -140,7 +140,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     MyGui ui(canvas);
@@ -193,7 +193,7 @@ int main() {
             }
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         if (ui.clear) {
             for (auto decal : decals) {

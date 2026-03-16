@@ -81,8 +81,8 @@ namespace {
 int main() {
 
     Canvas canvas("CubicBezierCurve", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -118,10 +118,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&]() {
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

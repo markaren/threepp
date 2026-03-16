@@ -66,6 +66,8 @@ namespace threepp {
         std::vector<unsigned char> readRGBPixels() override;
         void readPixels(const Vector2& position, const std::pair<int, int>& size, std::vector<unsigned char>& data);
 
+        void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0) override;
+
         void copyTextureToImage(Texture& texture) override;
 
         void writeFramebuffer(const std::filesystem::path& filename);

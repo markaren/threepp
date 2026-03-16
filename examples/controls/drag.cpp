@@ -9,9 +9,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Drag controls");
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFC;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFC;
 
     PerspectiveCamera camera(60, canvas.aspect());
     camera.position.z = 25;
@@ -103,12 +103,12 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     std::cout << "Press 'm' to switch between translate and rotate mode" << std::endl;
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

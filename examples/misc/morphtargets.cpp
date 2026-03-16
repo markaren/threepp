@@ -45,8 +45,8 @@ namespace {
 int main() {
 
     Canvas canvas("Morphtargets");
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
 
     auto scene = Scene::create();
     scene->background = Color(0x8FBCD4);
@@ -103,7 +103,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Vector2 mouse{-Infinity<float>, -Infinity<float>};
@@ -141,7 +141,7 @@ int main() {
             sphere->visible = true;
         }
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

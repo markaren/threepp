@@ -8,7 +8,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Morphtargets - sphere", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
 
@@ -55,7 +55,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     float sign = 1;
@@ -78,6 +78,6 @@ int main() {
             influence = std::clamp(influence, 0.01f, 0.99f);// avoid "locking"
         }
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

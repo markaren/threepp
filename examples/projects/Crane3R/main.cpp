@@ -84,10 +84,10 @@ auto createGrid() {
 int main() {
 
     Canvas canvas{"Crane3R", {{"size", WindowSize{1280, 720}}, {"antialiasing", 8}}};
-    GLRenderer renderer{canvas.size()};
-    renderer.autoClear = false;
-    renderer.shadowMap().enabled = true;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->shadowMap().enabled = true;
+    renderer->setClearColor(Color::aliceblue);
 
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.01, 100);
     camera->position.set(-15, 8, 15);
@@ -167,7 +167,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
 
         hud.setSize(size);
     });
@@ -204,8 +204,8 @@ int main() {
 
         transformControls.visible = targetHelper->visible;
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
 
         if (crane) {
 
@@ -236,7 +236,7 @@ int main() {
 
         } else {
 
-            hud.apply(renderer);
+            hud.apply(*renderer);
         }
     });
 

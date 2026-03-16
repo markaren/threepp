@@ -131,7 +131,7 @@ int main() {
     constexpr float moonScale = 0.23f;
 
     Canvas canvas{"FlyControls", {{"aa", 6}}};
-    GLRenderer renderer{canvas.size()};
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.fog = FogExp2(0x000000, 0.00000025f);
@@ -164,7 +164,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -185,7 +185,7 @@ int main() {
                                     : (dPlanet - radius * 1.01f);
 
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         controls.movementSpeed = 0.33f * d;
         controls.update(delta);
     });

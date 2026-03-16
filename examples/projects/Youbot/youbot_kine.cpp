@@ -67,9 +67,9 @@ struct MyUI: ImguiContext {
 int main() {
 
     Canvas canvas{Canvas::Parameters().title("Youbot-kine").size({1280, 720}).antialiasing(8)};
-    GLRenderer renderer{canvas.size()};
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
 
@@ -128,7 +128,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
 
         hud.setSize(size);
     });
@@ -162,8 +162,8 @@ int main() {
 
         tm.handleTasks();
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
+        renderer->clear();
+        renderer->render(*scene, *camera);
 
         if (youbot) {
 
@@ -191,7 +191,7 @@ int main() {
             keyController->update(dt);
         } else {
 
-            hud.apply(renderer);
+            hud.apply(*renderer);
         }
     });
 

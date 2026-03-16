@@ -9,9 +9,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Simple skinning", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = threepp::ShadowMap::PFCSoft;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = threepp::ShadowMap::PFCSoft;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1, 10000);
     camera.position.set(0, 6, -10);
@@ -95,7 +95,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     auto solderMixer = AnimationMixer(*soldier);
@@ -107,7 +107,7 @@ int main() {
 
     Clock clock;
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
 
         const auto dt = clock.getDelta();
 

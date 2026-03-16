@@ -149,7 +149,7 @@ namespace {
 int main() {
 
     Canvas canvas("Lut", {{"aa", 6}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     Scene scene;
     scene.background = Color::aliceblue;
@@ -262,11 +262,11 @@ int main() {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
 
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
         ui.render();
     });
 }

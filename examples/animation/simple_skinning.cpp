@@ -9,9 +9,9 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Simple skinning", {{"aa", 8}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
-    renderer.shadowMap().type = ShadowMap::PFCSoft;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
+    renderer->shadowMap().type = ShadowMap::PFCSoft;
 
     PerspectiveCamera camera(45, canvas.aspect(), 0.1, 10000);
     camera.position.set(0, 6, -15);
@@ -78,7 +78,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
 
@@ -88,6 +88,6 @@ int main() {
 
         mixer.update(dt);
 
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

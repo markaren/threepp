@@ -16,8 +16,8 @@ int main() {
 
     // Renderer & canvas
     Canvas canvas("Spline Editor", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     // Scene
     auto scene = Scene::create();
@@ -210,7 +210,7 @@ int main() {
     canvas.setIOCapture(&capture);
 
     canvas.onWindowResize([&](WindowSize size) {
-        renderer.setSize(size);
+        renderer->setSize(size);
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
     });
@@ -218,7 +218,7 @@ int main() {
     updateSplines();
     canvas.animate([&] {
         controls.update();
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

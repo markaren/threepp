@@ -3,9 +3,9 @@
 
 #include "shaders.hpp"
 #include "threepp/renderers/DawnRenderer.hpp"
-#include "threepp/renderers/dawn/GPUTexture.hpp"
-#include "threepp/renderers/dawn/GPUBuffer.hpp"
-#include "threepp/renderers/dawn/ComputePipeline.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
+#include "threepp/renderers/dawn/DawnBuffer.hpp"
+#include "threepp/renderers/dawn/DawnComputePipeline.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -18,11 +18,11 @@ namespace webtide {
     class PhillipsSpectrum {
 
     public:
-        threepp::GPUTexture h0;
+        threepp::DawnTexture h0;
 
         PhillipsSpectrum(threepp::DawnRenderer& renderer, uint32_t textureSize, float tileSize)
-            : h0(renderer, textureSize, textureSize, threepp::GPUTexture::Format::RGBA32Float),
-              noise_(renderer, textureSize, textureSize, threepp::GPUTexture::Format::RGBA32Float),
+            : h0(renderer, textureSize, textureSize, threepp::DawnTexture::Format::RGBA32Float),
+              noise_(renderer, textureSize, textureSize, threepp::DawnTexture::Format::RGBA32Float),
               uniformBuffer_(renderer, 32), // 5 fields padded to 32 bytes
               pipeline_(renderer, phillipsSpectrumWGSL, "computeSpectrum"),
               textureSize_(textureSize), tileSize_(tileSize) {
@@ -80,9 +80,9 @@ namespace webtide {
         }
 
     private:
-        threepp::GPUTexture noise_;
-        threepp::GPUBuffer uniformBuffer_;
-        threepp::ComputePipeline pipeline_;
+        threepp::DawnTexture noise_;
+        threepp::DawnBuffer uniformBuffer_;
+        threepp::DawnComputePipeline pipeline_;
         uint32_t textureSize_;
         float tileSize_;
     };

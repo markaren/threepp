@@ -85,8 +85,8 @@ int main() {
 
     Canvas canvas("MotorController", {{"aa", 6}});
     const auto size = canvas.size();
-    GLRenderer renderer(size);
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     Scene scene;
     scene.background = Color::white;
@@ -130,7 +130,7 @@ int main() {
         camera.top = frustumSize / 2;
         camera.bottom = -frustumSize / 2;
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     auto& params = controller.params();
@@ -167,9 +167,9 @@ int main() {
 
         motor.update(gain, dt);
 
-        renderer.clear();
-        renderer.render(scene, camera);
-        hud.apply(renderer);
+        renderer->clear();
+        renderer->render(scene, camera);
+        hud.apply(*renderer);
         ui.render();
 
         motorVisuals.setTargetPos(math::degToRad(targetPosition));

@@ -12,8 +12,8 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Clipping", {{"aa", 6}});
-    GLRenderer renderer(canvas.size());
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
 
@@ -74,15 +74,15 @@ int main() {
 
     // ***** Clipping setup (renderer): *****
     Plane globalPlane(Vector3(-1, 0, 0), 0.1);
-    renderer.localClippingEnabled = true;
+    renderer->localClippingEnabled = true;
 
-    bool globalClipping = !renderer.clippingPlanes.empty();
+    bool globalClipping = !renderer->clippingPlanes.empty();
     ImguiFunctionalContext ui(canvas, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
 
         ImGui::Begin("Local clipping");
-        ImGui::Checkbox("Enabled", &renderer.localClippingEnabled);
+        ImGui::Checkbox("Enabled", &renderer->localClippingEnabled);
         ImGui::Checkbox("Shadows", &material->clipShadows);
         ImGui::SliderFloat("Plane", &localPlane.constant, 0.3f, 1.25f);
         ImGui::End();
@@ -94,14 +94,14 @@ int main() {
         ImGui::Checkbox("Enabled", &globalClipping);
         if (ImGui::IsItemEdited()) {
             if (globalClipping) {
-                renderer.clippingPlanes.emplace_back(globalPlane);
+                renderer->clippingPlanes.emplace_back(globalPlane);
             } else {
-                renderer.clippingPlanes.clear();
+                renderer->clippingPlanes.clear();
             }
         }
         ImGui::SliderFloat("Plane", &globalPlane.constant, -0.4f, 3.f);
-        if (!renderer.clippingPlanes.empty() && ImGui::IsItemEdited()) {
-            renderer.clippingPlanes[0].copy(globalPlane);
+        if (!renderer->clippingPlanes.empty() && ImGui::IsItemEdited()) {
+            renderer->clippingPlanes[0].copy(globalPlane);
         }
         ImGui::End();
     });
@@ -121,7 +121,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -133,7 +133,7 @@ int main() {
         object->rotation.y = time * 0.2f;
         object->scale.setScalar(std::cos(time) * 0.125f + 0.875f);
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
 
         ui.render();
     });

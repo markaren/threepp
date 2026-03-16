@@ -94,7 +94,7 @@ std::shared_ptr<Mesh> createMesh(const Shape& shape, float scale = 1) {
 int main() {
 
     Canvas canvas("ShapeGeometry", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
+    auto renderer = createRenderer(canvas);
 
     auto scene = Scene::create();
     scene->background = Color::blue;
@@ -130,7 +130,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     Clock clock;
@@ -139,6 +139,6 @@ int main() {
 
         group->rotation.y += 0.8f * dt;
 
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 }

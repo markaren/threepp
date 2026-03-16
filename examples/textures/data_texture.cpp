@@ -39,9 +39,9 @@ int main() {
 
     Canvas canvas("Data texture", {{"aa", 4}});
     auto size = canvas.size();
-    GLRenderer renderer{size};
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->setClearColor(Color::aliceblue);
 
     Scene scene;
     Scene orthoScene;
@@ -95,7 +95,7 @@ int main() {
         orthoCamera.bottom = -newSize.height() / 2;
         orthoCamera.updateProjectionMatrix();
 
-        renderer.setSize(newSize);
+        renderer->setSize(newSize);
         size = newSize;
 
         updateSpritePosition(sprite, newSize, textureSize);
@@ -109,15 +109,15 @@ int main() {
         box.rotation.y += 0.5f * dt;
         sphere.rotation.x += 0.5f * dt;
 
-        renderer.clear();
-        renderer.render(scene, camera);
+        renderer->clear();
+        renderer->render(scene, camera);
 
         vector.x = (size.width() / 2) - (textureSize / 2);
         vector.y = (size.height() / 2) - (textureSize / 2);
 
-        renderer.copyFramebufferToTexture(vector, *texture);
+        renderer->copyFramebufferToTexture(vector, *texture);
 
-        renderer.clearDepth();
-        renderer.render(orthoScene, orthoCamera);
+        renderer->clearDepth();
+        renderer->render(orthoScene, orthoCamera);
     });
 }

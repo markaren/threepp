@@ -8,8 +8,8 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Cubemap");
-    GLRenderer renderer(canvas.size());
-    renderer.checkShaderErrors = true;
+    auto renderer = createRenderer(canvas);
+    renderer->checkShaderErrors = true;
 
     PerspectiveCamera camera(50, canvas.aspect(), 0.1, 1000);
     camera.position.z = 10;
@@ -47,10 +47,10 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera.aspect = size.aspect();
         camera.updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
     });
 
     canvas.animate([&] {
-        renderer.render(scene, camera);
+        renderer->render(scene, camera);
     });
 }

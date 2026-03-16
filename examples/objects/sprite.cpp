@@ -63,9 +63,9 @@ int main() {
 
     Canvas canvas{"Sprite", {{"aa", 4}, {"favicon", std::string(DATA_FOLDER) + "/textures/three.png"s}}};
     auto size = canvas.size();
-    GLRenderer renderer(size);
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, size.aspect(), 0.1f, 1000);
@@ -92,7 +92,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize newSize) {
         camera->aspect = newSize.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(newSize);
+        renderer->setSize(newSize);
 
         hud.setSize(newSize);
     });
@@ -129,8 +129,8 @@ int main() {
             lastPicked->scale.set(1.2, 1.2, 1.2);
         }
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
-        hud.apply(renderer);
+        renderer->clear();
+        renderer->render(*scene, *camera);
+        hud.apply(*renderer);
     });
 }

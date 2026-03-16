@@ -3,9 +3,9 @@
 
 #include "shaders.hpp"
 #include "threepp/renderers/DawnRenderer.hpp"
-#include "threepp/renderers/dawn/GPUTexture.hpp"
-#include "threepp/renderers/dawn/GPUBuffer.hpp"
-#include "threepp/renderers/dawn/ComputePipeline.hpp"
+#include "threepp/renderers/dawn/DawnTexture.hpp"
+#include "threepp/renderers/dawn/DawnBuffer.hpp"
+#include "threepp/renderers/dawn/DawnComputePipeline.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -21,7 +21,7 @@ namespace webtide {
             : renderer_(renderer),
               textureSize_(textureSize),
               logSize_(static_cast<uint32_t>(std::log2(textureSize))),
-              twiddleTable_(renderer, logSize_, textureSize, threepp::GPUTexture::Format::RGBA32Float),
+              twiddleTable_(renderer, logSize_, textureSize, threepp::DawnTexture::Format::RGBA32Float),
               settings_(renderer, 16), // step(4) + textureSize(4) + pad(8) = 16
               copyParams_(renderer, 16), // width(4) + height(4) + pad(8) = 16
               twiddlePipeline_(renderer, twiddleFactorsWGSL, "precomputeTwiddleFactorsAndInputIndices"),
@@ -53,7 +53,7 @@ namespace webtide {
 
         /// Apply the inverse FFT to the input texture, storing result in output.
         /// Both textures will be modified (ping-pong).
-        void applyToTexture(threepp::GPUTexture& input, threepp::GPUTexture& output) {
+        void applyToTexture(threepp::DawnTexture& input, threepp::DawnTexture& output) {
             uint32_t groups = (textureSize_ + 7) / 8;
 
             bool pingPong = false;
@@ -116,17 +116,17 @@ namespace webtide {
         uint32_t textureSize_;
         uint32_t logSize_;
 
-        threepp::GPUTexture twiddleTable_;
-        threepp::GPUBuffer settings_;
-        threepp::GPUBuffer copyParams_;
+        threepp::DawnTexture twiddleTable_;
+        threepp::DawnBuffer settings_;
+        threepp::DawnBuffer copyParams_;
 
-        threepp::ComputePipeline twiddlePipeline_;
-        threepp::ComputePipeline horizontalPipeline_;
-        threepp::ComputePipeline verticalPipeline_;
-        threepp::ComputePipeline permutePipeline_;
-        threepp::ComputePipeline copyPipeline_;
+        threepp::DawnComputePipeline twiddlePipeline_;
+        threepp::DawnComputePipeline horizontalPipeline_;
+        threepp::DawnComputePipeline verticalPipeline_;
+        threepp::DawnComputePipeline permutePipeline_;
+        threepp::DawnComputePipeline copyPipeline_;
 
-        void copyTexture(threepp::GPUTexture& src, threepp::GPUTexture& dst) {
+        void copyTexture(threepp::DawnTexture& src, threepp::DawnTexture& dst) {
             copyPipeline_.setStorageTexture(0, dst);
             copyPipeline_.setTexture(1, src);
 

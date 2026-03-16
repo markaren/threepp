@@ -100,8 +100,8 @@ auto createPlane() {
 int main() {
 
     Canvas canvas("threepp demo", {{"aa", 4}});
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -140,7 +140,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
 
         hud.setSize(size);
     });
@@ -157,9 +157,9 @@ int main() {
         hudText2.setText("Delta=" + std::to_string(dt));
         hud.needsUpdate(hudText2);
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
-        hud.apply(renderer);
+        renderer->clear();
+        renderer->render(*scene, *camera);
+        hud.apply(*renderer);
 
         ui.render();
 

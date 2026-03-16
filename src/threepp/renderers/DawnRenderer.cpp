@@ -189,6 +189,14 @@ struct DawnRenderer::Impl {
 
     bool initialized = false;
 
+    // Retained framebuffer for copyFramebufferToTexture support.
+    // When retainFramebuffer is true, render() copies the resolved color content
+    // to retainedFB before presenting, so it's available for later copy operations.
+    bool retainFramebuffer = false;
+    WGPUTexture retainedFB = nullptr;
+    uint32_t retainedFBWidth = 0;
+    uint32_t retainedFBHeight = 0;
+
     // Shared quad geometry for rendering sprites (standard attributes, not interleaved)
     std::shared_ptr<BufferGeometry> spriteGeometry_;
 
@@ -636,6 +644,44 @@ struct DawnRenderer::Impl {
 
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
+
+        // Retain framebuffer for copyFramebufferToTexture if requested
+        if (retainFramebuffer && useSurface) {
+            uint32_t w = static_cast<uint32_t>(size_.width());
+            uint32_t h = static_cast<uint32_t>(size_.height());
+
+            // (Re)create retained texture if size changed
+            if (!retainedFB || retainedFBWidth != w || retainedFBHeight != h) {
+                if (retainedFB) wgpuTextureRelease(retainedFB);
+                WGPUTextureDescriptor td{};
+                td.label = {.data = "retained_fb", .length = 11};
+                td.size = {w, h, 1};
+                td.mipLevelCount = 1;
+                td.sampleCount = 1;
+                td.dimension = WGPUTextureDimension_2D;
+                td.format = surfaceFormat;
+                td.usage = WGPUTextureUsage_CopyDst | WGPUTextureUsage_CopySrc | WGPUTextureUsage_TextureBinding;
+                retainedFB = wgpuDeviceCreateTexture(device, &td);
+                retainedFBWidth = w;
+                retainedFBHeight = h;
+            }
+
+            // Copy the resolved surface texture to retained framebuffer
+            WGPUTexelCopyTextureInfo src{};
+            src.texture = surfaceTexture.texture;
+            src.mipLevel = 0;
+            src.origin = {0, 0, 0};
+            src.aspect = WGPUTextureAspect_All;
+
+            WGPUTexelCopyTextureInfo dst{};
+            dst.texture = retainedFB;
+            dst.mipLevel = 0;
+            dst.origin = {0, 0, 0};
+            dst.aspect = WGPUTextureAspect_All;
+
+            WGPUExtent3D extent = {w, h, 1};
+            wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
+        }
 
         // Submit
         WGPUCommandBufferDescriptor cmdDesc{};
@@ -1207,6 +1253,8 @@ struct DawnRenderer::Impl {
     void dispose() {
         if (!initialized) return;
 
+        if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
+
         if (bufferPool) bufferPool->dispose();
         if (geometries) geometries->dispose();
         if (textures) textures->dispose();
@@ -1458,6 +1506,73 @@ void DawnRenderer::readPixels(const Vector2& position, const std::pair<int, int>
             data[dstIdx + 2] = allPixels[srcIdx + 2];
         }
     }
+}
+
+void DawnRenderer::copyFramebufferToTexture(const Vector2& position, Texture& texture, int level) {
+    if (!pimpl_->initialized) return;
+
+    // Enable framebuffer retention for future frames
+    pimpl_->retainFramebuffer = true;
+
+    // Source: retained framebuffer (or current render target's color texture)
+    WGPUTexture srcTexture = nullptr;
+    uint32_t srcW = 0, srcH = 0;
+
+    if (pimpl_->currentRenderTarget_) {
+        auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
+        srcTexture = rt.colorTexture;
+        srcW = rt.width;
+        srcH = rt.height;
+    } else if (pimpl_->retainedFB) {
+        srcTexture = pimpl_->retainedFB;
+        srcW = pimpl_->retainedFBWidth;
+        srcH = pimpl_->retainedFBHeight;
+    }
+
+    if (!srcTexture) return;
+
+    // Ensure the destination texture exists on the GPU
+    auto& dstEntry = pimpl_->textures->getOrCreateTexture(&texture);
+    if (!dstEntry.texture) return;
+
+    auto& img = texture.image();
+    uint32_t texW = img.width;
+    uint32_t texH = img.height;
+    if (texW == 0 || texH == 0) return;
+
+    // Clamp copy region to source bounds
+    uint32_t sx = static_cast<uint32_t>((std::max)(0.f, position.x));
+    uint32_t sy = static_cast<uint32_t>((std::max)(0.f, position.y));
+    uint32_t copyW = (std::min)(texW, srcW > sx ? srcW - sx : 0u);
+    uint32_t copyH = (std::min)(texH, srcH > sy ? srcH - sy : 0u);
+    if (copyW == 0 || copyH == 0) return;
+
+    // GPU copy from retained framebuffer to destination texture
+    WGPUCommandEncoderDescriptor encDesc{};
+    encDesc.label = {.data = "copy_fb", .length = 7};
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(pimpl_->device, &encDesc);
+
+    WGPUTexelCopyTextureInfo src{};
+    src.texture = srcTexture;
+    src.mipLevel = 0;
+    src.origin = {sx, sy, 0};
+    src.aspect = WGPUTextureAspect_All;
+
+    WGPUTexelCopyTextureInfo dst{};
+    dst.texture = dstEntry.texture;
+    dst.mipLevel = static_cast<uint32_t>(level);
+    dst.origin = {0, 0, 0};
+    dst.aspect = WGPUTextureAspect_All;
+
+    WGPUExtent3D extent = {copyW, copyH, 1};
+    wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
+
+    WGPUCommandBufferDescriptor cmdDesc{};
+    cmdDesc.label = {.data = "copy_fb_cmd", .length = 11};
+    WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+    wgpuQueueSubmit(pimpl_->queue, 1, &cmd);
+    wgpuCommandBufferRelease(cmd);
+    wgpuCommandEncoderRelease(encoder);
 }
 
 void DawnRenderer::copyTextureToImage(Texture& texture) {

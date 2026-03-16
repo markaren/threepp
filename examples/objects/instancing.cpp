@@ -40,9 +40,9 @@ int main() {
     constexpr int maxAmount = 25;
 
     Canvas canvas("Instancing", {{"aa", 4}, {"vsync", false}});
-    GLRenderer renderer(canvas.size());
-    renderer.autoClear = false;
-    renderer.setClearColor(Color::aliceblue);
+    auto renderer = createRenderer(canvas);
+    renderer->autoClear = false;
+    renderer->setClearColor(Color::aliceblue);
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 10000);
@@ -99,7 +99,7 @@ int main() {
     canvas.onWindowResize([&](WindowSize size) {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
-        renderer.setSize(size);
+        renderer->setSize(size);
 
         hud.setSize(size);
     });
@@ -136,9 +136,9 @@ int main() {
             hud.needsUpdate(handle);
         }
 
-        renderer.clear();
-        renderer.render(*scene, *camera);
-        hud.apply(renderer);
+        renderer->clear();
+        renderer->render(*scene, *camera);
+        hud.apply(*renderer);
 
         ui.render();
     });

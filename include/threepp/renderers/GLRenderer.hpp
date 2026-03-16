@@ -119,7 +119,7 @@ namespace threepp {
 
         [[nodiscard]] int getActiveMipmapLevel() const;
 
-        void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0);
+        void copyFramebufferToTexture(const Vector2& position, Texture& texture, int level = 0) override;
 
         void readPixels(const Vector2& position, const std::pair<int, int>& size, Format format, unsigned char* data);
 

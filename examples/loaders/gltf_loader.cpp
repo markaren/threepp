@@ -9,9 +9,9 @@ using namespace threepp;
 
 int main() {
     Canvas canvas("GLTF Demo");
-    GLRenderer renderer{canvas.size()};
-    renderer.outputEncoding = Encoding::sRGB;
-    renderer.shadowMap().enabled = true;
+    auto renderer = createRenderer(canvas);
+    renderer->outputEncoding = Encoding::sRGB;
+    renderer->shadowMap().enabled = true;
 
     auto scene = Scene::create();
     scene->background = Color::aliceblue;
@@ -42,7 +42,7 @@ int main() {
     scene->add(skeletonHelper);
 
     canvas.animate([&] {
-        renderer.render(*scene, *camera);
+        renderer->render(*scene, *camera);
     });
 
     return 0;
