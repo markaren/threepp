@@ -119,6 +119,9 @@ install(
 if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
 endif ()
+if (THREEPP_DAWN_GLSL_COMPAT)
+    install(TARGETS glslang SPIRV glslang-default-resource-limits EXPORT threepp-targets)
+endif ()
 install(TARGETS threepp EXPORT threepp-targets)
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(EXPORT threepp-targets

@@ -72,6 +72,8 @@ namespace threepp {
 
         void writeFramebuffer(const std::filesystem::path& filename);
 
+        [[nodiscard]] bool renderTargetFlipY() const override { return true; }
+
         [[nodiscard]] const DawnInfo& info() const;
 
         /// Access the underlying WGPUDevice handle (type-erased).

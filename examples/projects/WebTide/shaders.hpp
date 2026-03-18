@@ -341,6 +341,36 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 // Fragment shader: Fresnel + cubemap reflection + specular
 constexpr const char* waterFragmentWGSL = R"(
 
+struct TransformUniforms {
+    model: mat4x4<f32>,
+    view: mat4x4<f32>,
+    proj: mat4x4<f32>,
+    normalCol0: vec4<f32>,
+    normalCol1: vec4<f32>,
+    normalCol2: vec4<f32>,
+    cameraPos: vec3<f32>,
+    _pad: f32,
+};
+@group(0) @binding(0) var<uniform> transform: TransformUniforms;
+
+struct LightData {
+    numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,
+    ambient: vec3<f32>, _pad: f32,
+    dirDirection0: vec3<f32>, _pd0: f32,
+    dirColor0: vec3<f32>, _pd1: f32,
+};
+@group(0) @binding(1) var<uniform> lights: LightData;
+
+@group(0) @binding(9) var t_reflectionMap: texture_cube<f32>;
+@group(0) @binding(10) var s_reflectionMap: sampler;
+
+struct VertexOutput {
+    @builtin(position) clipPos: vec4<f32>,
+    @location(0) worldPos: vec3<f32>,
+    @location(1) worldNormal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+};
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let normal = normalize(in.worldNormal);

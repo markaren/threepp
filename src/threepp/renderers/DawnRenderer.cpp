@@ -678,8 +678,14 @@ struct DawnRenderer::Impl {
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
-        wgpuRenderPassEncoderSetViewport(pass, viewport_.x, viewport_.y, viewport_.w, viewport_.h, 0.0f, 1.0f);
-        if (scissorTest_) {
+        // Use render target viewport when rendering to an RT (matches GLRenderer behavior)
+        if (currentRenderTarget_) {
+            auto& rtVp = currentRenderTarget_->viewport;
+            wgpuRenderPassEncoderSetViewport(pass, rtVp.x, rtVp.y, rtVp.z, rtVp.w, 0.0f, 1.0f);
+        } else {
+            wgpuRenderPassEncoderSetViewport(pass, viewport_.x, viewport_.y, viewport_.w, viewport_.h, 0.0f, 1.0f);
+        }
+        if (scissorTest_ && !currentRenderTarget_) {
             wgpuRenderPassEncoderSetScissorRect(pass, scissor_.x, scissor_.y, scissor_.w, scissor_.h);
         }
 

@@ -104,6 +104,12 @@ namespace threepp {
 
         virtual void copyTextureToImage(Texture& /*texture*/) {}
 
+        // --- Convention flags ---
+
+        // True if render-target textures need a Y-flip when sampling with
+        // clip-space-derived UVs (WebGPU: UV (0,0) = top-left; GL: bottom-left).
+        [[nodiscard]] virtual bool renderTargetFlipY() const { return false; }
+
         // --- Depth state ---
 
         virtual void setDepthMask(bool /*flag*/) {}

@@ -221,13 +221,28 @@ struct Water::Impl {
             mirrorCamera->updateMatrixWorld();
             mirrorCamera->projectionMatrix.copy(camera->projectionMatrix);// Update the texture matrix
 
+            auto _renderer = static_cast<Renderer*>(renderer);
+
             textureMatrix.set(0.5f, 0.f, 0.f, 0.5f,
                               0.f, 0.5f, 0.f, 0.5f,
                               0.f, 0.f, 0.5f, 0.5f,
                               0.f, 0.f, 0.f, 1.f);
             textureMatrix.multiply(mirrorCamera->projectionMatrix);
-            textureMatrix.multiply(mirrorCamera->matrixWorldInverse);// Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
-                                                                     // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
+            textureMatrix.multiply(mirrorCamera->matrixWorldInverse);
+
+            // WebGPU render targets have UV (0,0) at top-left; GL has bottom-left.
+            // Flip the Y row of the textureMatrix: new_row1 = row3 - row1
+            // so that UV.y' / w = 1 - UV.y / w.
+            if (_renderer->renderTargetFlipY()) {
+                auto& e = textureMatrix.elements;
+                e[1]  = e[3]  - e[1];
+                e[5]  = e[7]  - e[5];
+                e[9]  = e[11] - e[9];
+                e[13] = e[15] - e[13];
+            }
+
+            // Now update projection matrix with new clip plane, implementing code from: http://www.terathon.com/code/oblique.html
+            // Paper explaining this technique: http://www.terathon.com/lengyel/Lengyel-Oblique.pdf
 
             mirrorPlane.setFromNormalAndCoplanarPoint(normal, mirrorWorldPosition);
             mirrorPlane.applyMatrix4(mirrorCamera->matrixWorldInverse);
@@ -245,8 +260,6 @@ struct Water::Impl {
             projectionMatrix.elements[10] = clipPlane.z + 1.f - clipBias;
             projectionMatrix.elements[14] = clipPlane.w;
             eye.setFromMatrixPosition(*camera->matrixWorld);// Render
-
-            auto _renderer = static_cast<Renderer*>(renderer);
 
             const auto currentRenderTarget = _renderer->getRenderTarget();
             const auto currentShadowAutoUpdate = _renderer->shadowMapAutoUpdate;

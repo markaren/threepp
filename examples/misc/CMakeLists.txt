@@ -9,4 +9,5 @@ add_example(NAME "multiple_scenes")
 
 if (THREEPP_WITH_DAWN)
     add_example(NAME "dawn_triangle")
+    add_example(NAME "water_side_by_side" LINK_IMGUI)
 endif ()
