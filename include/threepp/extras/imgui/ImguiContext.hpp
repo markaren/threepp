@@ -15,19 +15,25 @@
 class ImguiContext {
 
 public:
-    explicit ImguiContext(void* window) {
+    explicit ImguiContext(void* window, bool useOpenGL = true) {
         ImGui::CreateContext();
-        ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(window), true);
+        if (useOpenGL) {
+            ImGui_ImplGlfw_InitForOpenGL(static_cast<GLFWwindow*>(window), true);
 #ifdef __EMSCRIPTEN__
-        ImGui_ImplOpenGL3_Init("#version 300 es");
+            ImGui_ImplOpenGL3_Init("#version 300 es");
 #else
-        ImGui_ImplOpenGL3_Init("#version 330 core");
+            ImGui_ImplOpenGL3_Init("#version 330 core");
 #endif
+            glInitialized_ = true;
+        } else {
+            ImGui_ImplGlfw_InitForOther(static_cast<GLFWwindow*>(window), true);
+        }
 
         setFontScale(threepp::monitor::contentScale().first);
     }
 
-    explicit ImguiContext(const threepp::Canvas& canvas): ImguiContext(canvas.windowPtr()) {
+    explicit ImguiContext(const threepp::Canvas& canvas)
+        : ImguiContext(canvas.windowPtr(), canvas.graphicsApi() != threepp::GraphicsAPI::WebGPU) {
         canvas.onMonitorChange([this](int monitor) {
             setFontScale(threepp::monitor::contentScale(monitor).first);
         });
@@ -38,6 +44,11 @@ public:
     ImguiContext& operator=(const ImguiContext&) = delete;
 
     void render() {
+        // Skip ImGui rendering entirely when no rendering backend is initialized.
+        // Without a backend, ImGui draw data has nowhere to go and some internal
+        // state (font atlas texture) may not be set up, leading to crashes.
+        if (!glInitialized_) return;
+
         if (!dpiAwareIsConfigured_) {
 
             ImGuiStyle& style = ImGui::GetStyle();
@@ -59,7 +70,7 @@ public:
     }
 
     virtual ~ImguiContext() {
-        ImGui_ImplOpenGL3_Shutdown();
+        if (glInitialized_) ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
     }
@@ -82,6 +93,7 @@ protected:
     virtual void onRender() = 0;
 
 private:
+    bool glInitialized_ = false;
     bool dpiAwareIsConfigured_ = true;
     float dpiScale_ = 1.f;
 };

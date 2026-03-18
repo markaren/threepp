@@ -105,6 +105,9 @@ TextureEntry& DawnTextures::getOrCreateTexture(Texture* tex) {
     auto h = img.height;
     if (w == 0 || h == 0) return dummyTexture_;
 
+    auto& data = img.data<unsigned char>();
+    if (data.empty()) return dummyTexture_; // e.g. render target texture with no CPU-side data
+
     WGPUTextureDescriptor td{};
     td.label = {.data = "user_tex", .length = 8};
     td.size = {w, h, 1};
@@ -115,8 +118,6 @@ TextureEntry& DawnTextures::getOrCreateTexture(Texture* tex) {
     td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
     entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
     entry.view = wgpuTextureCreateView(entry.texture, nullptr);
-
-    auto& data = img.data<unsigned char>();
 
     // Convert RGB to RGBA if needed
     std::vector<unsigned char> rgba;

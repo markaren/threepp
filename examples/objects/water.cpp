@@ -11,7 +11,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Water", {{"aa", 4}});
+    Canvas canvas(Canvas::Parameters().title("Water").antialiasing(4).graphicsApi(GraphicsAPI::WebGPU));
     auto renderer = createRenderer(canvas);
     renderer->checkShaderErrors = true;
     renderer->toneMapping = ToneMapping::ACESFilmic;

@@ -82,6 +82,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace threepp;
@@ -108,6 +109,7 @@ struct DawnRenderer::Impl {
         void onEvent(Event& event) override {
             auto* mat = std::any_cast<Material*>(event.target);
             mat->removeEventListener("dispose", *this);
+            scope_->trackedMaterials_.erase(mat);
             if (scope_->pipelines) {
                 scope_->pipelines->onMaterialDispose(mat->id);
             }
@@ -166,8 +168,9 @@ struct DawnRenderer::Impl {
     // Subsystem: bind group assembly (hot path, reuses internal vector)
     std::unique_ptr<dawn::DawnBindGroups> bindGroups;
 
-    // Material dispose listener
+    // Material dispose listener and set of materials with the listener registered
     OnMaterialDispose onMaterialDispose;
+    std::unordered_set<Material*> trackedMaterials_;
 
     RenderTarget* currentRenderTarget_ = nullptr;
 
@@ -519,6 +522,54 @@ struct DawnRenderer::Impl {
         shadowMap->beginFrame(scene);
         scope.shadowMapAutoUpdate = shadowMap->autoUpdate;
 
+        // Collect renderables BEFORE the render pass so onBeforeRender callbacks can
+        // trigger nested renderer->render() calls (e.g. Water mirror pass) without
+        // nesting inside an active WebGPU render pass encoder.
+        renderList_.init();
+        {
+            Matrix4 psmTemp;
+            psmTemp.multiplyMatrices(projectionMatrix, viewMatrix);
+            frustum_.setFromProjectionMatrix(psmTemp);
+            collectRenderables(scene, psmTemp, camera, 0);
+        }
+        if (scope.sortObjects) renderList_.sort();
+        renderList_.finish();
+
+        // Fire onBeforeRender for each object (may trigger nested renders).
+        // Nested render() calls overwrite renderList_, so we must re-collect afterward.
+        bool hadBeforeRender = false;
+        auto* scenePtr = &scene;
+        auto* cameraPtr = &camera;
+        for (auto* item : renderList_.opaque) {
+            if (item->object && item->object->onBeforeRender) {
+                hadBeforeRender = true;
+                item->object->onBeforeRender.value()(
+                        &scope, scenePtr, cameraPtr,
+                        item->geometry, item->material, item->group);
+            }
+        }
+        for (auto* item : renderList_.transparent) {
+            if (item->object && item->object->onBeforeRender) {
+                hadBeforeRender = true;
+                item->object->onBeforeRender.value()(
+                        &scope, scenePtr, cameraPtr,
+                        item->geometry, item->material, item->group);
+            }
+        }
+
+        // Re-collect renderables since nested renders overwrote the render list
+        if (hadBeforeRender) {
+            renderList_.init();
+            {
+                Matrix4 psmTemp;
+                psmTemp.multiplyMatrices(projectionMatrix, viewMatrix);
+                frustum_.setFromProjectionMatrix(psmTemp);
+                collectRenderables(scene, psmTemp, camera, 0);
+            }
+            if (scope.sortObjects) renderList_.sort();
+            renderList_.finish();
+        }
+
         // Determine render target views
         WGPUTextureView colorView = nullptr;
         WGPUTextureView depthView = nullptr;
@@ -631,17 +682,6 @@ struct DawnRenderer::Impl {
         if (scissorTest_) {
             wgpuRenderPassEncoderSetScissorRect(pass, scissor_.x, scissor_.y, scissor_.w, scissor_.h);
         }
-
-        // Set up frustum for culling and collect renderables
-        renderList_.init();
-        Matrix4 projScreenMatrix;
-        projScreenMatrix.multiplyMatrices(projectionMatrix, viewMatrix);
-        frustum_.setFromProjectionMatrix(projScreenMatrix);
-        collectRenderables(scene, projScreenMatrix, camera, 0);
-        if (scope.sortObjects) {
-            renderList_.sort();
-        }
-        renderList_.finish();
 
         // Build per-frame rendering context
         dawn::FrameContext frameCtx{};
@@ -759,6 +799,7 @@ struct DawnRenderer::Impl {
         // Register dispose listener so we evict the pipeline cache entry when the material is destroyed
         if (!sm->hasEventListener("dispose", onMaterialDispose)) {
             sm->addEventListener("dispose", onMaterialDispose);
+            trackedMaterials_.insert(sm);
         }
 
         auto& pe = pipelines->getOrCreateCustomPipeline(sm, surfaceFormat, sampleCount_);
@@ -792,34 +833,106 @@ struct DawnRenderer::Impl {
         constexpr auto kUniformUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         WGPUBuffer perDrawTransformBuf = bufferPool->acquire(dawn::TRANSFORM_UNIFORM_SIZE, kUniformUsage, transformData);
 
-        // Custom uniforms at binding 2
+        // Custom uniforms at binding 2.
+        // For GLSL-compat shaders, pe.customUniformNames lists exactly which uniforms appear
+        // in the binding-2 UBO (directly declared in the original GLSL, not from chunk includes).
+        // For WGSL shaders, pe.customUniformNames is empty and we fall back to all non-texture uniforms.
         WGPUBuffer customUniformBuf = nullptr;
         bool hasCustomUniforms = false;
-        for (auto& [name, uniform] : sm->uniforms) {
-            if (uniform.hasValue()) { hasCustomUniforms = true; break; }
-        }
-        if (hasCustomUniforms) {
-            float uboData[64];
-            std::memset(uboData, 0, sizeof(uboData));
-            int idx = 0;
+        if (!pe.customUniformNames.empty()) {
+            hasCustomUniforms = true;  // GLSL-compat: names already filtered
+        } else {
             for (auto& [name, uniform] : sm->uniforms) {
                 if (!uniform.hasValue()) continue;
-                auto& val = uniform.value();
+                auto& val = const_cast<Uniform&>(uniform).value();
+                if (!std::get_if<Texture*>(&val)) { hasCustomUniforms = true; break; }
+            }
+        }
+        if (hasCustomUniforms) {
+            const uint32_t uboBytes = pe.customUniformSize;
+            const uint32_t uboFloats = uboBytes / sizeof(float);
+            std::vector<float> uboData(uboFloats, 0.0f);
+
+            // Build the sorted list of uniforms to pack, matching the GLSL UBO layout.
+            std::vector<std::pair<std::string, Uniform*>> sorted;
+            if (!pe.customUniformNames.empty()) {
+                // GLSL-compat path: pack only the filtered uniforms in the pre-sorted order.
+                // This must match the alphabetical order the translator used for the SPIR-V UBO.
+                for (auto& name : pe.customUniformNames) {
+                    auto it2 = sm->uniforms.find(name);
+                    if (it2 != sm->uniforms.end() && it2->second.hasValue()) {
+                        auto& val = const_cast<Uniform&>(it2->second).value();
+                        if (!std::get_if<Texture*>(&val)) sorted.push_back({name, &it2->second});
+                    }
+                }
+            } else {
+                // WGSL path: pack all non-texture uniforms sorted alphabetically.
+                sorted.reserve(sm->uniforms.size());
+                for (auto& [name, uniform] : sm->uniforms) {
+                    if (!uniform.hasValue()) continue;
+                    auto& val = const_cast<Uniform&>(uniform).value();
+                    if (!std::get_if<Texture*>(&val)) sorted.push_back({name, &uniform});
+                }
+                std::sort(sorted.begin(), sorted.end(), [](auto& a, auto& b) { return a.first < b.first; });
+            }
+
+            // Pack with 16-byte (4-float) slots per scalar/vec3, 64-byte (16-float) per mat4
+            uint32_t idx = 0;
+            for (auto& [name, uptr] : sorted) {
+                auto& val = uptr->value();
                 if (auto* f = std::get_if<float>(&val)) {
-                    if (idx < 64) uboData[idx++] = *f;
+                    if (idx + 4 <= uboFloats) { uboData[idx] = *f; idx += 4; }
                 } else if (auto* i = std::get_if<int>(&val)) {
-                    if (idx < 64) { float fi; std::memcpy(&fi, i, 4); uboData[idx++] = fi; }
+                    if (idx + 4 <= uboFloats) { float fi; std::memcpy(&fi, i, 4); uboData[idx] = fi; idx += 4; }
                 } else if (auto* v3 = std::get_if<Vector3>(&val)) {
-                    if (idx + 3 <= 64) { uboData[idx] = v3->x; uboData[idx+1] = v3->y; uboData[idx+2] = v3->z; idx += 4; }
+                    if (idx + 4 <= uboFloats) { uboData[idx] = v3->x; uboData[idx+1] = v3->y; uboData[idx+2] = v3->z; idx += 4; }
+                } else if (auto* v3p = std::get_if<Vector3*>(&val)) {
+                    if (*v3p && idx + 4 <= uboFloats) { uboData[idx] = (*v3p)->x; uboData[idx+1] = (*v3p)->y; uboData[idx+2] = (*v3p)->z; idx += 4; }
+                } else if (auto* m4 = std::get_if<Matrix4>(&val)) {
+                    if (idx + 16 <= uboFloats) { std::memcpy(&uboData[idx], m4->elements.data(), 16 * sizeof(float)); idx += 16; }
+                } else if (auto* m4p = std::get_if<Matrix4*>(&val)) {
+                    if (*m4p && idx + 16 <= uboFloats) { std::memcpy(&uboData[idx], (*m4p)->elements.data(), 16 * sizeof(float)); idx += 16; }
+                } else if (auto* col = std::get_if<Color>(&val)) {
+                    if (idx + 4 <= uboFloats) { uboData[idx] = col->r; uboData[idx+1] = col->g; uboData[idx+2] = col->b; idx += 4; }
                 }
             }
-            customUniformBuf = bufferPool->acquire(256, kUniformUsage, uboData);
+            customUniformBuf = bufferPool->acquire(uboBytes, kUniformUsage, uboData.data());
         }
+
+        // Build unified texture list from both customTextures and Texture* uniforms
+        dawn::TextureList unifiedTextures;
+        for (auto& [name, ptr] : sm->customTextures) {
+            auto* gpuTex = static_cast<DawnTexture*>(ptr);
+            unifiedTextures.push_back({name, {gpuTex->view(), gpuTex->sampler()}});
+        }
+        for (auto& [name, uniform] : sm->uniforms) {
+            if (!uniform.hasValue()) continue;
+            auto& val = const_cast<Uniform&>(uniform).value();
+            if (auto* texPtr = std::get_if<Texture*>(&val)) {
+                if (!*texPtr) continue;
+                // Check render targets first (e.g. mirror texture)
+                auto* rtEntry = renderTargets->findByTextureId((*texPtr)->id);
+                if (rtEntry) {
+                    unifiedTextures.push_back({name, {rtEntry->colorView, rtEntry->colorSampler}});
+                } else {
+                    auto& entry = textures->getOrCreateTexture(*texPtr);
+                    unifiedTextures.push_back({name, {entry.view, entry.sampler}});
+                }
+            }
+        }
+        // Sort and deduplicate by name
+        std::sort(unifiedTextures.begin(), unifiedTextures.end(),
+                  [](auto& a, auto& b) { return a.first < b.first; });
+        unifiedTextures.erase(
+                std::unique(unifiedTextures.begin(), unifiedTextures.end(),
+                            [](auto& a, auto& b) { return a.first == b.first; }),
+                unifiedTextures.end());
 
         // Build bind group entries via subsystem
         auto& entries = bindGroups->buildCustom(perDrawTransformBuf, lights->uniformBuffer(),
                                                  lights->lightUniformSize(),
-                                                 customUniformBuf, sm);
+                                                 customUniformBuf, pe.customUniformSize,
+                                                 sm, unifiedTextures);
 
         WGPUBindGroupDescriptor bgDesc{};
         bgDesc.label = {.data = "custom_bg", .length = 9};
@@ -1291,6 +1404,13 @@ struct DawnRenderer::Impl {
 
     void dispose() {
         if (!initialized) return;
+
+        // Unregister material dispose listeners before destroying so materials disposed
+        // after the renderer don't call back into freed memory.
+        for (auto* mat : trackedMaterials_) {
+            mat->removeEventListener("dispose", onMaterialDispose);
+        }
+        trackedMaterials_.clear();
 
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
 

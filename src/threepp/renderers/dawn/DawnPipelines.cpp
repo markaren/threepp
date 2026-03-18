@@ -339,7 +339,7 @@ namespace threepp::dawn {
         depthStencil.depthWriteEnabled = (features & ShaderFeatures::DepthWriteOff)
                                               ? WGPUOptionalBool_False
                                               : WGPUOptionalBool_True;
-        depthStencil.depthCompare = WGPUCompareFunction_Less;
+        depthStencil.depthCompare = WGPUCompareFunction_LessEqual;
 
         WGPURenderPipelineDescriptor pipelineDesc{};
         WGPUStringView pipeLabel = {.data = "dawn_pipeline", .length = 13};
@@ -437,12 +437,19 @@ namespace threepp::dawn {
                 std::vector<std::string> uniformNames;
                 std::vector<std::string> texNames;
                 for (auto& [name, uniform] : sm->uniforms) {
-                    if (uniform.hasValue()) uniformNames.push_back(name);
+                    if (!uniform.hasValue()) continue;
+                    auto& val = const_cast<Uniform&>(uniform).value();
+                    if (std::get_if<Texture*>(&val)) {
+                        texNames.push_back(name);
+                    } else {
+                        uniformNames.push_back(name);
+                    }
                 }
                 for (auto& [name, ptr] : sm->customTextures) {
                     texNames.push_back(name);
                 }
                 std::sort(texNames.begin(), texNames.end());
+                texNames.erase(std::unique(texNames.begin(), texNames.end()), texNames.end());
 
                 auto translated = translator_.translate(
                         sm->vertexShader, sm->fragmentShader,
@@ -454,6 +461,9 @@ namespace threepp::dawn {
                     customPipelineCache_[sm->id] = CustomPipelineEntry{};
                     return customPipelineCache_[sm->id];
                 }
+
+                entry.customUniformNames = translated.customUniformNames;
+                entry.customUniformSize = translated.customUniformSize;
 
                 // Create vertex shader module from SPIR-V
                 {
@@ -496,16 +506,62 @@ namespace threepp::dawn {
             } else
 #endif
             {
-                // WGSL path: create a single combined shader module
-                WGPUShaderSourceWGSL wgslSrc{};
-                wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
-                wgslSrc.chain.next  = nullptr;
-                wgslSrc.code        = {.data = wgsl.c_str(), .length = wgsl.size()};
+                // Detect separate per-stage WGSL (naga-generated): each shader
+                // string contains its own @vertex or @fragment entry point.
+                bool hasSeparateWgsl = !isGlsl &&
+                    sm->vertexShader.find("@vertex") != std::string::npos &&
+                    sm->fragmentShader.find("@fragment") != std::string::npos;
 
-                WGPUShaderModuleDescriptor shaderDesc{};
-                shaderDesc.nextInChain = &wgslSrc.chain;
-                shaderDesc.label       = {.data = "custom_shader", .length = 13};
-                entry.shader = wgpuDeviceCreateShaderModule(state_.device, &shaderDesc);
+                if (hasSeparateWgsl) {
+                    // Create separate vertex WGSL module
+                    {
+                        WGPUShaderSourceWGSL wgslSrc{};
+                        wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+                        wgslSrc.chain.next  = nullptr;
+                        wgslSrc.code        = {.data = sm->vertexShader.c_str(),
+                                               .length = sm->vertexShader.size()};
+
+                        WGPUShaderModuleDescriptor desc{};
+                        desc.nextInChain = &wgslSrc.chain;
+                        desc.label       = {.data = "wgsl_vert", .length = 9};
+                        entry.vertShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
+                        if (!entry.vertShader) {
+                            std::cerr << "[DawnPipelines] Failed to create separate vertex WGSL module\n";
+                            customPipelineCache_[sm->id] = CustomPipelineEntry{};
+                            return customPipelineCache_[sm->id];
+                        }
+                    }
+                    // Create separate fragment WGSL module
+                    {
+                        WGPUShaderSourceWGSL wgslSrc{};
+                        wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+                        wgslSrc.chain.next  = nullptr;
+                        wgslSrc.code        = {.data = sm->fragmentShader.c_str(),
+                                               .length = sm->fragmentShader.size()};
+
+                        WGPUShaderModuleDescriptor desc{};
+                        desc.nextInChain = &wgslSrc.chain;
+                        desc.label       = {.data = "wgsl_frag", .length = 9};
+                        entry.fragShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
+                        if (!entry.fragShader) {
+                            std::cerr << "[DawnPipelines] Failed to create separate fragment WGSL module\n";
+                            wgpuShaderModuleRelease(entry.vertShader);
+                            customPipelineCache_[sm->id] = CustomPipelineEntry{};
+                            return customPipelineCache_[sm->id];
+                        }
+                    }
+                } else {
+                    // Combined WGSL path: single module with vs_main + fs_main
+                    WGPUShaderSourceWGSL wgslSrc{};
+                    wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+                    wgslSrc.chain.next  = nullptr;
+                    wgslSrc.code        = {.data = wgsl.c_str(), .length = wgsl.size()};
+
+                    WGPUShaderModuleDescriptor shaderDesc{};
+                    shaderDesc.nextInChain = &wgslSrc.chain;
+                    shaderDesc.label       = {.data = "custom_shader", .length = 13};
+                    entry.shader = wgpuDeviceCreateShaderModule(state_.device, &shaderDesc);
+                }
             }
 
             // Build bind group layout entries
@@ -533,39 +589,61 @@ namespace threepp::dawn {
             }
 
             // Custom uniform buffer at binding 2 (for ocean params etc.)
-            bool hasCustomUniforms = false;
-            for (auto& [name, uniform] : sm->uniforms) {
-                if (uniform.hasValue()) {
-                    hasCustomUniforms = true;
-                    break;
+            // Exclude Texture* values — they are texture bindings, not UBO members.
+            // Compute actual UBO size: each scalar/vec3 → 16 bytes, mat4 → 64 bytes.
+            if (entry.customUniformSize == 0) {
+                // WGSL path: compute from the material's uniform map
+                for (auto& [name, uniform] : sm->uniforms) {
+                    if (!uniform.hasValue()) continue;
+                    auto& val = const_cast<Uniform&>(uniform).value();
+                    if (std::get_if<Texture*>(&val)) continue;
+                    if (std::get_if<Matrix4>(&val) || std::get_if<Matrix4*>(&val))
+                        entry.customUniformSize += 64;
+                    else
+                        entry.customUniformSize += 16;
                 }
             }
+            bool hasCustomUniforms = entry.customUniformSize > 0;
             if (hasCustomUniforms) {
                 WGPUBindGroupLayoutEntry e{};
                 e.binding = 2;
                 e.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
                 e.buffer.type = WGPUBufferBindingType_Uniform;
-                e.buffer.minBindingSize = 256;
+                e.buffer.minBindingSize = entry.customUniformSize;
                 bglEntries.push_back(e);
             }
 
             // GPU texture bindings (texture + sampler pairs, sorted by name for determinism)
+            // Collect from both customTextures and Texture* uniforms
             std::vector<std::string> texNames;
             for (auto& [name, ptr] : sm->customTextures) {
                 texNames.push_back(name);
             }
+            for (auto& [name, uniform] : sm->uniforms) {
+                if (!uniform.hasValue()) continue;
+                auto& val = const_cast<Uniform&>(uniform).value();
+                if (std::get_if<Texture*>(&val)) texNames.push_back(name);
+            }
             std::sort(texNames.begin(), texNames.end());
+            texNames.erase(std::unique(texNames.begin(), texNames.end()), texNames.end());
 
             uint32_t nextBinding = hasCustomUniforms ? 3 : 2;
             for (auto& name : texNames) {
-                auto* gpuTex = static_cast<DawnTexture*>(sm->customTextures[name]);
-                bool isCube = gpuTex->dimension() == DawnTexture::Dimension::Cube;
+                bool isCube = false;
+                bool fromCustomTextures = sm->customTextures.count(name) > 0;
+                if (fromCustomTextures) {
+                    auto* gpuTex = static_cast<DawnTexture*>(sm->customTextures[name]);
+                    isCube = gpuTex->dimension() == DawnTexture::Dimension::Cube;
+                }
+                // Textures from uniforms (render targets, etc.) use filtering samplers;
+                // customTextures may use non-filtering samplers for raw GPU textures.
+                bool useFiltering = isCube || !fromCustomTextures;
                 {
                     WGPUBindGroupLayoutEntry e{};
                     e.binding = nextBinding++;
                     e.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-                    e.texture.sampleType = isCube ? WGPUTextureSampleType_Float
-                                                  : WGPUTextureSampleType_UnfilterableFloat;
+                    e.texture.sampleType = useFiltering ? WGPUTextureSampleType_Float
+                                                        : WGPUTextureSampleType_UnfilterableFloat;
                     e.texture.viewDimension = isCube ? WGPUTextureViewDimension_Cube
                                                      : WGPUTextureViewDimension_2D;
                     bglEntries.push_back(e);
@@ -574,8 +652,8 @@ namespace threepp::dawn {
                     WGPUBindGroupLayoutEntry e{};
                     e.binding = nextBinding++;
                     e.visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
-                    e.sampler.type = isCube ? WGPUSamplerBindingType_Filtering
-                                            : WGPUSamplerBindingType_NonFiltering;
+                    e.sampler.type = useFiltering ? WGPUSamplerBindingType_Filtering
+                                                  : WGPUSamplerBindingType_NonFiltering;
                     bglEntries.push_back(e);
                 }
             }
@@ -594,17 +672,19 @@ namespace threepp::dawn {
             plDesc.bindGroupLayouts = &entry.bindGroupLayout;
             entry.layout = wgpuDeviceCreatePipelineLayout(state_.device, &plDesc);
 
-            // Vertex buffer layout: pos(vec3) + normal(vec3) + uv(vec2) = 3 attributes
-            // Uses full VERTEX_STRIDE (44 bytes) since the interleaved buffer includes color
-            WGPUVertexAttribute attrs[3]{};
+            // Vertex buffer layout: pos(0) + normal(12) + uv(24) + color(32) = 44 bytes
+            // All 4 attributes are declared because the GLSL translator always emits
+            // layout(location=3) in vec3 color; and wgpu validates SPIR-V vertex inputs.
+            WGPUVertexAttribute attrs[4]{};
             attrs[0].format = WGPUVertexFormat_Float32x3; attrs[0].offset = 0;  attrs[0].shaderLocation = 0;
             attrs[1].format = WGPUVertexFormat_Float32x3; attrs[1].offset = 12; attrs[1].shaderLocation = 1;
             attrs[2].format = WGPUVertexFormat_Float32x2; attrs[2].offset = 24; attrs[2].shaderLocation = 2;
+            attrs[3].format = WGPUVertexFormat_Float32x3; attrs[3].offset = 32; attrs[3].shaderLocation = 3;
 
             WGPUVertexBufferLayout vbLayout{};
             vbLayout.arrayStride = VERTEX_STRIDE;
             vbLayout.stepMode = WGPUVertexStepMode_Vertex;
-            vbLayout.attributeCount = 3;
+            vbLayout.attributeCount = 4;
             vbLayout.attributes = attrs;
 
             WGPUBlendState blendState{};
@@ -620,16 +700,20 @@ namespace threepp::dawn {
             colorTarget.writeMask = WGPUColorWriteMask_All;
             colorTarget.blend = &blendState;
 
-            // Choose entry points and shader modules based on whether we used SPIR-V or WGSL.
-            // SPIR-V (GLSL path): glslang uses "main" as the entry point.
-            // WGSL path: combined module uses "vs_main" / "fs_main".
-            const bool useSpirvModules = (entry.vertShader != nullptr);
-            WGPUShaderModule vsModule  = useSpirvModules ? entry.vertShader : entry.shader;
-            WGPUShaderModule fsModule  = useSpirvModules ? entry.fragShader : entry.shader;
-            WGPUStringView vsEntry = useSpirvModules
+            // Choose entry points and shader modules based on pipeline type:
+            // - SPIR-V (GLSL compat): separate modules, entry point "main"
+            // - Separate WGSL (naga): separate modules, entry point "vs_main"/"fs_main"
+            // - Combined WGSL: single module, entry point "vs_main"/"fs_main"
+            const bool useSeparateModules = (entry.vertShader != nullptr);
+            WGPUShaderModule vsModule = useSeparateModules ? entry.vertShader : entry.shader;
+            WGPUShaderModule fsModule = useSeparateModules ? entry.fragShader : entry.shader;
+
+            // SPIR-V modules (from glslang) use "main"; WGSL always uses vs_main/fs_main.
+            const bool isSpirvPath = useSeparateModules && (entry.shader == nullptr);
+            WGPUStringView vsEntry = (isSpirvPath && isGlsl)
                     ? WGPUStringView{.data = "main",    .length = 4}
                     : WGPUStringView{.data = "vs_main", .length = 7};
-            WGPUStringView fsEntry = useSpirvModules
+            WGPUStringView fsEntry = (isSpirvPath && isGlsl)
                     ? WGPUStringView{.data = "main",    .length = 4}
                     : WGPUStringView{.data = "fs_main", .length = 7};
 
@@ -639,10 +723,30 @@ namespace threepp::dawn {
             fragmentState.targetCount = 1;
             fragmentState.targets = &colorTarget;
 
+            auto mapDepthFunc = [](DepthFunc f) -> WGPUCompareFunction {
+                switch (f) {
+                    case DepthFunc::Never:        return WGPUCompareFunction_Never;
+                    case DepthFunc::Always:       return WGPUCompareFunction_Always;
+                    case DepthFunc::Less:         return WGPUCompareFunction_Less;
+                    case DepthFunc::LessEqual:    return WGPUCompareFunction_LessEqual;
+                    case DepthFunc::Equal:        return WGPUCompareFunction_Equal;
+                    case DepthFunc::GreaterEqual: return WGPUCompareFunction_GreaterEqual;
+                    case DepthFunc::Greater:      return WGPUCompareFunction_Greater;
+                    case DepthFunc::NotEqual:     return WGPUCompareFunction_NotEqual;
+                    default:                      return WGPUCompareFunction_LessEqual;
+                }
+            };
+
             WGPUDepthStencilState depthStencil{};
             depthStencil.format = WGPUTextureFormat_Depth24Plus;
-            depthStencil.depthWriteEnabled = WGPUOptionalBool_True;
-            depthStencil.depthCompare = WGPUCompareFunction_Less;
+            depthStencil.depthWriteEnabled = sm->depthWrite
+                ? WGPUOptionalBool_True : WGPUOptionalBool_False;
+            depthStencil.depthCompare = sm->depthTest
+                ? mapDepthFunc(sm->depthFunc) : WGPUCompareFunction_Always;
+
+            WGPUCullMode cullMode = WGPUCullMode_None;
+            if (sm->side == Side::Front) cullMode = WGPUCullMode_Back;
+            else if (sm->side == Side::Back) cullMode = WGPUCullMode_Front;
 
             WGPURenderPipelineDescriptor pipelineDesc{};
             pipelineDesc.label = {.data = "custom_pipeline", .length = 15};
@@ -654,7 +758,7 @@ namespace threepp::dawn {
             pipelineDesc.vertex.buffers = &vbLayout;
             pipelineDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
             pipelineDesc.primitive.frontFace = WGPUFrontFace_CCW;
-            pipelineDesc.primitive.cullMode = WGPUCullMode_None;
+            pipelineDesc.primitive.cullMode = cullMode;
             pipelineDesc.depthStencil = &depthStencil;
             pipelineDesc.multisample.count = sampleCount;
             pipelineDesc.multisample.mask = 0xFFFFFFFF;

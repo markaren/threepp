@@ -112,7 +112,9 @@ const std::vector<WGPUBindGroupEntry>& DawnBindGroups::buildStandard(const BindG
 const std::vector<WGPUBindGroupEntry>& DawnBindGroups::buildCustom(
         WGPUBuffer transformBuffer, WGPUBuffer lightBuffer,
         size_t lightUniformSize,
-        WGPUBuffer customUniformBuffer, ShaderMaterial* sm) {
+        WGPUBuffer customUniformBuffer, uint32_t customUniformSize,
+        ShaderMaterial* sm,
+        const TextureList& textures) {
     entries_.clear();
 
     // Binding 0: transform
@@ -122,22 +124,15 @@ const std::vector<WGPUBindGroupEntry>& DawnBindGroups::buildCustom(
 
     // Binding 2: custom uniforms (if present)
     if (customUniformBuffer) {
-        WGPUBindGroupEntry e{}; e.binding = 2; e.buffer = customUniformBuffer; e.offset = 0; e.size = 256;
+        WGPUBindGroupEntry e{}; e.binding = 2; e.buffer = customUniformBuffer; e.offset = 0; e.size = customUniformSize;
         entries_.push_back(e);
     }
 
-    // GPU texture bindings (sorted by name for deterministic order)
-    std::vector<std::string> texNames;
-    for (auto& [name, ptr] : sm->customTextures) {
-        texNames.push_back(name);
-    }
-    std::sort(texNames.begin(), texNames.end());
-
+    // GPU texture bindings from unified list (sorted by name for deterministic order)
     uint32_t nextBinding = customUniformBuffer ? 3 : 2;
-    for (auto& name : texNames) {
-        auto* gpuTex = static_cast<DawnTexture*>(sm->customTextures[name]);
-        { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.textureView = gpuTex->view(); entries_.push_back(e); }
-        { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.sampler = gpuTex->sampler(); entries_.push_back(e); }
+    for (auto& [name, views] : textures) {
+        { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.textureView = views.first; entries_.push_back(e); }
+        { WGPUBindGroupEntry e{}; e.binding = nextBinding++; e.sampler = views.second; entries_.push_back(e); }
     }
 
     return entries_;

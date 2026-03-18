@@ -8,7 +8,7 @@
 
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/Public/ResourceLimits.h>
-#include <glslang/SPIRV/GlslangToSpv.h>
+#include <SPIRV/GlslangToSpv.h>
 
 #include <algorithm>
 #include <functional>
@@ -119,8 +119,7 @@ namespace threepp::dawn {
             bool isVertex,
             const std::vector<std::string>& varyingNames,
             const std::vector<int>& varyingLocations,
-            bool hasCustomUniforms,
-            const std::vector<std::string>& uniformNames,
+            const std::vector<std::pair<std::string,std::string>>& customFields,
             const std::vector<std::string>& textureNames) {
 
         std::ostringstream out;
@@ -132,6 +131,13 @@ namespace threepp::dawn {
         out << "#define lowp\n";
         out << "#define mediump\n";
         out << "#define highp\n\n";
+
+        // --- Encoding stubs: WebGPU/Vulkan output is linear; these are no-ops ---
+        // Prevents "undefined function" errors from encodings_pars/encodings_fragment chunks
+        out << "#define linearToOutputTexel(v) (v)\n";
+        out << "#define LinearToLinear(v) (v)\n";
+        out << "#define GammaToLinear(v) (v)\n";
+        out << "#define LinearToGamma(v) (v)\n\n";
 
         // --- TransformUniforms UBO at binding 0 ---
         // Layout matches DawnRenderer's 256-byte TransformUniforms:
@@ -160,48 +166,57 @@ namespace threepp::dawn {
                "};\n\n";
 
         // --- Custom uniforms UBO at binding 2 ---
-        if (hasCustomUniforms) {
-            // Extract user-declared non-transform, non-sampler uniforms from source
-            static const std::regex uniformRex(
-                    R"(\buniform\s+(?:(?:lowp|mediump|highp)\s+)?(float|vec[234]|mat[234]|int|ivec[234])\s+(\w+)\s*;)");
-
-            std::set<std::string> emitted;
-            std::vector<std::pair<std::string,std::string>> fields; // type, name
-
-            std::sregex_iterator it(expandedGlsl.begin(), expandedGlsl.end(), uniformRex);
-            std::sregex_iterator end;
-            while (it != end) {
-                std::string type = (*it)[1].str();
-                std::string name = (*it)[2].str();
-                bool isUserUniform = std::find(uniformNames.begin(), uniformNames.end(), name)
-                                     != uniformNames.end();
-                if (isUserUniform && !isTransformUniform(name) &&
-                    emitted.insert(name).second) {
-                    fields.push_back({type, name});
+        // Use the pre-built unified field list so both vertex and fragment stages
+        // declare an IDENTICAL CustomUniforms struct (same fields, same order, same size).
+        // WebGPU requires all pipeline stages to agree on the binding-2 struct layout.
+        //
+        // Padding strategy (std140):
+        //   float/int:  use 3 SEPARATE float variables (not an array!) for padding.
+        //               Arrays in std140 have stride rounded to 16 bytes (Rule 4), so
+        //               `float _pad[3]` = 48 bytes. Individual floats = 4 bytes each.
+        //   vec3/ivec3: add 1 individual float to fill the trailing 4 bytes of the
+        //               16-byte vec3 slot (vec3 has 16-byte base alignment in std140).
+        //   vec4/mat4:  no padding needed (already 16/64 bytes in std140).
+        //
+        // We use the original uniform name as the struct member so the shader body can
+        // reference it directly, without #define macros that would conflict with function
+        // parameter names from included chunks (e.g., `float G_GGX_Smith(float alpha, ...)`).
+        if (!customFields.empty()) {
+            out << "layout(std140, set=0, binding=2) uniform CustomUniforms {\n";
+            for (auto& [t, n] : customFields) {
+                out << "    " << t << " " << n << ";\n";
+                if (t == "float" || t == "int") {
+                    // 3 individual floats = 12 bytes; together with the field = 16 bytes.
+                    out << "    float _p0" << n << "_, _p1" << n << "_, _p2" << n << "_;\n";
+                } else if (t == "vec3" || t == "ivec3") {
+                    // 1 float fills the remaining 4 bytes of the 16-byte vec3 slot.
+                    out << "    float _p" << n << "_;\n";
                 }
-                ++it;
+                // vec4, mat4: already sized correctly in std140.
             }
-
-            if (!fields.empty()) {
-                out << "layout(std140, set=0, binding=2) uniform CustomUniforms {\n";
-                for (auto& [t, n] : fields) {
-                    out << "    " << t << " " << n << ";\n";
-                }
-                out << "};\n\n";
-            }
+            out << "};\n\n";
         }
 
         // --- Texture/sampler bindings at binding 3+ ---
-        uint32_t nextBinding = hasCustomUniforms ? 3 : 2;
+        // Naga's SPIR-V frontend rejects combined image-sampler OpLoad patterns.
+        // Instead we declare separate texture2D + sampler at consecutive bindings
+        // and reconstruct the combined sampler2D via a #define so that the original
+        // texture(...) call syntax still compiles without modification.
+        // Layout: binding N = texture, binding N+1 = sampler (matches DawnPipelines BGL).
+        uint32_t nextBinding = !customFields.empty() ? 3 : 2;
         for (auto& texName : textureNames) {
-            // Check texture dimension
             bool isCube = expandedGlsl.find("samplerCube " + texName) != std::string::npos ||
                           expandedGlsl.find("samplerCube\t" + texName) != std::string::npos;
-            if (isCube) {
-                out << "layout(set=0, binding=" << nextBinding++ << ") uniform samplerCube " << texName << ";\n";
-            } else {
-                out << "layout(set=0, binding=" << nextBinding++ << ") uniform sampler2D " << texName << ";\n";
-            }
+            const std::string texType = isCube ? "textureCube" : "texture2D";
+            const std::string smpType = isCube ? "samplerCube"  : "sampler2D";
+            // Declare separate texture and sampler
+            out << "layout(set=0, binding=" << nextBinding
+                << ") uniform " << texType << " _tex_" << texName << ";\n";
+            out << "layout(set=0, binding=" << nextBinding + 1
+                << ") uniform sampler _smp_" << texName << ";\n";
+            // Reconstruct combined sampler so existing texture(sampler, ...) calls work
+            out << "#define " << texName << " " << smpType << "(_tex_" << texName << ", _smp_" << texName << ")\n";
+            nextBinding += 2;
         }
         if (!textureNames.empty()) out << "\n";
 
@@ -231,8 +246,10 @@ namespace threepp::dawn {
                 std::regex(R"(\battribute\s+(?:(?:lowp|mediump|highp)\s+)?\w+\s+\w+\s*;[^\n]*)"), "");
 
         // 3. Strip all `uniform` declarations — they're now in UBOs or sampler bindings
+        // Handles simple: `uniform float alpha;`
+        // And arrays:     `uniform vec3 lightProbe[ 9 ];` or `uniform vec3 v[ N ];`
         body = std::regex_replace(body,
-                std::regex(R"(\buniform\s+(?:(?:lowp|mediump|highp)\s+)?\S+\s+\w+\s*;[^\n]*)"), "");
+                std::regex(R"(\buniform\s+(?:(?:lowp|mediump|highp)\s+)?\S+\s+\w+(?:\s*\[[^\]]*\])?\s*;[^\n]*)"), "");
 
         // 4. Replace `varying TYPE name;` with layout(location=N) in/out
         {
@@ -295,7 +312,7 @@ namespace threepp::dawn {
         const char* src = vulkanGlsl.c_str();
         const int srcLen = static_cast<int>(vulkanGlsl.size());
         shader.setStringsWithLengths(&src, &srcLen, 1);
-        shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
+        shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 450);
         shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
         shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
 
@@ -320,12 +337,34 @@ namespace threepp::dawn {
 
         std::vector<uint32_t> spirv;
         glslang::SpvOptions opts;
-        opts.validate = true;
+        opts.validate          = true;  // validate SPIR-V with glslang's built-in validator
+        opts.generateDebugInfo = false;
+        opts.stripDebugInfo    = true;  // remove OpLine/OpSource — naga can trip on them
+        opts.disableOptimizer  = true;  // glslang optimizer can transform ImplicitLod→ExplicitLod incorrectly
         glslang::GlslangToSpv(*prog.getIntermediate(stage), spirv, &opts);
 
         if (spirv.empty()) {
             error = "glslang produced empty SPIR-V";
             return std::nullopt;
+        }
+
+        // Workaround: glslang 15.x generates OpImageSampleExplicitLod (88) with wc=5,
+        // missing the required image_operands word. This is invalid SPIR-V and naga
+        // rejects it. Patch opcode 88→87 (OpImageSampleImplicitLod) when wc==5 —
+        // the operand layout (result_type, result, sampled_image, coordinate) is
+        // identical, so this is a safe in-place fix for fragment shaders.
+        // SPIR-V opcodes: 86=OpSampledImage, 87=OpImageSampleImplicitLod, 88=OpImageSampleExplicitLod
+        if (!isVertex) {
+            // Skip 5-word SPIR-V header (magic, version, generator, bound, schema)
+            for (size_t i = 5; i < spirv.size(); ) {
+                const uint32_t wc     = spirv[i] >> 16;
+                const uint32_t opcode = spirv[i] & 0xFFFF;
+                if (wc == 0) break;
+                if (opcode == 88 /*OpImageSampleExplicitLod*/ && wc == 5) {
+                    spirv[i] = (wc << 16) | 87; // → OpImageSampleImplicitLod
+                }
+                i += wc;
+            }
         }
 
         return spirv;
@@ -374,19 +413,68 @@ namespace threepp::dawn {
             }
         }
 
-        // Determine whether there are custom (non-transform, non-sampler) uniforms
-        bool hasCustomUniforms = !uniformNames.empty();
+        // Filter uniformNames to only those directly declared in the original (pre-expansion) GLSL.
+        // Uniforms from included chunks (fog, lights, shadow) live inside #ifdef guards that
+        // aren't defined here, so they'd never appear in the compiled shader. Excluding them
+        // keeps the binding-2 UBO small and consistent with what the CPU packer writes.
+        std::set<std::string> directlyDeclared;
+        {
+            static const std::regex dRex(
+                    R"(\buniform\s+(?:(?:lowp|mediump|highp)\s+)?(?:float|vec[234]|mat[234]|int|ivec[234])\s+(\w+)\s*;)");
+            auto scan = [&](const std::string& src) {
+                std::sregex_iterator it(src.begin(), src.end(), dRex);
+                std::sregex_iterator end;
+                while (it != end) { directlyDeclared.insert((*it)[1].str()); ++it; }
+            };
+            scan(vertexGlsl);    // original, pre-expanded
+            scan(fragmentGlsl);  // original, pre-expanded
+        }
+        std::vector<std::string> filteredUniformNames;
+        for (auto& n : uniformNames) {
+            if (directlyDeclared.count(n)) filteredUniformNames.push_back(n);
+        }
+        std::sort(filteredUniformNames.begin(), filteredUniformNames.end());
+        result.customUniformNames = filteredUniformNames;
+
+        // Build unified (type, name) field list by scanning BOTH expanded shaders.
+        // Using a combined name→type map ensures both vertex and fragment stages receive
+        // an identical CustomUniforms struct — required by WebGPU pipeline validation.
+        std::map<std::string,std::string> uniformTypeMap;
+        {
+            static const std::regex typeRex(
+                    R"(\buniform\s+(?:(?:lowp|mediump|highp)\s+)?(float|vec[234]|mat[234]|int|ivec[234])\s+(\w+)\s*;)");
+            auto scanTypes = [&](const std::string& src) {
+                std::sregex_iterator it(src.begin(), src.end(), typeRex);
+                std::sregex_iterator end;
+                while (it != end) { uniformTypeMap[(*it)[2].str()] = (*it)[1].str(); ++it; }
+            };
+            scanTypes(expandedVert);
+            scanTypes(expandedFrag);
+        }
+        std::vector<std::pair<std::string,std::string>> customFields; // (type, name), sorted
+        for (auto& n : filteredUniformNames) {  // already sorted alphabetically
+            auto it = uniformTypeMap.find(n);
+            if (it != uniformTypeMap.end()) customFields.push_back({it->second, n});
+        }
+
+        // Compute UBO byte size: float/int/vec3 → vec4 slot (16 bytes), mat4 → 64 bytes
+        uint32_t uboSize = 0;
+        for (auto& [t, n] : customFields) {
+            if (t == "mat4") uboSize += 64;
+            else uboSize += 16; // float, int, vec3, vec4, ivec3 all fit in a 16-byte slot
+        }
+        result.customUniformSize = uboSize;
 
         // Step 3: upgrade to Vulkan GLSL 450
         const std::string vulkanVert = upgradeToVulkanGlsl(
                 expandedVert, true,
                 varyingNames, varyingLocations,
-                hasCustomUniforms, uniformNames, textureNames);
+                customFields, textureNames);
 
         const std::string vulkanFrag = upgradeToVulkanGlsl(
                 expandedFrag, false,
                 varyingNames, varyingLocations,
-                hasCustomUniforms, uniformNames, textureNames);
+                customFields, textureNames);
 
         // Step 4: compile to SPIR-V
         std::string vertErr, fragErr;

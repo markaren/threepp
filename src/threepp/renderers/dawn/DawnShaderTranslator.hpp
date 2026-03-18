@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace threepp::dawn {
@@ -20,6 +21,13 @@ namespace threepp::dawn {
         std::vector<uint32_t> vertexSpirv;
         std::vector<uint32_t> fragmentSpirv;
         std::string errorMessage;
+        // Uniform names that were placed in the binding-2 UBO, sorted alphabetically.
+        // Only includes uniforms directly declared in the original (pre-expanded) GLSL.
+        // The CPU packer must use this list (same order) to match the UBO layout.
+        std::vector<std::string> customUniformNames;
+        // Byte size of the CustomUniforms UBO (std140 layout, with padding).
+        // Zero if no custom uniforms exist.
+        uint32_t customUniformSize = 0;
 
         [[nodiscard]] bool success() const {
             return errorMessage.empty() &&
@@ -60,13 +68,15 @@ namespace threepp::dawn {
         //   - Add fragColor output (fragment stage only)
         //   - Replace texture2D()/textureCube() with texture()
         //   - #define modelViewMatrix (viewMatrix * modelMatrix)
+        // customFields: unified (type, name) pairs sorted alphabetically —
+        // same list is passed to both vertex and fragment so they share
+        // an identical binding-2 struct layout.
         std::string upgradeToVulkanGlsl(
                 const std::string& expandedGlsl,
                 bool isVertex,
                 const std::vector<std::string>& varyingNames,
                 const std::vector<int>& varyingLocations,
-                bool hasCustomUniforms,
-                const std::vector<std::string>& uniformNames,
+                const std::vector<std::pair<std::string,std::string>>& customFields,
                 const std::vector<std::string>& textureNames);
 
         // Compile Vulkan GLSL 450 to SPIR-V via glslang

@@ -649,6 +649,16 @@ if (THREEPP_WITH_DAWN)
         # ASYNCIFY is required so emscripten_sleep() can yield to the event loop
         # during adapter/device request and buffer map polling.
         target_link_options(threepp PUBLIC "-sUSE_WEBGPU=1" "-sASYNCIFY")
+
+        # Pre-translate GLSL shaders to WGSL via naga for browser deployment.
+        # Browsers only accept WGSL (WGPUSType_ShaderSourceSPIRV is not available).
+        include(${PROJECT_SOURCE_DIR}/cmake/FetchNaga.cmake)
+        include(${PROJECT_SOURCE_DIR}/cmake/EmbedWgslFromGlsl.cmake)
+
+        embed_wgsl_from_glsl(threepp water
+            "${PROJECT_SOURCE_DIR}/data/shaders/wgsl_input/water.vert"
+            "${PROJECT_SOURCE_DIR}/data/shaders/wgsl_input/water.frag"
+        )
     else ()
         include(${PROJECT_SOURCE_DIR}/cmake/FetchWgpuNative.cmake)
 
@@ -662,6 +672,7 @@ if (THREEPP_WITH_DAWN)
             target_sources(threepp PRIVATE
                 "threepp/renderers/dawn/DawnShaderTranslator.cpp"
             )
+            target_include_directories(threepp PRIVATE "${glslang_SOURCE_DIR}")
             target_link_libraries(threepp PRIVATE
                 glslang
                 SPIRV

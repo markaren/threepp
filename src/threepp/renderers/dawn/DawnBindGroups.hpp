@@ -24,6 +24,9 @@ namespace threepp::dawn {
     class DawnTextures;
     class DawnShadowMap;
 
+    // Sorted texture list for custom shader bind groups: (name, {textureView, sampler})
+    using TextureList = std::vector<std::pair<std::string, std::pair<WGPUTextureView, WGPUSampler>>>;
+
     // Input parameters for building standard material bind group entries.
     // All members are references/pointers -- no copies.
     struct BindGroupInputs {
@@ -54,7 +57,9 @@ namespace threepp::dawn {
         const std::vector<WGPUBindGroupEntry>& buildCustom(
                 WGPUBuffer transformBuffer, WGPUBuffer lightBuffer,
                 size_t lightUniformSize,
-                WGPUBuffer customUniformBuffer, ShaderMaterial* sm);
+                WGPUBuffer customUniformBuffer, uint32_t customUniformSize,
+                ShaderMaterial* sm,
+                const TextureList& textures);
 
     private:
         std::vector<WGPUBindGroupEntry> entries_;  // persistent, reused across calls

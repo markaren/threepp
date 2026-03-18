@@ -20,6 +20,7 @@ namespace threepp::dawn {
     struct RTEntry {
         WGPUTexture colorTexture = nullptr;       // resolve target (1x) -- readback source
         WGPUTextureView colorView = nullptr;
+        WGPUSampler colorSampler = nullptr;       // for sampling as a texture binding
         WGPUTexture depthTexture = nullptr;
         WGPUTextureView depthView = nullptr;
         // MSAA textures (only created when sampleCount > 1)
@@ -38,6 +39,9 @@ namespace threepp::dawn {
         // Get or create textures for the given render target and sample count.
         RTEntry& getOrCreate(RenderTarget* rt, uint32_t sampleCount);
 
+        // Find an RTEntry by the Texture::id of its color texture (for uniform-based binding).
+        RTEntry* findByTextureId(unsigned int texId);
+
         // Invalidate and release all cached entries.
         void invalidateAll();
 
@@ -46,6 +50,7 @@ namespace threepp::dawn {
     private:
         DawnState& state_;
         std::unordered_map<std::string, RTEntry> cache_;
+        std::unordered_map<unsigned int, std::string> texToRtUuid_;
 
         static void releaseEntry(RTEntry& e);
     };

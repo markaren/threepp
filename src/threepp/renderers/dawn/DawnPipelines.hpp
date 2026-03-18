@@ -40,14 +40,19 @@ namespace threepp::dawn {
     };
 
     struct CustomPipelineEntry {
-        WGPUShaderModule shader = nullptr;         // WGSL path: combined vert+frag module
-        WGPUShaderModule vertShader = nullptr;     // SPIR-V path: separate vertex module
-        WGPUShaderModule fragShader = nullptr;     // SPIR-V path: separate fragment module
+        WGPUShaderModule shader = nullptr;         // Combined WGSL: single vert+frag module
+        WGPUShaderModule vertShader = nullptr;     // Separate modules: SPIR-V or per-stage WGSL
+        WGPUShaderModule fragShader = nullptr;     // Separate modules: SPIR-V or per-stage WGSL
         WGPURenderPipeline pipeline = nullptr;
         WGPUPipelineLayout layout = nullptr;
         WGPUBindGroupLayout bindGroupLayout = nullptr;
         size_t shaderHash = 0;
         std::vector<WGPUBindGroupLayoutEntry> bglEntries;
+        // GLSL-compat path: names of uniforms placed in the binding-2 UBO, sorted alphabetically.
+        // The CPU packer must write these uniforms in the same order to match the SPIR-V layout.
+        std::vector<std::string> customUniformNames;
+        // Byte size of the binding-2 CustomUniforms UBO (0 if none).
+        uint32_t customUniformSize = 0;
     };
 
     class DawnPipelines {

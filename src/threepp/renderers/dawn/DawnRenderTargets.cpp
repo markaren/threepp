@@ -2,6 +2,7 @@
 #include "DawnRenderTargets.hpp"
 
 #include "threepp/renderers/RenderTarget.hpp"
+#include "threepp/textures/Texture.hpp"
 
 using namespace threepp::dawn;
 
@@ -13,6 +14,7 @@ void DawnRenderTargets::releaseEntry(RTEntry& e) {
     if (e.msaaColorTexture) wgpuTextureRelease(e.msaaColorTexture);
     if (e.msaaDepthView) wgpuTextureViewRelease(e.msaaDepthView);
     if (e.msaaDepthTexture) wgpuTextureRelease(e.msaaDepthTexture);
+    if (e.colorSampler) wgpuSamplerRelease(e.colorSampler);
     if (e.colorView) wgpuTextureViewRelease(e.colorView);
     if (e.colorTexture) wgpuTextureRelease(e.colorTexture);
     if (e.depthView) wgpuTextureViewRelease(e.depthView);
@@ -45,6 +47,19 @@ RTEntry& DawnRenderTargets::getOrCreate(threepp::RenderTarget* rt, uint32_t samp
     entry.colorTexture = wgpuDeviceCreateTexture(state_.device, &ctd);
     entry.colorView = wgpuTextureCreateView(entry.colorTexture, nullptr);
 
+    WGPUSamplerDescriptor sd{};
+    sd.label = {.data = "rt_sampler", .length = 10};
+    sd.minFilter = WGPUFilterMode_Linear;
+    sd.magFilter = WGPUFilterMode_Linear;
+    sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
+    sd.addressModeU = WGPUAddressMode_ClampToEdge;
+    sd.addressModeV = WGPUAddressMode_ClampToEdge;
+    sd.addressModeW = WGPUAddressMode_ClampToEdge;
+    sd.maxAnisotropy = 1;
+    entry.colorSampler = wgpuDeviceCreateSampler(state_.device, &sd);
+
+    if (rt->texture) texToRtUuid_[rt->texture->id] = rt->uuid;
+
     WGPUTextureDescriptor dtd{};
     dtd.label = {.data = "rt_depth", .length = 8};
     dtd.size = {rt->width, rt->height, 1};
@@ -73,11 +88,19 @@ RTEntry& DawnRenderTargets::getOrCreate(threepp::RenderTarget* rt, uint32_t samp
     return cache_[rt->uuid];
 }
 
+RTEntry* DawnRenderTargets::findByTextureId(unsigned int texId) {
+    auto it = texToRtUuid_.find(texId);
+    if (it == texToRtUuid_.end()) return nullptr;
+    auto it2 = cache_.find(it->second);
+    return it2 != cache_.end() ? &it2->second : nullptr;
+}
+
 void DawnRenderTargets::invalidateAll() {
     for (auto& [id, entry] : cache_) {
         releaseEntry(entry);
     }
     cache_.clear();
+    texToRtUuid_.clear();
 }
 
 void DawnRenderTargets::dispose() {
