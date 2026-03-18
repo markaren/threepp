@@ -642,24 +642,47 @@ endif ()
 
 
 if (THREEPP_WITH_DAWN)
-    include(${PROJECT_SOURCE_DIR}/cmake/FetchWgpuNative.cmake)
-
-    target_include_directories(threepp PRIVATE "${WGPU_INCLUDE_DIR}")
-    target_link_libraries(threepp PUBLIC ${WGPU_LIBRARY})
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_DAWN=1)
 
-    if (APPLE)
-        target_link_libraries(threepp PRIVATE "-framework QuartzCore" "-framework Metal")
-    endif ()
+    if (EMSCRIPTEN)
+        # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.
+        # ASYNCIFY is required so emscripten_sleep() can yield to the event loop
+        # during adapter/device request and buffer map polling.
+        target_link_options(threepp PUBLIC "-sUSE_WEBGPU=1" "-sASYNCIFY")
+    else ()
+        include(${PROJECT_SOURCE_DIR}/cmake/FetchWgpuNative.cmake)
 
-    # Copy wgpu_native.dll next to executables so they can find it at runtime
-    if (WIN32 AND WGPU_NATIVE_DLL)
-        add_custom_command(TARGET threepp POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${WGPU_NATIVE_DLL}"
-                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/wgpu_native.dll"
-            COMMENT "Copying wgpu_native.dll to output directory"
-        )
+        target_include_directories(threepp PRIVATE "${WGPU_INCLUDE_DIR}")
+        target_link_libraries(threepp PUBLIC ${WGPU_LIBRARY})
+
+        if (THREEPP_DAWN_GLSL_COMPAT)
+            message(STATUS "Dawn GLSL compat: fetching glslang...")
+            include(${PROJECT_SOURCE_DIR}/cmake/FetchGlslang.cmake)
+
+            target_sources(threepp PRIVATE
+                "threepp/renderers/dawn/DawnShaderTranslator.cpp"
+            )
+            target_link_libraries(threepp PRIVATE
+                glslang
+                SPIRV
+                glslang-default-resource-limits
+            )
+            target_compile_definitions(threepp PRIVATE THREEPP_DAWN_GLSL_COMPAT=1)
+        endif()
+
+        if (APPLE)
+            target_link_libraries(threepp PRIVATE "-framework QuartzCore" "-framework Metal")
+        endif ()
+
+        # Copy wgpu_native.dll next to executables so they can find it at runtime
+        if (WIN32 AND WGPU_NATIVE_DLL)
+            add_custom_command(TARGET threepp POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${WGPU_NATIVE_DLL}"
+                    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/wgpu_native.dll"
+                COMMENT "Copying wgpu_native.dll to output directory"
+            )
+        endif ()
     endif ()
 endif ()
 

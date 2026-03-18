@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+#ifdef THREEPP_DAWN_GLSL_COMPAT
+#include "DawnShaderTranslator.hpp"
+#endif
+
 namespace threepp::dawn {
 
     DawnPipelines::DawnPipelines(DawnState& state) : state_(state) {}
@@ -394,16 +398,20 @@ namespace threepp::dawn {
             WGPUTextureFormat surfaceFormat,
             uint32_t sampleCount) {
 
-        // Skip GLSL shaders -- Dawn requires WGSL
-        if (sm->vertexShader.find("gl_Position") != std::string::npos ||
-            sm->fragmentShader.find("gl_FragColor") != std::string::npos) {
-            // Return a default-initialized entry for unsupported shaders
+        const bool isGlsl = sm->vertexShader.find("gl_Position") != std::string::npos ||
+                             sm->fragmentShader.find("gl_FragColor") != std::string::npos;
+
+#ifndef THREEPP_DAWN_GLSL_COMPAT
+        if (isGlsl) {
+            // GLSL compat disabled at build time — skip silently
             return customPipelineCache_[sm->id];
         }
+#endif
 
-        // Combine vertex + fragment shader into one module
-        std::string wgsl = sm->vertexShader + "\n" + sm->fragmentShader;
-        size_t shaderHash = std::hash<std::string>{}(wgsl);
+        // Combine vertex + fragment shader into one module (WGSL path)
+        // For the GLSL path the hash still covers both shader strings.
+        std::string wgsl = isGlsl ? "" : (sm->vertexShader + "\n" + sm->fragmentShader);
+        size_t shaderHash = std::hash<std::string>{}(sm->vertexShader + "##" + sm->fragmentShader);
 
         auto it = customPipelineCache_.find(sm->id);
         bool needRebuild = (it == customPipelineCache_.end() || it->second.shaderHash != shaderHash);
@@ -412,25 +420,93 @@ namespace threepp::dawn {
             // Clean up old entry
             if (it != customPipelineCache_.end()) {
                 auto& old = it->second;
-                if (old.pipeline) wgpuRenderPipelineRelease(old.pipeline);
-                if (old.layout) wgpuPipelineLayoutRelease(old.layout);
+                if (old.pipeline)    wgpuRenderPipelineRelease(old.pipeline);
+                if (old.layout)      wgpuPipelineLayoutRelease(old.layout);
                 if (old.bindGroupLayout) wgpuBindGroupLayoutRelease(old.bindGroupLayout);
-                if (old.shader) wgpuShaderModuleRelease(old.shader);
+                if (old.shader)      wgpuShaderModuleRelease(old.shader);
+                if (old.vertShader)  wgpuShaderModuleRelease(old.vertShader);
+                if (old.fragShader)  wgpuShaderModuleRelease(old.fragShader);
             }
 
             CustomPipelineEntry entry{};
             entry.shaderHash = shaderHash;
 
-            // Create shader module
-            WGPUShaderSourceWGSL wgslSrc{};
-            wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
-            wgslSrc.chain.next = nullptr;
-            wgslSrc.code = {.data = wgsl.c_str(), .length = wgsl.size()};
+#ifdef THREEPP_DAWN_GLSL_COMPAT
+            if (isGlsl) {
+                // Collect non-texture uniform names and texture names
+                std::vector<std::string> uniformNames;
+                std::vector<std::string> texNames;
+                for (auto& [name, uniform] : sm->uniforms) {
+                    if (uniform.hasValue()) uniformNames.push_back(name);
+                }
+                for (auto& [name, ptr] : sm->customTextures) {
+                    texNames.push_back(name);
+                }
+                std::sort(texNames.begin(), texNames.end());
 
-            WGPUShaderModuleDescriptor shaderDesc{};
-            shaderDesc.nextInChain = &wgslSrc.chain;
-            shaderDesc.label = {.data = "custom_shader", .length = 13};
-            entry.shader = wgpuDeviceCreateShaderModule(state_.device, &shaderDesc);
+                auto translated = translator_.translate(
+                        sm->vertexShader, sm->fragmentShader,
+                        uniformNames, texNames);
+
+                if (!translated.success()) {
+                    std::cerr << "[DawnPipelines] GLSL translation failed for material "
+                              << sm->id << ":\n" << translated.errorMessage << std::endl;
+                    customPipelineCache_[sm->id] = CustomPipelineEntry{};
+                    return customPipelineCache_[sm->id];
+                }
+
+                // Create vertex shader module from SPIR-V
+                {
+                    WGPUShaderSourceSPIRV spirvSrc{};
+                    spirvSrc.chain.sType = WGPUSType_ShaderSourceSPIRV;
+                    spirvSrc.chain.next  = nullptr;
+                    spirvSrc.codeSize    = static_cast<uint32_t>(translated.vertexSpirv.size());
+                    spirvSrc.code        = translated.vertexSpirv.data();
+
+                    WGPUShaderModuleDescriptor desc{};
+                    desc.nextInChain = &spirvSrc.chain;
+                    desc.label       = {.data = "glsl_vert_spirv", .length = 15};
+                    entry.vertShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
+                    if (!entry.vertShader) {
+                        std::cerr << "[DawnPipelines] Failed to create vertex SPIR-V module\n";
+                        customPipelineCache_[sm->id] = CustomPipelineEntry{};
+                        return customPipelineCache_[sm->id];
+                    }
+                }
+
+                // Create fragment shader module from SPIR-V
+                {
+                    WGPUShaderSourceSPIRV spirvSrc{};
+                    spirvSrc.chain.sType = WGPUSType_ShaderSourceSPIRV;
+                    spirvSrc.chain.next  = nullptr;
+                    spirvSrc.codeSize    = static_cast<uint32_t>(translated.fragmentSpirv.size());
+                    spirvSrc.code        = translated.fragmentSpirv.data();
+
+                    WGPUShaderModuleDescriptor desc{};
+                    desc.nextInChain = &spirvSrc.chain;
+                    desc.label       = {.data = "glsl_frag_spirv", .length = 15};
+                    entry.fragShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
+                    if (!entry.fragShader) {
+                        std::cerr << "[DawnPipelines] Failed to create fragment SPIR-V module\n";
+                        wgpuShaderModuleRelease(entry.vertShader);
+                        customPipelineCache_[sm->id] = CustomPipelineEntry{};
+                        return customPipelineCache_[sm->id];
+                    }
+                }
+            } else
+#endif
+            {
+                // WGSL path: create a single combined shader module
+                WGPUShaderSourceWGSL wgslSrc{};
+                wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+                wgslSrc.chain.next  = nullptr;
+                wgslSrc.code        = {.data = wgsl.c_str(), .length = wgsl.size()};
+
+                WGPUShaderModuleDescriptor shaderDesc{};
+                shaderDesc.nextInChain = &wgslSrc.chain;
+                shaderDesc.label       = {.data = "custom_shader", .length = 13};
+                entry.shader = wgpuDeviceCreateShaderModule(state_.device, &shaderDesc);
+            }
 
             // Build bind group layout entries
             // Binding 0: TransformUniforms (256 bytes) -- vertex + fragment
@@ -544,9 +620,21 @@ namespace threepp::dawn {
             colorTarget.writeMask = WGPUColorWriteMask_All;
             colorTarget.blend = &blendState;
 
-            WGPUStringView fsEntry = {.data = "fs_main", .length = 7};
+            // Choose entry points and shader modules based on whether we used SPIR-V or WGSL.
+            // SPIR-V (GLSL path): glslang uses "main" as the entry point.
+            // WGSL path: combined module uses "vs_main" / "fs_main".
+            const bool useSpirvModules = (entry.vertShader != nullptr);
+            WGPUShaderModule vsModule  = useSpirvModules ? entry.vertShader : entry.shader;
+            WGPUShaderModule fsModule  = useSpirvModules ? entry.fragShader : entry.shader;
+            WGPUStringView vsEntry = useSpirvModules
+                    ? WGPUStringView{.data = "main",    .length = 4}
+                    : WGPUStringView{.data = "vs_main", .length = 7};
+            WGPUStringView fsEntry = useSpirvModules
+                    ? WGPUStringView{.data = "main",    .length = 4}
+                    : WGPUStringView{.data = "fs_main", .length = 7};
+
             WGPUFragmentState fragmentState{};
-            fragmentState.module = entry.shader;
+            fragmentState.module = fsModule;
             fragmentState.entryPoint = fsEntry;
             fragmentState.targetCount = 1;
             fragmentState.targets = &colorTarget;
@@ -560,8 +648,7 @@ namespace threepp::dawn {
             pipelineDesc.label = {.data = "custom_pipeline", .length = 15};
             pipelineDesc.layout = entry.layout;
 
-            WGPUStringView vsEntry = {.data = "vs_main", .length = 7};
-            pipelineDesc.vertex.module = entry.shader;
+            pipelineDesc.vertex.module = vsModule;
             pipelineDesc.vertex.entryPoint = vsEntry;
             pipelineDesc.vertex.bufferCount = 1;
             pipelineDesc.vertex.buffers = &vbLayout;
@@ -591,10 +678,12 @@ namespace threepp::dawn {
         pipelineCache_.clear();
 
         for (auto& [key, entry] : customPipelineCache_) {
-            if (entry.pipeline) wgpuRenderPipelineRelease(entry.pipeline);
-            if (entry.layout) wgpuPipelineLayoutRelease(entry.layout);
+            if (entry.pipeline)    wgpuRenderPipelineRelease(entry.pipeline);
+            if (entry.layout)      wgpuPipelineLayoutRelease(entry.layout);
             if (entry.bindGroupLayout) wgpuBindGroupLayoutRelease(entry.bindGroupLayout);
-            if (entry.shader) wgpuShaderModuleRelease(entry.shader);
+            if (entry.shader)      wgpuShaderModuleRelease(entry.shader);
+            if (entry.vertShader)  wgpuShaderModuleRelease(entry.vertShader);
+            if (entry.fragShader)  wgpuShaderModuleRelease(entry.fragShader);
         }
         customPipelineCache_.clear();
     }
@@ -603,10 +692,12 @@ namespace threepp::dawn {
         auto it = customPipelineCache_.find(materialId);
         if (it != customPipelineCache_.end()) {
             auto& entry = it->second;
-            if (entry.pipeline) wgpuRenderPipelineRelease(entry.pipeline);
-            if (entry.layout) wgpuPipelineLayoutRelease(entry.layout);
+            if (entry.pipeline)    wgpuRenderPipelineRelease(entry.pipeline);
+            if (entry.layout)      wgpuPipelineLayoutRelease(entry.layout);
             if (entry.bindGroupLayout) wgpuBindGroupLayoutRelease(entry.bindGroupLayout);
-            if (entry.shader) wgpuShaderModuleRelease(entry.shader);
+            if (entry.shader)      wgpuShaderModuleRelease(entry.shader);
+            if (entry.vertShader)  wgpuShaderModuleRelease(entry.vertShader);
+            if (entry.fragShader)  wgpuShaderModuleRelease(entry.fragShader);
             customPipelineCache_.erase(it);
         }
     }

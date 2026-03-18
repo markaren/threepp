@@ -1,7 +1,11 @@
 
 #include "DawnReadback.hpp"
 
+#ifndef __EMSCRIPTEN__
 #include <webgpu/wgpu.h>
+#else
+#include <emscripten.h>
+#endif
 
 #include <chrono>
 #include <stdexcept>
@@ -67,7 +71,11 @@ std::vector<unsigned char> threepp::dawn::readRGBPixels(
             wgpuCommandEncoderRelease(encoder);
             throw std::runtime_error("DawnRenderer: readRGBPixels buffer map timed out");
         }
+#ifdef __EMSCRIPTEN__
+        emscripten_sleep(0);
+#else
         wgpuDevicePoll(device, true, nullptr);
+#endif
     }
 
     std::vector<unsigned char> result;

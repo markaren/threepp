@@ -47,6 +47,7 @@
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 
+#ifndef __EMSCRIPTEN__
 #define GLFW_INCLUDE_NONE
 #ifdef __linux__
 #define GLFW_EXPOSE_NATIVE_X11
@@ -57,9 +58,14 @@
 #endif
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#endif// __EMSCRIPTEN__
 
 #include <webgpu/webgpu.h>
+#ifndef __EMSCRIPTEN__
 #include <webgpu/wgpu.h>
+#else
+#include <emscripten.h>
+#endif
 
 // stb_image_write — implementation is already compiled in GLRenderer.cpp.
 // Match the linkage used by the implementation (extern "C" in C++).
@@ -239,8 +245,11 @@ struct DawnRenderer::Impl {
     }
 
     void initWebGPU() {
-        // Create instance with primary backends (Vulkan/Metal/DX12).
-        // Avoid GL backend as it conflicts with GLFW's GL context.
+        // Create instance. On native: use wgpu-native extras to select
+        // primary backends (Vulkan/Metal/DX12) and avoid the GL backend
+        // which conflicts with GLFW's GL context.
+        // On Emscripten: the browser provides WebGPU natively; no extras needed.
+#ifndef __EMSCRIPTEN__
         WGPUInstanceExtras instanceExtras{};
         instanceExtras.chain.sType = static_cast<WGPUSType>(WGPUSType_InstanceExtras);
         instanceExtras.chain.next = nullptr;
@@ -248,6 +257,9 @@ struct DawnRenderer::Impl {
 
         WGPUInstanceDescriptor instanceDesc{};
         instanceDesc.nextInChain = &instanceExtras.chain;
+#else
+        WGPUInstanceDescriptor instanceDesc{};
+#endif
         instance = wgpuCreateInstance(&instanceDesc);
         if (!instance) {
             std::cerr << "DawnRenderer: Failed to create WebGPU instance" << std::endl;
@@ -295,12 +307,21 @@ struct DawnRenderer::Impl {
     }
 
     void createSurface() {
-        auto* glfwWindow = static_cast<GLFWwindow*>(canvas.windowPtr());
         WGPUSurfaceDescriptor surfDesc{};
+
+#if defined(__EMSCRIPTEN__)
+        // Emscripten: attach to the HTML canvas element.
+        WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc{};
+        canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
+        canvasDesc.chain.next = nullptr;
+        canvasDesc.selector = "#canvas";
+        surfDesc.nextInChain = &canvasDesc.chain;
+
+#elif defined(__linux__)
+        auto* glfwWindow = static_cast<GLFWwindow*>(canvas.windowPtr());
         WGPUStringView label = {.data = "threepp_surface", .length = 15};
         surfDesc.label = label;
 
-#if defined(__linux__)
         Display* x11Display = glfwGetX11Display();
         ::Window x11Window = glfwGetX11Window(glfwWindow);
 
@@ -312,6 +333,10 @@ struct DawnRenderer::Impl {
         surfDesc.nextInChain = &xlibSource.chain;
 
 #elif defined(_WIN32)
+        auto* glfwWindow = static_cast<GLFWwindow*>(canvas.windowPtr());
+        WGPUStringView label = {.data = "threepp_surface", .length = 15};
+        surfDesc.label = label;
+
         WGPUSurfaceSourceWindowsHWND hwndSource{};
         hwndSource.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
         hwndSource.chain.next = nullptr;
@@ -320,6 +345,10 @@ struct DawnRenderer::Impl {
         surfDesc.nextInChain = &hwndSource.chain;
 
 #elif defined(__APPLE__)
+        auto* glfwWindow = static_cast<GLFWwindow*>(canvas.windowPtr());
+        WGPUStringView label = {.data = "threepp_surface", .length = 15};
+        surfDesc.label = label;
+
         void* metalLayer = dawn_create_metal_layer(glfwGetCocoaWindow(glfwWindow));
         WGPUSurfaceSourceMetalLayer metalSource{};
         metalSource.chain.sType = WGPUSType_SurfaceSourceMetalLayer;
@@ -362,7 +391,11 @@ struct DawnRenderer::Impl {
             if (std::chrono::steady_clock::now() > deadline) {
                 throw std::runtime_error("DawnRenderer: requestAdapter timed out");
             }
+#ifdef __EMSCRIPTEN__
+            emscripten_sleep(0);
+#else
             wgpuInstanceProcessEvents(instance);
+#endif
         }
 
         if (!userData.adapter) {
@@ -403,7 +436,11 @@ struct DawnRenderer::Impl {
             if (std::chrono::steady_clock::now() > deadline) {
                 throw std::runtime_error("DawnRenderer: requestDevice timed out");
             }
+#ifdef __EMSCRIPTEN__
+            emscripten_sleep(0);
+#else
             wgpuInstanceProcessEvents(instance);
+#endif
         }
 
         if (!userData.device) {
@@ -690,7 +727,9 @@ struct DawnRenderer::Impl {
         wgpuQueueSubmit(queue, 1, &cmdBuffer);
 
         if (useSurface) {
+#ifndef __EMSCRIPTEN__
             wgpuSurfacePresent(surface);
+#endif
         }
 
         // Cleanup per-frame resources

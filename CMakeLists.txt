@@ -10,7 +10,10 @@ option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
-option(THREEPP_WITH_DAWN "Build with WebGPU/Dawn backend (via wgpu-native)" OFF)
+option(THREEPP_WITH_DAWN "Build with WebGPU/Dawn backend (via wgpu-native)" ON)
+cmake_dependent_option(THREEPP_DAWN_GLSL_COMPAT
+    "Enable GLSL->SPIR-V translation for ShaderMaterial on the Dawn backend (requires glslang)"
+    ON "THREEPP_WITH_DAWN" OFF)
 
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
@@ -18,8 +21,8 @@ cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFI
 # Force THREEPP_USE_EXTERNAL_GLFW OFF if NOT THREEPP_WITH_GLFW
 cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" OFF "THREEPP_WITH_GLFW" OFF)
 
-cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" ON "THREEPP_BUILD_EXAMPLES" OFF)
-cmake_dependent_option(THREEPP_FETCH_ASSIMP "Make assimp available for examples" OFF "THREEPP_BUILD_EXAMPLES" OFF)
+cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" ON "THREEPP_BUILD_EXAMPLES" ON)
+cmake_dependent_option(THREEPP_FETCH_ASSIMP "Make assimp available for examples" ON "THREEPP_BUILD_EXAMPLES" ON)
 
 
 # ==============================================================================

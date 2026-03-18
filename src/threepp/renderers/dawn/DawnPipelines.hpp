@@ -8,6 +8,10 @@
 #include "DawnShaders.hpp"
 #include "DawnState.hpp"
 
+#ifdef THREEPP_DAWN_GLSL_COMPAT
+#include "DawnShaderTranslator.hpp"
+#endif
+
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -36,7 +40,9 @@ namespace threepp::dawn {
     };
 
     struct CustomPipelineEntry {
-        WGPUShaderModule shader = nullptr;
+        WGPUShaderModule shader = nullptr;         // WGSL path: combined vert+frag module
+        WGPUShaderModule vertShader = nullptr;     // SPIR-V path: separate vertex module
+        WGPUShaderModule fragShader = nullptr;     // SPIR-V path: separate fragment module
         WGPURenderPipeline pipeline = nullptr;
         WGPUPipelineLayout layout = nullptr;
         WGPUBindGroupLayout bindGroupLayout = nullptr;
@@ -78,6 +84,10 @@ namespace threepp::dawn {
         std::unordered_map<unsigned int, CustomPipelineEntry> customPipelineCache_;
 
         std::vector<WGPUBindGroupLayoutEntry> buildBindGroupLayoutEntries(uint64_t features) const;
+
+#ifdef THREEPP_DAWN_GLSL_COMPAT
+        DawnShaderTranslator translator_;
+#endif
     };
 
 }// namespace threepp::dawn

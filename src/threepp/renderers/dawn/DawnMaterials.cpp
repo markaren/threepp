@@ -91,12 +91,18 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         p.skip = true;
         return p;
     } else if (auto m = dynamic_cast<ShaderMaterial*>(rawMat)) {
-        // Detect custom WGSL shaders (no GLSL markers)
+        // Detect GLSL (three.js) vs native WGSL shaders
         bool isGLSL = m->vertexShader.find("gl_Position") != std::string::npos ||
                       m->fragmentShader.find("gl_FragColor") != std::string::npos;
+#ifdef THREEPP_DAWN_GLSL_COMPAT
+        // With GLSL compat enabled, route GLSL shaders through the translation pipeline
+        p.isCustomShader = true;
+#else
         if (!isGLSL) {
             p.isCustomShader = true;
         }
+#endif
+        (void)isGLSL;
 
         // Try to extract diffuse color from uniforms
         if (m->uniforms.count("uColor") && m->uniforms.at("uColor").hasValue()) {
