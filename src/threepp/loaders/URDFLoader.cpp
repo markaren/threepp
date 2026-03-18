@@ -13,7 +13,10 @@
 #include "pugixml.hpp"
 #include "threepp/loaders/ModelLoader.hpp"
 
+#include <cmath>
 #include <iostream>
+#include <list>
+#include <map>
 
 
 using namespace threepp;
@@ -96,43 +99,32 @@ namespace {
                 .child = node.child("child").attribute("link").value()};
     }
 
-    std::filesystem::path getModelPath(const std::filesystem::path& basePath, std::string fileName) {
-
-        if (fileName.find("package://") != std::string::npos) {
-
-            fileName = fileName.substr(10);
-
-            if (std::filesystem::exists(basePath / fileName)) {
-                return basePath / fileName;
-            }
-
-            //find parent path with package.xml
-            bool packageFound = false;
-            auto packagePath = basePath;
-            for (int i = 0; i < 10; ++i) {
-                if (exists(packagePath / "package.xml") || exists(packagePath / "source-information.json")) {
-                    packageFound = true;
-                    break;
-                }
-                packagePath = packagePath.parent_path();
-            }
-            if (!packageFound) {
-                return "";
-            }
-
-            std::filesystem::path path = packagePath / fileName;
-            if (exists(path)) {
-                return path;
-            }
-            path = packagePath.parent_path() / fileName;
-            if (exists(path)) {
+    std::filesystem::path findPackageRoot(const std::filesystem::path& start) {
+        for (auto path = start; path != path.parent_path(); path = path.parent_path()) {
+            if (exists(path / "package.xml")) {
                 return path;
             }
 
-            return "";
+        }
+        return {};
+    }
+
+    std::filesystem::path getModelPath(const std::filesystem::path& basePath, std::string_view fileName) {
+        if (!fileName.starts_with("package://")) {
+            return basePath / fileName;
         }
 
-        return basePath / fileName;
+        const auto relative = std::filesystem::path(fileName.substr(10));
+
+        if (auto p = basePath / relative; exists(p)) return p;
+
+        const auto pkgRoot = findPackageRoot(basePath);
+        if (pkgRoot.empty()) return {};
+
+        if (auto p = pkgRoot / relative; exists(p)) return p;
+        if (auto p = pkgRoot.parent_path() / relative; exists(p)) return p;
+
+        return {};
     }
 
     std::shared_ptr<Object3D> parseGeometryNode(const std::filesystem::path& path, Loader<Group>* loader, const pugi::xml_node& geometry) {
@@ -181,9 +173,13 @@ namespace {
 
 }// namespace
 
+#include "XacroProcessor.hpp"
+
+
 struct URDFLoader::Impl {
 
     std::shared_ptr<Loader<Group>> loader;
+    std::map<std::string, std::string> xacroArgs;
 
     Impl(): loader(std::make_shared<ModelLoader>()) {}
 
@@ -193,6 +189,14 @@ struct URDFLoader::Impl {
 
         if (!result) return nullptr;
 
+        const std::string ext = utils::toLower(path.extension().string());
+        if (ext == ".xacro" || xacro::Processor::needsProcessing(doc)) {
+            xacro::Processor proc(path.parent_path(), xacroArgs);
+            pugi::xml_document processed;
+            proc.process(doc, processed);
+            return loadFromXml(processed, path);
+        }
+
         return loadFromXml(doc, path);
     }
 
@@ -201,6 +205,13 @@ struct URDFLoader::Impl {
         pugi::xml_parse_result result = doc.load_string(urdf.c_str());
 
         if (!result) return nullptr;
+
+        if (xacro::Processor::needsProcessing(doc)) {
+            xacro::Processor proc(baseDir, xacroArgs);
+            pugi::xml_document processed;
+            proc.process(doc, processed);
+            return loadFromXml(processed, baseDir);
+        }
 
         return loadFromXml(doc, baseDir);
     }
@@ -294,6 +305,11 @@ URDFLoader::URDFLoader()
 URDFLoader& URDFLoader::setGeometryLoader(std::shared_ptr<Loader<Group>> loader) {
     pimpl_->loader = std::move(loader);
 
+    return *this;
+}
+
+URDFLoader& URDFLoader::setArgs(std::map<std::string, std::string> args) {
+    pimpl_->xacroArgs = std::move(args);
     return *this;
 }
 
