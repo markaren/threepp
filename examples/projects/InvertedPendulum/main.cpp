@@ -42,7 +42,7 @@ int main() {
         renderer->setSize(size);
     });
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         externalForce = 0;
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});

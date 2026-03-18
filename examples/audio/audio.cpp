@@ -76,7 +76,7 @@ int main() {
     std::array<float, 3> audioPos{};
     bool play = audio.isPlaying();
     float volume = listener.getMasterVolume();
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
         ImGui::Begin("Audio settings");

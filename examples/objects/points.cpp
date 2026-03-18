@@ -57,7 +57,7 @@ int main() {
     const auto points = Points::create(geometry, material);
     scene->add(points);
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({}, {});
 

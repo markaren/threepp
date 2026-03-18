@@ -77,7 +77,7 @@ int main() {
     renderer->localClippingEnabled = true;
 
     bool globalClipping = !renderer->clippingPlanes.empty();
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230 * ui.dpiScale(), 0}, 0);
 

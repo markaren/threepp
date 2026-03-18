@@ -56,7 +56,7 @@ int main() {
     });
 
     bool paramsChanged = false;
-    auto ui = ImguiFunctionalContext(canvas, [&] {
+    auto ui = ImguiFunctionalContext(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({230, 0}, 0);
         ImGui::Begin("BoxGeometry");

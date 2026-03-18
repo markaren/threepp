@@ -37,7 +37,7 @@ int main() {
     });
 
     bool imguiOnly = true;
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, renderer, [&] {
 
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({static_cast<float>(textureSizeXY), static_cast<float>(50 + textureSizeXY)}, 0);

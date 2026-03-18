@@ -6,6 +6,7 @@
 #include "threepp/canvas/Canvas.hpp"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 
 namespace threepp {
@@ -95,6 +96,14 @@ namespace threepp {
         /// and invalidates all cached pipelines (shaders encode array sizes).
         /// Call before the first render, or between frames.
         void setMaxLights(int maxDir, int maxPoint, int maxSpot, int maxHemi);
+
+        /// Register a callback invoked at the end of each render pass (before encoder end).
+        /// Receives the WGPURenderPassEncoder as void*. Used for ImGui overlay rendering.
+        void setOverlayCallback(std::function<void(void*)> callback);
+
+        /// Surface texture format as uint32_t (cast to WGPUTextureFormat).
+        /// Avoids exposing WebGPU types in the public header.
+        [[nodiscard]] uint32_t nativeSurfaceFormat() const;
 
         void resetState();
         void dispose() override;

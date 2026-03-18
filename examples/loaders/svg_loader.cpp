@@ -9,7 +9,7 @@ namespace {
     class MyUI: public ImguiContext {
 
     public:
-        explicit MyUI(const Canvas& canvas): ImguiContext(canvas) {}
+        explicit MyUI(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
 
         [[nodiscard]] bool newSelection() const {
             return lastSelectedIndex != selectedIndex;
@@ -151,7 +151,7 @@ int main() {
 
     OrbitControls controls{*camera, canvas};
 
-    MyUI ui(canvas);
+    MyUI ui(canvas, *renderer);
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {

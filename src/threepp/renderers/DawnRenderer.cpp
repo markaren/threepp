@@ -172,6 +172,8 @@ struct DawnRenderer::Impl {
     OnMaterialDispose onMaterialDispose;
     std::unordered_set<Material*> trackedMaterials_;
 
+    std::function<void(void*)> overlayCallback_;
+
     RenderTarget* currentRenderTarget_ = nullptr;
 
     // Render target state
@@ -723,6 +725,12 @@ struct DawnRenderer::Impl {
         // Render transparent objects (back-to-front, depth write off)
         for (auto* item : renderList_.transparent) {
             renderItem(pass, item, projectionMatrix, viewMatrix, camera, frameCtx);
+        }
+
+        // Invoke overlay callback (e.g. ImGui) while the render pass is still active.
+        // Only for surface rendering, not render-to-texture passes.
+        if (!currentRenderTarget_ && overlayCallback_) {
+            overlayCallback_(static_cast<void*>(pass));
         }
 
         wgpuRenderPassEncoderEnd(pass);
@@ -1592,6 +1600,14 @@ void* DawnRenderer::nativeQueue() const {
 
 void* DawnRenderer::nativeInstance() const {
     return pimpl_->instance;
+}
+
+void DawnRenderer::setOverlayCallback(std::function<void(void*)> cb) {
+    pimpl_->overlayCallback_ = std::move(cb);
+}
+
+uint32_t DawnRenderer::nativeSurfaceFormat() const {
+    return static_cast<uint32_t>(pimpl_->surfaceFormat);
 }
 
 void DawnRenderer::setSampleCount(uint32_t count) {

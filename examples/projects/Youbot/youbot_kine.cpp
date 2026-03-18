@@ -22,8 +22,8 @@ struct MyUI: ImguiContext {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit MyUI(const Canvas& canvas, Kine& kine)
-        : ImguiContext(canvas),
+    explicit MyUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
+        : ImguiContext(canvas, renderer),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -148,7 +148,7 @@ int main() {
                         .addLink(Vector3(0, 1.225, 0))
                         .build();
 
-    MyUI ui(canvas, kine);
+    MyUI ui(canvas, *renderer, kine);
 
     IOCapture capture{};
     capture.preventMouseEvent = [] {

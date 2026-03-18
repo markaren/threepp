@@ -69,7 +69,7 @@ namespace {
 
         bool clear = false;
 
-        explicit MyGui(const Canvas& canvas): ImguiContext(canvas) {}
+        explicit MyGui(const Canvas& canvas, Renderer& renderer): ImguiContext(canvas, renderer) {}
 
         void onRender() override {
 
@@ -143,7 +143,7 @@ int main() {
         renderer->setSize(size);
     });
 
-    MyGui ui(canvas);
+    MyGui ui(canvas, *renderer);
     std::vector<Mesh*> decals;
 
     IOCapture capture{};

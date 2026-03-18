@@ -174,7 +174,7 @@ int main() {
     });
 
     bool animate{false};
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Options");

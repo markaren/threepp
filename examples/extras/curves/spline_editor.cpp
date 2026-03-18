@@ -177,7 +177,7 @@ int main() {
     canvas.addMouseListener(mouseListener);
 
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({0, 0}, 0, {0, 0});
         ImGui::SetNextWindowSize({0, 0}, 0);
         ImGui::Begin("Spline Editor");

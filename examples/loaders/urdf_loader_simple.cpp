@@ -48,7 +48,7 @@ int main() {
     bool showColliders{false};
 
     float angle = 0;
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({}, 0, {});
         ImGui::SetNextWindowSize({0, 0}, 0);
 

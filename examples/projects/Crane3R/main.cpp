@@ -26,8 +26,8 @@ struct MyUI: ImguiContext {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit MyUI(const Canvas& canvas, Kine& kine)
-        : ImguiContext(canvas),
+    explicit MyUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
+        : ImguiContext(canvas, renderer),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -180,7 +180,7 @@ int main() {
 
     auto ikSolver = std::make_unique<CCDSolver>();
 
-    MyUI ui(canvas, kine);
+    MyUI ui(canvas, *renderer, kine);
 
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
