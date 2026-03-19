@@ -87,7 +87,7 @@ int main() {
     };
     canvas.setIOCapture(&capture);
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     FontLoader fontLoader;
     const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 

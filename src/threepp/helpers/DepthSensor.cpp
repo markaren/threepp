@@ -114,7 +114,7 @@ void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& c
     unprojectPoints(cloud);
 }
 
-void DepthSensor::scan(GLRenderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
+void DepthSensor::scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors) {
 
     // Render scene from sensor viewpoint — color buffer is captured alongside depth
     renderer.setRenderTarget(sceneTarget_.get());

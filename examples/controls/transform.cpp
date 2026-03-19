@@ -69,7 +69,7 @@ int main() {
     canvas.addKeyListener(keyListener);
 
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     FontLoader fontLoader;
     TextSprite text(fontLoader.defaultFont(), 20.f * monitor::contentScale().first);
     text.setText("Press Q to toggle space, W/E/R to change mode, X/Y/Z to toggle axis, hold SHIFT for snapping");

@@ -112,7 +112,7 @@ int main() {
     textHandle.setHorizontalAlignment(TextSprite::HorizontalAlignment::Center);
     textHandle.setWorldScale(20*monitor::contentScale().first);
 
-    HUD hud(renderer);
+    HUD hud(*renderer);
     hud.add(textHandle).setNormalizedPosition({0.5, 0.5});
 
     TaskManager tm;
