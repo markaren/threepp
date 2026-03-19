@@ -39,6 +39,8 @@ std::string ShaderFeatures::describe(uint64_t features) {
     if (features & GradientMap)     append("GradientMap");
     if (features & EnvMap)          append("EnvMap");
     if (features & Skinning)        append("Skinning");
+    if (features & ShadowMat)       append("ShadowMat");
+    if (features & LineDashed)      append("LineDashed");
     if (features & DepthWriteOff)   append("DepthWriteOff");
     if (features & Wireframe)       append("Wireframe");
 
@@ -378,6 +380,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var roughness = material.roughnessMetalnessOpacity.x;
     var metalness = material.roughnessMetalnessOpacity.y;
 )";
+    // Dashed line discard: lineDistance in uv.x, dash params in specularAndShininess
+    if (features & ShaderFeatures::LineDashed) {
+        s << "    // LineDashedMaterial: discard fragments in gaps\n";
+        s << "    let dashSize = material.specularAndShininess.x;\n";
+        s << "    let totalSize = material.specularAndShininess.y;\n";
+        s << "    let dashScale = material.specularAndShininess.z;\n";
+        s << "    let vLineDistance = in.uv.x * dashScale;\n";
+        s << "    if (totalSize > 0.0 && (vLineDistance - floor(vLineDistance / totalSize) * totalSize) > dashSize) { discard; }\n";
+    }
     if (features & ShaderFeatures::VertexColors) {
         s << "    baseColor = baseColor * in.vertexColor;\n";
     }
@@ -397,6 +408,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if (features & ShaderFeatures::AlphaMap) {
         s << "    opacity = opacity * textureSample(t_alphaMap, s_alphaMap, in.uv).r;\n";
+    }
+
+    // ShadowMaterial: output shadow attenuation only, skip full lighting
+    if (features & ShaderFeatures::ShadowMat) {
+        if (features & ShaderFeatures::Shadow) {
+            // Compute combined shadow factor from all shadow-casting lights
+            s << "    var shadowFactor = 1.0;\n";
+            s << "    for (var si = 0u; si < shadow.count; si++) {\n";
+            s << "        shadowFactor = min(shadowFactor, sampleShadow(si, in.worldPos));\n";
+            s << "    }\n";
+            // Where shadowFactor == 1.0 (lit): fully transparent
+            // Where shadowFactor < 1.0 (shadow): show shadow color with opacity
+            s << "    return vec4<f32>(baseColor, opacity * (1.0 - shadowFactor));\n";
+        } else {
+            // No shadows active: fully transparent (nothing to show)
+            s << "    return vec4<f32>(baseColor, 0.0);\n";
+        }
+        s << "}\n";
+        return s.str();
     }
 
     if (lit) {

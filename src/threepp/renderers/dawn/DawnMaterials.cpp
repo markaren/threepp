@@ -8,6 +8,7 @@
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/materials/LineDashedMaterial.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
@@ -78,6 +79,11 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
     } else if (auto m = dynamic_cast<MeshBasicMaterial*>(rawMat)) {
         p.diffuse = m->color;
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
+    } else if (auto m = dynamic_cast<LineDashedMaterial*>(rawMat)) {
+        p.features |= ShaderFeatures::LineDashed;
+        p.diffuse = m->color;
+        // Pack dash parameters into specularColor/shininess fields (unused for lines)
+        p.specularColor = Color(m->dashSize, m->dashSize + m->gapSize, m->scale);
     } else if (auto m = dynamic_cast<LineBasicMaterial*>(rawMat)) {
         p.diffuse = m->color;
     } else if (auto m = dynamic_cast<PointsMaterial*>(rawMat)) {
@@ -87,9 +93,11 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         p.diffuse = m->color;
         p.opacity = m->opacity;
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
-    } else if (dynamic_cast<ShadowMaterial*>(rawMat)) {
-        p.skip = true;
-        return p;
+    } else if (auto m = dynamic_cast<ShadowMaterial*>(rawMat)) {
+        // ShadowMaterial: renders a transparent surface showing only shadow darkening.
+        // Needs lighting + shadow, but fragment outputs shadow attenuation only.
+        p.features |= ShaderFeatures::ShadowMat | ShaderFeatures::Lighting;
+        p.diffuse = m->color;
     } else if (auto m = dynamic_cast<ShaderMaterial*>(rawMat)) {
         // Detect GLSL (three.js) vs native WGSL shaders
         bool isGLSL = m->vertexShader.find("gl_Position") != std::string::npos ||

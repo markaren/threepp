@@ -19,6 +19,7 @@ std::vector<float> DawnGeometries::buildInterleavedVertexData(BufferGeometry* ge
     const float* normalData = nullptr;
     const float* uvData = nullptr;
     const float* colorData = nullptr;
+    const float* lineDistData = nullptr;
     int normalItemSize = 3, uvItemSize = 2, colorItemSize = 3;
 
     if (geometry->hasAttribute("normal")) {
@@ -35,6 +36,12 @@ std::vector<float> DawnGeometries::buildInterleavedVertexData(BufferGeometry* ge
         auto cAttr = geometry->getAttribute<float>("color");
         colorData = cAttr->array().data();
         colorItemSize = static_cast<int>(cAttr->itemSize());
+    }
+    // lineDistance attribute (computed by Line::computeLineDistances())
+    // Packed into uv.x for dashed line rendering in Dawn
+    if (geometry->hasAttribute("lineDistance")) {
+        auto ldAttr = geometry->getAttribute<float>("lineDistance");
+        lineDistData = ldAttr->array().data();
     }
 
     // 11 floats per vertex: pos(3) + normal(3) + uv(2) + color(3)
@@ -55,7 +62,11 @@ std::vector<float> DawnGeometries::buildInterleavedVertexData(BufferGeometry* ge
             interleaved[base + 5] = 1.f;
         }
 
-        if (uvData) {
+        if (lineDistData) {
+            // lineDistance goes into uv.x for dashed line fragment shader
+            interleaved[base + 6] = lineDistData[i];
+            interleaved[base + 7] = 0.f;
+        } else if (uvData) {
             interleaved[base + 6] = uvData[i * uvItemSize + 0];
             interleaved[base + 7] = (uvItemSize > 1) ? uvData[i * uvItemSize + 1] : 0.f;
         } else {
@@ -85,6 +96,8 @@ void DawnGeometries::storeAttributeVersions(BufferGeometry* geometry, GeometryBu
         gb.uvVersion = geometry->getAttribute<float>("uv")->version;
     if (geometry->hasAttribute("color"))
         gb.colorVersion = geometry->getAttribute<float>("color")->version;
+    if (geometry->hasAttribute("lineDistance"))
+        gb.lineDistanceVersion = geometry->getAttribute<float>("lineDistance")->version;
     if (geometry->getIndex())
         gb.indexVersion = geometry->getIndex()->version;
 }
@@ -101,6 +114,9 @@ bool DawnGeometries::geometryNeedsUpdate(BufferGeometry* geometry, const Geometr
         return true;
     if (geometry->hasAttribute("color") &&
         geometry->getAttribute<float>("color")->version > gb.colorVersion)
+        return true;
+    if (geometry->hasAttribute("lineDistance") &&
+        geometry->getAttribute<float>("lineDistance")->version > gb.lineDistanceVersion)
         return true;
     return false;
 }

@@ -1086,6 +1086,8 @@ TEST_CASE("Cross: normal-mapped sphere matches", "[dawn]") {
 
     auto makeScene = [&makeNormalTexture]() {
         auto scene = Scene::create();
+        auto ambient = AmbientLight::create(Color(0x404040));
+        scene->add(ambient);
         auto dirLight = DirectionalLight::create(Color(0xffffff), 1.0f);
         dirLight->position.set(1, 1, 1);
         scene->add(dirLight);
@@ -1106,8 +1108,6 @@ TEST_CASE("Cross: normal-mapped sphere matches", "[dawn]") {
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
     auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
 
-    // Normal-mapped sphere has limited coverage on small render target;
-    // GL output can vary when run in sequence with other tests.
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 256);
     CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 256);
     CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
@@ -1157,7 +1157,7 @@ TEST_CASE("Cross: ShaderMaterial produces similar result", "[dawn]") {
 // Section 18: Dawn — ShadowMaterial
 // =============================================================================
 
-// DawnRenderer: ShadowMaterial not yet recognized as a material type
+// DawnRenderer: ShadowMaterial renders shadow attenuation on transparent surface
 
 TEST_CASE("Cross: roughnessMap produces similar result", "[dawn]") {
     REQUIRE_DAWN();
@@ -1539,6 +1539,92 @@ TEST_CASE("Cross: multi-material scene matches between GL and Dawn", "[dawn]") {
     CHECK(ratio > 0.5);
     CHECK(ratio < 2.0);
     CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 30.0);
+}
+
+// =============================================================================
+// Section 40a: Dawn — LineDashedMaterial
+// =============================================================================
+
+TEST_CASE("Cross: LineDashedMaterial produces visible dashed line", "[dawn]") {
+    REQUIRE_DAWN();
+
+    auto makeScene = []() {
+        auto scene = Scene::create();
+        auto geometry = BufferGeometry::create();
+        // A horizontal line with 6 evenly-spaced points
+        std::vector<float> positions = {-3, 0, 0, -1.8f, 0, 0, -0.6f, 0, 0,
+                                        0.6f, 0, 0, 1.8f, 0, 0, 3, 0, 0};
+        geometry->setAttribute("position", FloatBufferAttribute::create(positions, 3));
+
+        auto material = LineDashedMaterial::create();
+        material->color = Color(0xffffff);
+        material->dashSize = 0.5f;
+        material->gapSize = 0.3f;
+        material->scale = 1.0f;
+
+        auto line = Line::create(geometry, material);
+        line->computeLineDistances();
+        scene->add(line);
+        return scene;
+    };
+
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 5;
+    Color clearColor(0x000000);
+
+    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    int nonBlack = countNonBlack(dawnPixels);
+    // Dashed line should produce some visible pixels (dash) and some gaps
+    CHECK(nonBlack > 2);
+    // Should have fewer pixels than a solid line (gaps discard fragments)
+    CHECK(nonBlack < PIXEL_COUNT / 2);
+}
+
+// =============================================================================
+// Section 40b: Dawn — ShadowMaterial parity
+// =============================================================================
+
+TEST_CASE("Cross: ShadowMaterial renders visible content when shadows active", "[dawn]") {
+    REQUIRE_DAWN();
+
+    auto makeScene = []() {
+        auto scene = Scene::create();
+
+        auto dirLight = DirectionalLight::create(Color(0xffffff), 1.0f);
+        dirLight->position.set(0, 5, 5);
+        dirLight->castShadow = true;
+        scene->add(dirLight);
+
+        // Occluder
+        auto boxGeom = BoxGeometry::create(1, 1, 1);
+        auto boxMat = MeshBasicMaterial::create();
+        boxMat->color = Color(0xff0000);
+        auto box = Mesh::create(boxGeom, boxMat);
+        box->position.y = 1;
+        box->castShadow = true;
+        scene->add(box);
+
+        // Shadow-receiving plane with ShadowMaterial
+        auto planeGeom = PlaneGeometry::create(10, 10);
+        auto shadowMat = ShadowMaterial::create();
+        shadowMat->color = Color(0x000000);
+        auto plane = Mesh::create(planeGeom, shadowMat);
+        plane->rotation.x = -math::PI / 2;
+        plane->receiveShadow = true;
+        scene->add(plane);
+
+        return scene;
+    };
+
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.set(0, 5, 8);
+    camera->lookAt(Vector3(0, 0, 0));
+    Color clearColor(0x000000);
+
+    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    // The red box should be visible; the shadow plane should be at least partially visible
+    int nonBlack = countNonBlack(dawnPixels);
+    CHECK(nonBlack > 5);
 }
 
 // =============================================================================

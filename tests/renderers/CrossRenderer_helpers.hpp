@@ -24,6 +24,7 @@
 #include "threepp/materials/MeshNormalMaterial.hpp"
 #include "threepp/materials/MeshMatcapMaterial.hpp"
 #include "threepp/materials/LineBasicMaterial.hpp"
+#include "threepp/materials/LineDashedMaterial.hpp"
 #include "threepp/materials/PointsMaterial.hpp"
 #include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/scenes/Fog.hpp"

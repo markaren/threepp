@@ -29,6 +29,7 @@ namespace threepp::dawn {
         unsigned int normalVersion = 0;
         unsigned int uvVersion = 0;
         unsigned int colorVersion = 0;
+        unsigned int lineDistanceVersion = 0;
         unsigned int indexVersion = 0;
     };
 

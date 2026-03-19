@@ -140,6 +140,7 @@ struct DawnRenderer::Impl {
     struct { float x=0, y=0, w=0, h=0; } viewport_;
     struct { uint32_t x=0, y=0, w=0, h=0; } scissor_;
     bool scissorTest_ = false;
+    bool viewportExplicit_ = false; // true if setViewport() called after setRenderTarget()
 
     // Subsystem: shared state
     dawn::DawnState dawnState;
@@ -680,14 +681,15 @@ struct DawnRenderer::Impl {
 
         WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
 
-        // Use render target viewport when rendering to an RT (matches GLRenderer behavior)
-        if (currentRenderTarget_) {
+        // Auto-adapt viewport to render target dimensions when no explicit
+        // setViewport() was called after setRenderTarget() (matches GLRenderer).
+        if (currentRenderTarget_ && !viewportExplicit_) {
             auto& rtVp = currentRenderTarget_->viewport;
             wgpuRenderPassEncoderSetViewport(pass, rtVp.x, rtVp.y, rtVp.z, rtVp.w, 0.0f, 1.0f);
         } else {
             wgpuRenderPassEncoderSetViewport(pass, viewport_.x, viewport_.y, viewport_.w, viewport_.h, 0.0f, 1.0f);
         }
-        if (scissorTest_ && !currentRenderTarget_) {
+        if (scissorTest_) {
             wgpuRenderPassEncoderSetScissorRect(pass, scissor_.x, scissor_.y, scissor_.w, scissor_.h);
         }
 
@@ -1485,6 +1487,7 @@ void DawnRenderer::setPixelRatio(float value) {
 void DawnRenderer::setViewport(const Vector4& v) {
     pimpl_->viewport_.x = v.x; pimpl_->viewport_.y = v.y;
     pimpl_->viewport_.w = v.z; pimpl_->viewport_.h = v.w;
+    pimpl_->viewportExplicit_ = true;
 }
 
 void DawnRenderer::setViewport(int x, int y, int width, int height) {
@@ -1493,6 +1496,7 @@ void DawnRenderer::setViewport(int x, int y, int width, int height) {
     pimpl_->viewport_.y = std::floor(y * pr);
     pimpl_->viewport_.w = std::floor(width * pr);
     pimpl_->viewport_.h = std::floor(height * pr);
+    pimpl_->viewportExplicit_ = true;
 }
 
 void DawnRenderer::setScissor(const Vector4& v) {
@@ -1568,6 +1572,7 @@ void DawnRenderer::setRenderTarget(RenderTarget* renderTarget, int activeCubeFac
     pimpl_->currentRenderTarget_ = renderTarget;
     pimpl_->activeCubeFace_ = activeCubeFace;
     pimpl_->activeMipmapLevel_ = activeMipmapLevel;
+    pimpl_->viewportExplicit_ = false;
 }
 
 int DawnRenderer::getActiveCubeFace() const {

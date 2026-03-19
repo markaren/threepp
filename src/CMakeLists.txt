@@ -117,6 +117,7 @@ set(publicHeaders
         "threepp/loaders/TextureLoader.hpp"
         "threepp/loaders/URDFLoader.hpp"
 
+        "threepp/materials/LineDashedMaterial.hpp"
         "threepp/materials/Material.hpp"
         "threepp/materials/MeshBasicMaterial.hpp"
         "threepp/materials/MeshDepthMaterial.hpp"
@@ -363,6 +364,7 @@ set(sources
         "threepp/loaders/URDFLoader.cpp"
 
         "threepp/materials/LineBasicMaterial.cpp"
+        "threepp/materials/LineDashedMaterial.cpp"
         "threepp/materials/Material.cpp"
         "threepp/materials/MeshBasicMaterial.cpp"
         "threepp/materials/MeshLambertMaterial.cpp"

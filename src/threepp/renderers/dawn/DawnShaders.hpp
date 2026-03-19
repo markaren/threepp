@@ -88,9 +88,20 @@ namespace threepp::dawn {
         // SkinnedMesh (bit 36)
         constexpr uint64_t Skinning        = 1ULL << 36;
 
+        // ShadowMaterial (bit 37): renders only shadow attenuation on a transparent surface
+        constexpr uint64_t ShadowMat       = 1ULL << 37;
+
+        // LineDashed (bit 38): dashed line fragment discard pattern
+        constexpr uint64_t LineDashed      = 1ULL << 38;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;
+        }
+
+        // ShadowMaterial needs shadow sampling but not full lighting.
+        inline bool needsShadowSampling(uint64_t features) {
+            return (features & ShadowMat) != 0 && (features & Shadow) != 0;
         }
 
         // Returns a human-readable string listing active features (for debugging).
