@@ -101,6 +101,10 @@ namespace threepp {
         /// Receives the WGPURenderPassEncoder as void*. Used for ImGui overlay rendering.
         void setOverlayCallback(std::function<void(void*)> callback);
 
+        /// Access the native color texture of the current render target (type-erased).
+        /// Returns nullptr if no render target is set.
+        [[nodiscard]] void* nativeRenderTargetTexture() const;
+
         /// Surface texture format as uint32_t (cast to WGPUTextureFormat).
         /// Avoids exposing WebGPU types in the public header.
         [[nodiscard]] uint32_t nativeSurfaceFormat() const;

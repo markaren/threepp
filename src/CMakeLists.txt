@@ -551,6 +551,8 @@ if (THREEPP_WITH_DAWN)
             "threepp/renderers/dawn/DawnBuffer.hpp"
             "threepp/renderers/dawn/DawnTexture.hpp"
             "threepp/renderers/dawn/DawnComputePipeline.hpp"
+            "threepp/renderers/dawn/EffectComposer.hpp"
+            "threepp/renderers/dawn/ShaderPass.hpp"
     )
     list(APPEND sources
             "threepp/renderers/DawnRenderer.cpp"
@@ -568,6 +570,8 @@ if (THREEPP_WITH_DAWN)
             "threepp/renderers/dawn/DawnTexture.cpp"
             "threepp/renderers/dawn/DawnBuffer.cpp"
             "threepp/renderers/dawn/DawnComputePipeline.cpp"
+            "threepp/renderers/dawn/EffectComposer.cpp"
+            "threepp/renderers/dawn/ShaderPass.cpp"
     )
     if (APPLE)
         list(APPEND sources

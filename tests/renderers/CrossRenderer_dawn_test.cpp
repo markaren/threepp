@@ -3344,7 +3344,7 @@ TEST_CASE("Dawn: displacement map + clipping plane combination", "[dawn]") {
 //   class EffectComposer { EffectComposer(DawnRenderer&); addPass(); render(); readRGBPixels(); };
 // =============================================================================
 
-#if 0 // Enable when EffectComposer and ShaderPass are implemented
+#if 1 // Enable when EffectComposer and ShaderPass are implemented
 
 #include "threepp/renderers/dawn/EffectComposer.hpp"
 #include "threepp/renderers/dawn/ShaderPass.hpp"
@@ -3498,12 +3498,12 @@ TEST_CASE("Dawn: grayscale post-process produces equal RGB channels", "[dawn]") 
     auto ambient = AmbientLight::create(Color(0xffffff));
     scene->add(ambient);
 
-    auto geom = BoxGeometry::create(0.6f, 0.6f, 0.6f);
+    auto geom = BoxGeometry::create(1.5f, 1.5f, 1.5f);
 
     auto redMat = MeshBasicMaterial::create();
     redMat->color = Color(0xff0000);
     auto redMesh = Mesh::create(geom, redMat);
-    redMesh->position.x = -1.0f;
+    redMesh->position.x = -1.5f;
     scene->add(redMesh);
 
     auto greenMat = MeshBasicMaterial::create();
@@ -3514,11 +3514,11 @@ TEST_CASE("Dawn: grayscale post-process produces equal RGB channels", "[dawn]") 
     auto blueMat = MeshBasicMaterial::create();
     blueMat->color = Color(0x0000ff);
     auto blueMesh = Mesh::create(geom, blueMat);
-    blueMesh->position.x = 1.0f;
+    blueMesh->position.x = 1.5f;
     scene->add(blueMesh);
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
-    camera->position.z = 4;
+    camera->position.z = 3;
     Color clearColor(0x000000);
 
     auto originalPixels = renderWithDawn(*scene, *camera, clearColor);

@@ -1611,6 +1611,12 @@ void DawnRenderer::setOverlayCallback(std::function<void(void*)> cb) {
     pimpl_->overlayCallback_ = std::move(cb);
 }
 
+void* DawnRenderer::nativeRenderTargetTexture() const {
+    if (!pimpl_->currentRenderTarget_) return nullptr;
+    auto& rt = pimpl_->renderTargets->getOrCreate(pimpl_->currentRenderTarget_, pimpl_->sampleCount_);
+    return static_cast<void*>(rt.colorTexture);
+}
+
 uint32_t DawnRenderer::nativeSurfaceFormat() const {
     return static_cast<uint32_t>(pimpl_->surfaceFormat);
 }
