@@ -420,6 +420,16 @@ struct WgpuRenderer::Impl {
         WGPUStringView label = {.data = "threepp_device", .length = 14};
         deviceDesc.label = label;
 
+        // Install an error callback that logs instead of panicking.
+        // Transient validation errors (e.g. stale scissor rect during window
+        // resize) are non-fatal and should not abort the process.
+        deviceDesc.uncapturedErrorCallbackInfo.callback =
+            [](WGPUDevice const*, WGPUErrorType type, WGPUStringView message,
+               void*, void*) {
+                std::cerr << "WgpuRenderer: GPU error (type " << static_cast<int>(type) << "): "
+                          << std::string_view(message.data, message.length) << std::endl;
+            };
+
         WGPURequestDeviceCallbackInfo callbackInfo{};
         callbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
         callbackInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice device,
@@ -586,6 +596,9 @@ struct WgpuRenderer::Impl {
             return; // Headless mode with no render target set
         }
 
+        // Actual attachment dimensions — used to clamp viewport/scissor
+        uint32_t attachW = 0, attachH = 0;
+
         if (useSurface) {
             wgpuSurfaceGetCurrentTexture(surface, &surfaceTexture);
             if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
@@ -594,6 +607,13 @@ struct WgpuRenderer::Impl {
                           << static_cast<int>(surfaceTexture.status) << ")" << std::endl;
                 return;
             }
+            // Use the actual surface texture dimensions — during a live resize
+            // the surface may lag behind canvas.size().
+            uint32_t w = wgpuTextureGetWidth(surfaceTexture.texture);
+            uint32_t h = wgpuTextureGetHeight(surfaceTexture.texture);
+            attachW = w;
+            attachH = h;
+
             WGPUTextureViewDescriptor vd{};
             vd.label = {.data = "surface_view", .length = 12};
             vd.format = surfaceFormat;
@@ -601,8 +621,6 @@ struct WgpuRenderer::Impl {
             vd.baseMipLevel = 0; vd.mipLevelCount = 1;
             vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
             vd.aspect = WGPUTextureAspect_All;
-            uint32_t w = static_cast<uint32_t>(size_.width());
-            uint32_t h = static_cast<uint32_t>(size_.height());
 
             if (sampleCount_ > 1) {
                 resolveView = wgpuTextureCreateView(surfaceTexture.texture, &vd);
@@ -631,6 +649,8 @@ struct WgpuRenderer::Impl {
             depthView = wgpuTextureCreateView(frameDepthTexture, nullptr);
         } else {
             auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
+            attachW = rt.width;
+            attachH = rt.height;
             depthView = rt.depthView;
             if (sampleCount_ > 1 && rt.msaaColorView) {
                 colorView = rt.msaaColorView;
@@ -687,10 +707,20 @@ struct WgpuRenderer::Impl {
             auto& rtVp = currentRenderTarget_->viewport;
             wgpuRenderPassEncoderSetViewport(pass, rtVp.x, rtVp.y, rtVp.z, rtVp.w, 0.0f, 1.0f);
         } else {
-            wgpuRenderPassEncoderSetViewport(pass, viewport_.x, viewport_.y, viewport_.w, viewport_.h, 0.0f, 1.0f);
+            float vw = (std::min)(viewport_.w, static_cast<float>(attachW));
+            float vh = (std::min)(viewport_.h, static_cast<float>(attachH));
+            wgpuRenderPassEncoderSetViewport(pass, viewport_.x, viewport_.y, vw, vh, 0.0f, 1.0f);
         }
+        // Always set scissor rect explicitly to the attachment dimensions.
+        // wgpu-native's default scissor can derive from the configured surface
+        // size rather than the actual texture size during a live window resize,
+        // causing a validation error when the surface texture is smaller.
         if (scissorTest_) {
-            wgpuRenderPassEncoderSetScissorRect(pass, scissor_.x, scissor_.y, scissor_.w, scissor_.h);
+            uint32_t sw = (std::min)(scissor_.w, attachW);
+            uint32_t sh = (std::min)(scissor_.h, attachH);
+            wgpuRenderPassEncoderSetScissorRect(pass, scissor_.x, scissor_.y, sw, sh);
+        } else {
+            wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, attachW, attachH);
         }
 
         // Build per-frame rendering context
@@ -1470,6 +1500,9 @@ void WgpuRenderer::setSize(const std::pair<int, int>& size) {
     pimpl_->canvas.setSize(size);
     pimpl_->size_ = {size.first, size.second};
     setViewport(0, 0, size.first, size.second);
+    pimpl_->scissor_ = {0, 0,
+                        static_cast<uint32_t>(size.first),
+                        static_cast<uint32_t>(size.second)};
     if (pimpl_->initialized) {
         pimpl_->configureSurface();
     }
@@ -1605,6 +1638,10 @@ void* WgpuRenderer::nativeQueue() const {
 
 void* WgpuRenderer::nativeInstance() const {
     return pimpl_->instance;
+}
+
+void* WgpuRenderer::nativeSurface() const {
+    return pimpl_->surface;
 }
 
 void WgpuRenderer::setOverlayCallback(std::function<void(void*)> cb) {

@@ -87,6 +87,10 @@ namespace threepp {
         /// Access the underlying WGPUInstance handle (type-erased).
         [[nodiscard]] void* nativeInstance() const;
 
+        /// Access the underlying WGPUSurface handle (type-erased).
+        /// Returns nullptr for headless canvases.
+        [[nodiscard]] void* nativeSurface() const;
+
         /// Set MSAA sample count (1 = no MSAA, 4 = 4x MSAA).
         /// Must be 1 or 4. Invalidates cached pipelines.
         void setSampleCount(uint32_t count);

@@ -73,6 +73,16 @@ public:
 
                 wgpuRenderer_->setOverlayCallback([this](void* passEncoder) {
                     if (pendingDrawData_) {
+                        // Override the draw data's display size to match the
+                        // current renderer size. During a live window resize,
+                        // the draw data may have been generated with a stale
+                        // display size (from the previous frame's ui.render()),
+                        // causing ImGui's scissor rects to exceed the actual
+                        // render pass attachment dimensions.
+                        auto sz = wgpuRenderer_->size();
+                        pendingDrawData_->DisplaySize = ImVec2(
+                            static_cast<float>(sz.width()),
+                            static_cast<float>(sz.height()));
                         ImGui_ImplWGPU_RenderDrawData(pendingDrawData_, static_cast<WGPURenderPassEncoder>(passEncoder));
                     }
                 });

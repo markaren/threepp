@@ -2,6 +2,7 @@
 // Split from CrossRenderer_test.cpp for maintainability.
 
 #include "CrossRenderer_helpers.hpp"
+#include <webgpu/webgpu.h>
 
 TEST_CASE("Wgpu: clear color produces expected pixels", "[wgpu]") {
     REQUIRE_WGPU();
@@ -3730,3 +3731,488 @@ TEST_CASE("Wgpu: post-process works with render targets", "[wgpu]") {
 }
 
 #endif // Post-processing API guard
+
+// =============================================================================
+// Section: Resize robustness tests
+//
+// These reproduce the crash that occurs when a window is resized smaller while
+// the WgpuRenderer is running. The root cause is stale viewport/scissor state
+// exceeding the actual attachment dimensions after resize.
+// =============================================================================
+
+TEST_CASE("Wgpu: rapid resize smaller via setSize with render targets", "[wgpu]") {
+    REQUIRE_WGPU();
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    static Canvas* canvas1 = nullptr;
+    if (!canvas1) {
+        canvas1 = new Canvas(Canvas::Parameters().size(512, 512).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+    }
+
+    WgpuRenderer renderer(*canvas1);
+    renderer.setClearColor(Color(0x000000));
+
+    // Simulate rapid window resize: large → small → large → very small
+    // Each step renders to a differently-sized render target after calling
+    // setSize, which updates viewport/scissor to the new canvas dimensions.
+    struct SizeStep { int w, h; };
+    SizeStep sizes[] = {
+        {512, 512}, {256, 256}, {400, 300}, {128, 64},
+        {512, 512}, {64, 64}, {300, 500}, {100, 100},
+    };
+
+    for (auto& [sw, sh] : sizes) {
+        renderer.setSize({sw, sh});
+        auto rt = RenderTarget::create(sw, sh, RenderTarget::Options{});
+        renderer.setRenderTarget(rt.get());
+        renderer.render(*scene, *camera);
+        auto pixels = renderer.readRGBPixels();
+        REQUIRE(pixels.size() == static_cast<size_t>(sw * sh * 3));
+    }
+
+    renderer.setRenderTarget(nullptr);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: resize smaller with stale scissor does not crash", "[wgpu]") {
+    REQUIRE_WGPU();
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    static Canvas* canvas2 = nullptr;
+    if (!canvas2) {
+        canvas2 = new Canvas(Canvas::Parameters().size(256, 256).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+    }
+
+    WgpuRenderer renderer(*canvas2);
+    renderer.setClearColor(Color(0x000000));
+
+    // Render at large size with scissor test enabled
+    auto largeRT = RenderTarget::create(256, 256, RenderTarget::Options{});
+    renderer.setRenderTarget(largeRT.get());
+    renderer.setScissorTest(true);
+    renderer.setScissor(0, 0, 256, 256);
+    renderer.render(*scene, *camera);
+
+    // Shrink WITHOUT updating scissor — scissor is still 256x256
+    auto smallRT = RenderTarget::create(128, 128, RenderTarget::Options{});
+    renderer.setRenderTarget(smallRT.get());
+    renderer.render(*scene, *camera);
+    auto pixels = renderer.readRGBPixels();
+    REQUIRE(pixels.size() == 128 * 128 * 3);
+
+    renderer.setScissorTest(false);
+    renderer.setRenderTarget(nullptr);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: resize smaller with stale viewport does not crash", "[wgpu]") {
+    REQUIRE_WGPU();
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    static Canvas* canvas3 = nullptr;
+    if (!canvas3) {
+        canvas3 = new Canvas(Canvas::Parameters().size(256, 256).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+    }
+
+    WgpuRenderer renderer(*canvas3);
+    renderer.setClearColor(Color(0x000000));
+
+    // Set an explicit viewport at the large size
+    auto largeRT = RenderTarget::create(256, 256, RenderTarget::Options{});
+    renderer.setRenderTarget(largeRT.get());
+    renderer.setViewport(0, 0, 256, 256);
+    renderer.render(*scene, *camera);
+
+    // Shrink the render target WITHOUT updating the viewport
+    auto smallRT = RenderTarget::create(128, 128, RenderTarget::Options{});
+    renderer.setRenderTarget(smallRT.get());
+    // viewport still 256x256 — must be clamped internally
+    renderer.render(*scene, *camera);
+    auto pixels = renderer.readRGBPixels();
+    REQUIRE(pixels.size() == 128 * 128 * 3);
+
+    renderer.setRenderTarget(nullptr);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: setSize shrink then render to RT simulates window drag", "[wgpu]") {
+    REQUIRE_WGPU();
+
+    // This test most closely matches the real-world window resize scenario:
+    // canvas starts large, setSize shrinks it (updating viewport/scissor to
+    // the new canvas size), but then the render target created from that size
+    // might mismatch if there's a timing issue.
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    static Canvas* canvas4 = nullptr;
+    if (!canvas4) {
+        canvas4 = new Canvas(Canvas::Parameters().size(512, 512).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+    }
+
+    WgpuRenderer renderer(*canvas4);
+    renderer.setClearColor(Color(0x000000));
+    renderer.setSampleCount(4); // MSAA like the water example
+
+    // Render at initial size
+    auto rt1 = RenderTarget::create(512, 512, RenderTarget::Options{});
+    renderer.setRenderTarget(rt1.get());
+    renderer.render(*scene, *camera);
+
+    // Simulate rapid shrink during window drag — multiple setSize calls
+    // before rendering, like GLFW firing many resize events
+    renderer.setSize({400, 400});
+    renderer.setSize({300, 300});
+    renderer.setSize({200, 200});
+
+    // Now render at the final smaller size
+    auto rt2 = RenderTarget::create(200, 200, RenderTarget::Options{});
+    renderer.setRenderTarget(rt2.get());
+    renderer.render(*scene, *camera);
+    auto pixels = renderer.readRGBPixels();
+    REQUIRE(pixels.size() == 200 * 200 * 3);
+    CHECK(countNonBlack(pixels) > 0);
+
+    // Go back larger — also must not crash
+    renderer.setSize({512, 512});
+    auto rt3 = RenderTarget::create(512, 512, RenderTarget::Options{});
+    renderer.setRenderTarget(rt3.get());
+    renderer.render(*scene, *camera);
+    auto pixels2 = renderer.readRGBPixels();
+    REQUIRE(pixels2.size() == 512 * 512 * 3);
+    CHECK(countNonBlack(pixels2) > 0);
+
+    renderer.setRenderTarget(nullptr);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: render target size mismatch with renderer size", "[wgpu]") {
+    REQUIRE_WGPU();
+
+    // Renderer thinks it's 512x512 but the render target is 128x128.
+    // This is the core of the resize bug — the renderer's internal state
+    // (viewport, scissor) is for a larger size than the actual attachment.
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = BoxGeometry::create(1.0f, 1.0f, 1.0f);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff0000);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    static Canvas* canvas5 = nullptr;
+    if (!canvas5) {
+        canvas5 = new Canvas(Canvas::Parameters().size(512, 512).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+    }
+
+    WgpuRenderer renderer(*canvas5);
+    renderer.setClearColor(Color(0x000000));
+
+    // Renderer is sized at 512x512, but render target is much smaller.
+    // Viewport/scissor are 512x512, attachment is 128x128.
+    auto smallRT = RenderTarget::create(128, 128, RenderTarget::Options{});
+    renderer.setRenderTarget(smallRT.get());
+    renderer.render(*scene, *camera);
+    auto pixels = renderer.readRGBPixels();
+    REQUIRE(pixels.size() == 128 * 128 * 3);
+    CHECK(countNonBlack(pixels) > 0);
+
+    // Also test with an even more extreme mismatch
+    auto tinyRT = RenderTarget::create(32, 32, RenderTarget::Options{});
+    renderer.setRenderTarget(tinyRT.get());
+    renderer.render(*scene, *camera);
+    auto tinyPixels = renderer.readRGBPixels();
+    REQUIRE(tinyPixels.size() == 32 * 32 * 3);
+
+    renderer.setRenderTarget(nullptr);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: surface reconfigured smaller behind renderer's back", "[wgpu][surface]") {
+    REQUIRE_WGPU();
+
+    // This is the exact scenario that crashes during manual window drag on
+    // Windows: the OS resizes the swap chain to a smaller size while the
+    // renderer's viewport/scissor state still reflects the old (larger) size.
+    // We simulate this by calling wgpuSurfaceConfigure directly via the
+    // nativeSurface() accessor, bypassing the renderer's resize detection.
+
+    static Canvas* sneakyCanvas = nullptr;
+    if (!sneakyCanvas) {
+        sneakyCanvas = new Canvas(Canvas::Parameters()
+            .size(800, 600)
+            .title("sneaky_resize_test")
+            .graphicsApi(GraphicsAPI::WebGPU));
+    } else {
+        sneakyCanvas->setSize({800, 600});
+    }
+
+    WgpuRenderer renderer(*sneakyCanvas);
+    renderer.setClearColor(Color(0x000000));
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    // Render at initial 800x600 — establishes viewport/scissor at 800x600
+    renderer.render(*scene, *camera);
+
+    // Reconfigure the surface to a SMALLER size directly, without telling
+    // the renderer. The renderer's viewport/scissor/size_ remain at 800x600,
+    // but the next wgpuSurfaceGetCurrentTexture will return 400x300.
+    auto* wgpuSurface = static_cast<WGPUSurface>(renderer.nativeSurface());
+    auto* wgpuDevice = static_cast<WGPUDevice>(renderer.nativeDevice());
+    REQUIRE(wgpuSurface != nullptr);
+
+    WGPUSurfaceConfiguration config{};
+    config.device = wgpuDevice;
+    config.format = static_cast<WGPUTextureFormat>(renderer.nativeSurfaceFormat());
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = 400;
+    config.height = 300;
+    config.presentMode = WGPUPresentMode_Fifo;
+    config.alphaMode = WGPUCompositeAlphaMode_Auto;
+    wgpuSurfaceConfigure(wgpuSurface, &config);
+
+    // Render — surface texture is 400x300 but renderer thinks it's 800x600.
+    // Without the fix, this crashes with: "Scissor Rect { w: 800, h: 600 }
+    // is not contained in the render target (400, 300, 1)"
+    renderer.render(*scene, *camera);
+
+    // Even more extreme: shrink to tiny
+    config.width = 200;
+    config.height = 150;
+    wgpuSurfaceConfigure(wgpuSurface, &config);
+    renderer.render(*scene, *camera);
+
+    CHECK(true);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: surface reconfigured smaller with MSAA", "[wgpu][surface]") {
+    REQUIRE_WGPU();
+
+    // Same scenario with MSAA 4x — matches the water example exactly.
+
+    static Canvas* sneakyMsaaCanvas = nullptr;
+    if (!sneakyMsaaCanvas) {
+        sneakyMsaaCanvas = new Canvas(Canvas::Parameters()
+            .size(800, 600)
+            .title("sneaky_msaa_resize_test")
+            .antialiasing(4)
+            .graphicsApi(GraphicsAPI::WebGPU));
+    } else {
+        sneakyMsaaCanvas->setSize({800, 600});
+    }
+
+    WgpuRenderer renderer(*sneakyMsaaCanvas);
+    renderer.setClearColor(Color(0x000000));
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    // Render at initial 800x600
+    renderer.render(*scene, *camera);
+
+    // Reconfigure surface smaller behind the renderer's back — with MSAA
+    auto* wgpuSurface = static_cast<WGPUSurface>(renderer.nativeSurface());
+    auto* wgpuDevice = static_cast<WGPUDevice>(renderer.nativeDevice());
+    REQUIRE(wgpuSurface != nullptr);
+
+    WGPUSurfaceConfiguration config{};
+    config.device = wgpuDevice;
+    config.format = static_cast<WGPUTextureFormat>(renderer.nativeSurfaceFormat());
+    config.usage = WGPUTextureUsage_RenderAttachment;
+    config.width = 400;
+    config.height = 300;
+    config.presentMode = WGPUPresentMode_Fifo;
+    config.alphaMode = WGPUCompositeAlphaMode_Auto;
+    wgpuSurfaceConfigure(wgpuSurface, &config);
+
+    // Render with stale state + MSAA — the MSAA/depth textures must match
+    // the actual surface texture, not the renderer's stale size
+    renderer.render(*scene, *camera);
+
+    CHECK(true);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: windowed surface resize does not crash", "[wgpu][surface]") {
+    REQUIRE_WGPU();
+
+    // Non-headless: creates a real window with a GPU surface, exactly like
+    // the water example. Uses a singleton canvas (never destroyed) to avoid
+    // glfwTerminate() invalidating GLFW state for later tests.
+    // Programmatic setSize triggers GLFW's window_size_callback synchronously
+    // on Windows, updating canvas.size() — reproducing the live drag scenario.
+
+    static Canvas* surfaceCanvas = nullptr;
+    if (!surfaceCanvas) {
+        surfaceCanvas = new Canvas(Canvas::Parameters()
+            .size(800, 600)
+            .title("resize_test")
+            .graphicsApi(GraphicsAPI::WebGPU));
+    } else {
+        surfaceCanvas->setSize({800, 600});
+    }
+
+    WgpuRenderer renderer(*surfaceCanvas);
+    renderer.setClearColor(Color(0x000000));
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    // Render a few frames at the initial size
+    for (int i = 0; i < 3; i++) {
+        renderer.render(*scene, *camera);
+    }
+
+    // Shrink the window — triggers glfwSetWindowSize which fires the
+    // window_size_callback synchronously, updating canvas.size().
+    surfaceCanvas->setSize({400, 300});
+    for (int i = 0; i < 3; i++) {
+        renderer.render(*scene, *camera);
+    }
+
+    // Shrink further
+    surfaceCanvas->setSize({200, 150});
+    for (int i = 0; i < 3; i++) {
+        renderer.render(*scene, *camera);
+    }
+
+    // Grow back
+    surfaceCanvas->setSize({800, 600});
+    for (int i = 0; i < 3; i++) {
+        renderer.render(*scene, *camera);
+    }
+
+    // Rapid resize sequence — simulates a fast window drag
+    surfaceCanvas->setSize({700, 500});
+    renderer.render(*scene, *camera);
+    surfaceCanvas->setSize({500, 350});
+    renderer.render(*scene, *camera);
+    surfaceCanvas->setSize({300, 200});
+    renderer.render(*scene, *camera);
+    surfaceCanvas->setSize({150, 100});
+    renderer.render(*scene, *camera);
+
+    CHECK(true);
+    renderer.dispose();
+}
+
+TEST_CASE("Wgpu: windowed surface resize with MSAA does not crash", "[wgpu][surface]") {
+    REQUIRE_WGPU();
+
+    // Same as above but with MSAA 4x — matches the water example exactly.
+
+    static Canvas* msaaCanvas = nullptr;
+    if (!msaaCanvas) {
+        msaaCanvas = new Canvas(Canvas::Parameters()
+            .size(800, 600)
+            .title("resize_msaa_test")
+            .antialiasing(4)
+            .graphicsApi(GraphicsAPI::WebGPU));
+    } else {
+        msaaCanvas->setSize({800, 600});
+    }
+
+    WgpuRenderer renderer(*msaaCanvas);
+    renderer.setClearColor(Color(0x000000));
+
+    auto scene = Scene::create();
+    auto ambient = AmbientLight::create(Color(0xffffff));
+    scene->add(ambient);
+    auto geometry = SphereGeometry::create(1.0f, 16, 8);
+    auto material = MeshBasicMaterial::create();
+    material->color = Color(0xff8800);
+    auto mesh = Mesh::create(geometry, material);
+    scene->add(mesh);
+    auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
+    camera->position.z = 3;
+
+    // Render at initial size
+    for (int i = 0; i < 3; i++) {
+        renderer.render(*scene, *camera);
+    }
+
+    // Rapid shrink sequence with MSAA
+    msaaCanvas->setSize({600, 400});
+    renderer.render(*scene, *camera);
+    msaaCanvas->setSize({400, 300});
+    renderer.render(*scene, *camera);
+    msaaCanvas->setSize({200, 150});
+    renderer.render(*scene, *camera);
+
+    // Grow back
+    msaaCanvas->setSize({800, 600});
+    renderer.render(*scene, *camera);
+
+    CHECK(true);
+    renderer.dispose();
+}
