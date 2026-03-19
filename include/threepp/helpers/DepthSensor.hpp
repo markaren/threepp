@@ -1,9 +1,11 @@
 #ifndef THREEPP_LIDAR_HPP
 #define THREEPP_LIDAR_HPP
 
+#include "CameraHelper.hpp"
 #include "threepp/cameras/OrthographicCamera.hpp"
 #include "threepp/cameras/PerspectiveCamera.hpp"
 #include "threepp/core/Object3D.hpp"
+#include "threepp/math/Color.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/scenes/Scene.hpp"
 
@@ -17,6 +19,8 @@ namespace threepp {
 
     /**
      * Simulates a depth sensor using GPU depth rendering.
+     *
+     * Can scan with or without color: the former is slightly more expensive but gives per-point color information, while the latter is faster and uses less GPU memory.
      *
      * Renders the scene from the sensor's viewpoint into a depth texture,
      * linearizes the result via a post-process shader, reads back the pixels,
@@ -41,12 +45,21 @@ namespace threepp {
          */
         void scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud);
 
+        /**
+         * RGB-D scan: returns hit points in world space and their corresponding
+         * sRGB colors sampled from the scene color buffer.
+         *
+         * colors[i] matches cloud[i] — both vectors are cleared and filled together.
+         */
+        void scan(Renderer& renderer, Scene& scene, std::vector<Vector3>& cloud, std::vector<Color>& colors);
+
         [[nodiscard]] unsigned int width() const { return width_; }
         [[nodiscard]] unsigned int height() const { return height_; }
         [[nodiscard]] float fov() const { return camera_.fov; }
         [[nodiscard]] float near() const { return camera_.nearPlane; }
         [[nodiscard]] float far() const { return camera_.farPlane; }
 
+        Camera& getCamera() { return camera_; }
 
     private:
         unsigned int width_;
@@ -63,7 +76,9 @@ namespace threepp {
         std::vector<float> xDir_;
         std::vector<float> yDir_;
 
-        void unprojectPoints(std::vector<Vector3>& points) const;
+        void unprojectPoints(std::vector<Vector3>& points,
+                             const unsigned char* colorPixels = nullptr,
+                             std::vector<Color>* colors = nullptr) const;
     };
 
 }// namespace threepp

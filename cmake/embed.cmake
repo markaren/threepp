@@ -111,7 +111,7 @@ file(APPEND "${favicon_out}" "\n\n#endif\n")
 set(embeddedFonts_out "${generatedSourcesDir}/threepp/EmbeddedFonts.cpp")
 
 set(fontName "helvetiker_bold")
-set(fontFile "${PROJECT_SOURCE_DIR}/data/fonts/${fontName}.typeface.json")
+set(fontFile "${PROJECT_SOURCE_DIR}/data/fonts/typeface/${fontName}.typeface.json")
 file(READ ${fontFile} FILE_CONTENTS HEX)
 string(REGEX REPLACE "(..)" "0x\\0," FILE_CONTENTS "${FILE_CONTENTS}")
 get_filename_component(fontName ${fontFile} NAME)

@@ -5,7 +5,7 @@
 
 #include "threepp/renderers/gl/GLBufferRenderer.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GLES3/gl3.h>

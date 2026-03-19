@@ -87,8 +87,8 @@ int main() {
         ImGui::SliderFloat("Plane", &localPlane.constant, 0.3f, 1.25f);
         ImGui::End();
 
-        ImGui::SetNextWindowPos({230, 0}, 0, {0, 0});
-        ImGui::SetNextWindowSize({230, 0}, 0);
+        ImGui::SetNextWindowPos({230*ui.dpiScale(), 0}, 0, {0, 0});
+        ImGui::SetNextWindowSize({}, 0);
 
         ImGui::Begin("Global clipping");
         ImGui::Checkbox("Enabled", &globalClipping);

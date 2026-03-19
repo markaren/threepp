@@ -5,8 +5,6 @@ using namespace threepp;
 
 MeshPhongMaterial::MeshPhongMaterial()
     : MaterialWithColor(0xffffff),
-      MaterialWithCombine(CombineOperation::Multiply),
-      MaterialWithFlatShading(false),
       MaterialWithSpecular(0x111111, 30),
       MaterialWithLightMap(1),
       MaterialWithAoMap(1),
@@ -15,7 +13,9 @@ MeshPhongMaterial::MeshPhongMaterial()
       MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithDisplacementMap(1, 0),
       MaterialWithReflectivity(1, 0.98f),
-      MaterialWithWireframe(false, 1) {}
+      MaterialWithWireframe(false, 1),
+      MaterialWithCombine(CombineOperation::Multiply),
+      MaterialWithFlatShading(false) {}
 
 
 std::string MeshPhongMaterial::type() const {

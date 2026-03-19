@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>threepp</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --header-h: 41px;
+            --terminal-h: 160px;
+            --bg: #0d0d0d;
+            --surface: #141414;
+            --border: rgba(255,255,255,0.08);
+            --accent: #7eb8f7;
+            --muted: rgba(255,255,255,0.35);
+        }
+
+        body {
+            background: var(--bg);
+            color: #e0e0e0;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* ── Header ── */
+        header {
+            height: var(--header-h);
+            min-height: var(--header-h);
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(13,13,13,0.9);
+            backdrop-filter: blur(8px);
+            border-bottom: 1px solid var(--border);
+            z-index: 10;
+        }
+
+        header a {
+            color: var(--accent);
+            text-decoration: none;
+            font-size: 0.82rem;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+        }
+        header a:hover { color: #aed4ff; }
+        .sep { color: var(--border); }
+        .title { font-size: 0.82rem; color: var(--muted); }
+        .spacer { flex: 1; }
+
+        /* ── Header controls ── */
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 3px 10px;
+            font-size: 0.72rem;
+            background: rgba(126,184,247,0.1);
+            color: var(--accent);
+            border: 1px solid rgba(126,184,247,0.25);
+            border-radius: 3px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s;
+        }
+        .btn:hover { background: rgba(126,184,247,0.2); }
+
+        .btn-terminal {
+            background: rgba(255,255,255,0.04);
+            color: var(--muted);
+            border-color: var(--border);
+        }
+        .btn-terminal:hover { background: rgba(255,255,255,0.08); color: #ccc; }
+        .btn-terminal.active { color: var(--accent); border-color: rgba(126,184,247,0.4); }
+
+        /* ── Canvas area ── */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        canvas {
+            display: block;
+            outline: none;
+        }
+
+        /* ── Loading overlay ── */
+        #loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+            gap: 14px;
+            transition: opacity 0.4s ease;
+            z-index: 5;
+        }
+        #loading.hidden { opacity: 0; pointer-events: none; }
+
+        .spinner {
+            width: 36px; height: 36px;
+            border: 2px solid rgba(126,184,247,0.12);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.75s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #load-status {
+            font-size: 0.75rem;
+            color: var(--muted);
+            letter-spacing: 0.05em;
+        }
+
+        #progress {
+            width: 180px; height: 2px;
+            appearance: none;
+            background: rgba(126,184,247,0.1);
+            border: none;
+            border-radius: 2px;
+        }
+        #progress::-webkit-progress-bar { background: rgba(126,184,247,0.1); border-radius: 2px; }
+        #progress::-webkit-progress-value { background: var(--accent); border-radius: 2px; }
+        #progress[hidden] { display: none; }
+
+        /* ── Terminal panel ── */
+        #terminal {
+            height: var(--terminal-h);
+            min-height: var(--terminal-h);
+            background: #0a0a0a;
+            border-top: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+        #terminal.hidden { display: none; }
+
+        #terminal-bar {
+            padding: 4px 12px;
+            font-size: 0.68rem;
+            color: var(--muted);
+            letter-spacing: 0.08em;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #output {
+            flex: 1;
+            width: 100%;
+            padding: 8px 12px;
+            background: transparent;
+            color: #a0c8a0;
+            font-family: 'Cascadia Code', 'Consolas', 'Lucida Console', monospace;
+            font-size: 0.75rem;
+            line-height: 1.5;
+            border: none;
+            resize: none;
+            outline: none;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <a href="https://github.com/markaren/threepp" target="_blank">threepp</a>
+    <span class="sep">/</span>
+    <a href="index.html">examples</a>
+    <span class="sep">/</span>
+    <span class="title" id="page-title"></span>
+    <div class="spacer"></div>
+    <div class="controls">
+        <button class="btn" onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked, document.getElementById('resize').checked)">
+            Fullscreen
+        </button>
+        <button class="btn btn-terminal" id="btn-terminal" onclick="toggleTerminal()">
+            Terminal
+        </button>
+    </div>
+</header>
+
+<!-- hidden inputs kept for Emscripten's requestFullscreen API -->
+<input type="checkbox" id="resize"      style="display:none" checked>
+<input type="checkbox" id="pointerLock" style="display:none" checked>
+
+<div id="canvas-container">
+    <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+    <div id="loading">
+        <div class="spinner" id="spinner"></div>
+        <progress id="progress" max="100" value="0" hidden></progress>
+        <div id="load-status">Downloading…</div>
+    </div>
+</div>
+
+<div id="terminal">
+    <div id="terminal-bar"><span>STDOUT</span></div>
+    <textarea id="output" readonly></textarea>
+</div>
+
+<script type='text/javascript'>
+    var statusElement   = document.getElementById('load-status');
+    var progressElement = document.getElementById('progress');
+    var spinnerElement  = document.getElementById('spinner');
+    var canvasElement   = document.getElementById('canvas');
+    var outputElement   = document.getElementById('output');
+
+    canvasElement.addEventListener('webglcontextlost', (e) => {
+        alert('WebGL context lost. You will need to reload the page.');
+        e.preventDefault();
+    }, false);
+
+    var setStatus = (text) => {
+        if (!setStatus.last) setStatus.last = { time: Date.now(), text: '' };
+        if (text === setStatus.last.text) return;
+        var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+        var now = Date.now();
+        if (m && now - setStatus.last.time < 30) return;
+        setStatus.last.time = now;
+        setStatus.last.text = text;
+        if (m) {
+            text = m[1];
+            progressElement.value  = parseInt(m[2]) * 100;
+            progressElement.max    = parseInt(m[4]) * 100;
+            progressElement.hidden = false;
+            spinnerElement.hidden  = false;
+        } else {
+            progressElement.value  = null;
+            progressElement.max    = null;
+            progressElement.hidden = true;
+            if (!text) spinnerElement.style.display = 'none';
+        }
+        statusElement.innerHTML = text;
+    };
+
+    var Module = {
+        print(...args) {
+            console.log(...args);
+            if (outputElement) {
+                outputElement.value += args.join(' ') + '\n';
+                outputElement.scrollTop = outputElement.scrollHeight;
+            }
+        },
+        canvas: canvasElement,
+        setStatus: setStatus,
+        totalDependencies: 0,
+        monitorRunDependencies(left) {
+            this.totalDependencies = Math.max(this.totalDependencies, left);
+            setStatus(left
+                ? 'Preparing… (' + (this.totalDependencies - left) + '/' + this.totalDependencies + ')'
+                : 'All downloads complete.');
+        },
+        onRuntimeInitialized() {
+            var loading = document.getElementById('loading');
+            loading.classList.add('hidden');
+            setTimeout(() => loading.remove(), 500);
+        }
+    };
+
+    setStatus('Downloading…');
+
+    window.onerror = (event) => {
+        setStatus('Exception thrown, see JavaScript console');
+        spinnerElement.style.display = 'none';
+        setStatus = (text) => {
+            if (text) console.error('[post-exception status] ' + text);
+        };
+    };
+
+    // ── Terminal toggle ──
+    function toggleTerminal() {
+        var panel = document.getElementById('terminal');
+        var btn   = document.getElementById('btn-terminal');
+        panel.classList.toggle('hidden');
+        btn.classList.toggle('active', !panel.classList.contains('hidden'));
+    }
+
+    // mark terminal button active on load
+    document.getElementById('btn-terminal').classList.add('active');
+
+    // ── Page title from filename ──
+    (function() {
+        var name = location.pathname.split('/').pop().replace(/\.html?$/i, '');
+        document.title = name || 'threepp';
+        document.getElementById('page-title').textContent = name;
+    })();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

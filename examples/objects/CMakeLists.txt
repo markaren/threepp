@@ -6,20 +6,27 @@ if (TARGET "instancing")
     target_include_directories("instancing" PRIVATE "${PROJECT_SOURCE_DIR}/examples/libs")
 endif ()
 
-add_example(NAME "sprite")
-add_example(NAME "lod" WEBWEB_EMBED
+add_example(NAME "sprite" WEB WEB_EMBED
+        "${PROJECT_SOURCE_DIR}/data/textures/sprite0.png@data/textures/"
+        "${PROJECT_SOURCE_DIR}/data/textures/three.png@data/textures/"
+)
+add_example(NAME "lod" WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
 )
 add_example(NAME "points" LINK_IMGUI WEB)
 
 add_example(NAME "bones" LINK_IMGUI)
-add_example(NAME "decal" LINK_IMGUI LINK_ASSIMP)
+add_example(NAME "decal" LINK_IMGUI)
 add_example(NAME "water" LINK_IMGUI WEB WEB_EMBED
         "${PROJECT_SOURCE_DIR}/data/textures/waternormals.jpg@data/textures/waternormals.jpg"
 )
 
-add_example(NAME "particle_system" LINK_IMGUI)
+add_example(NAME "particle_system" LINK_IMGUI WEB WEB_EMBED
+        "${PROJECT_SOURCE_DIR}/data/textures/star.png@data/textures/"
+        "${PROJECT_SOURCE_DIR}/data/textures/spark.png@data/textures/"
+        "${PROJECT_SOURCE_DIR}/data/textures/smokeparticle.png@data/textures/"
+)
 
-if (WIN32)
-    add_example(NAME "text_sprite")
-endif()
+add_example(NAME "text_sprite" LINK_IMGUI WEB WEB_EMBED
+        "${PROJECT_SOURCE_DIR}/data/fonts@data/fonts"
+)

@@ -5,11 +5,11 @@ using namespace threepp;
 
 MeshBasicMaterial::MeshBasicMaterial()
     : MaterialWithColor(0xffffff),
-      MaterialWithAoMap(1),
       MaterialWithLightMap(1),
-      MaterialWithCombine(CombineOperation::Multiply),
+      MaterialWithAoMap(1),
       MaterialWithReflectivity(1, 0.98f),
-      MaterialWithWireframe(false, 1) {}
+      MaterialWithWireframe(false, 1),
+      MaterialWithCombine(CombineOperation::Multiply) {}
 
 
 std::string MeshBasicMaterial::type() const {

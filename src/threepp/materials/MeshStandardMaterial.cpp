@@ -6,19 +6,19 @@ using namespace threepp;
 
 MeshStandardMaterial::MeshStandardMaterial()
     : MaterialWithColor(0xffffff),
-      MaterialWithWireframe(false, 1),
       MaterialWithRoughness(1),
       MaterialWithMetalness(0),
-      MaterialWithLightMap(1),
-      MaterialWithAoMap(1),
+      MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
       MaterialWithEmissive(0x000000, 1),
       MaterialWithBumpMap(1),
+      MaterialWithAoMap(1),
       MaterialWithEnvMap(1.f),
+      MaterialWithLightMap(1),
       MaterialWithDisplacementMap(1, 0),
-      MaterialWithReflectivityRatio(0.98),
-      MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
+      MaterialWithWireframe(false, 1),
+      MaterialWithFlatShading(false),
       MaterialWithVertexTangents(false),
-      MaterialWithFlatShading(false) {
+      MaterialWithRefractionRatio(0.98) {
 
     defines["STANDARD"] = "";
 }

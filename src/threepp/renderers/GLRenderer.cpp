@@ -37,7 +37,7 @@
 
 #include "threepp/utils/ImageUtils.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include "threepp/utils/LoadGlad.hpp"
 #else
 #include <GLES3/gl32.h>
@@ -148,23 +148,24 @@ struct GLRenderer::Impl {
     gl::GLShadowMap shadowMap;
 
     Impl(GLRenderer& scope, const std::pair<int, int>& size, const Parameters& parameters)
-        : scope(scope), _size(size),
-          cubemaps(scope),
-          bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
-          indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
-          clipping(properties),
+        : scope(scope),
+          _emptyScene(std::make_unique<Scene>()),
+          onMaterialDispose(this),
+          _size(size),
+          _currentDrawBuffers(GL_BACK),
           bindingStates(attributes),
           geometries(attributes, _info, bindingStates),
+          clipping(properties),
           textures(state, properties, _info),
-          objects(geometries, attributes, _info),
-          renderLists(properties),
-          shadowMap(objects),
           materials(properties),
-          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
+          renderLists(properties),
+          objects(geometries, attributes, _info),
           programCache(bindingStates, clipping),
-          _currentDrawBuffers(GL_BACK),
-          _emptyScene(std::make_unique<Scene>()),
-          onMaterialDispose(this) {
+          cubemaps(scope),
+          background(scope, cubemaps, state, objects, parameters.premultipliedAlpha),
+          bufferRenderer(std::make_unique<gl::GLBufferRenderer>(_info)),
+          indexedBufferRenderer(std::make_unique<gl::GLIndexedBufferRenderer>(_info)),
+          shadowMap(objects) {
 
         this->setViewport(0, 0, _size.width(), _size.height());
         this->setScissor(0, 0, _size.width(), _size.height());
@@ -687,7 +688,7 @@ struct GLRenderer::Impl {
 
         auto& uniforms = *materialProperties->uniforms;
 
-        if (!material->is<ShaderMaterial>() && !material->is<RawShaderMaterial>() || material->clipping) {
+        if ((!material->is<ShaderMaterial>() && !material->is<RawShaderMaterial>()) || material->clipping) {
 
             uniforms["clippingPlanes"] = clipping.uniform;
         }
@@ -1303,7 +1304,7 @@ struct GLRenderer::Impl {
 
 GLRenderer::GLRenderer(std::pair<int, int> size, const Parameters& parameters) {
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
     loadGlad();// if Glad has yet to be loaded, do it now
 #endif
 

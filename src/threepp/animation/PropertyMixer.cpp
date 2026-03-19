@@ -235,7 +235,7 @@ void PropertyMixer::saveOriginalState() const {
 
 PropertyMixer::~PropertyMixer() = default;
 
-void PropertyMixer::_select(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
+void PropertyMixer::_select([[maybe_unused]] PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
 
     if (t >= 0.5) {
 
@@ -245,11 +245,11 @@ void PropertyMixer::_select(PropertyMixer*, std::vector<float>& buffer, int dstO
         }
     }
 }
-void PropertyMixer::_slerp(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
+void PropertyMixer::_slerp([[maybe_unused]] PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, [[maybe_unused]] int stride) {
 
     Quaternion::slerpFlat(buffer, dstOffset, buffer, dstOffset, buffer, srcOffset, t);
 }
-void PropertyMixer::_lerp(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
+void PropertyMixer::_lerp([[maybe_unused]] PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
 
     const auto s = 1 - t;
 
@@ -261,7 +261,7 @@ void PropertyMixer::_lerp(PropertyMixer*, std::vector<float>& buffer, int dstOff
     }
 }
 
-void PropertyMixer::_lerpAdditive(PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
+void PropertyMixer::_lerpAdditive([[maybe_unused]] PropertyMixer*, std::vector<float>& buffer, int dstOffset, int srcOffset, float t, int stride) {
 
     for (auto i = 0; i != stride; ++i) {
 

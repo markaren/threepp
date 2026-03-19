@@ -13,11 +13,13 @@
 #include "threepp/objects/SkinnedMesh.hpp"
 
 #include <assimp/Importer.hpp>
+#include <assimp/config.h>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <assimp/version.h>
 
 #include <filesystem>
+#include <ranges>
 #include <sstream>
 #include <utility>
 
@@ -42,8 +44,16 @@ namespace threepp {
         }
 
 
+        AssimpLoader& setIgnoreUpDirection(bool ignore) {
+            ignoreUpDirection_ = ignore;
+            return *this;
+        }
+
         std::shared_ptr<Group> load(const std::filesystem::path& path) override {
 
+            if (ignoreUpDirection_) {
+                importer_.SetPropertyBool(AI_CONFIG_IMPORT_COLLADA_IGNORE_UP_DIRECTION, true);
+            }
             auto aiScene = importer_.ReadFile(path.string().c_str(), aiProcessPreset_TargetRealtime_Quality);
 
             if (!aiScene) {
@@ -89,6 +99,7 @@ namespace threepp {
         }
 
     private:
+        bool ignoreUpDirection_ = false;
         TextureLoader texLoader_;
         Assimp::Importer importer_;
 
@@ -283,11 +294,11 @@ namespace threepp {
             explicit SceneInfo(std::filesystem::path path): path(std::move(path)) {}
 
             [[nodiscard]] bool hasSkeleton(unsigned int meshIndex) const {
-                return boneData.count(meshIndex);
+                return boneData.contains(meshIndex);
             }
 
             [[nodiscard]] std::shared_ptr<Bone> getBone(const std::string& name) const {
-                for (const auto& [idx, data] : boneData) {
+                for (const auto& data : boneData | std::views::values) {
                     for (const auto& bone : data.bones) {
                         if (bone->name.substr(5) == name) {
                             return bone;
@@ -448,9 +459,10 @@ namespace threepp {
                 if (aiGetMaterialTextureCount(mat, aiTextureType_DIFFUSE) > 0) {
                     if (aiGetMaterialTexture(mat, aiTextureType_DIFFUSE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
-                        material.map = tex;
-
+                        tex->wrapS = TextureWrapping::Repeat;
+                        tex->wrapT = TextureWrapping::Repeat;
                         handleWrapping(mat, aiTextureType_DIFFUSE, *tex);
+                        material.map = tex;
                     }
                 } else {
                     C_STRUCT aiColor4D diffuse;
@@ -462,9 +474,10 @@ namespace threepp {
                 if (aiGetMaterialTextureCount(mat, aiTextureType_EMISSIVE) > 0) {
                     if (aiGetMaterialTexture(mat, aiTextureType_EMISSIVE, 0, &p) == aiReturn_SUCCESS) {
                         auto tex = loadTexture(aiScene, path, p.C_Str());
-                        material.emissiveMap = tex;
-
+                        tex->wrapS = TextureWrapping::Repeat;
+                        tex->wrapT = TextureWrapping::Repeat;
                         handleWrapping(mat, aiTextureType_EMISSIVE, *tex);
+                        material.emissiveMap = tex;
                     }
                 } else {
                     C_STRUCT aiColor4D emissive;
@@ -529,18 +542,18 @@ namespace threepp {
                 if (embed->mHeight == 0) {
 
                     std::vector<unsigned char> data(embed->mWidth);
-                    std::copy((unsigned char*) embed->pcData, (unsigned char*) embed->pcData + data.size(), data.begin());
+                    std::copy_n(reinterpret_cast<unsigned char*>(embed->pcData), data.size(), data.begin());
                     tex = texLoader_.loadFromMemory(ss.str(), data);
 
                 } else {
 
                     std::vector<unsigned char> data(embed->mWidth * embed->mHeight);
-                    std::copy((unsigned char*) embed->pcData, (unsigned char*) embed->pcData + data.size(), data.begin());
+                    std::copy_n(reinterpret_cast<unsigned char*>(embed->pcData), data.size(), data.begin());
                     tex = texLoader_.loadFromMemory(ss.str(), data);
                 }
             } else {
 
-                auto texPath = path.parent_path() / name;
+                const auto texPath = path.parent_path() / name;
                 tex = texLoader_.load(texPath);
             }
 
@@ -563,12 +576,10 @@ namespace threepp {
             aiVector3t<float> scale;
             t.Decompose(scale, quat, pos);
 
-            Matrix4 m;
-            m.makeRotationFromQuaternion(Quaternion{quat.x, quat.y, quat.z, quat.w});
-            m.setPosition({pos.x, pos.y, pos.z});
-
-            obj.applyMatrix4(m);
+            obj.position.set(pos.x, pos.y, pos.z);
+            obj.quaternion.set(quat.x, quat.y, quat.z, quat.w);
             obj.scale.set(scale.x, scale.y, scale.z);
+
         }
     };
 

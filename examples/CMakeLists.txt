@@ -29,23 +29,11 @@ if (DEFINED EMSCRIPTEN)
     file(GLOB HTML_FILES "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/*.html")
     list(REMOVE_ITEM HTML_FILES "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/index.html")
 
-    file(WRITE ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/index.html "
-<!DOCTYPE html>
-<html>
-<body>
-<h1>threepp WASM Examples</h1>
-<ul>
-")
-
-    foreach(FILE ${HTML_FILES})
+    set(EXAMPLE_LINKS "")
+    foreach (FILE ${HTML_FILES})
         get_filename_component(NAME ${FILE} NAME_WE)
-        file(APPEND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/index.html
-                "<li><a href=\"${NAME}.html\">${NAME}</a></li>\n")
-    endforeach()
+        string(APPEND EXAMPLE_LINKS "<li><a href=\"${NAME}.html\">${NAME}</a></li>\n")
+    endforeach ()
 
-    file(APPEND ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/index.html "
-</ul>
-</body>
-</html>
-")
+    configure_file(${PROJECT_SOURCE_DIR}/cmake/index.html.in ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/index.html @ONLY)
 endif ()

@@ -1,7 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-file(STRINGS "${CMAKE_CURRENT_LIST_DIR}/version.txt" projectVersion)
-project(threepp VERSION ${projectVersion})
-message("Current ${PROJECT_NAME} version: ${projectVersion}\n")
+project(threepp)
 
 include(CMakeDependentOption)
 
@@ -107,8 +105,8 @@ configure_package_config_file(cmake/config.cmake.in
         NO_SET_AND_CHECK_MACRO)
 write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/threepp-config-version.cmake"
-        VERSION ${CMAKE_PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion)
+        VERSION 0.0.0
+        COMPATIBILITY AnyNewerVersion)
 install(
         FILES
         "${CMAKE_CURRENT_BINARY_DIR}/threepp-config.cmake"

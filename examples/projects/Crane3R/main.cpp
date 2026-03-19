@@ -3,10 +3,11 @@
 
 #include "kine/Kine.hpp"
 #include "threepp/controls/TransformControls.hpp"
+#include "threepp/objects/TextSprite.hpp"
 #include "threepp/threepp.hpp"
 #include "utility/Angle.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <future>
 #endif
 
@@ -16,7 +17,7 @@ using namespace kine;
 #include "kine/ik/CCDSolver.hpp"
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
-struct MyUI: ImguiContext {
+struct CraneUI: ImguiContext {
 
     bool jointMode = true;
     bool posMode = false;
@@ -26,8 +27,8 @@ struct MyUI: ImguiContext {
     std::vector<KineLimit> limits;
     std::vector<float> values;
 
-    explicit MyUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
-        : ImguiContext(canvas, renderer),
+    explicit CraneUI(const Canvas& canvas, Renderer& renderer, Kine& kine)
+        : ImguiContext(canvas,renderer),
           limits(kine.limits()),
           values(kine.meanAngles()) {
 
@@ -114,17 +115,16 @@ int main() {
     scene->add(light1);
     scene->add(light2);
 
-    HUD hud(canvas.size());
+    HUD hud(*renderer);
     FontLoader fontLoader;
-    const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/helvetiker_regular.typeface.json");
+    const auto font = *fontLoader.load(std::string(DATA_FOLDER) + "/fonts/typeface/helvetiker_regular.typeface.json");
 
-    TextGeometry::Options opts(font, 40, 2);
-    auto handle = Text2D(opts, "Loading Crane3R..");
+    auto handle = TextSprite(font, 20.f * monitor::contentScale().first);
+    handle.setText("Loading model..");
     handle.setColor(Color::black);
-    hud.add(handle, HUD::Options()
-                            .setNormalizedPosition({0.5, 0.5})
+    hud.add(handle).setNormalizedPosition({0.5, 0.5})
                             .setHorizontalAlignment(HUD::HorizontalAlignment::CENTER)
-                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER));
+                            .setVerticalAlignment(HUD::VerticalAlignment::CENTER);
 
     Kine kine = KineBuilder()
                         .addRevoluteJoint(Vector3::Y(), {-90.f, 90.f})
@@ -137,7 +137,7 @@ int main() {
 
     TaskManager tm;
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
     std::shared_ptr<Crane3R> crane;
     auto future = std::async([&] {
         crane = Crane3R::create();
@@ -168,8 +168,6 @@ int main() {
         camera->aspect = size.aspect();
         camera->updateProjectionMatrix();
         renderer->setSize(size);
-
-        hud.setSize(size);
     });
 
     IOCapture capture{};
@@ -180,7 +178,7 @@ int main() {
 
     auto ikSolver = std::make_unique<CCDSolver>();
 
-    MyUI ui(canvas, *renderer, kine);
+    CraneUI ui(canvas, *renderer, kine);
 
     auto targetHelper = AxesHelper::create(2);
     targetHelper->visible = false;
@@ -236,11 +234,11 @@ int main() {
 
         } else {
 
-            hud.apply(*renderer);
+            hud.render();
         }
     });
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
     future.get();
 #endif
 }

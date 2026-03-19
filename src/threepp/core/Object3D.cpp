@@ -372,9 +372,9 @@ void Object3D::updateMatrixWorld(bool force) {
     }
 }
 
-void Object3D::updateWorldMatrix(std::optional<bool> updateParents, std::optional<bool> updateChildren) {
+void Object3D::updateWorldMatrix(bool updateParents, bool updateChildren) {
 
-    if (updateParents && updateParents.value() && parent) {
+    if (updateParents && parent) {
 
         parent->updateWorldMatrix(true, false);
     }
@@ -392,9 +392,9 @@ void Object3D::updateWorldMatrix(std::optional<bool> updateParents, std::optiona
 
     // update children
 
-    if (updateChildren && updateChildren.value()) {
+    if (updateChildren) {
 
-        for (auto& child : children) {
+        for (const auto& child : children) {
 
             child->updateWorldMatrix(false, true);
         }

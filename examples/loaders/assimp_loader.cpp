@@ -18,13 +18,21 @@ namespace {
     auto loadObj(AssimpLoader& loader) {
 
         auto model = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
+        model->scale *= 0.5f;
         return model;
     }
 
     auto loadStl(AssimpLoader& loader) {
 
         auto model = loader.load(std::string(DATA_FOLDER) + "/models/stl/pr2_head_pan.stl");
-        model->scale *= 100;
+        model->scale *= 100.f;
+        return model;
+    }
+
+    auto loadDae(AssimpLoader& loader) {
+
+        auto model = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+        model->scale *= 15.f;
         return model;
     }
 
@@ -52,29 +60,30 @@ int main() {
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, canvas.aspect(), 0.1f, 1000);
-    camera->position.set(0, 100, 175);
+    camera->position.set(0, 80, 175);
 
     std::cout << "Assimp version: " << AssimpLoader::getVersion() << std::endl;
     AssimpLoader loader;
     const auto glb = loadGlb(loader);
     const auto obj = loadObj(loader);
     const auto stl = loadStl(loader);
+    const auto dae = loadDae(loader);
 
     Box3 bb;
     bb.setFromObject(*obj);
 
+    const std::vector models{glb, obj, stl, dae};
     constexpr float sep = 50;
-    obj->position.x = -sep;
-
-    bb.getCenter(glb->position);
-    glb->position.x = sep;
-
-    bb.getCenter(stl->position);
-    stl->position.x = 0;
+    const float start = -sep * static_cast<float>(models.size() - 1) / 2.f;
+    for (int i = 0; i < static_cast<int>(models.size()); ++i) {
+        bb.getCenter(models[i]->position);
+        models[i]->position.x = start + sep * static_cast<float>(i);
+    }
 
     scene->add(glb);
     scene->add(obj);
     scene->add(stl);
+    scene->add(dae);
 
     addLights(*scene);
 

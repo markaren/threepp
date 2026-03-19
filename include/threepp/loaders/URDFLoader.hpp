@@ -6,7 +6,9 @@
 #include "threepp/objects/Robot.hpp"
 
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <string>
 
 namespace threepp {
 
@@ -17,7 +19,12 @@ namespace threepp {
     public:
         explicit URDFLoader();
 
+        // By default, the loader uses ModelLoader to load geometry files referenced in the URDF.
         URDFLoader& setGeometryLoader(std::shared_ptr<Loader<Group>> loader);
+
+        // Set xacro argument overrides, equivalent to passing `name:=value` on the xacro CLI.
+        // These override <xacro:arg default="..."/> values and are available as ${name} / $(arg name).
+        URDFLoader& setArgs(std::map<std::string, std::string> args);
 
         std::shared_ptr<Robot> load(const std::filesystem::path& path);
 

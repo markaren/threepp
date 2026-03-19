@@ -7,7 +7,7 @@
 #include "threepp/renderers/gl/GLGeometries.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GLES3/gl3.h>
@@ -50,8 +50,9 @@ struct GLObjects::Impl {
     std::vector<InstancedMesh*> registeredInstancedMeshes_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
-        : attributes_(attributes),
-          geometries_(geometries), info_(info),
+        : info_(info),
+          geometries_(geometries),
+          attributes_(attributes),
           onInstancedMeshDispose(this) {}
 
     BufferGeometry* update(Object3D* object) {

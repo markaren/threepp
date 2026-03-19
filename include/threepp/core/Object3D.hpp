@@ -231,9 +231,23 @@ namespace threepp {
         // Updates the local transform.
         void updateMatrix();
 
+        /**
+         * @brief Updates the transformation matrix in world space of this 3D object and its descendants.
+         *
+         * Also recomputes the local transformation matrix. The computation can be controlled with
+         * the matrixAutoUpdate and matrixWorldAutoUpdate flags.
+         *
+         * @param force When true, recomputation is forced even when matrixWorldNeedsUpdate is false. Default is false.
+         */
         virtual void updateMatrixWorld(bool force = false);
 
-        virtual void updateWorldMatrix(std::optional<bool> updateParents = std::nullopt, std::optional<bool> updateChildren = std::nullopt);
+        /**
+         * @brief An alternative to updateMatrixWorld with more control over ancestor and descendant updates.
+         *
+         * @param updateParents Whether ancestor nodes should be updated. Default is false.
+         * @param updateChildren Whether descendant nodes should be updated. Default is false.
+         */
+        virtual void updateWorldMatrix(bool updateParents = false, bool updateChildren = false);
 
         static std::shared_ptr<Object3D> create() {
 

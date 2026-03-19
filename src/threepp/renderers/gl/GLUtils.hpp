@@ -3,7 +3,7 @@
 #ifndef THREEPP_GLUTILS_HPP
 #define THREEPP_GLUTILS_HPP
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GL/gl.h>

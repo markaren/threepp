@@ -646,7 +646,7 @@ void gl::GLState::setPolygonOffset(bool polygonOffset, std::optional<float> fact
 
         enable(GL_POLYGON_OFFSET_FILL);
 
-        if (factor && currentPolygonOffsetFactor != *factor || units && currentPolygonOffsetUnits != *units) {
+        if ((factor && currentPolygonOffsetFactor != *factor) || (units && currentPolygonOffsetUnits != *units)) {
 
             glPolygonOffset(*factor, *units);
 

@@ -8,7 +8,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("Simple skinning", {{"aa", 8}});
+    Canvas canvas("Assimp bones / simple animation", {{"aa", 8}});
     auto renderer = createRenderer(canvas);
     renderer->shadowMap().enabled = true;
     renderer->shadowMap().type = threepp::ShadowMap::PFCSoft;
@@ -66,21 +66,16 @@ int main() {
 
     //
 
-    auto stormTropper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
-    stormTropper->traverseType<Mesh>([](Mesh& m) {
+    auto stormTrooper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+    stormTrooper->traverseType<Mesh>([](Mesh& m) {
         m.receiveShadow = true;
         m.castShadow = true;
-
-        if (auto mat = m.material()->as<MaterialWithMap>()) {
-            mat->map->wrapS = TextureWrapping::Repeat;
-            mat->map->wrapT = TextureWrapping::Repeat;
-        }
     });
-    scene.add(stormTropper);
-    stormTropper->scale *= 0.6;
-    stormTropper->position.x = 2;
+    scene.add(stormTrooper);
+    stormTrooper->scale *= 0.6;
+    stormTrooper->position.x = 2;
 
-    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTropper);
+    auto skeletonHelperTrooper = SkeletonHelper::create(*stormTrooper);
     skeletonHelperTrooper->material()->as<LineBasicMaterial>()->linewidth = 2;
     scene.add(skeletonHelperTrooper);
 
@@ -101,8 +96,8 @@ int main() {
     auto solderMixer = AnimationMixer(*soldier);
     solderMixer.clipAction(soldier->animations.back())->setLoop(Loop::Repeat).play();
 
-    auto trooperMixer = AnimationMixer(*stormTropper);
-    trooperMixer.clipAction(stormTropper->animations.front())->setLoop(Loop::Repeat).play();
+    auto trooperMixer = AnimationMixer(*stormTrooper);
+    trooperMixer.clipAction(stormTrooper->animations.front())->setLoop(Loop::Repeat).play();
 
 
     Clock clock;

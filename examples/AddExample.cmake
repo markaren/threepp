@@ -38,6 +38,7 @@ function(add_example)
         target_compile_definitions(${arg_NAME} PRIVATE DATA_FOLDER="data")
 
         set(LINK_FLAGS " --bind -sUSE_GLFW=3 -sGL_DEBUG=1 -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3 -sASSERTIONS -sALLOW_MEMORY_GROWTH -sNO_DISABLE_EXCEPTION_CATCHING -sWASM=1")
+        set(LINK_FLAGS "${LINK_FLAGS} --shell-file \"${PROJECT_SOURCE_DIR}/examples/emshell.html\"")
         if (arg_WEB_EMBED)
             foreach (path ${arg_WEB_EMBED})
                 set(LINK_FLAGS "${LINK_FLAGS} --embed-file \"${path}\"")

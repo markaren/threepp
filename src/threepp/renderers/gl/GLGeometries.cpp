@@ -5,7 +5,7 @@
 #include "threepp/renderers/gl/GLBindingStates.hpp"
 #include "threepp/renderers/gl/GLInfo.hpp"
 
-#ifndef EMSCRIPTEN
+#ifndef __EMSCRIPTEN__
 #include <glad/glad.h>
 #else
 #include <GL/glew.h>

@@ -7,10 +7,10 @@
 
 #include <cmath>
 
-class KeyController : public threepp::KeyListener {
+class SpheroKeyController : public threepp::KeyListener {
 
 public:
-    explicit KeyController(Sphero &sphero)
+    explicit SpheroKeyController(Sphero &sphero)
         : sphero_(&sphero) {}
 
     void update() {

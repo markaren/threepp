@@ -25,7 +25,7 @@ namespace threepp {
           public MaterialWithWireframe,
           public MaterialWithFlatShading,
           public MaterialWithVertexTangents,
-          public MaterialWithReflectivityRatio,
+          public MaterialWithRefractionRatio,
           public MaterialWithMorphTargets,
           public MaterialWithDefines {
 

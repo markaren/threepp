@@ -59,7 +59,7 @@ KeyframeTrack& KeyframeTrack::trim(float startTime, float endTime) {
     int from = 0;
     int to = static_cast<int>(nKeys) - 1;
 
-    while (from != nKeys && times_[from] < startTime) {
+    while (static_cast<size_t>(from) != nKeys && times_[from] < startTime) {
 
         ++from;
     }
@@ -71,7 +71,7 @@ KeyframeTrack& KeyframeTrack::trim(float startTime, float endTime) {
 
     ++to;// inclusive -> exclusive bound
 
-    if (from != 0 || to != nKeys) {
+    if (from != 0 || static_cast<size_t>(to) != nKeys) {
 
         // empty tracks are forbidden, so keep at least one keyframe
         if (from >= to) {
@@ -173,7 +173,7 @@ KeyframeTrack& KeyframeTrack::optimize() {
         ++writeIndex;
     }
 
-    if (writeIndex != times.size()) {
+    if (static_cast<size_t>(writeIndex) != times.size()) {
 
         this->times_ = AnimationUtils::arraySlice(times, 0, writeIndex);
         this->values_ = AnimationUtils::arraySlice(values, 0, writeIndex * stride);

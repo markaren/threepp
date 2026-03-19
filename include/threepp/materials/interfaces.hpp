@@ -66,18 +66,18 @@ namespace threepp {
         MaterialWithSpecular(Color specular, float shininess): specular(specular), shininess(shininess) {}
     };
 
-    struct MaterialWithReflectivityRatio: virtual Material {
+    struct MaterialWithRefractionRatio: virtual Material {
 
         float refractionRatio;
 
-        explicit MaterialWithReflectivityRatio(float refractionRatio): refractionRatio(refractionRatio) {}
+        explicit MaterialWithRefractionRatio(float refractionRatio): refractionRatio(refractionRatio) {}
     };
 
-    struct MaterialWithReflectivity: virtual Material, public MaterialWithReflectivityRatio {
+    struct MaterialWithReflectivity: virtual Material, MaterialWithRefractionRatio {
 
         float reflectivity;
 
-        MaterialWithReflectivity(float reflectivity, float refractionRatio): MaterialWithReflectivityRatio(refractionRatio), reflectivity(reflectivity) {}
+        MaterialWithReflectivity(float reflectivity, float refractionRatio): MaterialWithRefractionRatio(refractionRatio), reflectivity(reflectivity) {}
     };
 
     struct MaterialWithWireframe: virtual Material {
@@ -108,7 +108,7 @@ namespace threepp {
         float envMapIntensity;// Only used by MeshStandardMaterial
         std::shared_ptr<Texture> envMap;
 
-        explicit MaterialWithEnvMap(std::optional<float> envMapIntensity = std::nullopt): envMapIntensity(envMapIntensity.value_or(1)) {}
+        explicit MaterialWithEnvMap(float envMapIntensity = 1.f): envMapIntensity(envMapIntensity) {}
     };
 
     struct MaterialWithGradientMap: virtual Material {
