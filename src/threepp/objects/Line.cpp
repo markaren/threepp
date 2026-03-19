@@ -109,7 +109,7 @@ void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
         const auto start = std::max(0, drawRange.start);
         const auto end = std::min(index->count(), (drawRange.start + drawRange.count));
 
-        for (unsigned i = start, l = end - 1; i < l; i += step) {
+        for (int i = start, l = end - 1; i < l; i += step) {
 
             const auto a = index->getX(i);
             const auto b = index->getX(i + 1);
@@ -141,7 +141,7 @@ void Line::raycast(const Raycaster& raycaster, std::vector<Intersection>& inters
         const auto start = std::max(0, drawRange.start);
         const auto end = std::min(positionAttribute->count(), (drawRange.start + drawRange.count));
 
-        for (unsigned i = start, l = end - 1; i < l; i += step) {
+        for (int i = start, l = end - 1; i < l; i += step) {
 
             positionAttribute->setFromBufferAttribute(vStart, i);
             positionAttribute->setFromBufferAttribute(vEnd, i + 1);

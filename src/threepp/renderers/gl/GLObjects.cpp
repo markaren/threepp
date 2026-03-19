@@ -45,8 +45,9 @@ struct GLObjects::Impl {
     std::unordered_map<BufferGeometry*, size_t> updateMap_;
 
     Impl(GLGeometries& geometries, GLAttributes& attributes, GLInfo& info)
-        : attributes_(attributes),
-          geometries_(geometries), info_(info),
+        : info_(info),
+          geometries_(geometries),
+          attributes_(attributes),
           onInstancedMeshDispose(this) {}
 
     BufferGeometry* update(Object3D* object) {

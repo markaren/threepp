@@ -5,11 +5,11 @@ using namespace threepp;
 
 MeshLambertMaterial::MeshLambertMaterial()
     : MaterialWithColor(0xffffff),
-      MaterialWithWireframe(false, 1),
-      MaterialWithReflectivity(1, 0.98f),
       MaterialWithLightMap(1),
-      MaterialWithEmissive(0x000000, 1),
       MaterialWithAoMap(1),
+      MaterialWithEmissive(0x000000, 1),
+      MaterialWithReflectivity(1, 0.98f),
+      MaterialWithWireframe(false, 1),
       MaterialWithCombine(CombineOperation::Multiply) {}
 
 

@@ -49,7 +49,7 @@ namespace threepp {
 
         virtual Sample interpolate_(size_t i1, float t0, float t, float t1) = 0;
 
-        virtual void intervalChanged_(size_t i1, float t0, float t1){};
+        virtual void intervalChanged_([[maybe_unused]] size_t i1, [[maybe_unused]] float t0, [[maybe_unused]] float t1){};
 
     private:
         Sample _resultBuffer;

@@ -46,8 +46,8 @@ namespace {
 
         explicit SingleUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
             : UniformObject(std::move(id)),
-              activeInfo(std::move(activeInfo)),
               addr(addr),
+              activeInfo(std::move(activeInfo)),
               setValueFun(getSingularSetter()) {
         }
 
@@ -230,7 +230,7 @@ namespace {
             float w = value[3];
 
             ensureCapacity(cache, 4);
-            if (cache[0] != x || cache[1] != y && cache[2] != z || cache[3] != w) {
+            if (cache[0] != x || (cache[1] != y && cache[2] != z) || cache[3] != w) {
 
                 glUniform4f(addr, x, y, z, w);
 
@@ -296,8 +296,8 @@ namespace {
 
         explicit PureArrayUniform(std::string id, ActiveUniformInfo activeInfo, int addr)
             : UniformObject(std::move(id)),
-              activeInfo(std::move(activeInfo)),
               addr(addr),
+              activeInfo(std::move(activeInfo)),
               setValueFun(getPureArraySetter()) {}
 
         void setValue(const UniformValue& value, GLTextures* textures) override {
@@ -443,7 +443,7 @@ namespace {
 
             if (isIndex) id = std::to_string(utils::parseInt(id) | 0);
 
-            if (!match[3].matched || subscript == "[" && matchEnd + 2 == pathLength) {
+            if (!match[3].matched || (subscript == "[" && matchEnd + 2 == pathLength)) {
 
                 // bare name or "pure" bottom-level array "[0]" suffix
                 if (!match[3].matched) {
