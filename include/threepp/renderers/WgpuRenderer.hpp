@@ -113,6 +113,13 @@ namespace threepp {
         /// Avoids exposing WebGPU types in the public header.
         [[nodiscard]] uint32_t nativeSurfaceFormat() const;
 
+        /// Finalize the current frame: run any deferred post-processing (tone
+        /// mapping blit, ImGui overlay) and present the surface texture.
+        /// Normally called automatically by the Canvas animate loop. Call
+        /// explicitly when using render() outside of animate(), or before
+        /// reconfiguring the surface.
+        void endFrame();
+
         void resetState();
         void dispose() override;
 

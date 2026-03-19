@@ -69,8 +69,14 @@ std::string ShaderFeatures::describe(uint64_t features) {
         default:            append("TopoUnknown");    break;
     }
 
-    // Tone mapping is now a renderer-level post-process; bits are unused
-    // for shader generation but may still appear in feature dumps.
+    switch (features & TonemapMask) {
+        case TonemapNone:     append("TonemapNone");     break;
+        case TonemapLinear:   append("TonemapLinear");   break;
+        case TonemapReinhard: append("TonemapReinhard"); break;
+        case TonemapCineon:   append("TonemapCineon");   break;
+        case TonemapACES:     append("TonemapACES");     break;
+        default:              append("TonemapUnknown");  break;
+    }
 
     return s.str();
 }
@@ -393,6 +399,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (features & ShaderFeatures::Texture) {
         s << "    let texColor = textureSample(t_diffuse, s_diffuse, in.uv);\n";
         s << "    baseColor = baseColor * texColor.rgb;\n";
+        s << "    opacity = opacity * texColor.a;\n";
     }
     if (features & ShaderFeatures::RoughnessMap) {
         s << "    roughness = roughness * textureSample(t_roughnessMap, s_roughnessMap, in.uv).g;\n";
@@ -637,10 +644,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Tone mapping and sRGB output are now applied as a renderer-level
-    // post-process pass (see WgpuRenderer::toneMapBlit), so they are no
-    // longer generated per-object here. This ensures all materials
-    // (including custom ShaderMaterials) are tone-mapped uniformly.
+    // Per-object tone mapping — used when rendering to a render target
+    // (where the post-process blit doesn't apply). When rendering to the
+    // surface, these bits are zero and the renderer-level post-process handles it.
+    if ((features & ShaderFeatures::TonemapMask) != ShaderFeatures::TonemapNone) {
+        s << "    let exposure = material.fogParams.w;\n";
+        s << "    baseColor = baseColor * exposure;\n";
+        if ((features & ShaderFeatures::TonemapMask) == ShaderFeatures::TonemapReinhard) {
+            s << "    baseColor = baseColor / (vec3<f32>(1.0) + baseColor);\n";
+        } else if ((features & ShaderFeatures::TonemapMask) == ShaderFeatures::TonemapCineon) {
+            s << "    let x = max(vec3<f32>(0.0), baseColor - vec3<f32>(0.004));\n";
+            s << "    baseColor = (x * (6.2 * x + vec3<f32>(0.5))) / (x * (6.2 * x + vec3<f32>(1.7)) + vec3<f32>(0.06));\n";
+        } else if ((features & ShaderFeatures::TonemapMask) == ShaderFeatures::TonemapACES) {
+            s << "    let a = baseColor * (baseColor * 2.51 + vec3<f32>(0.03));\n";
+            s << "    let b = baseColor * (baseColor * 2.43 + vec3<f32>(0.59)) + vec3<f32>(0.14);\n";
+            s << "    baseColor = clamp(a / b, vec3<f32>(0.0), vec3<f32>(1.0));\n";
+        }
+        // TonemapLinear: just exposure multiplication (done above)
+    }
 
     // Fog
     if (features & ShaderFeatures::FogLinear) {
@@ -658,7 +679,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         s << "    }\n";
     }
 
-    // sRGB output is now handled by the renderer-level post-process pass.
+    // Per-object sRGB output — used when rendering to a render target.
+    if (features & ShaderFeatures::SRGBOutput) {
+        s << "    baseColor = pow(baseColor, vec3<f32>(1.0 / 2.2));\n";
+    }
 
     s << "    return vec4<f32>(baseColor, opacity);\n}\n";
     return s.str();

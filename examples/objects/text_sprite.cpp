@@ -7,7 +7,7 @@ using namespace threepp;
 
 int main() {
 
-    Canvas canvas("TextSprite");
+    Canvas canvas("TextSprite", {{"aa", 4}, {"vsync", false}, {"graphicsApi", GraphicsAPI::WebGPU}});
     auto renderer = createRenderer(canvas);
 
     Scene scene;
@@ -29,7 +29,7 @@ int main() {
     auto grid = AxesHelper::create(1);
     scene.add(grid);
 
-    ImguiFunctionalContext ui(canvas, [&] {
+    ImguiFunctionalContext ui(canvas, *renderer, [&] {
         ImGui::SetNextWindowPos({});
         ImGui::SetNextWindowSize({});
 

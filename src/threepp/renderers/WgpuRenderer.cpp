@@ -594,24 +594,12 @@ struct WgpuRenderer::Impl {
     }
 
     // Present and release the per-frame surface state.
-    void endFrame() {
+    // Release frame resources without presenting. Used by dispose() to
+    // drop the surface texture so wgpu doesn't complain about a held
+    // SurfaceOutput when the surface is reconfigured or destroyed.
+    void releaseFrame() {
         if (!frame_.active) return;
 
-        // If tone mapping is active, blit the intermediate RT to the surface,
-        // then render the ImGui overlay directly to the surface (not tone-mapped).
-        if (needsToneMapPass() && toneMap_.colorTexture) {
-            toneMapBlit();
-
-            if (overlayCallback_) {
-                overlayOnSurface();
-            }
-        }
-
-#ifndef __EMSCRIPTEN__
-        wgpuSurfacePresent(surface);
-#endif
-
-        // Release views and textures
         wgpuTextureViewRelease(frame_.depthView);
         wgpuTextureRelease(frame_.depthTexture);
         if (frame_.resolveView) {
@@ -624,6 +612,28 @@ struct WgpuRenderer::Impl {
         wgpuTextureRelease(frame_.surfaceTexture.texture);
 
         frame_ = {};
+    }
+
+    void endFrame() {
+        if (!frame_.active) return;
+
+        // If tone mapping is active, blit the intermediate RT to the surface.
+        if (needsToneMapPass() && toneMap_.colorTexture) {
+            toneMapBlit();
+        }
+
+        // Render overlay (e.g. ImGui) directly to the surface, after all
+        // render() calls and any tone-map blit. This ensures the overlay
+        // is drawn exactly once per frame and is never tone-mapped.
+        if (overlayCallback_) {
+            overlayOnSurface();
+        }
+
+#ifndef __EMSCRIPTEN__
+        wgpuSurfacePresent(surface);
+#endif
+
+        releaseFrame();
     }
 
     // Build the WGSL source for a tone mapping fullscreen pass.
@@ -1308,9 +1318,22 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 frameCtx.fogBits = SF::FogExp2;
             }
         }
-        // Tone mapping and sRGB are now applied as a post-process pass
-        // in endFrame(), so they are not set per-object here.
+        // When rendering to a render target, apply tone mapping per-object
+        // in shaders (the post-process blit only applies to surface rendering).
+        // When rendering to the surface, leave bits at zero — endFrame() handles it.
         frameCtx.toneMappingExposure = scope.toneMappingExposure;
+        if (currentRenderTarget_) {
+            switch (scope.toneMapping) {
+                case ToneMapping::Linear:    frameCtx.tonemapBits = SF::TonemapLinear; break;
+                case ToneMapping::Reinhard:  frameCtx.tonemapBits = SF::TonemapReinhard; break;
+                case ToneMapping::Cineon:    frameCtx.tonemapBits = SF::TonemapCineon; break;
+                case ToneMapping::ACESFilmic:frameCtx.tonemapBits = SF::TonemapACES; break;
+                default: break;
+            }
+            if (scope.outputEncoding == Encoding::sRGB) {
+                frameCtx.srgbOutput = true;
+            }
+        }
         frameCtx.localClippingEnabled = scope.localClippingEnabled;
         frameCtx.shadowActive = shadowMap->isActive();
 
@@ -1322,15 +1345,6 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Render transparent objects (back-to-front, depth write off)
         for (auto* item : renderList_.transparent) {
             renderItem(pass, item, projectionMatrix, viewMatrix, camera, frameCtx);
-        }
-
-        // Invoke overlay callback (e.g. ImGui) while the render pass is still active.
-        // Only for surface rendering, not render-to-texture passes.
-        // When tone mapping is active, the overlay is deferred to endFrame() so it
-        // renders directly to the surface after the tone map blit (UI should not
-        // be tone-mapped).
-        if (!currentRenderTarget_ && overlayCallback_ && !needsToneMapPass()) {
-            overlayCallback_(static_cast<void*>(pass));
         }
 
         wgpuRenderPassEncoderEnd(pass);
@@ -1726,7 +1740,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (rawMat->fog) {
             features |= frameCtx.fogBits;
         }
-        // Tone mapping and sRGB are applied as a renderer-level post-process.
+        // Per-object tone mapping/sRGB — only set when rendering to a render target.
+        features |= frameCtx.tonemapBits;
+        if (frameCtx.srgbOutput) {
+            features |= SF::SRGBOutput;
+        }
 
         // Get/create pipeline
         auto& pe = pipelines->getOrCreatePipeline(features, surfaceFormat, effectiveSampleCount_);
@@ -1739,11 +1757,26 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Sprites use a billboard model matrix (always faces the camera)
         Matrix4 modelMatrix;
         if (isSprite) {
+            auto* sprite = object->as<Sprite>();
             Vector3 spritePos;
             spritePos.setFromMatrixPosition(*object->matrixWorld);
             Vector3 spriteScale;
             spriteScale.setFromMatrixScale(*object->matrixWorld);
             modelMatrix.extractRotation(*camera.matrixWorld);
+
+            // Apply center offset — matches the GL sprite shader:
+            // alignedPosition = (position.xy - (center - 0.5)) * scale
+            // We shift the model position so the quad's anchor matches center.
+            if (sprite) {
+                Vector3 right, up;
+                right.setFromMatrixColumn(modelMatrix, 0);
+                up.setFromMatrixColumn(modelMatrix, 1);
+                float cx = sprite->center.x - 0.5f;
+                float cy = sprite->center.y - 0.5f;
+                spritePos.sub(right * (cx * spriteScale.x));
+                spritePos.sub(up * (cy * spriteScale.y));
+            }
+
             modelMatrix.scale(spriteScale);
             modelMatrix.setPosition(spritePos);
         } else {
@@ -2008,8 +2041,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
 
-        // Release tone mapping post-process resources
-        endFrame(); // Release any active frame state
+        // Release any active frame state without presenting (safe for dispose)
+        releaseFrame();
         if (toneMap_.colorView) wgpuTextureViewRelease(toneMap_.colorView);
         if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
         if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
@@ -2055,6 +2088,10 @@ WgpuRenderer::WgpuRenderer(Canvas& canvas)
 
 void WgpuRenderer::render(Object3D& scene, Camera& camera) {
     pimpl_->render(scene, camera);
+}
+
+void WgpuRenderer::endFrame() {
+    pimpl_->endFrame();
 }
 
 WindowSize WgpuRenderer::size() const {

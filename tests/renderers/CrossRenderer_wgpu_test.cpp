@@ -4006,6 +4006,7 @@ TEST_CASE("Wgpu: surface reconfigured smaller behind renderer's back", "[wgpu][s
 
     // Render at initial 800x600 — establishes viewport/scissor at 800x600
     renderer.render(*scene, *camera);
+    renderer.endFrame(); // Release surface texture before reconfiguring
 
     // Reconfigure the surface to a SMALLER size directly, without telling
     // the renderer. The renderer's viewport/scissor/size_ remain at 800x600,
@@ -4028,12 +4029,14 @@ TEST_CASE("Wgpu: surface reconfigured smaller behind renderer's back", "[wgpu][s
     // Without the fix, this crashes with: "Scissor Rect { w: 800, h: 600 }
     // is not contained in the render target (400, 300, 1)"
     renderer.render(*scene, *camera);
+    renderer.endFrame(); // Release surface texture before reconfiguring
 
     // Even more extreme: shrink to tiny
     config.width = 200;
     config.height = 150;
     wgpuSurfaceConfigure(wgpuSurface, &config);
     renderer.render(*scene, *camera);
+    renderer.endFrame();
 
     CHECK(true);
     renderer.dispose();
@@ -4071,6 +4074,7 @@ TEST_CASE("Wgpu: surface reconfigured smaller with MSAA", "[wgpu][surface]") {
 
     // Render at initial 800x600
     renderer.render(*scene, *camera);
+    renderer.endFrame(); // Release surface texture before reconfiguring
 
     // Reconfigure surface smaller behind the renderer's back — with MSAA
     auto* wgpuSurface = static_cast<WGPUSurface>(renderer.nativeSurface());
@@ -4090,6 +4094,7 @@ TEST_CASE("Wgpu: surface reconfigured smaller with MSAA", "[wgpu][surface]") {
     // Render with stale state + MSAA — the MSAA/depth textures must match
     // the actual surface texture, not the renderer's stale size
     renderer.render(*scene, *camera);
+    renderer.endFrame();
 
     CHECK(true);
     renderer.dispose();

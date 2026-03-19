@@ -178,6 +178,7 @@ struct Canvas::Impl {
     std::vector<std::function<void(WindowSize)>> resizeListener;
     std::vector<std::function<void(int monitor)>> monitorChangesListener;
     std::function<void()> frameEndCallback_;
+    bool insideAnimateLoop_{false};
 
     explicit Impl(Canvas& scope, const Parameters& params)
         : scope(scope), graphicsApi_(params.graphicsApi_), exitOnKeyEscape_(params.exitOnKeyEscape_) {
@@ -270,7 +271,9 @@ struct Canvas::Impl {
             return false;
         }
 
+        insideAnimateLoop_ = true;
         f();
+        insideAnimateLoop_ = false;
 
         if (graphicsApi_ == GraphicsAPI::OpenGL) {
             glfwSwapBuffers(window);
@@ -486,6 +489,10 @@ GraphicsAPI Canvas::graphicsApi() const {
 
 void Canvas::setFrameEndCallback(std::function<void()> callback) {
     pimpl_->frameEndCallback_ = std::move(callback);
+}
+
+bool Canvas::isInsideAnimateLoop() const {
+    return pimpl_->insideAnimateLoop_;
 }
 
 Canvas::~Canvas() = default;

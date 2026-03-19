@@ -69,6 +69,11 @@ namespace threepp::wgpu {
         float fogDensity = 0;
         uint64_t fogBits = 0;
         float toneMappingExposure = 1.0f;
+        // Per-object tone mapping/sRGB bits — used when rendering to a render
+        // target (where the post-process blit doesn't apply). Zero when
+        // rendering to the surface (post-process handles it).
+        uint64_t tonemapBits = 0;
+        bool srgbOutput = false;
         bool localClippingEnabled = false;
         bool shadowActive = false;
     };

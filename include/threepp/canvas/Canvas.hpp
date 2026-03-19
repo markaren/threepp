@@ -63,6 +63,11 @@ namespace threepp {
         /// present the surface texture, analogous to glfwSwapBuffers for GL.
         void setFrameEndCallback(std::function<void()> callback);
 
+        /// True while inside animateOnce() user callback (between f() call
+        /// and frame-end callback). Used by WgpuRenderer to decide whether
+        /// to auto-present after render() or defer to the frame-end callback.
+        [[nodiscard]] bool isInsideAnimateLoop() const;
+
         ~Canvas() override;
 
     private:
