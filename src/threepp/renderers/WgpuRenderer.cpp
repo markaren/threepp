@@ -79,6 +79,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -135,6 +136,9 @@ struct WgpuRenderer::Impl {
 
     // MSAA configuration
     uint32_t sampleCount_ = 1;
+    // Effective sample count for the current render pass (may be 1 when
+    // rendering to the non-MSAA tone mapping intermediate RT).
+    uint32_t effectiveSampleCount_ = 1;
 
     // Viewport & scissor state
     struct { float x=0, y=0, w=0, h=0; } viewport_;
@@ -200,6 +204,58 @@ struct WgpuRenderer::Impl {
     } renderInfo;
 
     bool initialized = false;
+
+    // Per-frame surface state — persists across multiple render() calls within
+    // a single frame so that HUD / multi-pass rendering works correctly.
+    // Acquired on the first render() of a frame, released by endFrame().
+    struct FrameSurface {
+        WGPUSurfaceTexture surfaceTexture{};
+        WGPUTextureView colorView = nullptr;
+        WGPUTextureView depthView = nullptr;
+        WGPUTextureView resolveView = nullptr;
+        WGPUTexture depthTexture = nullptr;
+        WGPUTexture msaaColorTexture = nullptr;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool active = false;      // true while a surface texture is acquired
+        bool hasRendered = false;  // true after the first render pass of this frame
+    } frame_;
+
+    // Pending clear flags — set by clear()/clearDepth()/clearStencil(),
+    // consumed by the next render pass's loadOp.
+    bool pendingClearColor_ = false;
+    bool pendingClearDepth_ = false;
+    bool pendingClearStencil_ = false;
+
+    // Internal tone mapping post-process state.
+    // When tone mapping or sRGB output is active, scene renders go to this
+    // intermediate RT instead of the surface. endFrame() blits to the surface
+    // with tone mapping + sRGB conversion applied via a fullscreen pass.
+    struct ToneMapState {
+        WGPUTexture colorTexture = nullptr;
+        WGPUTextureView colorView = nullptr;
+        WGPUTexture depthTexture = nullptr;
+        WGPUTextureView depthView = nullptr;
+        uint32_t width = 0;
+        uint32_t height = 0;
+
+        WGPUBindGroupLayout bindGroupLayout = nullptr;
+        WGPUPipelineLayout pipelineLayout = nullptr;
+        WGPUSampler sampler = nullptr;
+
+        // Cached pipelines keyed by tone mapping mode
+        // Index: 0=Linear, 1=Reinhard, 2=Cineon, 3=ACES, 4=None(sRGB only)
+        WGPURenderPipeline pipelines[5]{};
+        WGPUShaderModule shaderModules[5]{};
+
+        bool initialized = false;
+    } toneMap_;
+
+    // Returns true if a post-process tone mapping/sRGB pass is needed
+    bool needsToneMapPass() const {
+        return scope.toneMapping != ToneMapping::None ||
+               scope.outputEncoding == Encoding::sRGB;
+    }
 
     // Retained framebuffer for copyFramebufferToTexture support.
     // When retainFramebuffer is true, render() copies the resolved color content
@@ -480,12 +536,532 @@ struct WgpuRenderer::Impl {
         wgpuSurfaceConfigure(surface, &config);
     }
 
+    // Acquire the surface texture for this frame (called once per frame).
+    // Returns false if the surface texture could not be acquired.
+    bool acquireFrame() {
+        if (frame_.active) return true; // Already acquired
+
+        if (!surface) return false;
+
+        wgpuSurfaceGetCurrentTexture(surface, &frame_.surfaceTexture);
+        if (frame_.surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+            frame_.surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+            std::cerr << "WgpuRenderer: Failed to acquire surface texture (status "
+                      << static_cast<int>(frame_.surfaceTexture.status) << ")" << std::endl;
+            return false;
+        }
+
+        frame_.width = wgpuTextureGetWidth(frame_.surfaceTexture.texture);
+        frame_.height = wgpuTextureGetHeight(frame_.surfaceTexture.texture);
+
+        WGPUTextureViewDescriptor vd{};
+        vd.label = {.data = "surface_view", .length = 12};
+        vd.format = surfaceFormat;
+        vd.dimension = WGPUTextureViewDimension_2D;
+        vd.baseMipLevel = 0; vd.mipLevelCount = 1;
+        vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
+        vd.aspect = WGPUTextureAspect_All;
+
+        if (sampleCount_ > 1) {
+            frame_.resolveView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
+            WGPUTextureDescriptor msaaCtd{};
+            msaaCtd.label = {.data = "frame_msaa_color", .length = 16};
+            msaaCtd.size = {frame_.width, frame_.height, 1};
+            msaaCtd.mipLevelCount = 1;
+            msaaCtd.sampleCount = sampleCount_;
+            msaaCtd.dimension = WGPUTextureDimension_2D;
+            msaaCtd.format = surfaceFormat;
+            msaaCtd.usage = WGPUTextureUsage_RenderAttachment;
+            frame_.msaaColorTexture = wgpuDeviceCreateTexture(device, &msaaCtd);
+            frame_.colorView = wgpuTextureCreateView(frame_.msaaColorTexture, nullptr);
+        } else {
+            frame_.colorView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
+        }
+
+        WGPUTextureDescriptor dtd{};
+        dtd.label = {.data = "depth_tex", .length = 9};
+        dtd.size = {frame_.width, frame_.height, 1};
+        dtd.mipLevelCount = 1; dtd.sampleCount = sampleCount_;
+        dtd.dimension = WGPUTextureDimension_2D;
+        dtd.format = WGPUTextureFormat_Depth24Plus;
+        dtd.usage = WGPUTextureUsage_RenderAttachment;
+        frame_.depthTexture = wgpuDeviceCreateTexture(device, &dtd);
+        frame_.depthView = wgpuTextureCreateView(frame_.depthTexture, nullptr);
+
+        frame_.active = true;
+        frame_.hasRendered = false;
+        return true;
+    }
+
+    // Present and release the per-frame surface state.
+    void endFrame() {
+        if (!frame_.active) return;
+
+        // If tone mapping is active, blit the intermediate RT to the surface,
+        // then render the ImGui overlay directly to the surface (not tone-mapped).
+        if (needsToneMapPass() && toneMap_.colorTexture) {
+            toneMapBlit();
+
+            if (overlayCallback_) {
+                overlayOnSurface();
+            }
+        }
+
+#ifndef __EMSCRIPTEN__
+        wgpuSurfacePresent(surface);
+#endif
+
+        // Release views and textures
+        wgpuTextureViewRelease(frame_.depthView);
+        wgpuTextureRelease(frame_.depthTexture);
+        if (frame_.resolveView) {
+            wgpuTextureViewRelease(frame_.colorView);
+            wgpuTextureRelease(frame_.msaaColorTexture);
+            wgpuTextureViewRelease(frame_.resolveView);
+        } else {
+            wgpuTextureViewRelease(frame_.colorView);
+        }
+        wgpuTextureRelease(frame_.surfaceTexture.texture);
+
+        frame_ = {};
+    }
+
+    // Build the WGSL source for a tone mapping fullscreen pass.
+    static std::string buildToneMapWGSL(ToneMapping mode, bool srgb) {
+        std::ostringstream s;
+        s << R"(
+@group(0) @binding(0) var inputTex: texture_2d<f32>;
+@group(0) @binding(1) var inputSampler: sampler;
+@group(0) @binding(2) var<uniform> params: vec4<f32>; // x=exposure
+
+struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VSOutput {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    var out: VSOutput;
+    out.pos = vec4<f32>(positions[vi], 0.0, 1.0);
+    out.uv = positions[vi] * 0.5 + vec2<f32>(0.5, 0.5);
+    out.uv.y = 1.0 - out.uv.y;
+    return out;
+}
+
+@fragment fn fs(in: VSOutput) -> @location(0) vec4<f32> {
+    var color = textureSample(inputTex, inputSampler, in.uv);
+    var rgb = color.rgb;
+    let exposure = params.x;
+)";
+        // Tone mapping
+        switch (mode) {
+            case ToneMapping::Linear:
+                s << "    rgb = rgb * exposure;\n";
+                break;
+            case ToneMapping::Reinhard:
+                s << "    rgb = rgb * exposure;\n";
+                s << "    rgb = rgb / (vec3<f32>(1.0) + rgb);\n";
+                break;
+            case ToneMapping::Cineon:
+                s << "    rgb = rgb * exposure;\n";
+                s << "    let x = max(vec3<f32>(0.0), rgb - vec3<f32>(0.004));\n";
+                s << "    rgb = (x * (6.2 * x + vec3<f32>(0.5))) / (x * (6.2 * x + vec3<f32>(1.7)) + vec3<f32>(0.06));\n";
+                break;
+            case ToneMapping::ACESFilmic:
+                s << "    rgb = rgb * exposure;\n";
+                s << "    let a = rgb * (rgb * 2.51 + vec3<f32>(0.03));\n";
+                s << "    let b = rgb * (rgb * 2.43 + vec3<f32>(0.59)) + vec3<f32>(0.14);\n";
+                s << "    rgb = clamp(a / b, vec3<f32>(0.0), vec3<f32>(1.0));\n";
+                break;
+            default:
+                break;
+        }
+        if (srgb) {
+            s << "    rgb = pow(rgb, vec3<f32>(1.0 / 2.2));\n";
+        }
+        s << "    return vec4<f32>(rgb, color.a);\n}\n";
+        return s.str();
+    }
+
+    // Get (or lazily create) the tone mapping pipeline for the current settings.
+    int toneMapPipelineIndex() {
+        switch (scope.toneMapping) {
+            case ToneMapping::Linear: return 0;
+            case ToneMapping::Reinhard: return 1;
+            case ToneMapping::Cineon: return 2;
+            case ToneMapping::ACESFilmic: return 3;
+            default: return 4; // sRGB only, no tone mapping
+        }
+    }
+
+    void ensureToneMapResources() {
+        if (!toneMap_.initialized) {
+            // Bind group layout: texture, sampler, uniform buffer
+            WGPUBindGroupLayoutEntry entries[3]{};
+            entries[0].binding = 0;
+            entries[0].visibility = WGPUShaderStage_Fragment;
+            entries[0].texture.sampleType = WGPUTextureSampleType_Float;
+            entries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+            entries[1].binding = 1;
+            entries[1].visibility = WGPUShaderStage_Fragment;
+            entries[1].sampler.type = WGPUSamplerBindingType_Filtering;
+
+            entries[2].binding = 2;
+            entries[2].visibility = WGPUShaderStage_Fragment;
+            entries[2].buffer.type = WGPUBufferBindingType_Uniform;
+            entries[2].buffer.minBindingSize = 16;
+
+            WGPUBindGroupLayoutDescriptor bglDesc{};
+            bglDesc.label = {.data = "tonemap_bgl", .length = 11};
+            bglDesc.entryCount = 3;
+            bglDesc.entries = entries;
+            toneMap_.bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+
+            WGPUPipelineLayoutDescriptor plDesc{};
+            plDesc.label = {.data = "tonemap_pl", .length = 10};
+            plDesc.bindGroupLayoutCount = 1;
+            plDesc.bindGroupLayouts = &toneMap_.bindGroupLayout;
+            toneMap_.pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+
+            WGPUSamplerDescriptor sd{};
+            sd.label = {.data = "tonemap_sampler", .length = 15};
+            sd.minFilter = WGPUFilterMode_Linear;
+            sd.magFilter = WGPUFilterMode_Linear;
+            sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
+            sd.addressModeU = WGPUAddressMode_ClampToEdge;
+            sd.addressModeV = WGPUAddressMode_ClampToEdge;
+            sd.addressModeW = WGPUAddressMode_ClampToEdge;
+            sd.maxAnisotropy = 1;
+            toneMap_.sampler = wgpuDeviceCreateSampler(device, &sd);
+
+            toneMap_.initialized = true;
+        }
+
+        // Ensure the pipeline for the current tone mapping mode exists
+        int idx = toneMapPipelineIndex();
+        if (!toneMap_.pipelines[idx]) {
+            bool srgb = (scope.outputEncoding == Encoding::sRGB);
+            auto wgsl = buildToneMapWGSL(scope.toneMapping, srgb);
+
+            WGPUShaderSourceWGSL wgslSrc{};
+            wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+            wgslSrc.code = {.data = wgsl.c_str(), .length = wgsl.size()};
+
+            WGPUShaderModuleDescriptor smDesc{};
+            smDesc.nextInChain = &wgslSrc.chain;
+            smDesc.label = {.data = "tonemap_shader", .length = 14};
+            toneMap_.shaderModules[idx] = wgpuDeviceCreateShaderModule(device, &smDesc);
+
+            WGPUColorTargetState colorTarget{};
+            colorTarget.format = surfaceFormat;
+            colorTarget.writeMask = WGPUColorWriteMask_All;
+
+            WGPUStringView vsEntry = {.data = "vs", .length = 2};
+            WGPUStringView fsEntry = {.data = "fs", .length = 2};
+
+            WGPUFragmentState fragmentState{};
+            fragmentState.module = toneMap_.shaderModules[idx];
+            fragmentState.entryPoint = fsEntry;
+            fragmentState.targetCount = 1;
+            fragmentState.targets = &colorTarget;
+
+            WGPURenderPipelineDescriptor pipeDesc{};
+            pipeDesc.label = {.data = "tonemap_pipe", .length = 12};
+            pipeDesc.layout = toneMap_.pipelineLayout;
+            pipeDesc.vertex.module = toneMap_.shaderModules[idx];
+            pipeDesc.vertex.entryPoint = vsEntry;
+            pipeDesc.vertex.bufferCount = 0;
+            pipeDesc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+            pipeDesc.primitive.cullMode = WGPUCullMode_None;
+            pipeDesc.multisample.count = 1;
+            pipeDesc.multisample.mask = ~0u;
+            pipeDesc.fragment = &fragmentState;
+
+            toneMap_.pipelines[idx] = wgpuDeviceCreateRenderPipeline(device, &pipeDesc);
+        }
+    }
+
+    // Ensure the intermediate RT for tone mapping is the right size.
+    void ensureToneMapRT(uint32_t w, uint32_t h) {
+        if (toneMap_.width == w && toneMap_.height == h && toneMap_.colorTexture) return;
+
+        // Release old
+        if (toneMap_.colorView) wgpuTextureViewRelease(toneMap_.colorView);
+        if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
+        if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
+        if (toneMap_.depthTexture) wgpuTextureRelease(toneMap_.depthTexture);
+
+        toneMap_.width = w;
+        toneMap_.height = h;
+
+        // Color texture (non-MSAA, used as texture binding source)
+        WGPUTextureDescriptor td{};
+        td.label = {.data = "tonemap_color", .length = 13};
+        td.size = {w, h, 1};
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = surfaceFormat;
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        toneMap_.colorTexture = wgpuDeviceCreateTexture(device, &td);
+        toneMap_.colorView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
+
+        // Depth texture
+        WGPUTextureDescriptor dtd{};
+        dtd.label = {.data = "tonemap_depth", .length = 13};
+        dtd.size = {w, h, 1};
+        dtd.mipLevelCount = 1;
+        dtd.sampleCount = 1;
+        dtd.dimension = WGPUTextureDimension_2D;
+        dtd.format = WGPUTextureFormat_Depth24Plus;
+        dtd.usage = WGPUTextureUsage_RenderAttachment;
+        toneMap_.depthTexture = wgpuDeviceCreateTexture(device, &dtd);
+        toneMap_.depthView = wgpuTextureCreateView(toneMap_.depthTexture, nullptr);
+    }
+
+    // Blit the tone map intermediate RT to the surface with tone mapping applied.
+    void toneMapBlit() {
+        ensureToneMapResources();
+
+        int idx = toneMapPipelineIndex();
+        if (!toneMap_.pipelines[idx]) return;
+
+        // Upload exposure uniform
+        float params[4] = {scope.toneMappingExposure, 0, 0, 0};
+        WGPUBufferDescriptor ubDesc{};
+        ubDesc.label = {.data = "tonemap_ub", .length = 10};
+        ubDesc.size = 16;
+        ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        ubDesc.mappedAtCreation = true;
+        WGPUBuffer uniformBuf = wgpuDeviceCreateBuffer(device, &ubDesc);
+        std::memcpy(wgpuBufferGetMappedRange(uniformBuf, 0, 16), params, 16);
+        wgpuBufferUnmap(uniformBuf);
+
+        // Input texture view
+        WGPUTextureView inputView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
+
+        // Create bind group
+        WGPUBindGroupEntry bgEntries[3]{};
+        bgEntries[0].binding = 0;
+        bgEntries[0].textureView = inputView;
+        bgEntries[1].binding = 1;
+        bgEntries[1].sampler = toneMap_.sampler;
+        bgEntries[2].binding = 2;
+        bgEntries[2].buffer = uniformBuf;
+        bgEntries[2].size = 16;
+
+        WGPUBindGroupDescriptor bgDesc{};
+        bgDesc.label = {.data = "tonemap_bg", .length = 10};
+        bgDesc.layout = toneMap_.bindGroupLayout;
+        bgDesc.entryCount = 3;
+        bgDesc.entries = bgEntries;
+        WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(device, &bgDesc);
+
+        // Render to the surface
+        WGPUTextureView surfaceColorView;
+        WGPUTextureView surfaceResolveView = nullptr;
+        WGPUTexture blitMsaaTexture = nullptr;
+
+        WGPUTextureViewDescriptor vd{};
+        vd.label = {.data = "blit_view", .length = 9};
+        vd.format = surfaceFormat;
+        vd.dimension = WGPUTextureViewDimension_2D;
+        vd.baseMipLevel = 0; vd.mipLevelCount = 1;
+        vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
+        vd.aspect = WGPUTextureAspect_All;
+
+        // Tone map blit is always non-MSAA (fullscreen quad)
+        surfaceColorView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
+
+        WGPUCommandEncoderDescriptor encDesc{};
+        encDesc.label = {.data = "tonemap_enc", .length = 11};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+
+        WGPURenderPassColorAttachment colorAtt{};
+        colorAtt.view = surfaceColorView;
+        colorAtt.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        colorAtt.loadOp = WGPULoadOp_Clear;
+        colorAtt.storeOp = WGPUStoreOp_Store;
+        colorAtt.clearValue = {0, 0, 0, 1};
+
+        WGPURenderPassDescriptor rpDesc{};
+        rpDesc.label = {.data = "tonemap_pass", .length = 12};
+        rpDesc.colorAttachmentCount = 1;
+        rpDesc.colorAttachments = &colorAtt;
+
+        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(encoder, &rpDesc);
+        wgpuRenderPassEncoderSetPipeline(rp, toneMap_.pipelines[idx]);
+        wgpuRenderPassEncoderSetBindGroup(rp, 0, bindGroup, 0, nullptr);
+        wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
+        wgpuRenderPassEncoderEnd(rp);
+        wgpuRenderPassEncoderRelease(rp);
+
+        WGPUCommandBufferDescriptor cmdDesc{};
+        cmdDesc.label = {.data = "tonemap_cmd", .length = 11};
+        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        wgpuQueueSubmit(queue, 1, &cmd);
+
+        wgpuCommandBufferRelease(cmd);
+        wgpuCommandEncoderRelease(encoder);
+        wgpuBindGroupRelease(bindGroup);
+        wgpuTextureViewRelease(inputView);
+        wgpuTextureViewRelease(surfaceColorView);
+        wgpuBufferRelease(uniformBuf);
+    }
+
+    // Render the ImGui overlay directly to the surface (after tone map blit).
+    // Uses LoadOp_Load to preserve the tone-mapped scene.
+    // Must include a depth attachment because the ImGui pipeline was initialized
+    // with DepthStencilFormat = Depth24Plus.
+    void overlayOnSurface() {
+        WGPUTextureViewDescriptor vd{};
+        vd.label = {.data = "overlay_view", .length = 12};
+        vd.format = surfaceFormat;
+        vd.dimension = WGPUTextureViewDimension_2D;
+        vd.baseMipLevel = 0; vd.mipLevelCount = 1;
+        vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
+        vd.aspect = WGPUTextureAspect_All;
+        WGPUTextureView surfaceView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
+
+        // Create a temporary depth texture matching the surface dimensions.
+        // The ImGui pipeline expects Depth24Plus even though it doesn't use depth.
+        WGPUTextureDescriptor dtd{};
+        dtd.label = {.data = "overlay_depth", .length = 13};
+        dtd.size = {frame_.width, frame_.height, 1};
+        dtd.mipLevelCount = 1;
+        dtd.sampleCount = 1; // surface texture is always non-MSAA
+        dtd.dimension = WGPUTextureDimension_2D;
+        dtd.format = WGPUTextureFormat_Depth24Plus;
+        dtd.usage = WGPUTextureUsage_RenderAttachment;
+        WGPUTexture overlayDepthTex = wgpuDeviceCreateTexture(device, &dtd);
+        WGPUTextureView overlayDepthView = wgpuTextureCreateView(overlayDepthTex, nullptr);
+
+        WGPUCommandEncoderDescriptor encDesc{};
+        encDesc.label = {.data = "overlay_enc", .length = 11};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+
+        WGPURenderPassColorAttachment colorAtt{};
+        colorAtt.view = surfaceView;
+        colorAtt.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        colorAtt.loadOp = WGPULoadOp_Load;
+        colorAtt.storeOp = WGPUStoreOp_Store;
+
+        WGPURenderPassDepthStencilAttachment depthAtt{};
+        depthAtt.view = overlayDepthView;
+        depthAtt.depthLoadOp = WGPULoadOp_Clear;
+        depthAtt.depthStoreOp = WGPUStoreOp_Discard;
+        depthAtt.depthClearValue = 1.0f;
+
+        WGPURenderPassDescriptor rpDesc{};
+        rpDesc.label = {.data = "overlay_pass", .length = 12};
+        rpDesc.colorAttachmentCount = 1;
+        rpDesc.colorAttachments = &colorAtt;
+        rpDesc.depthStencilAttachment = &depthAtt;
+
+        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(encoder, &rpDesc);
+        overlayCallback_(static_cast<void*>(rp));
+        wgpuRenderPassEncoderEnd(rp);
+        wgpuRenderPassEncoderRelease(rp);
+
+        WGPUCommandBufferDescriptor cmdDesc{};
+        cmdDesc.label = {.data = "overlay_cmd", .length = 11};
+        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        wgpuQueueSubmit(queue, 1, &cmd);
+
+        wgpuCommandBufferRelease(cmd);
+        wgpuCommandEncoderRelease(encoder);
+        wgpuTextureViewRelease(overlayDepthView);
+        wgpuTextureRelease(overlayDepthTex);
+        wgpuTextureViewRelease(surfaceView);
+    }
+
+    // Execute a standalone clear pass (mid-frame, outside of a scene render).
+    void executeClear(bool color, bool depth, bool stencil) {
+        if (!initialized) return;
+
+        bool useSurface = (currentRenderTarget_ == nullptr && surface != nullptr);
+        if (!useSurface && currentRenderTarget_ == nullptr) return;
+
+        WGPUTextureView colorView = nullptr;
+        WGPUTextureView depthView = nullptr;
+        WGPUTextureView resolveView = nullptr;
+        uint32_t attachW = 0, attachH = 0;
+
+        if (useSurface) {
+            if (!acquireFrame()) return;
+            if (needsToneMapPass()) {
+                ensureToneMapRT(frame_.width, frame_.height);
+                colorView = toneMap_.colorView;
+                depthView = toneMap_.depthView;
+            } else {
+                colorView = frame_.colorView;
+                depthView = frame_.depthView;
+                resolveView = frame_.resolveView;
+            }
+            attachW = frame_.width;
+            attachH = frame_.height;
+        } else {
+            auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
+            attachW = rt.width;
+            attachH = rt.height;
+            depthView = rt.depthView;
+            if (sampleCount_ > 1 && rt.msaaColorView) {
+                colorView = rt.msaaColorView;
+                resolveView = rt.colorView;
+            } else {
+                colorView = rt.colorView;
+            }
+        }
+
+        WGPUCommandEncoderDescriptor encDesc{};
+        encDesc.label = {.data = "clear_enc", .length = 9};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+
+        WGPURenderPassColorAttachment colorAttachment{};
+        colorAttachment.view = colorView;
+        colorAttachment.resolveTarget = resolveView;
+        colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+        colorAttachment.loadOp = color ? WGPULoadOp_Clear : WGPULoadOp_Load;
+        colorAttachment.storeOp = WGPUStoreOp_Store;
+        colorAttachment.clearValue = {
+                static_cast<double>(clearColor_.r),
+                static_cast<double>(clearColor_.g),
+                static_cast<double>(clearColor_.b),
+                static_cast<double>(clearAlpha_)};
+
+        WGPURenderPassDepthStencilAttachment depthAttachment{};
+        depthAttachment.view = depthView;
+        depthAttachment.depthLoadOp = depth ? WGPULoadOp_Clear : WGPULoadOp_Load;
+        depthAttachment.depthStoreOp = WGPUStoreOp_Store;
+        depthAttachment.depthClearValue = 1.0f;
+
+        WGPURenderPassDescriptor passDesc{};
+        passDesc.label = {.data = "clear_pass", .length = 10};
+        passDesc.colorAttachmentCount = 1;
+        passDesc.colorAttachments = &colorAttachment;
+        passDesc.depthStencilAttachment = &depthAttachment;
+
+        WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+        wgpuRenderPassEncoderEnd(pass);
+        wgpuRenderPassEncoderRelease(pass);
+
+        WGPUCommandBufferDescriptor cmdDesc{};
+        cmdDesc.label = {.data = "clear_cmd", .length = 9};
+        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        wgpuQueueSubmit(queue, 1, &cmdBuffer);
+        wgpuCommandBufferRelease(cmdBuffer);
+        wgpuCommandEncoderRelease(encoder);
+
+        // After a clear, the surface has content — mark as rendered
+        if (useSurface) frame_.hasRendered = true;
+    }
 
     void render(Object3D& scene, Camera& camera) {
         if (!initialized) return;
 
-        // Recycle per-draw buffers from previous frame
-        bufferPool->beginFrame();
+        if (!frame_.active) {
+            // New frame — recycle per-draw buffers
+            bufferPool->beginFrame();
+        }
 
         // Reset per-frame statistics
         renderInfo.frame++;
@@ -500,7 +1076,11 @@ struct WgpuRenderer::Impl {
         auto currentSize = canvas.size();
         if (currentSize.width() != size_.width() || currentSize.height() != size_.height()) {
             size_ = currentSize;
-            if (surface) configureSurface();
+            if (surface) {
+                // Size changed — must release current frame and reconfigure
+                endFrame();
+                configureSurface();
+            }
             viewport_.w = static_cast<float>(size_.width());
             viewport_.h = static_cast<float>(size_.height());
             scissor_.w = static_cast<uint32_t>(size_.width());
@@ -587,9 +1167,6 @@ struct WgpuRenderer::Impl {
         WGPUTextureView colorView = nullptr;
         WGPUTextureView depthView = nullptr;
         WGPUTextureView resolveView = nullptr;
-        WGPUTexture frameDepthTexture = nullptr;
-        WGPUTexture frameMsaaColorTexture = nullptr;
-        WGPUSurfaceTexture surfaceTexture{};
         bool useSurface = (currentRenderTarget_ == nullptr && surface != nullptr);
 
         if (currentRenderTarget_ == nullptr && surface == nullptr) {
@@ -598,55 +1175,28 @@ struct WgpuRenderer::Impl {
 
         // Actual attachment dimensions — used to clamp viewport/scissor
         uint32_t attachW = 0, attachH = 0;
+        // Reset effective sample count (may be overridden when rendering to
+        // the non-MSAA tone mapping intermediate RT).
+        effectiveSampleCount_ = sampleCount_;
 
         if (useSurface) {
-            wgpuSurfaceGetCurrentTexture(surface, &surfaceTexture);
-            if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
-                surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-                std::cerr << "WgpuRenderer: Failed to acquire surface texture (status "
-                          << static_cast<int>(surfaceTexture.status) << ")" << std::endl;
-                return;
-            }
-            // Use the actual surface texture dimensions — during a live resize
-            // the surface may lag behind canvas.size().
-            uint32_t w = wgpuTextureGetWidth(surfaceTexture.texture);
-            uint32_t h = wgpuTextureGetHeight(surfaceTexture.texture);
-            attachW = w;
-            attachH = h;
+            // Acquire surface texture (reused across multiple render() calls per frame)
+            if (!acquireFrame()) return;
 
-            WGPUTextureViewDescriptor vd{};
-            vd.label = {.data = "surface_view", .length = 12};
-            vd.format = surfaceFormat;
-            vd.dimension = WGPUTextureViewDimension_2D;
-            vd.baseMipLevel = 0; vd.mipLevelCount = 1;
-            vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
-            vd.aspect = WGPUTextureAspect_All;
-
-            if (sampleCount_ > 1) {
-                resolveView = wgpuTextureCreateView(surfaceTexture.texture, &vd);
-                WGPUTextureDescriptor msaaCtd{};
-                msaaCtd.label = {.data = "frame_msaa_color", .length = 16};
-                msaaCtd.size = {w, h, 1};
-                msaaCtd.mipLevelCount = 1;
-                msaaCtd.sampleCount = sampleCount_;
-                msaaCtd.dimension = WGPUTextureDimension_2D;
-                msaaCtd.format = surfaceFormat;
-                msaaCtd.usage = WGPUTextureUsage_RenderAttachment;
-                frameMsaaColorTexture = wgpuDeviceCreateTexture(device, &msaaCtd);
-                colorView = wgpuTextureCreateView(frameMsaaColorTexture, nullptr);
+            if (needsToneMapPass()) {
+                // Redirect to intermediate RT; endFrame() will blit with tone mapping
+                ensureToneMapRT(frame_.width, frame_.height);
+                colorView = toneMap_.colorView;
+                depthView = toneMap_.depthView;
+                resolveView = nullptr; // No MSAA on the intermediate RT
+                effectiveSampleCount_ = 1;
             } else {
-                colorView = wgpuTextureCreateView(surfaceTexture.texture, &vd);
+                colorView = frame_.colorView;
+                depthView = frame_.depthView;
+                resolveView = frame_.resolveView;
             }
-
-            WGPUTextureDescriptor dtd{};
-            dtd.label = {.data = "depth_tex", .length = 9};
-            dtd.size = {w, h, 1};
-            dtd.mipLevelCount = 1; dtd.sampleCount = sampleCount_;
-            dtd.dimension = WGPUTextureDimension_2D;
-            dtd.format = WGPUTextureFormat_Depth24Plus;
-            dtd.usage = WGPUTextureUsage_RenderAttachment;
-            frameDepthTexture = wgpuDeviceCreateTexture(device, &dtd);
-            depthView = wgpuTextureCreateView(frameDepthTexture, nullptr);
+            attachW = frame_.width;
+            attachH = frame_.height;
         } else {
             auto& rt = renderTargets->getOrCreate(currentRenderTarget_, sampleCount_);
             attachW = rt.width;
@@ -674,12 +1224,33 @@ struct WgpuRenderer::Impl {
             effectiveClearAlpha = 1.0f;
         }
 
+        // Decide whether to clear on this render pass.
+        // Like the GL renderer: when autoClear is on, every render() clears.
+        // When autoClear is off, only explicit clear() calls (pending flags) clear.
+        bool shouldClearColor = pendingClearColor_;
+        bool shouldClearDepth = pendingClearDepth_;
+
+        if (useSurface) {
+            if (scope.autoClear) {
+                shouldClearColor |= scope.autoClearColor;
+                shouldClearDepth |= scope.autoClearDepth;
+            }
+        } else {
+            // Render target: always clear (matches previous behavior)
+            shouldClearColor = true;
+            shouldClearDepth = true;
+        }
+
+        pendingClearColor_ = false;
+        pendingClearDepth_ = false;
+        pendingClearStencil_ = false;
+
         // Render pass
         WGPURenderPassColorAttachment colorAttachment{};
         colorAttachment.view = colorView;
         colorAttachment.resolveTarget = resolveView;
         colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-        colorAttachment.loadOp = WGPULoadOp_Clear;
+        colorAttachment.loadOp = shouldClearColor ? WGPULoadOp_Clear : WGPULoadOp_Load;
         colorAttachment.storeOp = WGPUStoreOp_Store;
         colorAttachment.clearValue = {
                 static_cast<double>(effectiveClearColor.r),
@@ -689,7 +1260,7 @@ struct WgpuRenderer::Impl {
 
         WGPURenderPassDepthStencilAttachment depthAttachment{};
         depthAttachment.view = depthView;
-        depthAttachment.depthLoadOp = WGPULoadOp_Clear;
+        depthAttachment.depthLoadOp = shouldClearDepth ? WGPULoadOp_Clear : WGPULoadOp_Load;
         depthAttachment.depthStoreOp = WGPUStoreOp_Store;
         depthAttachment.depthClearValue = 1.0f;
 
@@ -737,16 +1308,10 @@ struct WgpuRenderer::Impl {
                 frameCtx.fogBits = SF::FogExp2;
             }
         }
-        switch (scope.toneMapping) {
-            case ToneMapping::Linear: frameCtx.tonemapBits = SF::TonemapLinear; break;
-            case ToneMapping::Reinhard: frameCtx.tonemapBits = SF::TonemapReinhard; break;
-            case ToneMapping::Cineon: frameCtx.tonemapBits = SF::TonemapCineon; break;
-            case ToneMapping::ACESFilmic: frameCtx.tonemapBits = SF::TonemapACES; break;
-            default: break;
-        }
+        // Tone mapping and sRGB are now applied as a post-process pass
+        // in endFrame(), so they are not set per-object here.
         frameCtx.toneMappingExposure = scope.toneMappingExposure;
         frameCtx.localClippingEnabled = scope.localClippingEnabled;
-        frameCtx.srgbOutput = (scope.outputEncoding == Encoding::sRGB);
         frameCtx.shadowActive = shadowMap->isActive();
 
         // Render opaque objects (front-to-back, depth write on)
@@ -761,7 +1326,10 @@ struct WgpuRenderer::Impl {
 
         // Invoke overlay callback (e.g. ImGui) while the render pass is still active.
         // Only for surface rendering, not render-to-texture passes.
-        if (!currentRenderTarget_ && overlayCallback_) {
+        // When tone mapping is active, the overlay is deferred to endFrame() so it
+        // renders directly to the surface after the tone map blit (UI should not
+        // be tone-mapped).
+        if (!currentRenderTarget_ && overlayCallback_ && !needsToneMapPass()) {
             overlayCallback_(static_cast<void*>(pass));
         }
 
@@ -791,7 +1359,7 @@ struct WgpuRenderer::Impl {
 
             // Copy the resolved surface texture to retained framebuffer
             WGPUTexelCopyTextureInfo src{};
-            src.texture = surfaceTexture.texture;
+            src.texture = frame_.surfaceTexture.texture;
             src.mipLevel = 0;
             src.origin = {0, 0, 0};
             src.aspect = WGPUTextureAspect_All;
@@ -811,28 +1379,11 @@ struct WgpuRenderer::Impl {
         cmdDesc.label = {.data = "cmd_buf", .length = 7};
         WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
         wgpuQueueSubmit(queue, 1, &cmdBuffer);
-
-        if (useSurface) {
-#ifndef __EMSCRIPTEN__
-            wgpuSurfacePresent(surface);
-#endif
-        }
-
-        // Cleanup per-frame resources
         wgpuCommandBufferRelease(cmdBuffer);
         wgpuCommandEncoderRelease(encoder);
-        if (useSurface) {
-            wgpuTextureViewRelease(depthView);
-            wgpuTextureRelease(frameDepthTexture);
-            if (resolveView) {
-                wgpuTextureViewRelease(colorView);
-                wgpuTextureRelease(frameMsaaColorTexture);
-                wgpuTextureViewRelease(resolveView);
-            } else {
-                wgpuTextureViewRelease(colorView);
-            }
-            wgpuTextureRelease(surfaceTexture.texture);
-        }
+
+        // Mark that this frame has rendered content
+        if (useSurface) frame_.hasRendered = true;
     }
 
     void renderCustomShaderObject(WGPURenderPassEncoder pass, Mesh* mesh,
@@ -848,7 +1399,7 @@ struct WgpuRenderer::Impl {
             trackedMaterials_.insert(sm);
         }
 
-        auto& pe = pipelines->getOrCreateCustomPipeline(sm, surfaceFormat, sampleCount_);
+        auto& pe = pipelines->getOrCreateCustomPipeline(sm, surfaceFormat, effectiveSampleCount_);
         if (!pe.pipeline) return;
 
         // Create per-draw transform buffer
@@ -1175,13 +1726,10 @@ struct WgpuRenderer::Impl {
         if (rawMat->fog) {
             features |= frameCtx.fogBits;
         }
-        features |= frameCtx.tonemapBits;
-        if (frameCtx.srgbOutput) {
-            features |= SF::SRGBOutput;
-        }
+        // Tone mapping and sRGB are applied as a renderer-level post-process.
 
         // Get/create pipeline
-        auto& pe = pipelines->getOrCreatePipeline(features, surfaceFormat, sampleCount_);
+        auto& pe = pipelines->getOrCreatePipeline(features, surfaceFormat, effectiveSampleCount_);
         if (!pe.pipeline) return;
 
         // Upload transform uniforms
@@ -1460,6 +2008,19 @@ struct WgpuRenderer::Impl {
 
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
 
+        // Release tone mapping post-process resources
+        endFrame(); // Release any active frame state
+        if (toneMap_.colorView) wgpuTextureViewRelease(toneMap_.colorView);
+        if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
+        if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
+        if (toneMap_.depthTexture) wgpuTextureRelease(toneMap_.depthTexture);
+        for (auto& p : toneMap_.pipelines) { if (p) wgpuRenderPipelineRelease(p); }
+        for (auto& m : toneMap_.shaderModules) { if (m) wgpuShaderModuleRelease(m); }
+        if (toneMap_.sampler) wgpuSamplerRelease(toneMap_.sampler);
+        if (toneMap_.pipelineLayout) wgpuPipelineLayoutRelease(toneMap_.pipelineLayout);
+        if (toneMap_.bindGroupLayout) wgpuBindGroupLayoutRelease(toneMap_.bindGroupLayout);
+        toneMap_ = {};
+
         if (bufferPool) bufferPool->dispose();
         if (geometries) geometries->dispose();
         if (textures) textures->dispose();
@@ -1486,7 +2047,11 @@ struct WgpuRenderer::Impl {
 // --- WgpuRenderer public API ---
 
 WgpuRenderer::WgpuRenderer(Canvas& canvas)
-    : pimpl_(std::make_unique<Impl>(*this, canvas)) {}
+    : pimpl_(std::make_unique<Impl>(*this, canvas)) {
+    // Register frame-end callback so the Canvas presents the surface texture
+    // after the user's animate callback, analogous to glfwSwapBuffers for GL.
+    canvas.setFrameEndCallback([this] { pimpl_->endFrame(); });
+}
 
 void WgpuRenderer::render(Object3D& scene, Camera& camera) {
     pimpl_->render(scene, camera);
@@ -1497,7 +2062,7 @@ WindowSize WgpuRenderer::size() const {
 }
 
 void WgpuRenderer::setSize(const std::pair<int, int>& size) {
-    pimpl_->canvas.setSize(size);
+    // pimpl_->canvas.setSize(size);
     pimpl_->size_ = {size.first, size.second};
     setViewport(0, 0, size.first, size.second);
     pimpl_->scissor_ = {0, 0,
@@ -1581,8 +2146,16 @@ void WgpuRenderer::setClearAlpha(float alpha) {
     pimpl_->clearAlpha_ = alpha;
 }
 
-void WgpuRenderer::clear(bool /*color*/, bool /*depth*/, bool /*stencil*/) {
-    // Clearing happens at render pass begin via loadOp = Clear
+void WgpuRenderer::clear(bool color, bool depth, bool stencil) {
+    if (pimpl_->frame_.active) {
+        // Mid-frame: execute an immediate clear pass on the current surface
+        pimpl_->executeClear(color, depth, stencil);
+    } else {
+        // No active frame yet: set pending flags for the next render pass
+        pimpl_->pendingClearColor_ |= color;
+        pimpl_->pendingClearDepth_ |= depth;
+        pimpl_->pendingClearStencil_ |= stencil;
+    }
 }
 
 void WgpuRenderer::clearColor() {

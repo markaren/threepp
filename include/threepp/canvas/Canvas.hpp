@@ -24,7 +24,7 @@ namespace threepp {
 
     public:
         struct Parameters;
-        typedef std::variant<bool, int, std::string, WindowSize> ParameterValue;
+        typedef std::variant<bool, int, std::string, WindowSize, GraphicsAPI> ParameterValue;
 
         explicit Canvas(const Parameters& params = Parameters());
 
@@ -57,6 +57,11 @@ namespace threepp {
         [[nodiscard]] void* windowPtr() const;
 
         [[nodiscard]] GraphicsAPI graphicsApi() const;
+
+        /// Register a callback invoked at the end of each frame (after the user
+        /// animate callback, before glfwPollEvents). Used by WgpuRenderer to
+        /// present the surface texture, analogous to glfwSwapBuffers for GL.
+        void setFrameEndCallback(std::function<void()> callback);
 
         ~Canvas() override;
 

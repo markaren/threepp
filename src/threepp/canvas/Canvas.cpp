@@ -177,6 +177,7 @@ struct Canvas::Impl {
 
     std::vector<std::function<void(WindowSize)>> resizeListener;
     std::vector<std::function<void(int monitor)>> monitorChangesListener;
+    std::function<void()> frameEndCallback_;
 
     explicit Impl(Canvas& scope, const Parameters& params)
         : scope(scope), graphicsApi_(params.graphicsApi_), exitOnKeyEscape_(params.exitOnKeyEscape_) {
@@ -273,6 +274,8 @@ struct Canvas::Impl {
 
         if (graphicsApi_ == GraphicsAPI::OpenGL) {
             glfwSwapBuffers(window);
+        } else if (frameEndCallback_) {
+            frameEndCallback_();
         }
         glfwPollEvents();
 
@@ -481,6 +484,10 @@ GraphicsAPI Canvas::graphicsApi() const {
     return pimpl_->graphicsApi_;
 }
 
+void Canvas::setFrameEndCallback(std::function<void()> callback) {
+    pimpl_->frameEndCallback_ = std::move(callback);
+}
+
 Canvas::~Canvas() = default;
 
 
@@ -528,7 +535,13 @@ Canvas::Parameters::Parameters(const std::unordered_map<std::string, ParameterVa
 
             headless(std::get<bool>(value));
             used = true;
+
+        } else if (key == "graphicsApi") {
+
+            graphicsApi(std::get<GraphicsAPI>(value));
+            used = true;
         }
+
 
         if (!used) {
             unused.emplace_back(key);

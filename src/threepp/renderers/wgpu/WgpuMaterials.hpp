@@ -68,10 +68,8 @@ namespace threepp::wgpu {
         float fogFar = 0;
         float fogDensity = 0;
         uint64_t fogBits = 0;
-        uint64_t tonemapBits = 0;
         float toneMappingExposure = 1.0f;
         bool localClippingEnabled = false;
-        bool srgbOutput = false;
         bool shadowActive = false;
     };
 
