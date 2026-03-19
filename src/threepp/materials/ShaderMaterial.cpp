@@ -6,8 +6,8 @@
 using namespace threepp;
 
 ShaderMaterial::ShaderMaterial()
-    : MaterialWithLights(false),
-      MaterialWithClipping(false),
+    : MaterialWithClipping(false),
+      MaterialWithLights(false),
       MaterialWithWireframe(false, 1),
       MaterialWithLineWidth(1),
       vertexShader(shaders::ShaderChunk::instance().default_vertex()),

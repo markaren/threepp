@@ -28,8 +28,8 @@ struct GLBindingStates::Impl {
     std::unordered_map<unsigned int, ProgramMap> bindingStates;
 
     explicit Impl(GLAttributes& attributes)
-        : maxVertexAttributes_(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
-          attributes_(attributes),
+        : attributes_(attributes),
+          maxVertexAttributes_(glGetParameteri(GL_MAX_VERTEX_ATTRIBS)),
           defaultState_(createBindingState(std::nullopt)),
           currentState_(defaultState_) {}
 

@@ -85,13 +85,13 @@ namespace {
 }// namespace
 
 gl::GLTextures::GLTextures(gl::GLState& state, gl::GLProperties& properties, gl::GLInfo& info)
-    : state(&state),
-      properties(&properties),
-      info(&info),
-      maxTextures(GLCapabilities::instance().maxTextures),
+    : maxTextures(GLCapabilities::instance().maxTextures),
       maxCubemapSize(GLCapabilities::instance().maxCubemapSize),
       maxTextureSize(GLCapabilities::instance().maxTextureSize),
       maxSamples(GLCapabilities::instance().maxSamples),
+      info(&info),
+      state(&state),
+      properties(&properties),
       onTextureDispose_(this),
       onRenderTargetDispose_(this) {}
 

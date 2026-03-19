@@ -4,11 +4,11 @@
 using namespace threepp;
 
 MeshNormalMaterial::MeshNormalMaterial()
-    : MaterialWithFlatShading(false),
-      MaterialWithWireframe(false, 1),
-      MaterialWithDisplacementMap(1, 0),
+    : MaterialWithBumpMap(1),
       MaterialWithNormalMap(NormalMapType::TangentSpace, {1, 1}),
-      MaterialWithBumpMap(1) {
+      MaterialWithDisplacementMap(1, 0),
+      MaterialWithWireframe(false, 1),
+      MaterialWithFlatShading(false) {
 
     this->fog = false;
 }

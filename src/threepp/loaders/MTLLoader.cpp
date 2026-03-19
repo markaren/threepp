@@ -60,7 +60,7 @@ namespace {
     }
 
     TexParams getTextureParams(const std::string& value, MeshPhongMaterial& params) {
-        TexParams texParams{.scale = Vector2(1, 1), .offset = Vector2(0, 0)};
+        TexParams texParams{.scale = Vector2(1, 1), .offset = Vector2(0, 0), .url = {}};
 
         auto items = utils::split(value, ' ');
         auto pos = std::ranges::find(items, "-bm");
@@ -97,7 +97,7 @@ std::shared_ptr<MaterialCreator> MTLLoader::load(const std::filesystem::path& pa
 
     std::ifstream in(path);
 
-    std::unordered_map<std::string, MatVariant>* info;
+    std::unordered_map<std::string, MatVariant>* info = nullptr;
     MaterialsInfo materialsInfo;
 
     std::string line;

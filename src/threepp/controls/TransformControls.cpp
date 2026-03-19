@@ -62,14 +62,14 @@ struct TransformControls::Impl {
 
     float rotationAngle{};
 
-    std::shared_ptr<TransformControlsGizmo> _gizmo;
-    std::shared_ptr<TransformControlsPlane> _plane;
-
     TransformControls& scope;
     PeripheralsEventSource& canvas;
     Object3D* object = nullptr;
 
     State state;
+
+    std::shared_ptr<TransformControlsGizmo> _gizmo;
+    std::shared_ptr<TransformControlsPlane> _plane;
 
     struct MyMouseListener: MouseListener {
 
@@ -145,10 +145,11 @@ struct TransformControls::Impl {
     MyMouseListener myMouseListener;
 
     Impl(TransformControls& scope, Camera& camera, PeripheralsEventSource& canvas)
-        : scope(scope), myMouseListener(*this), canvas(canvas),
+        : scope(scope), canvas(canvas),
           state(State(scope.enabled, scope.showX, scope.showY, scope.showZ)),
           _gizmo(std::make_shared<TransformControlsGizmo>(state)),
-          _plane(std::make_shared<TransformControlsPlane>(state)) {
+          _plane(std::make_shared<TransformControlsPlane>(state)),
+          myMouseListener(*this) {
 
         camera.updateMatrixWorld();
         camera.matrixWorld->decompose(this->state.cameraPosition, state.cameraQuaternion, this->_cameraScale);

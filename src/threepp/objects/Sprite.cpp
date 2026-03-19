@@ -63,8 +63,8 @@ namespace {
 
 
 Sprite::Sprite(const std::shared_ptr<SpriteMaterial>& material)
-    : _material(material ? material : SpriteMaterial::create()),
-      _geometry(BufferGeometry::create()) {
+    : _geometry(BufferGeometry::create()),
+      _material(material ? material : SpriteMaterial::create()) {
 
     std::vector<float> float32Array{
             -0.5f, -0.5f, 0.f, 0.f, 0.f,
