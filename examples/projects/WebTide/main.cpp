@@ -1,4 +1,4 @@
-// WebTide: FFT-based ocean simulation using threepp's DawnRenderer (WebGPU).
+// WebTide: FFT-based ocean simulation using threepp's WgpuRenderer (WebGPU).
 // Ported from the WebTide BabylonJS/TypeScript project.
 //
 // Credits & References:
@@ -13,7 +13,7 @@
 //   - Sand texture by Engin Akyurt
 
 #include "threepp/threepp.hpp"
-#include "threepp/renderers/DawnRenderer.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
@@ -21,7 +21,7 @@
 #include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/loaders/CubeTextureLoader.hpp"
 
-#include "threepp/renderers/dawn/DawnTexture.hpp"
+#include "threepp/renderers/wgpu/WgpuTexture.hpp"
 
 #include "shaders.hpp"
 #include "PhillipsSpectrum.hpp"
@@ -46,7 +46,7 @@ int main() {
 
     Canvas canvas(params);
 
-    DawnRenderer renderer(canvas);
+    WgpuRenderer renderer(canvas);
     renderer.setClearColor(Color::black); // Will be fully covered by skybox
 
     // Camera
@@ -76,9 +76,9 @@ int main() {
     webtide::IFFT ifft(renderer, textureSize);
 
     // Output textures (spatial domain, written by IFFT)
-    DawnTexture heightMap(renderer, textureSize, textureSize, DawnTexture::Format::RG32Float);
-    DawnTexture gradientMap(renderer, textureSize, textureSize, DawnTexture::Format::RG32Float);
-    DawnTexture displacementMap(renderer, textureSize, textureSize, DawnTexture::Format::RG32Float);
+    WgpuTexture heightMap(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture gradientMap(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture displacementMap(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
 
     // Create water ShaderMaterial with custom WGSL shaders
     auto waterMaterial = ShaderMaterial::create();
@@ -179,8 +179,8 @@ int main() {
 
     // Create GPU cubemap from skybox images for water reflections
     auto& faceImg = texPx->image();
-    DawnTexture reflectionMap(renderer, faceImg.width, faceImg.height,
-                             DawnTexture::Format::RGBA8Unorm, DawnTexture::Dimension::Cube);
+    WgpuTexture reflectionMap(renderer, faceImg.width, faceImg.height,
+                             WgpuTexture::Format::RGBA8Unorm, WgpuTexture::Dimension::Cube);
     // Write each face (+X, -X, +Y, -Y, +Z, -Z)
     auto& dataPx = texPx->image().data<unsigned char>();
     auto& dataNx = texNx->image().data<unsigned char>();

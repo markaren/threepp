@@ -1,10 +1,10 @@
-// Cross-renderer parity tests: GL vs Dawn comparison.
+// Cross-renderer parity tests: GL vs Wgpu comparison.
 // Split from CrossRenderer_test.cpp for maintainability.
 
 #include "CrossRenderer_helpers.hpp"
 
-TEST_CASE("Cross: clear color matches between GL and Dawn", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: clear color matches between GL and Wgpu", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
@@ -16,20 +16,20 @@ TEST_CASE("Cross: clear color matches between GL and Dawn", "[dawn]") {
     auto glPixels = renderWithGL(*scene, *camera, clearColor);
     REQUIRE(glPixels.size() == DATA_SIZE);
 
-    // Generate Dawn output
-    auto dawnPixels = renderWithDawn(*scene, *camera, clearColor);
-    REQUIRE(dawnPixels.size() == DATA_SIZE);
+    // Generate Wgpu output
+    auto wgpuPixels = renderWithWgpu(*scene, *camera, clearColor);
+    REQUIRE(wgpuPixels.size() == DATA_SIZE);
 
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
 
-    CHECK(std::abs(glAvg.r - dawnAvg.r) < 3.0);
-    CHECK(std::abs(glAvg.g - dawnAvg.g) < 3.0);
-    CHECK(std::abs(glAvg.b - dawnAvg.b) < 3.0);
+    CHECK(std::abs(glAvg.r - wgpuAvg.r) < 3.0);
+    CHECK(std::abs(glAvg.g - wgpuAvg.g) < 3.0);
+    CHECK(std::abs(glAvg.b - wgpuAvg.b) < 3.0);
 }
 
-TEST_CASE("Cross: unlit colored box produces similar average color", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: unlit colored box produces similar average color", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
@@ -44,25 +44,25 @@ TEST_CASE("Cross: unlit colored box produces similar average color", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*scene, *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*scene, *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*scene, *camera, clearColor);
     REQUIRE(glPixels.size() == DATA_SIZE);
-    REQUIRE(dawnPixels.size() == DATA_SIZE);
+    REQUIRE(wgpuPixels.size() == DATA_SIZE);
 
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
 
     CHECK(glAvg.g > 50.0);
-    CHECK(dawnAvg.g > 50.0);
+    CHECK(wgpuAvg.g > 50.0);
     CHECK(glAvg.g > glAvg.r);
-    CHECK(dawnAvg.g > dawnAvg.r);
+    CHECK(wgpuAvg.g > wgpuAvg.r);
 
-    CHECK(std::abs(glAvg.r - dawnAvg.r) < 30.0);
-    CHECK(std::abs(glAvg.g - dawnAvg.g) < 30.0);
-    CHECK(std::abs(glAvg.b - dawnAvg.b) < 30.0);
+    CHECK(std::abs(glAvg.r - wgpuAvg.r) < 30.0);
+    CHECK(std::abs(glAvg.g - wgpuAvg.g) < 30.0);
+    CHECK(std::abs(glAvg.b - wgpuAvg.b) < 30.0);
 }
 
-TEST_CASE("Cross: both renderers produce non-black output for visible geometry", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: both renderers produce non-black output for visible geometry", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
@@ -77,21 +77,21 @@ TEST_CASE("Cross: both renderers produce non-black output for visible geometry",
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*scene, *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*scene, *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*scene, *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
 
     CHECK(glNonBlack > PIXEL_COUNT / 8);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 8);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 8);
 
-    double coverageRatio = static_cast<double>(std::min(glNonBlack, dawnNonBlack)) /
-                           std::max(glNonBlack, dawnNonBlack);
+    double coverageRatio = static_cast<double>(std::min(glNonBlack, wgpuNonBlack)) /
+                           std::max(glNonBlack, wgpuNonBlack);
     CHECK(coverageRatio > 0.6);
 }
 
-TEST_CASE("Cross: lit Lambert sphere produces similar brightness", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: lit Lambert sphere produces similar brightness", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto scene = Scene::create();
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
@@ -112,23 +112,23 @@ TEST_CASE("Cross: lit Lambert sphere produces similar brightness", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*scene, *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*scene, *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*scene, *camera, clearColor);
 
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
 
     CHECK(glAvg.b > glAvg.r);
-    CHECK(dawnAvg.b > dawnAvg.r);
+    CHECK(wgpuAvg.b > wgpuAvg.r);
     CHECK(glAvg.b > 5.0);
-    CHECK(dawnAvg.b > 5.0);
+    CHECK(wgpuAvg.b > 5.0);
 
     double brightnessGL = (glAvg.r + glAvg.g + glAvg.b) / 3.0;
-    double brightnessDawn = (dawnAvg.r + dawnAvg.g + dawnAvg.b) / 3.0;
-    CHECK(std::abs(brightnessGL - brightnessDawn) < 50.0);
+    double brightnessWgpu = (wgpuAvg.r + wgpuAvg.g + wgpuAvg.b) / 3.0;
+    CHECK(std::abs(brightnessGL - brightnessWgpu) < 50.0);
 }
 
-TEST_CASE("Cross: object position affects which pixels are lit", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: object position affects which pixels are lit", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 5;
@@ -169,15 +169,15 @@ TEST_CASE("Cross: object position affects which pixels are lit", "[dawn]") {
     CHECK(avgXPosition(glLeft, RT_WIDTH, RT_HEIGHT) < center);
     CHECK(avgXPosition(glRight, RT_WIDTH, RT_HEIGHT) > center);
 
-    // Dawn comparison
-    auto dawnLeft = renderWithDawn(*makeScene(-2.0f), *camera, clearColor);
-    auto dawnRight = renderWithDawn(*makeScene(2.0f), *camera, clearColor);
-    CHECK(avgXPosition(dawnLeft, RT_WIDTH, RT_HEIGHT) < center);
-    CHECK(avgXPosition(dawnRight, RT_WIDTH, RT_HEIGHT) > center);
+    // Wgpu comparison
+    auto wgpuLeft = renderWithWgpu(*makeScene(-2.0f), *camera, clearColor);
+    auto wgpuRight = renderWithWgpu(*makeScene(2.0f), *camera, clearColor);
+    CHECK(avgXPosition(wgpuLeft, RT_WIDTH, RT_HEIGHT) < center);
+    CHECK(avgXPosition(wgpuRight, RT_WIDTH, RT_HEIGHT) > center);
 }
 
-TEST_CASE("Cross: multiple objects render with correct colors", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: multiple objects render with correct colors", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -224,15 +224,15 @@ TEST_CASE("Cross: multiple objects render with correct colors", "[dawn]") {
     CHECK(glLeftQ.r > glLeftQ.b);
     CHECK(glRightQ.b > glRightQ.r);
 
-    // Dawn comparison (fresh scene) — verify non-black output
-    // (exact color separation depends on Dawn multi-object rendering maturity)
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
-    int dawnNonBlack = countNonBlack(dawnPixels);
-    CHECK(dawnNonBlack > 0);
+    // Wgpu comparison (fresh scene) — verify non-black output
+    // (exact color separation depends on Wgpu multi-object rendering maturity)
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
+    CHECK(wgpuNonBlack > 0);
 }
 
-TEST_CASE("Cross: depth ordering is consistent", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: depth ordering is consistent", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 5;
@@ -263,17 +263,17 @@ TEST_CASE("Cross: depth ordering is consistent", "[dawn]") {
     auto glCenter = centerColor(renderWithGL(*scene, *camera, clearColor), RT_WIDTH, RT_HEIGHT);
     CHECK(glCenter.r > glCenter.g);
 
-    auto dawnCenter = centerColor(renderWithDawn(*scene, *camera, clearColor), RT_WIDTH, RT_HEIGHT);
-    CHECK(dawnCenter.r > dawnCenter.g);
+    auto wgpuCenter = centerColor(renderWithWgpu(*scene, *camera, clearColor), RT_WIDTH, RT_HEIGHT);
+    CHECK(wgpuCenter.r > wgpuCenter.g);
 }
 
 
 // =============================================================================
-// Section 4: Extended Dawn coverage — lights, textures, viewport, lifecycle
+// Section 4: Extended Wgpu coverage — lights, textures, viewport, lifecycle
 // =============================================================================
 
-TEST_CASE("Cross: PointLight produces similar result in both renderers", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: PointLight produces similar result in both renderers", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -294,15 +294,15 @@ TEST_CASE("Cross: PointLight produces similar result in both renderers", "[dawn]
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 8);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 8);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 8);
 
-    double coverageRatio = static_cast<double>(std::min(glNonBlack, dawnNonBlack)) /
-                           std::max(glNonBlack, dawnNonBlack);
+    double coverageRatio = static_cast<double>(std::min(glNonBlack, wgpuNonBlack)) /
+                           std::max(glNonBlack, wgpuNonBlack);
     CHECK(coverageRatio > 0.5);
 }
 
@@ -311,8 +311,8 @@ TEST_CASE("Cross: PointLight produces similar result in both renderers", "[dawn]
 // Section 5: Tests for new features (culling, wireframe, blend, API, etc.)
 // =============================================================================
 
-TEST_CASE("Cross: MeshPhongMaterial specular produces similar brightness", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: MeshPhongMaterial specular produces similar brightness", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -337,20 +337,20 @@ TEST_CASE("Cross: MeshPhongMaterial specular produces similar brightness", "[daw
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 8);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 8);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 8);
 
     double glBright = avgBrightness(glPixels);
-    double dawnBright = avgBrightness(dawnPixels);
-    CHECK(std::abs(glBright - dawnBright) < 50.0);
+    double wgpuBright = avgBrightness(wgpuPixels);
+    CHECK(std::abs(glBright - wgpuBright) < 50.0);
 }
 
-TEST_CASE("Cross: MeshStandardMaterial PBR produces similar brightness", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: MeshStandardMaterial PBR produces similar brightness", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -375,20 +375,20 @@ TEST_CASE("Cross: MeshStandardMaterial PBR produces similar brightness", "[dawn]
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 8);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 8);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 8);
 
     double glBright = avgBrightness(glPixels);
-    double dawnBright = avgBrightness(dawnPixels);
-    CHECK(std::abs(glBright - dawnBright) < 50.0);
+    double wgpuBright = avgBrightness(wgpuPixels);
+    CHECK(std::abs(glBright - wgpuBright) < 50.0);
 }
 
-TEST_CASE("Cross: emissive material matches between renderers", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: emissive material matches between renderers", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -406,21 +406,21 @@ TEST_CASE("Cross: emissive material matches between renderers", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
 
     // Both should show orange (r > b)
     CHECK(glAvg.r > glAvg.b);
-    CHECK(dawnAvg.r > dawnAvg.b);
+    CHECK(wgpuAvg.r > wgpuAvg.b);
 
     // Both should have similar brightness
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
-TEST_CASE("Cross: textured box produces similar output", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: textured box produces similar output", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -448,21 +448,21 @@ TEST_CASE("Cross: textured box produces similar output", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     // Both should render visible geometry
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 8);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 8);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 8);
 
     // Both should have red and green from the checkerboard
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
     CHECK(glAvg.r > 5.0);
     CHECK(glAvg.g > 5.0);
-    CHECK(dawnAvg.r > 5.0);
-    CHECK(dawnAvg.g > 5.0);
+    CHECK(wgpuAvg.r > 5.0);
+    CHECK(wgpuAvg.g > 5.0);
 }
 
 
@@ -470,8 +470,8 @@ TEST_CASE("Cross: textured box produces similar output", "[dawn]") {
 // Section 15: Cross-renderer — Extended feature parity
 // =============================================================================
 
-TEST_CASE("Cross: face culling matches between renderers", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: face culling matches between renderers", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
@@ -492,18 +492,18 @@ TEST_CASE("Cross: face culling matches between renderers", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
 
     // Both should show essentially nothing (back face culled)
     CHECK(glNonBlack < PIXEL_COUNT / 4);
-    CHECK(dawnNonBlack < PIXEL_COUNT / 4);
+    CHECK(wgpuNonBlack < PIXEL_COUNT / 4);
 }
 
-TEST_CASE("Cross: opacity produces similar brightness in both renderers", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: opacity produces similar brightness in both renderers", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
@@ -523,19 +523,19 @@ TEST_CASE("Cross: opacity produces similar brightness in both renderers", "[dawn
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     double glBright = avgBrightness(glPixels);
-    double dawnBright = avgBrightness(dawnPixels);
+    double wgpuBright = avgBrightness(wgpuPixels);
 
     // Both should be visible but dimmer than fully opaque
     CHECK(glBright > 5.0);
-    CHECK(dawnBright > 5.0);
-    CHECK(std::abs(glBright - dawnBright) < 50.0);
+    CHECK(wgpuBright > 5.0);
+    CHECK(std::abs(glBright - wgpuBright) < 50.0);
 }
 
-TEST_CASE("Cross: cylinder geometry produces similar coverage", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: cylinder geometry produces similar coverage", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -552,20 +552,20 @@ TEST_CASE("Cross: cylinder geometry produces similar coverage", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 32);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 32);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 32);
 
-    double coverageRatio = static_cast<double>(std::min(glNonBlack, dawnNonBlack)) /
-                           std::max(glNonBlack, dawnNonBlack);
+    double coverageRatio = static_cast<double>(std::min(glNonBlack, wgpuNonBlack)) /
+                           std::max(glNonBlack, wgpuNonBlack);
     CHECK(coverageRatio > 0.5);
 }
 
-TEST_CASE("Cross: double-sided rendering matches", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: double-sided rendering matches", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
@@ -585,22 +585,22 @@ TEST_CASE("Cross: double-sided rendering matches", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
 
     // Both should render the plane (double-sided)
     CHECK(glNonBlack > PIXEL_COUNT / 8);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 8);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 8);
 
-    double coverageRatio = static_cast<double>(std::min(glNonBlack, dawnNonBlack)) /
-                           std::max(glNonBlack, dawnNonBlack);
+    double coverageRatio = static_cast<double>(std::min(glNonBlack, wgpuNonBlack)) /
+                           std::max(glNonBlack, wgpuNonBlack);
     CHECK(coverageRatio > 0.5);
 }
 
-TEST_CASE("Cross: multiple directional lights match", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: multiple directional lights match", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -628,21 +628,21 @@ TEST_CASE("Cross: multiple directional lights match", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     // Both should have red and blue components
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
     CHECK(glAvg.r > 5.0);
     CHECK(glAvg.b > 5.0);
-    CHECK(dawnAvg.r > 5.0);
-    CHECK(dawnAvg.b > 5.0);
+    CHECK(wgpuAvg.r > 5.0);
+    CHECK(wgpuAvg.b > 5.0);
 
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
-TEST_CASE("Cross: camera position affects rendering consistently", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: camera position affects rendering consistently", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -661,18 +661,18 @@ TEST_CASE("Cross: camera position affects rendering consistently", "[dawn]") {
 
     // Both renderers should place the object to the right of center
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     double center = RT_WIDTH / 2.0;
     double glAvgX = avgXPosition(glPixels, RT_WIDTH, RT_HEIGHT);
-    double dawnAvgX = avgXPosition(dawnPixels, RT_WIDTH, RT_HEIGHT);
+    double wgpuAvgX = avgXPosition(wgpuPixels, RT_WIDTH, RT_HEIGHT);
 
     CHECK(glAvgX > center);
-    CHECK(dawnAvgX > center);
+    CHECK(wgpuAvgX > center);
 }
 
-TEST_CASE("Cross: SpotLight produces similar coverage", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: SpotLight produces similar coverage", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -695,22 +695,22 @@ TEST_CASE("Cross: SpotLight produces similar coverage", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 16);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 16);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 16);
 
     // Both should have green dominance
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
     CHECK(glAvg.g > glAvg.r);
-    CHECK(dawnAvg.g > dawnAvg.r);
+    CHECK(wgpuAvg.g > wgpuAvg.r);
 }
 
-TEST_CASE("Cross: HemisphereLight tints similarly", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: HemisphereLight tints similarly", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -731,22 +731,22 @@ TEST_CASE("Cross: HemisphereLight tints similarly", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 8);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 8);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 8);
 
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 6: Dawn — Missing Material Types
+// Section 6: Wgpu — Missing Material Types
 // =============================================================================
 
-TEST_CASE("Cross: MeshToonMaterial produces similar result", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: MeshToonMaterial produces similar result", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -767,15 +767,15 @@ TEST_CASE("Cross: MeshToonMaterial produces similar result", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 8);
-    CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 8);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(countNonBlack(wgpuPixels) > PIXEL_COUNT / 8);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
-TEST_CASE("Cross: MeshNormalMaterial produces similar result", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: MeshNormalMaterial produces similar result", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -791,19 +791,19 @@ TEST_CASE("Cross: MeshNormalMaterial produces similar result", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 8);
-    CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 8);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(countNonBlack(wgpuPixels) > PIXEL_COUNT / 8);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 7: Dawn — Missing Object Types
+// Section 7: Wgpu — Missing Object Types
 // =============================================================================
 
-TEST_CASE("Cross: InstancedMesh produces similar coverage", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: InstancedMesh produces similar coverage", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -829,27 +829,27 @@ TEST_CASE("Cross: InstancedMesh produces similar coverage", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     // Small boxes at 64x64 produce ~100 pixels
     CHECK(glNonBlack > 0);
-    CHECK(dawnNonBlack > 0);
+    CHECK(wgpuNonBlack > 0);
 
-    double ratio = static_cast<double>(glNonBlack) / dawnNonBlack;
+    double ratio = static_cast<double>(glNonBlack) / wgpuNonBlack;
     CHECK(ratio > 0.5);
     CHECK(ratio < 2.0);
 }
 
 // =============================================================================
-// Section 8: Dawn — Vertex Colors
+// Section 8: Wgpu — Vertex Colors
 // =============================================================================
 
-// DawnRenderer: vertex color attribute not yet in shader (only position, normal, uv)
+// WgpuRenderer: vertex color attribute not yet in shader (only position, normal, uv)
 
-TEST_CASE("Cross: vertex colors produce similar tint", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: vertex colors produce similar tint", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -877,23 +877,23 @@ TEST_CASE("Cross: vertex colors produce similar tint", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
 
     // Both should be red-dominant
     CHECK(glAvg.r > glAvg.g + 10);
-    CHECK(dawnAvg.r > dawnAvg.g + 10);
-    CHECK(std::abs(glAvg.r - dawnAvg.r) < 50.0);
+    CHECK(wgpuAvg.r > wgpuAvg.g + 10);
+    CHECK(std::abs(glAvg.r - wgpuAvg.r) < 50.0);
 }
 
 // =============================================================================
-// Section 9: Dawn — Fog
+// Section 9: Wgpu — Fog
 // =============================================================================
 
-TEST_CASE("Cross: Fog attenuation matches", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: Fog attenuation matches", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -915,18 +915,18 @@ TEST_CASE("Cross: Fog attenuation matches", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     // Sphere is small and heavily fogged — few non-black pixels expected
     CHECK(countNonBlack(glPixels) > 0);
-    CHECK(countNonBlack(dawnPixels) > 0);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(countNonBlack(wgpuPixels) > 0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
-// Cross-renderer fog comparison: Dawn fog is implemented but output differs from GL
+// Cross-renderer fog comparison: Wgpu fog is implemented but output differs from GL
 
-TEST_CASE("Cross: FogExp2 attenuation matches", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: FogExp2 attenuation matches", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -948,20 +948,20 @@ TEST_CASE("Cross: FogExp2 attenuation matches", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     // Sphere is small and heavily fogged — few non-black pixels expected
     CHECK(countNonBlack(glPixels) > 0);
-    CHECK(countNonBlack(dawnPixels) > 0);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(countNonBlack(wgpuPixels) > 0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 10: Dawn — OrthographicCamera
+// Section 10: Wgpu — OrthographicCamera
 // =============================================================================
 
-TEST_CASE("Cross: OrthographicCamera produces similar result", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: OrthographicCamera produces similar result", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -980,24 +980,24 @@ TEST_CASE("Cross: OrthographicCamera produces similar result", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
     CHECK(glNonBlack > PIXEL_COUNT / 32);
-    CHECK(dawnNonBlack > PIXEL_COUNT / 32);
+    CHECK(wgpuNonBlack > PIXEL_COUNT / 32);
 
-    double ratio = static_cast<double>(glNonBlack) / dawnNonBlack;
+    double ratio = static_cast<double>(glNonBlack) / wgpuNonBlack;
     CHECK(ratio > 0.5);
     CHECK(ratio < 2.0);
 }
 
 // =============================================================================
-// Section 11: Dawn — Object Hierarchy
+// Section 11: Wgpu — Object Hierarchy
 // =============================================================================
 
-TEST_CASE("Cross: object hierarchy matches", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: object hierarchy matches", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1022,21 +1022,21 @@ TEST_CASE("Cross: object hierarchy matches", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     double glX = avgXPosition(glPixels, RT_WIDTH, RT_HEIGHT);
-    double dawnX = avgXPosition(dawnPixels, RT_WIDTH, RT_HEIGHT);
+    double wgpuX = avgXPosition(wgpuPixels, RT_WIDTH, RT_HEIGHT);
 
     // Both should place object in similar X position
-    CHECK(std::abs(glX - dawnX) < RT_WIDTH * 0.3);
+    CHECK(std::abs(glX - wgpuX) < RT_WIDTH * 0.3);
 }
 
 // =============================================================================
-// Section 12: Dawn — Additional Geometries
+// Section 12: Wgpu — Additional Geometries
 // =============================================================================
 
-TEST_CASE("Cross: combined lights produce similar brightness", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: combined lights produce similar brightness", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1062,17 +1062,17 @@ TEST_CASE("Cross: combined lights produce similar brightness", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 15: Dawn — Shadow Types
+// Section 15: Wgpu — Shadow Types
 // =============================================================================
 
-TEST_CASE("Cross: normal-mapped sphere matches", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: normal-mapped sphere matches", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeNormalTexture = []() {
         std::vector<unsigned char> data = {
@@ -1106,19 +1106,19 @@ TEST_CASE("Cross: normal-mapped sphere matches", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 256);
-    CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 256);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(countNonBlack(wgpuPixels) > PIXEL_COUNT / 256);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 17: Dawn — ShaderMaterial
+// Section 17: Wgpu — ShaderMaterial
 // =============================================================================
 
-TEST_CASE("Cross: ShaderMaterial produces similar result", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: ShaderMaterial produces similar result", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1146,21 +1146,21 @@ TEST_CASE("Cross: ShaderMaterial produces similar result", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 8);
-    CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 8);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 30.0);
+    CHECK(countNonBlack(wgpuPixels) > PIXEL_COUNT / 8);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 30.0);
 }
 
 // =============================================================================
-// Section 18: Dawn — ShadowMaterial
+// Section 18: Wgpu — ShadowMaterial
 // =============================================================================
 
-// DawnRenderer: ShadowMaterial renders shadow attenuation on transparent surface
+// WgpuRenderer: ShadowMaterial renders shadow attenuation on transparent surface
 
-TEST_CASE("Cross: roughnessMap produces similar result", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: roughnessMap produces similar result", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1187,21 +1187,21 @@ TEST_CASE("Cross: roughnessMap produces similar result", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 8);
-    CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 8);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(countNonBlack(wgpuPixels) > PIXEL_COUNT / 8);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 20: Dawn — Emissive Map
+// Section 20: Wgpu — Emissive Map
 // =============================================================================
 
-// DawnRenderer: emissiveMap not yet sampled in shader
+// WgpuRenderer: emissiveMap not yet sampled in shader
 
-TEST_CASE("Cross: emissiveMap produces similar glow", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: emissiveMap produces similar glow", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1221,21 +1221,21 @@ TEST_CASE("Cross: emissiveMap produces similar glow", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 8);
-    CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 8);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(countNonBlack(wgpuPixels) > PIXEL_COUNT / 8);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 21: Dawn — AO Map
+// Section 21: Wgpu — AO Map
 // =============================================================================
 
-// DawnRenderer: aoMap not yet sampled in shader
+// WgpuRenderer: aoMap not yet sampled in shader
 
-TEST_CASE("Cross: alphaMap produces similar transparency", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: alphaMap produces similar transparency", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1259,19 +1259,19 @@ TEST_CASE("Cross: alphaMap produces similar transparency", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 23: Dawn — Displacement Map
+// Section 23: Wgpu — Displacement Map
 // =============================================================================
 
-// DawnRenderer: displacementMap not yet sampled in vertex shader
+// WgpuRenderer: displacementMap not yet sampled in vertex shader
 
-TEST_CASE("Cross: envMap produces similar reflections", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: envMap produces similar reflections", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1302,21 +1302,21 @@ TEST_CASE("Cross: envMap produces similar reflections", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     CHECK(countNonBlack(glPixels) > PIXEL_COUNT / 16);
-    CHECK(countNonBlack(dawnPixels) > PIXEL_COUNT / 16);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 60.0);
+    CHECK(countNonBlack(wgpuPixels) > PIXEL_COUNT / 16);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 60.0);
 }
 
 // =============================================================================
-// Section 28: Dawn — Morph Targets
+// Section 28: Wgpu — Morph Targets
 // =============================================================================
 
-// DawnRenderer: morph targets not yet implemented
+// WgpuRenderer: morph targets not yet implemented
 
-TEST_CASE("Cross: morph targets produce similar deformation", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: morph targets produce similar deformation", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1351,26 +1351,26 @@ TEST_CASE("Cross: morph targets produce similar deformation", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glCount = countNonBlack(glPixels);
-    int dawnCount = countNonBlack(dawnPixels);
+    int wgpuCount = countNonBlack(wgpuPixels);
     CHECK(glCount > 0);
-    CHECK(dawnCount > 0);
+    CHECK(wgpuCount > 0);
 
-    double ratio = static_cast<double>(glCount) / dawnCount;
+    double ratio = static_cast<double>(glCount) / wgpuCount;
     CHECK(ratio > 0.5);
     CHECK(ratio < 2.0);
 }
 
 // =============================================================================
-// Section 29: Dawn — Skinning
+// Section 29: Wgpu — Skinning
 // =============================================================================
 
-// DawnRenderer: SkinnedMesh / skeletal animation not yet implemented
+// WgpuRenderer: SkinnedMesh / skeletal animation not yet implemented
 
-TEST_CASE("Cross: clipping plane produces similar cut", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: clipping plane produces similar cut", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1405,39 +1405,39 @@ TEST_CASE("Cross: clipping plane produces similar cut", "[dawn]") {
         glRenderer.setRenderTarget(nullptr);
         glRenderer.dispose();
 
-        // Dawn with clipping
-        static Canvas* dawnClipCross = nullptr;
-        if (!dawnClipCross) {
-            dawnClipCross = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+        // Wgpu with clipping
+        static Canvas* wgpuClipCross = nullptr;
+        if (!wgpuClipCross) {
+            wgpuClipCross = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
         }
-        DawnRenderer dawnRenderer(*dawnClipCross);
-        dawnRenderer.setClearColor(clearColor);
-        dawnRenderer.localClippingEnabled = true;
-        auto dawnTarget = GLRenderTarget::create(RT_WIDTH, RT_HEIGHT, GLRenderTarget::Options{});
-        dawnRenderer.setRenderTarget(dawnTarget.get());
-        auto dawnScene = makeScene();
-        dawnRenderer.render(*dawnScene, *camera);
-        auto dawnPixels = dawnRenderer.readRGBPixels();
-        dawnRenderer.setRenderTarget(nullptr);
-        dawnRenderer.dispose();
+        WgpuRenderer wgpuRenderer(*wgpuClipCross);
+        wgpuRenderer.setClearColor(clearColor);
+        wgpuRenderer.localClippingEnabled = true;
+        auto wgpuTarget = GLRenderTarget::create(RT_WIDTH, RT_HEIGHT, GLRenderTarget::Options{});
+        wgpuRenderer.setRenderTarget(wgpuTarget.get());
+        auto wgpuScene = makeScene();
+        wgpuRenderer.render(*wgpuScene, *camera);
+        auto wgpuPixels = wgpuRenderer.readRGBPixels();
+        wgpuRenderer.setRenderTarget(nullptr);
+        wgpuRenderer.dispose();
 
         int glCount = countNonBlack(glPixels);
-        int dawnCount = countNonBlack(dawnPixels);
+        int wgpuCount = countNonBlack(wgpuPixels);
         CHECK(glCount > PIXEL_COUNT / 16);
-        CHECK(dawnCount > PIXEL_COUNT / 16);
+        CHECK(wgpuCount > PIXEL_COUNT / 16);
 
-        double ratio = static_cast<double>(glCount) / dawnCount;
+        double ratio = static_cast<double>(glCount) / wgpuCount;
         CHECK(ratio > 0.5);
         CHECK(ratio < 2.0);
     }
 }
 
 // =============================================================================
-// Section 31: Dawn — Tone Mapping
+// Section 31: Wgpu — Tone Mapping
 // =============================================================================
 
-TEST_CASE("Cross: InstancedMesh per-instance colors match", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: InstancedMesh per-instance colors match", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1469,25 +1469,25 @@ TEST_CASE("Cross: InstancedMesh per-instance colors match", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     auto glAvg = averageColor(glPixels);
-    auto dawnAvg = averageColor(dawnPixels);
+    auto wgpuAvg = averageColor(wgpuPixels);
 
     // Both should have red and blue (small boxes at 64x64)
     CHECK(glAvg.r > 1);
     CHECK(glAvg.b > 1);
-    CHECK(dawnAvg.r > 1);
-    CHECK(dawnAvg.b > 1);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 50.0);
+    CHECK(wgpuAvg.r > 1);
+    CHECK(wgpuAvg.b > 1);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 50.0);
 }
 
 // =============================================================================
-// Section 34: Dawn — Shadow Map Quality
+// Section 34: Wgpu — Shadow Map Quality
 // =============================================================================
 
-TEST_CASE("Cross: multi-material scene matches between GL and Dawn", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: multi-material scene matches between GL and Wgpu", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1531,22 +1531,22 @@ TEST_CASE("Cross: multi-material scene matches between GL and Dawn", "[dawn]") {
     Color clearColor(0x000000);
 
     auto glPixels = renderWithGL(*makeScene(), *camera, clearColor);
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
 
     int glNonBlack = countNonBlack(glPixels);
-    int dawnNonBlack = countNonBlack(dawnPixels);
-    double ratio = static_cast<double>(glNonBlack) / dawnNonBlack;
+    int wgpuNonBlack = countNonBlack(wgpuPixels);
+    double ratio = static_cast<double>(glNonBlack) / wgpuNonBlack;
     CHECK(ratio > 0.5);
     CHECK(ratio < 2.0);
-    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(dawnPixels)) < 30.0);
+    CHECK(std::abs(avgBrightness(glPixels) - avgBrightness(wgpuPixels)) < 30.0);
 }
 
 // =============================================================================
-// Section 40a: Dawn — LineDashedMaterial
+// Section 40a: Wgpu — LineDashedMaterial
 // =============================================================================
 
-TEST_CASE("Cross: LineDashedMaterial produces visible dashed line", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: LineDashedMaterial produces visible dashed line", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1572,8 +1572,8 @@ TEST_CASE("Cross: LineDashedMaterial produces visible dashed line", "[dawn]") {
     camera->position.z = 5;
     Color clearColor(0x000000);
 
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
-    int nonBlack = countNonBlack(dawnPixels);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
+    int nonBlack = countNonBlack(wgpuPixels);
     // Dashed line should produce some visible pixels (dash) and some gaps
     CHECK(nonBlack > 2);
     // Should have fewer pixels than a solid line (gaps discard fragments)
@@ -1581,11 +1581,11 @@ TEST_CASE("Cross: LineDashedMaterial produces visible dashed line", "[dawn]") {
 }
 
 // =============================================================================
-// Section 40b: Dawn — ShadowMaterial parity
+// Section 40b: Wgpu — ShadowMaterial parity
 // =============================================================================
 
-TEST_CASE("Cross: ShadowMaterial renders visible content when shadows active", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: ShadowMaterial renders visible content when shadows active", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto makeScene = []() {
         auto scene = Scene::create();
@@ -1621,22 +1621,22 @@ TEST_CASE("Cross: ShadowMaterial renders visible content when shadows active", "
     camera->lookAt(Vector3(0, 0, 0));
     Color clearColor(0x000000);
 
-    auto dawnPixels = renderWithDawn(*makeScene(), *camera, clearColor);
+    auto wgpuPixels = renderWithWgpu(*makeScene(), *camera, clearColor);
     // The red box should be visible; the shadow plane should be at least partially visible
-    int nonBlack = countNonBlack(dawnPixels);
+    int nonBlack = countNonBlack(wgpuPixels);
     CHECK(nonBlack > 5);
 }
 
 // =============================================================================
-// Section 41: Dawn — Shader Modularity Regression
+// Section 41: Wgpu — Shader Modularity Regression
 //
 // Regression guards for the buildWGSL() refactoring. These cover complex
 // shader feature flag combinations and should PASS now and continue passing
 // after the monolithic shader builder is split into composable chunks.
 // =============================================================================
 
-TEST_CASE("Cross: all material types still match GL after shader changes", "[dawn]") {
-    REQUIRE_DAWN();
+TEST_CASE("Cross: all material types still match GL after shader changes", "[wgpu]") {
+    REQUIRE_WGPU();
 
     auto camera = PerspectiveCamera::create(75, 1.0f, 0.1f, 100);
     camera->position.z = 3;
@@ -1660,52 +1660,52 @@ TEST_CASE("Cross: all material types still match GL after shader changes", "[daw
         auto mat = MeshBasicMaterial::create();
         mat->color = Color(0xff8800);
         auto glPx = renderWithGL(*makeSceneWith(mat), *camera, clearColor);
-        auto dawnPx = renderWithDawn(*makeSceneWith(mat), *camera, clearColor);
-        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(dawnPx)) < 30.0);
+        auto wgpuPx = renderWithWgpu(*makeSceneWith(mat), *camera, clearColor);
+        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(wgpuPx)) < 30.0);
     }
 
     SECTION("MeshLambertMaterial") {
         auto mat = MeshLambertMaterial::create();
         mat->color = Color(0xff8800);
         auto glPx = renderWithGL(*makeSceneWith(mat), *camera, clearColor);
-        auto dawnPx = renderWithDawn(*makeSceneWith(mat), *camera, clearColor);
-        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(dawnPx)) < 30.0);
+        auto wgpuPx = renderWithWgpu(*makeSceneWith(mat), *camera, clearColor);
+        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(wgpuPx)) < 30.0);
     }
 
     SECTION("MeshPhongMaterial") {
         auto mat = MeshPhongMaterial::create();
         mat->color = Color(0xff8800);
         auto glPx = renderWithGL(*makeSceneWith(mat), *camera, clearColor);
-        auto dawnPx = renderWithDawn(*makeSceneWith(mat), *camera, clearColor);
-        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(dawnPx)) < 30.0);
+        auto wgpuPx = renderWithWgpu(*makeSceneWith(mat), *camera, clearColor);
+        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(wgpuPx)) < 30.0);
     }
 
     SECTION("MeshStandardMaterial") {
         auto mat = MeshStandardMaterial::create();
         mat->color = Color(0xff8800);
         auto glPx = renderWithGL(*makeSceneWith(mat), *camera, clearColor);
-        auto dawnPx = renderWithDawn(*makeSceneWith(mat), *camera, clearColor);
-        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(dawnPx)) < 30.0);
+        auto wgpuPx = renderWithWgpu(*makeSceneWith(mat), *camera, clearColor);
+        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(wgpuPx)) < 30.0);
     }
 
     SECTION("MeshToonMaterial") {
         auto mat = MeshToonMaterial::create();
         mat->color = Color(0xff8800);
         auto glPx = renderWithGL(*makeSceneWith(mat), *camera, clearColor);
-        auto dawnPx = renderWithDawn(*makeSceneWith(mat), *camera, clearColor);
-        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(dawnPx)) < 30.0);
+        auto wgpuPx = renderWithWgpu(*makeSceneWith(mat), *camera, clearColor);
+        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(wgpuPx)) < 30.0);
     }
 
     SECTION("MeshNormalMaterial") {
         auto mat = MeshNormalMaterial::create();
         auto glPx = renderWithGL(*makeSceneWith(mat), *camera, clearColor);
-        auto dawnPx = renderWithDawn(*makeSceneWith(mat), *camera, clearColor);
-        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(dawnPx)) < 30.0);
+        auto wgpuPx = renderWithWgpu(*makeSceneWith(mat), *camera, clearColor);
+        CHECK(std::abs(avgBrightness(glPx) - avgBrightness(wgpuPx)) < 30.0);
     }
 }
 
 // =============================================================================
-// Section 42: Dawn — Post-Processing Framework
+// Section 42: Wgpu — Post-Processing Framework
 //
 // TDD red phase: these tests reference EffectComposer and ShaderPass classes
 // that do not yet exist. Enable when the post-processing framework is
@@ -1713,6 +1713,6 @@ TEST_CASE("Cross: all material types still match GL after shader changes", "[daw
 //
 // Proposed API:
 //   class ShaderPass { static create(wgslSource); };
-//   class EffectComposer { EffectComposer(DawnRenderer&); addPass(); render(); readRGBPixels(); };
+//   class EffectComposer { EffectComposer(WgpuRenderer&); addPass(); render(); readRGBPixels(); };
 // =============================================================================
 

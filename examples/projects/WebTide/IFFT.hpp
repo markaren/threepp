@@ -2,10 +2,10 @@
 #define WEBTIDE_IFFT_HPP
 
 #include "shaders.hpp"
-#include "threepp/renderers/DawnRenderer.hpp"
-#include "threepp/renderers/dawn/DawnTexture.hpp"
-#include "threepp/renderers/dawn/DawnBuffer.hpp"
-#include "threepp/renderers/dawn/DawnComputePipeline.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
+#include "threepp/renderers/wgpu/WgpuTexture.hpp"
+#include "threepp/renderers/wgpu/WgpuBuffer.hpp"
+#include "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -17,11 +17,11 @@ namespace webtide {
     class IFFT {
 
     public:
-        IFFT(threepp::DawnRenderer& renderer, uint32_t textureSize)
+        IFFT(threepp::WgpuRenderer& renderer, uint32_t textureSize)
             : renderer_(renderer),
               textureSize_(textureSize),
               logSize_(static_cast<uint32_t>(std::log2(textureSize))),
-              twiddleTable_(renderer, logSize_, textureSize, threepp::DawnTexture::Format::RGBA32Float),
+              twiddleTable_(renderer, logSize_, textureSize, threepp::WgpuTexture::Format::RGBA32Float),
               settings_(renderer, 16), // step(4) + textureSize(4) + pad(8) = 16
               copyParams_(renderer, 16), // width(4) + height(4) + pad(8) = 16
               twiddlePipeline_(renderer, twiddleFactorsWGSL, "precomputeTwiddleFactorsAndInputIndices"),
@@ -53,7 +53,7 @@ namespace webtide {
 
         /// Apply the inverse FFT to the input texture, storing result in output.
         /// Both textures will be modified (ping-pong).
-        void applyToTexture(threepp::DawnTexture& input, threepp::DawnTexture& output) {
+        void applyToTexture(threepp::WgpuTexture& input, threepp::WgpuTexture& output) {
             uint32_t groups = (textureSize_ + 7) / 8;
 
             bool pingPong = false;
@@ -112,21 +112,21 @@ namespace webtide {
         }
 
     private:
-        threepp::DawnRenderer& renderer_;
+        threepp::WgpuRenderer& renderer_;
         uint32_t textureSize_;
         uint32_t logSize_;
 
-        threepp::DawnTexture twiddleTable_;
-        threepp::DawnBuffer settings_;
-        threepp::DawnBuffer copyParams_;
+        threepp::WgpuTexture twiddleTable_;
+        threepp::WgpuBuffer settings_;
+        threepp::WgpuBuffer copyParams_;
 
-        threepp::DawnComputePipeline twiddlePipeline_;
-        threepp::DawnComputePipeline horizontalPipeline_;
-        threepp::DawnComputePipeline verticalPipeline_;
-        threepp::DawnComputePipeline permutePipeline_;
-        threepp::DawnComputePipeline copyPipeline_;
+        threepp::WgpuComputePipeline twiddlePipeline_;
+        threepp::WgpuComputePipeline horizontalPipeline_;
+        threepp::WgpuComputePipeline verticalPipeline_;
+        threepp::WgpuComputePipeline permutePipeline_;
+        threepp::WgpuComputePipeline copyPipeline_;
 
-        void copyTexture(threepp::DawnTexture& src, threepp::DawnTexture& dst) {
+        void copyTexture(threepp::WgpuTexture& src, threepp::WgpuTexture& dst) {
             copyPipeline_.setStorageTexture(0, dst);
             copyPipeline_.setTexture(1, src);
 

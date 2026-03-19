@@ -1,5 +1,5 @@
 // Backend-neutral renderer interface.
-// GLRenderer derives from this; future Dawn/Vulkan renderers will too.
+// GLRenderer derives from this; future Wgpu/Vulkan renderers will too.
 
 #ifndef THREEPP_RENDERER_HPP
 #define THREEPP_RENDERER_HPP

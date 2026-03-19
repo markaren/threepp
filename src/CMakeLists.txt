@@ -209,7 +209,7 @@ set(publicHeaders
         "threepp/renderers/Renderer.hpp"
         "threepp/renderers/RendererFactory.hpp"
         "threepp/renderers/GLRenderer.hpp"
-        "threepp/renderers/DawnRenderer.hpp"
+        "threepp/renderers/WgpuRenderer.hpp"
         "threepp/renderers/RenderTarget.hpp"
         "threepp/renderers/GLRenderTarget.hpp"
 
@@ -546,36 +546,36 @@ These can be installed on Ubuntu systems via sudo apt install libxinerama-dev li
     endif ()
 endif ()
 
-if (THREEPP_WITH_DAWN)
+if (THREEPP_WITH_WGPU)
     list(APPEND publicHeaders
-            "threepp/renderers/dawn/DawnBuffer.hpp"
-            "threepp/renderers/dawn/DawnTexture.hpp"
-            "threepp/renderers/dawn/DawnComputePipeline.hpp"
-            "threepp/renderers/dawn/EffectComposer.hpp"
-            "threepp/renderers/dawn/ShaderPass.hpp"
+            "threepp/renderers/wgpu/WgpuBuffer.hpp"
+            "threepp/renderers/wgpu/WgpuTexture.hpp"
+            "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
+            "threepp/renderers/wgpu/EffectComposer.hpp"
+            "threepp/renderers/wgpu/ShaderPass.hpp"
     )
     list(APPEND sources
-            "threepp/renderers/DawnRenderer.cpp"
-            "threepp/renderers/dawn/DawnBindGroups.cpp"
-            "threepp/renderers/dawn/DawnBufferPool.cpp"
-            "threepp/renderers/dawn/DawnGeometries.cpp"
-            "threepp/renderers/dawn/DawnLights.cpp"
-            "threepp/renderers/dawn/DawnMaterials.cpp"
-            "threepp/renderers/dawn/DawnPipelines.cpp"
-            "threepp/renderers/dawn/DawnReadback.cpp"
-            "threepp/renderers/dawn/DawnRenderTargets.cpp"
-            "threepp/renderers/dawn/DawnShaders.cpp"
-            "threepp/renderers/dawn/DawnShadowMap.cpp"
-            "threepp/renderers/dawn/DawnTextures.cpp"
-            "threepp/renderers/dawn/DawnTexture.cpp"
-            "threepp/renderers/dawn/DawnBuffer.cpp"
-            "threepp/renderers/dawn/DawnComputePipeline.cpp"
-            "threepp/renderers/dawn/EffectComposer.cpp"
-            "threepp/renderers/dawn/ShaderPass.cpp"
+            "threepp/renderers/WgpuRenderer.cpp"
+            "threepp/renderers/wgpu/WgpuBindGroups.cpp"
+            "threepp/renderers/wgpu/WgpuBufferPool.cpp"
+            "threepp/renderers/wgpu/WgpuGeometries.cpp"
+            "threepp/renderers/wgpu/WgpuLights.cpp"
+            "threepp/renderers/wgpu/WgpuMaterials.cpp"
+            "threepp/renderers/wgpu/WgpuPipelines.cpp"
+            "threepp/renderers/wgpu/WgpuReadback.cpp"
+            "threepp/renderers/wgpu/WgpuRenderTargets.cpp"
+            "threepp/renderers/wgpu/WgpuShaders.cpp"
+            "threepp/renderers/wgpu/WgpuShadowMap.cpp"
+            "threepp/renderers/wgpu/WgpuTextures.cpp"
+            "threepp/renderers/wgpu/WgpuTexture.cpp"
+            "threepp/renderers/wgpu/WgpuBuffer.cpp"
+            "threepp/renderers/wgpu/WgpuComputePipeline.cpp"
+            "threepp/renderers/wgpu/EffectComposer.cpp"
+            "threepp/renderers/wgpu/ShaderPass.cpp"
     )
     if (APPLE)
         list(APPEND sources
-                "threepp/renderers/DawnSurfaceMacOS.mm"
+                "threepp/renderers/WgpuSurfaceMacOS.mm"
         )
     endif ()
 endif ()
@@ -647,8 +647,8 @@ if (NOT DEFINED EMSCRIPTEN)
 endif ()
 
 
-if (THREEPP_WITH_DAWN)
-    target_compile_definitions(threepp PRIVATE THREEPP_WITH_DAWN=1)
+if (THREEPP_WITH_WGPU)
+    target_compile_definitions(threepp PRIVATE THREEPP_WITH_WGPU=1)
 
     if (EMSCRIPTEN)
         # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.
@@ -671,12 +671,12 @@ if (THREEPP_WITH_DAWN)
         target_include_directories(threepp PRIVATE "${WGPU_INCLUDE_DIR}")
         target_link_libraries(threepp PUBLIC ${WGPU_LIBRARY})
 
-        if (THREEPP_DAWN_GLSL_COMPAT)
-            message(STATUS "Dawn GLSL compat: fetching glslang...")
+        if (THREEPP_WGPU_GLSL_COMPAT)
+            message(STATUS "Wgpu GLSL compat: fetching glslang...")
             include(${PROJECT_SOURCE_DIR}/cmake/FetchGlslang.cmake)
 
             target_sources(threepp PRIVATE
-                "threepp/renderers/dawn/DawnShaderTranslator.cpp"
+                "threepp/renderers/wgpu/WgpuShaderTranslator.cpp"
             )
             target_include_directories(threepp PRIVATE "${glslang_SOURCE_DIR}")
             target_link_libraries(threepp PRIVATE
@@ -684,7 +684,7 @@ if (THREEPP_WITH_DAWN)
                 SPIRV
                 glslang-default-resource-limits
             )
-            target_compile_definitions(threepp PRIVATE THREEPP_DAWN_GLSL_COMPAT=1)
+            target_compile_definitions(threepp PRIVATE THREEPP_WGPU_GLSL_COMPAT=1)
         endif()
 
         if (APPLE)

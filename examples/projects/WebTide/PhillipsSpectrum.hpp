@@ -2,10 +2,10 @@
 #define WEBTIDE_PHILLIPSSPECTRUM_HPP
 
 #include "shaders.hpp"
-#include "threepp/renderers/DawnRenderer.hpp"
-#include "threepp/renderers/dawn/DawnTexture.hpp"
-#include "threepp/renderers/dawn/DawnBuffer.hpp"
-#include "threepp/renderers/dawn/DawnComputePipeline.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
+#include "threepp/renderers/wgpu/WgpuTexture.hpp"
+#include "threepp/renderers/wgpu/WgpuBuffer.hpp"
+#include "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -18,11 +18,11 @@ namespace webtide {
     class PhillipsSpectrum {
 
     public:
-        threepp::DawnTexture h0;
+        threepp::WgpuTexture h0;
 
-        PhillipsSpectrum(threepp::DawnRenderer& renderer, uint32_t textureSize, float tileSize)
-            : h0(renderer, textureSize, textureSize, threepp::DawnTexture::Format::RGBA32Float),
-              noise_(renderer, textureSize, textureSize, threepp::DawnTexture::Format::RGBA32Float),
+        PhillipsSpectrum(threepp::WgpuRenderer& renderer, uint32_t textureSize, float tileSize)
+            : h0(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RGBA32Float),
+              noise_(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RGBA32Float),
               uniformBuffer_(renderer, 32), // 5 fields padded to 32 bytes
               pipeline_(renderer, phillipsSpectrumWGSL, "computeSpectrum"),
               textureSize_(textureSize), tileSize_(tileSize) {
@@ -80,9 +80,9 @@ namespace webtide {
         }
 
     private:
-        threepp::DawnTexture noise_;
-        threepp::DawnBuffer uniformBuffer_;
-        threepp::DawnComputePipeline pipeline_;
+        threepp::WgpuTexture noise_;
+        threepp::WgpuBuffer uniformBuffer_;
+        threepp::WgpuComputePipeline pipeline_;
         uint32_t textureSize_;
         float tileSize_;
     };

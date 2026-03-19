@@ -7,6 +7,6 @@ add_subdirectory(SpheroControl)
 add_subdirectory(Optimization)
 add_subdirectory(Youbot)
 
-if (THREEPP_WITH_DAWN)
+if (THREEPP_WITH_WGPU)
     add_subdirectory(WebTide)
 endif ()

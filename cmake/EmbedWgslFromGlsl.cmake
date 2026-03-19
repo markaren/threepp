@@ -14,7 +14,7 @@ function(embed_wgsl_from_glsl TARGET NAME VERT_GLSL FRAG_GLSL)
     endif()
 
     set(_wgsl_dir "${CMAKE_BINARY_DIR}/wgsl_intermediate")
-    set(_gen_dir  "${CMAKE_BINARY_DIR}/generated/threepp/renderers/dawn/wgsl")
+    set(_gen_dir  "${CMAKE_BINARY_DIR}/generated/threepp/renderers/wgpu/wgsl")
     file(MAKE_DIRECTORY "${_wgsl_dir}")
     file(MAKE_DIRECTORY "${_gen_dir}")
 

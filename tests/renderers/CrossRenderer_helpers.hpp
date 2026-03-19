@@ -1,4 +1,4 @@
-// Cross-renderer test helpers: shared infrastructure for GL/Dawn/Cross tests.
+// Cross-renderer test helpers: shared infrastructure for GL/Wgpu/Cross tests.
 //
 // All utility functions, canvas singletons, and macros used by the split
 // test files live here. Functions are `inline` to ensure a single instance
@@ -10,7 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "threepp/threepp.hpp"
-#include "threepp/renderers/DawnRenderer.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
 
@@ -66,7 +66,7 @@ namespace crosstest {
 
     // Probe whether a WebGPU adapter can be obtained (no surface needed).
     // Also detects whether the adapter is a software/CPU rasterizer (e.g. lavapipe).
-    inline bool isDawnAvailable() {
+    inline bool isWgpuAvailable() {
         static int cached = -1;
         if (cached >= 0) return cached != 0;
 
@@ -123,12 +123,12 @@ namespace crosstest {
         return available;
     }
 
-    // Detect whether the Dawn adapter is a CPU/software rasterizer (e.g. lavapipe).
+    // Detect whether the Wgpu adapter is a CPU/software rasterizer (e.g. lavapipe).
     inline bool isSoftwareAdapter() {
         static int cached = -1;
         if (cached >= 0) return cached != 0;
 
-        if (!isDawnAvailable()) {
+        if (!isWgpuAvailable()) {
             cached = 0;
             return false;
         }
@@ -250,15 +250,15 @@ namespace crosstest {
         return pixels;
     }
 
-    // Render with Dawn, return pixel data
-    inline std::vector<unsigned char> renderWithDawn(Object3D& scene, Camera& camera, const Color& clearColor) {
-        // Dawn canvas is created on demand (only when Dawn is available)
-        static Canvas* dawnCanvasPtr = nullptr;
-        if (!dawnCanvasPtr) {
-            dawnCanvasPtr = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
+    // Render with Wgpu, return pixel data
+    inline std::vector<unsigned char> renderWithWgpu(Object3D& scene, Camera& camera, const Color& clearColor) {
+        // Wgpu canvas is created on demand (only when Wgpu is available)
+        static Canvas* wgpuCanvasPtr = nullptr;
+        if (!wgpuCanvasPtr) {
+            wgpuCanvasPtr = new Canvas(Canvas::Parameters().size(RT_WIDTH, RT_HEIGHT).headless(true).graphicsApi(GraphicsAPI::WebGPU));
         }
 
-        DawnRenderer renderer(*dawnCanvasPtr);
+        WgpuRenderer renderer(*wgpuCanvasPtr);
         renderer.setClearColor(clearColor);
 
         auto target = RenderTarget::create(RT_WIDTH, RT_HEIGHT, RenderTarget::Options{});
@@ -381,7 +381,7 @@ namespace crosstest {
 
 using namespace crosstest;
 
-#define REQUIRE_DAWN() do { if (!isDawnAvailable()) SKIP("No GPU backend available for Dawn"); } while(0)
+#define REQUIRE_WGPU() do { if (!isWgpuAvailable()) SKIP("No GPU backend available for Wgpu"); } while(0)
 #define SKIP_ON_SOFTWARE_ADAPTER() do { if (isSoftwareAdapter()) SKIP("Test skipped on software adapter (e.g. lavapipe)"); } while(0)
 
 #endif//CROSSRENDERER_HELPERS_HPP

@@ -30,7 +30,7 @@ namespace threepp {
     };
 
     // Callback to resolve a material's current program ID.
-    // GL backend returns GLProgram::id; Dawn backend can return pipeline hash.
+    // GL backend returns GLProgram::id; Wgpu backend can return pipeline hash.
     using ProgramIdResolver = std::function<uint64_t(Material*)>;
 
     struct RenderList {

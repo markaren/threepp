@@ -182,7 +182,7 @@ TEST_CASE("GL: object position affects which pixels are lit") {
 
 
 // =============================================================================
-// Section 2: Dawn-only validation (skipped if no GPU backend)
+// Section 2: Wgpu-only validation (skipped if no GPU backend)
 // =============================================================================
 
 TEST_CASE("GL: MeshToonMaterial renders with stepped shading") {

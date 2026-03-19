@@ -1,7 +1,7 @@
 #version 450
 
 // Water fragment shader -- standalone Vulkan GLSL 450 for naga translation.
-// Matches DawnRenderer bind group layout for custom ShaderMaterial pipelines.
+// Matches WgpuRenderer bind group layout for custom ShaderMaterial pipelines.
 
 // Binding 0: TransformUniforms (same as vertex)
 layout(std140, set=0, binding=0) uniform TransformUniforms {
@@ -44,7 +44,7 @@ layout(std140, set=0, binding=2) uniform CustomUniforms {
 // Texture bindings: naga translates Vulkan combined image+sampler (sampler2D)
 // into separate texture_2d and sampler bindings in WGSL. Each sampler2D
 // declared here at binding N produces WGSL bindings at N (texture) and N+1
-// (sampler). This matches DawnPipelines which assigns:
+// (sampler). This matches WgpuPipelines which assigns:
 //   mirrorSampler: texture@3, sampler@4
 //   normalSampler: texture@5, sampler@6
 layout(set=0, binding=3) uniform sampler2D mirrorSampler;

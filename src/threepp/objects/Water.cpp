@@ -13,7 +13,7 @@
 #include "threepp/renderers/shaders/UniformsUtil.hpp"
 
 #ifdef THREEPP_WGSL_WATER
-#include "threepp/renderers/dawn/wgsl/water_wgsl.hpp"
+#include "threepp/renderers/wgpu/wgsl/water_wgsl.hpp"
 #endif
 
 using namespace threepp;
@@ -44,8 +44,8 @@ namespace {
 #ifdef THREEPP_WGSL_WATER
                 // Pre-translated WGSL from naga (Emscripten / browser path).
                 // Each stage is a separate module with its own entry point.
-                threepp::dawn::wgsl::water_vert,
-                threepp::dawn::wgsl::water_frag
+                threepp::wgpu::wgsl::water_vert,
+                threepp::wgpu::wgsl::water_frag
 #else
                 R"(
                 uniform mat4 textureMatrix;

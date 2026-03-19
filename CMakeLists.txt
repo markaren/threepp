@@ -10,10 +10,10 @@ option(THREEPP_BUILD_TESTS "Build test suite" ON)
 option(THREEPP_WITH_SVG "Build with SVGLoader" ON)
 option(THREEPP_WITH_AUDIO "Build with Audio" ON)
 option(THREEPP_TREAT_WARNINGS_AS_ERRORS "Treat warnings as errors" OFF)
-option(THREEPP_WITH_DAWN "Build with WebGPU/Dawn backend (via wgpu-native)" ON)
-cmake_dependent_option(THREEPP_DAWN_GLSL_COMPAT
-    "Enable GLSL->SPIR-V translation for ShaderMaterial on the Dawn backend (requires glslang)"
-    ON "THREEPP_WITH_DAWN" OFF)
+option(THREEPP_WITH_WGPU "Build with WebGPU backend (via wgpu-native)" ON)
+cmake_dependent_option(THREEPP_WGPU_GLSL_COMPAT
+    "Enable GLSL->SPIR-V translation for ShaderMaterial on the Wgpu backend (requires glslang)"
+    ON "THREEPP_WITH_WGPU" OFF)
 
 
 # Force THREEPP_WITH_GLFW ON when targeting Emscripten
@@ -119,7 +119,7 @@ install(
 if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
 endif ()
-if (THREEPP_DAWN_GLSL_COMPAT)
+if (THREEPP_WGPU_GLSL_COMPAT)
     install(TARGETS glslang SPIRV glslang-default-resource-limits EXPORT threepp-targets)
 endif ()
 install(TARGETS threepp EXPORT threepp-targets)

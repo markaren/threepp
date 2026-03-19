@@ -1,5 +1,5 @@
 # cmake/FetchGlslang.cmake
-# Fetches glslang (GLSL -> SPIR-V) for the Dawn GLSL compatibility layer.
+# Fetches glslang (GLSL -> SPIR-V) for the Wgpu GLSL compatibility layer.
 # SPIR-V is then fed directly to wgpu-native (which has a built-in SPIR-V ingestion path).
 
 include(FetchContent)

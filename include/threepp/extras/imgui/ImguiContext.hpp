@@ -6,9 +6,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
-#ifdef THREEPP_WITH_DAWN
+#ifdef THREEPP_WITH_WGPU
 #include <imgui_impl_wgpu.h>
-#include <threepp/renderers/DawnRenderer.hpp>
+#include <threepp/renderers/WgpuRenderer.hpp>
 #endif
 
 #include <functional>
@@ -59,19 +59,19 @@ public:
 #endif
             glInitialized_ = true;
         }
-#ifdef THREEPP_WITH_DAWN
+#ifdef THREEPP_WITH_WGPU
         else {
-            dawnRenderer_ = dynamic_cast<threepp::DawnRenderer*>(&renderer);
-            if (dawnRenderer_) {
+            wgpuRenderer_ = dynamic_cast<threepp::WgpuRenderer*>(&renderer);
+            if (wgpuRenderer_) {
                 ImGui_ImplWGPU_InitInfo initInfo{};
-                initInfo.Device = static_cast<WGPUDevice>(dawnRenderer_->nativeDevice());
-                initInfo.RenderTargetFormat = static_cast<WGPUTextureFormat>(dawnRenderer_->nativeSurfaceFormat());
+                initInfo.Device = static_cast<WGPUDevice>(wgpuRenderer_->nativeDevice());
+                initInfo.RenderTargetFormat = static_cast<WGPUTextureFormat>(wgpuRenderer_->nativeSurfaceFormat());
                 initInfo.DepthStencilFormat = WGPUTextureFormat_Depth24Plus;
-                initInfo.PipelineMultisampleState.count = dawnRenderer_->getSampleCount();
+                initInfo.PipelineMultisampleState.count = wgpuRenderer_->getSampleCount();
 
                 ImGui_ImplWGPU_Init(&initInfo);
 
-                dawnRenderer_->setOverlayCallback([this](void* passEncoder) {
+                wgpuRenderer_->setOverlayCallback([this](void* passEncoder) {
                     if (pendingDrawData_) {
                         ImGui_ImplWGPU_RenderDrawData(pendingDrawData_, static_cast<WGPURenderPassEncoder>(passEncoder));
                     }
@@ -105,7 +105,7 @@ public:
         }
 
         if (glInitialized_) ImGui_ImplOpenGL3_NewFrame();
-#ifdef THREEPP_WITH_DAWN
+#ifdef THREEPP_WITH_WGPU
         if (wgpuInitialized_) ImGui_ImplWGPU_NewFrame();
 #endif
         ImGui_ImplGlfw_NewFrame();
@@ -118,7 +118,7 @@ public:
         if (glInitialized_) {
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         }
-#ifdef THREEPP_WITH_DAWN
+#ifdef THREEPP_WITH_WGPU
         if (wgpuInitialized_) {
             pendingDrawData_ = ImGui::GetDrawData();
         }
@@ -127,9 +127,9 @@ public:
 
     virtual ~ImguiContext() {
         if (glInitialized_) ImGui_ImplOpenGL3_Shutdown();
-#ifdef THREEPP_WITH_DAWN
+#ifdef THREEPP_WITH_WGPU
         if (wgpuInitialized_) {
-            if (dawnRenderer_) dawnRenderer_->setOverlayCallback(nullptr);
+            if (wgpuRenderer_) wgpuRenderer_->setOverlayCallback(nullptr);
             ImGui_ImplWGPU_Shutdown();
         }
 #endif
@@ -160,8 +160,8 @@ private:
     bool dpiAwareIsConfigured_ = true;
     float dpiScale_ = 1.f;
     ImDrawData* pendingDrawData_ = nullptr;
-#ifdef THREEPP_WITH_DAWN
-    threepp::DawnRenderer* dawnRenderer_ = nullptr;
+#ifdef THREEPP_WITH_WGPU
+    threepp::WgpuRenderer* wgpuRenderer_ = nullptr;
 #endif
 };
 

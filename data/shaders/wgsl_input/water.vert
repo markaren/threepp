@@ -1,9 +1,9 @@
 #version 450
 
 // Water vertex shader -- standalone Vulkan GLSL 450 for naga translation.
-// Matches DawnRenderer bind group layout for custom ShaderMaterial pipelines.
+// Matches WgpuRenderer bind group layout for custom ShaderMaterial pipelines.
 
-// Binding 0: TransformUniforms (matches DawnRenderer's 256-byte transform UBO)
+// Binding 0: TransformUniforms (matches WgpuRenderer's 256-byte transform UBO)
 layout(std140, set=0, binding=0) uniform TransformUniforms {
     mat4 modelMatrix;       // floats  0-15
     mat4 viewMatrix;        // floats 16-31
@@ -20,7 +20,7 @@ layout(std140, set=0, binding=1) uniform LightPlaceholder {
 };
 
 // Binding 2: CustomUniforms
-// The CPU-side packer in DawnRenderer sorts uniform names alphabetically and
+// The CPU-side packer in WgpuRenderer sorts uniform names alphabetically and
 // places each field in a 16-byte slot (float/int/vec3 each occupy 16 bytes;
 // mat4 occupies 64 bytes). This layout matches that scheme exactly:
 //

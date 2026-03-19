@@ -4,7 +4,7 @@
 #include "threepp/objects/Sky.hpp"
 #include "threepp/threepp.hpp"
 #include "threepp/textures/DataTexture.hpp"
-#include "threepp/renderers/DawnRenderer.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
@@ -91,7 +91,7 @@ int main() {
 
     // Single visible GL canvas (double width)
     Canvas canvas(Canvas::Parameters()
-                          .title("Water — OpenGL (left) vs WebGPU/Dawn (right)")
+                          .title("Water — OpenGL (left) vs WebGPU/Wgpu (right)")
                           .size(halfW * 2, halfH)
                           .antialiasing(4));
     auto glRenderer = createRenderer(canvas);
@@ -99,29 +99,29 @@ int main() {
     glRenderer->toneMapping = ToneMapping::ACESFilmic;
     glRenderer->setScissorTest(true);
 
-    // Headless Dawn canvas for offscreen rendering
-    Canvas dawnCanvas(Canvas::Parameters()
+    // Headless Wgpu canvas for offscreen rendering
+    Canvas wgpuCanvas(Canvas::Parameters()
                               .size(halfW, halfH)
                               .headless(true)
                               .graphicsApi(GraphicsAPI::WebGPU));
-    DawnRenderer dawnRenderer(dawnCanvas);
-    dawnRenderer.checkShaderErrors = true;
-    dawnRenderer.toneMapping = ToneMapping::ACESFilmic;
+    WgpuRenderer wgpuRenderer(wgpuCanvas);
+    wgpuRenderer.checkShaderErrors = true;
+    wgpuRenderer.toneMapping = ToneMapping::ACESFilmic;
 
-    // Dawn render target for offscreen rendering + readback
-    auto dawnRT = RenderTarget::create(halfW, halfH, RenderTarget::Options{});
+    // Wgpu render target for offscreen rendering + readback
+    auto wgpuRT = RenderTarget::create(halfW, halfH, RenderTarget::Options{});
 
-    // DataTexture to receive Dawn readback pixels, displayed on right half
-    auto dawnTex = DataTexture::create(3, halfW, halfH);
-    dawnTex->format = Format::RGB;
-    dawnTex->magFilter = Filter::Linear;
-    dawnTex->minFilter = Filter::Linear;
+    // DataTexture to receive Wgpu readback pixels, displayed on right half
+    auto wgpuTex = DataTexture::create(3, halfW, halfH);
+    wgpuTex->format = Format::RGB;
+    wgpuTex->magFilter = Filter::Linear;
+    wgpuTex->minFilter = Filter::Linear;
 
-    // Preview scene: fullscreen quad showing the Dawn texture
+    // Preview scene: fullscreen quad showing the Wgpu texture
     auto previewScene = Scene::create();
     auto previewCam = OrthographicCamera::create(-1, 1, 1, -1, 0, 1);
     auto previewMat = MeshBasicMaterial::create();
-    previewMat->map = dawnTex;
+    previewMat->map = wgpuTex;
     auto previewMesh = Mesh::create(PlaneGeometry::create(2, 2), previewMat);
     previewScene->add(previewMesh);
 
@@ -137,12 +137,12 @@ int main() {
     controls.update();
 
     // Two separate scene graphs (Water's onBeforeRender captures its own renderer)
-    WaterScene sceneGL, sceneDawn;
+    WaterScene sceneGL, sceneWgpu;
     sceneGL.build();
-    sceneDawn.build();
+    sceneWgpu.build();
 
     auto& suGL = sceneGL.sky->material()->as<ShaderMaterial>()->uniforms;
-    auto& suDawn = sceneDawn.sky->material()->as<ShaderMaterial>()->uniforms;
+    auto& suWgpu = sceneWgpu.sky->material()->as<ShaderMaterial>()->uniforms;
 
     float elevation = 2;
     float azimuth = 180;
@@ -151,16 +151,16 @@ int main() {
         sceneGL.elevation = elevation;
         sceneGL.azimuth = azimuth;
         sceneGL.computeSunPosition();
-        sceneDawn.elevation = elevation;
-        sceneDawn.azimuth = azimuth;
-        sceneDawn.computeSunPosition();
+        sceneWgpu.elevation = elevation;
+        sceneWgpu.azimuth = azimuth;
+        sceneWgpu.computeSunPosition();
     };
 
     auto syncSkyParams = [&] {
-        suDawn.at("turbidity").value<float>() = suGL.at("turbidity").value<float>();
-        suDawn.at("rayleigh").value<float>() = suGL.at("rayleigh").value<float>();
-        suDawn.at("mieCoefficient").value<float>() = suGL.at("mieCoefficient").value<float>();
-        suDawn.at("mieDirectionalG").value<float>() = suGL.at("mieDirectionalG").value<float>();
+        suWgpu.at("turbidity").value<float>() = suGL.at("turbidity").value<float>();
+        suWgpu.at("rayleigh").value<float>() = suGL.at("rayleigh").value<float>();
+        suWgpu.at("mieCoefficient").value<float>() = suGL.at("mieCoefficient").value<float>();
+        suWgpu.at("mieDirectionalG").value<float>() = suGL.at("mieDirectionalG").value<float>();
     };
 
     ImguiFunctionalContext ui(canvas, *glRenderer, [&] {
@@ -200,16 +200,16 @@ int main() {
         const int h = size.height();
 
         sceneGL.animate(t);
-        sceneDawn.animate(t);
+        sceneWgpu.animate(t);
         syncSkyParams();
 
-        // --- Dawn offscreen render ---
-        dawnRenderer.setRenderTarget(dawnRT.get());
-        dawnRenderer.render(*sceneDawn.scene, *camera);
-        auto pixels = dawnRenderer.readRGBPixels();
+        // --- Wgpu offscreen render ---
+        wgpuRenderer.setRenderTarget(wgpuRT.get());
+        wgpuRenderer.render(*sceneWgpu.scene, *camera);
+        auto pixels = wgpuRenderer.readRGBPixels();
 
         if (!pixels.empty()) {
-            // Flip vertically: Dawn readback is top-down, GL textures are bottom-up
+            // Flip vertically: Wgpu readback is top-down, GL textures are bottom-up
             const int rowBytes = halfW * 3;
             std::vector<unsigned char> flipped(pixels.size());
             for (int row = 0; row < halfH; row++) {
@@ -217,8 +217,8 @@ int main() {
                             &pixels[(halfH - 1 - row) * rowBytes],
                             rowBytes);
             }
-            dawnTex->image().setData(std::move(flipped));
-            dawnTex->needsUpdate();
+            wgpuTex->image().setData(std::move(flipped));
+            wgpuTex->needsUpdate();
         }
 
         // --- GL left half: render scene directly ---
@@ -226,8 +226,8 @@ int main() {
         glRenderer->setScissor(0, 0, hw, h);
         glRenderer->render(*sceneGL.scene, *camera);
 
-        // --- GL right half: display Dawn readback texture ---
-        // Disable tone mapping — the Dawn render already applied it.
+        // --- GL right half: display Wgpu readback texture ---
+        // Disable tone mapping — the Wgpu render already applied it.
         auto savedToneMapping = glRenderer->toneMapping;
         glRenderer->toneMapping = ToneMapping::None;
         glRenderer->setViewport(hw, 0, hw, h);

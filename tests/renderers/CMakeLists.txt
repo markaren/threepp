@@ -1,8 +1,8 @@
 
 add_subdirectory(gl)
 
-if (THREEPP_WITH_DAWN)
-    # Helper function to create a cross-renderer test target with Dawn/WebGPU support.
+if (THREEPP_WITH_WGPU)
+    # Helper function to create a cross-renderer test target with Wgpu/WebGPU support.
     function(add_cross_renderer_test name source)
         add_executable(${name} ${source})
         target_link_libraries(${name} PRIVATE threepp Catch2::Catch2WithMain)
@@ -25,7 +25,7 @@ if (THREEPP_WITH_DAWN)
     endfunction()
 
     add_cross_renderer_test(CrossRenderer_gl_test CrossRenderer_gl_test.cpp)
-    add_cross_renderer_test(CrossRenderer_dawn_test CrossRenderer_dawn_test.cpp)
+    add_cross_renderer_test(CrossRenderer_wgpu_test CrossRenderer_wgpu_test.cpp)
     add_cross_renderer_test(CrossRenderer_parity_test CrossRenderer_parity_test.cpp)
-    add_cross_renderer_test(DawnRenderer_perf_test DawnRenderer_perf_test.cpp)
+    add_cross_renderer_test(WgpuRenderer_perf_test WgpuRenderer_perf_test.cpp)
 endif ()
