@@ -361,12 +361,27 @@ struct VertexOutput {
     @location(5) undispXZ: vec2<f32>,     // undisplaced world XZ for stable gradient UVs
 };
 
-// textureLoad helper for RG32Float (UnfilterableFloat) textures.
-// textureSample/textureSampleLevel are forbidden by WebGPU spec for this format.
+// Bilinear sample for RG32Float (UnfilterableFloat) textures.
+// textureSample/textureSampleLevel are forbidden by WebGPU spec for this format,
+// so we do 4 textureLoad calls and lerp manually — same as sampleGrad() in the
+// fragment shader.  This removes the nearest-neighbour "staircase" on displaced
+// vertices, especially visible on the coarser outer-LOD tiles.
 fn loadRG(t: texture_2d<f32>, uv: vec2<f32>) -> vec2<f32> {
-    let sz = textureDimensions(t, 0);
-    let tc = vec2<i32>(fract(uv) * vec2<f32>(sz)) & (vec2<i32>(sz) - 1);
-    return textureLoad(t, tc, 0).rg;
+    let sz  = vec2<f32>(textureDimensions(t, 0));
+    let szi = vec2<i32>(sz);
+    // Map into texel space, shift by -0.5 to interpolate between texel centres.
+    let p   = fract(uv) * sz - 0.5;
+    let i   = vec2<i32>(floor(p));
+    let f   = fract(p);
+    let i00 = i & (szi - 1);
+    let i10 = (i + vec2<i32>(1, 0)) & (szi - 1);
+    let i01 = (i + vec2<i32>(0, 1)) & (szi - 1);
+    let i11 = (i + vec2<i32>(1, 1)) & (szi - 1);
+    let v00 = textureLoad(t, i00, 0).rg;
+    let v10 = textureLoad(t, i10, 0).rg;
+    let v01 = textureLoad(t, i01, 0).rg;
+    let v11 = textureLoad(t, i11, 0).rg;
+    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
 }
 
 @vertex

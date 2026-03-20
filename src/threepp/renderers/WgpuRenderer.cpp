@@ -731,12 +731,16 @@ struct ClearColor { color: vec4<f32> }
     }
 
     void configureSurface() {
+        const auto w = static_cast<uint32_t>(std::floor(size_.width()  * pixelRatio_));
+        const auto h = static_cast<uint32_t>(std::floor(size_.height() * pixelRatio_));
+        if (w == 0 || h == 0) return; // window is minimised — wgpu forbids zero-size surfaces
+
         WGPUSurfaceConfiguration config{};
         config.device = device;
         config.format = surfaceFormat;
         config.usage = WGPUTextureUsage_RenderAttachment;
-        config.width = static_cast<uint32_t>(std::floor(size_.width() * pixelRatio_));
-        config.height = static_cast<uint32_t>(std::floor(size_.height() * pixelRatio_));
+        config.width  = w;
+        config.height = h;
         config.presentMode = canvas.vsync() ? WGPUPresentMode_Fifo : WGPUPresentMode_Immediate;
         config.alphaMode = WGPUCompositeAlphaMode_Auto;
         config.viewFormatCount = 0;
@@ -1279,15 +1283,19 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (currentSize.width() != size_.width() || currentSize.height() != size_.height()) {
             size_ = currentSize;
             if (surface) {
-                // Size changed — must release current frame and reconfigure
+                // Size changed — must release current frame and reconfigure.
+                // Skip if minimised (zero area) — wgpu forbids zero-size surfaces.
                 endFrame();
-                configureSurface();
+                configureSurface(); // no-op when w==0 || h==0
             }
             viewport_.w = static_cast<float>(size_.width());
             viewport_.h = static_cast<float>(size_.height());
             scissor_.w = static_cast<uint32_t>(size_.width());
             scissor_.h = static_cast<uint32_t>(size_.height());
         }
+
+        // Skip rendering entirely while the window has zero area (minimised)
+        if (size_.width() == 0 || size_.height() == 0) return;
 
         // Update matrices
         scene.updateMatrixWorld();
