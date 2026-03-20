@@ -324,10 +324,14 @@ struct LightData {
 @group(0) @binding(1) var<uniform> lights: LightData;
 
 struct OceanUniforms {
+    choppiness:    vec4<f32>,
     foamStrength:  vec4<f32>,
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
+    fresnelScale:  vec4<f32>,
+    normalStrength:vec4<f32>,
     seaColor:      vec4<f32>,
+    specShininess: vec4<f32>,
     tileSize:      vec4<f32>,
     waveScale:     vec4<f32>,
 };
@@ -416,9 +420,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     let totalH    = h0 + h1 + h2;
 
     var waterPosition = in.position;
-    waterPosition.x += totalDisp.x * 0.5;
-    waterPosition.z += totalDisp.y * 0.5;
-    let yDisplace = totalH * 0.5 * ocean.waveScale.x;
+    waterPosition.x += totalDisp.x * ocean.choppiness.x;
+    waterPosition.z += totalDisp.y * ocean.choppiness.x;
+    let yDisplace = totalH * ocean.waveScale.x;
     waterPosition.y += yDisplace;
 
     let worldPos4 = transform.model * vec4<f32>(waterPosition, 1.0);
@@ -458,10 +462,14 @@ struct LightData {
 @group(0) @binding(1) var<uniform> lights: LightData;
 
 struct OceanUniforms {
+    choppiness:    vec4<f32>,
     foamStrength:  vec4<f32>,
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
+    fresnelScale:  vec4<f32>,
+    normalStrength:vec4<f32>,
     seaColor:      vec4<f32>,
+    specShininess: vec4<f32>,
     tileSize:      vec4<f32>,
     waveScale:     vec4<f32>,
 };
@@ -539,7 +547,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let g1 = sampleGrad(t_c1Grad, uv1) * (1.0 / C1_TILE);
     let g2 = sampleGrad(t_c2Grad, uv2) * (0.25 / C2_TILE);
 
-    let totalGrad = g0 + g1 + g2;
+    let totalGrad = (g0 + g1 + g2) * ocean.normalStrength.x;
     let normal    = normalize(vec3<f32>(-totalGrad.x, 1.0, -totalGrad.y));
 
     let lightDir = normalize(lights.dirDirection0);
@@ -551,7 +559,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let seaWaterColor = vec3<f32>(0.8, 0.9, 0.6);
 
     let nDotV   = max(dot(-viewRay, normal), 0.0);
-    let fresnel = pow(1.0 - nDotV, 3.0) * 0.65;
+    let fresnel = pow(1.0 - nDotV, 3.0) * ocean.fresnelScale.x;
 
     let sharpDiff = pow(ndl * 0.4 + 0.6, 80.0);
     let refracted = seaBase + sharpDiff * seaWaterColor * 0.12;
@@ -565,8 +573,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let atten = max(1.0 - dist * dist * 0.0003, 0.0);
     color += seaWaterColor * in.height * 0.18 * atten;
 
-    let specNorm = (60.0 + 8.0) / (3.14159 * 8.0);
-    let spec     = pow(max(0.0, dot(reflect(lightDir, normal), viewRay)), 60.0) * specNorm;
+    let shininess = ocean.specShininess.x;
+    let specNorm  = (shininess + 8.0) / (3.14159 * 8.0);
+    let spec      = pow(max(0.0, dot(reflect(lightDir, normal), viewRay)), shininess) * specNorm;
     color += vec3<f32>(spec) * lights.dirColor0;
 
     // Foam: sample at undisplaced XZ so it lines up with the Jacobian computation.

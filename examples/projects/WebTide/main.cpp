@@ -249,27 +249,48 @@ int main() {
 
     // -------------------------------------------------------------------------
     // Ocean visual settings — exposed via ImGui sliders.
-    // Uniform names are alphabetical to match the WgpuRenderer's packing order:
-    //   foamStrength, foamThreshold, fogDensity, seaColor, tileSize, waveScale
+    // Uniform names MUST be alphabetical to match the WgpuRenderer's packing order:
+    //   choppiness, foamStrength, foamThreshold, fogDensity, fresnelScale,
+    //   normalStrength, seaColor, specShininess, tileSize, waveScale
     // -------------------------------------------------------------------------
+    float uChoppiness    = 0.5f;   // horizontal displacement scale
     float uFoamStrength  = 0.35f;
     float uFoamThreshold = 0.30f;  // Jacobian foam threshold (lower = more foam)
     float uFogDensity    = 0.004f;
+    float uFresnelScale  = 0.65f;  // Fresnel reflection multiplier
+    float uNormalStrength= 1.0f;   // overall normal map intensity
     float uSeaColor[3]   = {0.10f, 0.19f, 0.22f};// seascape deep-water blue
-    float uWaveScale     = 1.0f;
-    float uTimeScale     = 1.0f;  // C++ only — not a shader uniform
-    float uLambda        = 1.2f;  // Jacobian choppiness multiplier
-    float uFoamDecay     = 1.5f;  // foam fade per second
+    float uSpecShininess = 60.0f;  // Blinn-Phong exponent
+    float uWaveScale     = 0.5f;   // vertical amplitude (matches old hardcoded 0.5)
+    float uTimeScale     = 1.0f;   // C++ only — not a shader uniform
+    float uLambda        = 1.2f;   // Jacobian choppiness multiplier
+    float uFoamDecay     = 1.5f;   // foam fade per second
+    float uSunAzimuth    = 210.0f; // degrees, 0=+X, CCW in XZ plane
+    float uSunElevation  = 35.0f;  // degrees above horizon
 
     auto pushUniforms = [&] {
+        waterMaterial->uniforms["choppiness"]    = Uniform(uChoppiness);
         waterMaterial->uniforms["foamStrength"]  = Uniform(uFoamStrength);
         waterMaterial->uniforms["foamThreshold"] = Uniform(uFoamThreshold);
         waterMaterial->uniforms["fogDensity"]    = Uniform(uFogDensity);
+        waterMaterial->uniforms["fresnelScale"]  = Uniform(uFresnelScale);
+        waterMaterial->uniforms["normalStrength"]= Uniform(uNormalStrength);
         waterMaterial->uniforms["seaColor"]      = Uniform(Color(uSeaColor[0], uSeaColor[1], uSeaColor[2]));
+        waterMaterial->uniforms["specShininess"] = Uniform(uSpecShininess);
         waterMaterial->uniforms["tileSize"]      = Uniform(C1_TILE);
         waterMaterial->uniforms["waveScale"]     = Uniform(uWaveScale);
     };
     pushUniforms();
+
+    auto updateSunDirection = [&] {
+        const float az  = uSunAzimuth  * math::PI / 180.0f;
+        const float el  = uSunElevation * math::PI / 180.0f;
+        dirLight->position.set(
+            std::cos(el) * std::cos(az),
+            std::sin(el),
+            std::cos(el) * std::sin(az));
+    };
+    updateSunDirection();
 
     // Animation state
     float elapsedSeconds = 60.0f;
@@ -277,23 +298,43 @@ int main() {
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
         ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
-        ImGui::SetNextWindowSize({280, 0}, ImGuiCond_Once);
+        ImGui::SetNextWindowSize({300, 0}, ImGuiCond_Once);
         ImGui::Begin("Ocean Settings");
 
         bool changed = false;
-        changed |= ImGui::SliderFloat("Wave Height",    &uWaveScale,  0.1f, 1.0f);
-        changed |= ImGui::SliderFloat("Speed",          &uTimeScale,  0.0f, 3.0f);
-        ImGui::Separator();
-        changed |= ImGui::ColorEdit3("Sea Colour",      uSeaColor);
-        ImGui::Separator();
-        changed |= ImGui::SliderFloat("Foam Threshold", &uFoamThreshold, 0.0f, 1.0f);
-        changed |= ImGui::SliderFloat("Foam Strength",  &uFoamStrength,  0.0f, 1.0f);
-        changed |= ImGui::SliderFloat("Foam Lambda",    &uLambda,    0.3f, 4.0f);
-        changed |= ImGui::SliderFloat("Foam Decay",     &uFoamDecay, 0.1f, 5.0f);
-        ImGui::Separator();
-        changed |= ImGui::SliderFloat("Fog Density",    &uFogDensity, 0.0f, 0.02f);
+        bool sunChanged = false;
 
-        if (changed) pushUniforms();
+        if (ImGui::CollapsingHeader("Waves", ImGuiTreeNodeFlags_DefaultOpen)) {
+            changed |= ImGui::SliderFloat("Height",      &uWaveScale,   0.0f,  1.5f);
+            changed |= ImGui::SliderFloat("Choppiness",  &uChoppiness,  0.0f,  2.0f);
+            changed |= ImGui::SliderFloat("Speed",       &uTimeScale,   0.0f,  3.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
+            changed |= ImGui::ColorEdit3 ("Sea Colour",    uSeaColor);
+            changed |= ImGui::SliderFloat("Normal Strength",&uNormalStrength, 0.0f, 4.0f);
+            changed |= ImGui::SliderFloat("Fresnel",       &uFresnelScale,   0.0f, 1.5f);
+            changed |= ImGui::SliderFloat("Specular",      &uSpecShininess,  4.0f, 256.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
+            sunChanged |= ImGui::SliderFloat("Azimuth°",   &uSunAzimuth,   0.0f, 360.0f);
+            sunChanged |= ImGui::SliderFloat("Elevation°", &uSunElevation, 5.0f,  85.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Foam", ImGuiTreeNodeFlags_DefaultOpen)) {
+            changed |= ImGui::SliderFloat("Threshold", &uFoamThreshold, 0.0f, 1.0f);
+            changed |= ImGui::SliderFloat("Strength",  &uFoamStrength,  0.0f, 1.0f);
+            changed |= ImGui::SliderFloat("Lambda",    &uLambda,        0.3f, 4.0f);
+            changed |= ImGui::SliderFloat("Decay",     &uFoamDecay,     0.1f, 5.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Atmosphere")) {
+            changed |= ImGui::SliderFloat("Fog Density", &uFogDensity, 0.0f, 0.02f);
+        }
+
+        if (changed)    pushUniforms();
+        if (sunChanged) updateSunDirection();
         ImGui::End();
     });
 
