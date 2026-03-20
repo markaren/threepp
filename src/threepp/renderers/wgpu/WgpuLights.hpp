@@ -8,6 +8,7 @@
 #include "WgpuState.hpp"
 
 #include <cstddef>
+#include <vector>
 #include <webgpu/webgpu.h>
 
 namespace threepp {
@@ -37,6 +38,8 @@ namespace threepp::wgpu {
     private:
         WgpuState& state_;
         WGPUBuffer lightBuffer_ = nullptr;
+        std::vector<float> scratch_;   // reused scratch buffer — avoids per-frame heap alloc
+        std::vector<float> uploaded_;  // last-uploaded data — skip GPU write when unchanged
     };
 
 }// namespace threepp::wgpu

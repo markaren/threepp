@@ -31,7 +31,9 @@ void WgpuLights::update(Object3D& scene) {
     auto& lim = state_.lightLimits;
     size_t bufSize = lim.lightUniformSize();
 
-    std::vector<float> data(bufSize / sizeof(float), 0.0f);
+    // Reuse scratch buffer to avoid per-frame heap allocation.
+    scratch_.assign(bufSize / sizeof(float), 0.0f);
+    std::vector<float>& data = scratch_;
     auto* u32 = reinterpret_cast<uint32_t*>(data.data());
 
     uint32_t nDir = 0, nPt = 0, nSp = 0, nHm = 0;
@@ -139,7 +141,11 @@ void WgpuLights::update(Object3D& scene) {
         off += 12;
     }
 
-    wgpuQueueWriteBuffer(state_.queue, lightBuffer_, 0, data.data(), bufSize);
+    // Only upload if the data actually changed (lights are usually static).
+    if (data != uploaded_) {
+        wgpuQueueWriteBuffer(state_.queue, lightBuffer_, 0, data.data(), bufSize);
+        uploaded_ = data;
+    }
 }
 
 size_t WgpuLights::lightUniformSize() const {
@@ -151,6 +157,7 @@ void WgpuLights::recreateBuffer() {
         wgpuBufferRelease(lightBuffer_);
         lightBuffer_ = nullptr;
     }
+    uploaded_.clear(); // force re-upload after buffer recreation
     WGPUBufferDescriptor d{};
     d.label = {.data = "light_buf", .length = 9};
     d.size = state_.lightLimits.lightUniformSize();

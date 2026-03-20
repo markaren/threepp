@@ -118,6 +118,67 @@ struct WgpuRenderer::Impl {
         }
     };
 
+    // Persistent per-object transform uniform buffer cache.
+    // Avoids re-uploading transform data when camera and object are both still.
+    struct PerObjectEntry {
+        WGPUBuffer transformBuf = nullptr;
+        float transformData[wgpu::TRANSFORM_UNIFORM_SIZE / sizeof(float)] = {};
+    };
+    std::unordered_map<int, PerObjectEntry> perObjectCache_;
+    // No per-object dispose listener: Object3D subclasses store their concrete
+    // type in event.target (not Object3D*), so a generic cast is unsafe.
+    // perObjectCache_ is fully released in dispose().
+
+    // Persistent per-material uniform buffer cache.
+    struct PerMaterialEntry {
+        WGPUBuffer materialBuf = nullptr;
+        float materialData[wgpu::MATERIAL_UNIFORM_SIZE / sizeof(float)] = {};
+    };
+    std::unordered_map<int, PerMaterialEntry> perMaterialCache_;
+    std::unordered_set<Material*> trackedMaterialsForUniforms_;
+
+    struct OnMaterialDisposeForUniforms : EventListener {
+        Impl* scope_;
+        explicit OnMaterialDisposeForUniforms(Impl* s) : scope_(s) {}
+        void onEvent(Event& event) override {
+            auto* mat = std::any_cast<Material*>(event.target);
+            mat->removeEventListener("dispose", *this);
+            scope_->trackedMaterialsForUniforms_.erase(mat);
+            auto it = scope_->perMaterialCache_.find(mat->id);
+            if (it != scope_->perMaterialCache_.end()) {
+                if (it->second.materialBuf) wgpuBufferRelease(it->second.materialBuf);
+                scope_->perMaterialCache_.erase(it);
+            }
+        }
+    } onMaterialDisposeForUniforms{this};
+
+    // Persistent GPU storage buffer cache for InstancedMesh data.
+    // Only re-uploaded when instanceMatrix/instanceColor version changes.
+    struct InstanceEntry {
+        WGPUBuffer buffer = nullptr;
+        size_t bufferSize = 0;
+        uint32_t matrixVersion = 0;
+        uint32_t colorVersion = 0;
+        bool hasColor = false;
+    };
+    std::unordered_map<int, InstanceEntry> instanceCache_;
+    std::unordered_set<InstancedMesh*> trackedInstancedMeshes_;
+
+    struct OnInstancedMeshDispose : EventListener {
+        Impl* scope_;
+        explicit OnInstancedMeshDispose(Impl* s) : scope_(s) {}
+        void onEvent(Event& event) override {
+            auto* mesh = std::any_cast<InstancedMesh*>(event.target);
+            mesh->removeEventListener("dispose", *this);
+            scope_->trackedInstancedMeshes_.erase(mesh);
+            auto it = scope_->instanceCache_.find(mesh->id);
+            if (it != scope_->instanceCache_.end()) {
+                if (it->second.buffer) wgpuBufferRelease(it->second.buffer);
+                scope_->instanceCache_.erase(it);
+            }
+        }
+    } onInstancedMeshDispose{this};
+
     WgpuRenderer& scope;
     Canvas& canvas;
 
@@ -676,7 +737,7 @@ struct ClearColor { color: vec4<f32> }
         config.usage = WGPUTextureUsage_RenderAttachment;
         config.width = static_cast<uint32_t>(std::floor(size_.width() * pixelRatio_));
         config.height = static_cast<uint32_t>(std::floor(size_.height() * pixelRatio_));
-        config.presentMode = WGPUPresentMode_Fifo;
+        config.presentMode = canvas.vsync() ? WGPUPresentMode_Fifo : WGPUPresentMode_Immediate;
         config.alphaMode = WGPUCompositeAlphaMode_Auto;
         config.viewFormatCount = 0;
         config.viewFormats = nullptr;
@@ -1953,42 +2014,102 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         transformData[62] = camPos.z;
         transformData[63] = 0;
 
-        // Acquire per-draw uniform buffers from pool
+        // Persistent per-object transform buffer — only re-upload when data changes.
         constexpr auto kUniformUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        WGPUBuffer perDrawTransform = bufferPool->acquire(wgpu::TRANSFORM_UNIFORM_SIZE, kUniformUsage, transformData);
+        auto& objEntry = perObjectCache_[object->id];
+        if (!objEntry.transformBuf) {
+            WGPUBufferDescriptor bd{};
+            bd.size = wgpu::TRANSFORM_UNIFORM_SIZE;
+            bd.usage = kUniformUsage;
+            objEntry.transformBuf = wgpuDeviceCreateBuffer(device, &bd);
+        }
+        if (std::memcmp(objEntry.transformData, transformData, wgpu::TRANSFORM_UNIFORM_SIZE) != 0) {
+            wgpuQueueWriteBuffer(queue, objEntry.transformBuf, 0, transformData, wgpu::TRANSFORM_UNIFORM_SIZE);
+            std::memcpy(objEntry.transformData, transformData, wgpu::TRANSFORM_UNIFORM_SIZE);
+        }
+        WGPUBuffer perDrawTransform = objEntry.transformBuf;
 
-        // Pack material uniforms via WgpuMaterials subsystem
+        // Persistent per-material uniform buffer — only re-upload when data changes.
         float matData[wgpu::MATERIAL_UNIFORM_SIZE / sizeof(float)];
         wgpu::packMaterialUniforms(matData, params, frameCtx, rawMat);
-        WGPUBuffer perDrawMaterial = bufferPool->acquire(wgpu::MATERIAL_UNIFORM_SIZE, kUniformUsage, matData);
+        if (!rawMat->hasEventListener("dispose", onMaterialDisposeForUniforms)) {
+            rawMat->addEventListener("dispose", onMaterialDisposeForUniforms);
+            trackedMaterialsForUniforms_.insert(rawMat);
+        }
+        auto& matEntry = perMaterialCache_[rawMat->id];
+        if (!matEntry.materialBuf) {
+            WGPUBufferDescriptor bd{};
+            bd.size = wgpu::MATERIAL_UNIFORM_SIZE;
+            bd.usage = kUniformUsage;
+            matEntry.materialBuf = wgpuDeviceCreateBuffer(device, &bd);
+        }
+        if (std::memcmp(matEntry.materialData, matData, wgpu::MATERIAL_UNIFORM_SIZE) != 0) {
+            wgpuQueueWriteBuffer(queue, matEntry.materialBuf, 0, matData, wgpu::MATERIAL_UNIFORM_SIZE);
+            std::memcpy(matEntry.materialData, matData, wgpu::MATERIAL_UNIFORM_SIZE);
+        }
+        WGPUBuffer perDrawMaterial = matEntry.materialBuf;
 
-        // Instance data buffer
+        // Instance data buffer — persistent per-mesh, only re-uploaded on version change.
         WGPUBuffer instanceBuffer = nullptr;
         size_t instanceBufSize = 0;
         if ((features & SF::Instanced) && instancedMesh) {
-            bool hasColor = features & SF::InstanceColor;
+            bool hasColor = (features & SF::InstanceColor) != 0;
             size_t instanceCount = instancedMesh->count();
             size_t floatsPerInstance = hasColor ? 20 : 16;
             size_t bufSize = instanceCount * floatsPerInstance * sizeof(float);
-            std::vector<float> instanceData(instanceCount * floatsPerInstance, 0.0f);
 
             auto* matAttr = instancedMesh->instanceMatrix();
             auto* colAttr = instancedMesh->instanceColor();
-            for (size_t i = 0; i < instanceCount; i++) {
-                const float* src = &matAttr->array()[i * 16];
-                float* dst = &instanceData[i * floatsPerInstance];
-                std::memcpy(dst, src, 16 * sizeof(float));
-                if (hasColor && colAttr) {
-                    const float* csrc = &colAttr->array()[i * 3];
-                    dst[16] = csrc[0];
-                    dst[17] = csrc[1];
-                    dst[18] = csrc[2];
-                    dst[19] = 1.0f;
-                }
+            uint32_t matVer = matAttr ? matAttr->version : 0;
+            uint32_t colVer = (hasColor && colAttr) ? colAttr->version : 0;
+
+            // Register dispose listener on first encounter
+            if (!instancedMesh->hasEventListener("dispose", onInstancedMeshDispose)) {
+                instancedMesh->addEventListener("dispose", onInstancedMeshDispose);
+                trackedInstancedMeshes_.insert(instancedMesh);
             }
 
+            auto& entry = instanceCache_[instancedMesh->id];
             constexpr auto kStorageUsage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-            instanceBuffer = bufferPool->acquire(bufSize, kStorageUsage, instanceData.data());
+
+            bool needsUpload = !entry.buffer
+                               || entry.bufferSize != bufSize
+                               || entry.hasColor != hasColor
+                               || entry.matrixVersion != matVer
+                               || entry.colorVersion != colVer;
+
+            if (needsUpload) {
+                // (Re)allocate persistent buffer if size or color-layout changed
+                if (!entry.buffer || entry.bufferSize != bufSize || entry.hasColor != hasColor) {
+                    if (entry.buffer) wgpuBufferRelease(entry.buffer);
+                    WGPUBufferDescriptor bd{};
+                    bd.size = bufSize;
+                    bd.usage = kStorageUsage;
+                    entry.buffer = wgpuDeviceCreateBuffer(device, &bd);
+                    entry.bufferSize = bufSize;
+                }
+
+                std::vector<float> instanceData(instanceCount * floatsPerInstance, 0.0f);
+                for (size_t i = 0; i < instanceCount; i++) {
+                    const float* src = &matAttr->array()[i * 16];
+                    float* dst = &instanceData[i * floatsPerInstance];
+                    std::memcpy(dst, src, 16 * sizeof(float));
+                    if (hasColor && colAttr) {
+                        const float* csrc = &colAttr->array()[i * 3];
+                        dst[16] = csrc[0];
+                        dst[17] = csrc[1];
+                        dst[18] = csrc[2];
+                        dst[19] = 1.0f;
+                    }
+                }
+                wgpuQueueWriteBuffer(queue, entry.buffer, 0, instanceData.data(), bufSize);
+
+                entry.hasColor = hasColor;
+                entry.matrixVersion = matVer;
+                entry.colorVersion = colVer;
+            }
+
+            instanceBuffer = entry.buffer;
             instanceBufSize = bufSize;
         }
 
@@ -2180,14 +2301,39 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
     void dispose() {
         if (!initialized) return;
 
-        // Unregister material dispose listeners before destroying so materials disposed
+        // Unregister all dispose listeners before destroying so objects/materials disposed
         // after the renderer don't call back into freed memory.
         for (auto* mat : trackedMaterials_) {
             mat->removeEventListener("dispose", onMaterialDispose);
         }
         trackedMaterials_.clear();
 
+        for (auto* mat : trackedMaterialsForUniforms_) {
+            mat->removeEventListener("dispose", onMaterialDisposeForUniforms);
+        }
+        trackedMaterialsForUniforms_.clear();
+
+        for (auto* mesh : trackedInstancedMeshes_) {
+            mesh->removeEventListener("dispose", onInstancedMeshDispose);
+        }
+        trackedInstancedMeshes_.clear();
+
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
+
+        for (auto& [id, entry] : instanceCache_) {
+            if (entry.buffer) wgpuBufferRelease(entry.buffer);
+        }
+        instanceCache_.clear();
+
+        for (auto& [id, entry] : perObjectCache_) {
+            if (entry.transformBuf) wgpuBufferRelease(entry.transformBuf);
+        }
+        perObjectCache_.clear();
+
+        for (auto& [id, entry] : perMaterialCache_) {
+            if (entry.materialBuf) wgpuBufferRelease(entry.materialBuf);
+        }
+        perMaterialCache_.clear();
 
         // Release any active frame state without presenting (safe for dispose)
         releaseFrame();
