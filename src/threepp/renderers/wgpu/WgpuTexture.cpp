@@ -14,6 +14,7 @@ namespace {
     WGPUTextureFormat toWGPUFormat(WgpuTexture::Format fmt) {
         switch (fmt) {
             case WgpuTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
+            case WgpuTexture::Format::RGBA16Float: return WGPUTextureFormat_RGBA16Float;
             case WgpuTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
             case WgpuTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
         }
@@ -23,10 +24,23 @@ namespace {
     uint32_t bytesPerPixel(WgpuTexture::Format fmt) {
         switch (fmt) {
             case WgpuTexture::Format::RGBA32Float: return 16;
+            case WgpuTexture::Format::RGBA16Float: return 8;
             case WgpuTexture::Format::RG32Float:   return 8;
             case WgpuTexture::Format::RGBA8Unorm:  return 4;
         }
         return 4;
+    }
+
+    // rgba16float and rgba8unorm are natively filterable; rg/rgba 32float are not
+    // (they require the float32-filterable device feature).
+    WGPUFilterMode defaultFilter(WgpuTexture::Format fmt) {
+        switch (fmt) {
+            case WgpuTexture::Format::RGBA16Float:
+            case WgpuTexture::Format::RGBA8Unorm:
+                return WGPUFilterMode_Linear;
+            default:
+                return WGPUFilterMode_Nearest;
+        }
     }
 
     uint32_t toWGPUUsage(uint32_t usage) {
@@ -69,13 +83,14 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     viewDesc.aspect = WGPUTextureAspect_All;
     view_ = wgpuTextureCreateView(texture_, &viewDesc);
 
+    WGPUFilterMode filter = defaultFilter(format);
     WGPUSamplerDescriptor samplerDesc{};
     samplerDesc.label = {.data = "gpu_tex_sampler", .length = 15};
     samplerDesc.addressModeU = WGPUAddressMode_Repeat;
     samplerDesc.addressModeV = WGPUAddressMode_Repeat;
     samplerDesc.addressModeW = WGPUAddressMode_Repeat;
-    samplerDesc.magFilter = WGPUFilterMode_Nearest;
-    samplerDesc.minFilter = WGPUFilterMode_Nearest;
+    samplerDesc.magFilter = filter;
+    samplerDesc.minFilter = filter;
     samplerDesc.mipmapFilter = WGPUMipmapFilterMode_Nearest;
     samplerDesc.maxAnisotropy = 1;
     sampler_ = wgpuDeviceCreateSampler(device_, &samplerDesc);

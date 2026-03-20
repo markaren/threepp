@@ -272,20 +272,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 constexpr const char* foamUpdateWGSL = R"(
 @group(0) @binding(0) var t_jacDiag: texture_2d<f32>;   // .r=Jxx .g=Jzz (spatial)
 @group(0) @binding(1) var t_foamIn:  texture_2d<f32>;   // previous frame foam [0,1]
-@group(0) @binding(2) var t_foamOut: texture_storage_2d<rg32float, write>;
+@group(0) @binding(2) var t_foamOut: texture_storage_2d<rgba16float, write>;
 
 struct FoamParams {
-    lambda: f32,   // choppiness multiplier (larger = more foam)
-    decay:  f32,   // foam fade per second
-    dt:     f32,   // delta time in seconds
-    _pad:   f32,
+    lambda:   f32,   // choppiness multiplier (larger = more foam)
+    decay:    f32,   // foam fade per second
+    dt:       f32,   // delta time in seconds
+    jacScale: f32,   // = 1/C1_TILE to normalise raw IFFT jac values (same as height normalisation)
 };
 @group(0) @binding(3) var<uniform> params: FoamParams;
 
 @compute @workgroup_size(8,8,1)
 fn updateFoam(@builtin(global_invocation_id) id: vec3<u32>) {
     let coord = vec2<i32>(id.xy);
-    let jac   = textureLoad(t_jacDiag, coord, 0).xy;
+    // Normalise raw IFFT Jacobian by jacScale so lambda is in a physically meaningful range.
+    let jac   = textureLoad(t_jacDiag, coord, 0).xy * params.jacScale;
     let J     = (1.0 + params.lambda * jac.x) * (1.0 + params.lambda * jac.y);
     let newFoam  = select(0.0, 1.0, J < 0.0);
     let prevFoam = textureLoad(t_foamIn, coord, 0).r;
@@ -298,7 +299,8 @@ fn updateFoam(@builtin(global_invocation_id) id: vec3<u32>) {
 // Water Rendering Shaders (WGSL, ported from GLSL)
 // ============================================================================
 
-// Vertex shader: displaces water mesh using compute-generated maps from 3 cascades
+// Vertex shader: displaces water mesh using compute-generated maps from 3 cascades.
+// Normal computation is done per-pixel in the fragment shader for smooth results.
 constexpr const char* waterVertexWGSL = R"(
 
 struct TransformUniforms {
@@ -316,48 +318,32 @@ struct TransformUniforms {
 struct LightData {
     numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,
     ambient: vec3<f32>, _pad: f32,
-    // We only use numDir and the first directional light direction for specular
     dirDirection0: vec3<f32>, _pd0: f32,
     dirColor0: vec3<f32>, _pd1: f32,
-    // Rest of light buffer not used by water shader (padded to 704 bytes)
 };
 @group(0) @binding(1) var<uniform> lights: LightData;
 
-// Alphabetical order matches C++ Uniform packing (each entry = one 16-byte slot):
-//   foamStrength, foamThreshold, fogDensity, seaColor, tileSize, waveScale
 struct OceanUniforms {
-    foamStrength:  vec4<f32>,  // .x = foam blend factor
-    foamThreshold: vec4<f32>,  // .x = threshold for Jacobian foam (unused in vertex)
-    fogDensity:    vec4<f32>,  // .x = fog exponential coefficient
-    seaColor:      vec4<f32>,  // .xyz = deep water base colour
-    tileSize:      vec4<f32>,  // .x = reference tile size (kept for uniform compat)
-    waveScale:     vec4<f32>,  // .x = vertical displacement multiplier
+    foamStrength:  vec4<f32>,
+    foamThreshold: vec4<f32>,
+    fogDensity:    vec4<f32>,
+    seaColor:      vec4<f32>,
+    tileSize:      vec4<f32>,
+    waveScale:     vec4<f32>,
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
 
-// Cascade texture bindings (alphabetical by customTextures key):
-// cascade0Displacement (3,4), cascade0Gradient (5,6), cascade0Height (7,8)
-// cascade1Displacement (9,10), cascade1Gradient (11,12), cascade1Height (13,14)
-// cascade2Displacement (15,16), cascade2Gradient (17,18), cascade2Height (19,20)
-// foamMap (21,22), reflectionMap (23,24)
-@group(0) @binding(3) var t_c0Disp:   texture_2d<f32>;
-@group(0) @binding(4) var s_c0Disp:   sampler;
-@group(0) @binding(5) var t_c0Grad:   texture_2d<f32>;
-@group(0) @binding(6) var s_c0Grad:   sampler;
-@group(0) @binding(7) var t_c0Height: texture_2d<f32>;
-@group(0) @binding(8) var s_c0Height: sampler;
+// Displacement + height textures (RG32Float — loaded via textureLoad, no sampler needed).
+// cascade0Displacement (3), cascade0Height (7)
+// cascade1Displacement (9), cascade1Height (13)
+// cascade2Displacement (15), cascade2Height (19)
+// (sampler slots 4,8,10,14,16,20 left unused; gradient textures 5,6,11,12,17,18 in fragment)
+@group(0) @binding(3)  var t_c0Disp:   texture_2d<f32>;
+@group(0) @binding(7)  var t_c0Height: texture_2d<f32>;
 @group(0) @binding(9)  var t_c1Disp:   texture_2d<f32>;
-@group(0) @binding(10) var s_c1Disp:   sampler;
-@group(0) @binding(11) var t_c1Grad:   texture_2d<f32>;
-@group(0) @binding(12) var s_c1Grad:   sampler;
 @group(0) @binding(13) var t_c1Height: texture_2d<f32>;
-@group(0) @binding(14) var s_c1Height: sampler;
 @group(0) @binding(15) var t_c2Disp:   texture_2d<f32>;
-@group(0) @binding(16) var s_c2Disp:   sampler;
-@group(0) @binding(17) var t_c2Grad:   texture_2d<f32>;
-@group(0) @binding(18) var s_c2Grad:   sampler;
 @group(0) @binding(19) var t_c2Height: texture_2d<f32>;
-@group(0) @binding(20) var s_c2Height: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -368,71 +354,72 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) clipPos: vec4<f32>,
     @location(0) worldPos: vec3<f32>,
-    @location(1) worldNormal: vec3<f32>,
+    @location(1) worldNormal: vec3<f32>,  // unused by fragment; kept for layout compat
     @location(2) uv: vec2<f32>,
-    @location(3) height: f32,      // combined Y displacement (for crest colour)
-    @location(4) foamHeight: f32,  // kept for compat but foam now driven by Jacobian texture
+    @location(3) height: f32,             // combined Y displacement (for crest colour)
+    @location(4) foamHeight: f32,
+    @location(5) undispXZ: vec2<f32>,     // undisplaced world XZ for stable gradient UVs
 };
+
+// textureLoad helper for RG32Float (UnfilterableFloat) textures.
+// textureSample/textureSampleLevel are forbidden by WebGPU spec for this format.
+fn loadRG(t: texture_2d<f32>, uv: vec2<f32>) -> vec2<f32> {
+    let sz = textureDimensions(t, 0);
+    let tc = vec2<i32>(fract(uv) * vec2<f32>(sz)) & (vec2<i32>(sz) - 1);
+    return textureLoad(t, tc, 0).rg;
+}
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    // Tile sizes for each cascade (must match C++ constants)
-    const C0_TILE: f32 = 5.0;    // ripples
-    const C1_TILE: f32 = 40.0;   // main chop
-    const C2_TILE: f32 = 400.0;  // long swell
+    const C0_TILE: f32 = 5.0;
+    const C1_TILE: f32 = 40.0;
+    const C2_TILE: f32 = 400.0;
 
-    let worldXZ  = (transform.model * vec4<f32>(in.position, 1.0)).xz;
+    // World-space XZ before displacement (used for stable UV sampling)
+    let worldXZ = (transform.model * vec4<f32>(in.position, 1.0)).xz;
     let uv0 = worldXZ / C0_TILE;
     let uv1 = worldXZ / C1_TILE;
     let uv2 = worldXZ / C2_TILE;
 
-    // Cascade 0 (fine ripples) fades out with camera distance
-    let camDist  = length(worldXZ - transform.cameraPos.xz);
-    let c0Fade   = clamp(1.0 - (camDist - 20.0) / 60.0, 0.0, 1.0);
+    let camDist = length(worldXZ - transform.cameraPos.xz);
+    let c0Fade  = clamp(1.0 - (camDist - 20.0) / 60.0, 0.0, 1.0);
 
-    let sf = 1.0 / C2_TILE;  // reference scale factor
+    // Normalize each cascade by its own tile size so all three contribute
+    // comparable amplitude regardless of Phillips spectrum scale at different k.
+    let d0 = loadRG(t_c0Disp,   uv0) * (c0Fade * 0.25 / C0_TILE);
+    let h0 = loadRG(t_c0Height, uv0).r * (c0Fade * 0.25 / C0_TILE);
 
-    // Sample all 3 cascades
-    let d0 = textureSampleLevel(t_c0Disp,   s_c0Disp,   uv0, 0.0).rg * c0Fade * 0.25;
-    let h0 = textureSampleLevel(t_c0Height, s_c0Height, uv0, 0.0).r  * c0Fade * 0.25;
-    let g0 = textureSampleLevel(t_c0Grad,   s_c0Grad,   uv0, 0.0).rg * c0Fade * 0.5;
+    let d1 = loadRG(t_c1Disp,   uv1) * (1.0 / C1_TILE);
+    let h1 = loadRG(t_c1Height, uv1).r * (1.0 / C1_TILE);
 
-    let d1 = textureSampleLevel(t_c1Disp,   s_c1Disp,   uv1, 0.0).rg;
-    let h1 = textureSampleLevel(t_c1Height, s_c1Height, uv1, 0.0).r;
-    let g1 = textureSampleLevel(t_c1Grad,   s_c1Grad,   uv1, 0.0).rg;
+    let d2 = loadRG(t_c2Disp,   uv2) * (1.0 / C2_TILE);
+    let h2 = loadRG(t_c2Height, uv2).r * (1.0 / C2_TILE);
 
-    let d2 = textureSampleLevel(t_c2Disp,   s_c2Disp,   uv2, 0.0).rg * 1.0;
-    let h2 = textureSampleLevel(t_c2Height, s_c2Height, uv2, 0.0).r  * 1.0;
-    let g2 = textureSampleLevel(t_c2Grad,   s_c2Grad,   uv2, 0.0).rg * 1.5;
-
-    let totalDisp = (d0 + d1 + d2) * sf;
-    let totalH    = (h0 + h1 + h2) * sf;
-    let totalGrad = (g0 + g1 + g2) * sf;
+    let totalDisp = d0 + d1 + d2;
+    let totalH    = h0 + h1 + h2;
 
     var waterPosition = in.position;
-
-    // Apply displacement
-    waterPosition.x += totalDisp.x;
-    waterPosition.z += totalDisp.y;
+    waterPosition.x += totalDisp.x * 0.5;
+    waterPosition.z += totalDisp.y * 0.5;
     let yDisplace = totalH * 0.5 * ocean.waveScale.x;
     waterPosition.y += yDisplace;
 
-    let normal = normalize(vec3<f32>(-totalGrad.x * 0.5, 1.0, -totalGrad.y * 0.5));
-
     let worldPos4 = transform.model * vec4<f32>(waterPosition, 1.0);
-    out.worldPos   = worldPos4.xyz;
-    out.worldNormal = (transform.model * vec4<f32>(normal, 0.0)).xyz;
-    out.uv     = in.uv;
-    out.height = yDisplace;
-    out.foamHeight = yDisplace;  // kept for compat but not used for foam anymore
-    out.clipPos = transform.proj * transform.view * worldPos4;
+    out.worldPos    = worldPos4.xyz;
+    out.worldNormal = (transform.model * vec4<f32>(0.0, 1.0, 0.0, 0.0)).xyz;
+    out.uv          = in.uv;
+    out.height      = yDisplace;
+    out.foamHeight  = yDisplace;
+    out.undispXZ    = worldXZ;  // pre-displacement XZ for gradient texture lookup
+    out.clipPos     = transform.proj * transform.view * worldPos4;
     return out;
 }
 )";
 
-// Fragment shader: Fresnel + cubemap reflection + specular + Jacobian foam
+// Fragment shader: per-pixel normals from gradient textures + Fresnel + foam.
+// Gradient textures are sampled here (not in vertex shader) for smooth normals.
 constexpr const char* waterFragmentWGSL = R"(
 
 struct TransformUniforms {
@@ -465,6 +452,14 @@ struct OceanUniforms {
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
 
+// Gradient textures — shared binding slots with vertex stage (5,6 / 11,12 / 17,18)
+@group(0) @binding(5)  var t_c0Grad: texture_2d<f32>;
+@group(0) @binding(6)  var s_c0Grad: sampler;
+@group(0) @binding(11) var t_c1Grad: texture_2d<f32>;
+@group(0) @binding(12) var s_c1Grad: sampler;
+@group(0) @binding(17) var t_c2Grad: texture_2d<f32>;
+@group(0) @binding(18) var s_c2Grad: sampler;
+
 @group(0) @binding(21) var t_foamMap:       texture_2d<f32>;
 @group(0) @binding(22) var s_foamMap:       sampler;
 @group(0) @binding(23) var t_reflectionMap: texture_cube<f32>;
@@ -477,57 +472,108 @@ struct VertexOutput {
     @location(2) uv: vec2<f32>,
     @location(3) height: f32,
     @location(4) foamHeight: f32,
+    @location(5) undispXZ: vec2<f32>,
 };
+
+// Simple value noise to break up foam edges
+fn hash2(p: vec2<f32>) -> f32 {
+    let p2 = fract(p * vec2<f32>(5.3983, 5.4427));
+    let p3 = p2 + dot(p2, p2.yx + vec2<f32>(21.5351));
+    return fract((p3.x + p3.y) * p3.x);
+}
+
+// Bilinear sample from a repeating RG32Float texture (UnfilterableFloat).
+// textureSample/Level are forbidden for RG32Float; we do 4 textureLoad calls instead.
+// Assumes power-of-2 texture dimensions (bitwise AND wrap).
+fn sampleGrad(t: texture_2d<f32>, uv: vec2<f32>) -> vec2<f32> {
+    let sz  = vec2<f32>(textureDimensions(t, 0));
+    let szi = vec2<i32>(sz);
+    // Map UV into texel space, offset by -0.5 so we interpolate between texel centres
+    let p  = fract(uv) * sz - 0.5;
+    let i  = vec2<i32>(floor(p));
+    let f  = fract(p);
+    let i00 = i & (szi - 1);
+    let i10 = (i + vec2<i32>(1, 0)) & (szi - 1);
+    let i01 = (i + vec2<i32>(0, 1)) & (szi - 1);
+    let i11 = (i + vec2<i32>(1, 1)) & (szi - 1);
+    let v00 = textureLoad(t, i00, 0).rg;
+    let v10 = textureLoad(t, i10, 0).rg;
+    let v01 = textureLoad(t, i01, 0).rg;
+    let v11 = textureLoad(t, i11, 0).rg;
+    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+}
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let normal   = normalize(in.worldNormal);
+    const C0_TILE: f32 = 5.0;
+    const C1_TILE: f32 = 40.0;
+    const C2_TILE: f32 = 400.0;
+
+    // Use undisplaced XZ for stable UV sampling (same reference frame as the FFT).
+    let worldXZ = in.undispXZ;
+    let uv0 = worldXZ / C0_TILE;
+    let uv1 = worldXZ / C1_TILE;
+    let uv2 = worldXZ / C2_TILE;
+
+    let camDist = length(worldXZ - transform.cameraPos.xz);
+    let c0Fade  = clamp(1.0 - (camDist - 20.0) / 60.0, 0.0, 1.0);
+
+    // Per-pixel normals via bilinear gradient sampling (RG32Float — textureLoad only).
+    // Each cascade normalized by its tile size (same convention as vertex displacement).
+    let g0 = sampleGrad(t_c0Grad, uv0) * (c0Fade * 0.8 / C0_TILE);
+    let g1 = sampleGrad(t_c1Grad, uv1) * (1.0 / C1_TILE);
+    let g2 = sampleGrad(t_c2Grad, uv2) * (0.25 / C2_TILE);
+
+    let totalGrad = g0 + g1 + g2;
+    let normal    = normalize(vec3<f32>(-totalGrad.x, 1.0, -totalGrad.y));
+
     let lightDir = normalize(lights.dirDirection0);
     let viewRay  = normalize(in.worldPos - transform.cameraPos);
 
     let ndl = max(0.0, dot(normal, lightDir));
 
-    // Seascape colour constants (seaBase tunable via ImGui slider)
     let seaBase       = ocean.seaColor.xyz;
-    let seaWaterColor = vec3<f32>(0.8,  0.9,  0.6);
+    let seaWaterColor = vec3<f32>(0.8, 0.9, 0.6);
 
-    // Fresnel -- power 3, 0.65 scale (seascape style)
     let nDotV   = max(dot(-viewRay, normal), 0.0);
     let fresnel = pow(1.0 - nDotV, 3.0) * 0.65;
 
-    // Refracted body colour: seaBase + sharp wrapped-diffuse tinted by water colour
     let sharpDiff = pow(ndl * 0.4 + 0.6, 80.0);
     let refracted = seaBase + sharpDiff * seaWaterColor * 0.12;
 
-    // Sky reflection from cubemap
     let reflectedDir = reflect(viewRay, normal);
     let reflected    = textureSample(t_reflectionMap, s_reflectionMap, reflectedDir).rgb;
 
     var color = mix(refracted, reflected, fresnel);
 
-    // Wave-height colour contribution (seascape: adds water colour at crests)
     let dist  = length(in.worldPos - transform.cameraPos);
     let atten = max(1.0 - dist * dist * 0.0003, 0.0);
     color += seaWaterColor * in.height * 0.18 * atten;
 
-    // Specular (seascape exponent 60 with normalisation)
     let specNorm = (60.0 + 8.0) / (3.14159 * 8.0);
     let spec     = pow(max(0.0, dot(reflect(lightDir, normal), viewRay)), 60.0) * specNorm;
     color += vec3<f32>(spec) * lights.dirColor0;
 
-    // Jacobian foam from persistent foam texture
-    let foamRaw   = textureSample(t_foamMap, s_foamMap, in.uv).r;
-    let foamValue = clamp((foamRaw - ocean.foamThreshold.x) / (1.0 - ocean.foamThreshold.x + 0.001), 0.0, 1.0);
-    let foamColor = vec3<f32>(0.85, 0.90, 0.92);
+    // Foam: sample at undisplaced XZ so it lines up with the Jacobian computation.
+    // Multi-scale hash noise breaks up the hard 0.156m texel boundaries.
+    let foamUV     = worldXZ / C1_TILE;  // sampler wraps (repeat mode)
+    let foamRaw    = textureSample(t_foamMap, s_foamMap, foamUV).r;
+    let fn1 = hash2(worldXZ * 0.4);   // ~2.5m coarse variation
+    let fn2 = hash2(worldXZ * 2.1);   // ~0.5m medium grain
+    let fn3 = hash2(worldXZ * 6.5);   // ~0.15m fine grain (texel-scale breakup)
+    let foamNoise  = fn1 * 0.12 + fn2 * 0.20 + fn3 * 0.13;  // total range ~0-0.45
+    let foamSample = foamRaw - foamNoise;
+    let foamValue  = smoothstep(ocean.foamThreshold.x - 0.05,
+                                ocean.foamThreshold.x + 0.40,
+                                foamSample);
+    let foamColor  = vec3<f32>(0.85, 0.90, 0.92);
     color = mix(color, foamColor, foamValue * ocean.foamStrength.x);
 
-    // Atmospheric haze -- starts beyond 200 units, density tunable via ImGui
     let fogFactor  = clamp(exp(-max(dist - 200.0, 0.0) * ocean.fogDensity.x), 0.0, 1.0);
     let horizonDir = normalize(vec3<f32>(viewRay.x, -0.02, viewRay.z));
     let fogColor   = textureSample(t_reflectionMap, s_reflectionMap, horizonDir).rgb;
     color = mix(fogColor, color, fogFactor);
 
-    // Gamma / tone curve (seascape: pow(color, 0.75) to lift the result)
     color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(0.75));
 
     return vec4<f32>(color, 1.0);

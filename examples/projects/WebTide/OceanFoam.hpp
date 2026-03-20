@@ -15,16 +15,16 @@ class OceanFoam {
 public:
     OceanFoam(threepp::WgpuRenderer& renderer, uint32_t textureSize)
         : jacSpatial_(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RG32Float),
-          foam0_(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RG32Float),
-          foam1_(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RG32Float),
+          foam0_(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RGBA16Float),
+          foam1_(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RGBA16Float),
           params_(renderer, 16),
           pipeline_(renderer, foamUpdateWGSL, "updateFoam"),
           textureSize_(textureSize)
     {
-        // foam textures start zeroed (no foam initially)
-        std::vector<float> zeros(textureSize * textureSize * 2, 0.0f);
-        foam0_.write(zeros.data(), zeros.size() * sizeof(float));
-        foam1_.write(zeros.data(), zeros.size() * sizeof(float));
+        // foam textures start zeroed (no foam initially); 4 float16 channels = 8 bytes/pixel
+        std::vector<uint8_t> zeros(textureSize * textureSize * 8, 0);
+        foam0_.write(zeros.data(), zeros.size());
+        foam1_.write(zeros.data(), zeros.size());
     }
 
     // Returns the texture to use in the water shader (current read-only foam)
@@ -41,7 +41,8 @@ public:
         // After IFFT, jacSpatial_ contains (.r=Jxx, .g=Jzz) in spatial domain
 
         // 2. Write foam params
-        struct { float lambda; float decay; float dt; float _pad; } p{lambda, decay, dt, 0};
+        // jacScale normalises the raw IFFT Jacobian by the cascade tile size (same as height).
+        struct { float lambda; float decay; float dt; float jacScale; } p{lambda, decay, dt, 1.0f/80.0f};
         params_.write(&p, sizeof(p));
 
         // 3. Run foam update: read jacSpatial_ + current foam, write to other foam buffer

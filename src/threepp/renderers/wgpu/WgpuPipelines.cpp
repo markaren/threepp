@@ -651,13 +651,18 @@ namespace threepp::wgpu {
             for (auto& name : texNames) {
                 bool isCube = false;
                 bool fromCustomTextures = sm->customTextures.count(name) > 0;
+                bool isFilterable = false;
                 if (fromCustomTextures) {
                     auto* gpuTex = static_cast<WgpuTexture*>(sm->customTextures[name]);
                     isCube = gpuTex->dimension() == WgpuTexture::Dimension::Cube;
+                    auto fmt = gpuTex->format();
+                    isFilterable = isCube ||
+                        fmt == WgpuTexture::Format::RGBA16Float ||
+                        fmt == WgpuTexture::Format::RGBA8Unorm;
                 }
-                // Textures from uniforms (render targets, etc.) use filtering samplers;
-                // customTextures may use non-filtering samplers for raw GPU textures.
-                bool useFiltering = isCube || !fromCustomTextures;
+                // Textures from uniforms always use filtering; customTextures use filtering
+                // only when the format natively supports it (RGBA16Float, RGBA8Unorm, cube).
+                bool useFiltering = isFilterable || !fromCustomTextures;
                 {
                     WGPUBindGroupLayoutEntry e{};
                     e.binding = nextBinding++;

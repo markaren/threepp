@@ -16,10 +16,24 @@ namespace {
     WGPUTextureFormat toWGPUFormat(WgpuTexture::Format fmt) {
         switch (fmt) {
             case WgpuTexture::Format::RGBA32Float: return WGPUTextureFormat_RGBA32Float;
+            case WgpuTexture::Format::RGBA16Float: return WGPUTextureFormat_RGBA16Float;
             case WgpuTexture::Format::RG32Float:   return WGPUTextureFormat_RG32Float;
             case WgpuTexture::Format::RGBA8Unorm:  return WGPUTextureFormat_RGBA8Unorm;
         }
         return WGPUTextureFormat_RGBA8Unorm;
+    }
+
+    // rgba16float and rgba8unorm are filterable (WGPUTextureSampleType_Float).
+    // rg32float / rgba32float require the float32-filterable feature; declare as UnfilterableFloat
+    // to avoid needing that feature for compute shaders that use textureLoad.
+    WGPUTextureSampleType sampleType(WgpuTexture::Format fmt) {
+        switch (fmt) {
+            case WgpuTexture::Format::RGBA16Float:
+            case WgpuTexture::Format::RGBA8Unorm:
+                return WGPUTextureSampleType_Float;
+            default:
+                return WGPUTextureSampleType_UnfilterableFloat;
+        }
     }
 
 }// namespace
@@ -75,10 +89,14 @@ struct WgpuComputePipeline::Impl {
                     e.storageTexture.viewDimension = WGPUTextureViewDimension_2D;
                     break;
                 case BindingType::StorageTextureRead:
-                case BindingType::Texture:
-                    e.texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+                case BindingType::Texture: {
+                    bool filterable = (info.textureFormat == WGPUTextureFormat_RGBA16Float ||
+                                       info.textureFormat == WGPUTextureFormat_RGBA8Unorm);
+                    e.texture.sampleType = filterable ? WGPUTextureSampleType_Float
+                                                      : WGPUTextureSampleType_UnfilterableFloat;
                     e.texture.viewDimension = WGPUTextureViewDimension_2D;
                     break;
+                }
                 case BindingType::UniformBuffer:
                     e.buffer.type = WGPUBufferBindingType_Uniform;
                     e.buffer.minBindingSize = info.bufferSize;

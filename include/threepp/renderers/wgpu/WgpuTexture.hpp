@@ -23,6 +23,7 @@ namespace threepp {
     public:
         enum class Format {
             RGBA32Float,
+            RGBA16Float,   // 8 bytes/pixel — storage-writable + linearly filterable
             RG32Float,
             RGBA8Unorm
         };

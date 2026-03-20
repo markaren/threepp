@@ -183,7 +183,7 @@ int main() {
     }
 
     auto ground = Mesh::create(groundGeo, groundMat);
-    ground->position.y = -5.0f;
+    ground->position.y = -10.0f;
     scene->add(ground);
 
     // Skybox (Tropical Sunny Day) – 6 individual textures mapped to box faces
@@ -281,7 +281,7 @@ int main() {
         ImGui::Begin("Ocean Settings");
 
         bool changed = false;
-        changed |= ImGui::SliderFloat("Wave Height",    &uWaveScale,  0.1f, 3.0f);
+        changed |= ImGui::SliderFloat("Wave Height",    &uWaveScale,  0.1f, 1.0f);
         changed |= ImGui::SliderFloat("Speed",          &uTimeScale,  0.0f, 3.0f);
         ImGui::Separator();
         changed |= ImGui::ColorEdit3("Sea Colour",      uSeaColor);
