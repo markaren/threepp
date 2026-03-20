@@ -19,6 +19,9 @@ struct Params {
     windTheta: f32,
     windSpeed: f32,
     smallWaveLengthCutoff: f32,
+    kMin: f32,
+    kMax: f32,
+    _pad: f32,
 };
 
 @group(0) @binding(2) var<uniform> params: Params;
@@ -51,6 +54,13 @@ fn computeSpectrum(@builtin(global_invocation_id) id: vec3<u32>) {
     let nz = f32(id.y) - f32(params.textureSize) / 2.0;
     let k = vec2<f32>(nx, nz) * deltaK;
 
+    // Band-pass filter: reject wavenumbers outside [kMin, kMax]
+    let kLen = length(k);
+    if (kLen < params.kMin || (params.kMax > 0.0 && kLen > params.kMax)) {
+        textureStore(H0, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
+
     let noise_k = textureLoad(Noise, vec2<i32>(id.xy), 0).xy;
     let h0_k = noise_k * sqrt(phillipsSpectrum2D(k) / 2.0);
 
@@ -77,6 +87,8 @@ struct Params {
 };
 
 @group(0) @binding(4) var<uniform> params: Params;
+
+@group(0) @binding(5) var JacDiag: texture_storage_2d<rg32float, write>;
 
 fn omega(k: vec2<f32>) -> f32 {
     return sqrt(length(k) * 9.81);
@@ -106,6 +118,14 @@ fn computeSpectrum(@builtin(global_invocation_id) id: vec3<u32>) {
     let ikh = complexMult(k, ih);
 
     let displacement = ikh / (length(k) + 0.001);
+
+    // Packed Jacobian diagonal spectrum: .r = Jxx spectrum, .g = Jzz spectrum
+    // Jxx = kx^2/|k| * H, Jzz = kz^2/|k| * H (packed using real/imag trick)
+    // IFFT of this gives (.r=Jxx_spatial, .g=Jzz_spatial)
+    let klen = length(k) + 0.001;
+    let jac_r = (k.x*k.x * h.x - k.y*k.y * h.y) / klen;
+    let jac_i = (k.x*k.x * h.y + k.y*k.y * h.x) / klen;
+    textureStore(JacDiag, iid.xy, vec4<f32>(jac_r, jac_i, 0.0, 0.0));
 
     textureStore(HT, iid.xy, vec4<f32>(h, vec2(0.0)));
     textureStore(DHT, iid.xy, vec4<f32>(ikh, vec2(0.0)));
@@ -246,11 +266,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 )";
 
+// Foam update: Jacobian-based whitecap detection with temporal decay.
+// J ~= (1 + lambda*Jxx)(1 + lambda*Jzz) -- when J < 0 the surface is folding (breaking wave).
+// Foam persists with exponential decay: foam = max(newFoam, prevFoam - decay*dt)
+constexpr const char* foamUpdateWGSL = R"(
+@group(0) @binding(0) var t_jacDiag: texture_2d<f32>;   // .r=Jxx .g=Jzz (spatial)
+@group(0) @binding(1) var t_foamIn:  texture_2d<f32>;   // previous frame foam [0,1]
+@group(0) @binding(2) var t_foamOut: texture_storage_2d<rg32float, write>;
+
+struct FoamParams {
+    lambda: f32,   // choppiness multiplier (larger = more foam)
+    decay:  f32,   // foam fade per second
+    dt:     f32,   // delta time in seconds
+    _pad:   f32,
+};
+@group(0) @binding(3) var<uniform> params: FoamParams;
+
+@compute @workgroup_size(8,8,1)
+fn updateFoam(@builtin(global_invocation_id) id: vec3<u32>) {
+    let coord = vec2<i32>(id.xy);
+    let jac   = textureLoad(t_jacDiag, coord, 0).xy;
+    let J     = (1.0 + params.lambda * jac.x) * (1.0 + params.lambda * jac.y);
+    let newFoam  = select(0.0, 1.0, J < 0.0);
+    let prevFoam = textureLoad(t_foamIn, coord, 0).r;
+    let foam     = max(newFoam, prevFoam - params.decay * params.dt);
+    textureStore(t_foamOut, coord, vec4<f32>(foam, 0.0, 0.0, 0.0));
+}
+)";
+
 // ============================================================================
 // Water Rendering Shaders (WGSL, ported from GLSL)
 // ============================================================================
 
-// Vertex shader: displaces water mesh using compute-generated maps
+// Vertex shader: displaces water mesh using compute-generated maps from 3 cascades
 constexpr const char* waterVertexWGSL = R"(
 
 struct TransformUniforms {
@@ -279,24 +327,37 @@ struct LightData {
 //   foamStrength, foamThreshold, fogDensity, seaColor, tileSize, waveScale
 struct OceanUniforms {
     foamStrength:  vec4<f32>,  // .x = foam blend factor
-    foamThreshold: vec4<f32>,  // .x = height at which foam starts
+    foamThreshold: vec4<f32>,  // .x = threshold for Jacobian foam (unused in vertex)
     fogDensity:    vec4<f32>,  // .x = fog exponential coefficient
     seaColor:      vec4<f32>,  // .xyz = deep water base colour
-    tileSize:      vec4<f32>,  // .x = tile world size
+    tileSize:      vec4<f32>,  // .x = reference tile size (kept for uniform compat)
     waveScale:     vec4<f32>,  // .x = vertical displacement multiplier
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
 
-// Bindings assigned alphabetically by customTextures key:
-// displacementMap (3,4), gradientMap (5,6), heightMap (7,8)
-@group(0) @binding(3) var t_displacementMap: texture_2d<f32>;
-@group(0) @binding(4) var s_displacementMap: sampler;
-@group(0) @binding(5) var t_gradientMap: texture_2d<f32>;
-@group(0) @binding(6) var s_gradientMap: sampler;
-@group(0) @binding(7) var t_heightMap: texture_2d<f32>;
-@group(0) @binding(8) var s_heightMap: sampler;
-@group(0) @binding(9) var t_reflectionMap: texture_cube<f32>;
-@group(0) @binding(10) var s_reflectionMap: sampler;
+// Cascade texture bindings (alphabetical by customTextures key):
+// cascade0Displacement (3,4), cascade0Gradient (5,6), cascade0Height (7,8)
+// cascade1Displacement (9,10), cascade1Gradient (11,12), cascade1Height (13,14)
+// cascade2Displacement (15,16), cascade2Gradient (17,18), cascade2Height (19,20)
+// foamMap (21,22), reflectionMap (23,24)
+@group(0) @binding(3) var t_c0Disp:   texture_2d<f32>;
+@group(0) @binding(4) var s_c0Disp:   sampler;
+@group(0) @binding(5) var t_c0Grad:   texture_2d<f32>;
+@group(0) @binding(6) var s_c0Grad:   sampler;
+@group(0) @binding(7) var t_c0Height: texture_2d<f32>;
+@group(0) @binding(8) var s_c0Height: sampler;
+@group(0) @binding(9)  var t_c1Disp:   texture_2d<f32>;
+@group(0) @binding(10) var s_c1Disp:   sampler;
+@group(0) @binding(11) var t_c1Grad:   texture_2d<f32>;
+@group(0) @binding(12) var s_c1Grad:   sampler;
+@group(0) @binding(13) var t_c1Height: texture_2d<f32>;
+@group(0) @binding(14) var s_c1Height: sampler;
+@group(0) @binding(15) var t_c2Disp:   texture_2d<f32>;
+@group(0) @binding(16) var s_c2Disp:   sampler;
+@group(0) @binding(17) var t_c2Grad:   texture_2d<f32>;
+@group(0) @binding(18) var s_c2Grad:   sampler;
+@group(0) @binding(19) var t_c2Height: texture_2d<f32>;
+@group(0) @binding(20) var s_c2Height: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -310,87 +371,68 @@ struct VertexOutput {
     @location(1) worldNormal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(3) height: f32,      // combined Y displacement (for crest colour)
-    @location(4) foamHeight: f32,  // world-continuous height for foam (non-repeating)
+    @location(4) foamHeight: f32,  // kept for compat but foam now driven by Jacobian texture
 };
-
-// Rotate a 2-D vector by `angle` radians — used to steer secondary wave passes
-fn rot2(v: vec2<f32>, angle: f32) -> vec2<f32> {
-    let c = cos(angle);
-    let s = sin(angle);
-    return vec2<f32>(v.x * c - v.y * s, v.x * s + v.y * c);
-}
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    let scalingFactor = 1.0 / ocean.tileSize.x;
+    // Tile sizes for each cascade (must match C++ constants)
+    const C0_TILE: f32 = 5.0;    // ripples
+    const C1_TILE: f32 = 40.0;   // main chop
+    const C2_TILE: f32 = 400.0;  // long swell
+
+    let worldXZ  = (transform.model * vec4<f32>(in.position, 1.0)).xz;
+    let uv0 = worldXZ / C0_TILE;
+    let uv1 = worldXZ / C1_TILE;
+    let uv2 = worldXZ / C2_TILE;
+
+    // Cascade 0 (fine ripples) fades out with camera distance
+    let camDist  = length(worldXZ - transform.cameraPos.xz);
+    let c0Fade   = clamp(1.0 - (camDist - 20.0) / 60.0, 0.0, 1.0);
+
+    let sf = 1.0 / C2_TILE;  // reference scale factor
+
+    // Sample all 3 cascades
+    let d0 = textureSampleLevel(t_c0Disp,   s_c0Disp,   uv0, 0.0).rg * c0Fade * 0.25;
+    let h0 = textureSampleLevel(t_c0Height, s_c0Height, uv0, 0.0).r  * c0Fade * 0.25;
+    let g0 = textureSampleLevel(t_c0Grad,   s_c0Grad,   uv0, 0.0).rg * c0Fade * 0.5;
+
+    let d1 = textureSampleLevel(t_c1Disp,   s_c1Disp,   uv1, 0.0).rg;
+    let h1 = textureSampleLevel(t_c1Height, s_c1Height, uv1, 0.0).r;
+    let g1 = textureSampleLevel(t_c1Grad,   s_c1Grad,   uv1, 0.0).rg;
+
+    let d2 = textureSampleLevel(t_c2Disp,   s_c2Disp,   uv2, 0.0).rg * 1.0;
+    let h2 = textureSampleLevel(t_c2Height, s_c2Height, uv2, 0.0).r  * 1.0;
+    let g2 = textureSampleLevel(t_c2Grad,   s_c2Grad,   uv2, 0.0).rg * 1.5;
+
+    let totalDisp = (d0 + d1 + d2) * sf;
+    let totalH    = (h0 + h1 + h2) * sf;
+    let totalGrad = (g0 + g1 + g2) * sf;
 
     var waterPosition = in.position;
 
-    let worldXZ = (transform.model * vec4<f32>(in.position, 1.0)).xz;
-
-    // Pass 1 — primary (tile-local UV, full amplitude)
-    let disp1  = textureSampleLevel(t_displacementMap, s_displacementMap, in.uv, 0.0).rg;
-    let h1     = textureSampleLevel(t_heightMap,       s_heightMap,       in.uv, 0.0).r;
-    let grad1  = textureSampleLevel(t_gradientMap,     s_gradientMap,     in.uv, 0.0).rg;
-
-    // Pass 2 — large-scale swell, world-continuous, 2x tile size (breaks per-tile repeat)
-    let uv2    = worldXZ / (ocean.tileSize.x * 2.0);
-    let disp2  = textureSampleLevel(t_displacementMap, s_displacementMap, uv2, 0.0).rg * 0.35;
-    let h2     = textureSampleLevel(t_heightMap,       s_heightMap,       uv2, 0.0).r  * 0.35;
-    let grad2  = textureSampleLevel(t_gradientMap,     s_gradientMap,     uv2, 0.0).rg * 0.35;
-
-    // Distance-based detail fade — chop passes 3 & 4 dissolve beyond ~80 units
-    // so far tiles look calmer (more like distant open ocean) and LOD is visible.
-    let camDist     = length(worldXZ - transform.cameraPos.xz);
-    let detailFade  = clamp(1.0 - (camDist - 40.0) / 120.0, 0.0, 1.0);
-
-    // Pass 3 — cross-swell at ~52° rotation, 1.6x scale (different wave direction)
-    // Interference between pass 1 and pass 3 creates irregular choppy peaks.
-    let uv3    = rot2(worldXZ, 0.9) / (ocean.tileSize.x * 1.6);
-    let disp3  = textureSampleLevel(t_displacementMap, s_displacementMap, uv3, 0.0).rg * 0.25 * detailFade;
-    let h3     = textureSampleLevel(t_heightMap,       s_heightMap,       uv3, 0.0).r  * 0.25 * detailFade;
-    let grad3  = textureSampleLevel(t_gradientMap,     s_gradientMap,     uv3, 0.0).rg * 0.25 * detailFade;
-
-    // Pass 4 — fine secondary chop at ~120° rotation, 3.1x scale (small-scale roughness)
-    let uv4    = rot2(worldXZ, 2.1) / (ocean.tileSize.x * 3.1);
-    let disp4  = textureSampleLevel(t_displacementMap, s_displacementMap, uv4, 0.0).rg * 0.14 * detailFade;
-    let h4     = textureSampleLevel(t_heightMap,       s_heightMap,       uv4, 0.0).r  * 0.14 * detailFade;
-    let grad4  = textureSampleLevel(t_gradientMap,     s_gradientMap,     uv4, 0.0).rg * 0.14 * detailFade;
-
-    let displacement = disp1 + disp2 + disp3 + disp4;
-    let height       = h1 + h2 + h3 + h4;
-    let gradient     = grad1 + grad2 + grad3 + grad4;
-
-    // Horizontal displacement (choppy waves)
-    waterPosition.x += displacement.x * scalingFactor;
-    waterPosition.z += displacement.y * scalingFactor;
-
-    // Vertical displacement (waveScale lets the user tune wave height at runtime)
-    let yDisplace = height * scalingFactor * 0.5 * ocean.waveScale.x;
+    // Apply displacement
+    waterPosition.x += totalDisp.x;
+    waterPosition.z += totalDisp.y;
+    let yDisplace = totalH * 0.5 * ocean.waveScale.x;
     waterPosition.y += yDisplace;
 
-    // Normal from combined gradient passes
-    let normal = normalize(vec3<f32>(-gradient.x * scalingFactor * 0.5, 1.0, -gradient.y * scalingFactor * 0.5));
+    let normal = normalize(vec3<f32>(-totalGrad.x * 0.5, 1.0, -totalGrad.y * 0.5));
 
     let worldPos4 = transform.model * vec4<f32>(waterPosition, 1.0);
     out.worldPos   = worldPos4.xyz;
     out.worldNormal = (transform.model * vec4<f32>(normal, 0.0)).xyz;
     out.uv     = in.uv;
     out.height = yDisplace;
-
-    // Foam driven by the actual combined crest height — appears exactly where waves peak.
-    // Passes 2-4 use world-space UVs so combined height varies between tiles,
-    // preventing the uniform tile-repeat pattern that a separate UV sample caused.
-    out.foamHeight = yDisplace;
-
+    out.foamHeight = yDisplace;  // kept for compat but not used for foam anymore
     out.clipPos = transform.proj * transform.view * worldPos4;
     return out;
 }
 )";
 
-// Fragment shader: Fresnel + cubemap reflection + specular
+// Fragment shader: Fresnel + cubemap reflection + specular + Jacobian foam
 constexpr const char* waterFragmentWGSL = R"(
 
 struct TransformUniforms {
@@ -423,8 +465,10 @@ struct OceanUniforms {
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
 
-@group(0) @binding(9) var t_reflectionMap: texture_cube<f32>;
-@group(0) @binding(10) var s_reflectionMap: sampler;
+@group(0) @binding(21) var t_foamMap:       texture_2d<f32>;
+@group(0) @binding(22) var s_foamMap:       sampler;
+@group(0) @binding(23) var t_reflectionMap: texture_cube<f32>;
+@group(0) @binding(24) var s_reflectionMap: sampler;
 
 struct VertexOutput {
     @builtin(position) clipPos: vec4<f32>,
@@ -447,13 +491,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let seaBase       = ocean.seaColor.xyz;
     let seaWaterColor = vec3<f32>(0.8,  0.9,  0.6);
 
-    // Fresnel — power 3, 0.65 scale (seascape style)
+    // Fresnel -- power 3, 0.65 scale (seascape style)
     let nDotV   = max(dot(-viewRay, normal), 0.0);
     let fresnel = pow(1.0 - nDotV, 3.0) * 0.65;
 
     // Refracted body colour: seaBase + sharp wrapped-diffuse tinted by water colour
-    // The sharp diffuse (exp 80) puts a subtle sun-coloured glow in the water near
-    // the specular region — gives the characteristic yellow-green depth look.
     let sharpDiff = pow(ndl * 0.4 + 0.6, 80.0);
     let refracted = seaBase + sharpDiff * seaWaterColor * 0.12;
 
@@ -473,13 +515,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let spec     = pow(max(0.0, dot(reflect(lightDir, normal), viewRay)), 60.0) * specNorm;
     color += vec3<f32>(spec) * lights.dirColor0;
 
-    // Foam at wave crests — threshold and strength tunable via ImGui
-    let foamUpper = ocean.foamThreshold.x * 1.875;
-    let foam      = smoothstep(ocean.foamThreshold.x, foamUpper, in.foamHeight);
+    // Jacobian foam from persistent foam texture
+    let foamRaw   = textureSample(t_foamMap, s_foamMap, in.uv).r;
+    let foamValue = clamp((foamRaw - ocean.foamThreshold.x) / (1.0 - ocean.foamThreshold.x + 0.001), 0.0, 1.0);
     let foamColor = vec3<f32>(0.85, 0.90, 0.92);
-    color = mix(color, foamColor, foam * ocean.foamStrength.x);
+    color = mix(color, foamColor, foamValue * ocean.foamStrength.x);
 
-    // Atmospheric haze — starts beyond 200 units, density tunable via ImGui
+    // Atmospheric haze -- starts beyond 200 units, density tunable via ImGui
     let fogFactor  = clamp(exp(-max(dist - 200.0, 0.0) * ocean.fogDensity.x), 0.0, 1.0);
     let horizonDir = normalize(vec3<f32>(viewRay.x, -0.02, viewRay.z));
     let fogColor   = textureSample(t_reflectionMap, s_reflectionMap, horizonDir).rgb;

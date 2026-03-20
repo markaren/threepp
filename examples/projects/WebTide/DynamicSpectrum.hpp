@@ -12,19 +12,21 @@
 
 namespace webtide {
 
-    /// Evolves the spectrum in time, producing ht, dht, and displacement textures.
+    /// Evolves the spectrum in time, producing ht, dht, displacement, and jacDiag textures.
     class DynamicSpectrum {
 
     public:
         threepp::WgpuTexture ht;
         threepp::WgpuTexture dht;
         threepp::WgpuTexture displacement;
+        threepp::WgpuTexture jacDiag;  // Packed Jacobian diagonal spectrum (RG32Float)
 
         DynamicSpectrum(threepp::WgpuRenderer& renderer, PhillipsSpectrum& initialSpectrum,
                         uint32_t textureSize, float tileSize)
             : ht(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RG32Float),
               dht(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RG32Float),
               displacement(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RG32Float),
+              jacDiag(renderer, textureSize, textureSize, threepp::WgpuTexture::Format::RG32Float),
               uniformBuffer_(renderer, 16), // textureSize(4) + tileSize(4) + elapsedSeconds(4) + pad(4) = 16
               pipeline_(renderer, dynamicSpectrumWGSL, "computeSpectrum"),
               textureSize_(textureSize), tileSize_(tileSize) {
@@ -34,6 +36,7 @@ namespace webtide {
             pipeline_.setStorageTexture(2, dht);
             pipeline_.setStorageTexture(3, displacement);
             pipeline_.setUniformBuffer(4, uniformBuffer_);
+            pipeline_.setStorageTexture(5, jacDiag);
         }
 
         void generate(float elapsedSeconds) {

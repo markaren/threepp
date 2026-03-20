@@ -1,6 +1,6 @@
 
 if (THREEPP_WITH_WGPU)
-    add_example(NAME "webtide" SOURCES main.cpp)
+    add_example(NAME "webtide" SOURCES main.cpp LINK_IMGUI)
     target_include_directories(webtide PRIVATE "${WGPU_INCLUDE_DIR}")
     target_link_libraries(webtide PRIVATE ${WGPU_LIBRARY})
 endif ()

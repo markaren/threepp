@@ -27,6 +27,7 @@
 
 #include "DynamicSpectrum.hpp"
 #include "IFFT.hpp"
+#include "OceanFoam.hpp"
 #include "PhillipsSpectrum.hpp"
 #include "shaders.hpp"
 
@@ -37,8 +38,14 @@ using namespace threepp;
 int main() {
 
     constexpr uint32_t textureSize = 256;
-    constexpr float tileSize = 40.0f;
-    constexpr int tileRadius = 6;// 13x13 grid (-6..6)
+    constexpr float C0_TILE = 5.0f;    // ripples
+    constexpr float C1_TILE = 40.0f;   // main chop (= reference tile for mesh)
+    constexpr float C2_TILE = 400.0f;  // long swell
+    constexpr int tileRadius = 6;      // 13x13 grid (-6..6)
+
+    // Band-pass boundaries from Nyquist wavenumbers
+    const float kNyq1 = math::PI * textureSize / C1_TILE;  // ~20.1
+    const float kNyq2 = math::PI * textureSize / C2_TILE;  // ~2.01
 
     // Create window and renderer
     Canvas::Parameters params;
@@ -72,15 +79,35 @@ int main() {
     dirLight->position.set(-1, 1, -3);
     scene->add(dirLight);
 
-    // Initialize ocean compute pipelines
-    webtide::PhillipsSpectrum phillipsSpectrum(renderer, textureSize, tileSize);
-    webtide::DynamicSpectrum dynamicSpectrum(renderer, phillipsSpectrum, textureSize, tileSize);
-    webtide::IFFT ifft(renderer, textureSize);
+    // Initialize ocean compute pipelines — 3 cascades with band-pass filtering
+    // PhillipsSpectrum(renderer, textureSize, tileSize, kMin, kMax, smallWaveCutoff)
+    webtide::PhillipsSpectrum spec0(renderer, textureSize, C0_TILE, kNyq1, 0.0f,  0.002f);  // kMax=0 means no upper limit
+    webtide::PhillipsSpectrum spec1(renderer, textureSize, C1_TILE, kNyq2, kNyq1, 0.01f);
+    webtide::PhillipsSpectrum spec2(renderer, textureSize, C2_TILE, 0.0f,  kNyq2, 0.05f);
 
-    // Output textures (spatial domain, written by IFFT)
-    WgpuTexture heightMap(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture gradientMap(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture displacementMap(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    webtide::DynamicSpectrum dynSpec0(renderer, spec0, textureSize, C0_TILE);
+    webtide::DynamicSpectrum dynSpec1(renderer, spec1, textureSize, C1_TILE);
+    webtide::DynamicSpectrum dynSpec2(renderer, spec2, textureSize, C2_TILE);
+
+    webtide::IFFT ifft0(renderer, textureSize);
+    webtide::IFFT ifft1(renderer, textureSize);
+    webtide::IFFT ifft2(renderer, textureSize);
+
+    // Output spatial-domain textures (3 per cascade: height, gradient, displacement)
+    WgpuTexture height0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture gradient0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture displacement0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+
+    WgpuTexture height1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture gradient1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture displacement1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+
+    WgpuTexture height2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture gradient2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture displacement2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+
+    // Foam system driven by cascade 1 Jacobian
+    webtide::OceanFoam oceanFoam(renderer, textureSize);
 
     // Create water ShaderMaterial with custom WGSL shaders
     auto waterMaterial = ShaderMaterial::create();
@@ -89,25 +116,34 @@ int main() {
     waterMaterial->side = Side::Double;
 
     // Set custom uniforms (ocean params at binding 2)
-    waterMaterial->uniforms["tileSize"] = Uniform(tileSize);
+    // Uniform names are alphabetical to match WgpuRenderer's packing order:
+    //   foamStrength, foamThreshold, fogDensity, seaColor, tileSize, waveScale
+    waterMaterial->uniforms["tileSize"] = Uniform(C1_TILE);
 
-    // Bind GPU textures (sorted alphabetically for deterministic binding order)
-    // Order: displacementMap, gradientMap, heightMap
-    // Binding layout: 2=oceanUniforms, 3/4=displacementMap, 5/6=gradientMap (swapped with height for alphabetical), 7/8=heightMap
-    // Actually alphabetical: "displacementMap" < "gradientMap" < "heightMap"
-    waterMaterial->customTextures["displacementMap"] = &displacementMap;
-    waterMaterial->customTextures["gradientMap"] = &gradientMap;
-    waterMaterial->customTextures["heightMap"] = &heightMap;
+    // Bind GPU textures — MUST be alphabetical for deterministic binding numbers.
+    // cascade0Displacement(3,4), cascade0Gradient(5,6), cascade0Height(7,8)
+    // cascade1Displacement(9,10), cascade1Gradient(11,12), cascade1Height(13,14)
+    // cascade2Displacement(15,16), cascade2Gradient(17,18), cascade2Height(19,20)
+    // foamMap(21,22), reflectionMap(23,24)
+    waterMaterial->customTextures["cascade0Displacement"] = &displacement0;
+    waterMaterial->customTextures["cascade0Gradient"]     = &gradient0;
+    waterMaterial->customTextures["cascade0Height"]       = &height0;
+    waterMaterial->customTextures["cascade1Displacement"] = &displacement1;
+    waterMaterial->customTextures["cascade1Gradient"]     = &gradient1;
+    waterMaterial->customTextures["cascade1Height"]       = &height1;
+    waterMaterial->customTextures["cascade2Displacement"] = &displacement2;
+    waterMaterial->customTextures["cascade2Gradient"]     = &gradient2;
+    waterMaterial->customTextures["cascade2Height"]       = &height2;
+    waterMaterial->customTextures["foamMap"]              = &oceanFoam.currentFoam();
 
     // LOD geometries — inner tiles keep detail, outer tiles are coarser.
     // All share the same material and FFT textures; only vertex density differs.
     // Chebyshev distance from centre determines LOD:
-    //   dist <= 1 : 128x128  (9 tiles,  ~147k verts)
-    //   dist <= 3 : 64x64    (40 tiles, ~164k verts)
-    //   dist <= 6 : 32x32    (120 tiles, ~123k verts)
-    // Total: ~434k verts vs ~3.2M previously; ocean 520x520 vs 140x140 units.
+    //   dist <= 1 : 256x256  (9 tiles,  full detail)
+    //   dist <= 3 : 128x128  (40 tiles, half detail)
+    //   dist <= 6 : 64x64    (120 tiles, quarter detail)
     auto makeWaterGeo = [&](int subdiv) {
-        auto g = PlaneGeometry::create(tileSize, tileSize, subdiv, subdiv);
+        auto g = PlaneGeometry::create(C1_TILE, C1_TILE, subdiv, subdiv);
         g->rotateX(-math::PI / 2.0f);
         return g;
     };
@@ -122,15 +158,15 @@ int main() {
                                                          : geoOuter;
             auto waterMesh = Mesh::create(geo, waterMaterial);
             waterMesh->position.set(
-                    static_cast<float>(x) * tileSize,
+                    static_cast<float>(x) * C1_TILE,
                     0,
-                    static_cast<float>(z) * tileSize);
+                    static_cast<float>(z) * C1_TILE);
             scene->add(waterMesh);
         }
     }
 
     // Ground plane (sand)
-    auto groundGeo = PlaneGeometry::create((1 + tileRadius * 2.0f) * tileSize, (1 + tileRadius * 2.0f) * tileSize);
+    auto groundGeo = PlaneGeometry::create((1 + tileRadius * 2.0f) * C1_TILE, (1 + tileRadius * 2.0f) * C1_TILE);
     groundGeo->rotateX(-math::PI / 2.0f);
     auto groundMat = MeshLambertMaterial::create();
     groundMat->color = Color(0xc2b280);// Sand color
@@ -216,20 +252,22 @@ int main() {
     // Uniform names are alphabetical to match the WgpuRenderer's packing order:
     //   foamStrength, foamThreshold, fogDensity, seaColor, tileSize, waveScale
     // -------------------------------------------------------------------------
-    float uFoamStrength = 0.35f;
-    float uFoamThreshold = 0.80f;
-    float uFogDensity = 0.004f;
-    float uSeaColor[3] = {0.10f, 0.19f, 0.22f};// seascape deep-water blue
-    float uWaveScale = 1.0f;
-    float uTimeScale = 1.0f;// C++ only — not a shader uniform
+    float uFoamStrength  = 0.35f;
+    float uFoamThreshold = 0.30f;  // Jacobian foam threshold (lower = more foam)
+    float uFogDensity    = 0.004f;
+    float uSeaColor[3]   = {0.10f, 0.19f, 0.22f};// seascape deep-water blue
+    float uWaveScale     = 1.0f;
+    float uTimeScale     = 1.0f;  // C++ only — not a shader uniform
+    float uLambda        = 1.2f;  // Jacobian choppiness multiplier
+    float uFoamDecay     = 1.5f;  // foam fade per second
 
     auto pushUniforms = [&] {
-        waterMaterial->uniforms["foamStrength"] = Uniform(uFoamStrength);
+        waterMaterial->uniforms["foamStrength"]  = Uniform(uFoamStrength);
         waterMaterial->uniforms["foamThreshold"] = Uniform(uFoamThreshold);
-        waterMaterial->uniforms["fogDensity"] = Uniform(uFogDensity);
-        waterMaterial->uniforms["seaColor"] = Uniform(Color(uSeaColor[0], uSeaColor[1], uSeaColor[2]));
-        waterMaterial->uniforms["tileSize"] = Uniform(tileSize);
-        waterMaterial->uniforms["waveScale"] = Uniform(uWaveScale);
+        waterMaterial->uniforms["fogDensity"]    = Uniform(uFogDensity);
+        waterMaterial->uniforms["seaColor"]      = Uniform(Color(uSeaColor[0], uSeaColor[1], uSeaColor[2]));
+        waterMaterial->uniforms["tileSize"]      = Uniform(C1_TILE);
+        waterMaterial->uniforms["waveScale"]     = Uniform(uWaveScale);
     };
     pushUniforms();
 
@@ -243,15 +281,17 @@ int main() {
         ImGui::Begin("Ocean Settings");
 
         bool changed = false;
-        changed |= ImGui::SliderFloat("Wave Height", &uWaveScale, 0.1f, 3.0f);
-        changed |= ImGui::SliderFloat("Speed", &uTimeScale, 0.0f, 3.0f);
+        changed |= ImGui::SliderFloat("Wave Height",    &uWaveScale,  0.1f, 3.0f);
+        changed |= ImGui::SliderFloat("Speed",          &uTimeScale,  0.0f, 3.0f);
         ImGui::Separator();
-        changed |= ImGui::ColorEdit3("Sea Colour", uSeaColor);
+        changed |= ImGui::ColorEdit3("Sea Colour",      uSeaColor);
         ImGui::Separator();
-        changed |= ImGui::SliderFloat("Foam Threshold", &uFoamThreshold, 0.2f, 2.0f);
-        changed |= ImGui::SliderFloat("Foam Strength", &uFoamStrength, 0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Foam Threshold", &uFoamThreshold, 0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Foam Strength",  &uFoamStrength,  0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Foam Lambda",    &uLambda,    0.3f, 4.0f);
+        changed |= ImGui::SliderFloat("Foam Decay",     &uFoamDecay, 0.1f, 5.0f);
         ImGui::Separator();
-        changed |= ImGui::SliderFloat("Fog Density", &uFogDensity, 0.0f, 0.02f);
+        changed |= ImGui::SliderFloat("Fog Density",    &uFogDensity, 0.0f, 0.02f);
 
         if (changed) pushUniforms();
         ImGui::End();
@@ -270,10 +310,29 @@ int main() {
         lastTime = now;
         elapsedSeconds += dt * uTimeScale;
 
-        dynamicSpectrum.generate(elapsedSeconds);
-        ifft.applyToTexture(dynamicSpectrum.ht, heightMap);
-        ifft.applyToTexture(dynamicSpectrum.dht, gradientMap);
-        ifft.applyToTexture(dynamicSpectrum.displacement, displacementMap);
+        // Generate dynamic spectra for all 3 cascades
+        dynSpec0.generate(elapsedSeconds);
+        dynSpec1.generate(elapsedSeconds);
+        dynSpec2.generate(elapsedSeconds);
+
+        // IFFT all cascade outputs to spatial domain
+        ifft0.applyToTexture(dynSpec0.ht,          height0);
+        ifft0.applyToTexture(dynSpec0.dht,         gradient0);
+        ifft0.applyToTexture(dynSpec0.displacement, displacement0);
+
+        ifft1.applyToTexture(dynSpec1.ht,          height1);
+        ifft1.applyToTexture(dynSpec1.dht,         gradient1);
+        ifft1.applyToTexture(dynSpec1.displacement, displacement1);
+
+        ifft2.applyToTexture(dynSpec2.ht,          height2);
+        ifft2.applyToTexture(dynSpec2.dht,         gradient2);
+        ifft2.applyToTexture(dynSpec2.displacement, displacement2);
+
+        // Update Jacobian foam (cascade 1 drives the breaking waves)
+        oceanFoam.update(dynSpec1, ifft1, dt, uLambda, uFoamDecay);
+
+        // Update foamMap pointer after ping-pong swap (before renderer.render())
+        waterMaterial->customTextures["foamMap"] = &oceanFoam.currentFoam();
 
         controls.update();
         ui.render();
