@@ -12,21 +12,23 @@
 //   - Tropical sunny day skybox from the BabylonJS Asset Library
 //   - Sand texture by Engin Akyurt
 
-#include "threepp/threepp.hpp"
-#include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
-#include "threepp/materials/ShaderMaterial.hpp"
-#include "threepp/materials/MeshLambertMaterial.hpp"
-#include "threepp/materials/MeshBasicMaterial.hpp"
-#include "threepp/loaders/TextureLoader.hpp"
 #include "threepp/loaders/CubeTextureLoader.hpp"
+#include "threepp/loaders/TextureLoader.hpp"
+#include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/materials/MeshLambertMaterial.hpp"
+#include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
+#include "threepp/threepp.hpp"
 
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 
-#include "shaders.hpp"
-#include "PhillipsSpectrum.hpp"
+#include "threepp/extras/imgui/ImguiContext.hpp"
+
 #include "DynamicSpectrum.hpp"
 #include "IFFT.hpp"
+#include "PhillipsSpectrum.hpp"
+#include "shaders.hpp"
 
 #include <chrono>
 
@@ -36,18 +38,18 @@ int main() {
 
     constexpr uint32_t textureSize = 256;
     constexpr float tileSize = 40.0f;
-    constexpr int tileRadius = 6; // 13x13 grid (-6..6)
+    constexpr int tileRadius = 6;// 13x13 grid (-6..6)
 
     // Create window and renderer
     Canvas::Parameters params;
     params.title("WebTide Ocean")
-          .size(1280, 720)
-          .graphicsApi(GraphicsAPI::WebGPU);
+            .size(1280, 720)
+            .graphicsApi(GraphicsAPI::WebGPU);
 
     Canvas canvas(params);
 
     WgpuRenderer renderer(canvas);
-    renderer.setClearColor(Color::black); // Will be fully covered by skybox
+    renderer.setClearColor(Color::black);// Will be fully covered by skybox
 
     // Camera
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 2000.f);
@@ -109,29 +111,29 @@ int main() {
         g->rotateX(-math::PI / 2.0f);
         return g;
     };
-    auto geoInner = makeWaterGeo(256);
-    auto geoMid   = makeWaterGeo(256);
-    auto geoOuter = makeWaterGeo(128);
+    auto geoInner = makeWaterGeo(256);   // dist <= 1 :  9 tiles, full detail
+    auto geoMid   = makeWaterGeo(128);   // dist <= 3 : 40 tiles, half detail
+    auto geoOuter = makeWaterGeo(64);    // dist <= 6 :120 tiles, quarter detail
 
     for (int x = -tileRadius; x <= tileRadius; x++) {
         for (int z = -tileRadius; z <= tileRadius; z++) {
-            int dist = std::max(std::abs(x), std::abs(z)); // Chebyshev distance
-            auto& geo = dist <= 1 ? geoInner : dist <= 3 ? geoMid : geoOuter;
+            int dist = std::max(std::abs(x), std::abs(z));// Chebyshev distance
+            auto& geo = dist <= 1 ? geoInner : dist <= 3 ? geoMid
+                                                         : geoOuter;
             auto waterMesh = Mesh::create(geo, waterMaterial);
             waterMesh->position.set(
-                static_cast<float>(x) * tileSize,
-                0,
-                static_cast<float>(z) * tileSize
-            );
+                    static_cast<float>(x) * tileSize,
+                    0,
+                    static_cast<float>(z) * tileSize);
             scene->add(waterMesh);
         }
     }
 
     // Ground plane (sand)
-    auto groundGeo = PlaneGeometry::create((1+tileRadius * 2.0f) * tileSize, (1+tileRadius * 2.0f) * tileSize);
+    auto groundGeo = PlaneGeometry::create((1 + tileRadius * 2.0f) * tileSize, (1 + tileRadius * 2.0f) * tileSize);
     groundGeo->rotateX(-math::PI / 2.0f);
     auto groundMat = MeshLambertMaterial::create();
-    groundMat->color = Color(0xc2b280); // Sand color
+    groundMat->color = Color(0xc2b280);// Sand color
 
     // Try to load sand texture
     TextureLoader textureLoader;
@@ -192,7 +194,7 @@ int main() {
     // Create GPU cubemap from skybox images for water reflections
     auto& faceImg = texPx->image();
     WgpuTexture reflectionMap(renderer, faceImg.width, faceImg.height,
-                             WgpuTexture::Format::RGBA8Unorm, WgpuTexture::Dimension::Cube);
+                              WgpuTexture::Format::RGBA8Unorm, WgpuTexture::Dimension::Cube);
     // Write each face (+X, -X, +Y, -Y, +Z, -Z)
     auto& dataPx = texPx->image().data<unsigned char>();
     auto& dataNx = texNx->image().data<unsigned char>();
@@ -209,23 +211,72 @@ int main() {
 
     waterMaterial->customTextures["reflectionMap"] = &reflectionMap;
 
+    // -------------------------------------------------------------------------
+    // Ocean visual settings — exposed via ImGui sliders.
+    // Uniform names are alphabetical to match the WgpuRenderer's packing order:
+    //   foamStrength, foamThreshold, fogDensity, seaColor, tileSize, waveScale
+    // -------------------------------------------------------------------------
+    float uFoamStrength = 0.35f;
+    float uFoamThreshold = 0.80f;
+    float uFogDensity = 0.004f;
+    float uSeaColor[3] = {0.10f, 0.19f, 0.22f};// seascape deep-water blue
+    float uWaveScale = 1.0f;
+    float uTimeScale = 1.0f;// C++ only — not a shader uniform
+
+    auto pushUniforms = [&] {
+        waterMaterial->uniforms["foamStrength"] = Uniform(uFoamStrength);
+        waterMaterial->uniforms["foamThreshold"] = Uniform(uFoamThreshold);
+        waterMaterial->uniforms["fogDensity"] = Uniform(uFogDensity);
+        waterMaterial->uniforms["seaColor"] = Uniform(Color(uSeaColor[0], uSeaColor[1], uSeaColor[2]));
+        waterMaterial->uniforms["tileSize"] = Uniform(tileSize);
+        waterMaterial->uniforms["waveScale"] = Uniform(uWaveScale);
+    };
+    pushUniforms();
+
     // Animation state
-    float elapsedSeconds = 60.0f; // Start at 60s to avoid startup artifacts
+    float elapsedSeconds = 60.0f;
     auto lastTime = std::chrono::high_resolution_clock::now();
+
+    ImguiFunctionalContext ui(canvas, renderer, [&] {
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
+        ImGui::SetNextWindowSize({280, 0}, ImGuiCond_Once);
+        ImGui::Begin("Ocean Settings");
+
+        bool changed = false;
+        changed |= ImGui::SliderFloat("Wave Height", &uWaveScale, 0.1f, 3.0f);
+        changed |= ImGui::SliderFloat("Speed", &uTimeScale, 0.0f, 3.0f);
+        ImGui::Separator();
+        changed |= ImGui::ColorEdit3("Sea Colour", uSeaColor);
+        ImGui::Separator();
+        changed |= ImGui::SliderFloat("Foam Threshold", &uFoamThreshold, 0.2f, 2.0f);
+        changed |= ImGui::SliderFloat("Foam Strength", &uFoamStrength, 0.0f, 1.0f);
+        ImGui::Separator();
+        changed |= ImGui::SliderFloat("Fog Density", &uFogDensity, 0.0f, 0.02f);
+
+        if (changed) pushUniforms();
+        ImGui::End();
+    });
+
+    IOCapture capture;
+    capture.preventMouseEvent = [&] {
+        // Prevent canvas orbit controls from interfering with ImGui interactions
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    canvas.setIOCapture(&capture);
 
     canvas.animate([&] {
         auto now = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float>(now - lastTime).count();
         lastTime = now;
-        elapsedSeconds += dt;
+        elapsedSeconds += dt * uTimeScale;
 
-        // Update ocean simulation (compute shaders)
         dynamicSpectrum.generate(elapsedSeconds);
         ifft.applyToTexture(dynamicSpectrum.ht, heightMap);
         ifft.applyToTexture(dynamicSpectrum.dht, gradientMap);
         ifft.applyToTexture(dynamicSpectrum.displacement, displacementMap);
 
         controls.update();
+        ui.render();
         renderer.render(*scene, *camera);
     });
 

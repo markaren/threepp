@@ -275,11 +275,15 @@ struct LightData {
 };
 @group(0) @binding(1) var<uniform> lights: LightData;
 
+// Alphabetical order matches C++ Uniform packing (each entry = one 16-byte slot):
+//   foamStrength, foamThreshold, fogDensity, seaColor, tileSize, waveScale
 struct OceanUniforms {
-    tileSize: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    foamStrength:  vec4<f32>,  // .x = foam blend factor
+    foamThreshold: vec4<f32>,  // .x = height at which foam starts
+    fogDensity:    vec4<f32>,  // .x = fog exponential coefficient
+    seaColor:      vec4<f32>,  // .xyz = deep water base colour
+    tileSize:      vec4<f32>,  // .x = tile world size
+    waveScale:     vec4<f32>,  // .x = vertical displacement multiplier
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
 
@@ -309,55 +313,79 @@ struct VertexOutput {
     @location(4) foamHeight: f32,  // world-continuous height for foam (non-repeating)
 };
 
+// Rotate a 2-D vector by `angle` radians — used to steer secondary wave passes
+fn rot2(v: vec2<f32>, angle: f32) -> vec2<f32> {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2<f32>(v.x * c - v.y * s, v.x * s + v.y * c);
+}
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
-    let scalingFactor = 1.0 / ocean.tileSize;
+    let scalingFactor = 1.0 / ocean.tileSize.x;
 
     var waterPosition = in.position;
 
-    // World-space UV at 2x tile scale — adjacent tiles sample different halves
-    // of the FFT texture, breaking the obvious tile-repetition pattern.
     let worldXZ = (transform.model * vec4<f32>(in.position, 1.0)).xz;
-    let largeUV = worldXZ / (ocean.tileSize * 2.0);
-    // 3.7x scale is incommensurate with integer tile offsets — no two tiles repeat
-    let foamUV  = worldXZ / (ocean.tileSize * 3.7);
 
-    // Primary (tile-local UV)
+    // Pass 1 — primary (tile-local UV, full amplitude)
     let disp1  = textureSampleLevel(t_displacementMap, s_displacementMap, in.uv, 0.0).rg;
-    let h1     = textureSampleLevel(t_heightMap, s_heightMap, in.uv, 0.0).r;
-    let grad1  = textureSampleLevel(t_gradientMap, s_gradientMap, in.uv, 0.0).rg;
+    let h1     = textureSampleLevel(t_heightMap,       s_heightMap,       in.uv, 0.0).r;
+    let grad1  = textureSampleLevel(t_gradientMap,     s_gradientMap,     in.uv, 0.0).rg;
 
-    // Large-scale swell overlay (half amplitude, world-continuous UV)
-    let disp2  = textureSampleLevel(t_displacementMap, s_displacementMap, largeUV, 0.0).rg * 0.35;
-    let h2     = textureSampleLevel(t_heightMap, s_heightMap, largeUV, 0.0).r * 0.35;
-    let grad2  = textureSampleLevel(t_gradientMap, s_gradientMap, largeUV, 0.0).rg * 0.35;
+    // Pass 2 — large-scale swell, world-continuous, 2x tile size (breaks per-tile repeat)
+    let uv2    = worldXZ / (ocean.tileSize.x * 2.0);
+    let disp2  = textureSampleLevel(t_displacementMap, s_displacementMap, uv2, 0.0).rg * 0.35;
+    let h2     = textureSampleLevel(t_heightMap,       s_heightMap,       uv2, 0.0).r  * 0.35;
+    let grad2  = textureSampleLevel(t_gradientMap,     s_gradientMap,     uv2, 0.0).rg * 0.35;
 
-    let displacement = disp1 + disp2;
-    let height       = h1 + h2;
-    let gradient     = grad1 + grad2;
+    // Distance-based detail fade — chop passes 3 & 4 dissolve beyond ~80 units
+    // so far tiles look calmer (more like distant open ocean) and LOD is visible.
+    let camDist     = length(worldXZ - transform.cameraPos.xz);
+    let detailFade  = clamp(1.0 - (camDist - 40.0) / 120.0, 0.0, 1.0);
+
+    // Pass 3 — cross-swell at ~52° rotation, 1.6x scale (different wave direction)
+    // Interference between pass 1 and pass 3 creates irregular choppy peaks.
+    let uv3    = rot2(worldXZ, 0.9) / (ocean.tileSize.x * 1.6);
+    let disp3  = textureSampleLevel(t_displacementMap, s_displacementMap, uv3, 0.0).rg * 0.25 * detailFade;
+    let h3     = textureSampleLevel(t_heightMap,       s_heightMap,       uv3, 0.0).r  * 0.25 * detailFade;
+    let grad3  = textureSampleLevel(t_gradientMap,     s_gradientMap,     uv3, 0.0).rg * 0.25 * detailFade;
+
+    // Pass 4 — fine secondary chop at ~120° rotation, 3.1x scale (small-scale roughness)
+    let uv4    = rot2(worldXZ, 2.1) / (ocean.tileSize.x * 3.1);
+    let disp4  = textureSampleLevel(t_displacementMap, s_displacementMap, uv4, 0.0).rg * 0.14 * detailFade;
+    let h4     = textureSampleLevel(t_heightMap,       s_heightMap,       uv4, 0.0).r  * 0.14 * detailFade;
+    let grad4  = textureSampleLevel(t_gradientMap,     s_gradientMap,     uv4, 0.0).rg * 0.14 * detailFade;
+
+    let displacement = disp1 + disp2 + disp3 + disp4;
+    let height       = h1 + h2 + h3 + h4;
+    let gradient     = grad1 + grad2 + grad3 + grad4;
 
     // Horizontal displacement (choppy waves)
     waterPosition.x += displacement.x * scalingFactor;
     waterPosition.z += displacement.y * scalingFactor;
 
-    // Vertical displacement (height)
-    let yDisplace = height * scalingFactor * 0.5;
+    // Vertical displacement (waveScale lets the user tune wave height at runtime)
+    let yDisplace = height * scalingFactor * 0.5 * ocean.waveScale.x;
     waterPosition.y += yDisplace;
 
-    // Normal from gradient map
+    // Normal from combined gradient passes
     let normal = normalize(vec3<f32>(-gradient.x * scalingFactor * 0.5, 1.0, -gradient.y * scalingFactor * 0.5));
 
     let worldPos4 = transform.model * vec4<f32>(waterPosition, 1.0);
-    out.worldPos = worldPos4.xyz;
+    out.worldPos   = worldPos4.xyz;
     out.worldNormal = (transform.model * vec4<f32>(normal, 0.0)).xyz;
-    out.uv = in.uv;
+    out.uv     = in.uv;
     out.height = yDisplace;
-    let foamH  = textureSampleLevel(t_heightMap, s_heightMap, foamUV, 0.0).r;
-    out.foamHeight = foamH * scalingFactor * 0.5;
-    out.clipPos = transform.proj * transform.view * worldPos4;
 
+    // Foam driven by the actual combined crest height — appears exactly where waves peak.
+    // Passes 2-4 use world-space UVs so combined height varies between tiles,
+    // preventing the uniform tile-repeat pattern that a separate UV sample caused.
+    out.foamHeight = yDisplace;
+
+    out.clipPos = transform.proj * transform.view * worldPos4;
     return out;
 }
 )";
@@ -385,6 +413,16 @@ struct LightData {
 };
 @group(0) @binding(1) var<uniform> lights: LightData;
 
+struct OceanUniforms {
+    foamStrength:  vec4<f32>,
+    foamThreshold: vec4<f32>,
+    fogDensity:    vec4<f32>,
+    seaColor:      vec4<f32>,
+    tileSize:      vec4<f32>,
+    waveScale:     vec4<f32>,
+};
+@group(0) @binding(2) var<uniform> ocean: OceanUniforms;
+
 @group(0) @binding(9) var t_reflectionMap: texture_cube<f32>;
 @group(0) @binding(10) var s_reflectionMap: sampler;
 
@@ -405,8 +443,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let ndl = max(0.0, dot(normal, lightDir));
 
-    // Seascape colour constants
-    let seaBase       = vec3<f32>(0.1,  0.19, 0.22);
+    // Seascape colour constants (seaBase tunable via ImGui slider)
+    let seaBase       = ocean.seaColor.xyz;
     let seaWaterColor = vec3<f32>(0.8,  0.9,  0.6);
 
     // Fresnel — power 3, 0.65 scale (seascape style)
@@ -435,13 +473,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let spec     = pow(max(0.0, dot(reflect(lightDir, normal), viewRay)), 60.0) * specNorm;
     color += vec3<f32>(spec) * lights.dirColor0;
 
-    // Foam at wave crests — driven by world-continuous height so it never
-    // repeats the same pattern across tiles
-    let foam = smoothstep(0.55, 1.1, in.foamHeight);
-    color = mix(color, vec3<f32>(1.0), foam * 0.6);
+    // Foam at wave crests — threshold and strength tunable via ImGui
+    let foamUpper = ocean.foamThreshold.x * 1.875;
+    let foam      = smoothstep(ocean.foamThreshold.x, foamUpper, in.foamHeight);
+    let foamColor = vec3<f32>(0.85, 0.90, 0.92);
+    color = mix(color, foamColor, foam * ocean.foamStrength.x);
 
-    // Atmospheric haze — starts beyond 40 units, fades into horizon sky
-    let fogFactor  = clamp(exp(-max(dist - 200.0, 0.0) * 0.008), 0.0, 1.0);
+    // Atmospheric haze — starts beyond 200 units, density tunable via ImGui
+    let fogFactor  = clamp(exp(-max(dist - 200.0, 0.0) * ocean.fogDensity.x), 0.0, 1.0);
     let horizonDir = normalize(vec3<f32>(viewRay.x, -0.02, viewRay.z));
     let fogColor   = textureSample(t_reflectionMap, s_reflectionMap, horizonDir).rgb;
     color = mix(fogColor, color, fogFactor);
