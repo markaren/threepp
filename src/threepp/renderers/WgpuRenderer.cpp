@@ -1423,10 +1423,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         std::memcpy(transformData + 16, viewMatrix.elements.data(), 64);
         std::memcpy(transformData + 32, projectionMatrix.elements.data(), 64);
 
-        Matrix4 modelView;
-        modelView.multiplyMatrices(viewMatrix, *mesh->matrixWorld);
         Matrix3 normalMatrix;
-        normalMatrix.setFromMatrix4(modelView);
+        normalMatrix.setFromMatrix4(*mesh->matrixWorld);
         normalMatrix.invert();
         normalMatrix.transpose();
         auto& ne = normalMatrix.elements;
@@ -1787,10 +1785,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         std::memcpy(transformData + 16, viewMatrix.elements.data(), 64);
         std::memcpy(transformData + 32, projectionMatrix.elements.data(), 64);
 
-        Matrix4 modelView;
-        modelView.multiplyMatrices(viewMatrix, modelMatrix);
         Matrix3 normalMatrix;
-        normalMatrix.setFromMatrix4(modelView);
+        normalMatrix.setFromMatrix4(modelMatrix);
         normalMatrix.invert();
         normalMatrix.transpose();
         auto& ne = normalMatrix.elements;

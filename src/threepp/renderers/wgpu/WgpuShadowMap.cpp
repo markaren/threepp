@@ -218,12 +218,15 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         auto& shadow = shadowLights[i].shadowInterface->shadow;
         shadow->updateMatrices(*light);
 
-        lights_[i].lightVP = shadow->matrix;
         lights_[i].bias = shadow->bias;
         lights_[i].normalBias = shadow->normalBias;
 
-        // Z-remap the light VP from [-1,1] to [0,1] for the uniform buffer
-        Matrix4 shadowVP = shadow->matrix;
+        // Build raw VP (proj * view_inverse) with a single Z-remap from OpenGL [-1,1] to WebGPU [0,1].
+        // sampleShadow in WGSL applies its own x*0.5+0.5 / y*0.5+0.5 for UV, so X/Y must stay as
+        // raw NDC [-1,1]. shadow->matrix already has UV+Z remapped to [0,1] — don't use it here.
+        Matrix4 shadowVP;
+        shadowVP.multiplyMatrices(shadow->camera->projectionMatrix,
+                                  shadow->camera->matrixWorldInverse);
         {
             auto& e = shadowVP.elements;
             e[2]  = 0.5f * e[2]  + 0.5f * e[3];
@@ -231,6 +234,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             e[10] = 0.5f * e[10] + 0.5f * e[11];
             e[14] = 0.5f * e[14] + 0.5f * e[15];
         }
+        lights_[i].lightVP = shadowVP;
 
         // Offset: 4 floats header + i * (SHADOW_UNIFORM_PER_LIGHT / 4) floats per light
         size_t offset = 4 + i * (SHADOW_UNIFORM_PER_LIGHT / sizeof(float));

@@ -367,7 +367,7 @@ fn sampleShadow(si: u32, worldPos: vec3<f32>) -> f32 {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @location(0) vec4<f32> {
     // Clipping plane test (active when clipPlane normal is non-zero)
     let cpn = material.clipPlane.xyz;
     if (dot(cpn, cpn) > 0.0) {
@@ -445,9 +445,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let nmSample = textureSample(t_normalMap, s_normalMap, in.uv).rgb * 2.0 - vec3<f32>(1.0);
     let normalScale = material.flags.zw;
     let scaledNm = vec3<f32>(nmSample.xy * normalScale, nmSample.z);
-    let N = normalize(TBN * scaledNm);
+    var N = normalize(TBN * scaledNm);
     let V = normalize(transform.cameraPos - in.worldPos);
 )";
+        if ((features & ShaderFeatures::CullMask) == ShaderFeatures::CullNone) {
+            s << "    if (!isFrontFacing) { N = -N; }\n";
+        }
         } else if (features & ShaderFeatures::BumpMap) {
             s << R"(
     let bmp_dPdx = dpdx(in.worldPos);
@@ -462,14 +465,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let crossX = cross(bmp_dPdy, geomN);
     let crossY = cross(geomN, bmp_dPdx);
     let surfGrad = (crossX * dBx + crossY * dBy) * bumpScale;
-    let N = normalize(in.worldNormal - surfGrad);
+    var N = normalize(in.worldNormal - surfGrad);
     let V = normalize(transform.cameraPos - in.worldPos);
 )";
+        if ((features & ShaderFeatures::CullMask) == ShaderFeatures::CullNone) {
+            s << "    if (!isFrontFacing) { N = -N; }\n";
+        }
         } else {
             s << R"(
-    let N = normalize(in.worldNormal);
+    var N = normalize(in.worldNormal);
     let V = normalize(transform.cameraPos - in.worldPos);
 )";
+        if ((features & ShaderFeatures::CullMask) == ShaderFeatures::CullNone) {
+            s << "    if (!isFrontFacing) { N = -N; }\n";
+        }
         }
         s << R"(
     var diffuseLight = lights.ambient;
