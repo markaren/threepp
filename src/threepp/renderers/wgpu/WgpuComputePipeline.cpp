@@ -135,30 +135,49 @@ WgpuComputePipeline::~WgpuComputePipeline() {
 }
 
 void WgpuComputePipeline::setStorageTexture(uint32_t binding, WgpuTexture& texture) {
+    auto fmt = toWGPUFormat(texture.format());
+    auto it = impl_->bindings.find(binding);
+    // Only invalidate the pipeline when the binding layout changes (type or format).
+    // A view-only swap does not affect the BGL or pipeline — bind group handles it.
+    if (it == impl_->bindings.end() ||
+        it->second.type != BindingType::StorageTextureWrite ||
+        it->second.textureFormat != fmt) {
+        impl_->pipelineBuilt = false;
+    }
     BindingInfo info{};
     info.type = BindingType::StorageTextureWrite;
     info.textureView = texture.view();
-    info.textureFormat = toWGPUFormat(texture.format());
+    info.textureFormat = fmt;
     impl_->bindings[binding] = info;
-    impl_->pipelineBuilt = false;
 }
 
 void WgpuComputePipeline::setTexture(uint32_t binding, WgpuTexture& texture) {
+    auto fmt = toWGPUFormat(texture.format());
+    auto it = impl_->bindings.find(binding);
+    if (it == impl_->bindings.end() ||
+        it->second.type != BindingType::Texture ||
+        it->second.textureFormat != fmt) {
+        impl_->pipelineBuilt = false;
+    }
     BindingInfo info{};
     info.type = BindingType::Texture;
     info.textureView = texture.view();
-    info.textureFormat = toWGPUFormat(texture.format());
+    info.textureFormat = fmt;
     impl_->bindings[binding] = info;
-    impl_->pipelineBuilt = false;
 }
 
 void WgpuComputePipeline::setUniformBuffer(uint32_t binding, WgpuBuffer& buffer) {
+    auto it = impl_->bindings.find(binding);
+    if (it == impl_->bindings.end() ||
+        it->second.type != BindingType::UniformBuffer ||
+        it->second.bufferSize != buffer.size()) {
+        impl_->pipelineBuilt = false;
+    }
     BindingInfo info{};
     info.type = BindingType::UniformBuffer;
     info.buffer = buffer.buffer();
     info.bufferSize = buffer.size();
     impl_->bindings[binding] = info;
-    impl_->pipelineBuilt = false;
 }
 
 void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {

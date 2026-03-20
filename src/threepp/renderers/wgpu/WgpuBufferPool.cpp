@@ -30,6 +30,16 @@ void WgpuBufferPool::beginFrame() {
         freePools_[key].push_back(entry.buffer);
     }
     inUse_.clear();
+
+    // Trim each size class to at most kMaxFreePerClass buffers to prevent
+    // the pool from accumulating memory after frames with transient peaks.
+    constexpr size_t kMaxFreePerClass = 4;
+    for (auto& [key, buffers] : freePools_) {
+        while (buffers.size() > kMaxFreePerClass) {
+            wgpuBufferRelease(buffers.back());
+            buffers.pop_back();
+        }
+    }
 }
 
 WGPUBuffer WgpuBufferPool::acquire(size_t size, WGPUBufferUsage usage, const void* data) {

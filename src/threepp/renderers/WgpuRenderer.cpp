@@ -212,15 +212,71 @@ struct WgpuRenderer::Impl {
     struct FrameSurface {
         WGPUSurfaceTexture surfaceTexture{};
         WGPUTextureView colorView = nullptr;
-        WGPUTextureView depthView = nullptr;
+        WGPUTextureView depthView = nullptr;    // points into cachedFrame_
         WGPUTextureView resolveView = nullptr;
-        WGPUTexture depthTexture = nullptr;
-        WGPUTexture msaaColorTexture = nullptr;
         uint32_t width = 0;
         uint32_t height = 0;
         bool active = false;      // true while a surface texture is acquired
         bool hasRendered = false;  // true after the first render pass of this frame
     } frame_;
+
+    // Persistent depth + MSAA textures — recreated only on resize or sample-count change.
+    // Avoids allocating/freeing large GPU textures every frame.
+    struct CachedFrameTex {
+        WGPUTexture depthTexture = nullptr;
+        WGPUTextureView depthView = nullptr;
+        WGPUTexture msaaColorTexture = nullptr;
+        WGPUTextureView msaaColorView = nullptr;
+        uint32_t width = 0, height = 0;
+        uint32_t sampleCount = 0;
+    } cachedFrame_;
+
+    void ensureFrameTextures(uint32_t w, uint32_t h, uint32_t sc) {
+        if (cachedFrame_.width == w && cachedFrame_.height == h && cachedFrame_.sampleCount == sc)
+            return;
+
+        // Release old resources
+        if (cachedFrame_.depthView)       { wgpuTextureViewRelease(cachedFrame_.depthView);      cachedFrame_.depthView = nullptr; }
+        if (cachedFrame_.depthTexture)    { wgpuTextureRelease(cachedFrame_.depthTexture);        cachedFrame_.depthTexture = nullptr; }
+        if (cachedFrame_.msaaColorView)   { wgpuTextureViewRelease(cachedFrame_.msaaColorView);   cachedFrame_.msaaColorView = nullptr; }
+        if (cachedFrame_.msaaColorTexture){ wgpuTextureRelease(cachedFrame_.msaaColorTexture);    cachedFrame_.msaaColorTexture = nullptr; }
+
+        cachedFrame_.width = w;
+        cachedFrame_.height = h;
+        cachedFrame_.sampleCount = sc;
+
+        WGPUTextureDescriptor dtd{};
+        dtd.label = {.data = "depth_tex", .length = 9};
+        dtd.size = {w, h, 1};
+        dtd.mipLevelCount = 1;
+        dtd.sampleCount = sc;
+        dtd.dimension = WGPUTextureDimension_2D;
+        dtd.format = WGPUTextureFormat_Depth24Plus;
+        dtd.usage = WGPUTextureUsage_RenderAttachment;
+        cachedFrame_.depthTexture = wgpuDeviceCreateTexture(device, &dtd);
+        cachedFrame_.depthView    = wgpuTextureCreateView(cachedFrame_.depthTexture, nullptr);
+
+        if (sc > 1) {
+            WGPUTextureDescriptor msaaCtd{};
+            msaaCtd.label = {.data = "frame_msaa_color", .length = 16};
+            msaaCtd.size = {w, h, 1};
+            msaaCtd.mipLevelCount = 1;
+            msaaCtd.sampleCount = sc;
+            msaaCtd.dimension = WGPUTextureDimension_2D;
+            msaaCtd.format = surfaceFormat;
+            msaaCtd.usage = WGPUTextureUsage_RenderAttachment;
+            cachedFrame_.msaaColorTexture = wgpuDeviceCreateTexture(device, &msaaCtd);
+            cachedFrame_.msaaColorView    = wgpuTextureCreateView(cachedFrame_.msaaColorTexture, nullptr);
+        }
+    }
+
+    void releaseCachedFrameTextures() {
+        if (cachedFrame_.depthView)       { wgpuTextureViewRelease(cachedFrame_.depthView);      cachedFrame_.depthView = nullptr; }
+        if (cachedFrame_.depthTexture)    { wgpuTextureRelease(cachedFrame_.depthTexture);        cachedFrame_.depthTexture = nullptr; }
+        if (cachedFrame_.msaaColorView)   { wgpuTextureViewRelease(cachedFrame_.msaaColorView);   cachedFrame_.msaaColorView = nullptr; }
+        if (cachedFrame_.msaaColorTexture){ wgpuTextureRelease(cachedFrame_.msaaColorTexture);    cachedFrame_.msaaColorTexture = nullptr; }
+        cachedFrame_ = {};
+    }
 
     // Pending clear flags — set by clear()/clearDepth()/clearStencil(),
     // consumed by the next render pass's loadOp.
@@ -243,6 +299,7 @@ struct WgpuRenderer::Impl {
         WGPUBindGroupLayout bindGroupLayout = nullptr;
         WGPUPipelineLayout pipelineLayout = nullptr;
         WGPUSampler sampler = nullptr;
+        WGPUBuffer uniformBuf = nullptr;  // persistent 16-byte uniform buffer for tone-map params
 
         // Cached pipelines keyed by tone mapping mode
         // Index: 0=Linear, 1=Reinhard, 2=Cineon, 3=ACES, 4=None(sRGB only)
@@ -645,6 +702,9 @@ struct ClearColor { color: vec4<f32> }
         frame_.width = wgpuTextureGetWidth(frame_.surfaceTexture.texture);
         frame_.height = wgpuTextureGetHeight(frame_.surfaceTexture.texture);
 
+        // Ensure persistent depth/MSAA textures exist at the right size.
+        ensureFrameTextures(frame_.width, frame_.height, sampleCount_);
+
         WGPUTextureViewDescriptor vd{};
         vd.label = {.data = "surface_view", .length = 12};
         vd.format = surfaceFormat;
@@ -655,29 +715,12 @@ struct ClearColor { color: vec4<f32> }
 
         if (sampleCount_ > 1) {
             frame_.resolveView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
-            WGPUTextureDescriptor msaaCtd{};
-            msaaCtd.label = {.data = "frame_msaa_color", .length = 16};
-            msaaCtd.size = {frame_.width, frame_.height, 1};
-            msaaCtd.mipLevelCount = 1;
-            msaaCtd.sampleCount = sampleCount_;
-            msaaCtd.dimension = WGPUTextureDimension_2D;
-            msaaCtd.format = surfaceFormat;
-            msaaCtd.usage = WGPUTextureUsage_RenderAttachment;
-            frame_.msaaColorTexture = wgpuDeviceCreateTexture(device, &msaaCtd);
-            frame_.colorView = wgpuTextureCreateView(frame_.msaaColorTexture, nullptr);
+            frame_.colorView = cachedFrame_.msaaColorView;
         } else {
             frame_.colorView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
         }
 
-        WGPUTextureDescriptor dtd{};
-        dtd.label = {.data = "depth_tex", .length = 9};
-        dtd.size = {frame_.width, frame_.height, 1};
-        dtd.mipLevelCount = 1; dtd.sampleCount = sampleCount_;
-        dtd.dimension = WGPUTextureDimension_2D;
-        dtd.format = WGPUTextureFormat_Depth24Plus;
-        dtd.usage = WGPUTextureUsage_RenderAttachment;
-        frame_.depthTexture = wgpuDeviceCreateTexture(device, &dtd);
-        frame_.depthView = wgpuTextureCreateView(frame_.depthTexture, nullptr);
+        frame_.depthView = cachedFrame_.depthView;
 
         frame_.active = true;
         frame_.hasRendered = false;
@@ -691,11 +734,9 @@ struct ClearColor { color: vec4<f32> }
     void releaseFrame() {
         if (!frame_.active) return;
 
-        wgpuTextureViewRelease(frame_.depthView);
-        wgpuTextureRelease(frame_.depthTexture);
+        // depth and MSAA textures/views are owned by cachedFrame_ — do not release here.
         if (frame_.resolveView) {
-            wgpuTextureViewRelease(frame_.colorView);
-            wgpuTextureRelease(frame_.msaaColorTexture);
+            // colorView points to the cached MSAA view — do not release.
             wgpuTextureViewRelease(frame_.resolveView);
         } else {
             wgpuTextureViewRelease(frame_.colorView);
@@ -834,6 +875,12 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             sd.maxAnisotropy = 1;
             toneMap_.sampler = wgpuDeviceCreateSampler(device, &sd);
 
+            WGPUBufferDescriptor ubDesc{};
+            ubDesc.label = {.data = "tonemap_ub", .length = 10};
+            ubDesc.size = 16;
+            ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            toneMap_.uniformBuf = wgpuDeviceCreateBuffer(device, &ubDesc);
+
             toneMap_.initialized = true;
         }
 
@@ -926,16 +973,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         int idx = toneMapPipelineIndex();
         if (!toneMap_.pipelines[idx]) return;
 
-        // Upload exposure uniform
+        // Upload exposure uniform into the persistent buffer
         float params[4] = {scope.toneMappingExposure, 0, 0, 0};
-        WGPUBufferDescriptor ubDesc{};
-        ubDesc.label = {.data = "tonemap_ub", .length = 10};
-        ubDesc.size = 16;
-        ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        ubDesc.mappedAtCreation = true;
-        WGPUBuffer uniformBuf = wgpuDeviceCreateBuffer(device, &ubDesc);
-        std::memcpy(wgpuBufferGetMappedRange(uniformBuf, 0, 16), params, 16);
-        wgpuBufferUnmap(uniformBuf);
+        wgpuQueueWriteBuffer(queue, toneMap_.uniformBuf, 0, params, 16);
 
         // Input texture view
         WGPUTextureView inputView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
@@ -947,7 +987,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         bgEntries[1].binding = 1;
         bgEntries[1].sampler = toneMap_.sampler;
         bgEntries[2].binding = 2;
-        bgEntries[2].buffer = uniformBuf;
+        bgEntries[2].buffer = toneMap_.uniformBuf;
         bgEntries[2].size = 16;
 
         WGPUBindGroupDescriptor bgDesc{};
@@ -1006,7 +1046,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         wgpuBindGroupRelease(bindGroup);
         wgpuTextureViewRelease(inputView);
         wgpuTextureViewRelease(surfaceColorView);
-        wgpuBufferRelease(uniformBuf);
+        // toneMap_.uniformBuf is persistent — not released here
     }
 
     // Render the ImGui overlay directly to the surface (after tone map blit).
@@ -2151,6 +2191,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         // Release any active frame state without presenting (safe for dispose)
         releaseFrame();
+        releaseCachedFrameTextures();
         if (toneMap_.colorView) wgpuTextureViewRelease(toneMap_.colorView);
         if (toneMap_.colorTexture) wgpuTextureRelease(toneMap_.colorTexture);
         if (toneMap_.depthView) wgpuTextureViewRelease(toneMap_.depthView);
@@ -2158,6 +2199,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         for (auto& p : toneMap_.pipelines) { if (p) wgpuRenderPipelineRelease(p); }
         for (auto& m : toneMap_.shaderModules) { if (m) wgpuShaderModuleRelease(m); }
         if (toneMap_.sampler) wgpuSamplerRelease(toneMap_.sampler);
+        if (toneMap_.uniformBuf) wgpuBufferRelease(toneMap_.uniformBuf);
         if (toneMap_.pipelineLayout) wgpuPipelineLayoutRelease(toneMap_.pipelineLayout);
         if (toneMap_.bindGroupLayout) wgpuBindGroupLayoutRelease(toneMap_.bindGroupLayout);
         toneMap_ = {};
