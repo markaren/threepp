@@ -25,11 +25,14 @@
 
 #include "threepp/extras/imgui/ImguiContext.hpp"
 
+#include "BuoyantSampler.hpp"
 #include "DynamicSpectrum.hpp"
 #include "IFFT.hpp"
 #include "OceanFoam.hpp"
 #include "PhillipsSpectrum.hpp"
 #include "shaders.hpp"
+
+#include "threepp/geometries/SphereGeometry.hpp"
 
 #include <chrono>
 
@@ -37,7 +40,7 @@ using namespace threepp;
 
 int main() {
 
-    constexpr uint32_t textureSize = 256;
+    constexpr uint32_t textureSize = 512;
     constexpr float C0_TILE = 5.0f;    // ripples
     constexpr float C1_TILE = 40.0f;   // main chop (= reference tile for mesh)
     constexpr float C2_TILE = 400.0f;  // long swell
@@ -93,21 +96,75 @@ int main() {
     webtide::IFFT ifft1(renderer, textureSize);
     webtide::IFFT ifft2(renderer, textureSize);
 
-    // Output spatial-domain textures (3 per cascade: height, gradient, displacement)
-    WgpuTexture height0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture gradient0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture displacement0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    // Output spatial-domain textures (3 per cascade: height, gradient, displacement).
+    // height0/1/2 and displacement1 need CopySrc so the BuoyantSampler can read them back.
+    constexpr uint32_t kReadable = WgpuTexture::Storage | WgpuTexture::TextureBinding |
+                                   WgpuTexture::CopyDst | WgpuTexture::CopySrc;
+    constexpr uint32_t kDefault  = WgpuTexture::Storage | WgpuTexture::TextureBinding |
+                                   WgpuTexture::CopyDst;
 
-    WgpuTexture height1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture gradient1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture displacement1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture height0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
+    WgpuTexture gradient0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kDefault);
+    WgpuTexture displacement0(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
 
-    WgpuTexture height2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture gradient2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
-    WgpuTexture displacement2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float);
+    WgpuTexture height1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
+    WgpuTexture gradient1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
+    WgpuTexture displacement1(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
+
+    WgpuTexture height2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
+    WgpuTexture gradient2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
+    WgpuTexture displacement2(renderer, textureSize, textureSize, WgpuTexture::Format::RG32Float, kReadable);
 
     // Foam system driven by cascade 1 Jacobian
     webtide::OceanFoam oceanFoam(renderer, textureSize);
+
+    // -------------------------------------------------------------------------
+    // Buoyant object — physics-driven sphere that rides the waves accurately.
+    //
+    // Position Y: spring-mass system (mass, spring, damper) so the buoy bobs
+    //             with realistic inertia rather than snapping to the surface.
+    // Rotation:   pitch/roll follow the wave-surface normal (from gradient
+    //             textures), smoothed with an exponential lag filter.
+    // XZ:         Gerstner horizontal displacement from GPU readback.
+    //
+    // All wave values come from GPU via BuoyantSampler (CopyTextureToBuffer).
+    // -------------------------------------------------------------------------
+    webtide::BuoyantSampler buoySampler(renderer);
+
+    constexpr float kBuoyRadius = 2.0f;  // metres
+
+    // Anchor = undisplaced XZ reference point.
+    float buoyAnchorX = 5.0f;
+    float buoyAnchorZ = 5.0f;
+
+    // Spring-mass physics — physically correct buoyancy for a 2 m sphere at 50 % submersion.
+    //
+    //  Buoyancy stiffness:  k = ρ_w · g · π · r²  = 1025·9.81·π·4  ≈ 126 000 N/m
+    //  Natural period 2 s:  m = k / ω₀²            = 126000 / π²   ≈ 12 760 kg
+    //  Damping ratio ζ=0.4: c = 2·ζ·√(k·m)                         ≈ 32 100 N·s/m
+    //
+    // ω₀(buoy) ≈ 3.14 rad/s  >>  ω(ocean wave) ≈ 0.5–1.0 rad/s
+    // → buoy responds ~3× faster than the waves, so it tracks tightly with
+    //   slight underdamped oscillation when a crest passes quickly.
+    constexpr float kBuoyMass    = 12760.f;
+    constexpr float kBuoySpring  = 126000.f;
+    constexpr float kBuoyDamping = 32100.f;
+
+    bool  buoyFirstFrame = true; // initialise physY from GPU on first sample
+    float buoyPhysY  = 0.f;     // sphere-centre Y (spring state)
+    float buoyVelY   = 0.f;     // vertical velocity m/s
+    float buoyWaveY  = 0.f;     // GPU-sampled wave surface height (shown in UI)
+
+    // Smoothed orientation (exponential lag, τ ≈ 0.2 s)
+    float buoyPitch  = 0.f;   // rotation around X (driven by dH/dz)
+    float buoyRoll   = 0.f;   // rotation around Z (driven by dH/dx)
+
+    auto buoyGeo = SphereGeometry::create(kBuoyRadius, 24, 18);
+    auto buoyMat = MeshLambertMaterial::create();
+    buoyMat->color = Color(0xff4400); // classic orange-red marine buoy
+    auto buoyMesh = Mesh::create(buoyGeo, buoyMat);
+    buoyMesh->position.set(buoyAnchorX, 0.f, buoyAnchorZ);
+    scene->add(buoyMesh);
 
     // Create water ShaderMaterial with custom WGSL shaders
     auto waterMaterial = ShaderMaterial::create();
@@ -333,6 +390,12 @@ int main() {
             changed |= ImGui::SliderFloat("Fog Density", &uFogDensity, 0.0f, 0.02f);
         }
 
+        if (ImGui::CollapsingHeader("Buoy")) {
+            ImGui::SliderFloat("Anchor X", &buoyAnchorX, -80.f, 80.f);
+            ImGui::SliderFloat("Anchor Z", &buoyAnchorZ, -80.f, 80.f);
+            ImGui::LabelText("Wave Y", "%.3f m", buoyWaveY);
+        }
+
         if (changed)    pushUniforms();
         if (sunChanged) updateSunDirection();
         ImGui::End();
@@ -368,6 +431,47 @@ int main() {
         ifft2.applyToTexture(dynSpec2.ht,          height2);
         ifft2.applyToTexture(dynSpec2.dht,         gradient2);
         ifft2.applyToTexture(dynSpec2.displacement, displacement2);
+
+        // GPU readback — all 3 cascade heights, displacements, and gradients.
+        // Runs after IFFT passes so spatial textures are fully written.
+        {
+            auto b = buoySampler.sample(
+                height0, height1, height2,
+                displacement0, displacement1, displacement2,
+                gradient1, gradient2,
+                buoyAnchorX, buoyAnchorZ,
+                C0_TILE, C1_TILE, C2_TILE,
+                uChoppiness, uWaveScale);
+
+            buoyWaveY = b.y;
+
+            // First frame: snap physics to GPU value to avoid catch-up pop.
+            if (buoyFirstFrame) {
+                buoyPhysY    = b.y;
+                buoyFirstFrame = false;
+            }
+
+            // Clamp dt to 50 ms — avoids instability on first frames or after
+            // a window pause where dt can be arbitrarily large.
+            const float pdt = std::min(dt, 0.05f);
+
+            // --- Vertical spring-mass (semi-implicit Euler) ---
+            // restY = wave surface = sphere centre for 50 % submersion.
+            const float springF = kBuoySpring  * (b.y    - buoyPhysY);
+            const float dampF   = kBuoyDamping * buoyVelY;
+            buoyVelY  += ((springF - dampF) / kBuoyMass) * pdt;
+            buoyPhysY += buoyVelY * pdt;
+
+            // --- Orientation: align with wave-surface normal, smooth lag ---
+            // Normal = normalize(-gx, 1, -gz)  →  pitch=atan(-gz), roll=atan(-gx)
+            const float alpha = 1.f - std::exp(-8.f * pdt); // τ ≈ 0.125 s
+            buoyPitch += (std::atan(-b.gz) - buoyPitch) * alpha;
+            buoyRoll  += (std::atan(-b.gx) - buoyRoll)  * alpha;
+
+            // XZ position: anchor + full 3-cascade displaced offset (matches vertex shader)
+            buoyMesh->position.set(buoyAnchorX + b.dx, buoyPhysY, buoyAnchorZ + b.dz);
+            buoyMesh->rotation.set(buoyPitch, 0.f, buoyRoll);
+        }
 
         // Update Jacobian foam (cascade 1 drives the breaking waves)
         oceanFoam.update(dynSpec1, ifft1, dt, uLambda, uFoamDecay);
