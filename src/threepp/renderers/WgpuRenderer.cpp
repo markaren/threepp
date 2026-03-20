@@ -266,6 +266,96 @@ struct WgpuRenderer::Impl {
     uint32_t retainedFBWidth = 0;
     uint32_t retainedFBHeight = 0;
 
+    // Scissored background clear pipeline (used when scissorTest_ is enabled and autoClear)
+    WGPURenderPipeline clearPipeline_ = nullptr;
+    WGPUPipelineLayout clearPipelineLayout_ = nullptr;
+    WGPUBindGroupLayout clearBGL_ = nullptr;
+    WGPUShaderModule clearShader_ = nullptr;
+    WGPUTextureFormat clearPipelineFormat_ = WGPUTextureFormat_Undefined;
+    uint32_t clearPipelineSampleCount_ = 0;
+
+    void initClearPipeline(WGPUTextureFormat colorFormat, uint32_t sampleCount) {
+        if (clearPipeline_ && clearPipelineFormat_ == colorFormat && clearPipelineSampleCount_ == sampleCount) return;
+        if (clearPipeline_) { wgpuRenderPipelineRelease(clearPipeline_); clearPipeline_ = nullptr; }
+        if (clearPipelineLayout_) { wgpuPipelineLayoutRelease(clearPipelineLayout_); clearPipelineLayout_ = nullptr; }
+        if (clearBGL_) { wgpuBindGroupLayoutRelease(clearBGL_); clearBGL_ = nullptr; }
+        if (clearShader_) { wgpuShaderModuleRelease(clearShader_); clearShader_ = nullptr; }
+
+        const char* wgsl = R"(
+struct ClearColor { color: vec4<f32> }
+@group(0) @binding(0) var<uniform> u: ClearColor;
+@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
+    var pos = array<vec2<f32>,3>(vec2<f32>(-1.,-1.),vec2<f32>(3.,-1.),vec2<f32>(-1.,3.));
+    return vec4<f32>(pos[vi], 1.0, 1.0);
+}
+@fragment fn fs_main() -> @location(0) vec4<f32> { return u.color; }
+)";
+        WGPUShaderSourceWGSL src{};
+        src.chain.sType = WGPUSType_ShaderSourceWGSL;
+        src.code = {.data = wgsl, .length = strlen(wgsl)};
+        WGPUShaderModuleDescriptor smd{};
+        smd.nextInChain = &src.chain;
+        clearShader_ = wgpuDeviceCreateShaderModule(device, &smd);
+
+        WGPUBindGroupLayoutEntry bgle{};
+        bgle.binding = 0;
+        bgle.visibility = WGPUShaderStage_Fragment;
+        bgle.buffer.type = WGPUBufferBindingType_Uniform;
+        bgle.buffer.minBindingSize = 16;
+        WGPUBindGroupLayoutDescriptor bgld{};
+        bgld.entryCount = 1; bgld.entries = &bgle;
+        clearBGL_ = wgpuDeviceCreateBindGroupLayout(device, &bgld);
+
+        WGPUPipelineLayoutDescriptor pld{};
+        pld.bindGroupLayoutCount = 1; pld.bindGroupLayouts = &clearBGL_;
+        clearPipelineLayout_ = wgpuDeviceCreatePipelineLayout(device, &pld);
+
+        WGPUColorTargetState ct{};
+        ct.format = colorFormat;
+        ct.writeMask = WGPUColorWriteMask_All;
+        WGPUStringView fsEntry = {.data="fs_main",.length=7};
+        WGPUFragmentState fs{};
+        fs.module = clearShader_; fs.entryPoint = fsEntry; fs.targetCount = 1; fs.targets = &ct;
+
+        WGPUDepthStencilState ds{};
+        ds.format = WGPUTextureFormat_Depth24Plus;
+        ds.depthWriteEnabled = WGPUOptionalBool_True;
+        ds.depthCompare = WGPUCompareFunction_Always;
+
+        WGPURenderPipelineDescriptor pd{};
+        WGPUStringView vsEntry = {.data="vs_main",.length=7};
+        pd.layout = clearPipelineLayout_;
+        pd.vertex.module = clearShader_; pd.vertex.entryPoint = vsEntry;
+        pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        pd.depthStencil = &ds;
+        pd.multisample.count = sampleCount; pd.multisample.mask = 0xFFFFFFFF;
+        pd.fragment = &fs;
+        clearPipeline_ = wgpuDeviceCreateRenderPipeline(device, &pd);
+        clearPipelineFormat_ = colorFormat;
+        clearPipelineSampleCount_ = sampleCount;
+    }
+
+    void drawScissoredClear(WGPURenderPassEncoder pass, Color color, float alpha,
+                            WGPUTextureFormat colorFormat, uint32_t sampleCount) {
+        initClearPipeline(colorFormat, sampleCount);
+        if (!clearPipeline_) return;
+
+        float rgba[4] = {color.r, color.g, color.b, alpha};
+        constexpr auto kUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        WGPUBuffer colorBuf = bufferPool->acquire(16, kUsage, rgba);
+
+        WGPUBindGroupEntry bge{};
+        bge.binding = 0; bge.buffer = colorBuf; bge.size = 16;
+        WGPUBindGroupDescriptor bgd{};
+        bgd.layout = clearBGL_; bgd.entryCount = 1; bgd.entries = &bge;
+        WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgd);
+
+        wgpuRenderPassEncoderSetPipeline(pass, clearPipeline_);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
+        wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+        wgpuBindGroupRelease(bg);
+    }
+
     // Shared quad geometry for rendering sprites (standard attributes, not interleaved)
     std::shared_ptr<BufferGeometry> spriteGeometry_;
 
@@ -1261,7 +1351,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         colorAttachment.view = colorView;
         colorAttachment.resolveTarget = resolveView;
         colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-        colorAttachment.loadOp = shouldClearColor ? WGPULoadOp_Clear : WGPULoadOp_Load;
+        // When scissor test is active, loadOp_Clear would clear the entire attachment
+        // ignoring the scissor rect (unlike WebGL where gl.clear() respects scissor).
+        // Use loadOp_Load and draw a scissored fullscreen triangle instead.
+        bool scissoredClear = scissorTest_ && shouldClearColor;
+        colorAttachment.loadOp = (shouldClearColor && !scissoredClear) ? WGPULoadOp_Clear : WGPULoadOp_Load;
         colorAttachment.storeOp = WGPUStoreOp_Store;
         colorAttachment.clearValue = {
                 static_cast<double>(effectiveClearColor.r),
@@ -1271,7 +1365,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         WGPURenderPassDepthStencilAttachment depthAttachment{};
         depthAttachment.view = depthView;
-        depthAttachment.depthLoadOp = shouldClearDepth ? WGPULoadOp_Clear : WGPULoadOp_Load;
+        // Depth clear also ignores scissor; use Load and let the clear triangle write depth=1.
+        depthAttachment.depthLoadOp = (shouldClearDepth && !scissoredClear) ? WGPULoadOp_Clear : WGPULoadOp_Load;
         depthAttachment.depthStoreOp = WGPUStoreOp_Store;
         depthAttachment.depthClearValue = 1.0f;
 
@@ -1303,6 +1398,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             wgpuRenderPassEncoderSetScissorRect(pass, scissor_.x, scissor_.y, sw, sh);
         } else {
             wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, attachW, attachH);
+        }
+
+        // When scissorTest_ is active we couldn't use loadOp_Clear (it ignores scissor).
+        // Draw a fullscreen triangle at z=1 with the clear color to fill only the scissored region.
+        if (scissoredClear) {
+            drawScissoredClear(pass, effectiveClearColor, effectiveClearAlpha,
+                               surfaceFormat, effectiveSampleCount_);
         }
 
         // Build per-frame rendering context
@@ -2059,6 +2161,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (toneMap_.pipelineLayout) wgpuPipelineLayoutRelease(toneMap_.pipelineLayout);
         if (toneMap_.bindGroupLayout) wgpuBindGroupLayoutRelease(toneMap_.bindGroupLayout);
         toneMap_ = {};
+
+        if (clearPipeline_) { wgpuRenderPipelineRelease(clearPipeline_); clearPipeline_ = nullptr; }
+        if (clearPipelineLayout_) { wgpuPipelineLayoutRelease(clearPipelineLayout_); clearPipelineLayout_ = nullptr; }
+        if (clearBGL_) { wgpuBindGroupLayoutRelease(clearBGL_); clearBGL_ = nullptr; }
+        if (clearShader_) { wgpuShaderModuleRelease(clearShader_); clearShader_ = nullptr; }
 
         if (bufferPool) bufferPool->dispose();
         if (geometries) geometries->dispose();
