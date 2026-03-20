@@ -231,26 +231,37 @@ WireframeBuffers& WgpuGeometries::getOrCreateWireframeBuffers(BufferGeometry* ge
 
     WireframeBuffers wb{};
 
-    if (geometry->getIndex()) {
-        auto& arr = geometry->getIndex()->array();
+    {
         std::set<uint64_t> edgeSet;
         std::vector<uint32_t> edges;
 
-        for (size_t i = 0; i + 2 < arr.size(); i += 3) {
-            uint32_t a = static_cast<uint32_t>(arr[i]);
-            uint32_t b = static_cast<uint32_t>(arr[i + 1]);
-            uint32_t c = static_cast<uint32_t>(arr[i + 2]);
+        auto addEdge = [&](uint32_t p, uint32_t q) {
+            uint64_t key = (static_cast<uint64_t>(std::min(p, q)) << 32) | std::max(p, q);
+            if (edgeSet.insert(key).second) {
+                edges.push_back(p);
+                edges.push_back(q);
+            }
+        };
 
-            auto addEdge = [&](uint32_t p, uint32_t q) {
-                uint64_t key = (static_cast<uint64_t>(std::min(p, q)) << 32) | std::max(p, q);
-                if (edgeSet.insert(key).second) {
-                    edges.push_back(p);
-                    edges.push_back(q);
-                }
-            };
-            addEdge(a, b);
-            addEdge(b, c);
-            addEdge(c, a);
+        if (geometry->getIndex()) {
+            auto& arr = geometry->getIndex()->array();
+            for (size_t i = 0; i + 2 < arr.size(); i += 3) {
+                uint32_t a = static_cast<uint32_t>(arr[i]);
+                uint32_t b = static_cast<uint32_t>(arr[i + 1]);
+                uint32_t c = static_cast<uint32_t>(arr[i + 2]);
+                addEdge(a, b);
+                addEdge(b, c);
+                addEdge(c, a);
+            }
+        } else if (geometry->hasAttribute("position")) {
+            // Non-indexed: sequential triangle triplets
+            uint32_t vertexCount = static_cast<uint32_t>(
+                geometry->getAttribute<float>("position")->count());
+            for (uint32_t i = 0; i + 2 < vertexCount; i += 3) {
+                addEdge(i, i + 1);
+                addEdge(i + 1, i + 2);
+                addEdge(i + 2, i);
+            }
         }
 
         if (!edges.empty()) {

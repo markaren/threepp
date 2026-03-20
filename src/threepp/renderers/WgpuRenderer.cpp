@@ -21,6 +21,7 @@
 #include "threepp/lights/lights.hpp"
 #include "threepp/lights/LightShadow.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
+#include "threepp/materials/SpriteMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 #include "threepp/math/Matrix3.hpp"
@@ -1773,6 +1774,15 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 float cy = sprite->center.y - 0.5f;
                 spritePos.sub(right * (cx * spriteScale.x));
                 spritePos.sub(up * (cy * spriteScale.y));
+            }
+
+            // Apply SpriteMaterial rotation (Z rotation in billboard local space = screen-space rotation)
+            if (auto* sm = dynamic_cast<SpriteMaterial*>(rawMat)) {
+                if (sm->rotation != 0.0f) {
+                    Matrix4 rotZ;
+                    rotZ.makeRotationZ(sm->rotation);
+                    modelMatrix.multiply(rotZ);
+                }
             }
 
             modelMatrix.scale(spriteScale);
