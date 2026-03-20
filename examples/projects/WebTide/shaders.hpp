@@ -305,6 +305,8 @@ struct VertexOutput {
     @location(0) worldPos: vec3<f32>,
     @location(1) worldNormal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) height: f32,      // combined Y displacement (for crest colour)
+    @location(4) foamHeight: f32,  // world-continuous height for foam (non-repeating)
 };
 
 @vertex
@@ -315,15 +317,34 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
     var waterPosition = in.position;
 
+    // World-space UV at 2x tile scale — adjacent tiles sample different halves
+    // of the FFT texture, breaking the obvious tile-repetition pattern.
+    let worldXZ = (transform.model * vec4<f32>(in.position, 1.0)).xz;
+    let largeUV = worldXZ / (ocean.tileSize * 2.0);
+    // 3.7x scale is incommensurate with integer tile offsets — no two tiles repeat
+    let foamUV  = worldXZ / (ocean.tileSize * 3.7);
+
+    // Primary (tile-local UV)
+    let disp1  = textureSampleLevel(t_displacementMap, s_displacementMap, in.uv, 0.0).rg;
+    let h1     = textureSampleLevel(t_heightMap, s_heightMap, in.uv, 0.0).r;
+    let grad1  = textureSampleLevel(t_gradientMap, s_gradientMap, in.uv, 0.0).rg;
+
+    // Large-scale swell overlay (half amplitude, world-continuous UV)
+    let disp2  = textureSampleLevel(t_displacementMap, s_displacementMap, largeUV, 0.0).rg * 0.35;
+    let h2     = textureSampleLevel(t_heightMap, s_heightMap, largeUV, 0.0).r * 0.35;
+    let grad2  = textureSampleLevel(t_gradientMap, s_gradientMap, largeUV, 0.0).rg * 0.35;
+
+    let displacement = disp1 + disp2;
+    let height       = h1 + h2;
+    let gradient     = grad1 + grad2;
+
     // Horizontal displacement (choppy waves)
-    let displacement = textureSampleLevel(t_displacementMap, s_displacementMap, in.uv, 0.0).rg * scalingFactor * 1.0;
-    waterPosition.x += displacement.x;
-    waterPosition.z += displacement.y;
+    waterPosition.x += displacement.x * scalingFactor;
+    waterPosition.z += displacement.y * scalingFactor;
 
     // Vertical displacement (height)
-    let height = textureSampleLevel(t_heightMap, s_heightMap, in.uv, 0.0).r;
-    let gradient = textureSampleLevel(t_gradientMap, s_gradientMap, in.uv, 0.0).rg;
-    waterPosition.y += height * scalingFactor * 0.5;
+    let yDisplace = height * scalingFactor * 0.5;
+    waterPosition.y += yDisplace;
 
     // Normal from gradient map
     let normal = normalize(vec3<f32>(-gradient.x * scalingFactor * 0.5, 1.0, -gradient.y * scalingFactor * 0.5));
@@ -332,6 +353,9 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.worldPos = worldPos4.xyz;
     out.worldNormal = (transform.model * vec4<f32>(normal, 0.0)).xyz;
     out.uv = in.uv;
+    out.height = yDisplace;
+    let foamH  = textureSampleLevel(t_heightMap, s_heightMap, foamUV, 0.0).r;
+    out.foamHeight = foamH * scalingFactor * 0.5;
     out.clipPos = transform.proj * transform.view * worldPos4;
 
     return out;
@@ -369,36 +393,63 @@ struct VertexOutput {
     @location(0) worldPos: vec3<f32>,
     @location(1) worldNormal: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) height: f32,
+    @location(4) foamHeight: f32,
 };
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let normal = normalize(in.worldNormal);
+    let normal   = normalize(in.worldNormal);
+    let lightDir = normalize(lights.dirDirection0);
+    let viewRay  = normalize(in.worldPos - transform.cameraPos);
 
-    // Light direction (from first directional light)
-    let lightDirection = normalize(lights.dirDirection0);
+    let ndl = max(0.0, dot(normal, lightDir));
 
-    // Diffuse lighting (threepp convention: lightDirection points toward light source)
-    let ndl = max(0.0, dot(normal, lightDirection));
-    let diffuseColor = vec3<f32>(0.01, 0.06, 0.1);
+    // Seascape colour constants
+    let seaBase       = vec3<f32>(0.1,  0.19, 0.22);
+    let seaWaterColor = vec3<f32>(0.8,  0.9,  0.6);
 
-    // View ray
-    let viewRayW = normalize(in.worldPos - transform.cameraPos);
+    // Fresnel — power 3, 0.65 scale (seascape style)
+    let nDotV   = max(dot(-viewRay, normal), 0.0);
+    let fresnel = pow(1.0 - nDotV, 3.0) * 0.65;
 
-    // Fresnel (Schlick approximation)
-    let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(-viewRayW, normal), 0.0), 5.0);
+    // Refracted body colour: seaBase + sharp wrapped-diffuse tinted by water colour
+    // The sharp diffuse (exp 80) puts a subtle sun-coloured glow in the water near
+    // the specular region — gives the characteristic yellow-green depth look.
+    let sharpDiff = pow(ndl * 0.4 + 0.6, 80.0);
+    let refracted = seaBase + sharpDiff * seaWaterColor * 0.12;
 
-    // Cubemap sky reflection
-    let reflectedDir = reflect(viewRayW, normal);
-    let reflectedColor = textureSample(t_reflectionMap, s_reflectionMap, reflectedDir).rgb;
+    // Sky reflection from cubemap
+    let reflectedDir = reflect(viewRay, normal);
+    let reflected    = textureSample(t_reflectionMap, s_reflectionMap, reflectedDir).rgb;
 
-    // Specular highlight
-    let specular = pow(max(0.0, dot(reflect(lightDirection, normal), viewRayW)), 720.0) * 210.0;
+    var color = mix(refracted, reflected, fresnel);
 
-    // Final composition
-    let finalColor = mix(diffuseColor * ndl, reflectedColor + specular, fresnel);
+    // Wave-height colour contribution (seascape: adds water colour at crests)
+    let dist  = length(in.worldPos - transform.cameraPos);
+    let atten = max(1.0 - dist * dist * 0.0003, 0.0);
+    color += seaWaterColor * in.height * 0.18 * atten;
 
-    return vec4<f32>(finalColor, 1.0);
+    // Specular (seascape exponent 60 with normalisation)
+    let specNorm = (60.0 + 8.0) / (3.14159 * 8.0);
+    let spec     = pow(max(0.0, dot(reflect(lightDir, normal), viewRay)), 60.0) * specNorm;
+    color += vec3<f32>(spec) * lights.dirColor0;
+
+    // Foam at wave crests — driven by world-continuous height so it never
+    // repeats the same pattern across tiles
+    let foam = smoothstep(0.55, 1.1, in.foamHeight);
+    color = mix(color, vec3<f32>(1.0), foam * 0.6);
+
+    // Atmospheric haze — starts beyond 40 units, fades into horizon sky
+    let fogFactor  = clamp(exp(-max(dist - 200.0, 0.0) * 0.008), 0.0, 1.0);
+    let horizonDir = normalize(vec3<f32>(viewRay.x, -0.02, viewRay.z));
+    let fogColor   = textureSample(t_reflectionMap, s_reflectionMap, horizonDir).rgb;
+    color = mix(fogColor, color, fogFactor);
+
+    // Gamma / tone curve (seascape: pow(color, 0.75) to lift the result)
+    color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(0.75));
+
+    return vec4<f32>(color, 1.0);
 }
 )";
 

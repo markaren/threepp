@@ -35,8 +35,8 @@ using namespace threepp;
 int main() {
 
     constexpr uint32_t textureSize = 256;
-    constexpr float tileSize = 20.0f;
-    constexpr int tileRadius = 3; // 7x7 grid (-3..3)
+    constexpr float tileSize = 40.0f;
+    constexpr int tileRadius = 6; // 13x13 grid (-6..6)
 
     // Create window and renderer
     Canvas::Parameters params;
@@ -50,7 +50,7 @@ int main() {
     renderer.setClearColor(Color::black); // Will be fully covered by skybox
 
     // Camera
-    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 1000.f);
+    auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 2000.f);
     camera->position.set(0, 5, 15);
     camera->lookAt({0, 0, 0});
 
@@ -97,15 +97,27 @@ int main() {
     waterMaterial->customTextures["gradientMap"] = &gradientMap;
     waterMaterial->customTextures["heightMap"] = &heightMap;
 
-    // Create water geometry (XZ plane with subdivisions)
-    auto waterGeo = PlaneGeometry::create(tileSize, tileSize, textureSize, textureSize);
-    // PlaneGeometry creates an XY plane, rotate to XZ
-    waterGeo->rotateX(-math::PI / 2.0f);
+    // LOD geometries — inner tiles keep detail, outer tiles are coarser.
+    // All share the same material and FFT textures; only vertex density differs.
+    // Chebyshev distance from centre determines LOD:
+    //   dist <= 1 : 128x128  (9 tiles,  ~147k verts)
+    //   dist <= 3 : 64x64    (40 tiles, ~164k verts)
+    //   dist <= 6 : 32x32    (120 tiles, ~123k verts)
+    // Total: ~434k verts vs ~3.2M previously; ocean 520x520 vs 140x140 units.
+    auto makeWaterGeo = [&](int subdiv) {
+        auto g = PlaneGeometry::create(tileSize, tileSize, subdiv, subdiv);
+        g->rotateX(-math::PI / 2.0f);
+        return g;
+    };
+    auto geoInner = makeWaterGeo(256);
+    auto geoMid   = makeWaterGeo(256);
+    auto geoOuter = makeWaterGeo(128);
 
-    // Create 3x3 grid of water tiles
     for (int x = -tileRadius; x <= tileRadius; x++) {
         for (int z = -tileRadius; z <= tileRadius; z++) {
-            auto waterMesh = Mesh::create(waterGeo, waterMaterial);
+            int dist = std::max(std::abs(x), std::abs(z)); // Chebyshev distance
+            auto& geo = dist <= 1 ? geoInner : dist <= 3 ? geoMid : geoOuter;
+            auto waterMesh = Mesh::create(geo, waterMaterial);
             waterMesh->position.set(
                 static_cast<float>(x) * tileSize,
                 0,
@@ -147,7 +159,7 @@ int main() {
     auto texPz = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_pz.jpg").string());
     auto texNz = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_nz.jpg").string());
 
-    auto skyboxGeo = BoxGeometry::create(500.f, 500.f, 500.f);
+    auto skyboxGeo = BoxGeometry::create(1800.f, 1800.f, 1800.f);
 
     auto matPx = MeshBasicMaterial::create();
     matPx->map = texPx;
