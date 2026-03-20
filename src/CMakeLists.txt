@@ -703,7 +703,7 @@ if (THREEPP_WITH_WGPU)
             add_custom_command(TARGET threepp POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     "${WGPU_NATIVE_DLL}"
-                    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>/wgpu_native.dll"
+                    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/wgpu_native.dll"
                 COMMENT "Copying wgpu_native.dll to output directory"
             )
         endif ()
