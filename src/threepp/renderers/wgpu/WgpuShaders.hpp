@@ -122,6 +122,11 @@ namespace threepp::wgpu {
     constexpr size_t SHADOW_UNIFORM_PER_LIGHT = 80;
     constexpr size_t SHADOW_UNIFORM_SIZE = 16 + MAX_SHADOW_LIGHTS * SHADOW_UNIFORM_PER_LIGHT;
 
+    // Point light shadow constants (6 depth passes per light, cube faces stored as 2D array)
+    constexpr int MAX_SHADOW_POINT_LIGHTS = 2;
+    constexpr size_t POINT_SHADOW_PER_LIGHT = 32;  // position(12)+near(4)+bias(4)+far(4)+pad(8)
+    constexpr size_t POINT_SHADOW_UNIFORM_SIZE = 16 + MAX_SHADOW_POINT_LIGHTS * POINT_SHADOW_PER_LIGHT;
+
     struct LightLimits;
 
     // Generate the main WGSL shader source for the given feature bitmask and light limits.

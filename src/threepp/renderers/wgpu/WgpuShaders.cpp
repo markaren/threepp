@@ -258,6 +258,76 @@ fn sampleShadow(si: u32, worldPos: vec3<f32>) -> f32 {
     return shadow_sum / 9.0;
 }
 )";
+        // Point light shadow structs and sampling function
+        s << "const MAX_SHADOW_POINT_LIGHTS: u32 = " << MAX_SHADOW_POINT_LIGHTS << "u;\n";
+        s << R"(
+struct PointShadowData {
+    position: vec3<f32>,
+    near: f32,
+    bias: f32,
+    far: f32,
+    _pad0: f32,
+    _pad1: f32,
+};
+struct PointShadowUniforms {
+    count: u32,
+    _p0: u32, _p1: u32, _p2: u32,
+    lights: array<PointShadowData, MAX_SHADOW_POINT_LIGHTS>,
+};
+@group(0) @binding(36) var<uniform> pointShadow: PointShadowUniforms;
+@group(0) @binding(37) var t_ptShadowMaps: texture_depth_2d_array;
+
+fn samplePointShadow(pi: u32, worldPos: vec3<f32>) -> f32 {
+    let psd = pointShadow.lights[pi];
+    let L = worldPos - psd.position;
+    let aL = abs(L);
+    var d: f32;
+    var uv: vec2<f32>;
+    var faceIdx: i32;
+    if (aL.x >= aL.y && aL.x >= aL.z) {
+        d = aL.x;
+        if (L.x > 0.0) {
+            faceIdx = 0;
+            uv = vec2<f32>(L.z / (2.0*d) + 0.5, 0.5 - L.y / (2.0*d));
+        } else {
+            faceIdx = 1;
+            uv = vec2<f32>(0.5 - L.z / (2.0*d), 0.5 - L.y / (2.0*d));
+        }
+    } else if (aL.y >= aL.x && aL.y >= aL.z) {
+        d = aL.y;
+        if (L.y > 0.0) {
+            faceIdx = 4;
+            uv = vec2<f32>(L.x / (2.0*d) + 0.5, 0.5 - L.z / (2.0*d));
+        } else {
+            faceIdx = 5;
+            uv = vec2<f32>(L.x / (2.0*d) + 0.5, L.z / (2.0*d) + 0.5);
+        }
+    } else {
+        d = aL.z;
+        if (L.z > 0.0) {
+            faceIdx = 2;
+            uv = vec2<f32>(0.5 - L.x / (2.0*d), 0.5 - L.y / (2.0*d));
+        } else {
+            faceIdx = 3;
+            uv = vec2<f32>(L.x / (2.0*d) + 0.5, 0.5 - L.y / (2.0*d));
+        }
+    }
+    let near = psd.near;
+    let far = psd.far;
+    let depthRef = far * (d - near) / (d * (far - near)) - psd.bias;
+    if (depthRef < 0.0 || depthRef > 1.0) { return 1.0; }
+    let layer = i32(pi) * 6 + faceIdx;
+    let texelSize = 1.0 / f32(textureDimensions(t_ptShadowMaps).x);
+    var shadow_sum = 0.0;
+    for (var sy = -1; sy <= 1; sy++) {
+        for (var sx = -1; sx <= 1; sx++) {
+            let offset = vec2<f32>(f32(sx), f32(sy)) * texelSize;
+            shadow_sum += textureSampleCompare(t_ptShadowMaps, s_shadowMap, uv + offset, layer, depthRef);
+        }
+    }
+    return shadow_sum / 9.0;
+}
+)";
     }
 
     s << "\nstruct VertexInput {\n";
@@ -530,17 +600,27 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         var NdotL = max(dot(N, L), 0.0);
         var att = 1.0;
         if (lights.point[i].distance > 0.0) {
-            let r2 = clamp(1.0 - pow(d / lights.point[i].distance, 4.0), 0.0, 1.0);
-            att = r2 * r2 / (d * d + 0.0001);
+            att = pow(max(1.0 - d / lights.point[i].distance, 0.0), lights.point[i].decay);
         }
 )";
         if (features & ShaderFeatures::GradientMap) {
             s << "        NdotL = textureSample(t_gradientMap, s_gradientMap, vec2<f32>(NdotL, 0.5)).r;\n";
         }
-        s << "        diffuseLight += lights.point[i].color * NdotL * att;\n";
+        // Per-light shadow attenuation for point lights
+        if (features & ShaderFeatures::Shadow) {
+            s << "        var ptShadow = 1.0;\n";
+            s << "        if (i < pointShadow.count) { ptShadow = samplePointShadow(i, in.worldPos); }\n";
+            s << "        diffuseLight += lights.point[i].color * NdotL * att * ptShadow;\n";
+        } else {
+            s << "        diffuseLight += lights.point[i].color * NdotL * att;\n";
+        }
         if (features & ShaderFeatures::Specular) {
             s << "        { let H = normalize(L + V); let s = pow(max(dot(N, H), 0.0), material.specularAndShininess.w);\n";
-            s << "          specularLight += lights.point[i].color * material.specularAndShininess.rgb * s * att; }\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          specularLight += lights.point[i].color * material.specularAndShininess.rgb * s * att * ptShadow; }\n";
+            } else {
+                s << "          specularLight += lights.point[i].color * material.specularAndShininess.rgb * s * att; }\n";
+            }
         }
         if (features & ShaderFeatures::PBR) {
             s << "        { let H = normalize(L + V); let NdotH = max(dot(N, H), 0.0);\n";
@@ -550,7 +630,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "          let D = a2 / (3.14159265 * denom * denom);\n";
             s << "          let F0 = mix(vec3<f32>(0.04), baseColor, m);\n";
             s << "          let F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);\n";
-            s << "          specularLight += lights.point[i].color * F * D * NdotL * att; }\n";
+            if (features & ShaderFeatures::Shadow) {
+                s << "          specularLight += lights.point[i].color * F * D * NdotL * att * ptShadow; }\n";
+            } else {
+                s << "          specularLight += lights.point[i].color * F * D * NdotL * att; }\n";
+            }
         }
         s << "    }\n";
 

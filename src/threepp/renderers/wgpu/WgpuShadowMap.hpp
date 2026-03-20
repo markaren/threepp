@@ -50,6 +50,11 @@ namespace threepp::wgpu {
         [[nodiscard]] WGPUTextureView depthArrayView() const { return depthArrayView_; }
         [[nodiscard]] WGPUSampler comparisonSampler() const { return comparisonSampler_; }
 
+        // Point light shadow accessors
+        [[nodiscard]] WGPUBuffer ptUniformBuffer() const { return ptUniformBuffer_; }
+        [[nodiscard]] WGPUTextureView ptDepthArrayView() const { return ptDepthArrayView_; }
+        [[nodiscard]] int numPointShadows() const { return numPointShadows_; }
+
         void dispose();
 
     private:
@@ -59,12 +64,19 @@ namespace threepp::wgpu {
         bool initialized_ = false;
         bool active_ = false;
         int activeLightCount_ = 0;
+        int numPointShadows_ = 0;
 
-        // Depth array texture (one layer per shadow-casting light)
+        // Dir/Spot shadow: depth array texture (one layer per shadow-casting light)
         WGPUTexture depthArrayTexture_ = nullptr;
         WGPUTextureView depthArrayView_ = nullptr;
         WGPUSampler comparisonSampler_ = nullptr;
         WGPUBuffer uniformBuffer_ = nullptr;
+
+        // Point light shadow: depth 2D array texture (6 layers per point light)
+        WGPUTexture ptDepthArrayTexture_ = nullptr;
+        WGPUTextureView ptDepthArrayView_ = nullptr;
+        WGPUBuffer ptUniformBuffer_ = nullptr;
+        WGPUTextureView ptLayerViews_[MAX_SHADOW_POINT_LIGHTS * 6]{};
 
         // Depth-only render pipeline
         WGPURenderPipeline depthPipeline_ = nullptr;
@@ -73,7 +85,7 @@ namespace threepp::wgpu {
         WGPUShaderModule depthShader_ = nullptr;
         WGPUBuffer depthTransformBuffer_ = nullptr;
 
-        // Per-light entries
+        // Per-light entries (dir/spot)
         ShadowLightEntry lights_[MAX_SHADOW_LIGHTS];
 
         void init();

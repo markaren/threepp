@@ -206,6 +206,26 @@ namespace threepp::wgpu {
             }
         }
 
+        // Binding 36-37: point light shadow map
+        if (features & ShaderFeatures::Shadow) {
+            {
+                WGPUBindGroupLayoutEntry e{};
+                e.binding = 36;
+                e.visibility = WGPUShaderStage_Fragment;
+                e.buffer.type = WGPUBufferBindingType_Uniform;
+                e.buffer.minBindingSize = POINT_SHADOW_UNIFORM_SIZE;
+                entries.push_back(e);
+            }
+            {
+                WGPUBindGroupLayoutEntry e{};
+                e.binding = 37;
+                e.visibility = WGPUShaderStage_Fragment;
+                e.texture.sampleType = WGPUTextureSampleType_Depth;
+                e.texture.viewDimension = WGPUTextureViewDimension_2DArray;
+                entries.push_back(e);
+            }
+        }
+
         // Binding 34-35: skinning (joint matrices + weights)
         if (features & ShaderFeatures::Skinning) {
             {

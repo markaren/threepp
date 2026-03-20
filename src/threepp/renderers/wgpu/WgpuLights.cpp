@@ -38,7 +38,7 @@ void WgpuLights::update(Object3D& scene) {
     float ambR = 0, ambG = 0, ambB = 0;
 
     struct DirEntry { Vector3 dir; Color col; bool shadow; };
-    struct PtEntry  { Vector3 pos; Color col; float dist; float decay; };
+    struct PtEntry  { Vector3 pos; Color col; float dist; float decay; bool shadow; };
     struct SpEntry  { Vector3 pos; Vector3 dir; Color col; float dist; float decay; float coneCos; float penumbraCos; bool shadow; };
     struct HmEntry  { Vector3 dir; Color sky; Color gnd; };
     std::vector<DirEntry> dirs;
@@ -63,7 +63,7 @@ void WgpuLights::update(Object3D& scene) {
             if (pts.size() < static_cast<size_t>(lim.maxPointLights)) {
                 Vector3 pos;
                 pos.setFromMatrixPosition(*pl->matrixWorld);
-                pts.push_back({pos, Color(pl->color).multiplyScalar(pl->intensity), pl->distance, pl->decay});
+                pts.push_back({pos, Color(pl->color).multiplyScalar(pl->intensity), pl->distance, pl->decay, pl->castShadow});
             }
         } else if (auto sl = obj.as<SpotLight>()) {
             if (sps.size() < static_cast<size_t>(lim.maxSpotLights)) {
@@ -95,6 +95,7 @@ void WgpuLights::update(Object3D& scene) {
     // Sort shadow-casting lights first within each type so that shadow map
     // indices align with light buffer indices (shadow index i == light index i).
     std::stable_partition(dirs.begin(), dirs.end(), [](const DirEntry& e) { return e.shadow; });
+    std::stable_partition(pts.begin(), pts.end(), [](const PtEntry& e) { return e.shadow; });
     std::stable_partition(sps.begin(), sps.end(), [](const SpEntry& e) { return e.shadow; });
 
     nDir = static_cast<uint32_t>(dirs.size());
