@@ -60,7 +60,7 @@ int main() {
 
     // Camera
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 2000.f);
-    camera->position.set(0, 5, 15);
+    camera->position.set(0, 25, 100);
     camera->lookAt({0, 0, 0});
 
     OrbitControls controls(*camera, canvas);
@@ -257,11 +257,11 @@ int main() {
     float uFoamStrength  = 0.35f;
     float uFoamThreshold = 0.30f;  // Jacobian foam threshold (lower = more foam)
     float uFogDensity    = 0.004f;
-    float uFresnelScale  = 0.65f;  // Fresnel reflection multiplier
+    float uFresnelScale  = 0.45f;  // Fresnel reflection multiplier
     float uNormalStrength= 1.0f;   // overall normal map intensity
     float uSeaColor[3]   = {0.10f, 0.19f, 0.22f};// seascape deep-water blue
-    float uSpecShininess = 60.0f;  // Blinn-Phong exponent
-    float uWaveScale     = 0.5f;   // vertical amplitude (matches old hardcoded 0.5)
+    float uSpecShininess = 120.0f;  // Blinn-Phong exponent
+    float uWaveScale     = 0.25f;   // vertical amplitude (matches old hardcoded 0.5)
     float uTimeScale     = 1.0f;   // C++ only — not a shader uniform
     float uLambda        = 1.2f;   // Jacobian choppiness multiplier
     float uFoamDecay     = 1.5f;   // foam fade per second
