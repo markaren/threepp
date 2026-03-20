@@ -559,12 +559,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         let lv = lights.spot[i].position - in.worldPos;
         let d = length(lv); let L = normalize(lv);
         var NdotL = max(dot(N, L), 0.0);
-        let ac = dot(L, normalize(lights.spot[i].direction));
+        let ac = dot(L, lights.spot[i].direction);
         let se = smoothstep(lights.spot[i].coneCos, lights.spot[i].penumbraCos, ac);
         var att = se;
         if (lights.spot[i].distance > 0.0) {
-            let r2 = clamp(1.0 - pow(d / lights.spot[i].distance, 4.0), 0.0, 1.0);
-            att = att * r2 * r2 / (d * d + 0.0001);
+            att = att * pow(max(1.0 - d / lights.spot[i].distance, 0.0), lights.spot[i].decay);
         }
 )";
         if (features & ShaderFeatures::GradientMap) {

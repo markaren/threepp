@@ -71,9 +71,14 @@ void WgpuLights::update(Object3D& scene) {
                 pos.setFromMatrixPosition(*sl->matrixWorld);
                 targetPos.setFromMatrixPosition(*sl->target().matrixWorld);
                 Vector3 direction = pos.clone().sub(targetPos).normalize();
+                float coneCos = std::cos(sl->angle);
+                // penumbraCos must be strictly > coneCos for smoothstep to be well-defined in WGSL.
+                // When penumbra == 0 they'd be equal, causing undefined behavior (Dawn returns 0).
+                float penumbraCos = std::cos(sl->angle * (1.0f - sl->penumbra));
+                if (penumbraCos <= coneCos) penumbraCos = coneCos + 1e-4f;
                 sps.push_back({pos, direction, Color(sl->color).multiplyScalar(sl->intensity),
                                sl->distance, sl->decay,
-                               std::cos(sl->angle), std::cos(sl->angle * (1.0f - sl->penumbra)), sl->castShadow});
+                               coneCos, penumbraCos, sl->castShadow});
             }
         } else if (auto hl = obj.as<HemisphereLight>()) {
             if (hms.size() < static_cast<size_t>(lim.maxHemiLights)) {
