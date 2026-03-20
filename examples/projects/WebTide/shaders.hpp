@@ -266,28 +266,40 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 )";
 
-// Foam update: Jacobian-based whitecap detection with temporal decay.
-// J ~= (1 + lambda*Jxx)(1 + lambda*Jzz) -- when J < 0 the surface is folding (breaking wave).
+// Foam update: combined 3-cascade Jacobian whitecap detection with temporal decay.
+// J_total = (1 + lambda*(Jxx0+Jxx1+Jxx2)) * (1 + lambda*(Jzz0+Jzz1+Jzz2))
+// Real breaking happens when the combined displacement field folds, not just one scale.
+// Each cascade's raw IFFT Jacobian is normalised by its own jacScale before summing.
 // Foam persists with exponential decay: foam = max(newFoam, prevFoam - decay*dt)
 constexpr const char* foamUpdateWGSL = R"(
-@group(0) @binding(0) var t_jacDiag: texture_2d<f32>;   // .r=Jxx .g=Jzz (spatial)
-@group(0) @binding(1) var t_foamIn:  texture_2d<f32>;   // previous frame foam [0,1]
-@group(0) @binding(2) var t_foamOut: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(0) var t_jacDiag0: texture_2d<f32>;  // cascade 0 .r=Jxx .g=Jzz (spatial)
+@group(0) @binding(1) var t_jacDiag1: texture_2d<f32>;  // cascade 1 .r=Jxx .g=Jzz (spatial)
+@group(0) @binding(2) var t_jacDiag2: texture_2d<f32>;  // cascade 2 .r=Jxx .g=Jzz (spatial)
+@group(0) @binding(3) var t_foamIn:   texture_2d<f32>;  // previous frame foam [0,1]
+@group(0) @binding(4) var t_foamOut:  texture_storage_2d<rgba16float, write>;
 
 struct FoamParams {
-    lambda:   f32,   // choppiness multiplier (larger = more foam)
-    decay:    f32,   // foam fade per second
-    dt:       f32,   // delta time in seconds
-    jacScale: f32,   // = 1/C1_TILE to normalise raw IFFT jac values (same as height normalisation)
+    lambda:    f32,   // choppiness multiplier
+    decay:     f32,   // foam fade per second
+    dt:        f32,   // delta time in seconds
+    jacScale0: f32,   // 1/(2*C0_TILE) — normalise cascade-0 IFFT Jacobian
+    jacScale1: f32,   // 1/(2*C1_TILE) — normalise cascade-1 IFFT Jacobian
+    jacScale2: f32,   // 1/(2*C2_TILE) — normalise cascade-2 IFFT Jacobian
+    _pad0:     f32,
+    _pad1:     f32,
 };
-@group(0) @binding(3) var<uniform> params: FoamParams;
+@group(0) @binding(5) var<uniform> params: FoamParams;
 
 @compute @workgroup_size(8,8,1)
 fn updateFoam(@builtin(global_invocation_id) id: vec3<u32>) {
     let coord = vec2<i32>(id.xy);
-    // Normalise raw IFFT Jacobian by jacScale so lambda is in a physically meaningful range.
-    let jac   = textureLoad(t_jacDiag, coord, 0).xy * params.jacScale;
-    let J     = (1.0 + params.lambda * jac.x) * (1.0 + params.lambda * jac.y);
+    // Normalise each cascade's raw IFFT Jacobian then sum for the combined field.
+    let jac0 = textureLoad(t_jacDiag0, coord, 0).xy * params.jacScale0;
+    let jac1 = textureLoad(t_jacDiag1, coord, 0).xy * params.jacScale1;
+    let jac2 = textureLoad(t_jacDiag2, coord, 0).xy * params.jacScale2;
+    let jacSum = jac0 + jac1 + jac2;
+    // Combined Jacobian — negative means the surface is folding (breaking wave).
+    let J        = (1.0 + params.lambda * jacSum.x) * (1.0 + params.lambda * jacSum.y);
     let newFoam  = select(0.0, 1.0, J < 0.0);
     let prevFoam = textureLoad(t_foamIn, coord, 0).r;
     let foam     = max(newFoam, prevFoam - params.decay * params.dt);
@@ -329,10 +341,14 @@ struct OceanUniforms {
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
     fresnelScale:  vec4<f32>,
+    mieCoeff:      vec4<f32>,   // x = mie scattering coefficient
+    mieG:          vec4<f32>,   // x = mie directional G
     normalStrength:vec4<f32>,
+    rayleigh:      vec4<f32>,   // x = rayleigh coefficient
     seaColor:      vec4<f32>,
     specShininess: vec4<f32>,
     tileSize:      vec4<f32>,
+    turbidity:     vec4<f32>,   // x = atmospheric turbidity
     waveScale:     vec4<f32>,
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
@@ -467,10 +483,14 @@ struct OceanUniforms {
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
     fresnelScale:  vec4<f32>,
+    mieCoeff:      vec4<f32>,   // x = mie scattering coefficient
+    mieG:          vec4<f32>,   // x = mie directional G
     normalStrength:vec4<f32>,
+    rayleigh:      vec4<f32>,   // x = rayleigh coefficient
     seaColor:      vec4<f32>,
     specShininess: vec4<f32>,
     tileSize:      vec4<f32>,
+    turbidity:     vec4<f32>,   // x = atmospheric turbidity
     waveScale:     vec4<f32>,
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
@@ -483,10 +503,8 @@ struct OceanUniforms {
 @group(0) @binding(17) var t_c2Grad: texture_2d<f32>;
 @group(0) @binding(18) var s_c2Grad: sampler;
 
-@group(0) @binding(21) var t_foamMap:       texture_2d<f32>;
-@group(0) @binding(22) var s_foamMap:       sampler;
-@group(0) @binding(23) var t_reflectionMap: texture_cube<f32>;
-@group(0) @binding(24) var s_reflectionMap: sampler;
+@group(0) @binding(21) var t_foamMap: texture_2d<f32>;
+@group(0) @binding(22) var s_foamMap: sampler;
 
 struct VertexOutput {
     @builtin(position) clipPos: vec4<f32>,
@@ -497,6 +515,86 @@ struct VertexOutput {
     @location(4) foamHeight: f32,
     @location(5) undispXZ: vec2<f32>,
 };
+
+// Narkowicz 2015 ACES filmic tone mapping — maps linear HDR to display [0,1].
+// Applied manually because WgpuRenderer does not inject tone mapping into
+// custom WGSL shaders (unlike the GL renderer with GLSL #include injection).
+fn acesFilmic(x: vec3<f32>) -> vec3<f32> {
+    return clamp((x * (2.51 * x + vec3<f32>(0.03))) /
+                 (x * (2.43 * x + vec3<f32>(0.59)) + vec3<f32>(0.14)),
+                 vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// ---- Preetham Atmospheric Sky (ported from three.js Sky shader) ----
+// Computes physically-based sky radiance for a given view direction.
+// Used for both water reflections and horizon fog.
+const SKY_EE:         f32 = 1000.0;                  // solar irradiance at TOA
+const SKY_CUTOFF:     f32 = 1.6110731556870734;       // earth shadow cutoff angle
+const SKY_STEEP:      f32 = 1.5;
+const SKY_RL_ZENITH:  f32 = 8.4E3;                   // rayleigh zenith optical depth
+const SKY_MIE_ZENITH: f32 = 1.25E3;                  // mie zenith optical depth
+const SKY_SUN_COS:    f32 = 0.9999566769;             // cos of 0.5° sun disc radius
+const SKY_3_16PI:     f32 = 0.05968310365946075;      // 3/(16π)
+const SKY_1_4PI:      f32 = 0.07957747154594767;      // 1/(4π)
+const SKY_PI:         f32 = 3.141592653589793;
+
+fn skyIntensity(cosZenith: f32) -> f32 {
+    let z = clamp(cosZenith, -1.0, 1.0);
+    return SKY_EE * max(0.0, 1.0 - exp(-((SKY_CUTOFF - acos(z)) / SKY_STEEP)));
+}
+
+fn skyMieCoeffs(turbidity: f32, mieCoeff: f32) -> vec3<f32> {
+    let MieConst = vec3<f32>(1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14);
+    let c = (0.2 * turbidity) * 10E-18;
+    return 0.434 * c * MieConst * mieCoeff;
+}
+
+fn skyHgPhase(cosTheta: f32, g: f32) -> f32 {
+    let g2  = g * g;
+    let inv = 1.0 / pow(max(1.0 - 2.0 * g * cosTheta + g2, 0.0001), 1.5);
+    return SKY_1_4PI * ((1.0 - g2) * inv);
+}
+
+// Returns tonemapped sky colour for view direction `dir` (need not be above horizon).
+// sunDir must be normalized. Preetham 1999 two-term scattering model.
+fn skyColor(dir: vec3<f32>, sunDir: vec3<f32>,
+            turbidity: f32, rayleigh: f32, mieCoeff: f32, mieG: f32) -> vec3<f32> {
+    let totalRayleigh = vec3<f32>(5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5);
+    let up   = vec3<f32>(0.0, 1.0, 0.0);
+    let sunE = skyIntensity(dot(sunDir, up));
+
+    let betaR = totalRayleigh * rayleigh;
+    let betaM = skyMieCoeffs(turbidity, mieCoeff);
+
+    // Optical path length — clamp zenith to upper hemisphere to avoid singularity.
+    let cosZ    = max(0.0, dot(up, dir));
+    let za      = acos(cosZ);
+    let za_deg  = za * (180.0 / SKY_PI);
+    let denom   = cos(za) + 0.15 * pow(max(93.885 - za_deg, 1.0), -1.253);
+    let inv     = 1.0 / max(denom, 1e-6);
+    let Fex     = exp(-(betaR * (SKY_RL_ZENITH * inv) + betaM * (SKY_MIE_ZENITH * inv)));
+
+    let cosTheta   = dot(dir, sunDir);
+    let betaRTheta = betaR * (SKY_3_16PI * (1.0 + cosTheta * cosTheta));
+    let betaMTheta = betaM * skyHgPhase(cosTheta, mieG);
+
+    let sumBeta    = max(betaR + betaM, vec3<f32>(1e-10));
+    let scatRatio  = (betaRTheta + betaMTheta) / sumBeta;
+
+    let Lin  = pow(max(sunE * scatRatio * (1.0 - Fex), vec3<f32>(0.0)), vec3<f32>(1.5));
+    let Lin2 = Lin * mix(vec3<f32>(1.0),
+                         pow(max(sunE * scatRatio * Fex, vec3<f32>(0.0)), vec3<f32>(0.5)),
+                         clamp(pow(1.0 - dot(up, sunDir), 5.0), 0.0, 1.0));
+
+    let L0   = vec3<f32>(0.1) * Fex;
+    let L0f  = L0 + (sunE * 19000.0 * Fex) *
+               smoothstep(SKY_SUN_COS, SKY_SUN_COS + 0.00002, cosTheta);
+
+    // three.js Sky pre-correction (pow 1/2.4 matches its retColor step),
+    // then ACES to map HDR → display [0,1].
+    let texColor = max((Lin2 + L0f) * 0.04 + vec3<f32>(0.0, 0.0003, 0.00075), vec3<f32>(0.0));
+    return acesFilmic(pow(texColor, vec3<f32>(1.0 / 2.4)));
+}
 
 // Simple value noise to break up foam edges
 fn hash2(p: vec2<f32>) -> f32 {
@@ -551,6 +649,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let normal    = normalize(vec3<f32>(-totalGrad.x, 1.0, -totalGrad.y));
 
     let lightDir = normalize(lights.dirDirection0);
+    let sunDir   = lightDir;   // directional light IS the sun
     let viewRay  = normalize(in.worldPos - transform.cameraPos);
 
     let ndl = max(0.0, dot(normal, lightDir));
@@ -565,7 +664,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let refracted = seaBase + sharpDiff * seaWaterColor * 0.12;
 
     let reflectedDir = reflect(viewRay, normal);
-    let reflected    = textureSample(t_reflectionMap, s_reflectionMap, reflectedDir).rgb;
+    let reflected    = skyColor(normalize(reflectedDir), sunDir,
+                                ocean.turbidity.x, ocean.rayleigh.x,
+                                ocean.mieCoeff.x,  ocean.mieG.x);
 
     var color = mix(refracted, reflected, fresnel);
 
@@ -595,11 +696,166 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let fogFactor  = clamp(exp(-max(dist - 200.0, 0.0) * ocean.fogDensity.x), 0.0, 1.0);
     let horizonDir = normalize(vec3<f32>(viewRay.x, -0.02, viewRay.z));
-    let fogColor   = textureSample(t_reflectionMap, s_reflectionMap, horizonDir).rgb;
+    let fogColor   = skyColor(horizonDir, sunDir,
+                              ocean.turbidity.x, ocean.rayleigh.x,
+                              ocean.mieCoeff.x,  ocean.mieG.x);
     color = mix(fogColor, color, fogFactor);
 
-    color = pow(max(color, vec3<f32>(0.0)), vec3<f32>(0.75));
+    // ACES tonemapping — WgpuRenderer does not inject this for custom WGSL shaders.
+    return vec4<f32>(acesFilmic(max(color, vec3<f32>(0.0))), 1.0);
+}
+)";
 
+// ============================================================================
+// Sky Rendering Shaders — Preetham analytical atmosphere
+// ============================================================================
+
+// Vertex shader: renders a large box from inside (Side::Back).
+// The depth trick (clipPos.z = clipPos.w) forces every fragment to the far
+// plane so the sky is always behind every scene object.
+constexpr const char* skyVertexWGSL = R"(
+struct TransformUniforms {
+    model:      mat4x4<f32>,
+    view:       mat4x4<f32>,
+    proj:       mat4x4<f32>,
+    normalCol0: vec4<f32>,
+    normalCol1: vec4<f32>,
+    normalCol2: vec4<f32>,
+    cameraPos:  vec3<f32>,
+    _pad:       f32,
+};
+@group(0) @binding(0) var<uniform> transform: TransformUniforms;
+
+struct VertexOut {
+    @builtin(position) clipPos:  vec4<f32>,
+    @location(0)       worldPos: vec3<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VertexOut {
+    let worldPos = (transform.model * vec4<f32>(position, 1.0)).xyz;
+    var cp = transform.proj * transform.view * vec4<f32>(worldPos, 1.0);
+    cp.z = cp.w; // always render at far plane — sky behind everything
+    return VertexOut(cp, worldPos);
+}
+)";
+
+// Fragment shader: Preetham atmospheric scattering (same model as water reflections).
+// The sun direction is taken from LightData binding 1 so both sky and water agree.
+constexpr const char* skyFragmentWGSL = R"(
+struct TransformUniforms {
+    model:      mat4x4<f32>,
+    view:       mat4x4<f32>,
+    proj:       mat4x4<f32>,
+    normalCol0: vec4<f32>,
+    normalCol1: vec4<f32>,
+    normalCol2: vec4<f32>,
+    cameraPos:  vec3<f32>,
+    _pad:       f32,
+};
+@group(0) @binding(0) var<uniform> transform: TransformUniforms;
+
+struct LightData {
+    numDir: u32, numPoint: u32, numSpot: u32, numHemi: u32,
+    ambient: vec3<f32>, _pad: f32,
+    dirDirection0: vec3<f32>, _pd0: f32,
+    dirColor0:     vec3<f32>, _pd1: f32,
+};
+@group(0) @binding(1) var<uniform> lights: LightData;
+
+// Custom sky-material uniforms (alphabetical, packed by WgpuRenderer)
+struct SkyUniforms {
+    mieCoeff:  vec4<f32>,   // x = mie scattering coefficient
+    mieG:      vec4<f32>,   // x = mie directional G
+    rayleigh:  vec4<f32>,   // x = rayleigh coefficient
+    turbidity: vec4<f32>,   // x = turbidity (1–30)
+};
+@group(0) @binding(2) var<uniform> sky: SkyUniforms;
+
+struct VertexOut {
+    @builtin(position) clipPos:  vec4<f32>,
+    @location(0)       worldPos: vec3<f32>,
+};
+
+// ACES filmic tone mapping — same as in water fragment shader.
+fn acesFilmic(x: vec3<f32>) -> vec3<f32> {
+    return clamp((x * (2.51 * x + vec3<f32>(0.03))) /
+                 (x * (2.43 * x + vec3<f32>(0.59)) + vec3<f32>(0.14)),
+                 vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// ---- Preetham sky model (shared constants with water fragment shader) ----
+const SKY_EE:         f32 = 1000.0;
+const SKY_CUTOFF:     f32 = 1.6110731556870734;
+const SKY_STEEP:      f32 = 1.5;
+const SKY_RL_ZENITH:  f32 = 8.4E3;
+const SKY_MIE_ZENITH: f32 = 1.25E3;
+const SKY_SUN_COS:    f32 = 0.9999566769;
+const SKY_3_16PI:     f32 = 0.05968310365946075;
+const SKY_1_4PI:      f32 = 0.07957747154594767;
+const SKY_PI:         f32 = 3.141592653589793;
+
+fn skyIntensity(cosZenith: f32) -> f32 {
+    let z = clamp(cosZenith, -1.0, 1.0);
+    return SKY_EE * max(0.0, 1.0 - exp(-((SKY_CUTOFF - acos(z)) / SKY_STEEP)));
+}
+
+fn skyMieCoeffs(turbidity: f32, mieCoeff: f32) -> vec3<f32> {
+    let MieConst = vec3<f32>(1.8399918514433978E14, 2.7798023919660528E14, 4.0790479543861094E14);
+    let c = (0.2 * turbidity) * 10E-18;
+    return 0.434 * c * MieConst * mieCoeff;
+}
+
+fn skyHgPhase(cosTheta: f32, g: f32) -> f32 {
+    let g2  = g * g;
+    let inv = 1.0 / pow(max(1.0 - 2.0 * g * cosTheta + g2, 0.0001), 1.5);
+    return SKY_1_4PI * ((1.0 - g2) * inv);
+}
+
+fn skyColor(dir: vec3<f32>, sunDir: vec3<f32>,
+            turbidity: f32, rayleigh: f32, mieCoeff: f32, mieG: f32) -> vec3<f32> {
+    let totalRayleigh = vec3<f32>(5.804542996261093E-6, 1.3562911419845635E-5, 3.0265902468824876E-5);
+    let up   = vec3<f32>(0.0, 1.0, 0.0);
+    let sunE = skyIntensity(dot(sunDir, up));
+
+    let betaR = totalRayleigh * rayleigh;
+    let betaM = skyMieCoeffs(turbidity, mieCoeff);
+
+    let cosZ   = max(0.0, dot(up, dir));
+    let za     = acos(cosZ);
+    let za_deg = za * (180.0 / SKY_PI);
+    let denom  = cos(za) + 0.15 * pow(max(93.885 - za_deg, 1.0), -1.253);
+    let inv    = 1.0 / max(denom, 1e-6);
+    let Fex    = exp(-(betaR * (SKY_RL_ZENITH * inv) + betaM * (SKY_MIE_ZENITH * inv)));
+
+    let cosTheta   = dot(dir, sunDir);
+    let betaRTheta = betaR * (SKY_3_16PI * (1.0 + cosTheta * cosTheta));
+    let betaMTheta = betaM * skyHgPhase(cosTheta, mieG);
+
+    let sumBeta   = max(betaR + betaM, vec3<f32>(1e-10));
+    let scatRatio = (betaRTheta + betaMTheta) / sumBeta;
+
+    let Lin  = pow(max(sunE * scatRatio * (1.0 - Fex), vec3<f32>(0.0)), vec3<f32>(1.5));
+    let Lin2 = Lin * mix(vec3<f32>(1.0),
+                         pow(max(sunE * scatRatio * Fex, vec3<f32>(0.0)), vec3<f32>(0.5)),
+                         clamp(pow(1.0 - dot(up, sunDir), 5.0), 0.0, 1.0));
+
+    let L0  = vec3<f32>(0.1) * Fex;
+    let L0f = L0 + (sunE * 19000.0 * Fex) *
+              smoothstep(SKY_SUN_COS, SKY_SUN_COS + 0.00002, cosTheta);
+
+    let texColor = max((Lin2 + L0f) * 0.04 + vec3<f32>(0.0, 0.0003, 0.00075), vec3<f32>(0.0));
+    return acesFilmic(pow(texColor, vec3<f32>(1.0 / 2.4)));
+}
+
+@fragment
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    let dir    = normalize(in.worldPos - transform.cameraPos);
+    let sunDir = normalize(lights.dirDirection0);
+    // skyColor already returns ACES-tonemapped [0,1] — return directly.
+    let color  = skyColor(dir, sunDir,
+                          sky.turbidity.x, sky.rayleigh.x,
+                          sky.mieCoeff.x,  sky.mieG.x);
     return vec4<f32>(color, 1.0);
 }
 )";

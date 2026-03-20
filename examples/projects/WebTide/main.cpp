@@ -9,13 +9,12 @@
 //   - Specular coefficients from Shadertoy by afl_ext
 //   - Acerola's video breakdown of Tessendorf's paper
 //   - Tangent calculations by Rikard Olajos
-//   - Tropical sunny day skybox from the BabylonJS Asset Library
+//   - Preetham sky shader ported from three.js (Preetham et al. 1999)
 //   - Sand texture by Engin Akyurt
 
+#include "threepp/geometries/BoxGeometry.hpp"
 #include "threepp/geometries/PlaneGeometry.hpp"
-#include "threepp/loaders/CubeTextureLoader.hpp"
 #include "threepp/loaders/TextureLoader.hpp"
-#include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
@@ -40,7 +39,7 @@ using namespace threepp;
 
 int main() {
 
-    constexpr uint32_t textureSize = 512;
+    constexpr uint32_t textureSize = 256;
     constexpr float C0_TILE = 5.0f;    // ripples
     constexpr float C1_TILE = 40.0f;   // main chop (= reference tile for mesh)
     constexpr float C2_TILE = 400.0f;  // long swell
@@ -57,9 +56,7 @@ int main() {
             .graphicsApi(GraphicsAPI::WebGPU);
 
     Canvas canvas(params);
-
     WgpuRenderer renderer(canvas);
-    renderer.setClearColor(Color::black);// Will be fully covered by skybox
 
     // Camera
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 2000.f);
@@ -181,7 +178,7 @@ int main() {
     // cascade0Displacement(3,4), cascade0Gradient(5,6), cascade0Height(7,8)
     // cascade1Displacement(9,10), cascade1Gradient(11,12), cascade1Height(13,14)
     // cascade2Displacement(15,16), cascade2Gradient(17,18), cascade2Height(19,20)
-    // foamMap(21,22), reflectionMap(23,24)
+    // foamMap(21,22)  [reflectionMap removed — sky is analytical]
     waterMaterial->customTextures["cascade0Displacement"] = &displacement0;
     waterMaterial->customTextures["cascade0Gradient"]     = &gradient0;
     waterMaterial->customTextures["cascade0Height"]       = &height0;
@@ -243,87 +240,64 @@ int main() {
     ground->position.y = -10.0f;
     scene->add(ground);
 
-    // Skybox (Tropical Sunny Day) – 6 individual textures mapped to box faces
-    std::filesystem::path skyboxPath(std::string(DATA_FOLDER) + "/textures/skybox");
+    // Analytical sky — Preetham atmospheric scattering rendered into a large box.
+    // The sky box follows the camera each frame so it is always visible.
+    // Sun direction comes from LightData (binding 1) so sky and water agree.
+    auto skyMaterial = ShaderMaterial::create();
+    skyMaterial->vertexShader   = webtide::skyVertexWGSL;
+    skyMaterial->fragmentShader = webtide::skyFragmentWGSL;
+    skyMaterial->side       = Side::Back;
+    skyMaterial->depthWrite = false;
 
-    TextureLoader skyTexLoader;
-    auto texPx = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_px.jpg").string());
-    auto texNx = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_nx.jpg").string());
-    auto texPy = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_py.jpg").string());
-    auto texNy = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_ny.jpg").string());
-    auto texPz = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_pz.jpg").string());
-    auto texNz = skyTexLoader.load((skyboxPath / "TropicalSunnyDay_nz.jpg").string());
-
-    auto skyboxGeo = BoxGeometry::create(1800.f, 1800.f, 1800.f);
-
-    auto matPx = MeshBasicMaterial::create();
-    matPx->map = texPx;
-    matPx->side = Side::Back;
-
-    auto matNx = MeshBasicMaterial::create();
-    matNx->map = texNx;
-    matNx->side = Side::Back;
-
-    auto matPy = MeshBasicMaterial::create();
-    matPy->map = texPy;
-    matPy->side = Side::Back;
-
-    auto matNy = MeshBasicMaterial::create();
-    matNy->map = texNy;
-    matNy->side = Side::Back;
-
-    auto matPz = MeshBasicMaterial::create();
-    matPz->map = texPz;
-    matPz->side = Side::Back;
-
-    auto matNz = MeshBasicMaterial::create();
-    matNz->map = texNz;
-    matNz->side = Side::Back;
-
-    std::vector<std::shared_ptr<Material>> skyboxMats{matPx, matNx, matPy, matNy, matPz, matNz};
-    auto skybox = Mesh::create(skyboxGeo, skyboxMats);
-    scene->add(skybox);
-
-    // Create GPU cubemap from skybox images for water reflections
-    auto& faceImg = texPx->image();
-    WgpuTexture reflectionMap(renderer, faceImg.width, faceImg.height,
-                              WgpuTexture::Format::RGBA8Unorm, WgpuTexture::Dimension::Cube);
-    // Write each face (+X, -X, +Y, -Y, +Z, -Z)
-    auto& dataPx = texPx->image().data<unsigned char>();
-    auto& dataNx = texNx->image().data<unsigned char>();
-    auto& dataPy = texPy->image().data<unsigned char>();
-    auto& dataNy = texNy->image().data<unsigned char>();
-    auto& dataPz = texPz->image().data<unsigned char>();
-    auto& dataNz = texNz->image().data<unsigned char>();
-    reflectionMap.writeFace(0, dataPx.data(), dataPx.size());
-    reflectionMap.writeFace(1, dataNx.data(), dataNx.size());
-    reflectionMap.writeFace(2, dataPy.data(), dataPy.size());
-    reflectionMap.writeFace(3, dataNy.data(), dataNy.size());
-    reflectionMap.writeFace(4, dataPz.data(), dataPz.size());
-    reflectionMap.writeFace(5, dataNz.data(), dataNz.size());
-
-    waterMaterial->customTextures["reflectionMap"] = &reflectionMap;
+    auto skyMesh = Mesh::create(BoxGeometry::create(1.0f, 1.0f, 1.0f), skyMaterial);
+    skyMesh->scale.setScalar(2000.0f);
+    skyMesh->renderOrder = -1;   // render before opaque objects
+    scene->add(skyMesh);
 
     // -------------------------------------------------------------------------
     // Ocean visual settings — exposed via ImGui sliders.
-    // Uniform names MUST be alphabetical to match the WgpuRenderer's packing order:
+    // Water uniform names MUST be alphabetical to match WgpuRenderer's packing:
     //   choppiness, foamStrength, foamThreshold, fogDensity, fresnelScale,
-    //   normalStrength, seaColor, specShininess, tileSize, waveScale
+    //   mieCoeff, mieG, normalStrength, rayleigh, seaColor, specShininess,
+    //   tileSize, turbidity, waveScale
+    // Sky uniform names (alphabetical): mieCoeff, mieG, rayleigh, turbidity
     // -------------------------------------------------------------------------
-    float uChoppiness    = 0.5f;   // horizontal displacement scale
+    float uChoppiness    = 0.5f;
     float uFoamStrength  = 0.35f;
-    float uFoamThreshold = 0.30f;  // Jacobian foam threshold (lower = more foam)
+    float uFoamThreshold = 0.30f;
     float uFogDensity    = 0.004f;
-    float uFresnelScale  = 0.45f;  // Fresnel reflection multiplier
-    float uNormalStrength= 1.0f;   // overall normal map intensity
-    float uSeaColor[3]   = {0.10f, 0.19f, 0.22f};// seascape deep-water blue
-    float uSpecShininess = 120.0f;  // Blinn-Phong exponent
-    float uWaveScale     = 0.25f;   // vertical amplitude (matches old hardcoded 0.5)
+    float uFresnelScale  = 0.45f;
+    float uNormalStrength= 1.0f;
+    float uSeaColor[3]   = {0.10f, 0.19f, 0.22f};
+    float uSpecShininess = 120.0f;
+    float uWaveScale     = 0.25f;
     float uTimeScale     = 1.0f;   // C++ only — not a shader uniform
-    float uLambda        = 1.2f;   // Jacobian choppiness multiplier
-    float uFoamDecay     = 1.5f;   // foam fade per second
+    float uLambda        = 1.2f;
+    float uFoamDecay     = 1.5f;
     float uSunAzimuth    = 210.0f; // degrees, 0=+X, CCW in XZ plane
     float uSunElevation  = 35.0f;  // degrees above horizon
+    // Atmospheric scattering parameters (Preetham model)
+    float uTurbidity     = 10.0f;  // 1=clear, 20=very hazy
+    float uRayleigh      = 1.0f;   // Rayleigh scattering coefficient
+    float uMieCoeff      = 0.005f; // Mie scattering coefficient
+    float uMieG          = 0.8f;   // Mie phase asymmetry (0=isotropic, 1=forward)
+
+    // Compute sun direction from azimuth/elevation — used in multiple lambdas.
+    auto sunDirection = [&]() -> Vector3 {
+        const float az = uSunAzimuth  * math::PI / 180.0f;
+        const float el = uSunElevation * math::PI / 180.0f;
+        return {std::cos(el) * std::cos(az), std::sin(el), std::cos(el) * std::sin(az)};
+    };
+
+    // Push sky params to sky mesh material.
+    auto pushSkyUniforms = [&] {
+        auto sd = sunDirection();
+        skyMaterial->uniforms["mieCoeff"]  = Uniform(uMieCoeff);
+        skyMaterial->uniforms["mieG"]      = Uniform(uMieG);
+        skyMaterial->uniforms["rayleigh"]  = Uniform(uRayleigh);
+        skyMaterial->uniforms["turbidity"] = Uniform(uTurbidity);
+        (void)sd; // sky sun dir comes from LightData, not a custom uniform
+    };
 
     auto pushUniforms = [&] {
         waterMaterial->uniforms["choppiness"]    = Uniform(uChoppiness);
@@ -331,21 +305,25 @@ int main() {
         waterMaterial->uniforms["foamThreshold"] = Uniform(uFoamThreshold);
         waterMaterial->uniforms["fogDensity"]    = Uniform(uFogDensity);
         waterMaterial->uniforms["fresnelScale"]  = Uniform(uFresnelScale);
+        waterMaterial->uniforms["mieCoeff"]      = Uniform(uMieCoeff);
+        waterMaterial->uniforms["mieG"]          = Uniform(uMieG);
         waterMaterial->uniforms["normalStrength"]= Uniform(uNormalStrength);
+        waterMaterial->uniforms["rayleigh"]      = Uniform(uRayleigh);
         waterMaterial->uniforms["seaColor"]      = Uniform(Color(uSeaColor[0], uSeaColor[1], uSeaColor[2]));
         waterMaterial->uniforms["specShininess"] = Uniform(uSpecShininess);
         waterMaterial->uniforms["tileSize"]      = Uniform(C1_TILE);
+        waterMaterial->uniforms["turbidity"]     = Uniform(uTurbidity);
         waterMaterial->uniforms["waveScale"]     = Uniform(uWaveScale);
     };
     pushUniforms();
+    pushSkyUniforms();
 
     auto updateSunDirection = [&] {
-        const float az  = uSunAzimuth  * math::PI / 180.0f;
-        const float el  = uSunElevation * math::PI / 180.0f;
-        dirLight->position.set(
-            std::cos(el) * std::cos(az),
-            std::sin(el),
-            std::cos(el) * std::sin(az));
+        auto sd = sunDirection();
+        dirLight->position.set(sd.x, sd.y, sd.z);
+        // Sky mesh sun dir is read from LightData (dirDirection0) automatically,
+        // but sky atmosphere params need an explicit push when sliders change.
+        pushSkyUniforms();
     };
     updateSunDirection();
 
@@ -374,9 +352,13 @@ int main() {
             changed |= ImGui::SliderFloat("Specular",      &uSpecShininess,  4.0f, 256.0f);
         }
 
-        if (ImGui::CollapsingHeader("Sun", ImGuiTreeNodeFlags_DefaultOpen)) {
-            sunChanged |= ImGui::SliderFloat("Azimuth°",   &uSunAzimuth,   0.0f, 360.0f);
-            sunChanged |= ImGui::SliderFloat("Elevation°", &uSunElevation, 5.0f,  85.0f);
+        if (ImGui::CollapsingHeader("Sun & Sky", ImGuiTreeNodeFlags_DefaultOpen)) {
+            sunChanged |= ImGui::SliderFloat("Azimuth°",   &uSunAzimuth,   0.0f,  360.0f);
+            sunChanged |= ImGui::SliderFloat("Elevation°", &uSunElevation, 5.0f,   85.0f);
+            changed    |= ImGui::SliderFloat("Turbidity",  &uTurbidity,    1.0f,   20.0f);
+            changed    |= ImGui::SliderFloat("Rayleigh",   &uRayleigh,     0.0f,    4.0f);
+            changed    |= ImGui::SliderFloat("Mie Coeff",  &uMieCoeff,     0.001f,  0.1f);
+            changed    |= ImGui::SliderFloat("Mie G",      &uMieG,         0.0f,    0.99f);
         }
 
         if (ImGui::CollapsingHeader("Foam", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -396,7 +378,7 @@ int main() {
             ImGui::LabelText("Wave Y", "%.3f m", buoyWaveY);
         }
 
-        if (changed)    pushUniforms();
+        if (changed)    { pushUniforms(); pushSkyUniforms(); }
         if (sunChanged) updateSunDirection();
         ImGui::End();
     });
@@ -473,11 +455,17 @@ int main() {
             buoyMesh->rotation.set(buoyPitch, 0.f, buoyRoll);
         }
 
-        // Update Jacobian foam (cascade 1 drives the breaking waves)
-        oceanFoam.update(dynSpec1, ifft1, dt, uLambda, uFoamDecay);
+        // Update Jacobian foam — combined 3-cascade Jacobian for realistic wave breaking.
+        // J_total = J0 + J1 + J2 captures breaking driven by swell modulating chop.
+        oceanFoam.update(dynSpec0, ifft0, dynSpec1, ifft1, dynSpec2, ifft2,
+                         dt, uLambda, uFoamDecay,
+                         C0_TILE, C1_TILE, C2_TILE);
 
         // Update foamMap pointer after ping-pong swap (before renderer.render())
         waterMaterial->customTextures["foamMap"] = &oceanFoam.currentFoam();
+
+        // Sky box follows camera so it is always around the viewer.
+        skyMesh->position.copy(camera->position);
 
         controls.update();
         ui.render();
