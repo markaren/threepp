@@ -341,6 +341,7 @@ struct OceanUniforms {
     contactObj1:   vec4<f32>,
     contactObj2:   vec4<f32>,
     contactObj3:   vec4<f32>,
+    detailStrength:vec4<f32>,   // x = detail micro-ripple strength (fades with distance)
     foamStrength:  vec4<f32>,
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
@@ -488,6 +489,7 @@ struct OceanUniforms {
     contactObj1:   vec4<f32>,
     contactObj2:   vec4<f32>,
     contactObj3:   vec4<f32>,
+    detailStrength:vec4<f32>,   // x = detail micro-ripple strength (fades with distance)
     foamStrength:  vec4<f32>,
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
@@ -622,6 +624,40 @@ fn hash2(p: vec2<f32>) -> f32 {
     return fract((p3.x + p3.y) * p3.x);
 }
 
+// 2D gradient hash — maps lattice point to a unit-ish vector in [-1, 1]^2.
+fn hash2Vec(p: vec2<f32>) -> vec2<f32> {
+    let q = vec2<f32>(dot(p, vec2<f32>(127.1, 311.7)),
+                      dot(p, vec2<f32>(269.5, 183.3)));
+    return -1.0 + 2.0 * fract(sin(q) * 43758.5453123);
+}
+
+// Perlin-style gradient noise with analytical derivatives (quintic C2 interpolant).
+// Returns vec3(noise_value, dfdx, dfdz) — the .yz components are the gradient of the
+// noise field and can be used directly as a normal-map perturbation.
+fn gradNoise(p: vec2<f32>) -> vec3<f32> {
+    let i  = floor(p);
+    let f  = fract(p);
+    // Quintic: u = 6t^5 - 15t^4 + 10t^3,  du = 30t^4 - 60t^3 + 30t^2
+    let u  = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+    // Gradient vectors at the four surrounding lattice corners
+    let ga = hash2Vec(i);
+    let gb = hash2Vec(i + vec2<f32>(1.0, 0.0));
+    let gc = hash2Vec(i + vec2<f32>(0.0, 1.0));
+    let gd = hash2Vec(i + vec2<f32>(1.0, 1.0));
+    // Dot products with offset vectors
+    let va = dot(ga, f);
+    let vb = dot(gb, f - vec2<f32>(1.0, 0.0));
+    let vc = dot(gc, f - vec2<f32>(0.0, 1.0));
+    let vd = dot(gd, f - vec2<f32>(1.0, 1.0));
+    let k  = va - vb - vc + vd;  // bilinear remainder
+    return vec3<f32>(
+        va + u.x*(vb - va) + u.y*(vc - va) + u.x*u.y*k,   // noise value
+        du.x * (u.y*k + vb - va),                           // df/dx
+        du.y * (u.x*k + vc - va)                            // df/dz
+    );
+}
+
 // Bilinear sample from a repeating RG32Float texture (UnfilterableFloat).
 // textureSample/Level are forbidden for RG32Float; we do 4 textureLoad calls instead.
 // Assumes power-of-2 texture dimensions (bitwise AND wrap).
@@ -642,7 +678,8 @@ fn sampleGrad(t: texture_2d<f32>, uv: vec2<f32>) -> vec2<f32> {
     let v11 = textureLoad(t, i11, 0).rg;
     return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
 }
-
+)"  // ---- MSVC 65535-char string literal split ----
+R"(
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     const C0_TILE: f32 = 5.0;
@@ -701,7 +738,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let g2 = sampleGrad(t_c2Grad, uv2) * (0.25 / C2_TILE);
 
     let totalGrad = (g0 + g1 + g2) * ocean.normalStrength.x;
-    let normal    = normalize(vec3<f32>(-totalGrad.x, 1.0, -totalGrad.y));
+    var normal    = normalize(vec3<f32>(-totalGrad.x, 1.0, -totalGrad.y));
+
+    // Detail micro-ripples: 3 octaves of Perlin gradient noise at sub-metre scales.
+    // Adds capillary-wave texture that the FFT can't capture at such small wavelengths.
+    // Strength fades with camera distance to avoid aliasing shimmer on far water.
+    {
+        let detailFade = clamp(1.0 - (camDist - 5.0) / 30.0, 0.0, 1.0)
+                         * ocean.detailStrength.x;
+        if (detailFade > 0.001) {
+            // Three octaves spanning ~0.48 m → ~0.07 m wavelength
+            let dn1 = gradNoise(worldXZ * 2.1);   // ~0.48 m — medium ripple
+            let dn2 = gradNoise(worldXZ * 5.7);   // ~0.18 m — fine chop
+            let dn3 = gradNoise(worldXZ * 14.0);  // ~0.07 m — capillary froth
+            let detailGrad = (dn1.yz * 0.55 + dn2.yz * 0.30 + dn3.yz * 0.15)
+                             * detailFade;
+            // Add detail gradient on top of FFT gradient, then renormalise
+            normal = normalize(vec3<f32>(
+                -(totalGrad.x + detailGrad.x),
+                1.0,
+                -(totalGrad.y + detailGrad.y)));
+        }
+    }
 
     let lightDir = normalize(lights.dirDirection0);
     let sunDir   = lightDir;   // directional light IS the sun

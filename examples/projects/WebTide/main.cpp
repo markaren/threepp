@@ -277,6 +277,7 @@ int main() {
     // Water uniform names MUST be alphabetical to match WgpuRenderer's packing:
     //   choppiness,
     //   contactObj0, contactObj1, contactObj2, contactObj3,  ← xy=worldXZ z=radius
+    //   detailStrength,                                       ← x=micro-ripple strength
     //   foamStrength, foamThreshold, fogDensity, fresnelScale,
     //   mieCoeff, mieG, normalStrength, rayleigh, seaColor, specShininess,
     //   tileSize, turbidity, waveScale, wireframe
@@ -284,6 +285,7 @@ int main() {
     // -------------------------------------------------------------------------
     bool  uWireframe     = false;
     float uChoppiness    = 0.5f;
+    float uDetailStrength= 0.8f;  // detail micro-ripple strength (0 = off, ~1 = nice)
     float uFoamStrength  = 0.35f;
     float uFoamThreshold = 0.30f;
     float uFogDensity    = 0.004f;
@@ -328,6 +330,7 @@ int main() {
         waterMaterial->uniforms["contactObj1"]   = Uniform(Color(0.f, 0.f, 0.f));
         waterMaterial->uniforms["contactObj2"]   = Uniform(Color(0.f, 0.f, 0.f));
         waterMaterial->uniforms["contactObj3"]   = Uniform(Color(0.f, 0.f, 0.f));
+        waterMaterial->uniforms["detailStrength"]= Uniform(uDetailStrength);
         waterMaterial->uniforms["foamStrength"]  = Uniform(uFoamStrength);
         waterMaterial->uniforms["foamThreshold"] = Uniform(uFoamThreshold);
         waterMaterial->uniforms["fogDensity"]    = Uniform(uFogDensity);
@@ -375,9 +378,10 @@ int main() {
 
         if (ImGui::CollapsingHeader("Appearance", ImGuiTreeNodeFlags_DefaultOpen)) {
             changed |= ImGui::ColorEdit3 ("Sea Colour",    uSeaColor);
-            changed |= ImGui::SliderFloat("Normal Strength",&uNormalStrength, 0.0f, 4.0f);
-            changed |= ImGui::SliderFloat("Fresnel",       &uFresnelScale,   0.0f, 1.5f);
-            changed |= ImGui::SliderFloat("Specular",      &uSpecShininess,  4.0f, 256.0f);
+            changed |= ImGui::SliderFloat("Normal Strength",&uNormalStrength,  0.0f, 4.0f);
+            changed |= ImGui::SliderFloat("Micro-ripples",  &uDetailStrength,  0.0f, 3.0f);
+            changed |= ImGui::SliderFloat("Fresnel",        &uFresnelScale,    0.0f, 1.5f);
+            changed |= ImGui::SliderFloat("Specular",       &uSpecShininess,   4.0f, 256.0f);
         }
 
         if (ImGui::CollapsingHeader("Sun & Sky", ImGuiTreeNodeFlags_DefaultOpen)) {
