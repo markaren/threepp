@@ -3,7 +3,9 @@
 #include "WgpuMaterials.hpp"
 
 #include "threepp/materials/MeshBasicMaterial.hpp"
+#include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
+#include "threepp/materials/MeshNormalMaterial.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/MeshToonMaterial.hpp"
@@ -76,6 +78,10 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         p.diffuse = m->color;
         p.emissive = m->emissive;
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }
+    } else if (dynamic_cast<MeshNormalMaterial*>(rawMat)) {
+        p.features |= ShaderFeatures::NormalVis;
+    } else if (dynamic_cast<MeshDepthMaterial*>(rawMat)) {
+        p.features |= ShaderFeatures::DepthVis;
     } else if (auto m = dynamic_cast<MeshBasicMaterial*>(rawMat)) {
         p.diffuse = m->color;
         if (m->map) { p.diffuseMap = m->map.get(); p.features |= ShaderFeatures::Texture; }

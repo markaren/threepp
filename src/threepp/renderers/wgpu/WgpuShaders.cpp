@@ -41,6 +41,8 @@ std::string ShaderFeatures::describe(uint64_t features) {
     if (features & Skinning)        append("Skinning");
     if (features & ShadowMat)       append("ShadowMat");
     if (features & LineDashed)      append("LineDashed");
+    if (features & NormalVis)       append("NormalVis");
+    if (features & DepthVis)        append("DepthVis");
     if (features & DepthWriteOff)   append("DepthWriteOff");
     if (features & Wireframe)       append("Wireframe");
 
@@ -81,7 +83,7 @@ std::string ShaderFeatures::describe(uint64_t features) {
     return s.str();
 }
 
-std::string threepp::wgpu::buildWGSL(uint64_t features, const LightLimits& limits) {
+std::string threepp::wgpu::buildWGSL(uint64_t features, const LightLimits& limits, const ShadowLimits& shadowLimits) {
     std::ostringstream s;
 
     s << R"(
@@ -218,7 +220,7 @@ struct MaterialUniforms {
     }
 
     if (features & ShaderFeatures::Shadow) {
-        s << "const MAX_SHADOW_LIGHTS: u32 = " << MAX_SHADOW_LIGHTS << "u;\n";
+        s << "const MAX_SHADOW_LIGHTS: u32 = " << shadowLimits.maxShadowLights << "u;\n";
         s << R"(
 struct ShadowLightData {
     lightVP: mat4x4<f32>,
@@ -259,7 +261,7 @@ fn sampleShadow(si: u32, worldPos: vec3<f32>) -> f32 {
 }
 )";
         // Point light shadow structs and sampling function
-        s << "const MAX_SHADOW_POINT_LIGHTS: u32 = " << MAX_SHADOW_POINT_LIGHTS << "u;\n";
+        s << "const MAX_SHADOW_POINT_LIGHTS: u32 = " << shadowLimits.maxShadowPointLights << "u;\n";
         s << R"(
 struct PointShadowData {
     position: vec3<f32>,
@@ -497,6 +499,25 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
             s << "    return vec4<f32>(baseColor, 0.0);\n";
         }
         s << "}\n";
+        return s.str();
+    }
+
+    // MeshNormalMaterial: map world-space normal to RGB color
+    if (features & ShaderFeatures::NormalVis) {
+        s << "    var N = normalize(in.worldNormal);\n";
+        s << "    if (!isFrontFacing) { N = -N; }\n";
+        s << "    baseColor = N * 0.5 + vec3<f32>(0.5);\n";
+        s << "    return vec4<f32>(baseColor, opacity);\n}\n";
+        return s.str();
+    }
+
+    // MeshDepthMaterial: map clip-space depth to brightness
+    if (features & ShaderFeatures::DepthVis) {
+        // in.clipPos.z / in.clipPos.w gives NDC depth in [0,1] for WebGPU
+        s << "    let depth = in.clipPos.z / in.clipPos.w;\n";
+        s << "    let brightness = 1.0 - depth;\n";
+        s << "    baseColor = vec3<f32>(brightness);\n";
+        s << "    return vec4<f32>(baseColor, opacity);\n}\n";
         return s.str();
     }
 

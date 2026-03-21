@@ -94,6 +94,12 @@ namespace threepp::wgpu {
         // LineDashed (bit 38): dashed line fragment discard pattern
         constexpr uint64_t LineDashed      = 1ULL << 38;
 
+        // MeshNormalMaterial (bit 39): maps world-space normals to RGB color
+        constexpr uint64_t NormalVis       = 1ULL << 39;
+
+        // MeshDepthMaterial (bit 40): maps depth (near→far) to brightness
+        constexpr uint64_t DepthVis        = 1ULL << 40;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;
@@ -116,21 +122,11 @@ namespace threepp::wgpu {
     //         + flags(16) + fogColor(16) + fogParams(16) + clipPlane(16) = 128
     constexpr size_t MATERIAL_UNIFORM_SIZE = 128;
 
-    // Shadow map constants
-    constexpr uint32_t SHADOW_MAP_SIZE = 1024;
-    constexpr int MAX_SHADOW_LIGHTS = 4;
-    constexpr size_t SHADOW_UNIFORM_PER_LIGHT = 80;
-    constexpr size_t SHADOW_UNIFORM_SIZE = 16 + MAX_SHADOW_LIGHTS * SHADOW_UNIFORM_PER_LIGHT;
-
-    // Point light shadow constants (6 depth passes per light, cube faces stored as 2D array)
-    constexpr int MAX_SHADOW_POINT_LIGHTS = 2;
-    constexpr size_t POINT_SHADOW_PER_LIGHT = 32;  // position(12)+near(4)+bias(4)+far(4)+pad(8)
-    constexpr size_t POINT_SHADOW_UNIFORM_SIZE = 16 + MAX_SHADOW_POINT_LIGHTS * POINT_SHADOW_PER_LIGHT;
-
     struct LightLimits;
+    struct ShadowLimits;
 
-    // Generate the main WGSL shader source for the given feature bitmask and light limits.
-    std::string buildWGSL(uint64_t features, const LightLimits& limits);
+    // Generate the main WGSL shader source for the given feature bitmask and light/shadow limits.
+    std::string buildWGSL(uint64_t features, const LightLimits& limits, const ShadowLimits& shadowLimits);
 
     // Generate the depth-only WGSL shader for shadow passes.
     std::string buildDepthWGSL();

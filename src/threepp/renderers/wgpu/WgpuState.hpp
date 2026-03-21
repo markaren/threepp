@@ -27,6 +27,24 @@ namespace threepp::wgpu {
         }
     };
 
+    // Runtime-configurable shadow limits.
+    struct ShadowLimits {
+        uint32_t mapSize = 1024;
+        int maxShadowLights = 4;
+        int maxShadowPointLights = 2;
+
+        // Uniform buffer sizes derived from current limits.
+        static constexpr size_t shadowUniformPerLight = 80;
+        static constexpr size_t pointShadowPerLight = 32;
+
+        [[nodiscard]] size_t shadowUniformSize() const {
+            return 16 + static_cast<size_t>(maxShadowLights) * shadowUniformPerLight;
+        }
+        [[nodiscard]] size_t pointShadowUniformSize() const {
+            return 16 + static_cast<size_t>(maxShadowPointLights) * pointShadowPerLight;
+        }
+    };
+
     // Holds the core WebGPU handles shared across subsystems.
     // Owned by WgpuRenderer::Impl; subsystems hold a reference.
     struct WgpuState {
@@ -34,6 +52,7 @@ namespace threepp::wgpu {
         WGPUQueue queue = nullptr;
         WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
         LightLimits lightLimits;
+        ShadowLimits shadowLimits;
     };
 
 }// namespace threepp::wgpu

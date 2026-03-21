@@ -76,7 +76,7 @@ namespace threepp::wgpu {
         WGPUTexture ptDepthArrayTexture_ = nullptr;
         WGPUTextureView ptDepthArrayView_ = nullptr;
         WGPUBuffer ptUniformBuffer_ = nullptr;
-        WGPUTextureView ptLayerViews_[MAX_SHADOW_POINT_LIGHTS * 6]{};
+        std::vector<WGPUTextureView> ptLayerViews_;
 
         // Depth-only render pipeline
         WGPURenderPipeline depthPipeline_ = nullptr;
@@ -86,7 +86,7 @@ namespace threepp::wgpu {
         WGPUBuffer depthTransformBuffer_ = nullptr;
 
         // Per-light entries (dir/spot)
-        ShadowLightEntry lights_[MAX_SHADOW_LIGHTS];
+        std::vector<ShadowLightEntry> lights_;
 
         void init();
         void renderPass(WGPUCommandEncoder encoder, Object3D& scene,

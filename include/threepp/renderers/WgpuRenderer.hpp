@@ -101,6 +101,11 @@ namespace threepp {
         /// Call before the first render, or between frames.
         void setMaxLights(int maxDir, int maxPoint, int maxSpot, int maxHemi);
 
+        /// Set shadow map configuration. Rebuilds shadow GPU resources and
+        /// invalidates cached pipelines (shaders encode shadow array sizes).
+        /// Call before the first render, or between frames.
+        void setShadowConfig(uint32_t mapSize, int maxShadowLights, int maxShadowPointLights);
+
         /// Register a callback invoked at the end of each render pass (before encoder end).
         /// Receives the WGPURenderPassEncoder as void*. Used for ImGui overlay rendering.
         void setOverlayCallback(std::function<void(void*)> callback);
