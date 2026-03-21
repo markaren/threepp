@@ -275,7 +275,9 @@ int main() {
     // -------------------------------------------------------------------------
     // Ocean visual settings — exposed via ImGui sliders.
     // Water uniform names MUST be alphabetical to match WgpuRenderer's packing:
-    //   choppiness, foamStrength, foamThreshold, fogDensity, fresnelScale,
+    //   choppiness,
+    //   contactObj0, contactObj1, contactObj2, contactObj3,  ← xy=worldXZ z=radius
+    //   foamStrength, foamThreshold, fogDensity, fresnelScale,
     //   mieCoeff, mieG, normalStrength, rayleigh, seaColor, specShininess,
     //   tileSize, turbidity, waveScale, wireframe
     // Sky uniform names (alphabetical): mieCoeff, mieG, rayleigh, turbidity
@@ -320,6 +322,12 @@ int main() {
 
     auto pushUniforms = [&] {
         waterMaterial->uniforms["choppiness"]    = Uniform(uChoppiness);
+        // contactObj0 is updated every frame in the animate loop (buoy follows waves).
+        // contactObj1-3 are static placeholders — set non-zero radius to activate.
+        waterMaterial->uniforms["contactObj0"]   = Uniform(Color(buoyAnchorX, buoyAnchorZ, kBuoyRadius));
+        waterMaterial->uniforms["contactObj1"]   = Uniform(Color(0.f, 0.f, 0.f));
+        waterMaterial->uniforms["contactObj2"]   = Uniform(Color(0.f, 0.f, 0.f));
+        waterMaterial->uniforms["contactObj3"]   = Uniform(Color(0.f, 0.f, 0.f));
         waterMaterial->uniforms["foamStrength"]  = Uniform(uFoamStrength);
         waterMaterial->uniforms["foamThreshold"] = Uniform(uFoamThreshold);
         waterMaterial->uniforms["fogDensity"]    = Uniform(uFogDensity);
@@ -483,6 +491,10 @@ int main() {
             // XZ position: anchor + full 3-cascade displaced offset (matches vertex shader)
             buoyMesh->position.set(buoyAnchorX + b.dx, buoyPhysY, buoyAnchorZ + b.dz);
             buoyMesh->rotation.set(buoyPitch, 0.f, buoyRoll);
+
+            // Keep contact foam ring centred on the actual (displaced) buoy position.
+            waterMaterial->uniforms["contactObj0"] = Uniform(Color(
+                buoyMesh->position.x, buoyMesh->position.z, kBuoyRadius));
         }
 
         // Update Jacobian foam — combined 3-cascade Jacobian for realistic wave breaking.

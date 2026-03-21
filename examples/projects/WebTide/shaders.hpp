@@ -337,6 +337,10 @@ struct LightData {
 
 struct OceanUniforms {
     choppiness:    vec4<f32>,
+    contactObj0:   vec4<f32>,   // xy = world XZ centre, z = radius (0 = inactive)
+    contactObj1:   vec4<f32>,
+    contactObj2:   vec4<f32>,
+    contactObj3:   vec4<f32>,
     foamStrength:  vec4<f32>,
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
@@ -480,6 +484,10 @@ struct LightData {
 
 struct OceanUniforms {
     choppiness:    vec4<f32>,
+    contactObj0:   vec4<f32>,   // xy = world XZ centre, z = radius (0 = inactive)
+    contactObj1:   vec4<f32>,
+    contactObj2:   vec4<f32>,
+    contactObj3:   vec4<f32>,
     foamStrength:  vec4<f32>,
     foamThreshold: vec4<f32>,
     fogDensity:    vec4<f32>,
@@ -740,6 +748,64 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 foamSample);
     let foamColor  = vec3<f32>(0.85, 0.90, 0.92);
     color = mix(color, foamColor, foamValue * ocean.foamStrength.x);
+
+    // Contact foam around scene objects (buoys, ship hulls, rocks).
+    // Physical model:
+    //   - Wave crests expand the splash radius and drive intensity.
+    //   - Gradient direction gives asymmetry: upstream face gets the most foam.
+    //   - Two-octave hash noise breaks the perfect-circle artefact.
+    //   - Existing Jacobian foam (foamRaw) seeds extra turbulence near the hull.
+    {
+        let dispXZ   = in.worldPos.xz;
+        let grad2D   = totalGrad / (ocean.normalStrength.x + 0.001); // raw XZ gradient
+
+        // Wave energy at this surface point drives overall foam brightness.
+        let waveH    = saturate(in.height * 1.2 + 0.4);              // bias up so troughs ≠ zero
+        let steepness = saturate(length(grad2D) * 0.5);
+        let waveEnergy = mix(0.25, 1.0, max(waveH, steepness));
+
+        var cFoam: f32 = 0.0;
+        let objs = array<vec4<f32>, 4>(
+            ocean.contactObj0, ocean.contactObj1,
+            ocean.contactObj2, ocean.contactObj3);
+
+        for (var i: i32 = 0; i < 4; i++) {
+            let obj = objs[i];
+            if (obj.z < 0.001) { continue; }
+
+            let toObj  = obj.xy - dispXZ;
+            let dist2D = length(toObj);
+
+            // Radius pulses outward on wave crests (splash).
+            let effR = obj.z + max(0.0, in.height) * 0.6;
+            let d    = max(0.0, dist2D - effR);
+
+            // Proximity: tight inner ring, soft outer halo.
+            let proximity = exp(-d * d * 0.30);
+
+            // Directionality: the wave face pointing toward the object gets more foam.
+            // grad2D points uphill; dot with -toObj is positive when the slope rises
+            // away from the object (i.e. we are on the upstream face).
+            let toObjN    = toObj / (dist2D + 0.001);
+            let waveFace  = saturate(dot(-normalize(grad2D + vec2<f32>(0.001)), toObjN));
+            let dirFactor = mix(0.3, 1.0, waveFace);
+
+            // Two-octave hash noise: coarse shape + fine froth.
+            let n1 = hash2(dispXZ * 1.9 + vec2<f32>(f32(i) * 4.1));
+            let n2 = hash2(dispXZ * 5.3 + vec2<f32>(f32(i) * 1.7));
+            let noisy = 0.35 + 0.45 * n1 + 0.20 * n2;
+
+                // Jacobian foam acts as a decay memory: foamRaw persists for several seconds
+            // after a wave breaks, so it proxies "a wave was here recently".
+            // We blend it with the instantaneous wave energy so the ring doesn't
+            // snap to zero in every trough — it fades gradually like real foam.
+            let jacDecay  = foamRaw * 2.0;                    // amplify — range [0, ~2]
+            let sustained = max(waveEnergy, min(jacDecay, 1.0) * 0.7);
+
+            cFoam = max(cFoam, proximity * dirFactor * sustained * noisy);
+        }
+        color = mix(color, foamColor, min(cFoam, 1.0) * ocean.foamStrength.x);
+    }
 
     let fogFactor  = clamp(exp(-max(dist - 200.0, 0.0) * ocean.fogDensity.x), 0.0, 1.0);
     let horizonDir = normalize(vec3<f32>(viewRay.x, -0.02, viewRay.z));
