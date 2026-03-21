@@ -9,6 +9,7 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <random>
