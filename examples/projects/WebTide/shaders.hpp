@@ -749,7 +749,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     color = mix(fogColor, color, fogFactor);
 
     // ACES tonemapping — WgpuRenderer does not inject this for custom WGSL shaders.
-    return vec4<f32>(acesFilmic(max(color, vec3<f32>(0.0))), 1.0);
+    // Fresnel-based alpha: transparent when looking straight down, nearly opaque at grazing angles.
+    // fogFactor drives alpha to 1.0 at distance — more water depth = fully opaque horizon.
+    let alpha = mix(1.0, mix(0.9, 0.97, fresnel), fogFactor);
+    return vec4<f32>(acesFilmic(max(color, vec3<f32>(0.0))), alpha);
 }
 )";
 

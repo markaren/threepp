@@ -168,6 +168,8 @@ int main() {
     waterMaterial->vertexShader = webtide::waterVertexWGSL;
     waterMaterial->fragmentShader = webtide::waterFragmentWGSL;
     waterMaterial->side = Side::Double;
+    waterMaterial->transparent = true;
+    waterMaterial->depthWrite = false;  // don't occlude geometry behind the surface
 
     // Set custom uniforms (ocean params at binding 2)
     // Uniform names are alphabetical to match WgpuRenderer's packing order:
