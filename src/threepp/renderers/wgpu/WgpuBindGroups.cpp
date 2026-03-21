@@ -54,10 +54,10 @@ const std::vector<WGPUBindGroupEntry>& WgpuBindGroups::buildStandard(const BindG
 
     // Binding 7-9: shadow map (dir/spot); 36-37: point light shadow
     if (features & SF::Shadow) {
-        { WGPUBindGroupEntry e{}; e.binding = 7; e.buffer = inputs.shadowMap->uniformBuffer(); e.offset = 0; e.size = SHADOW_UNIFORM_SIZE; entries_.push_back(e); }
+        { WGPUBindGroupEntry e{}; e.binding = 7; e.buffer = inputs.shadowMap->uniformBuffer(); e.offset = 0; e.size = inputs.shadowUniformSize; entries_.push_back(e); }
         { WGPUBindGroupEntry e{}; e.binding = 8; e.textureView = inputs.shadowMap->depthArrayView(); entries_.push_back(e); }
         { WGPUBindGroupEntry e{}; e.binding = 9; e.sampler = inputs.shadowMap->comparisonSampler(); entries_.push_back(e); }
-        { WGPUBindGroupEntry e{}; e.binding = 36; e.buffer = inputs.shadowMap->ptUniformBuffer(); e.offset = 0; e.size = POINT_SHADOW_UNIFORM_SIZE; entries_.push_back(e); }
+        { WGPUBindGroupEntry e{}; e.binding = 36; e.buffer = inputs.shadowMap->ptUniformBuffer(); e.offset = 0; e.size = inputs.pointShadowUniformSize; entries_.push_back(e); }
         { WGPUBindGroupEntry e{}; e.binding = 37; e.textureView = inputs.shadowMap->ptDepthArrayView(); entries_.push_back(e); }
     }
 

@@ -38,6 +38,8 @@ namespace threepp::wgpu {
         const MaterialParams& params;
         WgpuTextures& textures;
         WgpuShadowMap* shadowMap;       // may be null
+        size_t shadowUniformSize = 0;   // runtime shadow uniform buffer size
+        size_t pointShadowUniformSize = 0;
         // Optional per-draw storage buffers
         WGPUBuffer instanceBuffer = nullptr; size_t instanceSize = 0;
         WGPUBuffer morphBuffer = nullptr;    size_t morphSize = 0;

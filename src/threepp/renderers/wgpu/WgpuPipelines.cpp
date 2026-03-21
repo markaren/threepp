@@ -119,7 +119,7 @@ namespace threepp::wgpu {
                 e.binding = 7;
                 e.visibility = WGPUShaderStage_Fragment;
                 e.buffer.type = WGPUBufferBindingType_Uniform;
-                e.buffer.minBindingSize = SHADOW_UNIFORM_SIZE;
+                e.buffer.minBindingSize = state_.shadowLimits.shadowUniformSize();
                 entries.push_back(e);
             }
             {
@@ -213,7 +213,7 @@ namespace threepp::wgpu {
                 e.binding = 36;
                 e.visibility = WGPUShaderStage_Fragment;
                 e.buffer.type = WGPUBufferBindingType_Uniform;
-                e.buffer.minBindingSize = POINT_SHADOW_UNIFORM_SIZE;
+                e.buffer.minBindingSize = state_.shadowLimits.pointShadowUniformSize();
                 entries.push_back(e);
             }
             {
@@ -256,7 +256,7 @@ namespace threepp::wgpu {
         PipelineEntry entry{};
 
         // Shader module
-        std::string wgsl = buildWGSL(features, state_.lightLimits);
+        std::string wgsl = buildWGSL(features, state_.lightLimits, state_.shadowLimits);
         WGPUShaderSourceWGSL wgslSource{};
         wgslSource.chain.sType = WGPUSType_ShaderSourceWGSL;
         wgslSource.chain.next = nullptr;
@@ -708,17 +708,40 @@ namespace threepp::wgpu {
             vbLayout.attributes = attrs;
 
             WGPUBlendState blendState{};
-            blendState.color.srcFactor = WGPUBlendFactor_SrcAlpha;
-            blendState.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
-            blendState.color.operation = WGPUBlendOperation_Add;
-            blendState.alpha.srcFactor = WGPUBlendFactor_One;
-            blendState.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
-            blendState.alpha.operation = WGPUBlendOperation_Add;
+            if (sm->blending == Blending::Additive) {
+                blendState.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+                blendState.color.dstFactor = WGPUBlendFactor_One;
+                blendState.color.operation = WGPUBlendOperation_Add;
+                blendState.alpha.srcFactor = WGPUBlendFactor_One;
+                blendState.alpha.dstFactor = WGPUBlendFactor_One;
+                blendState.alpha.operation = WGPUBlendOperation_Add;
+            } else if (sm->blending == Blending::Subtractive) {
+                blendState.color.srcFactor = WGPUBlendFactor_Zero;
+                blendState.color.dstFactor = WGPUBlendFactor_OneMinusSrc;
+                blendState.color.operation = WGPUBlendOperation_Add;
+                blendState.alpha.srcFactor = WGPUBlendFactor_Zero;
+                blendState.alpha.dstFactor = WGPUBlendFactor_One;
+                blendState.alpha.operation = WGPUBlendOperation_Add;
+            } else if (sm->blending == Blending::Multiply) {
+                blendState.color.srcFactor = WGPUBlendFactor_Zero;
+                blendState.color.dstFactor = WGPUBlendFactor_Src;
+                blendState.color.operation = WGPUBlendOperation_Add;
+                blendState.alpha.srcFactor = WGPUBlendFactor_Zero;
+                blendState.alpha.dstFactor = WGPUBlendFactor_SrcAlpha;
+                blendState.alpha.operation = WGPUBlendOperation_Add;
+            } else {
+                blendState.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+                blendState.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+                blendState.color.operation = WGPUBlendOperation_Add;
+                blendState.alpha.srcFactor = WGPUBlendFactor_One;
+                blendState.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+                blendState.alpha.operation = WGPUBlendOperation_Add;
+            }
 
             WGPUColorTargetState colorTarget{};
             colorTarget.format = surfaceFormat;
             colorTarget.writeMask = WGPUColorWriteMask_All;
-            colorTarget.blend = &blendState;
+            colorTarget.blend = (sm->blending == Blending::None) ? nullptr : &blendState;
 
             // Choose entry points and shader modules based on pipeline type:
             // - SPIR-V (GLSL compat): separate modules, entry point "main"

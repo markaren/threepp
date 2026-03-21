@@ -2,7 +2,7 @@
 
 Comparison of WgpuRenderer (WebGPU/wgpu-native) vs GLRenderer (OpenGL 3.3) feature coverage.
 
-Last updated: 2026-03-19
+Last updated: 2026-03-21
 
 
 ## Legend
@@ -28,8 +28,8 @@ Last updated: 2026-03-19
 | MeshPhongMaterial    | Y   | Y    | Blinn-Phong specular + all maps                          |
 | MeshStandardMaterial | Y   | Y    | PBR metalness/roughness with all texture maps             |
 | MeshToonMaterial     | Y   | Y    | Gradient map support                                      |
-| MeshNormalMaterial   | Y   | P    | Renders as unlit white; no normal-to-color mapping        |
-| MeshDepthMaterial    | Y   | P    | Renders as unlit white; no depth-to-brightness mapping    |
+| MeshNormalMaterial   | Y   | Y    | Maps world-space normals to RGB (N*0.5+0.5)               |
+| MeshDepthMaterial    | Y   | Y    | Maps clip-space depth to brightness (1-depth)             |
 | MeshMatcapMaterial   | Y   | P    | Renders as unlit white; no matcap texture lookup          |
 | LineBasicMaterial    | Y   | Y    |                                                           |
 | LineDashedMaterial   | Y   | Y    | Dash params packed into shader uniforms                   |
@@ -89,8 +89,9 @@ Last updated: 2026-03-19
 | VSM (variance)           | Y   | N    |                                                    |
 | Shadow bias              | Y   | Y    |                                                    |
 | Normal bias              | Y   | Y    |                                                    |
-| Shadow map size          | -   | 1024 | Hardcoded `SHADOW_MAP_SIZE`                        |
-| Max shadow lights        | -   | 4    | Depth array texture, `MAX_SHADOW_LIGHTS` constant  |
+| Shadow map size          | -   | 1024 | Default; configurable via `setShadowConfig()`      |
+| Max shadow lights        | -   | 4    | Default; configurable via `setShadowConfig()`      |
+| Max shadow point lights  | -   | 2    | Default; configurable via `setShadowConfig()`      |
 
 
 ## Geometry & Objects
@@ -214,6 +215,7 @@ Last updated: 2026-03-19
 | Per-frame buffer pooling   | N   | Y    | Avoids per-draw alloc/free                     |
 | Nested render support      | Y   | N    | GL has renderListStack/renderStateStack        |
 | Dynamic light counts       | Y   | Y    | `setMaxLights()` reconfigures at runtime       |
+| Dynamic shadow config      | -   | Y    | `setShadowConfig()` for map size and limits    |
 | Pipeline invalidation      | -   | Y    | On MSAA change, material dispose, light reconf |
 | Geometry version tracking  | Y   | Y    | Incremental buffer updates                     |
 | Texture version tracking   | Y   | Y    | Lazy upload on change                          |
@@ -233,7 +235,7 @@ Last updated: 2026-03-19
 ## Shader Feature Flags (Dynamic WGSL Generation)
 
 The Wgpu shader generator uses a 64-bit feature bitmask to select shader variants.
-39 flags control material model, topology, maps, effects, and rendering modes:
+41 flags control material model, topology, maps, effects, and rendering modes:
 
 | Category        | Flags                                                              |
 | --------------- | ------------------------------------------------------------------ |
@@ -241,6 +243,7 @@ The Wgpu shader generator uses a 64-bit feature bitmask to select shader variant
 | Topology        | Triangle, LineList, LineStrip, PointList                           |
 | Texture maps    | NormalMap, EmissiveMap, RoughnessMap, MetalnessMap, AOMap, AlphaMap, SpecularMap, LightMap, BumpMap, GradientMap, EnvMap, DisplacementMap |
 | Instance/morph  | Instanced, InstanceColor, MorphTargets, Skinning                  |
+| Visualisation   | NormalVis, DepthVis                                               |
 | Effects         | FogLinear, FogExp2, Shadow, ShadowMat, LineDashed                 |
 | Rendering       | SRGBOutput, VertexColors, DepthWriteOff, Wireframe                |
 | Config          | CullMode (2 bits), BlendMode (3 bits), ToneMapping (3 bits)       |

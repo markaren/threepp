@@ -23,11 +23,19 @@ void WgpuShadowMap::init() {
     if (initialized_) return;
     initialized_ = true;
 
+    const auto& sl = state_.shadowLimits;
+    const auto mapSize = sl.mapSize;
+    const auto maxLights = sl.maxShadowLights;
+    const auto maxPointLights = sl.maxShadowPointLights;
+
+    lights_.resize(maxLights);
+    ptLayerViews_.resize(maxPointLights * 6, nullptr);
+
     // 2D array depth texture with one layer per shadow-casting light
     {
         WGPUTextureDescriptor td{};
         td.label = {.data = "shadow_depth_array", .length = 18};
-        td.size = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, MAX_SHADOW_LIGHTS};
+        td.size = {mapSize, mapSize, static_cast<uint32_t>(maxLights)};
         td.mipLevelCount = 1;
         td.sampleCount = 1;
         td.dimension = WGPUTextureDimension_2D;
@@ -43,12 +51,12 @@ void WgpuShadowMap::init() {
         avd.baseMipLevel = 0;
         avd.mipLevelCount = 1;
         avd.baseArrayLayer = 0;
-        avd.arrayLayerCount = MAX_SHADOW_LIGHTS;
+        avd.arrayLayerCount = static_cast<uint32_t>(maxLights);
         avd.aspect = WGPUTextureAspect_DepthOnly;
         depthArrayView_ = wgpuTextureCreateView(depthArrayTexture_, &avd);
 
         // Per-layer views for rendering
-        for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
+        for (int i = 0; i < maxLights; i++) {
             WGPUTextureViewDescriptor lvd{};
             lvd.label = {.data = "shadow_layer_view", .length = 17};
             lvd.format = WGPUTextureFormat_Depth32Float;
@@ -78,7 +86,7 @@ void WgpuShadowMap::init() {
     {
         WGPUBufferDescriptor bd{};
         bd.label = {.data = "shadow_ub", .length = 9};
-        bd.size = SHADOW_UNIFORM_SIZE;
+        bd.size = sl.shadowUniformSize();
         bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         uniformBuffer_ = wgpuDeviceCreateBuffer(state_.device, &bd);
     }
@@ -87,7 +95,7 @@ void WgpuShadowMap::init() {
     {
         WGPUTextureDescriptor td{};
         td.label = {.data = "pt_shadow_depth_array", .length = 21};
-        td.size = {SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, static_cast<uint32_t>(MAX_SHADOW_POINT_LIGHTS * 6)};
+        td.size = {mapSize, mapSize, static_cast<uint32_t>(maxPointLights * 6)};
         td.mipLevelCount = 1;
         td.sampleCount = 1;
         td.dimension = WGPUTextureDimension_2D;
@@ -101,11 +109,11 @@ void WgpuShadowMap::init() {
         avd.dimension = WGPUTextureViewDimension_2DArray;
         avd.baseMipLevel = 0; avd.mipLevelCount = 1;
         avd.baseArrayLayer = 0;
-        avd.arrayLayerCount = static_cast<uint32_t>(MAX_SHADOW_POINT_LIGHTS * 6);
+        avd.arrayLayerCount = static_cast<uint32_t>(maxPointLights * 6);
         avd.aspect = WGPUTextureAspect_DepthOnly;
         ptDepthArrayView_ = wgpuTextureCreateView(ptDepthArrayTexture_, &avd);
 
-        for (int i = 0; i < MAX_SHADOW_POINT_LIGHTS * 6; i++) {
+        for (int i = 0; i < maxPointLights * 6; i++) {
             WGPUTextureViewDescriptor lvd{};
             lvd.label = {.data = "pt_shadow_layer", .length = 15};
             lvd.format = WGPUTextureFormat_Depth32Float;
@@ -122,7 +130,7 @@ void WgpuShadowMap::init() {
     {
         WGPUBufferDescriptor bd{};
         bd.label = {.data = "pt_shadow_ub", .length = 12};
-        bd.size = POINT_SHADOW_UNIFORM_SIZE;
+        bd.size = sl.pointShadowUniformSize();
         bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         ptUniformBuffer_ = wgpuDeviceCreateBuffer(state_.device, &bd);
     }
@@ -213,6 +221,9 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
     activeLightCount_ = 0;
     numPointShadows_ = 0;
 
+    const auto& sl = state_.shadowLimits;
+    const auto mapSize = static_cast<float>(sl.mapSize);
+
     // Collect shadow-casting DirectionalLight and SpotLight instances
     struct ShadowCaster {
         Light* light;
@@ -226,13 +237,13 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
     std::function<void(Object3D&)> findShadowLights = [&](Object3D& obj) {
         if (obj.castShadow) {
             if (auto dl = obj.as<DirectionalLight>()) {
-                if (static_cast<int>(shadowLights.size()) < MAX_SHADOW_LIGHTS)
+                if (static_cast<int>(shadowLights.size()) < sl.maxShadowLights)
                     shadowLights.push_back({dl, dl});
-            } else if (auto sl = obj.as<SpotLight>()) {
-                if (static_cast<int>(shadowLights.size()) < MAX_SHADOW_LIGHTS)
-                    shadowLights.push_back({sl, sl});
+            } else if (auto sl2 = obj.as<SpotLight>()) {
+                if (static_cast<int>(shadowLights.size()) < sl.maxShadowLights)
+                    shadowLights.push_back({sl2, sl2});
             } else if (auto pl = obj.as<PointLight>()) {
-                if (static_cast<int>(pointShadowLights.size()) < MAX_SHADOW_POINT_LIGHTS)
+                if (static_cast<int>(pointShadowLights.size()) < sl.maxShadowPointLights)
                     pointShadowLights.push_back(pl);
             }
         }
@@ -261,7 +272,8 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
     // Build shadow uniform buffer data:
     // [count(u32), numDirShadows(u32), numSpotShadows(u32), pad,
     //  light0{VP(64), bias(4), normalBias(4), pad(8)}, ...]
-    std::vector<float> shadowData(SHADOW_UNIFORM_SIZE / sizeof(float), 0.0f);
+    const size_t shadowUniformSize = sl.shadowUniformSize();
+    std::vector<float> shadowData(shadowUniformSize / sizeof(float), 0.0f);
     auto countBits = static_cast<uint32_t>(shadowLights.size());
     std::memcpy(&shadowData[0], &countBits, sizeof(uint32_t));
     std::memcpy(&shadowData[1], &numDirShadows, sizeof(uint32_t));
@@ -275,9 +287,6 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         lights_[i].bias = shadow->bias;
         lights_[i].normalBias = shadow->normalBias;
 
-        // Build raw VP (proj * view_inverse) with a single Z-remap from OpenGL [-1,1] to WebGPU [0,1].
-        // sampleShadow in WGSL applies its own x*0.5+0.5 / y*0.5+0.5 for UV, so X/Y must stay as
-        // raw NDC [-1,1]. shadow->matrix already has UV+Z remapped to [0,1] — don't use it here.
         Matrix4 shadowVP;
         shadowVP.multiplyMatrices(shadow->camera->projectionMatrix,
                                   shadow->camera->matrixWorldInverse);
@@ -290,13 +299,12 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         }
         lights_[i].lightVP = shadowVP;
 
-        // Offset: 4 floats header + i * (SHADOW_UNIFORM_PER_LIGHT / 4) floats per light
-        size_t offset = 4 + i * (SHADOW_UNIFORM_PER_LIGHT / sizeof(float));
+        size_t offset = 4 + i * (ShadowLimits::shadowUniformPerLight / sizeof(float));
         std::memcpy(&shadowData[offset], shadowVP.elements.data(), 64);
         shadowData[offset + 16] = shadow->bias;
         shadowData[offset + 17] = shadow->normalBias;
     }
-    wgpuQueueWriteBuffer(state_.queue, uniformBuffer_, 0, shadowData.data(), SHADOW_UNIFORM_SIZE);
+    wgpuQueueWriteBuffer(state_.queue, uniformBuffer_, 0, shadowData.data(), shadowUniformSize);
 
     // Render depth pass for each shadow-casting light
     for (int i = 0; i < static_cast<int>(shadowLights.size()); i++) {
@@ -306,7 +314,6 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         encDesc.label = {.data = "shadow_enc", .length = 10};
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(state_.device, &encDesc);
 
-        // Build light view-projection with Z-remap for the depth pass
         Matrix4 lightProj = shadow->camera->projectionMatrix;
         {
             auto& e = lightProj.elements;
@@ -331,8 +338,8 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
     // Render depth pass for each point shadow light (6 faces each)
     numPointShadows_ = static_cast<int>(pointShadowLights.size());
 
-    // Build point shadow uniform buffer
-    std::vector<float> ptData(POINT_SHADOW_UNIFORM_SIZE / sizeof(float), 0.0f);
+    const size_t ptUniformSize = sl.pointShadowUniformSize();
+    std::vector<float> ptData(ptUniformSize / sizeof(float), 0.0f);
     auto ptCount = static_cast<uint32_t>(pointShadowLights.size());
     std::memcpy(&ptData[0], &ptCount, sizeof(uint32_t));
 
@@ -347,8 +354,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         float farVal  = pl->distance > 0.0f ? pl->distance : (plShadow ? plShadow->camera->farPlane : 500.0f);
         float biasVal = plShadow ? plShadow->bias : 0.005f;
 
-        // POINT_SHADOW_PER_LIGHT = 32 bytes = 8 floats. Header = 4 floats.
-        size_t off = 4 + static_cast<size_t>(pi) * (POINT_SHADOW_PER_LIGHT / sizeof(float));
+        size_t off = 4 + static_cast<size_t>(pi) * (ShadowLimits::pointShadowPerLight / sizeof(float));
         ptData[off+0] = lightPos.x; ptData[off+1] = lightPos.y; ptData[off+2] = lightPos.z;
         ptData[off+3] = nearVal;
         ptData[off+4] = biasVal;
@@ -359,7 +365,6 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         for (int face = 0; face < 6; face++) {
             plShadow->updateMatrices(*pl, static_cast<size_t>(face));
 
-            // Build lightVP with Z-remap
             Matrix4 lightProj = plShadow->camera->projectionMatrix;
             {
                 auto& e = lightProj.elements;
@@ -390,7 +395,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             passDesc.depthStencilAttachment = &depthAtt;
 
             WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-            wgpuRenderPassEncoderSetViewport(pass, 0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0.0f, 1.0f);
+            wgpuRenderPassEncoderSetViewport(pass, 0, 0, mapSize, mapSize, 0.0f, 1.0f);
             wgpuRenderPassEncoderSetPipeline(pass, depthPipeline_);
             renderObject(pass, scene, lightVP);
             wgpuRenderPassEncoderEnd(pass);
@@ -404,13 +409,15 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             wgpuCommandEncoderRelease(encoder);
         }
     }
-    wgpuQueueWriteBuffer(state_.queue, ptUniformBuffer_, 0, ptData.data(), POINT_SHADOW_UNIFORM_SIZE);
+    wgpuQueueWriteBuffer(state_.queue, ptUniformBuffer_, 0, ptData.data(), ptUniformSize);
 
     if (needsUpdate) needsUpdate = false;
 }
 
 void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
                                const Matrix4& lightVP, int lightIndex) {
+
+    const auto mapSize = static_cast<float>(state_.shadowLimits.mapSize);
 
     WGPURenderPassDepthStencilAttachment depthAttachment{};
     depthAttachment.view = lights_[lightIndex].layerView;
@@ -425,7 +432,7 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
     passDesc.depthStencilAttachment = &depthAttachment;
 
     WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    wgpuRenderPassEncoderSetViewport(pass, 0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0.0f, 1.0f);
+    wgpuRenderPassEncoderSetViewport(pass, 0, 0, mapSize, mapSize, 0.0f, 1.0f);
     wgpuRenderPassEncoderSetPipeline(pass, depthPipeline_);
 
     renderObject(pass, scene, lightVP);
@@ -485,8 +492,8 @@ void WgpuShadowMap::renderObject(WGPURenderPassEncoder pass, Object3D& object,
 void WgpuShadowMap::dispose() {
     if (!initialized_) return;
 
-    for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
-        if (lights_[i].layerView) wgpuTextureViewRelease(lights_[i].layerView);
+    for (auto& light : lights_) {
+        if (light.layerView) wgpuTextureViewRelease(light.layerView);
     }
     if (depthArrayView_) wgpuTextureViewRelease(depthArrayView_);
     if (depthArrayTexture_) wgpuTextureRelease(depthArrayTexture_);
@@ -508,14 +515,13 @@ void WgpuShadowMap::dispose() {
     depthBindGroupLayout_ = nullptr;
     depthShader_ = nullptr;
 
-    for (int i = 0; i < MAX_SHADOW_LIGHTS; i++) {
-        lights_[i] = {};
-    }
+    lights_.clear();
 
     // Point shadow resources
-    for (int i = 0; i < MAX_SHADOW_POINT_LIGHTS * 6; i++) {
-        if (ptLayerViews_[i]) { wgpuTextureViewRelease(ptLayerViews_[i]); ptLayerViews_[i] = nullptr; }
+    for (auto& view : ptLayerViews_) {
+        if (view) { wgpuTextureViewRelease(view); view = nullptr; }
     }
+    ptLayerViews_.clear();
     if (ptDepthArrayView_) { wgpuTextureViewRelease(ptDepthArrayView_); ptDepthArrayView_ = nullptr; }
     if (ptDepthArrayTexture_) { wgpuTextureRelease(ptDepthArrayTexture_); ptDepthArrayTexture_ = nullptr; }
     if (ptUniformBuffer_) { wgpuBufferRelease(ptUniformBuffer_); ptUniformBuffer_ = nullptr; }

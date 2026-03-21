@@ -2215,6 +2215,8 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             .params = params,
             .textures = *textures,
             .shadowMap = shadowMap.get(),
+            .shadowUniformSize = wgpuState.shadowLimits.shadowUniformSize(),
+            .pointShadowUniformSize = wgpuState.shadowLimits.pointShadowUniformSize(),
             .instanceBuffer = instanceBuffer, .instanceSize = instanceBufSize,
             .morphBuffer = morphBuffer, .morphSize = morphBufSize,
             .skinBuffer = skinBuffer, .skinSize = skinBufSize,
@@ -2605,6 +2607,23 @@ void WgpuRenderer::setMaxLights(int maxDir, int maxPoint, int maxSpot, int maxHe
     if (pimpl_->lights) pimpl_->lights->recreateBuffer();
 
     // Invalidate pipelines — shaders embed array sizes from LightLimits
+    if (pimpl_->pipelines) pimpl_->pipelines->invalidateAll();
+}
+
+void WgpuRenderer::setShadowConfig(uint32_t mapSize, int maxShadowLights, int maxShadowPointLights) {
+    auto& sl = pimpl_->wgpuState.shadowLimits;
+    if (sl.mapSize == mapSize && sl.maxShadowLights == maxShadowLights &&
+        sl.maxShadowPointLights == maxShadowPointLights)
+        return;
+
+    sl.mapSize = mapSize;
+    sl.maxShadowLights = maxShadowLights;
+    sl.maxShadowPointLights = maxShadowPointLights;
+
+    // Dispose old shadow GPU resources — they will be re-created on next init()
+    if (pimpl_->shadowMap) pimpl_->shadowMap->dispose();
+
+    // Invalidate pipelines — shaders encode shadow array sizes
     if (pimpl_->pipelines) pimpl_->pipelines->invalidateAll();
 }
 
