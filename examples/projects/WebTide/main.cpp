@@ -205,19 +205,35 @@ int main() {
     auto geoMid   = makeWaterGeo(128);   // dist <= 3 : 40 tiles, half detail
     auto geoOuter = makeWaterGeo(64);    // dist <= 6 :120 tiles, quarter detail
 
+    // Tile meshes stored so we can reposition them each frame as the camera moves.
+    // Each tile lives at offset (x,z) from the camera's snapped tile position.
+    struct TileEntry { std::shared_ptr<Mesh> mesh; int ox, oz; };
+    std::vector<TileEntry> waterTiles;
+    waterTiles.reserve((2 * tileRadius + 1) * (2 * tileRadius + 1));
+
     for (int x = -tileRadius; x <= tileRadius; x++) {
         for (int z = -tileRadius; z <= tileRadius; z++) {
-            int dist = std::max(std::abs(x), std::abs(z));// Chebyshev distance
-            auto& geo = dist <= 1 ? geoInner : dist <= 3 ? geoMid
-                                                         : geoOuter;
+            int dist = std::max(std::abs(x), std::abs(z));
+            auto& geo = dist <= 1 ? geoInner : dist <= 3 ? geoMid : geoOuter;
             auto waterMesh = Mesh::create(geo, waterMaterial);
-            waterMesh->position.set(
-                    static_cast<float>(x) * C1_TILE,
-                    0,
-                    static_cast<float>(z) * C1_TILE);
             scene->add(waterMesh);
+            waterTiles.push_back({waterMesh, x, z});
         }
     }
+
+    // Snap tile grid to the orbit target (where the camera is looking on the water surface).
+    // This keeps the high-detail inner ring centred in front of the viewer, not behind.
+    auto updateTilePositions = [&] {
+        int snapX = static_cast<int>(std::round(controls.target.x / C1_TILE));
+        int snapZ = static_cast<int>(std::round(controls.target.z / C1_TILE));
+        for (auto& t : waterTiles) {
+            t.mesh->position.set(
+                static_cast<float>(snapX + t.ox) * C1_TILE,
+                0,
+                static_cast<float>(snapZ + t.oz) * C1_TILE);
+        }
+    };
+    updateTilePositions();
 
     // Ground plane (sand)
     auto groundGeo = PlaneGeometry::create((1 + tileRadius * 2.0f) * C1_TILE, (1 + tileRadius * 2.0f) * C1_TILE);
@@ -259,9 +275,10 @@ int main() {
     // Water uniform names MUST be alphabetical to match WgpuRenderer's packing:
     //   choppiness, foamStrength, foamThreshold, fogDensity, fresnelScale,
     //   mieCoeff, mieG, normalStrength, rayleigh, seaColor, specShininess,
-    //   tileSize, turbidity, waveScale
+    //   tileSize, turbidity, waveScale, wireframe
     // Sky uniform names (alphabetical): mieCoeff, mieG, rayleigh, turbidity
     // -------------------------------------------------------------------------
+    bool  uWireframe     = false;
     float uChoppiness    = 0.5f;
     float uFoamStrength  = 0.35f;
     float uFoamThreshold = 0.30f;
@@ -314,6 +331,7 @@ int main() {
         waterMaterial->uniforms["tileSize"]      = Uniform(C1_TILE);
         waterMaterial->uniforms["turbidity"]     = Uniform(uTurbidity);
         waterMaterial->uniforms["waveScale"]     = Uniform(uWaveScale);
+        waterMaterial->uniforms["wireframe"]     = Uniform(uWireframe ? 1.0f : 0.0f);
     };
     pushUniforms();
     pushSkyUniforms();
@@ -378,6 +396,12 @@ int main() {
             ImGui::LabelText("Wave Y", "%.3f m", buoyWaveY);
         }
 
+        if (ImGui::CollapsingHeader("Debug")) {
+            // Wireframe drawn inside the WGSL fragment shader using fwidth() grid lines.
+            // The displaced surface itself is shown — grid animates with the waves.
+            if (ImGui::Checkbox("Wireframe", &uWireframe)) { pushUniforms(); }
+        }
+
         if (changed)    { pushUniforms(); pushSkyUniforms(); }
         if (sunChanged) updateSunDirection();
         ImGui::End();
@@ -386,6 +410,10 @@ int main() {
     IOCapture capture;
     capture.preventMouseEvent = [&] {
         // Prevent canvas orbit controls from interfering with ImGui interactions
+        return ImGui::GetIO().WantCaptureMouse;
+    };
+    capture.preventScrollEvent = [&] {
+        // Prevent canvas orbit controls from zooming when ImGui scrolls
         return ImGui::GetIO().WantCaptureMouse;
     };
     canvas.setIOCapture(&capture);
@@ -464,10 +492,15 @@ int main() {
         // Update foamMap pointer after ping-pong swap (before renderer.render())
         waterMaterial->customTextures["foamMap"] = &oceanFoam.currentFoam();
 
+        controls.update();
+
+        // Snap tile grid to orbit target — high-detail tiles always surround the
+        // point the viewer is looking at, not where the camera physically is.
+        updateTilePositions();
+
         // Sky box follows camera so it is always around the viewer.
         skyMesh->position.copy(camera->position);
 
-        controls.update();
         ui.render();
         renderer.render(*scene, *camera);
     });

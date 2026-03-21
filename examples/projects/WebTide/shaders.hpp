@@ -350,6 +350,7 @@ struct OceanUniforms {
     tileSize:      vec4<f32>,
     turbidity:     vec4<f32>,   // x = atmospheric turbidity
     waveScale:     vec4<f32>,
+    wireframe:     vec4<f32>,   // x > 0.5 = wireframe debug mode
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
 
@@ -492,6 +493,7 @@ struct OceanUniforms {
     tileSize:      vec4<f32>,
     turbidity:     vec4<f32>,   // x = atmospheric turbidity
     waveScale:     vec4<f32>,
+    wireframe:     vec4<f32>,   // x > 0.5 = wireframe debug mode
 };
 @group(0) @binding(2) var<uniform> ocean: OceanUniforms;
 
@@ -596,6 +598,15 @@ fn skyColor(dir: vec3<f32>, sunDir: vec3<f32>,
     return acesFilmic(pow(texColor, vec3<f32>(1.0 / 2.4)));
 }
 
+// Anti-aliased world-space grid line: returns 1.0 on a line, 0.0 between lines.
+// Uses fwidth() so lines stay 1-pixel wide regardless of zoom/angle.
+fn gridFactor(pos: vec2<f32>, spacing: f32) -> f32 {
+    let fw = fwidth(pos);
+    let g  = abs(fract(pos / spacing - 0.5) - 0.5) / max(fw, vec2<f32>(0.0001));
+    let line = 1.0 - min(g, vec2<f32>(1.0));
+    return max(line.x, line.y);
+}
+
 // Simple value noise to break up foam edges
 fn hash2(p: vec2<f32>) -> f32 {
     let p2 = fract(p * vec2<f32>(5.3983, 5.4427));
@@ -632,6 +643,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Use undisplaced XZ for stable UV sampling (same reference frame as the FFT).
     let worldXZ = in.undispXZ;
+
+    // Wireframe debug: animated world-space grid on the displaced surface.
+    // Tile LOD is recovered from undisplaced XZ via round(pos/tileSize).
+    // Three LOD zones shown in distinct colours with their actual vertex spacing:
+    //   green  — inner (dist≤1, 256 subdiv, 0.156 m spacing)
+    //   yellow — mid   (dist≤3, 128 subdiv, 0.313 m spacing)
+    //   orange — outer (dist≤6,  64 subdiv, 0.625 m spacing)
+    // Tile boundary lines are always drawn in white.
+    if (ocean.wireframe.x > 0.5) {
+        let snapTile  = round(transform.cameraPos.xz / C1_TILE);
+        let tileIdx   = round(worldXZ / C1_TILE);
+        let relIdx    = tileIdx - snapTile;
+        let chebyshev = max(abs(relIdx.x), abs(relIdx.y));
+
+        var spacing:  f32;
+        var lodColor: vec3<f32>;
+        if (chebyshev <= 1.0) {
+            spacing  = C1_TILE / 256.0;            // 0.156 m — inner, full detail
+            lodColor = vec3<f32>(0.10, 0.95, 0.35);
+        } else if (chebyshev <= 3.0) {
+            spacing  = C1_TILE / 128.0;            // 0.313 m — mid
+            lodColor = vec3<f32>(0.95, 0.85, 0.10);
+        } else {
+            spacing  = C1_TILE / 64.0;             // 0.625 m — outer, coarsest
+            lodColor = vec3<f32>(0.95, 0.40, 0.10);
+        }
+
+        let gGrid = gridFactor(worldXZ, spacing);
+        let gTile = gridFactor(worldXZ, C1_TILE);  // white tile boundaries
+
+        // Tile boundary overrides LOD grid colour
+        let col = mix(lodColor * gGrid * 0.85, vec3<f32>(1.0), gTile);
+        let alpha = max(gGrid * 0.85, gTile);
+        return vec4<f32>(col, alpha);
+    }
+
     let uv0 = worldXZ / C0_TILE;
     let uv1 = worldXZ / C1_TILE;
     let uv2 = worldXZ / C2_TILE;
