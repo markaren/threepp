@@ -787,10 +787,43 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let atten = max(1.0 - dist * dist * 0.0003, 0.0);
     color += seaWaterColor * in.height * 0.18 * atten;
 
-    let shininess = ocean.specShininess.x;
-    let specNorm  = (shininess + 8.0) / (3.14159 * 8.0);
-    let spec      = pow(max(0.0, dot(reflect(lightDir, normal), viewRay)), shininess) * specNorm;
-    color += vec3<f32>(spec) * lights.dirColor0;
+    // GGX micro-facet sun disc specular.
+    // Instead of Blinn-Phong we use Cook-Torrance with the reflected sky as the
+    // light source tint: skyColor(reflectedDir) returns the actual sun disc color
+    // (or sky at that angle) so the glint automatically matches the atmosphere.
+    // specShininess maps to GGX roughness: higher shininess → sharper glint.
+    //   shininess=256 → α≈0.008 (mirror-like)
+    //   shininess=120 → α≈0.017 (typical calm sea)
+    //   shininess=  4 → α≈0.33  (choppy, diffuse glint)
+    {
+        let alpha  = max(2.0 / (ocean.specShininess.x + 2.0), 0.004);
+        let alpha2 = alpha * alpha;
+        // Half-vector between sun and view (viewRay points away from camera)
+        let H      = normalize(sunDir - viewRay);
+        let NdotH  = max(dot(normal, H), 0.0);
+        let NdotV  = max(dot(-viewRay, normal), 0.0);
+        let NdotL  = max(dot(normal, sunDir), 0.0);
+        let VdotH  = max(dot(-viewRay, H), 0.0);
+        // GGX NDF — wide at low shininess, needle-sharp at high shininess
+        let d      = NdotH * NdotH * (alpha2 - 1.0) + 1.0;
+        let D      = alpha2 / (3.14159265 * d * d);
+        // Schlick Fresnel — water F0 ≈ 0.02 at normal incidence
+        let F      = 0.02 + 0.98 * pow(1.0 - VdotH, 5.0);
+        // Smith height-correlated geometry term
+        let k      = alpha * 0.5;
+        let G      = (NdotV / (NdotV * (1.0 - k) + k))
+                   * (NdotL / (NdotL * (1.0 - k) + k));
+        // Cook-Torrance BRDF value
+        let brdf   = (D * F * G) / max(4.0 * NdotV, 0.001) * NdotL;
+        // Sample sky in the mirror-reflect direction for tint — the sun disc term
+        // inside skyColor gives the blinding white when reflectedDir ≈ sunDir.
+        // The returned [0,1] ACES value is used as a tint; the HDR scale (×8) lets
+        // the final acesFilmic call compress it into a natural bright disc.
+        let glintSky = skyColor(normalize(reflectedDir), sunDir,
+                                ocean.turbidity.x, ocean.rayleigh.x,
+                                ocean.mieCoeff.x,  ocean.mieG.x);
+        color += glintSky * brdf * 8.0;
+    }
 
     // Foam: sample at undisplaced XZ so it lines up with the Jacobian computation.
     // Multi-scale hash noise breaks up the hard 0.156m texel boundaries.
