@@ -52,11 +52,11 @@ int main() {
     // Create window and renderer
     Canvas::Parameters params;
     params.title("WebTide Ocean")
-            .size(1280, 720)
             .graphicsApi(GraphicsAPI::WebGPU);
 
     Canvas canvas(params);
     WgpuRenderer renderer(canvas);
+    renderer.setClearColor(0x87ceeb); // sky blue
 
     // Camera
     auto camera = PerspectiveCamera::create(60, canvas.aspect(), 0.1f, 2000.f);

@@ -80,6 +80,9 @@
 #include "stb_image_write.h"
 #undef STBIWDEF
 
+#include "external/glfw/include/GLFW/glfw3.h"
+
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -285,6 +288,8 @@ struct WgpuRenderer::Impl {
     struct FrameSurface {
 #ifndef __EMSCRIPTEN__
         WGPUSurfaceTexture surfaceTexture{};
+#else
+        WGPUTextureView swapChainView = nullptr; // acquired once per frame from swap chain
 #endif
         WGPUTextureView colorView = nullptr;
         WGPUTextureView depthView = nullptr;    // points into cachedFrame_
@@ -787,8 +792,8 @@ struct ClearColor { color: vec4<f32> }
         WGPUSwapChainDescriptor scDesc{};
         scDesc.usage = WGPUTextureUsage_RenderAttachment;
         scDesc.format = surfaceFormat;
-        scDesc.width = static_cast<uint32_t>(std::floor(size_.width() * pixelRatio_));
-        scDesc.height = static_cast<uint32_t>(std::floor(size_.height() * pixelRatio_));
+        scDesc.width = w;
+        scDesc.height = h;
         scDesc.presentMode = WGPUPresentMode_Fifo;
         swapChain = wgpuDeviceCreateSwapChain(device, surface, &scDesc);
 #else
@@ -819,8 +824,11 @@ struct ClearColor { color: vec4<f32> }
         WGPUTextureView backbufferView = wgpuSwapChainGetCurrentTextureView(swapChain);
         if (!backbufferView) return false;
 
-        frame_.width = static_cast<uint32_t>(canvas.size().width());
-        frame_.height = static_cast<uint32_t>(canvas.size().height());
+        frame_.swapChainView = backbufferView; // cache for reuse within this frame
+
+        // Use the same size as configureSurface (CSS size × pixelRatio)
+        frame_.width = static_cast<uint32_t>(std::floor(size_.width() * pixelRatio_));
+        frame_.height = static_cast<uint32_t>(std::floor(size_.height() * pixelRatio_));
         ensureFrameTextures(frame_.width, frame_.height, sampleCount_);
 
         if (sampleCount_ > 1) {
@@ -885,13 +893,18 @@ struct ClearColor { color: vec4<f32> }
         }
 
         // depth and MSAA textures/views are owned by cachedFrame_ — do not release here.
+#ifdef __EMSCRIPTEN__
+        // Release the swap chain view once (obtained in acquireFrame).
+        if (frame_.swapChainView) {
+            wgpuTextureViewRelease(frame_.swapChainView);
+        }
+#else
         if (frame_.resolveView) {
             // colorView points to the cached MSAA view — do not release.
             wgpuTextureViewRelease(frame_.resolveView);
         } else {
             wgpuTextureViewRelease(frame_.colorView);
         }
-#ifndef __EMSCRIPTEN__
         wgpuTextureRelease(frame_.surfaceTexture.texture);
 #endif
 
@@ -1177,7 +1190,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         // Tone map blit is always non-MSAA (fullscreen quad)
 #ifdef __EMSCRIPTEN__
-        surfaceColorView = wgpuSwapChainGetCurrentTextureView(swapChain);
+        surfaceColorView = frame_.swapChainView;
 #else
         surfaceColorView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
 #endif
@@ -1210,7 +1223,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         wgpuBindGroupRelease(bindGroup);
         wgpuTextureViewRelease(inputView);
+#ifndef __EMSCRIPTEN__
         wgpuTextureViewRelease(surfaceColorView);
+#endif
         // toneMap_.uniformBuf is persistent — not released here
     }
 
@@ -1227,7 +1242,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
         vd.aspect = WGPUTextureAspect_All;
 #ifdef __EMSCRIPTEN__
-        WGPUTextureView surfaceView = wgpuSwapChainGetCurrentTextureView(swapChain);
+        WGPUTextureView surfaceView = frame_.swapChainView;
 #else
         WGPUTextureView surfaceView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
 #endif
@@ -1277,7 +1292,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         wgpuTextureViewRelease(overlayDepthView);
         wgpuTextureRelease(overlayDepthTex);
+#ifndef __EMSCRIPTEN__
         wgpuTextureViewRelease(surfaceView);
+#endif
     }
 
     // Execute a standalone clear pass (mid-frame, outside of a scene render).

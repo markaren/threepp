@@ -25,12 +25,16 @@ namespace {
 #ifdef __EMSCRIPTEN__
     struct FunctionWrapper {
         std::function<void()> loopFunction;
+        std::function<void()> frameEndCallback;
 
-        explicit FunctionWrapper(std::function<void()> loopFunction)
-            : loopFunction(std::move(loopFunction)) {}
+        FunctionWrapper(std::function<void()> loopFunction, std::function<void()> frameEndCallback)
+            : loopFunction(std::move(loopFunction)), frameEndCallback(std::move(frameEndCallback)) {}
 
         void loop() {
             loopFunction();
+            if (frameEndCallback) {
+                frameEndCallback();
+            }
         }
     };
 
@@ -289,7 +293,7 @@ struct Canvas::Impl {
 
     void animate(const std::function<void()>& f) {
 #ifdef __EMSCRIPTEN__
-        FunctionWrapper wrapper(f);
+        FunctionWrapper wrapper(f, frameEndCallback_);
         emscripten_set_main_loop_arg(&emscriptenLoop, &wrapper, 0, true);
 #else
         while (animateOnce(f)) {}

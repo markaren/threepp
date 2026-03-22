@@ -657,7 +657,7 @@ endif ()
 if (THREEPP_WITH_WGPU)
     target_compile_definitions(threepp PRIVATE THREEPP_WITH_WGPU=1)
 
-    if (EMSCRIPTEN)
+    if (DEFINED EMSCRIPTEN)
         # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.
         # ASYNCIFY is required so emscripten_sleep() can yield to the event loop
         # during adapter/device request and buffer map polling.

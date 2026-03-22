@@ -35,18 +35,9 @@ namespace webtide {
 
 /// Per-frame GPU readback of wave state at a single world position.
 ///
-/// Reads 8 single texels per frame (one 6-copy command buffer):
-///   slot 0 : h0     cascade-0 height         (RG32Float, R=height)
-///   slot 1 : h1     cascade-1 height
-///   slot 2 : h2     cascade-2 height
-///   slot 3 : disp0  cascade-0 displacement    (RG32Float, R=Δx  G=Δz)
-///   slot 4 : disp1  cascade-1 displacement
-///   slot 5 : disp2  cascade-2 displacement
-///   slot 6 : grad1  cascade-1 surface slope   (RG32Float, R=dH/dx  G=dH/dz)
-///   slot 7 : grad2  cascade-2 surface slope
-///
-/// The normalization applied to each channel reproduces waterVertexWGSL exactly,
-/// so the buoy tracks the displaced wave surface rather than the undisplaced grid.
+/// On native (wgpu-native), uses synchronous map with wgpuDevicePoll.
+/// On Emscripten, uses a one-frame-latency async pattern: submit the copy
+/// and map request this frame, read the results next frame.
 class BuoyantSampler {
 public:
     explicit BuoyantSampler(threepp::WgpuRenderer& renderer)
@@ -55,7 +46,7 @@ public:
     {
         WGPUBufferDescriptor bd{};
         bd.label = BUOY_WGPU_LABEL("buoy_staging");
-        bd.size  = kNumSlots * kSlotBytes; // 8 × 256 = 2048 bytes
+        bd.size  = kNumSlots * kSlotBytes;
         bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
         staging_ = wgpuDeviceCreateBuffer(device_, &bd);
     }
@@ -74,7 +65,6 @@ public:
     };
 
     /// Call once per frame after all IFFT compute passes have been submitted.
-    /// All six displacement/height/gradient textures must have the CopySrc usage flag.
     Result sample(
         const threepp::WgpuTexture& h0,
         const threepp::WgpuTexture& h1,
@@ -88,9 +78,97 @@ public:
         float c0Tile, float c1Tile, float c2Tile,
         float choppiness, float waveScale)
     {
+        // -----------------------------------------------------------
+        // Step 1: Read back previous frame's result (if ready)
+        // -----------------------------------------------------------
+        Result r = lastResult_; // default to previous result for smoothness
+
+#ifdef __EMSCRIPTEN__
+        if (mapPending_ && mapDone_) {
+            if (mapStatus_ == BUOY_MAP_ASYNC_STATUS_SUCCESS) {
+                r = decodeResult(pendingC0Tile_, pendingC1Tile_, pendingC2Tile_,
+                                 pendingChoppiness_, pendingWaveScale_);
+            }
+            wgpuBufferUnmap(staging_);
+            mapPending_ = false;
+        }
+#else
+        // Native: synchronous readback
+        {
+            struct MapState { bool done = false; WgpuMapAsyncStatus status{}; } s;
+            submitCopy(h0, h1, h2, disp0, disp1, disp2, grad1, grad2,
+                       worldX, worldZ, c0Tile, c1Tile, c2Tile);
+
+            WGPUBufferMapCallbackInfo cb{};
+            cb.mode     = WGPUCallbackMode_AllowSpontaneous;
+            cb.callback = [](WGPUMapAsyncStatus st, WGPUStringView, void* ud1, void*) {
+                auto* s   = static_cast<MapState*>(ud1);
+                s->status = st;
+                s->done   = true;
+            };
+            cb.userdata1 = &s;
+            wgpuBufferMapAsync(staging_, WGPUMapMode_Read, 0, kNumSlots * kSlotBytes, cb);
+
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+            while (!s.done) {
+                if (std::chrono::steady_clock::now() > deadline) break;
+                wgpuDevicePoll(device_, true, nullptr);
+            }
+
+            if (s.done && s.status == BUOY_MAP_ASYNC_STATUS_SUCCESS) {
+                r = decodeResult(c0Tile, c1Tile, c2Tile, choppiness, waveScale);
+            }
+            wgpuBufferUnmap(staging_);
+        }
+#endif
+
+        lastResult_ = r;
+
+        // -----------------------------------------------------------
+        // Step 2 (Emscripten): Submit copy + start async map for NEXT frame
+        // -----------------------------------------------------------
+#ifdef __EMSCRIPTEN__
+        if (!mapPending_) {
+            submitCopy(h0, h1, h2, disp0, disp1, disp2, grad1, grad2,
+                       worldX, worldZ, c0Tile, c1Tile, c2Tile);
+
+            // Save params for decoding next frame
+            pendingC0Tile_ = c0Tile;
+            pendingC1Tile_ = c1Tile;
+            pendingC2Tile_ = c2Tile;
+            pendingChoppiness_ = choppiness;
+            pendingWaveScale_ = waveScale;
+
+            mapDone_ = false;
+            mapStatus_ = {};
+            wgpuBufferMapAsync(staging_, WGPUMapMode_Read, 0, kNumSlots * kSlotBytes,
+                [](WGPUBufferMapAsyncStatus st, void* userdata) {
+                    auto* self = static_cast<BuoyantSampler*>(userdata);
+                    self->mapStatus_ = st;
+                    self->mapDone_ = true;
+                }, this);
+            mapPending_ = true;
+        }
+#endif
+
+        return r;
+    }
+
+private:
+    void submitCopy(
+        const threepp::WgpuTexture& h0,
+        const threepp::WgpuTexture& h1,
+        const threepp::WgpuTexture& h2,
+        const threepp::WgpuTexture& disp0,
+        const threepp::WgpuTexture& disp1,
+        const threepp::WgpuTexture& disp2,
+        const threepp::WgpuTexture& grad1,
+        const threepp::WgpuTexture& grad2,
+        float worldX, float worldZ,
+        float c0Tile, float c1Tile, float c2Tile)
+    {
         const uint32_t sz = h0.width();
 
-        // Match the vertex shader's UV → integer texel mapping exactly.
         auto texelOf = [&](float tile) -> std::pair<uint32_t, uint32_t> {
             float u = worldX / tile;
             float v = worldZ / tile;
@@ -118,7 +196,7 @@ public:
             WgpuTexelCopyBufferInfo dst{};
             dst.buffer              = staging_;
             dst.layout.offset       = static_cast<uint64_t>(slot) * kSlotBytes;
-            dst.layout.bytesPerRow  = kSlotBytes; // ≥ 256, multiple of 256 ✓
+            dst.layout.bytesPerRow  = kSlotBytes;
             dst.layout.rowsPerImage = 1;
 
             WGPUExtent3D ext = {1, 1, 1};
@@ -128,9 +206,9 @@ public:
         copyTexel(h0.texture(),    tx0, ty0, 0);
         copyTexel(h1.texture(),    tx1, ty1, 1);
         copyTexel(h2.texture(),    tx2, ty2, 2);
-        copyTexel(disp0.texture(), tx0, ty0, 3);  // cascade-0 UV for disp0
+        copyTexel(disp0.texture(), tx0, ty0, 3);
         copyTexel(disp1.texture(), tx1, ty1, 4);
-        copyTexel(disp2.texture(), tx2, ty2, 5);  // cascade-2 UV for disp2
+        copyTexel(disp2.texture(), tx2, ty2, 5);
         copyTexel(grad1.texture(), tx1, ty1, 6);
         copyTexel(grad2.texture(), tx2, ty2, 7);
 
@@ -138,95 +216,58 @@ public:
         cd.label = BUOY_WGPU_LABEL("buoy_cmd");
         WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, &cd);
         wgpuQueueSubmit(queue_, 1, &cmd);
-
-        struct MapState { bool done = false; WgpuMapAsyncStatus status{}; } s;
-
-#ifdef __EMSCRIPTEN__
-        wgpuBufferMapAsync(staging_, WGPUMapMode_Read, 0, kNumSlots * kSlotBytes,
-            [](WGPUBufferMapAsyncStatus st, void* userdata) {
-                auto* s   = static_cast<MapState*>(userdata);
-                s->status = st;
-                s->done   = true;
-            }, &s);
-
-        // Emscripten has no wgpuDevicePoll; use emscripten_sleep to yield to the browser
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-        while (!s.done) {
-            if (std::chrono::steady_clock::now() > deadline) break;
-            emscripten_sleep(1);
-        }
-#else
-        WGPUBufferMapCallbackInfo cb{};
-        cb.mode     = WGPUCallbackMode_AllowSpontaneous;
-        cb.callback = [](WGPUMapAsyncStatus st, WGPUStringView, void* ud1, void*) {
-            auto* s   = static_cast<MapState*>(ud1);
-            s->status = st;
-            s->done   = true;
-        };
-        cb.userdata1 = &s;
-        wgpuBufferMapAsync(staging_, WGPUMapMode_Read, 0, kNumSlots * kSlotBytes, cb);
-
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
-        while (!s.done) {
-            if (std::chrono::steady_clock::now() > deadline) break;
-            wgpuDevicePoll(device_, true, nullptr);
-        }
-#endif
-
-        Result r{};
-        if (s.done && s.status == BUOY_MAP_ASYNC_STATUS_SUCCESS) {
-            // Each 256-byte slot: [float R, float G, <248 bytes padding>]
-            // stride = 256/4 = 64 floats between slot starts.
-            const auto* f = static_cast<const float*>(
-                wgpuBufferGetConstMappedRange(staging_, 0, kNumSlots * kSlotBytes));
-
-            constexpr uint32_t S = kSlotBytes / sizeof(float); // 64
-
-            const float raw_h0   = f[0*S];
-            const float raw_h1   = f[1*S];
-            const float raw_h2   = f[2*S];
-            const float raw_d0x  = f[3*S],   raw_d0z  = f[3*S+1];
-            const float raw_d1x  = f[4*S],   raw_d1z  = f[4*S+1];
-            const float raw_d2x  = f[5*S],   raw_d2z  = f[5*S+1];
-            const float raw_g1x  = f[6*S],   raw_g1z  = f[6*S+1];
-            const float raw_g2x  = f[7*S],   raw_g2z  = f[7*S+1];
-
-            // --- Height: identical to waterVertexWGSL (c0Fade=1 assumed near camera) ---
-            const float h0n = raw_h0 * (0.25f / c0Tile);
-            const float h1n = raw_h1 * (1.0f  / c1Tile);
-            const float h2n = raw_h2 * (1.0f  / c2Tile);
-            r.y = (h0n + h1n + h2n) * waveScale;
-
-            // --- XZ displacement: sum all three cascades, matches vertex shader ---
-            //   d0 *= c0Fade * 0.25 / C0  (c0Fade=1)
-            //   d1 *= 1.0 / C1
-            //   d2 *= 1.0 / C2
-            //   totalDisp *= choppiness
-            const float dx = raw_d0x * (0.25f / c0Tile)
-                           + raw_d1x * (1.0f  / c1Tile)
-                           + raw_d2x * (1.0f  / c2Tile);
-            const float dz = raw_d0z * (0.25f / c0Tile)
-                           + raw_d1z * (1.0f  / c1Tile)
-                           + raw_d2z * (1.0f  / c2Tile);
-            r.dx = dx * choppiness;
-            r.dz = dz * choppiness;
-
-            // --- Gradient (slope): C1 + C2, skip C0 to avoid micro-jitter ---
-            r.gx = raw_g1x * (1.0f / c1Tile) + raw_g2x * (0.25f / c2Tile);
-            r.gz = raw_g1z * (1.0f / c1Tile) + raw_g2z * (0.25f / c2Tile);
-
-            wgpuBufferUnmap(staging_);
-        }
-
         wgpuCommandBufferRelease(cmd);
         wgpuCommandEncoderRelease(enc);
+    }
+
+    Result decodeResult(float c0Tile, float c1Tile, float c2Tile,
+                        float choppiness, float waveScale) {
+        const auto* f = static_cast<const float*>(
+            wgpuBufferGetConstMappedRange(staging_, 0, kNumSlots * kSlotBytes));
+        if (!f) return {};
+
+        constexpr uint32_t S = kSlotBytes / sizeof(float); // 64
+
+        const float raw_h0   = f[0*S];
+        const float raw_h1   = f[1*S];
+        const float raw_h2   = f[2*S];
+        const float raw_d0x  = f[3*S],   raw_d0z  = f[3*S+1];
+        const float raw_d1x  = f[4*S],   raw_d1z  = f[4*S+1];
+        const float raw_d2x  = f[5*S],   raw_d2z  = f[5*S+1];
+        const float raw_g1x  = f[6*S],   raw_g1z  = f[6*S+1];
+        const float raw_g2x  = f[7*S],   raw_g2z  = f[7*S+1];
+
+        Result r{};
+        const float h0n = raw_h0 * (0.25f / c0Tile);
+        const float h1n = raw_h1 * (1.0f  / c1Tile);
+        const float h2n = raw_h2 * (1.0f  / c2Tile);
+        r.y = (h0n + h1n + h2n) * waveScale;
+
+        const float dx = raw_d0x * (0.25f / c0Tile)
+                       + raw_d1x * (1.0f  / c1Tile)
+                       + raw_d2x * (1.0f  / c2Tile);
+        const float dz = raw_d0z * (0.25f / c0Tile)
+                       + raw_d1z * (1.0f  / c1Tile)
+                       + raw_d2z * (1.0f  / c2Tile);
+        r.dx = dx * choppiness;
+        r.dz = dz * choppiness;
+
+        r.gx = raw_g1x * (1.0f / c1Tile) + raw_g2x * (0.25f / c2Tile);
+        r.gz = raw_g1z * (1.0f / c1Tile) + raw_g2z * (0.25f / c2Tile);
         return r;
     }
 
-private:
     WGPUDevice device_  = nullptr;
     WGPUQueue  queue_   = nullptr;
     WGPUBuffer staging_ = nullptr;
+
+    // Async state for Emscripten (one-frame-latency readback)
+    bool mapPending_ = false;
+    bool mapDone_ = false;
+    WgpuMapAsyncStatus mapStatus_{};
+    float pendingC0Tile_ = 0, pendingC1Tile_ = 0, pendingC2Tile_ = 0;
+    float pendingChoppiness_ = 0, pendingWaveScale_ = 0;
+    Result lastResult_{};
 
     static constexpr uint32_t kSlotBytes = 256; // WebGPU min bytesPerRow
     static constexpr uint32_t kNumSlots  = 8;   // h0 h1 h2 | d0 d1 d2 | g1 g2
