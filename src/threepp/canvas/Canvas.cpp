@@ -43,7 +43,7 @@ namespace {
     void setWindowIcon(GLFWwindow* window, std::optional<std::filesystem::path> customIcon) {
 
 #ifdef __APPLE__
-        return; // operation is not supported on macOS
+        return;// operation is not supported on macOS
 #endif
 
         ImageLoader imageLoader;
@@ -205,7 +205,8 @@ struct Canvas::Impl {
         glfwWindowHint(GLFW_RESIZABLE, params.resizable_);
 
         glfwWindowHint(GLFW_VISIBLE, params.headless_ ? GLFW_FALSE : GLFW_TRUE);
-
+#else
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);// for WebGPU
 #endif
 
         if (params.antialiasing_ > 0) {

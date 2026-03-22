@@ -48,8 +48,8 @@
 #include "threepp/scenes/Fog.hpp"
 #include "threepp/scenes/FogExp2.hpp"
 
-#ifndef __EMSCRIPTEN__
 #define GLFW_INCLUDE_NONE
+#ifndef __EMSCRIPTEN__
 #ifdef __linux__
 #define GLFW_EXPOSE_NATIVE_X11
 #elif defined(_WIN32)
@@ -58,14 +58,18 @@
 #define GLFW_EXPOSE_NATIVE_COCOA
 #endif
 #include <GLFW/glfw3.h>
+#ifndef __EMSCRIPTEN__
+#endif
+#include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
-#endif// __EMSCRIPTEN__
+#endif
 
 #include <webgpu/webgpu.h>
 #ifndef __EMSCRIPTEN__
 #include <webgpu/wgpu.h>
 #else
 #include <emscripten.h>
+#include <emscripten/html5_webgpu.h>
 #endif
 
 #include "wgpu/WgpuCompat.hpp"
