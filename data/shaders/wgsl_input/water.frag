@@ -41,14 +41,14 @@ layout(std140, set=0, binding=2) uniform CustomUniforms {
     float _pad7;
 };
 
-// Texture bindings: naga translates Vulkan combined image+sampler (sampler2D)
-// into separate texture_2d and sampler bindings in WGSL. Each sampler2D
-// declared here at binding N produces WGSL bindings at N (texture) and N+1
-// (sampler). This matches WgpuPipelines which assigns:
+// Texture bindings: naga requires separate texture and sampler declarations.
+// This matches WgpuPipelines which assigns:
 //   mirrorSampler: texture@3, sampler@4
 //   normalSampler: texture@5, sampler@6
-layout(set=0, binding=3) uniform sampler2D mirrorSampler;
-layout(set=0, binding=5) uniform sampler2D normalSampler;
+layout(set=0, binding=3) uniform texture2D mirrorTexture;
+layout(set=0, binding=4) uniform sampler mirrorSampler;
+layout(set=0, binding=5) uniform texture2D normalTexture;
+layout(set=0, binding=6) uniform sampler normalSampler;
 
 // Inputs from vertex stage
 layout(location=0) in vec4 mirrorCoord;
@@ -64,10 +64,10 @@ vec4 getNoise(vec2 uv) {
     vec2 uv2 = uv / vec2(8907.0, 9803.0) + vec2(time / 101.0, time / 97.0);
     vec2 uv3 = uv / vec2(1091.0, 1027.0) - vec2(time / 109.0, time / -113.0);
 
-    vec4 noise = texture(normalSampler, uv0) +
-                 texture(normalSampler, uv1) +
-                 texture(normalSampler, uv2) +
-                 texture(normalSampler, uv3);
+    vec4 noise = texture(sampler2D(normalTexture, normalSampler), uv0) +
+                 texture(sampler2D(normalTexture, normalSampler), uv1) +
+                 texture(sampler2D(normalTexture, normalSampler), uv2) +
+                 texture(sampler2D(normalTexture, normalSampler), uv3);
 
     return noise * 0.5 - 1.0;
 }
@@ -97,7 +97,7 @@ void main() {
     float dist = length(worldToEye);
 
     vec2 distortion = surfaceNormal.xz * (0.001 + 1.0 / dist) * distortionScale;
-    vec3 reflectionSample = vec3(texture(mirrorSampler,
+    vec3 reflectionSample = vec3(texture(sampler2D(mirrorTexture, mirrorSampler),
                                          mirrorCoord.xy / mirrorCoord.w + distortion));
 
     float theta = max(dot(eyeDirection, surfaceNormal), 0.0);

@@ -1,6 +1,7 @@
 
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
+#include "WgpuCompat.hpp"
 
 #include <webgpu/webgpu.h>
 
@@ -63,7 +64,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
       bytesPerPixel_(::bytesPerPixel(format)) {
 
     WGPUTextureDescriptor texDesc{};
-    texDesc.label = {.data = "gpu_texture", .length = 11};
+    texDesc.label = WGPU_LABEL("gpu_texture");
     texDesc.size = {width, height, 1};
     texDesc.mipLevelCount = 1;
     texDesc.sampleCount = 1;
@@ -73,7 +74,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     texture_ = wgpuDeviceCreateTexture(device_, &texDesc);
 
     WGPUTextureViewDescriptor viewDesc{};
-    viewDesc.label = {.data = "gpu_tex_view", .length = 12};
+    viewDesc.label = WGPU_LABEL("gpu_tex_view");
     viewDesc.format = toWGPUFormat(format);
     viewDesc.dimension = WGPUTextureViewDimension_2D;
     viewDesc.baseMipLevel = 0;
@@ -85,7 +86,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
 
     WGPUFilterMode filter = defaultFilter(format);
     WGPUSamplerDescriptor samplerDesc{};
-    samplerDesc.label = {.data = "gpu_tex_sampler", .length = 15};
+    samplerDesc.label = WGPU_LABEL("gpu_tex_sampler");
     samplerDesc.addressModeU = WGPUAddressMode_Repeat;
     samplerDesc.addressModeV = WGPUAddressMode_Repeat;
     samplerDesc.addressModeW = WGPUAddressMode_Repeat;
@@ -107,7 +108,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     bool isCube = (dimension == Dimension::Cube);
 
     WGPUTextureDescriptor texDesc{};
-    texDesc.label = {.data = "gpu_texture", .length = 11};
+    texDesc.label = WGPU_LABEL("gpu_texture");
     texDesc.size = {width, height, isCube ? 6u : 1u};
     texDesc.mipLevelCount = 1;
     texDesc.sampleCount = 1;
@@ -117,7 +118,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     texture_ = wgpuDeviceCreateTexture(device_, &texDesc);
 
     WGPUTextureViewDescriptor viewDesc{};
-    viewDesc.label = {.data = "gpu_tex_view", .length = 12};
+    viewDesc.label = WGPU_LABEL("gpu_tex_view");
     viewDesc.format = toWGPUFormat(format);
     viewDesc.dimension = isCube ? WGPUTextureViewDimension_Cube : WGPUTextureViewDimension_2D;
     viewDesc.baseMipLevel = 0;
@@ -128,7 +129,7 @@ WgpuTexture::WgpuTexture(WgpuRenderer& renderer, uint32_t width, uint32_t height
     view_ = wgpuTextureCreateView(texture_, &viewDesc);
 
     WGPUSamplerDescriptor samplerDesc{};
-    samplerDesc.label = {.data = "gpu_tex_sampler", .length = 15};
+    samplerDesc.label = WGPU_LABEL("gpu_tex_sampler");
     samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
     samplerDesc.addressModeV = WGPUAddressMode_ClampToEdge;
     samplerDesc.addressModeW = WGPUAddressMode_ClampToEdge;
@@ -174,7 +175,7 @@ WgpuTexture& WgpuTexture::operator=(WgpuTexture&& other) noexcept {
 }
 
 void WgpuTexture::write(const void* data, size_t size) {
-    WGPUTexelCopyTextureInfo dst{};
+    WgpuTexelCopyTextureInfo dst{};
     dst.texture = texture_;
     dst.mipLevel = 0;
     dst.origin = {0, 0, 0};
@@ -186,7 +187,7 @@ void WgpuTexture::write(const void* data, size_t size) {
 
     if (paddedBytesPerRow == unpaddedBytesPerRow) {
         // No padding needed -- upload directly
-        WGPUTexelCopyBufferLayout layout{};
+        WgpuTexelCopyBufferLayout layout{};
         layout.offset = 0;
         layout.bytesPerRow = unpaddedBytesPerRow;
         layout.rowsPerImage = height_;
@@ -204,7 +205,7 @@ void WgpuTexture::write(const void* data, size_t size) {
                         unpaddedBytesPerRow);
         }
 
-        WGPUTexelCopyBufferLayout layout{};
+        WgpuTexelCopyBufferLayout layout{};
         layout.offset = 0;
         layout.bytesPerRow = paddedBytesPerRow;
         layout.rowsPerImage = height_;
@@ -237,7 +238,7 @@ void WgpuTexture::writeFace(uint32_t face, const void* data, size_t size) {
         size = expectedRGBA;
     }
 
-    WGPUTexelCopyTextureInfo dst{};
+    WgpuTexelCopyTextureInfo dst{};
     dst.texture = texture_;
     dst.mipLevel = 0;
     dst.origin = {0, 0, face};
@@ -247,7 +248,7 @@ void WgpuTexture::writeFace(uint32_t face, const void* data, size_t size) {
     uint32_t paddedBytesPerRow = ((unpaddedBytesPerRow + 255) / 256) * 256;
 
     if (paddedBytesPerRow == unpaddedBytesPerRow) {
-        WGPUTexelCopyBufferLayout layout{};
+        WgpuTexelCopyBufferLayout layout{};
         layout.offset = 0;
         layout.bytesPerRow = unpaddedBytesPerRow;
         layout.rowsPerImage = height_;
@@ -263,7 +264,7 @@ void WgpuTexture::writeFace(uint32_t face, const void* data, size_t size) {
                         unpaddedBytesPerRow);
         }
 
-        WGPUTexelCopyBufferLayout layout{};
+        WgpuTexelCopyBufferLayout layout{};
         layout.offset = 0;
         layout.bytesPerRow = paddedBytesPerRow;
         layout.rowsPerImage = height_;
