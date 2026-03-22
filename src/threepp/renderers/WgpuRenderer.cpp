@@ -118,17 +118,6 @@ struct WgpuRenderer::Impl {
         }
     };
 
-    // Persistent per-object transform uniform buffer cache.
-    // Avoids re-uploading transform data when camera and object are both still.
-    struct PerObjectEntry {
-        WGPUBuffer transformBuf = nullptr;
-        float transformData[wgpu::TRANSFORM_UNIFORM_SIZE / sizeof(float)] = {};
-    };
-    std::unordered_map<int, PerObjectEntry> perObjectCache_;
-    // No per-object dispose listener: Object3D subclasses store their concrete
-    // type in event.target (not Object3D*), so a generic cast is unsafe.
-    // perObjectCache_ is fully released in dispose().
-
     // Persistent per-material uniform buffer cache.
     struct PerMaterialEntry {
         WGPUBuffer materialBuf = nullptr;
@@ -201,6 +190,20 @@ struct WgpuRenderer::Impl {
     // Effective sample count for the current render pass (may be 1 when
     // rendering to the non-MSAA tone mapping intermediate RT).
     uint32_t effectiveSampleCount_ = 1;
+
+    // Single command encoder for the entire frame.  All render passes recorded
+    // within one animation frame — including nested mirror renders, the tone-map
+    // blit, and the ImGui overlay — share this encoder.  wgpu-native then inserts
+    // correct Vulkan image-layout transitions between passes automatically.
+    // Created lazily on the first render()/executeClear() call; submitted and
+    // nulled out in endFrame().
+    WGPUCommandEncoder renderEncoder_ = nullptr;
+
+    // Per-render light buffer — acquired from the pool at the start of each render()
+    // call so that each render pass in the same frame gets its own light data snapshot.
+    // This prevents a later render() (e.g. the HUD with no lights) from overwriting the
+    // persistent lightBuffer_ before the earlier render pass's GPU work runs.
+    WGPUBuffer renderLightBuffer_ = nullptr;
 
     // Viewport & scissor state
     struct { float x=0, y=0, w=0, h=0; } viewport_;
@@ -795,6 +798,12 @@ struct ClearColor { color: vec4<f32> }
     void releaseFrame() {
         if (!frame_.active) return;
 
+        // If called without a matching endFrame() (e.g. dispose), discard the encoder.
+        if (renderEncoder_) {
+            wgpuCommandEncoderRelease(renderEncoder_);
+            renderEncoder_ = nullptr;
+        }
+
         // depth and MSAA textures/views are owned by cachedFrame_ — do not release here.
         if (frame_.resolveView) {
             // colorView points to the cached MSAA view — do not release.
@@ -820,6 +829,19 @@ struct ClearColor { color: vec4<f32> }
         // is drawn exactly once per frame and is never tone-mapped.
         if (overlayCallback_) {
             overlayOnSurface();
+        }
+
+        // Submit the single per-frame command buffer that holds all render passes
+        // (mirror RT, main scene, tone-map blit, overlay).  Submitting once keeps
+        // all passes in one command buffer so wgpu-native inserts correct barriers.
+        if (renderEncoder_) {
+            WGPUCommandBufferDescriptor cmdDesc{};
+            cmdDesc.label = {.data = "frame_cmd", .length = 9};
+            WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(renderEncoder_, &cmdDesc);
+            wgpuQueueSubmit(queue, 1, &cmd);
+            wgpuCommandBufferRelease(cmd);
+            wgpuCommandEncoderRelease(renderEncoder_);
+            renderEncoder_ = nullptr;
         }
 
 #ifndef __EMSCRIPTEN__
@@ -1074,9 +1096,12 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Tone map blit is always non-MSAA (fullscreen quad)
         surfaceColorView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
 
-        WGPUCommandEncoderDescriptor encDesc{};
-        encDesc.label = {.data = "tonemap_enc", .length = 11};
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        // Ensure the per-frame encoder exists (toneMapBlit is called from endFrame).
+        if (!renderEncoder_) {
+            WGPUCommandEncoderDescriptor encDesc{};
+            encDesc.label = {.data = "render_enc", .length = 10};
+            renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        }
 
         WGPURenderPassColorAttachment colorAtt{};
         colorAtt.view = surfaceColorView;
@@ -1090,20 +1115,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         rpDesc.colorAttachmentCount = 1;
         rpDesc.colorAttachments = &colorAtt;
 
-        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(encoder, &rpDesc);
+        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(renderEncoder_, &rpDesc);
         wgpuRenderPassEncoderSetPipeline(rp, toneMap_.pipelines[idx]);
         wgpuRenderPassEncoderSetBindGroup(rp, 0, bindGroup, 0, nullptr);
         wgpuRenderPassEncoderDraw(rp, 3, 1, 0, 0);
         wgpuRenderPassEncoderEnd(rp);
         wgpuRenderPassEncoderRelease(rp);
 
-        WGPUCommandBufferDescriptor cmdDesc{};
-        cmdDesc.label = {.data = "tonemap_cmd", .length = 11};
-        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-        wgpuQueueSubmit(queue, 1, &cmd);
-
-        wgpuCommandBufferRelease(cmd);
-        wgpuCommandEncoderRelease(encoder);
         wgpuBindGroupRelease(bindGroup);
         wgpuTextureViewRelease(inputView);
         wgpuTextureViewRelease(surfaceColorView);
@@ -1137,9 +1155,12 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         WGPUTexture overlayDepthTex = wgpuDeviceCreateTexture(device, &dtd);
         WGPUTextureView overlayDepthView = wgpuTextureCreateView(overlayDepthTex, nullptr);
 
-        WGPUCommandEncoderDescriptor encDesc{};
-        encDesc.label = {.data = "overlay_enc", .length = 11};
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        // Ensure the per-frame encoder exists (overlayOnSurface is called from endFrame).
+        if (!renderEncoder_) {
+            WGPUCommandEncoderDescriptor encDesc{};
+            encDesc.label = {.data = "render_enc", .length = 10};
+            renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        }
 
         WGPURenderPassColorAttachment colorAtt{};
         colorAtt.view = surfaceView;
@@ -1159,18 +1180,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         rpDesc.colorAttachments = &colorAtt;
         rpDesc.depthStencilAttachment = &depthAtt;
 
-        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(encoder, &rpDesc);
+        WGPURenderPassEncoder rp = wgpuCommandEncoderBeginRenderPass(renderEncoder_, &rpDesc);
         overlayCallback_(static_cast<void*>(rp));
         wgpuRenderPassEncoderEnd(rp);
         wgpuRenderPassEncoderRelease(rp);
 
-        WGPUCommandBufferDescriptor cmdDesc{};
-        cmdDesc.label = {.data = "overlay_cmd", .length = 11};
-        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-        wgpuQueueSubmit(queue, 1, &cmd);
-
-        wgpuCommandBufferRelease(cmd);
-        wgpuCommandEncoderRelease(encoder);
         wgpuTextureViewRelease(overlayDepthView);
         wgpuTextureRelease(overlayDepthTex);
         wgpuTextureViewRelease(surfaceView);
@@ -1214,9 +1228,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
         }
 
-        WGPUCommandEncoderDescriptor encDesc{};
-        encDesc.label = {.data = "clear_enc", .length = 9};
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        if (!renderEncoder_) {
+            WGPUCommandEncoderDescriptor encDesc{};
+            encDesc.label = {.data = "render_enc", .length = 10};
+            renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        }
 
         WGPURenderPassColorAttachment colorAttachment{};
         colorAttachment.view = colorView;
@@ -1242,16 +1258,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         passDesc.colorAttachments = &colorAttachment;
         passDesc.depthStencilAttachment = &depthAttachment;
 
-        WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+        WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(renderEncoder_, &passDesc);
         wgpuRenderPassEncoderEnd(pass);
         wgpuRenderPassEncoderRelease(pass);
-
-        WGPUCommandBufferDescriptor cmdDesc{};
-        cmdDesc.label = {.data = "clear_cmd", .length = 9};
-        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-        wgpuQueueSubmit(queue, 1, &cmdBuffer);
-        wgpuCommandBufferRelease(cmdBuffer);
-        wgpuCommandEncoderRelease(encoder);
 
         // After a clear, the surface has content — mark as rendered
         if (useSurface) frame_.hasRendered = true;
@@ -1309,8 +1318,18 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             e[14] = 0.5f * e[14] + 0.5f * e[15];
         }
 
-        // Upload world-space light data
+        // Upload world-space light data, then snapshot it into a per-render pool buffer.
+        // With the single deferred encoder, all render passes in a frame share one submit.
+        // If lights->update() wrote directly to a persistent buffer, a later render() call
+        // (e.g. the HUD scene which has no lights) would overwrite it with zeros before the
+        // GPU runs the earlier passes.  Acquiring a unique pool buffer per render() call
+        // ensures each render pass sees its own correct light data.
         lights->update(scene);
+        {
+            constexpr auto kLightUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            renderLightBuffer_ = bufferPool->acquire(
+                lights->lightUniformSize(), kLightUsage, lights->currentData().data());
+        }
 
         // Shadow pass (delegated to WgpuShadowMap subsystem)
         shadowMap->autoUpdate = scope.shadowMapAutoUpdate;
@@ -1412,10 +1431,15 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
         }
 
-        // Command encoder
-        WGPUCommandEncoderDescriptor encDesc{};
-        encDesc.label = {.data = "cmd_enc", .length = 7};
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        // Create the per-frame encoder on the first render() call; subsequent calls
+        // (e.g. mirror pass, main scene) append passes to the same encoder.
+        // Submitted once in endFrame() so wgpu-native inserts correct barriers.
+        if (!renderEncoder_) {
+            WGPUCommandEncoderDescriptor encDesc{};
+            encDesc.label = {.data = "render_enc", .length = 10};
+            renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+        }
+        WGPUCommandEncoder encoder = renderEncoder_;
 
         // Determine clear color
         auto* sceneObj = scene.as<Scene>();
@@ -1592,15 +1616,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
         }
 
-        // Submit
-        WGPUCommandBufferDescriptor cmdDesc{};
-        cmdDesc.label = {.data = "cmd_buf", .length = 7};
-        WGPUCommandBuffer cmdBuffer = wgpuCommandEncoderFinish(encoder, &cmdDesc);
-        wgpuQueueSubmit(queue, 1, &cmdBuffer);
-        wgpuCommandBufferRelease(cmdBuffer);
-        wgpuCommandEncoderRelease(encoder);
-
-        // Mark that this frame has rendered content
+        // Submission is deferred to endFrame() — all passes share renderEncoder_.
         if (useSurface) frame_.hasRendered = true;
     }
 
@@ -1742,7 +1758,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 unifiedTextures.end());
 
         // Build bind group entries via subsystem
-        auto& entries = bindGroups->buildCustom(perDrawTransformBuf, lights->uniformBuffer(),
+        auto& entries = bindGroups->buildCustom(perDrawTransformBuf, renderLightBuffer_,
                                                  lights->lightUniformSize(),
                                                  customUniformBuf, pe.customUniformSize,
                                                  sm, unifiedTextures);
@@ -2014,20 +2030,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         transformData[62] = camPos.z;
         transformData[63] = 0;
 
-        // Persistent per-object transform buffer — only re-upload when data changes.
+        // Per-draw transform buffer — must be a unique buffer per draw call because it
+        // contains the view and projection matrices (camera-dependent data).  A persistent
+        // per-object buffer would be overwritten by any subsequent render() call that uses
+        // a different camera (e.g. water mirror pass) before the encoder is submitted,
+        // causing both passes to see the last-written camera matrices.
         constexpr auto kUniformUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        auto& objEntry = perObjectCache_[object->id];
-        if (!objEntry.transformBuf) {
-            WGPUBufferDescriptor bd{};
-            bd.size = wgpu::TRANSFORM_UNIFORM_SIZE;
-            bd.usage = kUniformUsage;
-            objEntry.transformBuf = wgpuDeviceCreateBuffer(device, &bd);
-        }
-        if (std::memcmp(objEntry.transformData, transformData, wgpu::TRANSFORM_UNIFORM_SIZE) != 0) {
-            wgpuQueueWriteBuffer(queue, objEntry.transformBuf, 0, transformData, wgpu::TRANSFORM_UNIFORM_SIZE);
-            std::memcpy(objEntry.transformData, transformData, wgpu::TRANSFORM_UNIFORM_SIZE);
-        }
-        WGPUBuffer perDrawTransform = objEntry.transformBuf;
+        WGPUBuffer perDrawTransform = bufferPool->acquire(wgpu::TRANSFORM_UNIFORM_SIZE, kUniformUsage, transformData);
 
         // Persistent per-material uniform buffer — only re-upload when data changes.
         float matData[wgpu::MATERIAL_UNIFORM_SIZE / sizeof(float)];
@@ -2210,7 +2219,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             .features = features,
             .transformBuffer = perDrawTransform,
             .materialBuffer = perDrawMaterial,
-            .lightBuffer = lights->uniformBuffer(),
+            .lightBuffer = renderLightBuffer_,
             .lightUniformSize = lights->lightUniformSize(),
             .params = params,
             .textures = *textures,
@@ -2326,11 +2335,6 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             if (entry.buffer) wgpuBufferRelease(entry.buffer);
         }
         instanceCache_.clear();
-
-        for (auto& [id, entry] : perObjectCache_) {
-            if (entry.transformBuf) wgpuBufferRelease(entry.transformBuf);
-        }
-        perObjectCache_.clear();
 
         for (auto& [id, entry] : perMaterialCache_) {
             if (entry.materialBuf) wgpuBufferRelease(entry.materialBuf);

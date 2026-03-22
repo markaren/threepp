@@ -30,6 +30,11 @@ namespace threepp::wgpu {
         // Current light uniform buffer size (derived from state's light limits).
         [[nodiscard]] size_t lightUniformSize() const;
 
+        // Raw light data computed by the last update() call.
+        // Used by the renderer to upload a per-render snapshot to a pool buffer,
+        // so concurrent render passes in the same frame each see their own light data.
+        [[nodiscard]] const std::vector<float>& currentData() const { return scratch_; }
+
         // Recreate the GPU buffer after light limits have changed.
         void recreateBuffer();
 
