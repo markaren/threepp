@@ -42,7 +42,7 @@ void WgpuBufferPool::beginFrame() {
     }
 }
 
-WGPUBuffer WgpuBufferPool::acquire(size_t size, WGPUBufferUsage usage, const void* data) {
+WGPUBuffer WgpuBufferPool::acquire(size_t size, WgpuBufferUsageFlags usage, const void* data) {
     size_t sc = roundToSizeClass(size);
     PoolKey key{sc, usage};
 

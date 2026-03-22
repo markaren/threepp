@@ -20,7 +20,7 @@ cmake_dependent_option(THREEPP_WITH_GLFW "Build with GLFW frontend" ON "NOT DEFI
 cmake_dependent_option(THREEPP_USE_EXTERNAL_GLFW "Use externally supplied GLFW" OFF "THREEPP_WITH_GLFW" OFF)
 
 cmake_dependent_option(THREEPP_BUILD_EXAMPLE_PROJECTS "Build example projects" ON "THREEPP_BUILD_EXAMPLES" ON)
-cmake_dependent_option(THREEPP_FETCH_ASSIMP "Make assimp available for examples" ON "THREEPP_BUILD_EXAMPLES" ON)
+cmake_dependent_option(THREEPP_FETCH_ASSIMP "Make assimp available for examples" OFF "THREEPP_BUILD_EXAMPLES" OFF)
 
 
 # ==============================================================================
@@ -117,7 +117,7 @@ install(
 if (BUILD_SHARED_LIBS AND NOT THREEPP_USE_EXTERNAL_GLFW)
     install(TARGETS glfw EXPORT threepp-targets)
 endif ()
-if (THREEPP_WGPU_GLSL_COMPAT)
+if (THREEPP_WGPU_GLSL_COMPAT AND NOT EMSCRIPTEN)
     install(TARGETS glslang SPIRV glslang-default-resource-limits EXPORT threepp-targets)
 endif ()
 install(TARGETS threepp EXPORT threepp-targets)

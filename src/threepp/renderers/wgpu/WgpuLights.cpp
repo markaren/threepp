@@ -1,5 +1,6 @@
 
 #include "WgpuLights.hpp"
+#include "WgpuCompat.hpp"
 
 #include "WgpuShaders.hpp"
 
@@ -21,7 +22,7 @@ WgpuLights::WgpuLights(WgpuState& state)
     : state_(state) {
 
     WGPUBufferDescriptor d{};
-    d.label = {.data = "light_buf", .length = 9};
+    d.label = WGPU_LABEL("light_buf");
     d.size = state_.lightLimits.lightUniformSize();
     d.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     lightBuffer_ = wgpuDeviceCreateBuffer(state_.device, &d);
@@ -159,7 +160,7 @@ void WgpuLights::recreateBuffer() {
     }
     uploaded_.clear(); // force re-upload after buffer recreation
     WGPUBufferDescriptor d{};
-    d.label = {.data = "light_buf", .length = 9};
+    d.label = WGPU_LABEL("light_buf");
     d.size = state_.lightLimits.lightUniformSize();
     d.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     lightBuffer_ = wgpuDeviceCreateBuffer(state_.device, &d);

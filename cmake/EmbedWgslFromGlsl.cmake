@@ -26,7 +26,7 @@ function(embed_wgsl_from_glsl TARGET NAME VERT_GLSL FRAG_GLSL)
     # Step 1: Translate vertex GLSL -> WGSL via naga
     add_custom_command(
         OUTPUT "${_vert_wgsl}"
-        COMMAND "${NAGA_EXECUTABLE}" "${VERT_GLSL}" "${_vert_wgsl}"
+        COMMAND "${NAGA_EXECUTABLE}" --input-kind glsl --shader-stage vert "${VERT_GLSL}" "${_vert_wgsl}"
         DEPENDS "${VERT_GLSL}" "${NAGA_EXECUTABLE}"
         COMMENT "naga: ${NAME}.vert -> WGSL"
         VERBATIM
@@ -35,7 +35,7 @@ function(embed_wgsl_from_glsl TARGET NAME VERT_GLSL FRAG_GLSL)
     # Step 2: Translate fragment GLSL -> WGSL via naga
     add_custom_command(
         OUTPUT "${_frag_wgsl}"
-        COMMAND "${NAGA_EXECUTABLE}" "${FRAG_GLSL}" "${_frag_wgsl}"
+        COMMAND "${NAGA_EXECUTABLE}" --input-kind glsl --shader-stage frag "${FRAG_GLSL}" "${_frag_wgsl}"
         DEPENDS "${FRAG_GLSL}" "${NAGA_EXECUTABLE}"
         COMMENT "naga: ${NAME}.frag -> WGSL"
         VERBATIM

@@ -1,4 +1,5 @@
 #include "WgpuShadowMap.hpp"
+#include "WgpuCompat.hpp"
 #include "WgpuGeometries.hpp"
 #include "WgpuShaders.hpp"
 
@@ -34,7 +35,7 @@ void WgpuShadowMap::init() {
     // 2D array depth texture with one layer per shadow-casting light
     {
         WGPUTextureDescriptor td{};
-        td.label = {.data = "shadow_depth_array", .length = 18};
+        td.label = WGPU_LABEL("shadow_depth_array");
         td.size = {mapSize, mapSize, static_cast<uint32_t>(maxLights)};
         td.mipLevelCount = 1;
         td.sampleCount = 1;
@@ -45,7 +46,7 @@ void WgpuShadowMap::init() {
 
         // Full array view for sampling in the fragment shader
         WGPUTextureViewDescriptor avd{};
-        avd.label = {.data = "shadow_array_view", .length = 17};
+        avd.label = WGPU_LABEL("shadow_array_view");
         avd.format = WGPUTextureFormat_Depth32Float;
         avd.dimension = WGPUTextureViewDimension_2DArray;
         avd.baseMipLevel = 0;
@@ -58,7 +59,7 @@ void WgpuShadowMap::init() {
         // Per-layer views for rendering
         for (int i = 0; i < maxLights; i++) {
             WGPUTextureViewDescriptor lvd{};
-            lvd.label = {.data = "shadow_layer_view", .length = 17};
+            lvd.label = WGPU_LABEL("shadow_layer_view");
             lvd.format = WGPUTextureFormat_Depth32Float;
             lvd.dimension = WGPUTextureViewDimension_2D;
             lvd.baseMipLevel = 0;
@@ -72,7 +73,7 @@ void WgpuShadowMap::init() {
 
     // Comparison sampler
     WGPUSamplerDescriptor sd{};
-    sd.label = {.data = "shadow_samp", .length = 11};
+    sd.label = WGPU_LABEL("shadow_samp");
     sd.addressModeU = WGPUAddressMode_ClampToEdge;
     sd.addressModeV = WGPUAddressMode_ClampToEdge;
     sd.addressModeW = WGPUAddressMode_ClampToEdge;
@@ -85,7 +86,7 @@ void WgpuShadowMap::init() {
     // Dir/Spot shadow uniform buffer
     {
         WGPUBufferDescriptor bd{};
-        bd.label = {.data = "shadow_ub", .length = 9};
+        bd.label = WGPU_LABEL("shadow_ub");
         bd.size = sl.shadowUniformSize();
         bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         uniformBuffer_ = wgpuDeviceCreateBuffer(state_.device, &bd);
@@ -94,7 +95,7 @@ void WgpuShadowMap::init() {
     // Point light shadow: 2D array texture (6 layers per light)
     {
         WGPUTextureDescriptor td{};
-        td.label = {.data = "pt_shadow_depth_array", .length = 21};
+        td.label = WGPU_LABEL("pt_shadow_depth_array");
         td.size = {mapSize, mapSize, static_cast<uint32_t>(maxPointLights * 6)};
         td.mipLevelCount = 1;
         td.sampleCount = 1;
@@ -104,7 +105,7 @@ void WgpuShadowMap::init() {
         ptDepthArrayTexture_ = wgpuDeviceCreateTexture(state_.device, &td);
 
         WGPUTextureViewDescriptor avd{};
-        avd.label = {.data = "pt_shadow_array_view", .length = 20};
+        avd.label = WGPU_LABEL("pt_shadow_array_view");
         avd.format = WGPUTextureFormat_Depth32Float;
         avd.dimension = WGPUTextureViewDimension_2DArray;
         avd.baseMipLevel = 0; avd.mipLevelCount = 1;
@@ -115,7 +116,7 @@ void WgpuShadowMap::init() {
 
         for (int i = 0; i < maxPointLights * 6; i++) {
             WGPUTextureViewDescriptor lvd{};
-            lvd.label = {.data = "pt_shadow_layer", .length = 15};
+            lvd.label = WGPU_LABEL("pt_shadow_layer");
             lvd.format = WGPUTextureFormat_Depth32Float;
             lvd.dimension = WGPUTextureViewDimension_2D;
             lvd.baseMipLevel = 0; lvd.mipLevelCount = 1;
@@ -129,7 +130,7 @@ void WgpuShadowMap::init() {
     // Point light shadow uniform buffer
     {
         WGPUBufferDescriptor bd{};
-        bd.label = {.data = "pt_shadow_ub", .length = 12};
+        bd.label = WGPU_LABEL("pt_shadow_ub");
         bd.size = sl.pointShadowUniformSize();
         bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         ptUniformBuffer_ = wgpuDeviceCreateBuffer(state_.device, &bd);
@@ -138,7 +139,7 @@ void WgpuShadowMap::init() {
     // Depth-only transform buffer (one mat4x4)
     {
         WGPUBufferDescriptor bd{};
-        bd.label = {.data = "shadow_xform", .length = 12};
+        bd.label = WGPU_LABEL("shadow_xform");
         bd.size = 64;
         bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         depthTransformBuffer_ = wgpuDeviceCreateBuffer(state_.device, &bd);
@@ -147,13 +148,13 @@ void WgpuShadowMap::init() {
     // Depth-only shader module
     std::string depthWGSL = buildDepthWGSL();
 
-    WGPUShaderSourceWGSL wgslSource{};
-    wgslSource.chain.sType = WGPUSType_ShaderSourceWGSL;
-    wgslSource.code = {.data = depthWGSL.c_str(), .length = depthWGSL.size()};
+    WgpuShaderSourceWGSL wgslSource{};
+    wgslSource.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
+    WGPU_SHADER_CODE(wgslSource, depthWGSL.c_str(), depthWGSL.size());
 
     WGPUShaderModuleDescriptor smd{};
     smd.nextInChain = &wgslSource.chain;
-    smd.label = {.data = "shadow_shader", .length = 13};
+    smd.label = WGPU_LABEL("shadow_shader");
     depthShader_ = wgpuDeviceCreateShaderModule(state_.device, &smd);
 
     // Bind group layout: one uniform buffer at binding 0
@@ -164,13 +165,13 @@ void WgpuShadowMap::init() {
     bglEntry.buffer.minBindingSize = 64;
 
     WGPUBindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = {.data = "shadow_bgl", .length = 10};
+    bglDesc.label = WGPU_LABEL("shadow_bgl");
     bglDesc.entryCount = 1;
     bglDesc.entries = &bglEntry;
     depthBindGroupLayout_ = wgpuDeviceCreateBindGroupLayout(state_.device, &bglDesc);
 
     WGPUPipelineLayoutDescriptor plDesc{};
-    plDesc.label = {.data = "shadow_pl", .length = 9};
+    plDesc.label = WGPU_LABEL("shadow_pl");
     plDesc.bindGroupLayoutCount = 1;
     plDesc.bindGroupLayouts = &depthBindGroupLayout_;
     depthPipelineLayout_ = wgpuDeviceCreatePipelineLayout(state_.device, &plDesc);
@@ -190,14 +191,14 @@ void WgpuShadowMap::init() {
 
     WGPUDepthStencilState depthStencil{};
     depthStencil.format = WGPUTextureFormat_Depth32Float;
-    depthStencil.depthWriteEnabled = WGPUOptionalBool_True;
+    depthStencil.depthWriteEnabled = WGPU_OPTIONAL_BOOL_TRUE;
     depthStencil.depthCompare = WGPUCompareFunction_Less;
 
     WGPURenderPipelineDescriptor pipeDesc{};
-    pipeDesc.label = {.data = "shadow_pipe", .length = 11};
+    pipeDesc.label = WGPU_LABEL("shadow_pipe");
     pipeDesc.layout = depthPipelineLayout_;
 
-    WGPUStringView vsEntry = {.data = "vs_main", .length = 7};
+    auto vsEntry = WGPU_ENTRY("vs_main");
     pipeDesc.vertex.module = depthShader_;
     pipeDesc.vertex.entryPoint = vsEntry;
     pipeDesc.vertex.bufferCount = 1;
@@ -311,7 +312,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         auto& shadow = shadowLights[i].shadowInterface->shadow;
 
         WGPUCommandEncoderDescriptor encDesc{};
-        encDesc.label = {.data = "shadow_enc", .length = 10};
+        encDesc.label = WGPU_LABEL("shadow_enc");
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(state_.device, &encDesc);
 
         Matrix4 lightProj = shadow->camera->projectionMatrix;
@@ -328,7 +329,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
         renderPass(encoder, scene, lightVP, i);
 
         WGPUCommandBufferDescriptor cmdDesc{};
-        cmdDesc.label = {.data = "shadow_cmd", .length = 10};
+        cmdDesc.label = WGPU_LABEL("shadow_cmd");
         WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
         wgpuQueueSubmit(state_.queue, 1, &cmd);
         wgpuCommandBufferRelease(cmd);
@@ -379,7 +380,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             int layerIdx = pi * 6 + face;
 
             WGPUCommandEncoderDescriptor encDesc{};
-            encDesc.label = {.data = "pt_shadow_enc", .length = 13};
+            encDesc.label = WGPU_LABEL("pt_shadow_enc");
             WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(state_.device, &encDesc);
 
             WGPURenderPassDepthStencilAttachment depthAtt{};
@@ -389,7 +390,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             depthAtt.depthClearValue = 1.0f;
 
             WGPURenderPassDescriptor passDesc{};
-            passDesc.label = {.data = "pt_shadow_pass", .length = 14};
+            passDesc.label = WGPU_LABEL("pt_shadow_pass");
             passDesc.colorAttachmentCount = 0;
             passDesc.colorAttachments = nullptr;
             passDesc.depthStencilAttachment = &depthAtt;
@@ -402,7 +403,7 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             wgpuRenderPassEncoderRelease(pass);
 
             WGPUCommandBufferDescriptor cmdDesc{};
-            cmdDesc.label = {.data = "pt_shadow_cmd", .length = 13};
+            cmdDesc.label = WGPU_LABEL("pt_shadow_cmd");
             WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
             wgpuQueueSubmit(state_.queue, 1, &cmd);
             wgpuCommandBufferRelease(cmd);
@@ -426,7 +427,7 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
     depthAttachment.depthClearValue = 1.0f;
 
     WGPURenderPassDescriptor passDesc{};
-    passDesc.label = {.data = "shadow_pass", .length = 11};
+    passDesc.label = WGPU_LABEL("shadow_pass");
     passDesc.colorAttachmentCount = 0;
     passDesc.colorAttachments = nullptr;
     passDesc.depthStencilAttachment = &depthAttachment;
@@ -459,7 +460,7 @@ void WgpuShadowMap::renderObject(WGPURenderPassEncoder pass, Object3D& object,
             entry.size = 64;
 
             WGPUBindGroupDescriptor bgDesc{};
-            bgDesc.label = {.data = "shadow_bg", .length = 9};
+            bgDesc.label = WGPU_LABEL("shadow_bg");
             bgDesc.layout = depthBindGroupLayout_;
             bgDesc.entryCount = 1;
             bgDesc.entries = &entry;
