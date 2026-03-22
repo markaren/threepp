@@ -3,6 +3,7 @@
 #include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 
+#include <webgpu/webgpu.h>
 #ifndef __EMSCRIPTEN__
 #include <webgpu/wgpu.h>
 #else
@@ -11,6 +12,24 @@
 
 #include <chrono>
 #include <cmath>
+
+// Pull in the compat layer used by the rest of threepp's WGPU code
+#ifdef __EMSCRIPTEN__
+// Emscripten type aliases (mirrors WgpuCompat.hpp but self-contained for examples)
+using WgpuTexelCopyTextureInfo  = WGPUImageCopyTexture;
+using WgpuTexelCopyBufferInfo   = WGPUImageCopyBuffer;
+using WgpuTexelCopyBufferLayout = WGPUTextureDataLayout;
+using WgpuMapAsyncStatus        = WGPUBufferMapAsyncStatus;
+#define BUOY_WGPU_LABEL(s) (s)
+#define BUOY_MAP_ASYNC_STATUS_SUCCESS WGPUBufferMapAsyncStatus_Success
+#else
+using WgpuTexelCopyTextureInfo  = WGPUTexelCopyTextureInfo;
+using WgpuTexelCopyBufferInfo   = WGPUTexelCopyBufferInfo;
+using WgpuTexelCopyBufferLayout = WGPUTexelCopyBufferLayout;
+using WgpuMapAsyncStatus        = WGPUMapAsyncStatus;
+#define BUOY_WGPU_LABEL(s) WGPUStringView{.data = (s), .length = sizeof(s) - 1}
+#define BUOY_MAP_ASYNC_STATUS_SUCCESS WGPUMapAsyncStatus_Success
+#endif
 
 namespace webtide {
 
@@ -35,7 +54,7 @@ public:
         , queue_ (static_cast<WGPUQueue> (renderer.nativeQueue()))
     {
         WGPUBufferDescriptor bd{};
-        bd.label = {.data = "buoy_staging", .length = 12};
+        bd.label = BUOY_WGPU_LABEL("buoy_staging");
         bd.size  = kNumSlots * kSlotBytes; // 8 × 256 = 2048 bytes
         bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
         staging_ = wgpuDeviceCreateBuffer(device_, &bd);
@@ -88,15 +107,15 @@ public:
         auto [tx2, ty2] = texelOf(c2Tile);
 
         WGPUCommandEncoderDescriptor ed{};
-        ed.label = {.data = "buoy_enc", .length = 8};
+        ed.label = BUOY_WGPU_LABEL("buoy_enc");
         WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, &ed);
 
         auto copyTexel = [&](WGPUTexture tex, uint32_t tx, uint32_t ty, uint32_t slot) {
-            WGPUTexelCopyTextureInfo src{};
+            WgpuTexelCopyTextureInfo src{};
             src.texture = tex;
             src.origin  = {tx, ty, 0};
 
-            WGPUTexelCopyBufferInfo dst{};
+            WgpuTexelCopyBufferInfo dst{};
             dst.buffer              = staging_;
             dst.layout.offset       = static_cast<uint64_t>(slot) * kSlotBytes;
             dst.layout.bytesPerRow  = kSlotBytes; // ≥ 256, multiple of 256 ✓
@@ -116,11 +135,27 @@ public:
         copyTexel(grad2.texture(), tx2, ty2, 7);
 
         WGPUCommandBufferDescriptor cd{};
-        cd.label = {.data = "buoy_cmd", .length = 8};
+        cd.label = BUOY_WGPU_LABEL("buoy_cmd");
         WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, &cd);
         wgpuQueueSubmit(queue_, 1, &cmd);
 
-        struct MapState { bool done = false; WGPUMapAsyncStatus status{}; } s;
+        struct MapState { bool done = false; WgpuMapAsyncStatus status{}; } s;
+
+#ifdef __EMSCRIPTEN__
+        wgpuBufferMapAsync(staging_, WGPUMapMode_Read, 0, kNumSlots * kSlotBytes,
+            [](WGPUBufferMapAsyncStatus st, void* userdata) {
+                auto* s   = static_cast<MapState*>(userdata);
+                s->status = st;
+                s->done   = true;
+            }, &s);
+
+        // Emscripten has no wgpuDevicePoll; use emscripten_sleep to yield to the browser
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        while (!s.done) {
+            if (std::chrono::steady_clock::now() > deadline) break;
+            emscripten_sleep(1);
+        }
+#else
         WGPUBufferMapCallbackInfo cb{};
         cb.mode     = WGPUCallbackMode_AllowSpontaneous;
         cb.callback = [](WGPUMapAsyncStatus st, WGPUStringView, void* ud1, void*) {
@@ -136,9 +171,10 @@ public:
             if (std::chrono::steady_clock::now() > deadline) break;
             wgpuDevicePoll(device_, true, nullptr);
         }
+#endif
 
         Result r{};
-        if (s.done && s.status == WGPUMapAsyncStatus_Success) {
+        if (s.done && s.status == BUOY_MAP_ASYNC_STATUS_SUCCESS) {
             // Each 256-byte slot: [float R, float G, <248 bytes padding>]
             // stride = 256/4 = 64 floats between slot starts.
             const auto* f = static_cast<const float*>(
