@@ -11,5 +11,5 @@ ShaderPass::ShaderPass(const std::string& wgslSource)
 ShaderPass::~ShaderPass() = default;
 
 std::shared_ptr<ShaderPass> ShaderPass::create(const std::string& wgslSource) {
-    return std::shared_ptr<ShaderPass>(new ShaderPass(wgslSource));
+    return std::make_shared<ShaderPass>(wgslSource);
 }

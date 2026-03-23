@@ -1,7 +1,6 @@
 // Pipeline creation and caching for the Wgpu renderer backend.
 
 #include "WgpuPipelines.hpp"
-#include "WgpuCompat.hpp"
 #include "WgpuGeometries.hpp"
 #include "WgpuShaders.hpp"
 
@@ -258,14 +257,14 @@ namespace threepp::wgpu {
 
         // Shader module
         std::string wgsl = buildWGSL(features, state_.lightLimits, state_.shadowLimits);
-        WgpuShaderSourceWGSL wgslSource{};
-        wgslSource.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
+        WGPUShaderSourceWGSL wgslSource{};
+        wgslSource.chain.sType = WGPUSType_ShaderSourceWGSL;
         wgslSource.chain.next = nullptr;
-        WGPU_SHADER_CODE(wgslSource, wgsl.c_str(), wgsl.size());
+        wgslSource.code = {.data = wgsl.c_str(), .length = static_cast<size_t>(wgsl.size())};
 
         WGPUShaderModuleDescriptor shaderDesc{};
         shaderDesc.nextInChain = &wgslSource.chain;
-        shaderDesc.label = WGPU_LABEL("wgpu_shader");
+        shaderDesc.label = WGPUStringView{"wgpu_shader", WGPU_STRLEN} ;
         entry.shader = wgpuDeviceCreateShaderModule(state_.device, &shaderDesc);
         if (!entry.shader) {
             std::cerr << "WgpuPipelines: Failed to create shader module for features 0x"
@@ -277,14 +276,14 @@ namespace threepp::wgpu {
         auto bglEntries = buildBindGroupLayoutEntries(features);
 
         WGPUBindGroupLayoutDescriptor bglDesc{};
-        bglDesc.label = WGPU_LABEL("bind_group_layout");
+        bglDesc.label = WGPUStringView{"bind_group_layout", WGPU_STRLEN} ;
         bglDesc.entryCount = bglEntries.size();
         bglDesc.entries = bglEntries.data();
         entry.bindGroupLayout = wgpuDeviceCreateBindGroupLayout(state_.device, &bglDesc);
 
         // Pipeline layout
         WGPUPipelineLayoutDescriptor plDesc{};
-        plDesc.label = WGPU_LABEL("pipeline_layout");
+        plDesc.label = WGPUStringView{"pipeline_layout", WGPU_STRLEN} ;
         plDesc.bindGroupLayoutCount = 1;
         plDesc.bindGroupLayouts = &entry.bindGroupLayout;
         entry.layout = wgpuDeviceCreatePipelineLayout(state_.device, &plDesc);
@@ -345,7 +344,7 @@ namespace threepp::wgpu {
             colorTarget.blend = &blendState;
         }
 
-        auto fsEntry = WGPU_ENTRY("fs_main");
+        auto fsEntry = WGPUStringView{"fs_main", WGPU_STRLEN} ;
         WGPUFragmentState fragmentState{};
         fragmentState.module = entry.shader;
         fragmentState.entryPoint = fsEntry;
@@ -355,15 +354,15 @@ namespace threepp::wgpu {
         WGPUDepthStencilState depthStencil{};
         depthStencil.format = WGPUTextureFormat_Depth24Plus;
         depthStencil.depthWriteEnabled = (features & ShaderFeatures::DepthWriteOff)
-                                              ? WGPU_OPTIONAL_BOOL_FALSE
-                                              : WGPU_OPTIONAL_BOOL_TRUE;
+                                              ? WGPUOptionalBool_False
+                                              : WGPUOptionalBool_True;
         depthStencil.depthCompare = WGPUCompareFunction_LessEqual;
 
         WGPURenderPipelineDescriptor pipelineDesc{};
-        pipelineDesc.label = WGPU_LABEL("wgpu_pipeline");
+        pipelineDesc.label = WGPUStringView{"wgpu_pipeline", WGPU_STRLEN} ;
         pipelineDesc.layout = entry.layout;
 
-        auto vsEntry = WGPU_ENTRY("vs_main");
+        auto vsEntry = WGPUStringView{"vs_main", WGPU_STRLEN} ;
         pipelineDesc.vertex.module = entry.shader;
         pipelineDesc.vertex.entryPoint = vsEntry;
         pipelineDesc.vertex.bufferCount = 1;
@@ -492,7 +491,7 @@ namespace threepp::wgpu {
 
                     WGPUShaderModuleDescriptor desc{};
                     desc.nextInChain = &spirvSrc.chain;
-                    desc.label       = WGPU_LABEL("glsl_vert_spirv");
+                    desc.label       = WGPUStringView{"glsl_vert_spirv", WGPU_STRLEN} ;
                     entry.vertShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
                     if (!entry.vertShader) {
                         std::cerr << "[WgpuPipelines] Failed to create vertex SPIR-V module\n";
@@ -511,7 +510,7 @@ namespace threepp::wgpu {
 
                     WGPUShaderModuleDescriptor desc{};
                     desc.nextInChain = &spirvSrc.chain;
-                    desc.label       = WGPU_LABEL("glsl_frag_spirv");
+                    desc.label       = WGPUStringView{"glsl_frag_spirv", WGPU_STRLEN} ;
                     entry.fragShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
                     if (!entry.fragShader) {
                         std::cerr << "[WgpuPipelines] Failed to create fragment SPIR-V module\n";
@@ -532,14 +531,14 @@ namespace threepp::wgpu {
                 if (hasSeparateWgsl) {
                     // Create separate vertex WGSL module
                     {
-                        WgpuShaderSourceWGSL wgslSrc{};
-                        wgslSrc.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
+                        WGPUShaderSourceWGSL wgslSrc{};
+                        wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
                         wgslSrc.chain.next  = nullptr;
-                        WGPU_SHADER_CODE(wgslSrc, sm->vertexShader.c_str(), sm->vertexShader.size());
+                        wgslSrc.code = {.data = sm->vertexShader.c_str(), .length = static_cast<size_t>(sm->vertexShader.size())};
 
                         WGPUShaderModuleDescriptor desc{};
                         desc.nextInChain = &wgslSrc.chain;
-                        desc.label       = WGPU_LABEL("wgsl_vert");
+                        desc.label       = WGPUStringView{"wgsl_vert", WGPU_STRLEN} ;
                         entry.vertShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
                         if (!entry.vertShader) {
                             std::cerr << "[WgpuPipelines] Failed to create separate vertex WGSL module\n";
@@ -549,14 +548,14 @@ namespace threepp::wgpu {
                     }
                     // Create separate fragment WGSL module
                     {
-                        WgpuShaderSourceWGSL wgslSrc{};
-                        wgslSrc.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
+                        WGPUShaderSourceWGSL wgslSrc{};
+                        wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
                         wgslSrc.chain.next  = nullptr;
-                        WGPU_SHADER_CODE(wgslSrc, sm->fragmentShader.c_str(), sm->fragmentShader.size());
+                        wgslSrc.code = {.data = sm->fragmentShader.c_str(), .length = static_cast<size_t>(sm->fragmentShader.size())};
 
                         WGPUShaderModuleDescriptor desc{};
                         desc.nextInChain = &wgslSrc.chain;
-                        desc.label       = WGPU_LABEL("wgsl_frag");
+                        desc.label       = WGPUStringView{"wgsl_frag", WGPU_STRLEN} ;
                         entry.fragShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
                         if (!entry.fragShader) {
                             std::cerr << "[WgpuPipelines] Failed to create separate fragment WGSL module\n";
@@ -567,14 +566,14 @@ namespace threepp::wgpu {
                     }
                 } else {
                     // Combined WGSL path: single module with vs_main + fs_main
-                    WgpuShaderSourceWGSL wgslSrc{};
-                    wgslSrc.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
+                    WGPUShaderSourceWGSL wgslSrc{};
+                    wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
                     wgslSrc.chain.next  = nullptr;
-                    WGPU_SHADER_CODE(wgslSrc, wgsl.c_str(), wgsl.size());
+                    wgslSrc.code = {.data = wgsl.c_str(), .length = static_cast<size_t>(wgsl.size())};
 
                     WGPUShaderModuleDescriptor shaderDesc{};
                     shaderDesc.nextInChain = &wgslSrc.chain;
-                    shaderDesc.label       = WGPU_LABEL("custom_shader");
+                    shaderDesc.label       = WGPUStringView{"custom_shader", WGPU_STRLEN} ;
                     entry.shader = wgpuDeviceCreateShaderModule(state_.device, &shaderDesc);
                 }
             }
@@ -681,13 +680,13 @@ namespace threepp::wgpu {
             entry.bglEntries = bglEntries;
 
             WGPUBindGroupLayoutDescriptor bglDesc{};
-            bglDesc.label = WGPU_LABEL("custom_bgl");
+            bglDesc.label = WGPUStringView{"custom_bgl", WGPU_STRLEN} ;
             bglDesc.entryCount = bglEntries.size();
             bglDesc.entries = bglEntries.data();
             entry.bindGroupLayout = wgpuDeviceCreateBindGroupLayout(state_.device, &bglDesc);
 
             WGPUPipelineLayoutDescriptor plDesc{};
-            plDesc.label = WGPU_LABEL("custom_pl");
+            plDesc.label = WGPUStringView{"custom_pl", WGPU_STRLEN} ;
             plDesc.bindGroupLayoutCount = 1;
             plDesc.bindGroupLayouts = &entry.bindGroupLayout;
             entry.layout = wgpuDeviceCreatePipelineLayout(state_.device, &plDesc);
@@ -753,8 +752,8 @@ namespace threepp::wgpu {
 
             // SPIR-V modules (from glslang) use "main"; WGSL always uses vs_main/fs_main.
             const bool isSpirvPath = useSeparateModules && (entry.shader == nullptr);
-            auto vsEntry = (isSpirvPath && isGlsl) ? WGPU_ENTRY("main") : WGPU_ENTRY("vs_main");
-            auto fsEntry = (isSpirvPath && isGlsl) ? WGPU_ENTRY("main") : WGPU_ENTRY("fs_main");
+            auto vsEntry = (isSpirvPath && isGlsl) ? WGPUStringView{"main", WGPU_STRLEN}  : WGPUStringView{"vs_main", WGPU_STRLEN} ;
+            auto fsEntry = (isSpirvPath && isGlsl) ? WGPUStringView{"main", WGPU_STRLEN}  : WGPUStringView{"fs_main", WGPU_STRLEN} ;
 
             WGPUFragmentState fragmentState{};
             fragmentState.module = fsModule;
@@ -779,7 +778,7 @@ namespace threepp::wgpu {
             WGPUDepthStencilState depthStencil{};
             depthStencil.format = WGPUTextureFormat_Depth24Plus;
             depthStencil.depthWriteEnabled = sm->depthWrite
-                ? WGPU_OPTIONAL_BOOL_TRUE : WGPU_OPTIONAL_BOOL_FALSE;
+                ? WGPUOptionalBool_True : WGPUOptionalBool_False;
             depthStencil.depthCompare = sm->depthTest
                 ? mapDepthFunc(sm->depthFunc) : WGPUCompareFunction_Always;
 
@@ -788,7 +787,7 @@ namespace threepp::wgpu {
             else if (sm->side == Side::Back) cullMode = WGPUCullMode_Front;
 
             WGPURenderPipelineDescriptor pipelineDesc{};
-            pipelineDesc.label = WGPU_LABEL("custom_pipeline");
+            pipelineDesc.label = WGPUStringView{"custom_pipeline", WGPU_STRLEN} ;
             pipelineDesc.layout = entry.layout;
 
             pipelineDesc.vertex.module = vsModule;

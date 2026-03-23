@@ -69,10 +69,7 @@
 #include <webgpu/wgpu.h>
 #else
 #include <emscripten.h>
-#include <emscripten/html5_webgpu.h>
 #endif
-
-#include "wgpu/WgpuCompat.hpp"
 
 // stb_image_write — implementation is already compiled in GLRenderer.cpp.
 // Match the linkage used by the implementation (extern "C" in C++).
@@ -186,9 +183,6 @@ struct WgpuRenderer::Impl {
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
     WGPUSurface surface = nullptr;
-#ifdef __EMSCRIPTEN__
-    WGPUSwapChain swapChain = nullptr;
-#endif
 
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
 
@@ -286,11 +280,8 @@ struct WgpuRenderer::Impl {
     // a single frame so that HUD / multi-pass rendering works correctly.
     // Acquired on the first render() of a frame, released by endFrame().
     struct FrameSurface {
-#ifndef __EMSCRIPTEN__
+
         WGPUSurfaceTexture surfaceTexture{};
-#else
-        WGPUTextureView swapChainView = nullptr; // acquired once per frame from swap chain
-#endif
         WGPUTextureView colorView = nullptr;
         WGPUTextureView depthView = nullptr;    // points into cachedFrame_
         WGPUTextureView resolveView = nullptr;
@@ -326,7 +317,7 @@ struct WgpuRenderer::Impl {
         cachedFrame_.sampleCount = sc;
 
         WGPUTextureDescriptor dtd{};
-        dtd.label = WGPU_LABEL("depth_tex");
+        dtd.label = WGPUStringView{"depth_tex", sizeof("depth_tex") - 1};
         dtd.size = {w, h, 1};
         dtd.mipLevelCount = 1;
         dtd.sampleCount = sc;
@@ -338,7 +329,7 @@ struct WgpuRenderer::Impl {
 
         if (sc > 1) {
             WGPUTextureDescriptor msaaCtd{};
-            msaaCtd.label = WGPU_LABEL("frame_msaa_color");
+            msaaCtd.label = WGPUStringView{"frame_msaa_color", sizeof("frame_msaa_color") - 1};
             msaaCtd.size = {w, h, 1};
             msaaCtd.mipLevelCount = 1;
             msaaCtd.sampleCount = sc;
@@ -427,9 +418,9 @@ struct ClearColor { color: vec4<f32> }
 }
 @fragment fn fs_main() -> @location(0) vec4<f32> { return u.color; }
 )";
-        WgpuShaderSourceWGSL src{};
-        src.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
-        WGPU_SHADER_CODE(src, wgsl, strlen(wgsl));
+        WGPUShaderSourceWGSL src{};
+        src.chain.sType = WGPUSType_ShaderSourceWGSL;
+        src.code = {.data = wgsl, .length = static_cast<size_t>(strlen(wgsl))};
         WGPUShaderModuleDescriptor smd{};
         smd.nextInChain = &src.chain;
         clearShader_ = wgpuDeviceCreateShaderModule(device, &smd);
@@ -450,17 +441,17 @@ struct ClearColor { color: vec4<f32> }
         WGPUColorTargetState ct{};
         ct.format = colorFormat;
         ct.writeMask = WGPUColorWriteMask_All;
-        auto fsEntry = WGPU_ENTRY("fs_main");
+        auto fsEntry = WGPUStringView{"fs_main", sizeof("fs_main") - 1};
         WGPUFragmentState fs{};
         fs.module = clearShader_; fs.entryPoint = fsEntry; fs.targetCount = 1; fs.targets = &ct;
 
         WGPUDepthStencilState ds{};
         ds.format = WGPUTextureFormat_Depth24Plus;
-        ds.depthWriteEnabled = WGPU_OPTIONAL_BOOL_TRUE;
+        ds.depthWriteEnabled = WGPUOptionalBool_True;
         ds.depthCompare = WGPUCompareFunction_Always;
 
         WGPURenderPipelineDescriptor pd{};
-        auto vsEntry = WGPU_ENTRY("vs_main");
+        auto vsEntry = WGPUStringView{"vs_main", sizeof("vs_main") - 1};
         pd.layout = clearPipelineLayout_;
         pd.vertex.module = clearShader_; pd.vertex.entryPoint = vsEntry;
         pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
@@ -601,15 +592,15 @@ struct ClearColor { color: vec4<f32> }
 
 #if defined(__EMSCRIPTEN__)
         // Emscripten: attach to the HTML canvas element.
-        WGPUSurfaceDescriptorFromCanvasHTMLSelector canvasDesc{};
-        canvasDesc.chain.sType = WGPUSType_SurfaceDescriptorFromCanvasHTMLSelector;
+        WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasDesc{};
+        canvasDesc.chain.sType = WGPUSType_EmscriptenSurfaceSourceCanvasHTMLSelector;
         canvasDesc.chain.next = nullptr;
-        canvasDesc.selector = "#canvas";
+        canvasDesc.selector = WGPUStringView{"#canvas", 7};
         surfDesc.nextInChain = &canvasDesc.chain;
 
 #elif defined(__linux__)
         auto* glfwWindow = static_cast<GLFWwindow*>(canvas.windowPtr());
-        surfDesc.label = WGPU_LABEL("threepp_surface");
+        surfDesc.label = WGPUStringView{"threepp_surface", sizeof("threepp_surface") - 1};
 
         Display* x11Display = glfwGetX11Display();
         ::Window x11Window = glfwGetX11Window(glfwWindow);
@@ -623,7 +614,7 @@ struct ClearColor { color: vec4<f32> }
 
 #elif defined(_WIN32)
         auto* glfwWindow = static_cast<GLFWwindow*>(canvas.windowPtr());
-        surfDesc.label = WGPU_LABEL("threepp_surface");
+        surfDesc.label = WGPUStringView{"threepp_surface", sizeof("threepp_surface") - 1};
 
         WGPUSurfaceSourceWindowsHWND hwndSource{};
         hwndSource.chain.sType = WGPUSType_SurfaceSourceWindowsHWND;
@@ -634,7 +625,7 @@ struct ClearColor { color: vec4<f32> }
 
 #elif defined(__APPLE__)
         auto* glfwWindow = static_cast<GLFWwindow*>(canvas.windowPtr());
-        surfDesc.label = WGPU_LABEL("threepp_surface");
+        surfDesc.label = WGPUStringView{"threepp_surface", sizeof("threepp_surface") - 1};
 
         void* metalLayer = wgpu_create_metal_layer(glfwGetCocoaWindow(glfwWindow));
         WGPUSurfaceSourceMetalLayer metalSource{};
@@ -656,19 +647,6 @@ struct ClearColor { color: vec4<f32> }
         WGPURequestAdapterOptions options{};
         options.compatibleSurface = surface; // nullptr in headless mode
 
-#ifdef __EMSCRIPTEN__
-        wgpuInstanceRequestAdapter(instance, &options,
-            [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
-               const char* message, void* userdata) {
-                auto* ud = static_cast<UserData*>(userdata);
-                if (status == WGPURequestAdapterStatus_Success) {
-                    ud->adapter = adapter;
-                } else {
-                    std::cerr << "WgpuRenderer: Adapter request failed: " << message << std::endl;
-                }
-                ud->done = true;
-            }, &userData);
-#else
         WGPURequestAdapterCallbackInfo callbackInfo{};
         callbackInfo.mode = WGPUCallbackMode_AllowSpontaneous;
         callbackInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter adapter,
@@ -685,7 +663,6 @@ struct ClearColor { color: vec4<f32> }
         callbackInfo.userdata1 = &userData;
 
         wgpuInstanceRequestAdapter(instance, &options, callbackInfo);
-#endif
 
         auto deadline = std::chrono::steady_clock::now() + WGPU_ASYNC_TIMEOUT;
         while (!userData.done) {
@@ -712,21 +689,8 @@ struct ClearColor { color: vec4<f32> }
         } userData;
 
         WGPUDeviceDescriptor deviceDesc{};
-        deviceDesc.label = WGPU_LABEL("threepp_device");
+        deviceDesc.label = WGPUStringView{"threepp_device", sizeof("threepp_device") - 1};
 
-#ifdef __EMSCRIPTEN__
-        wgpuAdapterRequestDevice(adapter, &deviceDesc,
-            [](WGPURequestDeviceStatus status, WGPUDevice device,
-               const char* message, void* userdata) {
-                auto* ud = static_cast<UserData*>(userdata);
-                if (status == WGPURequestDeviceStatus_Success) {
-                    ud->device = device;
-                } else {
-                    std::cerr << "WgpuRenderer: Device request failed: " << message << std::endl;
-                }
-                ud->done = true;
-            }, &userData);
-#else
         // Install an error callback that logs instead of panicking.
         // Transient validation errors (e.g. stale scissor rect during window
         // resize) are non-fatal and should not abort the process.
@@ -753,7 +717,7 @@ struct ClearColor { color: vec4<f32> }
         callbackInfo.userdata1 = &userData;
 
         wgpuAdapterRequestDevice(adapter, &deviceDesc, callbackInfo);
-#endif
+
 
         auto deadline = std::chrono::steady_clock::now() + WGPU_ASYNC_TIMEOUT;
         while (!userData.done) {
@@ -772,15 +736,6 @@ struct ClearColor { color: vec4<f32> }
         }
         device = userData.device;
 
-#ifdef __EMSCRIPTEN__
-        // On Emscripten the device descriptor has no uncapturedErrorCallbackInfo field;
-        // install the error callback after obtaining the device.
-        wgpuDeviceSetUncapturedErrorCallback(device,
-            [](WGPUErrorType type, const char* message, void*) {
-                std::cerr << "WgpuRenderer: GPU error (type " << static_cast<int>(type) << "): "
-                          << message << std::endl;
-            }, nullptr);
-#endif
     }
 
     void configureSurface() {
@@ -788,15 +743,6 @@ struct ClearColor { color: vec4<f32> }
         const auto h = static_cast<uint32_t>(std::floor(size_.height() * pixelRatio_));
         if (w == 0 || h == 0) return; // window is minimised — wgpu forbids zero-size surfaces
 
-#ifdef __EMSCRIPTEN__
-        WGPUSwapChainDescriptor scDesc{};
-        scDesc.usage = WGPUTextureUsage_RenderAttachment;
-        scDesc.format = surfaceFormat;
-        scDesc.width = w;
-        scDesc.height = h;
-        scDesc.presentMode = WGPUPresentMode_Fifo;
-        swapChain = wgpuDeviceCreateSwapChain(device, surface, &scDesc);
-#else
         WGPUSurfaceConfiguration config{};
         config.device = device;
         config.format = surfaceFormat;
@@ -809,7 +755,7 @@ struct ClearColor { color: vec4<f32> }
         config.viewFormats = nullptr;
 
         wgpuSurfaceConfigure(surface, &config);
-#endif
+
     }
 
     // Acquire the surface texture for this frame (called once per frame).
@@ -819,29 +765,6 @@ struct ClearColor { color: vec4<f32> }
 
         if (!surface) return false;
 
-#ifdef __EMSCRIPTEN__
-        if (!swapChain) return false;
-        WGPUTextureView backbufferView = wgpuSwapChainGetCurrentTextureView(swapChain);
-        if (!backbufferView) return false;
-
-        frame_.swapChainView = backbufferView; // cache for reuse within this frame
-
-        // Use the same size as configureSurface (CSS size × pixelRatio)
-        frame_.width = static_cast<uint32_t>(std::floor(size_.width() * pixelRatio_));
-        frame_.height = static_cast<uint32_t>(std::floor(size_.height() * pixelRatio_));
-        ensureFrameTextures(frame_.width, frame_.height, sampleCount_);
-
-        if (sampleCount_ > 1) {
-            frame_.resolveView = backbufferView;
-            frame_.colorView = cachedFrame_.msaaColorView;
-        } else {
-            frame_.colorView = backbufferView;
-        }
-        frame_.depthView = cachedFrame_.depthView;
-        frame_.active = true;
-        frame_.hasRendered = false;
-        return true;
-#else
         wgpuSurfaceGetCurrentTexture(surface, &frame_.surfaceTexture);
         if (frame_.surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
             frame_.surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
@@ -857,7 +780,7 @@ struct ClearColor { color: vec4<f32> }
         ensureFrameTextures(frame_.width, frame_.height, sampleCount_);
 
         WGPUTextureViewDescriptor vd{};
-        vd.label = WGPU_LABEL("surface_view");
+        vd.label = WGPUStringView{"surface_view", sizeof("surface_view") - 1};
         vd.format = surfaceFormat;
         vd.dimension = WGPUTextureViewDimension_2D;
         vd.baseMipLevel = 0; vd.mipLevelCount = 1;
@@ -876,7 +799,7 @@ struct ClearColor { color: vec4<f32> }
         frame_.active = true;
         frame_.hasRendered = false;
         return true;
-#endif
+
     }
 
     // Present and release the per-frame surface state.
@@ -893,12 +816,6 @@ struct ClearColor { color: vec4<f32> }
         }
 
         // depth and MSAA textures/views are owned by cachedFrame_ — do not release here.
-#ifdef __EMSCRIPTEN__
-        // Release the swap chain view once (obtained in acquireFrame).
-        if (frame_.swapChainView) {
-            wgpuTextureViewRelease(frame_.swapChainView);
-        }
-#else
         if (frame_.resolveView) {
             // colorView points to the cached MSAA view — do not release.
             wgpuTextureViewRelease(frame_.resolveView);
@@ -906,7 +823,7 @@ struct ClearColor { color: vec4<f32> }
             wgpuTextureViewRelease(frame_.colorView);
         }
         wgpuTextureRelease(frame_.surfaceTexture.texture);
-#endif
+
 
         frame_ = {};
     }
@@ -931,7 +848,7 @@ struct ClearColor { color: vec4<f32> }
         // all passes in one command buffer so wgpu-native inserts correct barriers.
         if (renderEncoder_) {
             WGPUCommandBufferDescriptor cmdDesc{};
-            cmdDesc.label = WGPU_LABEL("frame_cmd");
+            cmdDesc.label = WGPUStringView{"frame_cmd", sizeof("frame_cmd") - 1};
             WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(renderEncoder_, &cmdDesc);
             wgpuQueueSubmit(queue, 1, &cmd);
             wgpuCommandBufferRelease(cmd);
@@ -1031,19 +948,19 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             entries[2].buffer.minBindingSize = 16;
 
             WGPUBindGroupLayoutDescriptor bglDesc{};
-            bglDesc.label = WGPU_LABEL("tonemap_bgl");
+            bglDesc.label = WGPUStringView{"tonemap_bgl", sizeof("tonemap_bgl") - 1};
             bglDesc.entryCount = 3;
             bglDesc.entries = entries;
             toneMap_.bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
 
             WGPUPipelineLayoutDescriptor plDesc{};
-            plDesc.label = WGPU_LABEL("tonemap_pl");
+            plDesc.label = WGPUStringView{"tonemap_pl", sizeof("tonemap_pl") - 1};
             plDesc.bindGroupLayoutCount = 1;
             plDesc.bindGroupLayouts = &toneMap_.bindGroupLayout;
             toneMap_.pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
 
             WGPUSamplerDescriptor sd{};
-            sd.label = WGPU_LABEL("tonemap_sampler");
+            sd.label = WGPUStringView{"tonemap_sampler", sizeof("tonemap_sampler") - 1};
             sd.minFilter = WGPUFilterMode_Linear;
             sd.magFilter = WGPUFilterMode_Linear;
             sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
@@ -1054,7 +971,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             toneMap_.sampler = wgpuDeviceCreateSampler(device, &sd);
 
             WGPUBufferDescriptor ubDesc{};
-            ubDesc.label = WGPU_LABEL("tonemap_ub");
+            ubDesc.label = WGPUStringView{"tonemap_ub", sizeof("tonemap_ub") - 1};
             ubDesc.size = 16;
             ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
             toneMap_.uniformBuf = wgpuDeviceCreateBuffer(device, &ubDesc);
@@ -1068,21 +985,21 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             bool srgb = (scope.outputEncoding == Encoding::sRGB);
             auto wgsl = buildToneMapWGSL(scope.toneMapping, srgb);
 
-            WgpuShaderSourceWGSL wgslSrc{};
-            wgslSrc.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
-            WGPU_SHADER_CODE(wgslSrc, wgsl.c_str(), wgsl.size());
+            WGPUShaderSourceWGSL wgslSrc{};
+            wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+            wgslSrc.code = {.data = wgsl.c_str(), .length = static_cast<size_t>(wgsl.size())};
 
             WGPUShaderModuleDescriptor smDesc{};
             smDesc.nextInChain = &wgslSrc.chain;
-            smDesc.label = WGPU_LABEL("tonemap_shader");
+            smDesc.label = WGPUStringView{"tonemap_shader", sizeof("tonemap_shader") - 1};
             toneMap_.shaderModules[idx] = wgpuDeviceCreateShaderModule(device, &smDesc);
 
             WGPUColorTargetState colorTarget{};
             colorTarget.format = surfaceFormat;
             colorTarget.writeMask = WGPUColorWriteMask_All;
 
-            auto vsEntry = WGPU_ENTRY("vs");
-            auto fsEntry = WGPU_ENTRY("fs");
+            auto vsEntry = WGPUStringView{"vs", sizeof("vs") - 1};
+            auto fsEntry = WGPUStringView{"fs", sizeof("fs") - 1};
 
             WGPUFragmentState fragmentState{};
             fragmentState.module = toneMap_.shaderModules[idx];
@@ -1091,7 +1008,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             fragmentState.targets = &colorTarget;
 
             WGPURenderPipelineDescriptor pipeDesc{};
-            pipeDesc.label = WGPU_LABEL("tonemap_pipe");
+            pipeDesc.label = WGPUStringView{"tonemap_pipe", sizeof("tonemap_pipe") - 1};
             pipeDesc.layout = toneMap_.pipelineLayout;
             pipeDesc.vertex.module = toneMap_.shaderModules[idx];
             pipeDesc.vertex.entryPoint = vsEntry;
@@ -1121,7 +1038,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         // Color texture (non-MSAA, used as texture binding source)
         WGPUTextureDescriptor td{};
-        td.label = WGPU_LABEL("tonemap_color");
+        td.label = WGPUStringView{"tonemap_color", sizeof("tonemap_color") - 1};
         td.size = {w, h, 1};
         td.mipLevelCount = 1;
         td.sampleCount = 1;
@@ -1133,7 +1050,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         // Depth texture
         WGPUTextureDescriptor dtd{};
-        dtd.label = WGPU_LABEL("tonemap_depth");
+        dtd.label = WGPUStringView{"tonemap_depth", sizeof("tonemap_depth") - 1};
         dtd.size = {w, h, 1};
         dtd.mipLevelCount = 1;
         dtd.sampleCount = 1;
@@ -1169,7 +1086,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         bgEntries[2].size = 16;
 
         WGPUBindGroupDescriptor bgDesc{};
-        bgDesc.label = WGPU_LABEL("tonemap_bg");
+        bgDesc.label = WGPUStringView{"tonemap_bg", sizeof("tonemap_bg") - 1};
         bgDesc.layout = toneMap_.bindGroupLayout;
         bgDesc.entryCount = 3;
         bgDesc.entries = bgEntries;
@@ -1181,7 +1098,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         WGPUTexture blitMsaaTexture = nullptr;
 
         WGPUTextureViewDescriptor vd{};
-        vd.label = WGPU_LABEL("blit_view");
+        vd.label = WGPUStringView{"blit_view", sizeof("blit_view") - 1};
         vd.format = surfaceFormat;
         vd.dimension = WGPUTextureViewDimension_2D;
         vd.baseMipLevel = 0; vd.mipLevelCount = 1;
@@ -1189,16 +1106,14 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         vd.aspect = WGPUTextureAspect_All;
 
         // Tone map blit is always non-MSAA (fullscreen quad)
-#ifdef __EMSCRIPTEN__
-        surfaceColorView = frame_.swapChainView;
-#else
+
         surfaceColorView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
-#endif
+
 
         // Ensure the per-frame encoder exists (toneMapBlit is called from endFrame).
         if (!renderEncoder_) {
             WGPUCommandEncoderDescriptor encDesc{};
-            encDesc.label = WGPU_LABEL("render_enc");
+            encDesc.label = WGPUStringView{"render_enc", sizeof("render_enc") - 1};
             renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
         }
 
@@ -1210,7 +1125,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         colorAtt.clearValue = {0, 0, 0, 1};
 
         WGPURenderPassDescriptor rpDesc{};
-        rpDesc.label = WGPU_LABEL("tonemap_pass");
+        rpDesc.label = WGPUStringView{"tonemap_pass", sizeof("tonemap_pass") - 1};
         rpDesc.colorAttachmentCount = 1;
         rpDesc.colorAttachments = &colorAtt;
 
@@ -1235,22 +1150,20 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
     // with DepthStencilFormat = Depth24Plus.
     void overlayOnSurface() {
         WGPUTextureViewDescriptor vd{};
-        vd.label = WGPU_LABEL("overlay_view");
+        vd.label = WGPUStringView{"overlay_view", sizeof("overlay_view") - 1};
         vd.format = surfaceFormat;
         vd.dimension = WGPUTextureViewDimension_2D;
         vd.baseMipLevel = 0; vd.mipLevelCount = 1;
         vd.baseArrayLayer = 0; vd.arrayLayerCount = 1;
         vd.aspect = WGPUTextureAspect_All;
-#ifdef __EMSCRIPTEN__
-        WGPUTextureView surfaceView = frame_.swapChainView;
-#else
+
         WGPUTextureView surfaceView = wgpuTextureCreateView(frame_.surfaceTexture.texture, &vd);
-#endif
+
 
         // Create a temporary depth texture matching the surface dimensions.
         // The ImGui pipeline expects Depth24Plus even though it doesn't use depth.
         WGPUTextureDescriptor dtd{};
-        dtd.label = WGPU_LABEL("overlay_depth");
+        dtd.label = WGPUStringView{"overlay_depth", sizeof("overlay_depth") - 1};
         dtd.size = {frame_.width, frame_.height, 1};
         dtd.mipLevelCount = 1;
         dtd.sampleCount = 1; // surface texture is always non-MSAA
@@ -1263,7 +1176,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Ensure the per-frame encoder exists (overlayOnSurface is called from endFrame).
         if (!renderEncoder_) {
             WGPUCommandEncoderDescriptor encDesc{};
-            encDesc.label = WGPU_LABEL("render_enc");
+            encDesc.label = WGPUStringView{"render_enc", sizeof("render_enc") - 1};
             renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
         }
 
@@ -1280,7 +1193,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         depthAtt.depthClearValue = 1.0f;
 
         WGPURenderPassDescriptor rpDesc{};
-        rpDesc.label = WGPU_LABEL("overlay_pass");
+        rpDesc.label = WGPUStringView{"overlay_pass", sizeof("overlay_pass") - 1};
         rpDesc.colorAttachmentCount = 1;
         rpDesc.colorAttachments = &colorAtt;
         rpDesc.depthStencilAttachment = &depthAtt;
@@ -1337,7 +1250,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
 
         if (!renderEncoder_) {
             WGPUCommandEncoderDescriptor encDesc{};
-            encDesc.label = WGPU_LABEL("render_enc");
+            encDesc.label = WGPUStringView{"render_enc", sizeof("render_enc") - 1};
             renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
         }
 
@@ -1360,7 +1273,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         depthAttachment.depthClearValue = 1.0f;
 
         WGPURenderPassDescriptor passDesc{};
-        passDesc.label = WGPU_LABEL("clear_pass");
+        passDesc.label = WGPUStringView{"clear_pass", sizeof("clear_pass") - 1};
         passDesc.colorAttachmentCount = 1;
         passDesc.colorAttachments = &colorAttachment;
         passDesc.depthStencilAttachment = &depthAttachment;
@@ -1547,7 +1460,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Submitted once in endFrame() so wgpu-native inserts correct barriers.
         if (!renderEncoder_) {
             WGPUCommandEncoderDescriptor encDesc{};
-            encDesc.label = WGPU_LABEL("render_enc");
+            encDesc.label = WGPUStringView{"render_enc", sizeof("render_enc") - 1};
             renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
         }
         WGPUCommandEncoder encoder = renderEncoder_;
@@ -1607,7 +1520,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         depthAttachment.depthClearValue = 1.0f;
 
         WGPURenderPassDescriptor passDesc{};
-        passDesc.label = WGPU_LABEL("render_pass");
+        passDesc.label = WGPUStringView{"render_pass", sizeof("render_pass") - 1};
         passDesc.colorAttachmentCount = 1;
         passDesc.colorAttachments = &colorAttachment;
         passDesc.depthStencilAttachment = &depthAttachment;
@@ -1699,7 +1612,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             if (!retainedFB || retainedFBWidth != w || retainedFBHeight != h) {
                 if (retainedFB) wgpuTextureRelease(retainedFB);
                 WGPUTextureDescriptor td{};
-                td.label = WGPU_LABEL("retained_fb");
+                td.label = WGPUStringView{"retained_fb", sizeof("retained_fb") - 1};
                 td.size = {w, h, 1};
                 td.mipLevelCount = 1;
                 td.sampleCount = 1;
@@ -1712,13 +1625,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
 
             // Copy the resolved surface texture to retained framebuffer
-            WgpuTexelCopyTextureInfo src{};
+            WGPUTexelCopyTextureInfo src{};
             src.texture = frame_.surfaceTexture.texture;
             src.mipLevel = 0;
             src.origin = {0, 0, 0};
             src.aspect = WGPUTextureAspect_All;
 
-            WgpuTexelCopyTextureInfo dst{};
+            WGPUTexelCopyTextureInfo dst{};
             dst.texture = retainedFB;
             dst.mipLevel = 0;
             dst.origin = {0, 0, 0};
@@ -1877,7 +1790,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                                                  sm, unifiedTextures);
 
         WGPUBindGroupDescriptor bgDesc{};
-        bgDesc.label = WGPU_LABEL("custom_bg");
+        bgDesc.label = WGPUStringView{"custom_bg", sizeof("custom_bg") - 1};
         bgDesc.layout = pe.bindGroupLayout;
         bgDesc.entryCount = entries.size();
         bgDesc.entries = entries.data();
@@ -2347,7 +2260,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         auto& entries = bindGroups->buildStandard(bgInputs);
 
         WGPUBindGroupDescriptor bgDesc{};
-        bgDesc.label = WGPU_LABEL("obj_bg");
+        bgDesc.label = WGPUStringView{"obj_bg", sizeof("obj_bg") - 1};
         bgDesc.layout = pe.bindGroupLayout;
         bgDesc.entryCount = entries.size();
         bgDesc.entries = entries.data();
@@ -2482,9 +2395,6 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (lights) lights->dispose();
         if (renderTargets) renderTargets->dispose();
 
-#ifdef __EMSCRIPTEN__
-        if (swapChain) wgpuSwapChainRelease(swapChain);
-#endif
         if (queue) wgpuQueueRelease(queue);
         if (device) wgpuDeviceRelease(device);
         if (adapter) wgpuAdapterRelease(adapter);
@@ -2828,16 +2738,16 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
 
     // GPU copy from retained framebuffer to destination texture
     WGPUCommandEncoderDescriptor encDesc{};
-    encDesc.label = WGPU_LABEL("copy_fb");
+    encDesc.label = WGPUStringView{"copy_fb", sizeof("copy_fb") - 1};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(pimpl_->device, &encDesc);
 
-    WgpuTexelCopyTextureInfo src{};
+    WGPUTexelCopyTextureInfo src{};
     src.texture = srcTexture;
     src.mipLevel = 0;
     src.origin = {sx, sy, 0};
     src.aspect = WGPUTextureAspect_All;
 
-    WgpuTexelCopyTextureInfo dst{};
+    WGPUTexelCopyTextureInfo dst{};
     dst.texture = dstEntry.texture;
     dst.mipLevel = static_cast<uint32_t>(level);
     dst.origin = {0, 0, 0};
@@ -2847,7 +2757,7 @@ void WgpuRenderer::copyFramebufferToTexture(const Vector2& position, Texture& te
     wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
 
     WGPUCommandBufferDescriptor cmdDesc{};
-    cmdDesc.label = WGPU_LABEL("copy_fb_cmd");
+    cmdDesc.label = WGPUStringView{"copy_fb_cmd", sizeof("copy_fb_cmd") - 1};
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
     wgpuQueueSubmit(pimpl_->queue, 1, &cmd);
     wgpuCommandBufferRelease(cmd);

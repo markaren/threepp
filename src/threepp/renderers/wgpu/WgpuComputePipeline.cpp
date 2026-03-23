@@ -4,8 +4,6 @@
 #include "threepp/renderers/wgpu/WgpuBuffer.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
 
-#include "WgpuCompat.hpp"
-
 #include <webgpu/webgpu.h>
 
 #include <unordered_map>
@@ -108,20 +106,20 @@ struct WgpuComputePipeline::Impl {
         }
 
         WGPUBindGroupLayoutDescriptor bglDesc{};
-        bglDesc.label = WGPU_LABEL("compute_bgl");
+        bglDesc.label = WGPUStringView{"compute_bgl", WGPU_STRLEN} ;
         bglDesc.entryCount = bglEntries.size();
         bglDesc.entries = bglEntries.data();
         bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
 
         WGPUPipelineLayoutDescriptor plDesc{};
-        plDesc.label = WGPU_LABEL("compute_pl");
+        plDesc.label = WGPUStringView{"compute_pl", WGPU_STRLEN} ;
         plDesc.bindGroupLayoutCount = 1;
         plDesc.bindGroupLayouts = &bindGroupLayout;
         pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
 
-        auto ep = WGPU_STR(entryPoint.c_str(), entryPoint.size());
+        auto ep = WGPUStringView{entryPoint.c_str(), static_cast<size_t>(entryPoint.size())};
         WGPUComputePipelineDescriptor pipeDesc{};
-        pipeDesc.label = WGPU_LABEL("compute_pipe");
+        pipeDesc.label = WGPUStringView{"compute_pipe", WGPU_STRLEN} ;
         pipeDesc.layout = pipelineLayout;
         pipeDesc.compute.module = shaderModule;
         pipeDesc.compute.entryPoint = ep;
@@ -139,14 +137,14 @@ WgpuComputePipeline::WgpuComputePipeline(WgpuRenderer& renderer, const std::stri
     impl_->queue = static_cast<WGPUQueue>(renderer.nativeQueue());
     impl_->entryPoint = entryPoint;
 
-    WgpuShaderSourceWGSL wgslSrc{};
-    wgslSrc.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
+    WGPUShaderSourceWGSL wgslSrc{};
+    wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
     wgslSrc.chain.next = nullptr;
-    WGPU_SHADER_CODE(wgslSrc, wgslSource.c_str(), wgslSource.size());
+    wgslSrc.code = {.data = wgslSource.c_str(), .length = static_cast<size_t>(wgslSource.size())};
 
     WGPUShaderModuleDescriptor shaderDesc{};
     shaderDesc.nextInChain = &wgslSrc.chain;
-    shaderDesc.label = WGPU_LABEL("compute_shader");
+    shaderDesc.label = WGPUStringView{"compute_shader", WGPU_STRLEN} ;
     impl_->shaderModule = wgpuDeviceCreateShaderModule(impl_->device, &shaderDesc);
 }
 
@@ -226,7 +224,7 @@ void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     }
 
     WGPUBindGroupDescriptor bgDesc{};
-    bgDesc.label = WGPU_LABEL("compute_bg");
+    bgDesc.label = WGPUStringView{"compute_bg", WGPU_STRLEN} ;
     bgDesc.layout = impl_->bindGroupLayout;
     bgDesc.entryCount = entries.size();
     bgDesc.entries = entries.data();
@@ -234,11 +232,11 @@ void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
 
     // Create command encoder and dispatch
     WGPUCommandEncoderDescriptor encDesc{};
-    encDesc.label = WGPU_LABEL("compute_enc");
+    encDesc.label = WGPUStringView{"compute_enc", WGPU_STRLEN} ;
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(impl_->device, &encDesc);
 
     WGPUComputePassDescriptor passDesc{};
-    passDesc.label = WGPU_LABEL("compute_pass");
+    passDesc.label = WGPUStringView{"compute_pass", WGPU_STRLEN} ;
     WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
 
     wgpuComputePassEncoderSetPipeline(pass, impl_->pipeline);
@@ -248,7 +246,7 @@ void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     wgpuComputePassEncoderRelease(pass);
 
     WGPUCommandBufferDescriptor cmdDesc{};
-    cmdDesc.label = WGPU_LABEL("compute_cmd");
+    cmdDesc.label = WGPUStringView{"compute_cmd", WGPU_STRLEN} ;
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
     wgpuQueueSubmit(impl_->queue, 1, &cmd);
 

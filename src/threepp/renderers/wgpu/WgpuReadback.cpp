@@ -1,11 +1,12 @@
 
 #include "WgpuReadback.hpp"
-#include "WgpuCompat.hpp"
 
-#ifndef __EMSCRIPTEN__
-#include <webgpu/wgpu.h>
-#else
+#include <webgpu/webgpu.h>
+
+#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+#else
+#include <webgpu/wgpu.h>
 #endif
 
 #include <chrono>
@@ -27,19 +28,19 @@ std::vector<unsigned char> threepp::wgpu::readRGBPixels(
     uint32_t bufferSize = paddedBytesPerRow * h;
 
     WGPUBufferDescriptor bd{};
-    bd.label = WGPU_LABEL("readback_buf");
+    bd.label = WGPUStringView{"readback_buf", WGPU_STRLEN};
     bd.size = bufferSize;
     bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
     WGPUBuffer stagingBuf = wgpuDeviceCreateBuffer(device, &bd);
 
     WGPUCommandEncoderDescriptor encDesc{};
-    encDesc.label = WGPU_LABEL("readback_enc");
+    encDesc.label = WGPUStringView{"readback_enc", WGPU_STRLEN};
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
 
-    WgpuTexelCopyTextureInfo src{};
+    WGPUTexelCopyTextureInfo src{};
     src.texture = colorTexture;
 
-    WgpuTexelCopyBufferInfo dst{};
+    WGPUTexelCopyBufferInfo dst{};
     dst.buffer = stagingBuf;
     dst.layout.bytesPerRow = paddedBytesPerRow;
     dst.layout.rowsPerImage = h;
@@ -48,20 +49,12 @@ std::vector<unsigned char> threepp::wgpu::readRGBPixels(
     wgpuCommandEncoderCopyTextureToBuffer(encoder, &src, &dst, &extent);
 
     WGPUCommandBufferDescriptor cmdDesc{};
-    cmdDesc.label = WGPU_LABEL("readback_cmd");
+    cmdDesc.label =   WGPUStringView{"readback_cmd", WGPU_STRLEN} ;
     WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
     wgpuQueueSubmit(queue, 1, &cmd);
 
-    struct MapData { bool done = false; WgpuMapAsyncStatus status; } mapData;
+    struct MapData { bool done = false; WGPUMapAsyncStatus status; } mapData;
 
-#ifdef __EMSCRIPTEN__
-    wgpuBufferMapAsync(stagingBuf, WGPUMapMode_Read, 0, bufferSize,
-        [](WGPUBufferMapAsyncStatus status, void* ud) {
-            auto* d = static_cast<MapData*>(ud);
-            d->status = status;
-            d->done = true;
-        }, &mapData);
-#else
     WGPUBufferMapCallbackInfo mapCb{};
     mapCb.mode = WGPUCallbackMode_AllowSpontaneous;
     mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*msg*/, void* ud1, void* /*ud2*/) {
@@ -71,7 +64,7 @@ std::vector<unsigned char> threepp::wgpu::readRGBPixels(
     };
     mapCb.userdata1 = &mapData;
     wgpuBufferMapAsync(stagingBuf, WGPUMapMode_Read, 0, bufferSize, mapCb);
-#endif
+
 
     auto deadline = std::chrono::steady_clock::now() + WGPU_ASYNC_TIMEOUT;
     while (!mapData.done) {
@@ -89,7 +82,7 @@ std::vector<unsigned char> threepp::wgpu::readRGBPixels(
     }
 
     std::vector<unsigned char> result;
-    if (mapData.status == WGPU_MAP_ASYNC_STATUS_SUCCESS) {
+    if (mapData.status == WGPUMapAsyncStatus_Success) {
         auto* mapped = static_cast<const unsigned char*>(wgpuBufferGetConstMappedRange(stagingBuf, 0, bufferSize));
         result.resize(w * h * 3);
         for (uint32_t row = 0; row < h; row++) {

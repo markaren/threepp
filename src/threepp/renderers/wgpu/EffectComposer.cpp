@@ -3,13 +3,8 @@
 #include "ShaderPassImpl.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
 #include "threepp/renderers/RenderTarget.hpp"
-#include "threepp/cameras/Camera.hpp"
-#include "threepp/core/Object3D.hpp"
 
 #include "WgpuReadback.hpp"
-#include "WgpuCompat.hpp"
-
-#include <webgpu/webgpu.h>
 
 #include <iostream>
 
@@ -71,20 +66,20 @@ struct EffectComposer::Impl {
         entries[1].sampler.type = WGPUSamplerBindingType_Filtering;
 
         WGPUBindGroupLayoutDescriptor bglDesc{};
-        bglDesc.label = WGPU_LABEL("composer_bgl");
+        bglDesc.label = WGPUStringView{"composer_bgl", WGPU_STRLEN} ;
         bglDesc.entryCount = 2;
         bglDesc.entries = entries;
         bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
 
         WGPUPipelineLayoutDescriptor plDesc{};
-        plDesc.label = WGPU_LABEL("composer_pl");
+        plDesc.label = WGPUStringView{"composer_pl", WGPU_STRLEN} ;
         plDesc.bindGroupLayoutCount = 1;
         plDesc.bindGroupLayouts = &bindGroupLayout;
         pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &plDesc);
 
         // Sampler: linear filtering, clamp-to-edge
         WGPUSamplerDescriptor sd{};
-        sd.label = WGPU_LABEL("composer_sampler");
+        sd.label = WGPUStringView{"composer_sampler", WGPU_STRLEN} ;
         sd.minFilter = WGPUFilterMode_Linear;
         sd.magFilter = WGPUFilterMode_Linear;
         sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
@@ -108,7 +103,7 @@ struct EffectComposer::Impl {
 
     WGPUTexture createTexture(uint32_t w, uint32_t h, const char* label, size_t labelLen) {
         WGPUTextureDescriptor td{};
-        td.label = WGPU_STR(label, labelLen);
+        td.label = WGPUStringView{label, static_cast<size_t>(labelLen)};
         td.size = {w, h, 1};
         td.mipLevelCount = 1;
         td.sampleCount = 1;
@@ -195,7 +190,7 @@ struct EffectComposer::Impl {
             bgEntries[1].sampler = sampler;
 
             WGPUBindGroupDescriptor bgDesc{};
-            bgDesc.label = WGPU_LABEL("composer_bg");
+            bgDesc.label = WGPUStringView{"composer_bg", WGPU_STRLEN} ;
             bgDesc.layout = bindGroupLayout;
             bgDesc.entryCount = 2;
             bgDesc.entries = bgEntries;
@@ -203,7 +198,7 @@ struct EffectComposer::Impl {
 
             // Create command encoder and render pass
             WGPUCommandEncoderDescriptor encDesc{};
-            encDesc.label = WGPU_LABEL("composer_enc");
+            encDesc.label = WGPUStringView{"composer_enc", WGPU_STRLEN} ;
             WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
 
             WGPURenderPassColorAttachment colorAtt{};
@@ -214,7 +209,7 @@ struct EffectComposer::Impl {
             colorAtt.clearValue = {0, 0, 0, 1};
 
             WGPURenderPassDescriptor rpDesc{};
-            rpDesc.label = WGPU_LABEL("composer_pass");
+            rpDesc.label = WGPUStringView{"composer_pass", WGPU_STRLEN} ;
             rpDesc.colorAttachmentCount = 1;
             rpDesc.colorAttachments = &colorAtt;
 
@@ -226,7 +221,7 @@ struct EffectComposer::Impl {
             wgpuRenderPassEncoderRelease(rp);
 
             WGPUCommandBufferDescriptor cmdDesc{};
-            cmdDesc.label = WGPU_LABEL("composer_cmd");
+            cmdDesc.label = WGPUStringView{"composer_cmd", WGPU_STRLEN} ;
             WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
             wgpuQueueSubmit(queue, 1, &cmd);
 

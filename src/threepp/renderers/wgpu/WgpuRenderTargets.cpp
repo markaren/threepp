@@ -1,6 +1,5 @@
 
 #include "WgpuRenderTargets.hpp"
-#include "WgpuCompat.hpp"
 
 #include "threepp/renderers/RenderTarget.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -38,7 +37,7 @@ RTEntry& WgpuRenderTargets::getOrCreate(threepp::RenderTarget* rt, uint32_t samp
     entry.sampleCount = sampleCount;
 
     WGPUTextureDescriptor ctd{};
-    ctd.label = WGPU_LABEL("rt_color");
+    ctd.label = WGPUStringView{"rt_color", WGPU_STRLEN} ;
     ctd.size = {rt->width, rt->height, 1};
     ctd.mipLevelCount = 1;
     ctd.sampleCount = 1;
@@ -49,7 +48,7 @@ RTEntry& WgpuRenderTargets::getOrCreate(threepp::RenderTarget* rt, uint32_t samp
     entry.colorView = wgpuTextureCreateView(entry.colorTexture, nullptr);
 
     WGPUSamplerDescriptor sd{};
-    sd.label = WGPU_LABEL("rt_sampler");
+    sd.label = WGPUStringView{"rt_sampler", WGPU_STRLEN} ;
     sd.minFilter = WGPUFilterMode_Linear;
     sd.magFilter = WGPUFilterMode_Linear;
     sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
@@ -62,7 +61,7 @@ RTEntry& WgpuRenderTargets::getOrCreate(threepp::RenderTarget* rt, uint32_t samp
     if (rt->texture) texToRtUuid_[rt->texture->id] = rt->uuid;
 
     WGPUTextureDescriptor dtd{};
-    dtd.label = WGPU_LABEL("rt_depth");
+    dtd.label = WGPUStringView{"rt_depth", WGPU_STRLEN} ;
     dtd.size = {rt->width, rt->height, 1};
     dtd.mipLevelCount = 1;
     dtd.sampleCount = sampleCount;
@@ -74,7 +73,7 @@ RTEntry& WgpuRenderTargets::getOrCreate(threepp::RenderTarget* rt, uint32_t samp
 
     if (sampleCount > 1) {
         WGPUTextureDescriptor msaaCtd{};
-        msaaCtd.label = WGPU_LABEL("rt_msaa_color");
+        msaaCtd.label = WGPUStringView{"rt_msaa_color", WGPU_STRLEN} ;
         msaaCtd.size = {rt->width, rt->height, 1};
         msaaCtd.mipLevelCount = 1;
         msaaCtd.sampleCount = sampleCount;

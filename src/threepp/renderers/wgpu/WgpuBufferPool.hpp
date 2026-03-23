@@ -1,6 +1,6 @@
 #pragma once
 
-#include "WgpuCompat.hpp"
+#include <webgpu/webgpu.h>
 
 #include <cstddef>
 #include <unordered_map>
@@ -20,7 +20,7 @@ public:
 
     // Acquire a buffer of at least `size` bytes with the given usage flags.
     // Writes `data` into the buffer if non-null.
-    WGPUBuffer acquire(size_t size, WgpuBufferUsageFlags usage, const void* data = nullptr);
+    WGPUBuffer acquire(size_t size, WGPUBufferUsage usage, const void* data = nullptr);
 
     // Release all GPU buffers.
     void dispose();
@@ -33,7 +33,7 @@ private:
 
     struct PoolKey {
         size_t sizeClass;
-        WgpuBufferUsageFlags usage;
+        WGPUBufferUsage usage;
         bool operator==(const PoolKey& o) const {
             return sizeClass == o.sizeClass && usage == o.usage;
         }
@@ -47,7 +47,7 @@ private:
     struct InUseEntry {
         WGPUBuffer buffer;
         size_t sizeClass;
-        WgpuBufferUsageFlags usage;
+        WGPUBufferUsage usage;
     };
 
     std::unordered_map<PoolKey, std::vector<WGPUBuffer>, PoolKeyHash> freePools_;

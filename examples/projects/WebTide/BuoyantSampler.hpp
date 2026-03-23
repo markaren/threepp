@@ -4,31 +4,11 @@
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 
 #include <webgpu/webgpu.h>
-#ifndef __EMSCRIPTEN__
-#include <webgpu/wgpu.h>
-#else
-#include <emscripten.h>
-#endif
 
 #include <chrono>
 #include <cmath>
-
-// Pull in the compat layer used by the rest of threepp's WGPU code
 #ifdef __EMSCRIPTEN__
-// Emscripten type aliases (mirrors WgpuCompat.hpp but self-contained for examples)
-using WgpuTexelCopyTextureInfo  = WGPUImageCopyTexture;
-using WgpuTexelCopyBufferInfo   = WGPUImageCopyBuffer;
-using WgpuTexelCopyBufferLayout = WGPUTextureDataLayout;
-using WgpuMapAsyncStatus        = WGPUBufferMapAsyncStatus;
-#define BUOY_WGPU_LABEL(s) (s)
-#define BUOY_MAP_ASYNC_STATUS_SUCCESS WGPUBufferMapAsyncStatus_Success
-#else
-using WgpuTexelCopyTextureInfo  = WGPUTexelCopyTextureInfo;
-using WgpuTexelCopyBufferInfo   = WGPUTexelCopyBufferInfo;
-using WgpuTexelCopyBufferLayout = WGPUTexelCopyBufferLayout;
-using WgpuMapAsyncStatus        = WGPUMapAsyncStatus;
-#define BUOY_WGPU_LABEL(s) WGPUStringView{.data = (s), .length = sizeof(s) - 1}
-#define BUOY_MAP_ASYNC_STATUS_SUCCESS WGPUMapAsyncStatus_Success
+#  include <emscripten.h>
 #endif
 
 namespace webtide {
@@ -45,7 +25,7 @@ public:
         , queue_ (static_cast<WGPUQueue> (renderer.nativeQueue()))
     {
         WGPUBufferDescriptor bd{};
-        bd.label = BUOY_WGPU_LABEL("buoy_staging");
+        bd.label = WGPUStringView{"buoy_staging", sizeof("buoy_staging") - 1};
         bd.size  = kNumSlots * kSlotBytes;
         bd.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead;
         staging_ = wgpuDeviceCreateBuffer(device_, &bd);
@@ -83,19 +63,10 @@ public:
         // -----------------------------------------------------------
         Result r = lastResult_; // default to previous result for smoothness
 
-#ifdef __EMSCRIPTEN__
-        if (mapPending_ && mapDone_) {
-            if (mapStatus_ == BUOY_MAP_ASYNC_STATUS_SUCCESS) {
-                r = decodeResult(pendingC0Tile_, pendingC1Tile_, pendingC2Tile_,
-                                 pendingChoppiness_, pendingWaveScale_);
-            }
-            wgpuBufferUnmap(staging_);
-            mapPending_ = false;
-        }
-#else
+
         // Native: synchronous readback
         {
-            struct MapState { bool done = false; WgpuMapAsyncStatus status{}; } s;
+            struct MapState { bool done = false; WGPUMapAsyncStatus status{}; } s;
             submitCopy(h0, h1, h2, disp0, disp1, disp2, grad1, grad2,
                        worldX, worldZ, c0Tile, c1Tile, c2Tile);
 
@@ -112,44 +83,21 @@ public:
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
             while (!s.done) {
                 if (std::chrono::steady_clock::now() > deadline) break;
+#ifdef __EMSCRIPTEN__
+                emscripten_sleep(1);
+#else
                 wgpuDevicePoll(device_, true, nullptr);
+#endif
             }
 
-            if (s.done && s.status == BUOY_MAP_ASYNC_STATUS_SUCCESS) {
+            if (s.done && s.status == WGPUMapAsyncStatus_Success) {
                 r = decodeResult(c0Tile, c1Tile, c2Tile, choppiness, waveScale);
             }
             wgpuBufferUnmap(staging_);
         }
-#endif
 
         lastResult_ = r;
 
-        // -----------------------------------------------------------
-        // Step 2 (Emscripten): Submit copy + start async map for NEXT frame
-        // -----------------------------------------------------------
-#ifdef __EMSCRIPTEN__
-        if (!mapPending_) {
-            submitCopy(h0, h1, h2, disp0, disp1, disp2, grad1, grad2,
-                       worldX, worldZ, c0Tile, c1Tile, c2Tile);
-
-            // Save params for decoding next frame
-            pendingC0Tile_ = c0Tile;
-            pendingC1Tile_ = c1Tile;
-            pendingC2Tile_ = c2Tile;
-            pendingChoppiness_ = choppiness;
-            pendingWaveScale_ = waveScale;
-
-            mapDone_ = false;
-            mapStatus_ = {};
-            wgpuBufferMapAsync(staging_, WGPUMapMode_Read, 0, kNumSlots * kSlotBytes,
-                [](WGPUBufferMapAsyncStatus st, void* userdata) {
-                    auto* self = static_cast<BuoyantSampler*>(userdata);
-                    self->mapStatus_ = st;
-                    self->mapDone_ = true;
-                }, this);
-            mapPending_ = true;
-        }
-#endif
 
         return r;
     }
@@ -185,15 +133,15 @@ private:
         auto [tx2, ty2] = texelOf(c2Tile);
 
         WGPUCommandEncoderDescriptor ed{};
-        ed.label = BUOY_WGPU_LABEL("buoy_enc");
+        ed.label = WGPUStringView{"buoy_enc", sizeof("buoy_enc") - 1};
         WGPUCommandEncoder enc = wgpuDeviceCreateCommandEncoder(device_, &ed);
 
         auto copyTexel = [&](WGPUTexture tex, uint32_t tx, uint32_t ty, uint32_t slot) {
-            WgpuTexelCopyTextureInfo src{};
+            WGPUTexelCopyTextureInfo src{};
             src.texture = tex;
             src.origin  = {tx, ty, 0};
 
-            WgpuTexelCopyBufferInfo dst{};
+            WGPUTexelCopyBufferInfo dst{};
             dst.buffer              = staging_;
             dst.layout.offset       = static_cast<uint64_t>(slot) * kSlotBytes;
             dst.layout.bytesPerRow  = kSlotBytes;
@@ -213,7 +161,7 @@ private:
         copyTexel(grad2.texture(), tx2, ty2, 7);
 
         WGPUCommandBufferDescriptor cd{};
-        cd.label = BUOY_WGPU_LABEL("buoy_cmd");
+        cd.label = WGPUStringView{"buoy_cmd", sizeof("buoy_cmd") - 1};
         WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(enc, &cd);
         wgpuQueueSubmit(queue_, 1, &cmd);
         wgpuCommandBufferRelease(cmd);
@@ -264,7 +212,7 @@ private:
     // Async state for Emscripten (one-frame-latency readback)
     bool mapPending_ = false;
     bool mapDone_ = false;
-    WgpuMapAsyncStatus mapStatus_{};
+    WGPUMapAsyncStatus mapStatus_{};
     float pendingC0Tile_ = 0, pendingC1Tile_ = 0, pendingC2Tile_ = 0;
     float pendingChoppiness_ = 0, pendingWaveScale_ = 0;
     Result lastResult_{};

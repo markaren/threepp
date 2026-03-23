@@ -1,7 +1,7 @@
 
 #include "WgpuTextures.hpp"
 
-#include "WgpuCompat.hpp"
+#include <webgpu/webgpu.h>
 #include "threepp/textures/Texture.hpp"
 
 using namespace threepp;
@@ -12,7 +12,7 @@ WgpuTextures::WgpuTextures(WgpuState& state)
 
 void WgpuTextures::createDummyTexture() {
     WGPUTextureDescriptor td{};
-    td.label = WGPU_LABEL("dummy_tex");
+    td.label = WGPUStringView{"dummy_tex", WGPU_STRLEN} ;
     td.size = {1, 1, 1};
     td.mipLevelCount = 1;
     td.sampleCount = 1;
@@ -23,16 +23,16 @@ void WgpuTextures::createDummyTexture() {
     dummyTexture_.view = wgpuTextureCreateView(dummyTexture_.texture, nullptr);
 
     unsigned char white[] = {255, 255, 255, 255};
-    WgpuTexelCopyTextureInfo dst{};
+    WGPUTexelCopyTextureInfo dst{};
     dst.texture = dummyTexture_.texture;
-    WgpuTexelCopyBufferLayout layout{};
+    WGPUTexelCopyBufferLayout layout{};
     layout.bytesPerRow = 4;
     layout.rowsPerImage = 1;
     WGPUExtent3D extent = {1, 1, 1};
     wgpuQueueWriteTexture(state_.queue, &dst, white, 4, &layout, &extent);
 
     WGPUSamplerDescriptor sd{};
-    sd.label = WGPU_LABEL("dummy_sampler");
+    sd.label = WGPUStringView{"dummy_sampler", WGPU_STRLEN} ;
     sd.magFilter = WGPUFilterMode_Linear;
     sd.minFilter = WGPUFilterMode_Linear;
     sd.addressModeU = WGPUAddressMode_Repeat;
@@ -44,7 +44,7 @@ void WgpuTextures::createDummyTexture() {
     // Dummy cube texture (1x1 white per face)
     {
         WGPUTextureDescriptor ctd{};
-        ctd.label = WGPU_LABEL("dummy_cube");
+        ctd.label = WGPUStringView{"dummy_cube", WGPU_STRLEN} ;
         ctd.size = {1, 1, 6};
         ctd.mipLevelCount = 1;
         ctd.sampleCount = 1;
@@ -54,10 +54,10 @@ void WgpuTextures::createDummyTexture() {
         dummyCubeTexture_.texture = wgpuDeviceCreateTexture(state_.device, &ctd);
 
         for (uint32_t face = 0; face < 6; face++) {
-            WgpuTexelCopyTextureInfo cdst{};
+            WGPUTexelCopyTextureInfo cdst{};
             cdst.texture = dummyCubeTexture_.texture;
             cdst.origin = {0, 0, face};
-            WgpuTexelCopyBufferLayout clayout{};
+            WGPUTexelCopyBufferLayout clayout{};
             clayout.bytesPerRow = 4;
             clayout.rowsPerImage = 1;
             WGPUExtent3D cextent = {1, 1, 1};
@@ -65,7 +65,7 @@ void WgpuTextures::createDummyTexture() {
         }
 
         WGPUTextureViewDescriptor cvd{};
-        cvd.label = WGPU_LABEL("dummy_cube_view");
+        cvd.label = WGPUStringView{"dummy_cube_view", WGPU_STRLEN} ;
         cvd.format = WGPUTextureFormat_RGBA8Unorm;
         cvd.dimension = WGPUTextureViewDimension_Cube;
         cvd.baseMipLevel = 0;
@@ -76,7 +76,7 @@ void WgpuTextures::createDummyTexture() {
         dummyCubeTexture_.view = wgpuTextureCreateView(dummyCubeTexture_.texture, &cvd);
 
         WGPUSamplerDescriptor csd{};
-        csd.label = WGPU_LABEL("dummy_cube_samp");
+        csd.label = WGPUStringView{"dummy_cube_samp", WGPU_STRLEN} ;
         csd.magFilter = WGPUFilterMode_Linear;
         csd.minFilter = WGPUFilterMode_Linear;
         csd.addressModeU = WGPUAddressMode_ClampToEdge;
@@ -110,7 +110,7 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     if (data.empty()) return dummyTexture_; // e.g. render target texture with no CPU-side data
 
     WGPUTextureDescriptor td{};
-    td.label = WGPU_LABEL("user_tex");
+    td.label = WGPUStringView{"user_tex", WGPU_STRLEN} ;
     td.size = {w, h, 1};
     td.mipLevelCount = 1;
     td.sampleCount = 1;
@@ -136,16 +136,16 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
         srcSize = rgba.size();
     }
 
-    WgpuTexelCopyTextureInfo dst{};
+    WGPUTexelCopyTextureInfo dst{};
     dst.texture = entry.texture;
-    WgpuTexelCopyBufferLayout layout{};
+    WGPUTexelCopyBufferLayout layout{};
     layout.bytesPerRow = w * 4;
     layout.rowsPerImage = h;
     WGPUExtent3D extent = {w, h, 1};
     wgpuQueueWriteTexture(state_.queue, &dst, srcData, srcSize, &layout, &extent);
 
     WGPUSamplerDescriptor sd{};
-    sd.label = WGPU_LABEL("tex_sampler");
+    sd.label = WGPUStringView{"tex_sampler", WGPU_STRLEN} ;
     sd.magFilter = (tex->magFilter == Filter::Nearest) ? WGPUFilterMode_Nearest : WGPUFilterMode_Linear;
     sd.minFilter = (tex->minFilter == Filter::Nearest || tex->minFilter == Filter::NearestMipmapNearest || tex->minFilter == Filter::NearestMipmapLinear)
         ? WGPUFilterMode_Nearest : WGPUFilterMode_Linear;
@@ -187,7 +187,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     if (w == 0 || h == 0) return dummyCubeTexture_;
 
     WGPUTextureDescriptor td{};
-    td.label = WGPU_LABEL("cube_tex");
+    td.label = WGPUStringView{"cube_tex", WGPU_STRLEN} ;
     td.size = {w, h, 6};
     td.mipLevelCount = 1;
     td.sampleCount = 1;
@@ -217,10 +217,10 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
             srcSize = rgba.size();
         }
 
-        WgpuTexelCopyTextureInfo dst{};
+        WGPUTexelCopyTextureInfo dst{};
         dst.texture = entry.texture;
         dst.origin = {0, 0, face};
-        WgpuTexelCopyBufferLayout layout{};
+        WGPUTexelCopyBufferLayout layout{};
         layout.bytesPerRow = w * 4;
         layout.rowsPerImage = h;
         WGPUExtent3D extent = {w, h, 1};
@@ -228,7 +228,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     }
 
     WGPUTextureViewDescriptor vd{};
-    vd.label = WGPU_LABEL("cube_view");
+    vd.label = WGPUStringView{"cube_view", WGPU_STRLEN} ;
     vd.format = WGPUTextureFormat_RGBA8Unorm;
     vd.dimension = WGPUTextureViewDimension_Cube;
     vd.baseMipLevel = 0;
@@ -239,7 +239,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     entry.view = wgpuTextureCreateView(entry.texture, &vd);
 
     WGPUSamplerDescriptor sd{};
-    sd.label = WGPU_LABEL("cube_sampler");
+    sd.label = WGPUStringView{"cube_sampler", WGPU_STRLEN} ;
     sd.magFilter = WGPUFilterMode_Linear;
     sd.minFilter = WGPUFilterMode_Linear;
     sd.addressModeU = WGPUAddressMode_ClampToEdge;

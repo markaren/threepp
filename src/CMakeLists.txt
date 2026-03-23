@@ -659,9 +659,7 @@ if (THREEPP_WITH_WGPU)
 
     if (DEFINED EMSCRIPTEN)
         # Emscripten exposes the browser's native WebGPU — no wgpu-native needed.
-        # ASYNCIFY is required so emscripten_sleep() can yield to the event loop
-        # during adapter/device request and buffer map polling.
-        target_link_options(threepp PUBLIC "-sUSE_WEBGPU=1" "-sASYNCIFY")
+        target_compile_options(threepp PUBLIC "--use-port=emdawnwebgpu")
 
         # Pre-translate GLSL shaders to WGSL via naga for browser deployment.
         # Browsers only accept WGSL (WGPUSType_ShaderSourceSPIRV is not available).

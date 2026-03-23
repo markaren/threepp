@@ -1,6 +1,5 @@
 
 #include "WgpuGeometries.hpp"
-#include "WgpuCompat.hpp"
 
 #include "threepp/core/BufferGeometry.hpp"
 
@@ -143,7 +142,7 @@ GeometryBuffers& WgpuGeometries::getOrCreateGeometryBuffers(BufferGeometry* geom
                 auto interleaved = buildInterleavedVertexData(geometry, newCount);
                 auto byteSize = interleaved.size() * sizeof(float);
                 WGPUBufferDescriptor vbDesc{};
-                vbDesc.label = WGPU_LABEL("vertex_buf");
+                vbDesc.label = WGPUStringView{"vertex_buf", WGPU_STRLEN} ;
                 vbDesc.size = byteSize;
                 vbDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
                 gb.vertexBuffer = wgpuDeviceCreateBuffer(state_.device, &vbDesc);
@@ -170,7 +169,7 @@ GeometryBuffers& WgpuGeometries::getOrCreateGeometryBuffers(BufferGeometry* geom
             if (static_cast<uint32_t>(indices.size()) != gb.indexCount) {
                 if (gb.indexBuffer) wgpuBufferRelease(gb.indexBuffer);
                 WGPUBufferDescriptor ibDesc{};
-                ibDesc.label = WGPU_LABEL("index_buf");
+                ibDesc.label = WGPUStringView{"index_buf", WGPU_STRLEN} ;
                 ibDesc.size = byteSize;
                 ibDesc.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
                 gb.indexBuffer = wgpuDeviceCreateBuffer(state_.device, &ibDesc);
@@ -194,7 +193,7 @@ GeometryBuffers& WgpuGeometries::getOrCreateGeometryBuffers(BufferGeometry* geom
         auto interleaved = buildInterleavedVertexData(geometry, count);
         auto byteSize = interleaved.size() * sizeof(float);
         WGPUBufferDescriptor vbDesc{};
-        vbDesc.label = WGPU_LABEL("vertex_buf");
+        vbDesc.label = WGPUStringView{"vertex_buf", WGPU_STRLEN} ;
         vbDesc.size = byteSize;
         vbDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
         gb.vertexBuffer = wgpuDeviceCreateBuffer(state_.device, &vbDesc);
@@ -210,7 +209,7 @@ GeometryBuffers& WgpuGeometries::getOrCreateGeometryBuffers(BufferGeometry* geom
         }
         auto byteSize = indices.size() * sizeof(uint32_t);
         WGPUBufferDescriptor ibDesc{};
-        ibDesc.label = WGPU_LABEL("index_buf");
+        ibDesc.label = WGPUStringView{"index_buf", WGPU_STRLEN} ;
         ibDesc.size = byteSize;
         ibDesc.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
         gb.indexBuffer = wgpuDeviceCreateBuffer(state_.device, &ibDesc);
@@ -268,7 +267,7 @@ WireframeBuffers& WgpuGeometries::getOrCreateWireframeBuffers(BufferGeometry* ge
         if (!edges.empty()) {
             auto byteSize = edges.size() * sizeof(uint32_t);
             WGPUBufferDescriptor bd{};
-            bd.label = WGPU_LABEL("wire_idx");
+            bd.label = WGPUStringView{"wire_idx", WGPU_STRLEN} ;
             bd.size = byteSize;
             bd.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
             wb.indexBuffer = wgpuDeviceCreateBuffer(state_.device, &bd);

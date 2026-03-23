@@ -1,7 +1,6 @@
 
 #include "threepp/renderers/wgpu/WgpuBuffer.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
-#include "WgpuCompat.hpp"
 
 #include <webgpu/webgpu.h>
 
@@ -13,7 +12,7 @@ WgpuBuffer::WgpuBuffer(WgpuRenderer& renderer, size_t size)
       size_(size) {
 
     WGPUBufferDescriptor desc{};
-    desc.label = WGPU_LABEL("gpu_buffer");
+    desc.label = WGPUStringView{"gpu_buffer", WGPU_STRLEN} ;
     desc.size = size;
     desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
     buffer_ = wgpuDeviceCreateBuffer(device_, &desc);

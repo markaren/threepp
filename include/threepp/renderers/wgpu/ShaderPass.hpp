@@ -15,14 +15,14 @@ namespace threepp {
     public:
         static std::shared_ptr<ShaderPass> create(const std::string& wgslSource);
 
+        explicit ShaderPass(const std::string& wgslSource);
+
         ~ShaderPass();
 
         ShaderPass(const ShaderPass&) = delete;
         ShaderPass& operator=(const ShaderPass&) = delete;
 
     private:
-        explicit ShaderPass(const std::string& wgslSource);
-
         struct Impl;
         std::unique_ptr<Impl> pimpl_;
 

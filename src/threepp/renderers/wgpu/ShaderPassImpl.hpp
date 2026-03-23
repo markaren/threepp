@@ -2,7 +2,6 @@
 #define THREEPP_SHADERPASSIMPL_HPP
 
 #include "threepp/renderers/wgpu/ShaderPass.hpp"
-#include "WgpuCompat.hpp"
 
 #include <webgpu/webgpu.h>
 
@@ -22,14 +21,14 @@ namespace threepp {
             if (pipeline) return;
 
             // Create shader module
-            WgpuShaderSourceWGSL wgslSrc{};
-            wgslSrc.chain.sType = WGPU_STYPE_SHADER_SOURCE_WGSL;
+            WGPUShaderSourceWGSL wgslSrc{};
+            wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
             wgslSrc.chain.next = nullptr;
-            WGPU_SHADER_CODE(wgslSrc, wgslSource.c_str(), wgslSource.size());
+            wgslSrc.code = {.data = wgslSource.c_str(), .length = static_cast<size_t>(wgslSource.size())};
 
             WGPUShaderModuleDescriptor shaderDesc{};
             shaderDesc.nextInChain = &wgslSrc.chain;
-            shaderDesc.label = WGPU_LABEL("shaderpass_module");
+            shaderDesc.label = WGPUStringView{"shaderpass_module", WGPU_STRLEN} ;
             shaderModule = wgpuDeviceCreateShaderModule(device, &shaderDesc);
 
             // Color target — opaque overwrite, no blending
@@ -37,8 +36,8 @@ namespace threepp {
             colorTarget.format = format;
             colorTarget.writeMask = WGPUColorWriteMask_All;
 
-            auto vsEntry = WGPU_ENTRY("vs");
-            auto fsEntry = WGPU_ENTRY("fs");
+            auto vsEntry = WGPUStringView{"vs", WGPU_STRLEN} ;
+            auto fsEntry = WGPUStringView{"fs", WGPU_STRLEN} ;
 
             WGPUFragmentState fragmentState{};
             fragmentState.module = shaderModule;
@@ -47,7 +46,7 @@ namespace threepp {
             fragmentState.targets = &colorTarget;
 
             WGPURenderPipelineDescriptor pipeDesc{};
-            pipeDesc.label = WGPU_LABEL("shaderpass_pipe");
+            pipeDesc.label = WGPUStringView{"shaderpass_pipe", WGPU_STRLEN} ;
             pipeDesc.layout = layout;
             pipeDesc.vertex.module = shaderModule;
             pipeDesc.vertex.entryPoint = vsEntry;
