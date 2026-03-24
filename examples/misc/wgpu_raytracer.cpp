@@ -16,6 +16,7 @@
 //     matData  row  0  : (albedo.r, albedo.g, albedo.b, shininess)
 //     bvhData  rows 0-1: (aabbMin.xyz, left)  (aabbMax.xyz, right)  per node
 
+#include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
@@ -37,16 +38,16 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
-constexpr int MAX_TRIS       = 65536;
-constexpr int MAX_MATS       = 64;
-constexpr int MAX_BVH_NODES  = 2 * MAX_TRIS - 1;
-constexpr int MAX_TEX_SLOTS  = 16;
-constexpr int TILE_SIZE      = 512;  // 16*512=8192=max WebGPU tex width; also update WGSL TILE_SIZE!
-constexpr int TRI_TEX_HEIGHT = 8;   // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
-constexpr int MAT_TEX_HEIGHT = 2;   // row0: albedo+shininess, row1: texSlot
-constexpr int TEX_PAGE_WIDTH  = 8192;
-constexpr int TRI_TEX_PAGES   = (MAX_TRIS      + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
-constexpr int BVH_TEX_PAGES   = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
+constexpr int MAX_TRIS = 65536;
+constexpr int MAX_MATS = 64;
+constexpr int MAX_BVH_NODES = 2 * MAX_TRIS - 1;
+constexpr int MAX_TEX_SLOTS = 16;
+constexpr int TILE_SIZE = 512;   // 16*512=8192=max WebGPU tex width; also update WGSL TILE_SIZE!
+constexpr int TRI_TEX_HEIGHT = 8;// rows: v0 v1 v2 n0 n1 n2 uv01 uv2
+constexpr int MAT_TEX_HEIGHT = 2;// row0: albedo+shininess, row1: texSlot
+constexpr int TEX_PAGE_WIDTH = 8192;
+constexpr int TRI_TEX_PAGES = (MAX_TRIS + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
+constexpr int BVH_TEX_PAGES = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
 
 // ---------------------------------------------------------------------------
 // WGSL compute shader — path tracer + accumulator
@@ -73,8 +74,9 @@ struct RtUniforms {
     triCount:   vec4<f32>,           // x   = number of triangles
     mode:       vec4<f32>,           // x   = 0 raytracer, 1 path tracer
     lightCount: vec4<f32>,           // x   = number of active lights (max 4)
-    lightPos:   array<vec4<f32>, 4>, // xyz = world-space light positions
+    lightPos:   array<vec4<f32>, 4>, // xyz = position (point) or direction (directional)
     lightCol:   array<vec4<f32>, 4>, // xyz = color * intensity per light
+    lightType:  array<vec4<f32>, 4>, // x   = 0 point, 1 directional
 };
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
@@ -268,11 +270,12 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     let count = i32(rt.lightCount.x);
     for (var li = 0; li < 4; li++) {
         if (li >= count) { break; }
-        let lp  = rt.lightPos[li].xyz;
-        let lc  = rt.lightCol[li].xyz;
-        let toL = lp - h.point;
-        let ld  = length(toL);
-        let ln  = toL / ld;
+        let lc   = rt.lightCol[li].xyz;
+        let isDir = rt.lightType[li].x > 0.5;
+        // For directional lights lightPos stores the direction *toward* the light.
+        let ln   = select(normalize(rt.lightPos[li].xyz - h.point),
+                          normalize(rt.lightPos[li].xyz), isDir);
+        let ld   = select(length(rt.lightPos[li].xyz - h.point), 1e30, isDir);
         var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
         let sh = sceneHit(sr);
         if (sh.t >= ld - 1e-3) {
@@ -322,11 +325,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
         let lcount = i32(rt.lightCount.x);
         for (var li = 0; li < 4; li++) {
             if (li >= lcount) { break; }
-            let lp  = rt.lightPos[li].xyz;
-            let lc  = rt.lightCol[li].xyz;
-            let toL = lp - h.point;
-            let ld  = length(toL);
-            let ln  = toL / ld;
+            let lc    = rt.lightCol[li].xyz;
+            let isDir = rt.lightType[li].x > 0.5;
+            let ln    = select(normalize(rt.lightPos[li].xyz - h.point),
+                               normalize(rt.lightPos[li].xyz), isDir);
+            let ld    = select(length(rt.lightPos[li].xyz - h.point), 1e30, isDir);
             var sr: Ray;
             sr.origin = h.point + h.normal * 1e-3;
             sr.dir    = ln;
@@ -430,10 +433,15 @@ fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
     return transform.proj * transform.view * transform.model * vec4<f32>(position, 1.0);
 }
 
+fn aces(x: vec3<f32>) -> vec3<f32> {
+    return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14),
+                 vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let col = textureLoad(accumTex, vec2<i32>(fragPos.xy), 0).xyz;
-    let gc  = pow(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
+    let gc  = pow(aces(col), vec3<f32>(1.0 / 2.2));
     return vec4<f32>(gc, 1.0);
 }
 )";
@@ -441,9 +449,8 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
 // ---------------------------------------------------------------------------
 // CPU-side uniform struct (must match RtUniforms in csWGSL, 256-byte aligned)
 // ---------------------------------------------------------------------------
-// 18 vec4s used (288 bytes): camOri/Fwd/Rgt/Up, iRes, tanHalfFov,
-// frameCount, triCount, mode, lightCount, lightPos[4], lightCol[4].
-// Padded to 512 bytes (WebGPU 256-byte alignment, next multiple after 288).
+// 22 vec4s used (352 bytes): + lightType[4] vs previous 18.
+// Padded to 512 bytes.
 struct alignas(16) RtGpuUniforms {
     float camOri[4];
     float camFwd[4];
@@ -455,9 +462,10 @@ struct alignas(16) RtGpuUniforms {
     float triCount[4];
     float mode[4];        // x: 0=raytracer 1=path tracer
     float lightCount[4];  // x: number of active lights (max 4)
-    float lightPos[4][4]; // [lightIdx][xyzw]
+    float lightPos[4][4]; // [lightIdx][xyzw] – position or toward-direction
     float lightCol[4][4]; // [lightIdx][xyzw]
-    float _pad[56];       // 288 used + 224 pad = 512 bytes
+    float lightType[4][4];// [lightIdx][x]: 0=point, 1=directional
+    float _pad[40];       // 352 used + 160 pad = 512 bytes
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -484,7 +492,7 @@ static std::vector<unsigned char> buildAtlas(
         const auto& src = img.data<unsigned char>();
         const int srcW = static_cast<int>(img.width);
         const int srcH = static_cast<int>(img.height);
-        const int ch   = static_cast<int>(src.size()) / (srcW * srcH);
+        const int ch = static_cast<int>(src.size()) / (srcW * srcH);
 
         const int destX = slot * TILE_SIZE;
         for (int ty = 0; ty < TILE_SIZE; ++ty) {
@@ -546,7 +554,10 @@ static int buildGeometryBuffers(
         } else {
             idx = (row * width + col) * 4;
         }
-        buf[idx + 0] = x; buf[idx + 1] = y; buf[idx + 2] = z; buf[idx + 3] = w;
+        buf[idx + 0] = x;
+        buf[idx + 1] = y;
+        buf[idx + 2] = z;
+        buf[idx + 3] = w;
     };
 
     for (auto& mesh : meshes) {
@@ -563,7 +574,7 @@ static int buildGeometryBuffers(
             if (mwm->map) {
                 auto it = texSlotMap.find(mwm->map.get());
                 if (it != texSlotMap.end()) {
-                    texSlot   = static_cast<float>(it->second);
+                    texSlot = static_cast<float>(it->second);
                     texOffsetX = mwm->map->offset.x;
                     texOffsetY = mwm->map->offset.y;
                     texRepeatX = mwm->map->repeat.x;
@@ -637,9 +648,9 @@ static int buildGeometryBuffers(
 // ---------------------------------------------------------------------------
 struct BvhNode {
     float minX, minY, minZ;
-    int   left;
+    int left;
     float maxX, maxY, maxZ;
-    int   right;
+    int right;
 };
 
 static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
@@ -649,7 +660,7 @@ static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
 }
 
 static float boxSurfaceArea(float mnX, float mnY, float mnZ,
-                             float mxX, float mxY, float mxZ) {
+                            float mxX, float mxY, float mxZ) {
     const float dx = mxX - mnX, dy = mxY - mnY, dz = mxZ - mnZ;
     return 2.f * (dx * dy + dy * dz + dz * dx);
 }
@@ -680,7 +691,7 @@ static int buildBvhNode(
 
     const int count = end - start;
     if (count <= 4) {
-        nodes[ni].left  = -(start + 1);
+        nodes[ni].left = -(start + 1);
         nodes[ni].right = count;
         return ni;
     }
@@ -690,12 +701,12 @@ static int buildBvhNode(
     struct Bucket {
         float mnX = 1e30f, mnY = 1e30f, mnZ = 1e30f;
         float mxX = -1e30f, mxY = -1e30f, mxZ = -1e30f;
-        int   cnt = 0;
+        int cnt = 0;
     };
 
-    float bestCost   = 1e30f;
-    int   bestAxis   = 0;
-    int   bestSplit  = NB / 2;
+    float bestCost = 1e30f;
+    int bestAxis = 0;
+    int bestSplit = NB / 2;
 
     const float nodeArea = boxSurfaceArea(minX, minY, minZ, maxX, maxY, maxZ);
 
@@ -708,8 +719,7 @@ static int buildBvhNode(
         Bucket buckets[NB];
         for (int i = start; i < end; i++) {
             const int ti = idx[i];
-            const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis)
-                           + triGet(buf, ti, 2, axis)) / 3.f;
+            const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis) + triGet(buf, ti, 2, axis)) / 3.f;
             const int bi = std::clamp(static_cast<int>((c - axMin) * scale), 0, NB - 1);
             for (int r = 0; r <= 2; r++) {
                 buckets[bi].mnX = std::min(buckets[bi].mnX, triGet(buf, ti, r, 0));
@@ -726,28 +736,38 @@ static int buildBvhNode(
             // Accumulate left [0..s-1] and right [s..NB-1]
             float lmnX = 1e30f, lmnY = 1e30f, lmnZ = 1e30f;
             float lmxX = -1e30f, lmxY = -1e30f, lmxZ = -1e30f;
-            int   lcnt = 0;
+            int lcnt = 0;
             for (int b = 0; b < s; b++) {
                 if (!buckets[b].cnt) continue;
-                lmnX = std::min(lmnX, buckets[b].mnX); lmnY = std::min(lmnY, buckets[b].mnY); lmnZ = std::min(lmnZ, buckets[b].mnZ);
-                lmxX = std::max(lmxX, buckets[b].mxX); lmxY = std::max(lmxY, buckets[b].mxY); lmxZ = std::max(lmxZ, buckets[b].mxZ);
+                lmnX = std::min(lmnX, buckets[b].mnX);
+                lmnY = std::min(lmnY, buckets[b].mnY);
+                lmnZ = std::min(lmnZ, buckets[b].mnZ);
+                lmxX = std::max(lmxX, buckets[b].mxX);
+                lmxY = std::max(lmxY, buckets[b].mxY);
+                lmxZ = std::max(lmxZ, buckets[b].mxZ);
                 lcnt += buckets[b].cnt;
             }
             float rmnX = 1e30f, rmnY = 1e30f, rmnZ = 1e30f;
             float rmxX = -1e30f, rmxY = -1e30f, rmxZ = -1e30f;
-            int   rcnt = 0;
+            int rcnt = 0;
             for (int b = s; b < NB; b++) {
                 if (!buckets[b].cnt) continue;
-                rmnX = std::min(rmnX, buckets[b].mnX); rmnY = std::min(rmnY, buckets[b].mnY); rmnZ = std::min(rmnZ, buckets[b].mnZ);
-                rmxX = std::max(rmxX, buckets[b].mxX); rmxY = std::max(rmxY, buckets[b].mxY); rmxZ = std::max(rmxZ, buckets[b].mxZ);
+                rmnX = std::min(rmnX, buckets[b].mnX);
+                rmnY = std::min(rmnY, buckets[b].mnY);
+                rmnZ = std::min(rmnZ, buckets[b].mnZ);
+                rmxX = std::max(rmxX, buckets[b].mxX);
+                rmxY = std::max(rmxY, buckets[b].mxY);
+                rmxZ = std::max(rmxZ, buckets[b].mxZ);
                 rcnt += buckets[b].cnt;
             }
             if (!lcnt || !rcnt) continue;
 
-            const float cost = (static_cast<float>(lcnt) * boxSurfaceArea(lmnX, lmnY, lmnZ, lmxX, lmxY, lmxZ)
-                              + static_cast<float>(rcnt) * boxSurfaceArea(rmnX, rmnY, rmnZ, rmxX, rmxY, rmxZ))
-                             / nodeArea;
-            if (cost < bestCost) { bestCost = cost; bestAxis = axis; bestSplit = s; }
+            const float cost = (static_cast<float>(lcnt) * boxSurfaceArea(lmnX, lmnY, lmnZ, lmxX, lmxY, lmxZ) + static_cast<float>(rcnt) * boxSurfaceArea(rmnX, rmnY, rmnZ, rmxX, rmxY, rmxZ)) / nodeArea;
+            if (cost < bestCost) {
+                bestCost = cost;
+                bestAxis = axis;
+                bestSplit = s;
+            }
         }
     }
 
@@ -756,8 +776,7 @@ static int buildBvhNode(
     const float splitPos = axMin + (axMax - axMin) * static_cast<float>(bestSplit) / NB;
 
     auto mid = std::partition(idx.begin() + start, idx.begin() + end, [&](int ti) {
-        const float c = (triGet(buf, ti, 0, bestAxis) + triGet(buf, ti, 1, bestAxis)
-                       + triGet(buf, ti, 2, bestAxis)) / 3.f;
+        const float c = (triGet(buf, ti, 0, bestAxis) + triGet(buf, ti, 1, bestAxis) + triGet(buf, ti, 2, bestAxis)) / 3.f;
         return c < splitPos;
     });
     int sp = static_cast<int>(mid - idx.begin());
@@ -765,7 +784,7 @@ static int buildBvhNode(
 
     const int lc = buildBvhNode(nodes, idx, buf, start, sp);
     const int rc = buildBvhNode(nodes, idx, buf, sp, end);
-    nodes[ni].left  = lc;
+    nodes[ni].left = lc;
     nodes[ni].right = rc;
     return ni;
 }
@@ -799,7 +818,7 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
         const int page = i / TEX_PAGE_WIDTH;
-        const int col  = i % TEX_PAGE_WIDTH;
+        const int col = i % TEX_PAGE_WIDTH;
         bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 0] = n.minX;
         bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 1] = n.minY;
         bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 2] = n.minZ;
@@ -852,7 +871,7 @@ int main() {
                                static_cast<uint32_t>(sz.height()));
     auto accumB = makeAccumTex(static_cast<uint32_t>(sz.width()),
                                static_cast<uint32_t>(sz.height()));
-    WgpuTexture* readAccum  = &accumA;
+    WgpuTexture* readAccum = &accumA;
     WgpuTexture* writeAccum = &accumB;
 
     // Zero-fill for initial state
@@ -887,7 +906,7 @@ int main() {
     displayCam.position.z = 1.f;
 
     auto displayMat = ShaderMaterial::create();
-    displayMat->vertexShader   = displayWGSL;
+    displayMat->vertexShader = displayWGSL;
     displayMat->fragmentShader = displayWGSL;
     displayMat->customTextures["accumTex"] = readAccum;
 
@@ -902,6 +921,12 @@ int main() {
             BoxGeometry::create(1.5f, 1.5f, 1.5f),
             MeshStandardMaterial::create({{"map", tex}, {"roughness", 0.9f}}));
     boxMesh->position.set(0.f, 1.f, -1.f);
+
+    auto boxMesh2 = Mesh::create(
+            BoxGeometry::create(),
+            MeshStandardMaterial::create({{"color", Color::black}, {"roughness", 0.9f}}));
+    boxMesh2->scale *= 1000;
+
 
     auto sphere1 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
@@ -928,10 +953,11 @@ int main() {
     scene.add(sphere1);
     scene.add(sphere2);
     scene.add(floor);
+    scene.add(boxMesh2);
 
     ModelLoader loader;
     auto obj = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
-    obj->traverseType<Mesh>([&] (Mesh& m) {
+    obj->traverseType<Mesh>([&](Mesh& m) {
         auto tex = m.material()->as<MaterialWithMap>();
         m.setMaterial(MeshStandardMaterial::create({{"map", tex ? tex->map : nullptr}, {"roughness", 0.9f}}));
     });
@@ -951,18 +977,18 @@ int main() {
 
     // ---- Texture atlas (rebuilt when mesh list changes) ----
     std::unordered_map<Texture*, int> texSlotMap;
-    std::vector<Mesh*> prevMeshes;  // for change detection
+    std::vector<Mesh*> prevMeshes;// for change detection
 
     // ---- Mode + accumulation state ----
-    bool  pathTracerOn = false;  // press T to toggle
-    float frameCount   = 0.f;
+    bool pathTracerOn = false;// press T to toggle
+    float frameCount = 0.f;
     Vector3 prevCamPos = rtCam.position;
     Vector3 prevTarget = controls.target;
 
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
             pathTracerOn = !pathTracerOn;
-            frameCount   = 0.f;  // reset accumulation on mode switch
+            frameCount = 0.f;// reset accumulation on mode switch
         }
     });
     canvas.addKeyListener(keyAdapter);
@@ -974,7 +1000,7 @@ int main() {
                               static_cast<uint32_t>(ns.height()));
         accumB = makeAccumTex(static_cast<uint32_t>(ns.width()),
                               static_cast<uint32_t>(ns.height()));
-        readAccum  = &accumA;
+        readAccum = &accumA;
         writeAccum = &accumB;
         displayMat->customTextures["accumTex"] = readAccum;
         frameCount = 0.f;
@@ -1001,7 +1027,7 @@ int main() {
         const Vector3& camPos = rtCam.position;
         Vector3 fwd = Vector3(controls.target).sub(camPos).normalize();
         Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
-        Vector3 up  = Vector3(rgt).cross(fwd);
+        Vector3 up = Vector3(rgt).cross(fwd);
 
         // Reset accumulation on camera movement
         const bool camMoved =
@@ -1019,9 +1045,9 @@ int main() {
             if (m.visible) rtMeshes.push_back(&m);
         });
         std::vector<PointLight*> pointLights;
-        scene.traverseType<PointLight>([&](PointLight& l) {
-            pointLights.push_back(&l);
-        });
+        scene.traverseType<PointLight>([&](PointLight& l) { pointLights.push_back(&l); });
+        std::vector<DirectionalLight*> dirLights;
+        scene.traverseType<DirectionalLight>([&](DirectionalLight& l) { dirLights.push_back(&l); });
 
         // Rebuild texture atlas only when mesh list changes
         if (rtMeshes != prevMeshes) {
@@ -1041,35 +1067,60 @@ int main() {
 
         // Pack uniform buffer
         RtGpuUniforms u{};
-        u.camOri[0] = camPos.x;  u.camOri[1] = camPos.y;  u.camOri[2] = camPos.z;
-        u.camFwd[0] = fwd.x;     u.camFwd[1] = fwd.y;     u.camFwd[2] = fwd.z;
-        u.camRgt[0] = rgt.x;     u.camRgt[1] = rgt.y;     u.camRgt[2] = rgt.z;
-        u.camUp[0]  = up.x;      u.camUp[1]  = up.y;      u.camUp[2]  = up.z;
+        u.camOri[0] = camPos.x;
+        u.camOri[1] = camPos.y;
+        u.camOri[2] = camPos.z;
+        u.camFwd[0] = fwd.x;
+        u.camFwd[1] = fwd.y;
+        u.camFwd[2] = fwd.z;
+        u.camRgt[0] = rgt.x;
+        u.camRgt[1] = rgt.y;
+        u.camRgt[2] = rgt.z;
+        u.camUp[0] = up.x;
+        u.camUp[1] = up.y;
+        u.camUp[2] = up.z;
         const auto curSz = canvas.size();
         u.iRes[0] = static_cast<float>(curSz.width());
         u.iRes[1] = static_cast<float>(curSz.height());
         u.tanHalfFov[0] = tanHalfFov;
         u.frameCount[0] = frameCount;
-        u.triCount[0]   = static_cast<float>(triCount);
-        u.mode[0]       = pathTracerOn ? 1.f : 0.f;
-        // Pack up to 4 point lights
-        const int nLights = std::min(static_cast<int>(pointLights.size()), 4);
-        u.lightCount[0] = static_cast<float>(nLights);
-        for (int li = 0; li < nLights; ++li) {
-            const auto& lp = pointLights[li]->position;
-            const auto& lc = pointLights[li]->color;
-            const float lint = pointLights[li]->intensity;
-            u.lightPos[li][0] = lp.x; u.lightPos[li][1] = lp.y; u.lightPos[li][2] = lp.z;
-            u.lightCol[li][0] = lc.r * lint;
-            u.lightCol[li][1] = lc.g * lint;
-            u.lightCol[li][2] = lc.b * lint;
+        u.triCount[0] = static_cast<float>(triCount);
+        u.mode[0] = pathTracerOn ? 1.f : 0.f;
+
+        // Pack up to 4 lights (point first, then directional)
+        int nLights = 0;
+        auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
+            if (nLights >= 4) return;
+            u.lightPos[nLights][0] = px;
+            u.lightPos[nLights][1] = py;
+            u.lightPos[nLights][2] = pz;
+            u.lightCol[nLights][0] = r;
+            u.lightCol[nLights][1] = g;
+            u.lightCol[nLights][2] = b;
+            u.lightType[nLights][0] = type;
+            ++nLights;
+        };
+        for (auto* l : pointLights) {
+            const auto& lp = l->position;
+            const auto& lc = l->color;
+            const float li = l->intensity;
+            packLight(lp.x, lp.y, lp.z, lc.r * li, lc.g * li, lc.b * li, 0.f);
         }
+        for (auto* l : dirLights) {
+            // direction = normalize(target - position); store as "toward light" unit vector
+            Vector3 dir = Vector3(l->target().position).sub(l->position).normalize();
+            const auto& lc = l->color;
+            const float li = l->intensity;
+            packLight(dir.x, dir.y, dir.z, lc.r * li, lc.g * li, lc.b * li, 1.f);
+        }
+        u.lightCount[0] = static_cast<float>(nLights);
+
         rtUniformBuf.write(&u, sizeof(u));
 
         // Dispatch: read accumA, write accumB (ping-pong)
         rtPipeline.setTexture(1, *readAccum);
         rtPipeline.setStorageTexture(2, *writeAccum);
-        const uint32_t gx = (static_cast<uint32_t>(curSz.width())  + 7u) / 8u;
+        const uint32_t gx = (static_cast<uint32_t>(curSz.width()) + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(curSz.height()) + 7u) / 8u;
         rtPipeline.dispatch(gx, gy);
 
