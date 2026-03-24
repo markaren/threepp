@@ -1,38 +1,33 @@
-// GPU raytracer that reads real threepp geometry (BufferGeometry) and renders it
-// entirely in a WGSL fragment shader via WgpuRenderer.
+// GPU path tracer that reads real threepp geometry (BufferGeometry) and renders it
+// entirely via a WGSL compute shader using WgpuComputePipeline.
 //
-// How it works:
-//   Each frame, world-space triangle data is extracted from threepp Mesh objects
-//   (position attribute + index buffer + matrixWorld), packed into two
-//   RGBA32Float WgpuTextures, and uploaded to the GPU:
+// Architecture:
+//   Each frame a compute shader traces one Monte Carlo path per pixel and blends
+//   the result into a per-pixel accumulation texture (running average):
 //
-//     triData  (width=MAX_TRIS, height=4)
-//       row 0 : col i = (v0.x, v0.y, v0.z, float(matIdx))
-//       row 1 : col i = (v1.x, v1.y, v1.z, 0)
-//       row 2 : col i = (v2.x, v2.y, v2.z, 0)
-//       row 3 : col i = (nx,   ny,   nz,   0)   precomputed face normal
+//     accumulation[pixel] = (accumulation[pixel] * frameCount + newSample) / (frameCount+1)
 //
-//     matData  (width=MAX_MATS, height=1)
-//       row 0 : col i = (albedo.r, albedo.g, albedo.b, shininess)
+//   Two RGBA32Float textures ping-pong as accumulator (read one, write the other).
+//   A simple blit fragment shader displays the accumulated result with gamma correction.
+//   Moving the camera resets frameCount → accumulation restarts.
 //
-//   The WGSL fragment shader loops over triCount triangles, runs
-//   Möller–Trumbore intersection, and shades with Blinn-Phong + hard shadows
-//   + one mirror-reflection bounce.  OrbitControls give interactive camera.
+//   Geometry is packed into RGBA32Float WgpuTextures every frame (BVH rebuilt on CPU):
+//     triData  rows 0-5: v0 v1 v2 n0 n1 n2  (paged, 8192 columns wide)
+//     matData  row  0  : (albedo.r, albedo.g, albedo.b, shininess)
+//     bvhData  rows 0-1: (aabbMin.xyz, left)  (aabbMax.xyz, right)  per node
 
 #include "threepp/lights/PointLight.hpp"
-#include "threepp/materials/MeshBasicMaterial.hpp"
-#include "threepp/materials/MeshLambertMaterial.hpp"
-#include "threepp/materials/MeshPhongMaterial.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/renderers/WgpuRenderer.hpp"
+#include "threepp/renderers/wgpu/WgpuBuffer.hpp"
+#include "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
 #include "threepp/renderers/wgpu/WgpuTexture.hpp"
 #include "threepp/threepp.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <iostream>
 #include <numeric>
 #include <unordered_map>
 #include <vector>
@@ -42,87 +37,59 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
-constexpr int MAX_TRIS = 8192;
-constexpr int MAX_MATS = 64;
-constexpr int MAX_BVH_NODES = 2*MAX_TRIS-1;// 2*MAX_TRIS - 1 worst case
-constexpr int TRI_TEX_HEIGHT = 8;  // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
-constexpr int MAT_TEX_HEIGHT = 2;  // row0: albedo+shininess, row1: texSlot
-constexpr int MAX_TEX_SLOTS = 16;
-constexpr int TILE_SIZE = 256;
-// WebGPU max texture dimension is 8192. Wider data is folded into extra rows.
-constexpr int TEX_PAGE_WIDTH = 8192;
-constexpr int TRI_TEX_PAGES  = (MAX_TRIS      + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
-constexpr int BVH_TEX_PAGES  = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
+constexpr int MAX_TRIS       = 8192;
+constexpr int MAX_MATS       = 64;
+constexpr int MAX_BVH_NODES  = 2 * MAX_TRIS - 1;
+constexpr int MAX_TEX_SLOTS  = 16;
+constexpr int TILE_SIZE      = 256;
+constexpr int TRI_TEX_HEIGHT = 8;   // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
+constexpr int MAT_TEX_HEIGHT = 2;   // row0: albedo+shininess, row1: texSlot
+constexpr int TEX_PAGE_WIDTH  = 8192;
+constexpr int TRI_TEX_PAGES   = (MAX_TRIS      + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
+constexpr int BVH_TEX_PAGES   = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
 
 // ---------------------------------------------------------------------------
-// WGSL vertex shader
+// WGSL compute shader — path tracer + accumulator
+//
+// Bindings:
+//   0: RtUniforms (uniform buffer)
+//   1: accumRead  (texture_2d<f32>)
+//   2: accumWrite (texture_storage_2d<rgba32float, write>)
+//   3: bvhData    (texture_2d<f32>)
+//   4: matData    (texture_2d<f32>)
+//   5: triData    (texture_2d<f32>)
+//   6: texAtlas   (texture_2d<f32>, RGBA8Unorm strip of TILE_SIZE×TILE_SIZE tiles)
 // ---------------------------------------------------------------------------
-constexpr const char* vsWGSL = R"(
-struct TransformUniforms {
-    model:      mat4x4<f32>,
-    view:       mat4x4<f32>,
-    proj:       mat4x4<f32>,
-    normalCol0: vec4<f32>,
-    normalCol1: vec4<f32>,
-    normalCol2: vec4<f32>,
-    cameraPos:  vec3<f32>,
-    _pad:       f32,
-};
-@group(0) @binding(0) var<uniform> transform: TransformUniforms;
-
-@vertex
-fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
-    return transform.proj * transform.view * transform.model * vec4<f32>(position, 1.0);
-}
-)";
-
-// ---------------------------------------------------------------------------
-// WGSL fragment shader
-// Custom uniforms MUST be alphabetical: aspect camFwd camOri camRgt camUp iRes iTime tanHalfFov triCount
-// Custom textures MUST be alphabetical: bvhData(3,4)  matData(5,6)  texAtlas(7,8)  triData(9,10)
-// ---------------------------------------------------------------------------
-constexpr const char* fsWGSL = R"(
+constexpr const char* csWGSL = R"(
 
 struct RtUniforms {
-    aspect:     vec4<f32>,   // x = width/height
-    camFwd:     vec4<f32>,   // xyz = forward
-    camOri:     vec4<f32>,   // xyz = camera position
-    camRgt:     vec4<f32>,   // xyz = right
-    camUp:      vec4<f32>,   // xyz = up
-    iRes:       vec4<f32>,   // xy = viewport pixels
-    iTime:      vec4<f32>,   // x = elapsed seconds
-    lightCol:   vec4<f32>,   // xyz = color * intensity (pre-multiplied)
-    lightPos:   vec4<f32>,   // xyz = world-space position
-    tanHalfFov: vec4<f32>,   // x = tan(fov/2)
-    triCount:   vec4<f32>,   // x = number of triangles (float→int)
+    camOri:     vec4<f32>,  // xyz = camera position
+    camFwd:     vec4<f32>,  // xyz = forward direction
+    camRgt:     vec4<f32>,  // xyz = right direction
+    camUp:      vec4<f32>,  // xyz = up direction
+    lightPos:   vec4<f32>,  // xyz = world-space light position
+    lightCol:   vec4<f32>,  // xyz = color * intensity
+    iRes:       vec4<f32>,  // xy  = viewport size in pixels
+    tanHalfFov: vec4<f32>,  // x   = tan(fov/2)
+    frameCount: vec4<f32>,  // x   = accumulated frames so far (float)
+    triCount:   vec4<f32>,  // x   = number of triangles
+    mode:       vec4<f32>,  // x   = 0 raytracer, 1 path tracer
 };
-@group(0) @binding(2) var<uniform> rt: RtUniforms;
 
-// bvhData: row0 col i = (aabbMin.xyz, left)   left<0 → leaf, triStart=-left-1
-//          row1 col i = (aabbMax.xyz, right)  right = rightChild OR triCount
-@group(0) @binding(3) var bvhData: texture_2d<f32>;
-// binding 4 = bvhData sampler (reserved)
+@group(0) @binding(0) var<uniform> rt:          RtUniforms;
+@group(0) @binding(1) var accumRead:  texture_2d<f32>;
+@group(0) @binding(2) var accumWrite: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var bvhData:    texture_2d<f32>;
+@group(0) @binding(4) var matData:    texture_2d<f32>;
+@group(0) @binding(5) var triData:    texture_2d<f32>;
+@group(0) @binding(6) var texAtlas:   texture_2d<f32>;
 
-// matData: row0 col i = (albedo.r, albedo.g, albedo.b, shininess)
-//          row1 col i = (texSlot, 0, 0, 0)  — texSlot<0 means no texture
-@group(0) @binding(5) var matData: texture_2d<f32>;
-// binding 6 = matData sampler (reserved)
-
-// texAtlas: horizontal strip of TILE_SIZE×TILE_SIZE tiles, one per texSlot
-@group(0) @binding(7) var texAtlas:        texture_2d<f32>;
-@group(0) @binding(8) var texAtlasSampler: sampler;
-
-// triData: rows 0-2 = v0/v1/v2 (w=matIdx in row0), rows 3-5 = n0/n1/n2
-//          row 6 = (u0,v0, u1,v1), row 7 = (u2,v2, 0,0)
-@group(0) @binding(9) var triData: texture_2d<f32>;
-// binding 10 = triData sampler (reserved)
-
-const MAX_TEX_SLOTS: f32 = 16.0;
-const TRI_PAGE_W: i32 = 8192;  // TEX_PAGE_WIDTH
-const TRI_PAGE_H: i32 = 8;     // TRI_TEX_HEIGHT rows per page
+const TRI_PAGE_W:  i32 = 8192;
+const TRI_PAGE_H:  i32 = 8;
+const TILE_SIZE:   i32 = 256;
+const MAX_TEX_SLOTS: i32 = 16;
 const BVH_PAGE_W: i32 = 8192;
 
-// Paged texture coordinate helpers (handle textures wider than 8192)
 fn triCoord(ti: i32, row: i32) -> vec2<i32> {
     return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
 }
@@ -131,16 +98,43 @@ fn bvhCoord(ni: i32, row: i32) -> vec2<i32> {
 }
 
 // ---- Types ----
-struct Ray { origin: vec3<f32>, dir: vec3<f32>, }
-struct Isect { t: f32, u: f32, v: f32, }
-struct Hit {
+struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
+struct Isect { t: f32, u: f32, v: f32 }
+struct Hit  {
     t:         f32,
     point:     vec3<f32>,
     normal:    vec3<f32>,
     albedo:    vec3<f32>,
     shininess: f32,
     uv:        vec2<f32>,
-    texSlot:   f32,        // < 0 → no texture
+    texSlot:   f32,   // < 0 = no texture
+}
+
+// ---- PCG random number generator ----
+fn pcg(v: u32) -> u32 {
+    var s = v * 747796405u + 2891336453u;
+    s = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+    return (s >> 22u) ^ s;
+}
+fn rand(seed: ptr<function, u32>) -> f32 {
+    *seed = pcg(*seed);
+    return f32(*seed) / 4294967296.0;
+}
+
+// ---- Cosine-weighted hemisphere sample around n ----
+fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
+    let u1  = rand(seed);
+    let u2  = rand(seed);
+    let r   = sqrt(u1);
+    let phi = 6.28318530718 * u2;
+    let lx  = r * cos(phi);
+    let ly  = r * sin(phi);
+    let lz  = sqrt(max(0.0, 1.0 - u1));
+    // Build orthonormal basis around n
+    let nt  = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
+    let rgt = normalize(cross(nt, n));
+    let up  = cross(n, rgt);
+    return normalize(lx * rgt + ly * up + lz * n);
 }
 
 // ---- Sky gradient ----
@@ -149,7 +143,7 @@ fn sky(d: vec3<f32>) -> vec3<f32> {
     return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.32, 0.52, 1.0), t);
 }
 
-// ---- Möller–Trumbore: returns (t, u, v) barycentric; t=1e30 on miss ----
+// ---- Möller–Trumbore: returns (t, u, v); t=1e30 on miss ----
 fn triIntersect(ray: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> Isect {
     var r: Isect; r.t = 1e30;
     let e1 = v1 - v0;
@@ -170,17 +164,17 @@ fn triIntersect(ray: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> Isect 
     return r;
 }
 
-// ---- Slab AABB test; returns true if ray hits box before tmax ----
+// ---- Slab AABB test ----
 fn aabbHit(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> bool {
-    let invD = vec3<f32>(1.0) / ray.dir;
-    let t1   = (bmin - ray.origin) * invD;
-    let t2   = (bmax - ray.origin) * invD;
+    let invD  = vec3<f32>(1.0) / ray.dir;
+    let t1    = (bmin - ray.origin) * invD;
+    let t2    = (bmax - ray.origin) * invD;
     let tNear = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
     let tFar  = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));
     return tFar >= max(tNear, 0.0) && tNear < tmax;
 }
 
-// ---- Load and shade a triangle, update h if closer ----
+// ---- Load triangle, update h if closer ----
 fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let r0 = textureLoad(triData, triCoord(ti, 0), 0);
     let v0 = r0.xyz;
@@ -190,11 +184,11 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let isect = triIntersect(ray, v0, v1, v2);
     if (isect.t >= (*h).t) { return; }
 
-    let w   = 1.0 - isect.u - isect.v;
-    let n0  = textureLoad(triData, triCoord(ti, 3), 0).xyz;
-    let n1  = textureLoad(triData, triCoord(ti, 4), 0).xyz;
-    let n2  = textureLoad(triData, triCoord(ti, 5), 0).xyz;
-    var sn  = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
+    let w  = 1.0 - isect.u - isect.v;
+    let n0 = textureLoad(triData, triCoord(ti, 3), 0).xyz;
+    let n1 = textureLoad(triData, triCoord(ti, 4), 0).xyz;
+    let n2 = textureLoad(triData, triCoord(ti, 5), 0).xyz;
+    let sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
 
     let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
     let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
@@ -217,62 +211,61 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
 
 // ---- BVH traversal ----
 fn sceneHit(ray: Ray) -> Hit {
-    var h: Hit;
-    h.t = 1e30;
-
+    var h: Hit; h.t = 1e30;
     var stack: array<i32, 32>;
     var top: i32 = 0;
-    stack[0] = 0;
-    top = 1;
+    stack[0] = 0; top = 1;
 
     while (top > 0) {
         top -= 1;
         let ni  = stack[top];
         let nd0 = textureLoad(bvhData, bvhCoord(ni, 0), 0);
         let nd1 = textureLoad(bvhData, bvhCoord(ni, 1), 0);
-
         if (!aabbHit(nd0.xyz, nd1.xyz, ray, h.t)) { continue; }
-
         let left  = i32(nd0.w);
         let right = i32(nd1.w);
-
         if (left < 0) {
-            // Leaf: test triangles
             let triStart = -left - 1;
             let triCount = right;
             for (var ti = triStart; ti < triStart + triCount; ti++) {
                 testTriangle(ray, ti, &h);
             }
         } else {
-            // Interior: push both children (closer last = popped first)
-            stack[top] = right;
-            top += 1;
-            stack[top] = left;
-            top += 1;
+            stack[top] = right; top += 1;
+            stack[top] = left;  top += 1;
         }
     }
     return h;
 }
 
-// ---- Blinn-Phong shade with single shadow ray ----
+// ---- Generate a camera ray for pixel px with viewport res ----
+fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
+    let aspect = res.x / res.y;
+    let ndc = vec2<f32>((px.x / res.x) * 2.0 - 1.0,
+                         1.0 - (px.y / res.y) * 2.0);
+    var ray: Ray;
+    ray.origin = rt.camOri.xyz;
+    ray.dir    = normalize(rt.camFwd.xyz
+                         + rt.camRgt.xyz * (ndc.x * rt.tanHalfFov.x * aspect)
+                         + rt.camUp.xyz  * (ndc.y * rt.tanHalfFov.x));
+    return ray;
+}
+
+// ---- Blinn-Phong shade with hard shadow (used by raytracer mode) ----
 fn shade(h: Hit, rd: vec3<f32>, lp: vec3<f32>) -> vec3<f32> {
-    // Resolve albedo: sample texture atlas or use material colour
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) {
-        let au = (h.texSlot + fract(h.uv.x)) / MAX_TEX_SLOTS;
-        let av = fract(h.uv.y);
-        albedo = textureSampleLevel(texAtlas, texAtlasSampler,
-                                    vec2<f32>(au, av), 0.0).xyz;
+        let tx = i32(h.texSlot) * TILE_SIZE
+               + clamp(i32(fract(h.uv.x) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
+        let ty = clamp(i32(fract(h.uv.y) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
+        albedo = textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
     }
-
     let toL = lp - h.point;
     let ld  = length(toL);
     let ln  = toL / ld;
-
-    let lc = rt.lightCol.xyz;   // pre-multiplied color * intensity
+    let lc  = rt.lightCol.xyz;
     var col = albedo * 0.10;
-
-    var sr: Ray; sr.origin = h.point; sr.dir = ln;
+    var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
     let sh = sceneHit(sr);
     if (sh.t >= ld - 1e-3) {
         col += albedo * lc * max(0.0, dot(h.normal, ln)) * 0.80;
@@ -282,102 +275,192 @@ fn shade(h: Hit, rd: vec3<f32>, lp: vec3<f32>) -> vec3<f32> {
     return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
-// ---- Trace with one mirror-reflection bounce ----
-fn trace(ray: Ray, lp: vec3<f32>) -> vec3<f32> {
+// ---- Deterministic trace with one mirror bounce ----
+fn raytrace(ray: Ray, lp: vec3<f32>) -> vec3<f32> {
     let h0 = sceneHit(ray);
     if (h0.t >= 1e30) { return sky(ray.dir); }
-
     var col = shade(h0, ray.dir, lp);
-
     if (h0.shininess > 20.0) {
         let k = min(0.55, h0.shininess / 100.0);
         var r1: Ray;
-        r1.origin = h0.point;
+        r1.origin = h0.point + h0.normal * 1e-3;
         r1.dir    = reflect(ray.dir, h0.normal);
         let h1 = sceneHit(r1);
-        var rc: vec3<f32>;
-        if (h1.t >= 1e30) { rc = sky(r1.dir); }
-        else               { rc = shade(h1, r1.dir, lp); }
+        let rc = select(shade(h1, r1.dir, lp), sky(r1.dir), h1.t >= 1e30);
         col = col * (1.0 - k) + rc * k;
     }
     return col;
 }
 
-fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
-    let fwd = rt.camFwd.xyz;
-    let rgt = rt.camRgt.xyz;
-    let up  = rt.camUp.xyz;
-    // WebGPU: y=0 at top → flip y for standard NDC
-    let ndc = vec2<f32>(
-        (px.x / res.x) * 2.0 - 1.0,
-        1.0 - (px.y / res.y) * 2.0
-    );
-    var ray: Ray;
-    ray.origin = rt.camOri.xyz;
-    ray.dir    = normalize(fwd
-                         + rgt * (ndc.x * rt.tanHalfFov.x * rt.aspect.x)
-                         + up  * (ndc.y * rt.tanHalfFov.x));
-    return ray;
+// ---- Path trace: next-event estimation + cosine-weighted indirect ----
+fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
+    var ray        = ray_in;
+    var throughput = vec3<f32>(1.0);
+    var radiance   = vec3<f32>(0.0);
+
+    for (var i = 0; i < 5; i++) {
+        let h = sceneHit(ray);
+        if (h.t >= 1e29) {
+            radiance += throughput * sky(ray.dir);
+            break;
+        }
+
+        // Resolve albedo from texture atlas if this material has a texture
+        var albedo = h.albedo;
+        if (h.texSlot >= 0.0) {
+            let tx = i32(h.texSlot) * TILE_SIZE
+                   + clamp(i32(fract(h.uv.x) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
+            let ty = clamp(i32(fract(h.uv.y) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
+            albedo = textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
+        }
+
+        // Next-event estimation: shadow ray to the point light
+        let toL = rt.lightPos.xyz - h.point;
+        let ld  = length(toL);
+        let ln  = toL / ld;
+        var sr: Ray;
+        sr.origin = h.point + h.normal * 1e-3;
+        sr.dir    = ln;
+        let sh = sceneHit(sr);
+        if (sh.t >= ld - 1e-3) {
+            let lc   = rt.lightCol.xyz;
+            let diff = max(0.0, dot(h.normal, ln));
+            // Blinn-Phong specular lobe
+            let hv   = normalize(normalize(-ray.dir) + ln);
+            let spec = pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0);
+            radiance += throughput * (albedo * lc * diff * 0.85 + lc * spec * 0.35);
+        }
+        // Ambient term
+        radiance += throughput * albedo * 0.03;
+
+        // Russian roulette after first bounce
+        if (i > 0) {
+            let p = max(max(throughput.r, throughput.g), throughput.b);
+            if (rand(seed) > p) { break; }
+            throughput /= p;
+        }
+
+        // Sample next direction: specular vs. diffuse
+        let spec_prob = h.shininess / (h.shininess + 64.0);
+        if (rand(seed) < spec_prob) {
+            ray.dir = reflect(ray.dir, h.normal);
+        } else {
+            ray.dir = cosineHemisphere(h.normal, seed);
+        }
+        throughput *= albedo;
+        ray.origin  = h.point + h.normal * 1e-3;
+    }
+    return radiance;
 }
 
-@fragment
-fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
-    let res  = rt.iRes.xy;
-    let time = rt.iTime.x;
+@compute @workgroup_size(8, 8)
+fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pixel = vec2<i32>(i32(gid.x), i32(gid.y));
+    let res   = rt.iRes.xy;
+    if (f32(pixel.x) >= res.x || f32(pixel.y) >= res.y) { return; }
 
-    let lc = rt.lightPos.xyz;
+    let fc   = u32(rt.frameCount.x);
+    let isPT = rt.mode.x > 0.5;
 
-    // Each RGSS sample tests a slightly different point on the area light (XZ plane).
-    // Fixed offsets — no hash, no noise, no extra rays.  Radius controls penumbra width.
-    let lr = 0.05;
-    let lp0 = lc + vec3<f32>( lr,  0.0,  0.0);
-    let lp1 = lc + vec3<f32>(-lr,  0.0,  0.0);
-    let lp2 = lc + vec3<f32>( 0.0, 0.0,  lr);
-    let lp3 = lc + vec3<f32>( 0.0, 0.0, -lr);
+    var sample: vec3<f32>;
 
-    // RGSS 4-sample anti-aliasing — rotated 2×2 grid, offsets in pixels
-    let o0 = vec2<f32>( 0.125,  0.375);
-    let o1 = vec2<f32>(-0.375,  0.125);
-    let o2 = vec2<f32>( 0.375, -0.125);
-    let o3 = vec2<f32>(-0.125, -0.375);
+    if (!isPT) {
+        // ---- Raytracer mode: deterministic Blinn-Phong, RGSS 4x AA + soft shadow ----
+        let lc  = rt.lightPos.xyz;
+        let lr  = 0.05;
+        let lp0 = lc + vec3<f32>( lr,  0.0,  0.0);
+        let lp1 = lc + vec3<f32>(-lr,  0.0,  0.0);
+        let lp2 = lc + vec3<f32>( 0.0, 0.0,  lr);
+        let lp3 = lc + vec3<f32>( 0.0, 0.0, -lr);
+        let o0 = vec2<f32>( 0.125,  0.375);
+        let o1 = vec2<f32>(-0.375,  0.125);
+        let o2 = vec2<f32>( 0.375, -0.125);
+        let o3 = vec2<f32>(-0.125, -0.375);
+        let fp = vec2<f32>(f32(pixel.x), f32(pixel.y));
+        sample = (raytrace(makeRay(fp + o0, res), lp0)
+                + raytrace(makeRay(fp + o1, res), lp1)
+                + raytrace(makeRay(fp + o2, res), lp2)
+                + raytrace(makeRay(fp + o3, res), lp3)) * 0.25;
+        // No accumulation in raytracer mode — write fresh each frame
+        textureStore(accumWrite, pixel, vec4<f32>(sample, 1.0));
+    } else {
+        // ---- Path tracer mode: stochastic, EMA accumulation ----
+        var seed = pcg(gid.x * 1973u + 1u) ^ pcg(gid.y * 9277u + 1u) ^ pcg(fc * 26699u + 1u);
+        let jx  = rand(&seed) - 0.5;
+        let jy  = rand(&seed) - 0.5;
+        let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
+        sample  = pathTrace(ray, &seed);
 
-    var col = trace(makeRay(fragPos.xy + o0, res), lp0)
-            + trace(makeRay(fragPos.xy + o1, res), lp1)
-            + trace(makeRay(fragPos.xy + o2, res), lp2)
-            + trace(makeRay(fragPos.xy + o3, res), lp3);
-    col *= 0.25;  // average in linear space, then gamma
-
-    col = pow(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
-    return vec4<f32>(col, 1.0);
+        // Exponential moving average (alpha=1 on reset to avoid ghosting old view)
+        let old     = textureLoad(accumRead, pixel, 0).xyz;
+        let alpha   = select(0.1, 1.0, fc == 0u);
+        let blended = old * (1.0 - alpha) + sample * alpha;
+        textureStore(accumWrite, pixel, vec4<f32>(blended, 1.0));
+    }
 }
 )";
 
 // ---------------------------------------------------------------------------
-// Extract material properties via interface casts
+// WGSL display shader — blit accumulated texture to screen with gamma
+//
+// Bindings (ShaderMaterial, no custom uniforms):
+//   0: TransformUniforms (always present)
+//   1: LightData buffer (always present, unused here)
+//   2: accumTex (first custom texture, texture_2d<f32>)
+//   3: accumTex sampler (reserved, unused)
 // ---------------------------------------------------------------------------
-static std::pair<Color, float> extractMaterial(const Material* mat) {
-    Color albedo(0.8f, 0.8f, 0.8f);
-    float shininess = 8.f;
-    if (!mat) return {albedo, shininess};
+constexpr const char* displayWGSL = R"(
+struct TransformUniforms {
+    model:      mat4x4<f32>,
+    view:       mat4x4<f32>,
+    proj:       mat4x4<f32>,
+    normalCol0: vec4<f32>,
+    normalCol1: vec4<f32>,
+    normalCol2: vec4<f32>,
+    cameraPos:  vec3<f32>,
+    _pad:       f32,
+};
+@group(0) @binding(0) var<uniform> transform: TransformUniforms;
+@group(0) @binding(2) var accumTex: texture_2d<f32>;
 
-    if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
-        albedo = c->color;
-
-    if (auto* s = dynamic_cast<const MaterialWithSpecular*>(mat)) {
-        shininess = std::max(1.f, s->shininess);
-    } else if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
-        shininess = std::max(1.f, (1.f - r->roughness) * 128.f);
-    }
-    return {albedo, shininess};
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
+    return transform.proj * transform.view * transform.model * vec4<f32>(position, 1.0);
 }
 
+@fragment
+fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
+    let col = textureLoad(accumTex, vec2<i32>(fragPos.xy), 0).xyz;
+    let gc  = pow(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
+    return vec4<f32>(gc, 1.0);
+}
+)";
+
 // ---------------------------------------------------------------------------
-// Build texture atlas from mesh materials that have a map.
-// Returns atlas pixel data (RGBA8, MAX_TEX_SLOTS*TILE_SIZE × TILE_SIZE)
-// and fills texSlotMap: Texture* → slot index (0..MAX_TEX_SLOTS-1).
+// CPU-side uniform struct (must match RtUniforms in csWGSL, 256-byte aligned)
+// ---------------------------------------------------------------------------
+struct alignas(16) RtGpuUniforms {
+    float camOri[4];
+    float camFwd[4];
+    float camRgt[4];
+    float camUp[4];
+    float lightPos[4];
+    float lightCol[4];
+    float iRes[4];
+    float tanHalfFov[4];
+    float frameCount[4];
+    float triCount[4];
+    float mode[4];   // 0 = raytracer, 1 = path tracer
+    float _pad[20];  // pad to 256 bytes  (176 used + 80 pad = 256)
+};
+static_assert(sizeof(RtGpuUniforms) == 256, "RtGpuUniforms must be 256 bytes");
+
+// ---------------------------------------------------------------------------
+// Build texture atlas: MAX_TEX_SLOTS tiles of TILE_SIZE×TILE_SIZE (RGBA8).
+// Fills texSlotMap: Texture* → slot index.
 // ---------------------------------------------------------------------------
 static std::vector<unsigned char> buildAtlas(
-        const std::vector<std::shared_ptr<Mesh>>& meshes,
+        const std::vector<Mesh*>& meshes,
         std::unordered_map<Texture*, int>& texSlotMap) {
     const int atlasW = MAX_TEX_SLOTS * TILE_SIZE;
     std::vector<unsigned char> atlas(atlasW * TILE_SIZE * 4, 255);
@@ -388,46 +471,59 @@ static std::vector<unsigned char> buildAtlas(
         auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get());
         if (!mwm || !mwm->map) continue;
         Texture* tex = mwm->map.get();
-        if (texSlotMap.count(tex)) continue;// already assigned
+        if (texSlotMap.count(tex)) continue;
 
-        // Get raw image data (assume uchar RGBA/RGB)
         auto& img = tex->image();
         if (img.width == 0 || img.height == 0) continue;
         const auto& src = img.data<unsigned char>();
         const int srcW = static_cast<int>(img.width);
         const int srcH = static_cast<int>(img.height);
-        const int channels = static_cast<int>(src.size()) / (srcW * srcH);
+        const int ch   = static_cast<int>(src.size()) / (srcW * srcH);
 
-        // Blit into atlas slot with nearest-neighbour scale
         const int destX = slot * TILE_SIZE;
         for (int ty = 0; ty < TILE_SIZE; ++ty) {
             const int sy = ty * srcH / TILE_SIZE;
             for (int tx = 0; tx < TILE_SIZE; ++tx) {
                 const int sx = tx * srcW / TILE_SIZE;
-                const int si = (sy * srcW + sx) * channels;
+                const int si = (sy * srcW + sx) * ch;
                 const int di = (ty * atlasW + destX + tx) * 4;
                 atlas[di + 0] = src[si + 0];
                 atlas[di + 1] = src[si + 1];
                 atlas[di + 2] = src[si + 2];
-                atlas[di + 3] = channels == 4 ? src[si + 3] : 255u;
+                atlas[di + 3] = ch == 4 ? src[si + 3] : 255u;
             }
         }
-
         texSlotMap[tex] = slot++;
     }
     return atlas;
 }
 
 // ---------------------------------------------------------------------------
-// Build CPU triangle/material buffers from a list of Mesh objects.
+// Extract material properties
+// ---------------------------------------------------------------------------
+static std::pair<Color, float> extractMaterial(const Material* mat) {
+    Color albedo(0.8f, 0.8f, 0.8f);
+    float shininess = 8.f;
+    if (!mat) return {albedo, shininess};
+    if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
+        albedo = c->color;
+    if (auto* s = dynamic_cast<const MaterialWithSpecular*>(mat)) {
+        shininess = std::max(1.f, s->shininess);
+    } else if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
+        shininess = std::max(1.f, (1.f - r->roughness) * 128.f);
+    }
+    return {albedo, shininess};
+}
+
+// ---------------------------------------------------------------------------
+// Build CPU triangle + material buffers from Mesh objects.
 // Returns the number of triangles written.
 // ---------------------------------------------------------------------------
 static int buildGeometryBuffers(
-        const std::vector<std::shared_ptr<Mesh>>& meshes,
+        const std::vector<Mesh*>& meshes,
         const std::unordered_map<Texture*, int>& texSlotMap,
-        std::vector<float>& triBuffer,// MAX_TRIS * TRI_TEX_HEIGHT rows * 4 floats
-        std::vector<float>& matBuffer)// MAX_MATS * MAT_TEX_HEIGHT rows * 4 floats
-{
+        std::vector<float>& triBuffer,
+        std::vector<float>& matBuffer) {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
 
@@ -438,28 +534,22 @@ static int buildGeometryBuffers(
                         float x, float y, float z, float w) {
         int idx;
         if (width > TEX_PAGE_WIDTH) {
-            // Paged layout: fold columns beyond TEX_PAGE_WIDTH into extra rows
             const int page = col / TEX_PAGE_WIDTH;
             const int pcol = col % TEX_PAGE_WIDTH;
             idx = ((page * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + pcol) * 4;
         } else {
             idx = (row * width + col) * 4;
         }
-        buf[idx + 0] = x;
-        buf[idx + 1] = y;
-        buf[idx + 2] = z;
-        buf[idx + 3] = w;
+        buf[idx + 0] = x; buf[idx + 1] = y; buf[idx + 2] = z; buf[idx + 3] = w;
     };
 
     for (auto& mesh : meshes) {
         if (triCount >= MAX_TRIS || matCount >= MAX_MATS) break;
 
-        // Material row 0: albedo + shininess
         auto [albedo, shininess] = extractMaterial(mesh->material().get());
         setTexel(matBuffer, MAX_MATS, matCount, 0,
                  albedo.r, albedo.g, albedo.b, shininess);
 
-        // Material row 1: texture slot (-1 = none)
         float texSlot = -1.f;
         if (auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get())) {
             if (mwm->map) {
@@ -472,7 +562,6 @@ static int buildGeometryBuffers(
 
         const int matIdx = matCount++;
 
-        // Geometry
         mesh->updateMatrixWorld(true);
         const auto& world = *mesh->matrixWorld;
         auto* geo = mesh->geometry().get();
@@ -530,12 +619,11 @@ static int buildGeometryBuffers(
 // ---------------------------------------------------------------------------
 struct BvhNode {
     float minX, minY, minZ;
-    int left;// >= 0: left child index   < 0: leaf, triStart = -left-1
+    int   left;
     float maxX, maxY, maxZ;
-    int right;// interior: right child index   leaf: triangle count
+    int   right;
 };
 
-// Read one float component from the paged triBuffer
 static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
     const int page = ti / TEX_PAGE_WIDTH;
     const int pcol = ti % TEX_PAGE_WIDTH;
@@ -550,38 +638,28 @@ static int buildBvhNode(
     const int ni = static_cast<int>(nodes.size());
     nodes.emplace_back();
 
-    // Compute AABB over triangles in [start, end)
     float minX = 1e30f, minY = 1e30f, minZ = 1e30f;
     float maxX = -1e30f, maxY = -1e30f, maxZ = -1e30f;
     for (int i = start; i < end; i++) {
         const int ti = idx[i];
         for (int r = 0; r <= 2; r++) {
-            const float x = triGet(buf, ti, r, 0);
-            const float y = triGet(buf, ti, r, 1);
-            const float z = triGet(buf, ti, r, 2);
-            minX = std::min(minX, x);
-            minY = std::min(minY, y);
-            minZ = std::min(minZ, z);
-            maxX = std::max(maxX, x);
-            maxY = std::max(maxY, y);
-            maxZ = std::max(maxZ, z);
+            minX = std::min(minX, triGet(buf, ti, r, 0));
+            minY = std::min(minY, triGet(buf, ti, r, 1));
+            minZ = std::min(minZ, triGet(buf, ti, r, 2));
+            maxX = std::max(maxX, triGet(buf, ti, r, 0));
+            maxY = std::max(maxY, triGet(buf, ti, r, 1));
+            maxZ = std::max(maxZ, triGet(buf, ti, r, 2));
         }
     }
-    nodes[ni].minX = minX;
-    nodes[ni].minY = minY;
-    nodes[ni].minZ = minZ;
-    nodes[ni].maxX = maxX;
-    nodes[ni].maxY = maxY;
-    nodes[ni].maxZ = maxZ;
+    nodes[ni] = {minX, minY, minZ, 0, maxX, maxY, maxZ, 0};
 
     const int count = end - start;
     if (count <= 2) {
-        nodes[ni].left = -(start + 1);// leaf: encode triStart as negative
+        nodes[ni].left  = -(start + 1);
         nodes[ni].right = count;
         return ni;
     }
 
-    // Split along longest axis at centroid midpoint
     const float dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
     const int axis = (dx >= dy && dx >= dz) ? 0 : (dy >= dz ? 1 : 2);
     const float axMins[3] = {minX, minY, minZ};
@@ -589,7 +667,8 @@ static int buildBvhNode(
     const float split = (axMins[axis] + axMaxs[axis]) * 0.5f;
 
     auto mid = std::partition(idx.begin() + start, idx.begin() + end, [&](int ti) {
-        const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis) + triGet(buf, ti, 2, axis)) / 3.f;
+        const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis) +
+                         triGet(buf, ti, 2, axis)) / 3.f;
         return c < split;
     });
     int sp = static_cast<int>(mid - idx.begin());
@@ -597,13 +676,11 @@ static int buildBvhNode(
 
     const int lc = buildBvhNode(nodes, idx, buf, start, sp);
     const int rc = buildBvhNode(nodes, idx, buf, sp, end);
-    nodes[ni].left = lc;
+    nodes[ni].left  = lc;
     nodes[ni].right = rc;
     return ni;
 }
 
-// Build BVH over triCount triangles.  Reorders triBuffer in-place to match
-// BVH leaf order.  Returns packed node data ready for GPU upload.
 static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) {
     std::vector<int> indices(triCount);
     std::iota(indices.begin(), indices.end(), 0);
@@ -612,8 +689,8 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
     nodes.reserve(triCount * 2);
     buildBvhNode(nodes, indices, triBuffer, 0, triCount);
 
-    // Reorder triBuffer to match the sorted index order (paged layout)
-    auto pagedTriIdx = [](int ti, int row) -> int {
+    // Reorder triBuffer to match sorted leaf order
+    auto pagedIdx = [](int ti, int row) -> int {
         const int page = ti / TEX_PAGE_WIDTH;
         const int pcol = ti % TEX_PAGE_WIDTH;
         return ((page * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + pcol) * 4;
@@ -623,11 +700,11 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
         const int oi = indices[ni];
         for (int row = 0; row < TRI_TEX_HEIGHT; row++)
             for (int c = 0; c < 4; c++)
-                sorted[pagedTriIdx(ni, row) + c] = triBuffer[pagedTriIdx(oi, row) + c];
+                sorted[pagedIdx(ni, row) + c] = triBuffer[pagedIdx(oi, row) + c];
     }
     triBuffer = std::move(sorted);
 
-    // Pack BVH nodes into paged RGBA32Float texture (TEX_PAGE_WIDTH wide, 2*BVH_TEX_PAGES tall)
+    // Pack BVH nodes into paged RGBA32Float texture
     std::vector<float> bvhBuf(TEX_PAGE_WIDTH * 2 * BVH_TEX_PAGES * 4, 0.f);
     const int nc = std::min(static_cast<int>(nodes.size()), MAX_BVH_NODES);
     for (int i = 0; i < nc; i++) {
@@ -651,127 +728,148 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
 // ---------------------------------------------------------------------------
 int main() {
 
-    Canvas canvas("Wgpu GPU Raytracer – Triangle Mesh",
+    Canvas canvas("Wgpu Path Tracer – Accumulation",
                   {{"graphicsApi", GraphicsAPI::WebGPU}});
 
     WgpuRenderer renderer(canvas);
     renderer.setClearColor(Color(0x000000));
 
-    // ---- GPU textures for geometry data ----
-    // Both triTex and bvhTex use paged layout (TEX_PAGE_WIDTH wide) to stay within the 8192 limit.
+    auto sz = canvas.size();
+
+    // ---- Geometry textures (shared between frames) ----
     WgpuTexture bvhTex(renderer, TEX_PAGE_WIDTH, 2 * BVH_TEX_PAGES,
                        WgpuTexture::Format::RGBA32Float,
                        WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
     WgpuTexture matTex(renderer, MAX_MATS, MAT_TEX_HEIGHT,
                        WgpuTexture::Format::RGBA32Float,
                        WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
-    // Texture atlas: MAX_TEX_SLOTS tiles of TILE_SIZE×TILE_SIZE (RGBA8Unorm)
-    WgpuTexture texAtlasTex(renderer, MAX_TEX_SLOTS * TILE_SIZE, TILE_SIZE,
-                            WgpuTexture::Format::RGBA8Unorm,
-                            WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
     WgpuTexture triTex(renderer, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * TRI_TEX_PAGES,
                        WgpuTexture::Format::RGBA32Float,
                        WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+    WgpuTexture texAtlasTex(renderer, MAX_TEX_SLOTS * TILE_SIZE, TILE_SIZE,
+                            WgpuTexture::Format::RGBA8Unorm,
+                            WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
 
-    // CPU buffers for geometry data
+    // CPU geometry buffers
     std::vector<float> triBuffer(TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * TRI_TEX_PAGES * 4, 0.f);
     std::vector<float> matBuffer(MAX_MATS * MAT_TEX_HEIGHT * 4, 0.f);
 
-    // ---- Raytracer camera + OrbitControls ----
+    // ---- Accumulation textures (ping-pong, RGBA32Float) ----
+    // Default usage includes Storage | TextureBinding | CopyDst
+    auto makeAccumTex = [&](uint32_t w, uint32_t h) {
+        return WgpuTexture(renderer, w, h, WgpuTexture::Format::RGBA32Float);
+    };
+    auto accumA = makeAccumTex(static_cast<uint32_t>(sz.width()),
+                               static_cast<uint32_t>(sz.height()));
+    auto accumB = makeAccumTex(static_cast<uint32_t>(sz.width()),
+                               static_cast<uint32_t>(sz.height()));
+    WgpuTexture* readAccum  = &accumA;
+    WgpuTexture* writeAccum = &accumB;
+
+    // Zero-fill for initial state
+    {
+        std::vector<float> zeros(sz.width() * sz.height() * 4, 0.f);
+        accumA.write(zeros.data(), zeros.size() * sizeof(float));
+        accumB.write(zeros.data(), zeros.size() * sizeof(float));
+    }
+
+    // ---- RT uniform buffer (256 bytes, matches RtGpuUniforms) ----
+    WgpuBuffer rtUniformBuf(renderer, sizeof(RtGpuUniforms));
+
+    // ---- Compute pipeline ----
+    WgpuComputePipeline rtPipeline(renderer, csWGSL, "rt_main");
+    rtPipeline.setUniformBuffer(0, rtUniformBuf);
+    // bindings 1, 2 set per-frame (ping-pong)
+    rtPipeline.setTexture(3, bvhTex);
+    rtPipeline.setTexture(4, matTex);
+    rtPipeline.setTexture(5, triTex);
+    rtPipeline.setTexture(6, texAtlasTex);
+
+    // ---- Camera + controls ----
     PerspectiveCamera rtCam(60.f, canvas.aspect(), 0.1f, 200.f);
     rtCam.position.set(0.f, 3.f, 8.f);
-
     OrbitControls controls{rtCam, canvas};
     controls.target.set(0.f, 0.f, 0.f);
     controls.update();
-
     const float tanHalfFov = std::tan(60.f * math::PI / 360.f);
-    float aspect = canvas.aspect();
 
-    // ---- Fullscreen quad with WGSL ShaderMaterial ----
+    // ---- Display: fullscreen quad with blit shader ----
     OrthographicCamera displayCam(-1.f, 1.f, 1.f, -1.f, 0.1f, 10.f);
     displayCam.position.z = 1.f;
 
-    auto rtMat = ShaderMaterial::create();
-    rtMat->vertexShader = vsWGSL;
-    rtMat->fragmentShader = fsWGSL;
-
-    // Custom textures bound alphabetically: bvhData(3,4) matData(5,6) texAtlas(7,8) triData(9,10)
-    rtMat->customTextures["bvhData"] = &bvhTex;
-    rtMat->customTextures["matData"] = &matTex;
-    rtMat->customTextures["texAtlas"] = &texAtlasTex;
-    rtMat->customTextures["triData"] = &triTex;
-
-    // Uniforms (alphabetical: aspect camFwd camOri camRgt camUp iRes iTime lightCol lightPos tanHalfFov triCount)
-    auto sz = canvas.size();
-    rtMat->uniforms["aspect"] = Uniform(aspect);
-    rtMat->uniforms["camFwd"] = Uniform(Color(0.f, -0.35f, -0.94f));
-    rtMat->uniforms["camOri"] = Uniform(Color(0.f, 3.f, 8.f));
-    rtMat->uniforms["camRgt"] = Uniform(Color(1.f, 0.f, 0.f));
-    rtMat->uniforms["camUp"] = Uniform(Color(0.f, 1.f, 0.f));
-    rtMat->uniforms["iRes"] = Uniform(Color(float(sz.width()), float(sz.height()), 0.f));
-    rtMat->uniforms["iTime"] = Uniform(0.f);
-    rtMat->uniforms["lightCol"] = Uniform(Color(1.f, 0.95f, 0.8f));
-    rtMat->uniforms["lightPos"] = Uniform(Color(5.f, 6.f, -2.f));
-    rtMat->uniforms["tanHalfFov"] = Uniform(tanHalfFov);
-    rtMat->uniforms["triCount"] = Uniform(0.f);
+    auto displayMat = ShaderMaterial::create();
+    displayMat->vertexShader   = displayWGSL;
+    displayMat->fragmentShader = displayWGSL;
+    displayMat->customTextures["accumTex"] = readAccum;
 
     Scene displayScene;
-    displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), rtMat));
+    displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), displayMat));
 
-    canvas.onWindowResize([&](WindowSize ns) {
-        renderer.setSize(ns);
-        aspect = ns.aspect();
-        rtMat->uniforms["iRes"] = Uniform(Color(float(ns.width()), float(ns.height()), 0.f));
-    });
-
-    // -------------------------------------------------------------------------
-    // Demo scene objects  — standard threepp Mesh + geometry + material
-    // -------------------------------------------------------------------------
-
+    // ---- Scene objects ----
     TextureLoader tl;
     auto tex = tl.load(std::string(DATA_FOLDER) + "/textures/uv_grid_opengl.jpg");
 
-    // Rotating gold box
     auto boxMesh = Mesh::create(
             BoxGeometry::create(1.5f, 1.5f, 1.5f),
-            MeshStandardMaterial::create({{"map", tex},
-                                          {"roughness", 1.f}}));
+            MeshStandardMaterial::create({{"map", tex}, {"roughness", 0.9f}}));
     boxMesh->position.set(0.f, 1.f, -1.f);
 
-    // Shiny red sphere (left)
     auto sphere1 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
-            MeshStandardMaterial::create({{"color", Color(0.90f, 0.18f, 0.10f)},
+            MeshStandardMaterial::create({{"color", Color::orangered},
                                           {"roughness", 0.85f}}));
     sphere1->position.set(-2.8f, 1.f, 0.f);
 
-    // Semi-shiny blue sphere (right)
     auto sphere2 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
-            MeshStandardMaterial::create({{"color", Color(0.15f, 0.45f, 0.95f)},
-                                          {"roughness", 0.25f}}));
+            MeshStandardMaterial::create({{"color", Color::steelblue},
+                                          {"roughness", 0.45f}}));
     sphere2->position.set(2.8f, 1.f, 0.f);
 
-    // Large floor plane (rotated -90° around X)
     auto floor = Mesh::create(
             PlaneGeometry::create(16.f, 16.f, 4, 4),
-            MeshStandardMaterial::create({{"color", Color(0.55f, 0.55f, 0.55f)},
-                                          {"roughness", 0.9f}}));
+            MeshStandardMaterial::create({{"color", Color::darkgrey},
+                                          {"roughness", 0.99f}}));
     floor->rotation.x = -math::PI / 2.f;
     floor->position.y = -1.f;
 
-    // Collect all RT scene meshes
-    std::vector<std::shared_ptr<Mesh>> rtMeshes = {boxMesh, sphere1, sphere2, floor};
+    std::vector<Mesh*> rtMeshes = {boxMesh.get(), sphere1.get(), sphere2.get(), floor.get()};
 
-    // ---- Point light ----
-    auto pointLight = PointLight::create(Color::lightyellow, 0.8f);
-    pointLight->position.set(5.f, 6.f, -2.f);
-
-    // Build texture atlas (once — textures don't change per-frame)
+    // ---- Texture atlas (built once — textures don't change per-frame) ----
     std::unordered_map<Texture*, int> texSlotMap;
     auto atlasData = buildAtlas(rtMeshes, texSlotMap);
     texAtlasTex.write(atlasData.data(), atlasData.size());
+
+    // ---- Point light ----
+    auto pointLight = PointLight::create(Color::white, 0.6f);
+    pointLight->position.set(5.f, 6.f, -2.f);
+
+    // ---- Mode + accumulation state ----
+    bool  pathTracerOn = false;  // press T to toggle
+    float frameCount   = 0.f;
+    Vector3 prevCamPos = rtCam.position;
+    Vector3 prevTarget = controls.target;
+
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        if (ev.key == Key::T) {
+            pathTracerOn = !pathTracerOn;
+            frameCount   = 0.f;  // reset accumulation on mode switch
+        }
+    });
+    canvas.addKeyListener(keyAdapter);
+
+    canvas.onWindowResize([&](const WindowSize& ns) {
+        renderer.setSize(ns);
+        // Recreate accum textures at new resolution
+        accumA = makeAccumTex(static_cast<uint32_t>(ns.width()),
+                              static_cast<uint32_t>(ns.height()));
+        accumB = makeAccumTex(static_cast<uint32_t>(ns.width()),
+                              static_cast<uint32_t>(ns.height()));
+        readAccum  = &accumA;
+        writeAccum = &accumB;
+        displayMat->customTextures["accumTex"] = readAccum;
+        frameCount = 0.f;
+    });
 
     // ---- Animation ----
     Clock clock;
@@ -781,24 +879,32 @@ int main() {
         const float dt = clock.getDelta();
         elapsed += dt;
 
-        // Animate the box
+        // Animate box and light
         boxMesh->rotation.y += dt * 0.6f;
         boxMesh->rotation.x += dt * 0.3f;
-
-        // Animate the point light
         pointLight->position.set(
                 5.f * std::cos(elapsed * 0.6f),
                 6.f + std::sin(elapsed * 0.3f),
                 -2.f + 4.f * std::sin(elapsed * 0.6f));
 
-        // Update camera orientation from OrbitControls
+        // Update camera
         controls.update();
-        const Vector3& pos = rtCam.position;
-        Vector3 fwd = Vector3(controls.target).sub(pos).normalize();
+        const Vector3& camPos = rtCam.position;
+        Vector3 fwd = Vector3(controls.target).sub(camPos).normalize();
         Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
-        Vector3 up = Vector3(rgt).cross(fwd);
+        Vector3 up  = Vector3(rgt).cross(fwd);
 
-        // Rebuild world-space triangle data, then BVH (triBuffer is reordered in-place)
+        // Reset accumulation on camera movement
+        const bool camMoved =
+                (camPos - prevCamPos).length() > 1e-5f ||
+                (controls.target - prevTarget).length() > 1e-5f;
+        if (camMoved) {
+            frameCount = 0.f;
+            prevCamPos = camPos;
+            prevTarget = controls.target;
+        }
+
+        // Rebuild geometry + BVH each frame (handles animated objects)
         const int triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer);
         const auto bvhBuffer = buildBVH(triBuffer, triCount);
 
@@ -806,23 +912,41 @@ int main() {
         triTex.write(triBuffer.data(), triBuffer.size() * sizeof(float));
         matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
 
-        // Push uniforms
+        // Pack uniform buffer
+        RtGpuUniforms u{};
+        u.camOri[0] = camPos.x;  u.camOri[1] = camPos.y;  u.camOri[2] = camPos.z;
+        u.camFwd[0] = fwd.x;     u.camFwd[1] = fwd.y;     u.camFwd[2] = fwd.z;
+        u.camRgt[0] = rgt.x;     u.camRgt[1] = rgt.y;     u.camRgt[2] = rgt.z;
+        u.camUp[0]  = up.x;      u.camUp[1]  = up.y;      u.camUp[2]  = up.z;
         const auto& lp = pointLight->position;
         const auto& lc = pointLight->color;
-        const float li = pointLight->intensity;
-        rtMat->uniforms["lightCol"] = Uniform(Color(lc.r * li, lc.g * li, lc.b * li));
-        rtMat->uniforms["lightPos"] = Uniform(Color(lp.x, lp.y, lp.z));
+        const float li  = pointLight->intensity;
+        u.lightPos[0] = lp.x;    u.lightPos[1] = lp.y;    u.lightPos[2] = lp.z;
+        u.lightCol[0] = lc.r * li; u.lightCol[1] = lc.g * li; u.lightCol[2] = lc.b * li;
+        const auto curSz = canvas.size();
+        u.iRes[0] = static_cast<float>(curSz.width());
+        u.iRes[1] = static_cast<float>(curSz.height());
+        u.tanHalfFov[0] = tanHalfFov;
+        u.frameCount[0] = frameCount;
+        u.triCount[0]   = static_cast<float>(triCount);
+        u.mode[0]       = pathTracerOn ? 1.f : 0.f;
+        rtUniformBuf.write(&u, sizeof(u));
 
-        rtMat->uniforms["aspect"] = Uniform(aspect);
-        rtMat->uniforms["camFwd"] = Uniform(Color(fwd.x, fwd.y, fwd.z));
-        rtMat->uniforms["camOri"] = Uniform(Color(pos.x, pos.y, pos.z));
-        rtMat->uniforms["camRgt"] = Uniform(Color(rgt.x, rgt.y, rgt.z));
-        rtMat->uniforms["camUp"] = Uniform(Color(up.x, up.y, up.z));
-        rtMat->uniforms["iTime"] = Uniform(elapsed);
-        rtMat->uniforms["tanHalfFov"] = Uniform(tanHalfFov);
-        rtMat->uniforms["triCount"] = Uniform(static_cast<float>(triCount));
-        rtMat->uniformsNeedUpdate = true;
+        // Dispatch: read accumA, write accumB (ping-pong)
+        rtPipeline.setTexture(1, *readAccum);
+        rtPipeline.setStorageTexture(2, *writeAccum);
+        const uint32_t gx = (static_cast<uint32_t>(curSz.width())  + 7u) / 8u;
+        const uint32_t gy = (static_cast<uint32_t>(curSz.height()) + 7u) / 8u;
+        rtPipeline.dispatch(gx, gy);
 
+        // Swap ping-pong and point display at written result
+        std::swap(readAccum, writeAccum);
+        displayMat->customTextures["accumTex"] = readAccum;
+        displayMat->uniformsNeedUpdate = true;
+
+        frameCount += 1.f;
+
+        // Render display quad
         renderer.render(displayScene, displayCam);
     });
 
