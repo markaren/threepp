@@ -37,7 +37,7 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
-constexpr int MAX_TRIS       = 8192;
+constexpr int MAX_TRIS       = 65536;
 constexpr int MAX_MATS       = 64;
 constexpr int MAX_BVH_NODES  = 2 * MAX_TRIS - 1;
 constexpr int MAX_TEX_SLOTS  = 16;
@@ -213,7 +213,7 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
 // ---- BVH traversal ----
 fn sceneHit(ray: Ray) -> Hit {
     var h: Hit; h.t = 1e30;
-    var stack: array<i32, 32>;
+    var stack: array<i32, 64>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
 
@@ -570,8 +570,12 @@ static int buildGeometryBuffers(
 
         const int matIdx = matCount++;
 
-        mesh->updateMatrixWorld(true);
+        mesh->updateWorldMatrix(true, true);
         const auto& world = *mesh->matrixWorld;
+        // Normals must be transformed by the inverse-transpose of the world matrix
+        // to stay perpendicular to surfaces under non-uniform scale.
+        Matrix4 normalMat(world);
+        normalMat.invert().transpose();
         auto* geo = mesh->geometry().get();
         auto* pos = geo->getAttribute<float>("position");
         if (!pos) continue;
@@ -587,7 +591,7 @@ static int buildGeometryBuffers(
         auto norm = [&](int i) -> Vector3 {
             if (!nrm) return {0.f, 1.f, 0.f};
             Vector3 n(nrm->getX(i), nrm->getY(i), nrm->getZ(i));
-            n.transformDirection(world);
+            n.transformDirection(normalMat);
             return n;
         };
         auto uv = [&](int i) -> std::pair<float, float> {
@@ -638,6 +642,13 @@ static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
     return buf[((page * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + pcol) * 4 + comp];
 }
 
+static float boxSurfaceArea(float mnX, float mnY, float mnZ,
+                             float mxX, float mxY, float mxZ) {
+    const float dx = mxX - mnX, dy = mxY - mnY, dz = mxZ - mnZ;
+    return 2.f * (dx * dy + dy * dz + dz * dx);
+}
+
+// SAH BVH: 8-bucket binned SAH, leaf threshold 4.
 static int buildBvhNode(
         std::vector<BvhNode>& nodes,
         std::vector<int>& idx,
@@ -662,22 +673,86 @@ static int buildBvhNode(
     nodes[ni] = {minX, minY, minZ, 0, maxX, maxY, maxZ, 0};
 
     const int count = end - start;
-    if (count <= 2) {
+    if (count <= 4) {
         nodes[ni].left  = -(start + 1);
         nodes[ni].right = count;
         return ni;
     }
 
-    const float dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
-    const int axis = (dx >= dy && dx >= dz) ? 0 : (dy >= dz ? 1 : 2);
-    const float axMins[3] = {minX, minY, minZ};
-    const float axMaxs[3] = {maxX, maxY, maxZ};
-    const float split = (axMins[axis] + axMaxs[axis]) * 0.5f;
+    // Binned SAH: evaluate 8 candidate splits along each axis.
+    constexpr int NB = 8;
+    struct Bucket {
+        float mnX = 1e30f, mnY = 1e30f, mnZ = 1e30f;
+        float mxX = -1e30f, mxY = -1e30f, mxZ = -1e30f;
+        int   cnt = 0;
+    };
+
+    float bestCost   = 1e30f;
+    int   bestAxis   = 0;
+    int   bestSplit  = NB / 2;
+
+    const float nodeArea = boxSurfaceArea(minX, minY, minZ, maxX, maxY, maxZ);
+
+    for (int axis = 0; axis < 3; axis++) {
+        const float axMin = (axis == 0) ? minX : (axis == 1 ? minY : minZ);
+        const float axMax = (axis == 0) ? maxX : (axis == 1 ? maxY : maxZ);
+        if (axMax - axMin < 1e-6f) continue;
+        const float scale = NB / (axMax - axMin);
+
+        Bucket buckets[NB];
+        for (int i = start; i < end; i++) {
+            const int ti = idx[i];
+            const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis)
+                           + triGet(buf, ti, 2, axis)) / 3.f;
+            const int bi = std::clamp(static_cast<int>((c - axMin) * scale), 0, NB - 1);
+            for (int r = 0; r <= 2; r++) {
+                buckets[bi].mnX = std::min(buckets[bi].mnX, triGet(buf, ti, r, 0));
+                buckets[bi].mnY = std::min(buckets[bi].mnY, triGet(buf, ti, r, 1));
+                buckets[bi].mnZ = std::min(buckets[bi].mnZ, triGet(buf, ti, r, 2));
+                buckets[bi].mxX = std::max(buckets[bi].mxX, triGet(buf, ti, r, 0));
+                buckets[bi].mxY = std::max(buckets[bi].mxY, triGet(buf, ti, r, 1));
+                buckets[bi].mxZ = std::max(buckets[bi].mxZ, triGet(buf, ti, r, 2));
+            }
+            buckets[bi].cnt++;
+        }
+
+        for (int s = 1; s < NB; s++) {
+            // Accumulate left [0..s-1] and right [s..NB-1]
+            float lmnX = 1e30f, lmnY = 1e30f, lmnZ = 1e30f;
+            float lmxX = -1e30f, lmxY = -1e30f, lmxZ = -1e30f;
+            int   lcnt = 0;
+            for (int b = 0; b < s; b++) {
+                if (!buckets[b].cnt) continue;
+                lmnX = std::min(lmnX, buckets[b].mnX); lmnY = std::min(lmnY, buckets[b].mnY); lmnZ = std::min(lmnZ, buckets[b].mnZ);
+                lmxX = std::max(lmxX, buckets[b].mxX); lmxY = std::max(lmxY, buckets[b].mxY); lmxZ = std::max(lmxZ, buckets[b].mxZ);
+                lcnt += buckets[b].cnt;
+            }
+            float rmnX = 1e30f, rmnY = 1e30f, rmnZ = 1e30f;
+            float rmxX = -1e30f, rmxY = -1e30f, rmxZ = -1e30f;
+            int   rcnt = 0;
+            for (int b = s; b < NB; b++) {
+                if (!buckets[b].cnt) continue;
+                rmnX = std::min(rmnX, buckets[b].mnX); rmnY = std::min(rmnY, buckets[b].mnY); rmnZ = std::min(rmnZ, buckets[b].mnZ);
+                rmxX = std::max(rmxX, buckets[b].mxX); rmxY = std::max(rmxY, buckets[b].mxY); rmxZ = std::max(rmxZ, buckets[b].mxZ);
+                rcnt += buckets[b].cnt;
+            }
+            if (!lcnt || !rcnt) continue;
+
+            const float cost = (static_cast<float>(lcnt) * boxSurfaceArea(lmnX, lmnY, lmnZ, lmxX, lmxY, lmxZ)
+                              + static_cast<float>(rcnt) * boxSurfaceArea(rmnX, rmnY, rmnZ, rmxX, rmxY, rmxZ))
+                             / nodeArea;
+            if (cost < bestCost) { bestCost = cost; bestAxis = axis; bestSplit = s; }
+        }
+    }
+
+    const float axMin = (bestAxis == 0) ? minX : (bestAxis == 1 ? minY : minZ);
+    const float axMax = (bestAxis == 0) ? maxX : (bestAxis == 1 ? maxY : maxZ);
+    const float splitPos = axMin + (axMax - axMin) * static_cast<float>(bestSplit) / NB;
 
     auto mid = std::partition(idx.begin() + start, idx.begin() + end, [&](int ti) {
-        const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis) +
-                         triGet(buf, ti, 2, axis)) / 3.f;
-        return c < split;
+        const float c = (triGet(buf, ti, 0, bestAxis) + triGet(buf, ti, 1, bestAxis)
+                       + triGet(buf, ti, 2, bestAxis)) / 3.f;
+        return c < splitPos;
     });
     int sp = static_cast<int>(mid - idx.begin());
     if (sp == start || sp == end) sp = (start + end) / 2;
@@ -847,6 +922,17 @@ int main() {
     scene.add(sphere1);
     scene.add(sphere2);
     scene.add(floor);
+
+    ModelLoader loader;
+    auto obj = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
+    obj->traverseType<Mesh>([&] (Mesh& m) {
+        auto tex = m.material()->as<MaterialWithMap>();
+        m.setMaterial(MeshStandardMaterial::create({{"map", tex ? tex->map : nullptr}, {"roughness", 0.9f}}));
+    });
+    obj->position.z = -4.f;
+    obj->position.y = -1.f;
+    obj->scale *= 0.025f;
+    scene.add(obj);
 
     // ---- Point light ----
     auto pointLight = PointLight::create(Color::white, 0.6f);
