@@ -63,17 +63,18 @@ constexpr int BVH_TEX_PAGES   = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_
 constexpr const char* csWGSL = R"(
 
 struct RtUniforms {
-    camOri:     vec4<f32>,  // xyz = camera position
-    camFwd:     vec4<f32>,  // xyz = forward direction
-    camRgt:     vec4<f32>,  // xyz = right direction
-    camUp:      vec4<f32>,  // xyz = up direction
-    lightPos:   vec4<f32>,  // xyz = world-space light position
-    lightCol:   vec4<f32>,  // xyz = color * intensity
-    iRes:       vec4<f32>,  // xy  = viewport size in pixels
-    tanHalfFov: vec4<f32>,  // x   = tan(fov/2)
-    frameCount: vec4<f32>,  // x   = accumulated frames so far (float)
-    triCount:   vec4<f32>,  // x   = number of triangles
-    mode:       vec4<f32>,  // x   = 0 raytracer, 1 path tracer
+    camOri:     vec4<f32>,           // xyz = camera position
+    camFwd:     vec4<f32>,           // xyz = forward direction
+    camRgt:     vec4<f32>,           // xyz = right direction
+    camUp:      vec4<f32>,           // xyz = up direction
+    iRes:       vec4<f32>,           // xy  = viewport size in pixels
+    tanHalfFov: vec4<f32>,           // x   = tan(fov/2)
+    frameCount: vec4<f32>,           // x   = accumulated frames so far (float)
+    triCount:   vec4<f32>,           // x   = number of triangles
+    mode:       vec4<f32>,           // x   = 0 raytracer, 1 path tracer
+    lightCount: vec4<f32>,           // x   = number of active lights (max 4)
+    lightPos:   array<vec4<f32>, 4>, // xyz = world-space light positions
+    lightCol:   array<vec4<f32>, 4>, // xyz = color * intensity per light
 };
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
@@ -252,7 +253,7 @@ fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
 }
 
 // ---- Blinn-Phong shade with hard shadow (used by raytracer mode) ----
-fn shade(h: Hit, rd: vec3<f32>, lp: vec3<f32>) -> vec3<f32> {
+fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) {
         let tx = i32(h.texSlot) * TILE_SIZE
@@ -260,33 +261,38 @@ fn shade(h: Hit, rd: vec3<f32>, lp: vec3<f32>) -> vec3<f32> {
         let ty = clamp(i32(fract(h.uv.y) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
         albedo = textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
     }
-    let toL = lp - h.point;
-    let ld  = length(toL);
-    let ln  = toL / ld;
-    let lc  = rt.lightCol.xyz;
     var col = albedo * 0.10;
-    var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
-    let sh = sceneHit(sr);
-    if (sh.t >= ld - 1e-3) {
-        col += albedo * lc * max(0.0, dot(h.normal, ln)) * 0.80;
-        let hv = normalize(normalize(-rd) + ln);
-        col += lc * pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0) * 0.65;
+    let count = i32(rt.lightCount.x);
+    for (var li = 0; li < 4; li++) {
+        if (li >= count) { break; }
+        let lp  = rt.lightPos[li].xyz;
+        let lc  = rt.lightCol[li].xyz;
+        let toL = lp - h.point;
+        let ld  = length(toL);
+        let ln  = toL / ld;
+        var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
+        let sh = sceneHit(sr);
+        if (sh.t >= ld - 1e-3) {
+            col += albedo * lc * max(0.0, dot(h.normal, ln)) * 0.80;
+            let hv = normalize(normalize(-rd) + ln);
+            col += lc * pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0) * 0.65;
+        }
     }
     return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 // ---- Deterministic trace with one mirror bounce ----
-fn raytrace(ray: Ray, lp: vec3<f32>) -> vec3<f32> {
+fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
     if (h0.t >= 1e30) { return sky(ray.dir); }
-    var col = shade(h0, ray.dir, lp);
+    var col = shade(h0, ray.dir);
     if (h0.shininess > 20.0) {
         let k = min(0.55, h0.shininess / 100.0);
         var r1: Ray;
         r1.origin = h0.point + h0.normal * 1e-3;
         r1.dir    = reflect(ray.dir, h0.normal);
         let h1 = sceneHit(r1);
-        let rc = select(shade(h1, r1.dir, lp), sky(r1.dir), h1.t >= 1e30);
+        let rc = select(shade(h1, r1.dir), sky(r1.dir), h1.t >= 1e30);
         col = col * (1.0 - k) + rc * k;
     }
     return col;
@@ -314,21 +320,25 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
             albedo = textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
         }
 
-        // Next-event estimation: shadow ray to the point light
-        let toL = rt.lightPos.xyz - h.point;
-        let ld  = length(toL);
-        let ln  = toL / ld;
-        var sr: Ray;
-        sr.origin = h.point + h.normal * 1e-3;
-        sr.dir    = ln;
-        let sh = sceneHit(sr);
-        if (sh.t >= ld - 1e-3) {
-            let lc   = rt.lightCol.xyz;
-            let diff = max(0.0, dot(h.normal, ln));
-            // Blinn-Phong specular lobe
-            let hv   = normalize(normalize(-ray.dir) + ln);
-            let spec = pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0);
-            radiance += throughput * (albedo * lc * diff * 0.85 + lc * spec * 0.35);
+        // Next-event estimation: shadow ray to each light
+        let lcount = i32(rt.lightCount.x);
+        for (var li = 0; li < 4; li++) {
+            if (li >= lcount) { break; }
+            let lp  = rt.lightPos[li].xyz;
+            let lc  = rt.lightCol[li].xyz;
+            let toL = lp - h.point;
+            let ld  = length(toL);
+            let ln  = toL / ld;
+            var sr: Ray;
+            sr.origin = h.point + h.normal * 1e-3;
+            sr.dir    = ln;
+            let sh = sceneHit(sr);
+            if (sh.t >= ld - 1e-3) {
+                let diff = max(0.0, dot(h.normal, ln));
+                let hv   = normalize(normalize(-ray.dir) + ln);
+                let spec = pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0);
+                radiance += throughput * (albedo * lc * diff * 0.85 + lc * spec * 0.35);
+            }
         }
         // Ambient term
         radiance += throughput * albedo * 0.03;
@@ -365,22 +375,16 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var sample: vec3<f32>;
 
     if (!isPT) {
-        // ---- Raytracer mode: deterministic Blinn-Phong, RGSS 4x AA + soft shadow ----
-        let lc  = rt.lightPos.xyz;
-        let lr  = 0.05;
-        let lp0 = lc + vec3<f32>( lr,  0.0,  0.0);
-        let lp1 = lc + vec3<f32>(-lr,  0.0,  0.0);
-        let lp2 = lc + vec3<f32>( 0.0, 0.0,  lr);
-        let lp3 = lc + vec3<f32>( 0.0, 0.0, -lr);
+        // ---- Raytracer mode: deterministic Blinn-Phong, RGSS 4x AA ----
         let o0 = vec2<f32>( 0.125,  0.375);
         let o1 = vec2<f32>(-0.375,  0.125);
         let o2 = vec2<f32>( 0.375, -0.125);
         let o3 = vec2<f32>(-0.125, -0.375);
         let fp = vec2<f32>(f32(pixel.x), f32(pixel.y));
-        sample = (raytrace(makeRay(fp + o0, res), lp0)
-                + raytrace(makeRay(fp + o1, res), lp1)
-                + raytrace(makeRay(fp + o2, res), lp2)
-                + raytrace(makeRay(fp + o3, res), lp3)) * 0.25;
+        sample = (raytrace(makeRay(fp + o0, res))
+                + raytrace(makeRay(fp + o1, res))
+                + raytrace(makeRay(fp + o2, res))
+                + raytrace(makeRay(fp + o3, res))) * 0.25;
         // No accumulation in raytracer mode — write fresh each frame
         textureStore(accumWrite, pixel, vec4<f32>(sample, 1.0));
     } else {
@@ -439,21 +443,25 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
 // ---------------------------------------------------------------------------
 // CPU-side uniform struct (must match RtUniforms in csWGSL, 256-byte aligned)
 // ---------------------------------------------------------------------------
+// 18 vec4s used (288 bytes): camOri/Fwd/Rgt/Up, iRes, tanHalfFov,
+// frameCount, triCount, mode, lightCount, lightPos[4], lightCol[4].
+// Padded to 512 bytes (WebGPU 256-byte alignment, next multiple after 288).
 struct alignas(16) RtGpuUniforms {
     float camOri[4];
     float camFwd[4];
     float camRgt[4];
     float camUp[4];
-    float lightPos[4];
-    float lightCol[4];
     float iRes[4];
     float tanHalfFov[4];
     float frameCount[4];
     float triCount[4];
-    float mode[4];   // 0 = raytracer, 1 = path tracer
-    float _pad[20];  // pad to 256 bytes  (176 used + 80 pad = 256)
+    float mode[4];        // x: 0=raytracer 1=path tracer
+    float lightCount[4];  // x: number of active lights (max 4)
+    float lightPos[4][4]; // [lightIdx][xyzw]
+    float lightCol[4][4]; // [lightIdx][xyzw]
+    float _pad[56];       // 288 used + 224 pad = 512 bytes
 };
-static_assert(sizeof(RtGpuUniforms) == 256, "RtGpuUniforms must be 256 bytes");
+static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
 // ---------------------------------------------------------------------------
 // Build texture atlas: MAX_TEX_SLOTS tiles of TILE_SIZE×TILE_SIZE (RGBA8).
@@ -833,16 +841,25 @@ int main() {
     floor->rotation.x = -math::PI / 2.f;
     floor->position.y = -1.f;
 
-    std::vector<Mesh*> rtMeshes = {boxMesh.get(), sphere1.get(), sphere2.get(), floor.get()};
-
-    // ---- Texture atlas (built once — textures don't change per-frame) ----
-    std::unordered_map<Texture*, int> texSlotMap;
-    auto atlasData = buildAtlas(rtMeshes, texSlotMap);
-    texAtlasTex.write(atlasData.data(), atlasData.size());
+    // ---- Scene graph — add all objects so traversal can find them ----
+    Scene scene;
+    scene.add(boxMesh);
+    scene.add(sphere1);
+    scene.add(sphere2);
+    scene.add(floor);
 
     // ---- Point light ----
     auto pointLight = PointLight::create(Color::white, 0.6f);
     pointLight->position.set(5.f, 6.f, -2.f);
+    scene.add(pointLight);
+
+    auto pointLight2 = PointLight::create(Color::white, 0.2f);
+    pointLight2->position.set(-5.f, 6.f, 4.f);
+    scene.add(pointLight2);
+
+    // ---- Texture atlas (rebuilt when mesh list changes) ----
+    std::unordered_map<Texture*, int> texSlotMap;
+    std::vector<Mesh*> prevMeshes;  // for change detection
 
     // ---- Mode + accumulation state ----
     bool  pathTracerOn = false;  // press T to toggle
@@ -904,6 +921,24 @@ int main() {
             prevTarget = controls.target;
         }
 
+        // Collect visible meshes and lights from scene graph
+        std::vector<Mesh*> rtMeshes;
+        scene.traverseType<Mesh>([&](Mesh& m) {
+            if (m.visible) rtMeshes.push_back(&m);
+        });
+        std::vector<PointLight*> pointLights;
+        scene.traverseType<PointLight>([&](PointLight& l) {
+            pointLights.push_back(&l);
+        });
+
+        // Rebuild texture atlas only when mesh list changes
+        if (rtMeshes != prevMeshes) {
+            texSlotMap.clear();
+            const auto atlasData = buildAtlas(rtMeshes, texSlotMap);
+            texAtlasTex.write(atlasData.data(), atlasData.size());
+            prevMeshes = rtMeshes;
+        }
+
         // Rebuild geometry + BVH each frame (handles animated objects)
         const int triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer);
         const auto bvhBuffer = buildBVH(triBuffer, triCount);
@@ -918,11 +953,6 @@ int main() {
         u.camFwd[0] = fwd.x;     u.camFwd[1] = fwd.y;     u.camFwd[2] = fwd.z;
         u.camRgt[0] = rgt.x;     u.camRgt[1] = rgt.y;     u.camRgt[2] = rgt.z;
         u.camUp[0]  = up.x;      u.camUp[1]  = up.y;      u.camUp[2]  = up.z;
-        const auto& lp = pointLight->position;
-        const auto& lc = pointLight->color;
-        const float li  = pointLight->intensity;
-        u.lightPos[0] = lp.x;    u.lightPos[1] = lp.y;    u.lightPos[2] = lp.z;
-        u.lightCol[0] = lc.r * li; u.lightCol[1] = lc.g * li; u.lightCol[2] = lc.b * li;
         const auto curSz = canvas.size();
         u.iRes[0] = static_cast<float>(curSz.width());
         u.iRes[1] = static_cast<float>(curSz.height());
@@ -930,6 +960,18 @@ int main() {
         u.frameCount[0] = frameCount;
         u.triCount[0]   = static_cast<float>(triCount);
         u.mode[0]       = pathTracerOn ? 1.f : 0.f;
+        // Pack up to 4 point lights
+        const int nLights = std::min(static_cast<int>(pointLights.size()), 4);
+        u.lightCount[0] = static_cast<float>(nLights);
+        for (int li = 0; li < nLights; ++li) {
+            const auto& lp = pointLights[li]->position;
+            const auto& lc = pointLights[li]->color;
+            const float lint = pointLights[li]->intensity;
+            u.lightPos[li][0] = lp.x; u.lightPos[li][1] = lp.y; u.lightPos[li][2] = lp.z;
+            u.lightCol[li][0] = lc.r * lint;
+            u.lightCol[li][1] = lc.g * lint;
+            u.lightCol[li][2] = lc.b * lint;
+        }
         rtUniformBuf.write(&u, sizeof(u));
 
         // Dispatch: read accumA, write accumB (ping-pong)
