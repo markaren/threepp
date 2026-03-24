@@ -380,19 +380,111 @@ struct WgpuRenderer::Impl {
         bool initialized = false;
     } toneMap_;
 
-    // Returns true if a post-process tone mapping/sRGB pass is needed
+    // Returns true if a post-process tone mapping/sRGB pass is needed.
+    // Also returns true when retainFramebuffer is active: routing through the
+    // intermediate color texture gives us a COPY_SRC source for the retain copy,
+    // since surface textures only carry RENDER_ATTACHMENT usage.
     bool needsToneMapPass() const {
         return scope.toneMapping != ToneMapping::None ||
-               scope.outputEncoding == Encoding::sRGB;
+               scope.outputEncoding == Encoding::sRGB ||
+               retainFramebuffer;
     }
 
     // Retained framebuffer for copyFramebufferToTexture support.
-    // When retainFramebuffer is true, render() copies the resolved color content
-    // to retainedFB before presenting, so it's available for later copy operations.
+    // When retainFramebuffer is true, render() blits the resolved scene content
+    // into retainedFB (Rgba8Unorm) so it's available for later copy operations.
+    // Rgba8Unorm matches the format of DataTexture destinations.
     bool retainFramebuffer = false;
     WGPUTexture retainedFB = nullptr;
     uint32_t retainedFBWidth = 0;
     uint32_t retainedFBHeight = 0;
+
+    // Blit pipeline used by the retain block: converts surfaceFormat (Bgra8Unorm
+    // on Windows) to Rgba8Unorm via a shader pass (CopyTextureToTexture cannot
+    // bridge these formats as they are not copy-compatible in WebGPU).
+    struct RetainBlitState {
+        WGPURenderPipeline pipeline = nullptr;
+        WGPUPipelineLayout pipelineLayout = nullptr;
+        WGPUBindGroupLayout bgl = nullptr;
+        WGPUSampler sampler = nullptr;
+        WGPUShaderModule shader = nullptr;
+    } retainBlit_;
+
+    void ensureRetainBlit() {
+        if (retainBlit_.pipeline) return;
+
+        const char* wgsl = R"(
+@group(0) @binding(0) var src: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> V {
+    var p = array<vec2<f32>,3>(vec2<f32>(-1.,-1.),vec2<f32>(3.,-1.),vec2<f32>(-1.,3.));
+    var o: V;
+    o.pos = vec4<f32>(p[vi], 0., 1.);
+    o.uv = p[vi] * 0.5 + vec2<f32>(0.5);
+    return o;
+}
+@fragment fn fs(in: V) -> @location(0) vec4<f32> {
+    return textureSample(src, samp, in.uv);
+}
+)";
+        WGPUShaderSourceWGSL wgslSrc{};
+        wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+        wgslSrc.code = {.data = wgsl, .length = static_cast<size_t>(strlen(wgsl))};
+        WGPUShaderModuleDescriptor smDesc{};
+        smDesc.nextInChain = &wgslSrc.chain;
+        retainBlit_.shader = wgpuDeviceCreateShaderModule(device, &smDesc);
+
+        WGPUBindGroupLayoutEntry bglEntries[2]{};
+        bglEntries[0].binding = 0;
+        bglEntries[0].visibility = WGPUShaderStage_Fragment;
+        bglEntries[0].texture.sampleType = WGPUTextureSampleType_Float;
+        bglEntries[0].texture.viewDimension = WGPUTextureViewDimension_2D;
+        bglEntries[1].binding = 1;
+        bglEntries[1].visibility = WGPUShaderStage_Fragment;
+        bglEntries[1].sampler.type = WGPUSamplerBindingType_Filtering;
+        WGPUBindGroupLayoutDescriptor bgld{};
+        bgld.entryCount = 2;
+        bgld.entries = bglEntries;
+        retainBlit_.bgl = wgpuDeviceCreateBindGroupLayout(device, &bgld);
+
+        WGPUPipelineLayoutDescriptor pld{};
+        pld.bindGroupLayoutCount = 1;
+        pld.bindGroupLayouts = &retainBlit_.bgl;
+        retainBlit_.pipelineLayout = wgpuDeviceCreatePipelineLayout(device, &pld);
+
+        WGPUSamplerDescriptor sd{};
+        sd.magFilter = WGPUFilterMode_Nearest;
+        sd.minFilter = WGPUFilterMode_Nearest;
+        sd.mipmapFilter = WGPUMipmapFilterMode_Nearest;
+        sd.addressModeU = WGPUAddressMode_ClampToEdge;
+        sd.addressModeV = WGPUAddressMode_ClampToEdge;
+        sd.maxAnisotropy = 1;
+        retainBlit_.sampler = wgpuDeviceCreateSampler(device, &sd);
+
+        WGPUVertexState vs{};
+        vs.module = retainBlit_.shader;
+        vs.entryPoint = {.data = "vs", .length = 2};
+
+        WGPUColorTargetState ct{};
+        ct.format = WGPUTextureFormat_RGBA8Unorm;
+        ct.writeMask = WGPUColorWriteMask_All;
+
+        WGPUFragmentState fs{};
+        fs.module = retainBlit_.shader;
+        fs.entryPoint = {.data = "fs", .length = 2};
+        fs.targetCount = 1;
+        fs.targets = &ct;
+
+        WGPURenderPipelineDescriptor rpd{};
+        rpd.layout = retainBlit_.pipelineLayout;
+        rpd.vertex = vs;
+        rpd.fragment = &fs;
+        rpd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        rpd.multisample.count = 1;
+        rpd.multisample.mask = 0xFFFFFFFF;
+        retainBlit_.pipeline = wgpuDeviceCreateRenderPipeline(device, &rpd);
+    }
 
     // Scissored background clear pipeline (used when scissorTest_ is enabled and autoClear)
     WGPURenderPipeline clearPipeline_ = nullptr;
@@ -1044,7 +1136,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         td.sampleCount = 1;
         td.dimension = WGPUTextureDimension_2D;
         td.format = surfaceFormat;
-        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding;
+        td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopySrc;
         toneMap_.colorTexture = wgpuDeviceCreateTexture(device, &td);
         toneMap_.colorView = wgpuTextureCreateView(toneMap_.colorTexture, nullptr);
 
@@ -1608,7 +1700,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             uint32_t w = static_cast<uint32_t>(size_.width());
             uint32_t h = static_cast<uint32_t>(size_.height());
 
-            // (Re)create retained texture if size changed
+            // (Re)create retained texture if size changed.
+            // Format is Rgba8Unorm to match DataTexture destinations — a render
+            // blit (not CopyTextureToTexture) bridges the surfaceFormat difference.
             if (!retainedFB || retainedFBWidth != w || retainedFBHeight != h) {
                 if (retainedFB) wgpuTextureRelease(retainedFB);
                 WGPUTextureDescriptor td{};
@@ -1617,28 +1711,57 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 td.mipLevelCount = 1;
                 td.sampleCount = 1;
                 td.dimension = WGPUTextureDimension_2D;
-                td.format = surfaceFormat;
-                td.usage = WGPUTextureUsage_CopyDst | WGPUTextureUsage_CopySrc | WGPUTextureUsage_TextureBinding;
+                td.format = WGPUTextureFormat_RGBA8Unorm;
+                td.usage = WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc | WGPUTextureUsage_TextureBinding;
                 retainedFB = wgpuDeviceCreateTexture(device, &td);
                 retainedFBWidth = w;
                 retainedFBHeight = h;
             }
 
-            // Copy the resolved surface texture to retained framebuffer
-            WGPUTexelCopyTextureInfo src{};
-            src.texture = frame_.surfaceTexture.texture;
-            src.mipLevel = 0;
-            src.origin = {0, 0, 0};
-            src.aspect = WGPUTextureAspect_All;
+            // Blit toneMap_.colorTexture (surfaceFormat/Bgra8Unorm on Windows)
+            // into retainedFB (Rgba8Unorm) via a shader pass. The shader stage
+            // handles the format mapping transparently; CopyTextureToTexture
+            // cannot be used because BGRA and RGBA are not copy-compatible.
+            ensureRetainBlit();
 
-            WGPUTexelCopyTextureInfo dst{};
-            dst.texture = retainedFB;
-            dst.mipLevel = 0;
-            dst.origin = {0, 0, 0};
-            dst.aspect = WGPUTextureAspect_All;
+            WGPUTextureViewDescriptor tvd{};
+            tvd.dimension = WGPUTextureViewDimension_2D;
+            tvd.mipLevelCount = 1;
+            tvd.arrayLayerCount = 1;
+            WGPUTextureView srcView = wgpuTextureCreateView(toneMap_.colorTexture, &tvd);
+            WGPUTextureView dstView = wgpuTextureCreateView(retainedFB, &tvd);
 
-            WGPUExtent3D extent = {w, h, 1};
-            wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
+            WGPUBindGroupEntry bgEntries[2]{};
+            bgEntries[0].binding = 0;
+            bgEntries[0].textureView = srcView;
+            bgEntries[1].binding = 1;
+            bgEntries[1].sampler = retainBlit_.sampler;
+            WGPUBindGroupDescriptor bgd{};
+            bgd.layout = retainBlit_.bgl;
+            bgd.entryCount = 2;
+            bgd.entries = bgEntries;
+            WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgd);
+
+            WGPURenderPassColorAttachment ca{};
+            ca.view = dstView;
+            ca.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+            ca.loadOp = WGPULoadOp_Clear;
+            ca.storeOp = WGPUStoreOp_Store;
+            ca.clearValue = {0, 0, 0, 1};
+
+            WGPURenderPassDescriptor rpassDesc{};
+            rpassDesc.colorAttachmentCount = 1;
+            rpassDesc.colorAttachments = &ca;
+            WGPURenderPassEncoder rpe = wgpuCommandEncoderBeginRenderPass(encoder, &rpassDesc);
+            wgpuRenderPassEncoderSetPipeline(rpe, retainBlit_.pipeline);
+            wgpuRenderPassEncoderSetBindGroup(rpe, 0, bg, 0, nullptr);
+            wgpuRenderPassEncoderDraw(rpe, 3, 1, 0, 0);
+            wgpuRenderPassEncoderEnd(rpe);
+            wgpuRenderPassEncoderRelease(rpe);
+
+            wgpuBindGroupRelease(bg);
+            wgpuTextureViewRelease(srcView);
+            wgpuTextureViewRelease(dstView);
         }
 #endif
 
@@ -2356,6 +2479,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         trackedInstancedMeshes_.clear();
 
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
+        if (retainBlit_.pipeline)       { wgpuRenderPipelineRelease(retainBlit_.pipeline);       retainBlit_.pipeline = nullptr; }
+        if (retainBlit_.pipelineLayout) { wgpuPipelineLayoutRelease(retainBlit_.pipelineLayout); retainBlit_.pipelineLayout = nullptr; }
+        if (retainBlit_.bgl)            { wgpuBindGroupLayoutRelease(retainBlit_.bgl);            retainBlit_.bgl = nullptr; }
+        if (retainBlit_.sampler)        { wgpuSamplerRelease(retainBlit_.sampler);               retainBlit_.sampler = nullptr; }
+        if (retainBlit_.shader)         { wgpuShaderModuleRelease(retainBlit_.shader);            retainBlit_.shader = nullptr; }
 
         for (auto& [id, entry] : instanceCache_) {
             if (entry.buffer) wgpuBufferRelease(entry.buffer);
