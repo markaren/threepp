@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <numeric>
 #include <unordered_map>
 #include <vector>
@@ -41,13 +42,17 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
-constexpr int MAX_TRIS = 4096;
+constexpr int MAX_TRIS = 8192;
 constexpr int MAX_MATS = 64;
-constexpr int MAX_BVH_NODES = 8192;// 2*MAX_TRIS - 1 worst case
+constexpr int MAX_BVH_NODES = 2*MAX_TRIS-1;// 2*MAX_TRIS - 1 worst case
 constexpr int TRI_TEX_HEIGHT = 8;  // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
 constexpr int MAT_TEX_HEIGHT = 2;  // row0: albedo+shininess, row1: texSlot
 constexpr int MAX_TEX_SLOTS = 16;
 constexpr int TILE_SIZE = 256;
+// WebGPU max texture dimension is 8192. Wider data is folded into extra rows.
+constexpr int TEX_PAGE_WIDTH = 8192;
+constexpr int TRI_TEX_PAGES  = (MAX_TRIS      + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
+constexpr int BVH_TEX_PAGES  = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
 
 // ---------------------------------------------------------------------------
 // WGSL vertex shader
@@ -113,6 +118,17 @@ struct RtUniforms {
 // binding 10 = triData sampler (reserved)
 
 const MAX_TEX_SLOTS: f32 = 16.0;
+const TRI_PAGE_W: i32 = 8192;  // TEX_PAGE_WIDTH
+const TRI_PAGE_H: i32 = 8;     // TRI_TEX_HEIGHT rows per page
+const BVH_PAGE_W: i32 = 8192;
+
+// Paged texture coordinate helpers (handle textures wider than 8192)
+fn triCoord(ti: i32, row: i32) -> vec2<i32> {
+    return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
+}
+fn bvhCoord(ni: i32, row: i32) -> vec2<i32> {
+    return vec2<i32>(ni % BVH_PAGE_W, (ni / BVH_PAGE_W) * 2 + row);
+}
 
 // ---- Types ----
 struct Ray { origin: vec3<f32>, dir: vec3<f32>, }
@@ -166,22 +182,22 @@ fn aabbHit(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> bool {
 
 // ---- Load and shade a triangle, update h if closer ----
 fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
-    let r0 = textureLoad(triData, vec2<i32>(ti, 0), 0);
+    let r0 = textureLoad(triData, triCoord(ti, 0), 0);
     let v0 = r0.xyz;
-    let v1 = textureLoad(triData, vec2<i32>(ti, 1), 0).xyz;
-    let v2 = textureLoad(triData, vec2<i32>(ti, 2), 0).xyz;
+    let v1 = textureLoad(triData, triCoord(ti, 1), 0).xyz;
+    let v2 = textureLoad(triData, triCoord(ti, 2), 0).xyz;
 
     let isect = triIntersect(ray, v0, v1, v2);
     if (isect.t >= (*h).t) { return; }
 
     let w   = 1.0 - isect.u - isect.v;
-    let n0  = textureLoad(triData, vec2<i32>(ti, 3), 0).xyz;
-    let n1  = textureLoad(triData, vec2<i32>(ti, 4), 0).xyz;
-    let n2  = textureLoad(triData, vec2<i32>(ti, 5), 0).xyz;
+    let n0  = textureLoad(triData, triCoord(ti, 3), 0).xyz;
+    let n1  = textureLoad(triData, triCoord(ti, 4), 0).xyz;
+    let n2  = textureLoad(triData, triCoord(ti, 5), 0).xyz;
     var sn  = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
 
-    let uv01 = textureLoad(triData, vec2<i32>(ti, 6), 0);
-    let uv2  = textureLoad(triData, vec2<i32>(ti, 7), 0).xy;
+    let uv01 = textureLoad(triData, triCoord(ti, 6), 0);
+    let uv2  = textureLoad(triData, triCoord(ti, 7), 0).xy;
     let iuv  = vec2<f32>(uv01.x, uv01.y) * w
              + vec2<f32>(uv01.z, uv01.w) * isect.u
              + uv2                        * isect.v;
@@ -212,8 +228,8 @@ fn sceneHit(ray: Ray) -> Hit {
     while (top > 0) {
         top -= 1;
         let ni  = stack[top];
-        let nd0 = textureLoad(bvhData, vec2<i32>(ni, 0), 0);
-        let nd1 = textureLoad(bvhData, vec2<i32>(ni, 1), 0);
+        let nd0 = textureLoad(bvhData, bvhCoord(ni, 0), 0);
+        let nd1 = textureLoad(bvhData, bvhCoord(ni, 1), 0);
 
         if (!aabbHit(nd0.xyz, nd1.xyz, ray, h.t)) { continue; }
 
@@ -420,7 +436,15 @@ static int buildGeometryBuffers(
 
     auto setTexel = [&](std::vector<float>& buf, int width, int col, int row,
                         float x, float y, float z, float w) {
-        const int idx = (row * width + col) * 4;
+        int idx;
+        if (width > TEX_PAGE_WIDTH) {
+            // Paged layout: fold columns beyond TEX_PAGE_WIDTH into extra rows
+            const int page = col / TEX_PAGE_WIDTH;
+            const int pcol = col % TEX_PAGE_WIDTH;
+            idx = ((page * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + pcol) * 4;
+        } else {
+            idx = (row * width + col) * 4;
+        }
         buf[idx + 0] = x;
         buf[idx + 1] = y;
         buf[idx + 2] = z;
@@ -511,9 +535,11 @@ struct BvhNode {
     int right;// interior: right child index   leaf: triangle count
 };
 
-// Read one float component from the flat triBuffer (row-major, RGBA texels)
+// Read one float component from the paged triBuffer
 static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
-    return buf[(row * MAX_TRIS + ti) * 4 + comp];
+    const int page = ti / TEX_PAGE_WIDTH;
+    const int pcol = ti % TEX_PAGE_WIDTH;
+    return buf[((page * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + pcol) * 4 + comp];
 }
 
 static int buildBvhNode(
@@ -586,30 +612,36 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
     nodes.reserve(triCount * 2);
     buildBvhNode(nodes, indices, triBuffer, 0, triCount);
 
-    // Reorder triBuffer to match the sorted index order
+    // Reorder triBuffer to match the sorted index order (paged layout)
+    auto pagedTriIdx = [](int ti, int row) -> int {
+        const int page = ti / TEX_PAGE_WIDTH;
+        const int pcol = ti % TEX_PAGE_WIDTH;
+        return ((page * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + pcol) * 4;
+    };
     std::vector<float> sorted(triBuffer.size(), 0.f);
     for (int ni = 0; ni < triCount; ni++) {
         const int oi = indices[ni];
         for (int row = 0; row < TRI_TEX_HEIGHT; row++)
             for (int c = 0; c < 4; c++)
-                sorted[(row * MAX_TRIS + ni) * 4 + c] =
-                        triBuffer[(row * MAX_TRIS + oi) * 4 + c];
+                sorted[pagedTriIdx(ni, row) + c] = triBuffer[pagedTriIdx(oi, row) + c];
     }
     triBuffer = std::move(sorted);
 
-    // Pack into RGBA32Float texture rows (MAX_BVH_NODES wide, 2 tall)
-    std::vector<float> bvhBuf(MAX_BVH_NODES * 2 * 4, 0.f);
+    // Pack BVH nodes into paged RGBA32Float texture (TEX_PAGE_WIDTH wide, 2*BVH_TEX_PAGES tall)
+    std::vector<float> bvhBuf(TEX_PAGE_WIDTH * 2 * BVH_TEX_PAGES * 4, 0.f);
     const int nc = std::min(static_cast<int>(nodes.size()), MAX_BVH_NODES);
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
-        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 0] = n.minX;
-        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 1] = n.minY;
-        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 2] = n.minZ;
-        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 3] = static_cast<float>(n.left);
-        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 0] = n.maxX;
-        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 1] = n.maxY;
-        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 2] = n.maxZ;
-        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 3] = static_cast<float>(n.right);
+        const int page = i / TEX_PAGE_WIDTH;
+        const int col  = i % TEX_PAGE_WIDTH;
+        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 0] = n.minX;
+        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 1] = n.minY;
+        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 2] = n.minZ;
+        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 3] = static_cast<float>(n.left);
+        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 0] = n.maxX;
+        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 1] = n.maxY;
+        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 2] = n.maxZ;
+        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 3] = static_cast<float>(n.right);
     }
     return bvhBuf;
 }
@@ -626,7 +658,8 @@ int main() {
     renderer.setClearColor(Color(0x000000));
 
     // ---- GPU textures for geometry data ----
-    WgpuTexture bvhTex(renderer, MAX_BVH_NODES, 2,
+    // Both triTex and bvhTex use paged layout (TEX_PAGE_WIDTH wide) to stay within the 8192 limit.
+    WgpuTexture bvhTex(renderer, TEX_PAGE_WIDTH, 2 * BVH_TEX_PAGES,
                        WgpuTexture::Format::RGBA32Float,
                        WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
     WgpuTexture matTex(renderer, MAX_MATS, MAT_TEX_HEIGHT,
@@ -636,12 +669,12 @@ int main() {
     WgpuTexture texAtlasTex(renderer, MAX_TEX_SLOTS * TILE_SIZE, TILE_SIZE,
                             WgpuTexture::Format::RGBA8Unorm,
                             WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
-    WgpuTexture triTex(renderer, MAX_TRIS, TRI_TEX_HEIGHT,
+    WgpuTexture triTex(renderer, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * TRI_TEX_PAGES,
                        WgpuTexture::Format::RGBA32Float,
                        WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
 
     // CPU buffers for geometry data
-    std::vector<float> triBuffer(MAX_TRIS * TRI_TEX_HEIGHT * 4, 0.f);
+    std::vector<float> triBuffer(TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * TRI_TEX_PAGES * 4, 0.f);
     std::vector<float> matBuffer(MAX_MATS * MAT_TEX_HEIGHT * 4, 0.f);
 
     // ---- Raytracer camera + OrbitControls ----
