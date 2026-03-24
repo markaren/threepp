@@ -41,7 +41,7 @@ constexpr int MAX_TRIS       = 65536;
 constexpr int MAX_MATS       = 64;
 constexpr int MAX_BVH_NODES  = 2 * MAX_TRIS - 1;
 constexpr int MAX_TEX_SLOTS  = 16;
-constexpr int TILE_SIZE      = 256;
+constexpr int TILE_SIZE      = 512;  // 16*512=8192=max WebGPU tex width; also update WGSL TILE_SIZE!
 constexpr int TRI_TEX_HEIGHT = 8;   // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
 constexpr int MAT_TEX_HEIGHT = 2;   // row0: albedo+shininess, row1: texSlot
 constexpr int TEX_PAGE_WIDTH  = 8192;
@@ -87,7 +87,7 @@ struct RtUniforms {
 
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
-const TILE_SIZE:   i32 = 256;
+const TILE_SIZE:   i32 = 512;  // must match C++ TILE_SIZE constant
 const MAX_TEX_SLOTS: i32 = 16;
 const BVH_PAGE_W: i32 = 8192;
 
@@ -136,6 +136,14 @@ fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
     let rgt = normalize(cross(nt, n));
     let up  = cross(n, rgt);
     return normalize(lx * rgt + ly * up + lz * n);
+}
+
+// ---- Atlas colour lookup ----
+fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
+    let tx = i32(texSlot) * TILE_SIZE
+           + clamp(i32(fract(uv.x) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
+    let ty = clamp(i32(fract(uv.y) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
+    return textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
 }
 
 // ---- Sky gradient ----
@@ -255,12 +263,7 @@ fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
 // ---- Blinn-Phong shade with hard shadow (used by raytracer mode) ----
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
-    if (h.texSlot >= 0.0) {
-        let tx = i32(h.texSlot) * TILE_SIZE
-               + clamp(i32(fract(h.uv.x) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
-        let ty = clamp(i32(fract(h.uv.y) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
-        albedo = textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
-    }
+    if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
     var col = albedo * 0.10;
     let count = i32(rt.lightCount.x);
     for (var li = 0; li < 4; li++) {
@@ -313,12 +316,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
 
         // Resolve albedo from texture atlas if this material has a texture
         var albedo = h.albedo;
-        if (h.texSlot >= 0.0) {
-            let tx = i32(h.texSlot) * TILE_SIZE
-                   + clamp(i32(fract(h.uv.x) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
-            let ty = clamp(i32(fract(h.uv.y) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
-            albedo = textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
-        }
+        if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
 
         // Next-event estimation: shadow ray to each light
         let lcount = i32(rt.lightCount.x);
@@ -559,11 +557,18 @@ static int buildGeometryBuffers(
                  albedo.r, albedo.g, albedo.b, shininess);
 
         float texSlot = -1.f;
+        float texOffsetX = 0.f, texOffsetY = 0.f;
+        float texRepeatX = 1.f, texRepeatY = 1.f;
         if (auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get())) {
             if (mwm->map) {
                 auto it = texSlotMap.find(mwm->map.get());
-                if (it != texSlotMap.end())
-                    texSlot = static_cast<float>(it->second);
+                if (it != texSlotMap.end()) {
+                    texSlot   = static_cast<float>(it->second);
+                    texOffsetX = mwm->map->offset.x;
+                    texOffsetY = mwm->map->offset.y;
+                    texRepeatX = mwm->map->repeat.x;
+                    texRepeatY = mwm->map->repeat.y;
+                }
             }
         }
         setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, 0.f, 0.f, 0.f);
@@ -596,7 +601,8 @@ static int buildGeometryBuffers(
         };
         auto uv = [&](int i) -> std::pair<float, float> {
             if (!uvs) return {0.f, 0.f};
-            return {uvs->getX(i), uvs->getY(i)};
+            return {uvs->getX(i) * texRepeatX + texOffsetX,
+                    uvs->getY(i) * texRepeatY + texOffsetY};
         };
         auto vi = [&](int tri, int corner) -> int {
             return idx ? static_cast<int>(idx->getX(tri * 3 + corner)) : tri * 3 + corner;
@@ -924,14 +930,14 @@ int main() {
     scene.add(floor);
 
     ModelLoader loader;
-    auto obj = loader.load(std::string(DATA_FOLDER) + "/models/obj/female02/female02.obj");
+    auto obj = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
     obj->traverseType<Mesh>([&] (Mesh& m) {
         auto tex = m.material()->as<MaterialWithMap>();
         m.setMaterial(MeshStandardMaterial::create({{"map", tex ? tex->map : nullptr}, {"roughness", 0.9f}}));
     });
     obj->position.z = -4.f;
     obj->position.y = -1.f;
-    obj->scale *= 0.025f;
+    // obj->scale *= 0.025f;
     scene.add(obj);
 
     // ---- Point light ----
