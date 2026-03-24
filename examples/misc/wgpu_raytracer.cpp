@@ -140,6 +140,43 @@ fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
     return normalize(lx * rgt + ly * up + lz * n);
 }
 
+// ---- GGX microfacet helpers ----
+const PI: f32 = 3.14159265358979;
+
+// GGX (Trowbridge-Reitz) Normal Distribution Function
+fn ggxD(NdotH: f32, alpha: f32) -> f32 {
+    let a2 = alpha * alpha;
+    let d  = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+// Smith G1 — Schlick-GGX approximation
+fn ggxG1(NdotX: f32, alpha: f32) -> f32 {
+    let k = alpha * 0.5;
+    return NdotX / max(NdotX * (1.0 - k) + k, 1e-6);
+}
+
+// Schlick Fresnel
+fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
+    return F0 + (vec3<f32>(1.0) - F0) * pow(max(0.0, 1.0 - cosTheta), 5.0);
+}
+
+// Sample a direction from the GGX NDF; returns the reflected direction.
+fn sampleGGXDir(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
+                seed: ptr<function, u32>) -> vec3<f32> {
+    let u1   = rand(seed);
+    let u2   = rand(seed);
+    let a2   = alpha * alpha;
+    let phi  = 2.0 * PI * u1;
+    let cosT = sqrt((1.0 - u2) / max(1.0 + (a2 - 1.0) * u2, 1e-6));
+    let sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
+    let nt   = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
+    let rgt  = normalize(cross(nt, n));
+    let up   = cross(n, rgt);
+    let hm   = normalize(sinT * cos(phi) * rgt + sinT * sin(phi) * up + cosT * n);
+    return reflect(-wo, hm);
+}
+
 // ---- Atlas colour lookup ----
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let tx = i32(texSlot) * TILE_SIZE
@@ -262,26 +299,36 @@ fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
     return ray;
 }
 
-// ---- Blinn-Phong shade with hard shadow (used by raytracer mode) ----
+// ---- GGX shade with hard shadow (used by raytracer mode) ----
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
-    var col = albedo * 0.10;
+    var col = albedo * 0.02;
     let count = i32(rt.lightCount.x);
+    let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
         if (li >= count) { break; }
-        let lc   = rt.lightCol[li].xyz;
+        let lc    = rt.lightCol[li].xyz;
         let isDir = rt.lightType[li].x > 0.5;
-        // For directional lights lightPos stores the direction *toward* the light.
-        let ln   = select(normalize(rt.lightPos[li].xyz - h.point),
-                          normalize(rt.lightPos[li].xyz), isDir);
-        let ld   = select(length(rt.lightPos[li].xyz - h.point), 1e30, isDir);
+        let ln    = select(normalize(rt.lightPos[li].xyz - h.point),
+                           normalize(rt.lightPos[li].xyz), isDir);
+        let ld    = select(length(rt.lightPos[li].xyz - h.point), 1e30, isDir);
         var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
         let sh = sceneHit(sr);
         if (sh.t >= ld - 1e-3) {
-            col += albedo * lc * max(0.0, dot(h.normal, ln)) * 0.80;
-            let hv = normalize(normalize(-rd) + ln);
-            col += lc * pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0) * 0.65;
+            let NdotL = max(0.0, dot(h.normal, ln));
+            let hv    = normalize(wo_s + ln);
+            let NdotH = max(0.0, dot(h.normal, hv));
+            let NdotV = max(0.001, dot(h.normal, wo_s));
+            let NdotL2 = max(0.001, NdotL);
+            let VdotH = max(0.0, dot(wo_s, hv));
+            let F0_s  = vec3<f32>(0.04);
+            let Ds    = ggxD(NdotH, h.shininess);
+            let Fs    = schlick(VdotH, F0_s);
+            let Gs    = ggxG1(NdotV, h.shininess) * ggxG1(NdotL2, h.shininess);
+            let f_spec = Ds * Fs * Gs / max(4.0 * NdotV * NdotL2, 1e-6);
+            let f_diff = (vec3<f32>(1.0) - Fs) * albedo / PI;
+            col += lc * (f_diff + f_spec) * NdotL;
         }
     }
     return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -292,8 +339,9 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
     if (h0.t >= 1e30) { return sky(ray.dir); }
     var col = shade(h0, ray.dir);
-    if (h0.shininess > 20.0) {
-        let k = min(0.55, h0.shininess / 100.0);
+    if (h0.shininess < 0.5) {
+        // Low GGX alpha = smooth/glossy surface: add a mirror bounce
+        let k = max(0.0, 1.0 - h0.shininess * 2.0) * 0.55;
         var r1: Ray;
         r1.origin = h0.point + h0.normal * 1e-3;
         r1.dir    = reflect(ray.dir, h0.normal);
@@ -321,8 +369,9 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
         var albedo = h.albedo;
         if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
 
-        // Next-event estimation: shadow ray to each light
+        // Next-event estimation: shadow ray to each light (GGX BSDF)
         let lcount = i32(rt.lightCount.x);
+        let wo = normalize(-ray.dir);
         for (var li = 0; li < 4; li++) {
             if (li >= lcount) { break; }
             let lc    = rt.lightCol[li].xyz;
@@ -335,10 +384,19 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
             sr.dir    = ln;
             let sh = sceneHit(sr);
             if (sh.t >= ld - 1e-3) {
-                let diff = max(0.0, dot(h.normal, ln));
-                let hv   = normalize(normalize(-ray.dir) + ln);
-                let spec = pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0);
-                radiance += throughput * (albedo * lc * diff * 0.85 + lc * spec * 0.35);
+                let NdotL = dot(h.normal, ln);
+                if (NdotL <= 0.0) { continue; }
+                let hv    = normalize(wo + ln);
+                let NdotH = max(0.0, dot(h.normal, hv));
+                let NdotV = max(0.001, dot(h.normal, wo));
+                let VdotH = max(0.0, dot(wo, hv));
+                let F0    = vec3<f32>(0.04);
+                let D     = ggxD(NdotH, h.shininess);
+                let F     = schlick(VdotH, F0);
+                let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, NdotL), h.shininess);
+                let f_spec = D * F * G / max(4.0 * NdotV * NdotL, 1e-6);
+                let f_diff = (vec3<f32>(1.0) - F) * albedo / PI;
+                radiance  += throughput * (f_diff + f_spec) * NdotL * lc;
             }
         }
         // Ambient term
@@ -351,15 +409,28 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
             throughput /= p;
         }
 
-        // Sample next direction: specular vs. diffuse
-        let spec_prob = h.shininess / (h.shininess + 64.0);
-        if (rand(seed) < spec_prob) {
-            ray.dir = reflect(ray.dir, h.normal);
+        // Sample next direction: 50/50 GGX specular vs. cosine-weighted diffuse
+        let wo_b = normalize(-ray.dir);
+        let F0_b = vec3<f32>(0.04);
+        var wi_b: vec3<f32>;
+        if (rand(seed) < 0.5) {
+            // GGX specular sample
+            wi_b = sampleGGXDir(wo_b, h.normal, h.shininess, seed);
+            let cos_b = dot(h.normal, wi_b);
+            if (cos_b <= 0.0) { break; }
+            let hb  = normalize(wo_b + wi_b);
+            let Fb  = schlick(max(0.0, dot(wo_b, hb)), F0_b);
+            let G1L = ggxG1(cos_b, h.shininess);
+            throughput *= Fb * G1L * 2.0;   // divide by 0.5 selection probability
         } else {
-            ray.dir = cosineHemisphere(h.normal, seed);
+            // Diffuse sample
+            wi_b = cosineHemisphere(h.normal, seed);
+            let cos_b = dot(h.normal, wi_b);
+            if (cos_b <= 0.0) { break; }
+            throughput *= albedo * 2.0;     // divide by 0.5 selection probability
         }
-        throughput *= albedo;
-        ray.origin  = h.point + h.normal * 1e-3;
+        ray.origin = h.point + h.normal * 1e-3;
+        ray.dir    = wi_b;
     }
     return radiance;
 }
@@ -521,10 +592,12 @@ static std::pair<Color, float> extractMaterial(const Material* mat) {
     if (!mat) return {albedo, shininess};
     if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
         albedo = c->color;
-    if (auto* s = dynamic_cast<const MaterialWithSpecular*>(mat)) {
-        shininess = std::max(1.f, s->shininess);
-    } else if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
-        shininess = std::max(1.f, (1.f - r->roughness) * 128.f);
+    if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
+        const float rough = std::max(0.f, std::min(1.f, r->roughness));
+        shininess = std::max(0.04f, rough * rough);   // GGX alpha = roughness²
+    } else if (auto* s = dynamic_cast<const MaterialWithSpecular*>(mat)) {
+        const float n = std::max(1.f, s->shininess);
+        shininess = std::max(0.04f, std::sqrt(2.f / (n + 2.f)));  // Phong → GGX alpha
     }
     return {albedo, shininess};
 }
@@ -967,11 +1040,11 @@ int main() {
     scene.add(obj);
 
     // ---- Point light ----
-    auto pointLight = PointLight::create(Color::white, 0.6f);
+    auto pointLight = PointLight::create(Color::white, 0.9f);
     pointLight->position.set(5.f, 6.f, -2.f);
     scene.add(pointLight);
 
-    auto pointLight2 = PointLight::create(Color::white, 0.2f);
+    auto pointLight2 = PointLight::create(Color::white, 0.4f);
     pointLight2->position.set(-5.f, 6.f, 4.f);
     scene.add(pointLight2);
 
@@ -985,10 +1058,13 @@ int main() {
     Vector3 prevCamPos = rtCam.position;
     Vector3 prevTarget = controls.target;
 
+    bool raster = false;
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
             pathTracerOn = !pathTracerOn;
             frameCount = 0.f;// reset accumulation on mode switch
+        } else if (ev.key == Key::R) {
+            raster = !raster;
         }
     });
     canvas.addKeyListener(keyAdapter);
@@ -1131,8 +1207,12 @@ int main() {
 
         frameCount += 1.f;
 
-        // Render display quad
-        renderer.render(displayScene, displayCam);
+        if (raster) {
+            renderer.render(scene, rtCam);
+        } else {
+            // Render display quad
+            renderer.render(displayScene, displayCam);
+        }
     });
 
     return 0;
