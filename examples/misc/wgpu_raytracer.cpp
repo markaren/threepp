@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <unordered_map>
 #include <vector>
 
@@ -39,12 +40,13 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
-constexpr int MAX_TRIS = 4096;
-constexpr int MAX_MATS = 64;
-constexpr int TRI_TEX_HEIGHT = 8;  // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
-constexpr int MAT_TEX_HEIGHT = 2;  // row0: albedo+shininess, row1: texSlot
-constexpr int MAX_TEX_SLOTS = 16;
-constexpr int TILE_SIZE = 256;
+constexpr int MAX_TRIS       = 4096;
+constexpr int MAX_MATS       = 64;
+constexpr int MAX_BVH_NODES  = 8192;  // 2*MAX_TRIS - 1 worst case
+constexpr int TRI_TEX_HEIGHT = 8;     // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
+constexpr int MAT_TEX_HEIGHT = 2;     // row0: albedo+shininess, row1: texSlot
+constexpr int MAX_TEX_SLOTS  = 16;
+constexpr int TILE_SIZE      = 256;
 
 // ---------------------------------------------------------------------------
 // WGSL vertex shader
@@ -71,7 +73,7 @@ fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
 // ---------------------------------------------------------------------------
 // WGSL fragment shader
 // Custom uniforms MUST be alphabetical: aspect camFwd camOri camRgt camUp iRes iTime tanHalfFov triCount
-// Custom textures MUST be alphabetical: matData(3,4)  texAtlas(5,6)  triData(7,8)
+// Custom textures MUST be alphabetical: bvhData(3,4)  matData(5,6)  texAtlas(7,8)  triData(9,10)
 // ---------------------------------------------------------------------------
 constexpr const char* fsWGSL = R"(
 
@@ -88,19 +90,24 @@ struct RtUniforms {
 };
 @group(0) @binding(2) var<uniform> rt: RtUniforms;
 
+// bvhData: row0 col i = (aabbMin.xyz, left)   left<0 → leaf, triStart=-left-1
+//          row1 col i = (aabbMax.xyz, right)  right = rightChild OR triCount
+@group(0) @binding(3) var bvhData: texture_2d<f32>;
+// binding 4 = bvhData sampler (reserved)
+
 // matData: row0 col i = (albedo.r, albedo.g, albedo.b, shininess)
 //          row1 col i = (texSlot, 0, 0, 0)  — texSlot<0 means no texture
-@group(0) @binding(3) var matData: texture_2d<f32>;
-// binding 4 = matData sampler (reserved)
+@group(0) @binding(5) var matData: texture_2d<f32>;
+// binding 6 = matData sampler (reserved)
 
 // texAtlas: horizontal strip of TILE_SIZE×TILE_SIZE tiles, one per texSlot
-@group(0) @binding(5) var texAtlas:        texture_2d<f32>;
-@group(0) @binding(6) var texAtlasSampler: sampler;
+@group(0) @binding(7) var texAtlas:        texture_2d<f32>;
+@group(0) @binding(8) var texAtlasSampler: sampler;
 
 // triData: rows 0-2 = v0/v1/v2 (w=matIdx in row0), rows 3-5 = n0/n1/n2
 //          row 6 = (u0,v0, u1,v1), row 7 = (u2,v2, 0,0)
-@group(0) @binding(7) var triData: texture_2d<f32>;
-// binding 8 = triData sampler (reserved)
+@group(0) @binding(9) var triData: texture_2d<f32>;
+// binding 10 = triData sampler (reserved)
 
 const MAX_TEX_SLOTS: f32 = 16.0;
 
@@ -144,46 +151,86 @@ fn triIntersect(ray: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> Isect 
     return r;
 }
 
-// ---- Scene intersection: loop over all triangles ----
+// ---- Slab AABB test; returns true if ray hits box before tmax ----
+fn aabbHit(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> bool {
+    let invD = vec3<f32>(1.0) / ray.dir;
+    let t1   = (bmin - ray.origin) * invD;
+    let t2   = (bmax - ray.origin) * invD;
+    let tNear = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
+    let tFar  = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));
+    return tFar >= max(tNear, 0.0) && tNear < tmax;
+}
+
+// ---- Load and shade a triangle, update h if closer ----
+fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
+    let r0 = textureLoad(triData, vec2<i32>(ti, 0), 0);
+    let v0 = r0.xyz;
+    let v1 = textureLoad(triData, vec2<i32>(ti, 1), 0).xyz;
+    let v2 = textureLoad(triData, vec2<i32>(ti, 2), 0).xyz;
+
+    let isect = triIntersect(ray, v0, v1, v2);
+    if (isect.t >= (*h).t) { return; }
+
+    let w   = 1.0 - isect.u - isect.v;
+    let n0  = textureLoad(triData, vec2<i32>(ti, 3), 0).xyz;
+    let n1  = textureLoad(triData, vec2<i32>(ti, 4), 0).xyz;
+    let n2  = textureLoad(triData, vec2<i32>(ti, 5), 0).xyz;
+    var sn  = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
+
+    let uv01 = textureLoad(triData, vec2<i32>(ti, 6), 0);
+    let uv2  = textureLoad(triData, vec2<i32>(ti, 7), 0).xy;
+    let iuv  = vec2<f32>(uv01.x, uv01.y) * w
+             + vec2<f32>(uv01.z, uv01.w) * isect.u
+             + uv2                        * isect.v;
+
+    let matIdx = i32(r0.w);
+    let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
+    let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+
+    (*h).t         = isect.t;
+    (*h).point     = ray.origin + isect.t * ray.dir;
+    (*h).normal    = select(sn, -sn, dot(ray.dir, sn) > 0.0);
+    (*h).albedo    = mat0.xyz;
+    (*h).shininess = mat0.w;
+    (*h).uv        = iuv;
+    (*h).texSlot   = mat1.x;
+}
+
+// ---- BVH traversal ----
 fn sceneHit(ray: Ray) -> Hit {
     var h: Hit;
     h.t = 1e30;
 
-    let n = i32(rt.triCount.x);
-    for (var i = 0; i < n; i++) {
-        let r0 = textureLoad(triData, vec2<i32>(i, 0), 0);  // v0.xyz, matIdx
-        let v0 = r0.xyz;
-        let v1 = textureLoad(triData, vec2<i32>(i, 1), 0).xyz;
-        let v2 = textureLoad(triData, vec2<i32>(i, 2), 0).xyz;
+    var stack: array<i32, 32>;
+    var top: i32 = 0;
+    stack[0] = 0;
+    top = 1;
 
-        let isect = triIntersect(ray, v0, v1, v2);
-        if (isect.t >= h.t) { continue; }
+    while (top > 0) {
+        top -= 1;
+        let ni  = stack[top];
+        let nd0 = textureLoad(bvhData, vec2<i32>(ni, 0), 0);
+        let nd1 = textureLoad(bvhData, vec2<i32>(ni, 1), 0);
 
-        // Interpolate vertex normals (rows 3, 4, 5)
-        let n0 = textureLoad(triData, vec2<i32>(i, 3), 0).xyz;
-        let n1 = textureLoad(triData, vec2<i32>(i, 4), 0).xyz;
-        let n2 = textureLoad(triData, vec2<i32>(i, 5), 0).xyz;
-        let w  = 1.0 - isect.u - isect.v;
-        var sn = normalize(n0 * w + n1 * isect.u + n2 * isect.v);
+        if (!aabbHit(nd0.xyz, nd1.xyz, ray, h.t)) { continue; }
 
-        // Interpolate UV (row 6: u0v0u1v1, row 7: u2v2__)
-        let uv01 = textureLoad(triData, vec2<i32>(i, 6), 0);
-        let uv2  = textureLoad(triData, vec2<i32>(i, 7), 0).xy;
-        let iuv  = vec2<f32>(uv01.x, uv01.y) * w
-                 + vec2<f32>(uv01.z, uv01.w) * isect.u
-                 + uv2                        * isect.v;
+        let left  = i32(nd0.w);
+        let right = i32(nd1.w);
 
-        let matIdx = i32(r0.w);
-        let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
-        let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
-
-        h.t         = isect.t;
-        h.point     = ray.origin + isect.t * ray.dir;
-        h.normal    = select(sn, -sn, dot(ray.dir, sn) > 0.0);
-        h.albedo    = mat0.xyz;
-        h.shininess = mat0.w;
-        h.uv        = iuv;
-        h.texSlot   = mat1.x;
+        if (left < 0) {
+            // Leaf: test triangles
+            let triStart = -left - 1;
+            let triCount = right;
+            for (var ti = triStart; ti < triStart + triCount; ti++) {
+                testTriangle(ray, ti, &h);
+            }
+        } else {
+            // Interior: push both children (closer last = popped first)
+            stack[top] = right;
+            top += 1;
+            stack[top] = left;
+            top += 1;
+        }
     }
     return h;
 }
@@ -434,6 +481,114 @@ static int buildGeometryBuffers(
 }
 
 // ---------------------------------------------------------------------------
+// BVH builder
+// ---------------------------------------------------------------------------
+struct BvhNode {
+    float minX, minY, minZ;
+    int   left;   // >= 0: left child index   < 0: leaf, triStart = -left-1
+    float maxX, maxY, maxZ;
+    int   right;  // interior: right child index   leaf: triangle count
+};
+
+// Read one float component from the flat triBuffer (row-major, RGBA texels)
+static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
+    return buf[(row * MAX_TRIS + ti) * 4 + comp];
+}
+
+static int buildBvhNode(
+        std::vector<BvhNode>& nodes,
+        std::vector<int>& idx,
+        const std::vector<float>& buf,
+        int start, int end)
+{
+    const int ni = static_cast<int>(nodes.size());
+    nodes.emplace_back();
+
+    // Compute AABB over triangles in [start, end)
+    float minX = 1e30f, minY = 1e30f, minZ = 1e30f;
+    float maxX =-1e30f, maxY =-1e30f, maxZ =-1e30f;
+    for (int i = start; i < end; i++) {
+        const int ti = idx[i];
+        for (int r = 0; r <= 2; r++) {
+            const float x = triGet(buf, ti, r, 0);
+            const float y = triGet(buf, ti, r, 1);
+            const float z = triGet(buf, ti, r, 2);
+            minX = std::min(minX, x); minY = std::min(minY, y); minZ = std::min(minZ, z);
+            maxX = std::max(maxX, x); maxY = std::max(maxY, y); maxZ = std::max(maxZ, z);
+        }
+    }
+    nodes[ni].minX = minX; nodes[ni].minY = minY; nodes[ni].minZ = minZ;
+    nodes[ni].maxX = maxX; nodes[ni].maxY = maxY; nodes[ni].maxZ = maxZ;
+
+    const int count = end - start;
+    if (count <= 2) {
+        nodes[ni].left  = -(start + 1);  // leaf: encode triStart as negative
+        nodes[ni].right = count;
+        return ni;
+    }
+
+    // Split along longest axis at centroid midpoint
+    const float dx = maxX - minX, dy = maxY - minY, dz = maxZ - minZ;
+    const int axis = (dx >= dy && dx >= dz) ? 0 : (dy >= dz ? 1 : 2);
+    const float axMins[3] = {minX, minY, minZ};
+    const float axMaxs[3] = {maxX, maxY, maxZ};
+    const float split = (axMins[axis] + axMaxs[axis]) * 0.5f;
+
+    auto mid = std::partition(idx.begin() + start, idx.begin() + end, [&](int ti) {
+        const float c = (triGet(buf, ti, 0, axis)
+                       + triGet(buf, ti, 1, axis)
+                       + triGet(buf, ti, 2, axis)) / 3.f;
+        return c < split;
+    });
+    int sp = static_cast<int>(mid - idx.begin());
+    if (sp == start || sp == end) sp = (start + end) / 2;
+
+    const int lc = buildBvhNode(nodes, idx, buf, start, sp);
+    const int rc = buildBvhNode(nodes, idx, buf, sp, end);
+    nodes[ni].left  = lc;
+    nodes[ni].right = rc;
+    return ni;
+}
+
+// Build BVH over triCount triangles.  Reorders triBuffer in-place to match
+// BVH leaf order.  Returns packed node data ready for GPU upload.
+static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) {
+    std::vector<int> indices(triCount);
+    std::iota(indices.begin(), indices.end(), 0);
+
+    std::vector<BvhNode> nodes;
+    nodes.reserve(triCount * 2);
+    buildBvhNode(nodes, indices, triBuffer, 0, triCount);
+
+    // Reorder triBuffer to match the sorted index order
+    std::vector<float> sorted(triBuffer.size(), 0.f);
+    for (int ni = 0; ni < triCount; ni++) {
+        const int oi = indices[ni];
+        for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+            for (int c = 0; c < 4; c++)
+                sorted[(row * MAX_TRIS + ni) * 4 + c] =
+                    triBuffer[(row * MAX_TRIS + oi) * 4 + c];
+    }
+    triBuffer = std::move(sorted);
+
+    // Pack into RGBA32Float texture rows (MAX_BVH_NODES wide, 2 tall)
+    std::vector<float> bvhBuf(MAX_BVH_NODES * 2 * 4, 0.f);
+    const int nc = std::min(static_cast<int>(nodes.size()), MAX_BVH_NODES);
+    for (int i = 0; i < nc; i++) {
+        const auto& n = nodes[i];
+        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 0] = n.minX;
+        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 1] = n.minY;
+        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 2] = n.minZ;
+        bvhBuf[(0 * MAX_BVH_NODES + i) * 4 + 3] = static_cast<float>(n.left);
+        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 0] = n.maxX;
+        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 1] = n.maxY;
+        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 2] = n.maxZ;
+        bvhBuf[(1 * MAX_BVH_NODES + i) * 4 + 3] = static_cast<float>(n.right);
+    }
+    return bvhBuf;
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 int main() {
@@ -445,7 +600,7 @@ int main() {
     renderer.setClearColor(Color(0x000000));
 
     // ---- GPU textures for geometry data ----
-    WgpuTexture triTex(renderer, MAX_TRIS, TRI_TEX_HEIGHT,
+    WgpuTexture bvhTex(renderer, MAX_BVH_NODES, 2,
                        WgpuTexture::Format::RGBA32Float,
                        WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
     WgpuTexture matTex(renderer, MAX_MATS, MAT_TEX_HEIGHT,
@@ -455,6 +610,9 @@ int main() {
     WgpuTexture texAtlasTex(renderer, MAX_TEX_SLOTS * TILE_SIZE, TILE_SIZE,
                             WgpuTexture::Format::RGBA8Unorm,
                             WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+    WgpuTexture triTex(renderer, MAX_TRIS, TRI_TEX_HEIGHT,
+                       WgpuTexture::Format::RGBA32Float,
+                       WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
 
     // CPU buffers for geometry data
     std::vector<float> triBuffer(MAX_TRIS * TRI_TEX_HEIGHT * 4, 0.f);
@@ -479,7 +637,8 @@ int main() {
     rtMat->vertexShader   = vsWGSL;
     rtMat->fragmentShader = fsWGSL;
 
-    // Custom textures bound alphabetically: matData(3,4) texAtlas(5,6) triData(7,8)
+    // Custom textures bound alphabetically: bvhData(3,4) matData(5,6) texAtlas(7,8) triData(9,10)
+    rtMat->customTextures["bvhData"]  = &bvhTex;
     rtMat->customTextures["matData"]  = &matTex;
     rtMat->customTextures["texAtlas"] = &texAtlasTex;
     rtMat->customTextures["triData"]  = &triTex;
@@ -568,9 +727,11 @@ int main() {
         Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
         Vector3 up  = Vector3(rgt).cross(fwd);
 
-        // Rebuild world-space triangle data from all meshes each frame
+        // Rebuild world-space triangle data, then BVH (triBuffer is reordered in-place)
         const int triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer);
+        const auto bvhBuffer = buildBVH(triBuffer, triCount);
 
+        bvhTex.write(bvhBuffer.data(), bvhBuffer.size() * sizeof(float));
         triTex.write(triBuffer.data(), triBuffer.size() * sizeof(float));
         matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
 
