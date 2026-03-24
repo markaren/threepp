@@ -19,6 +19,7 @@
 //   Möller–Trumbore intersection, and shades with Blinn-Phong + hard shadows
 //   + one mirror-reflection bounce.  OrbitControls give interactive camera.
 
+#include "threepp/lights/PointLight.hpp"
 #include "threepp/materials/MeshBasicMaterial.hpp"
 #include "threepp/materials/MeshLambertMaterial.hpp"
 #include "threepp/materials/MeshPhongMaterial.hpp"
@@ -40,13 +41,13 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 // Limits
 // ---------------------------------------------------------------------------
-constexpr int MAX_TRIS       = 4096;
-constexpr int MAX_MATS       = 64;
-constexpr int MAX_BVH_NODES  = 8192;  // 2*MAX_TRIS - 1 worst case
-constexpr int TRI_TEX_HEIGHT = 8;     // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
-constexpr int MAT_TEX_HEIGHT = 2;     // row0: albedo+shininess, row1: texSlot
-constexpr int MAX_TEX_SLOTS  = 16;
-constexpr int TILE_SIZE      = 256;
+constexpr int MAX_TRIS = 4096;
+constexpr int MAX_MATS = 64;
+constexpr int MAX_BVH_NODES = 8192;// 2*MAX_TRIS - 1 worst case
+constexpr int TRI_TEX_HEIGHT = 8;  // rows: v0 v1 v2 n0 n1 n2 uv01 uv2
+constexpr int MAT_TEX_HEIGHT = 2;  // row0: albedo+shininess, row1: texSlot
+constexpr int MAX_TEX_SLOTS = 16;
+constexpr int TILE_SIZE = 256;
 
 // ---------------------------------------------------------------------------
 // WGSL vertex shader
@@ -85,6 +86,8 @@ struct RtUniforms {
     camUp:      vec4<f32>,   // xyz = up
     iRes:       vec4<f32>,   // xy = viewport pixels
     iTime:      vec4<f32>,   // x = elapsed seconds
+    lightCol:   vec4<f32>,   // xyz = color * intensity (pre-multiplied)
+    lightPos:   vec4<f32>,   // xyz = world-space position
     tanHalfFov: vec4<f32>,   // x = tan(fov/2)
     triCount:   vec4<f32>,   // x = number of triangles (float→int)
 };
@@ -235,7 +238,7 @@ fn sceneHit(ray: Ray) -> Hit {
     return h;
 }
 
-// ---- Blinn-Phong shade with hard shadow ----
+// ---- Blinn-Phong shade with single shadow ray ----
 fn shade(h: Hit, rd: vec3<f32>, lp: vec3<f32>) -> vec3<f32> {
     // Resolve albedo: sample texture atlas or use material colour
     var albedo = h.albedo;
@@ -250,14 +253,15 @@ fn shade(h: Hit, rd: vec3<f32>, lp: vec3<f32>) -> vec3<f32> {
     let ld  = length(toL);
     let ln  = toL / ld;
 
+    let lc = rt.lightCol.xyz;   // pre-multiplied color * intensity
     var col = albedo * 0.10;
 
     var sr: Ray; sr.origin = h.point; sr.dir = ln;
     let sh = sceneHit(sr);
     if (sh.t >= ld - 1e-3) {
-        col += albedo * max(0.0, dot(h.normal, ln)) * 0.80;
+        col += albedo * lc * max(0.0, dot(h.normal, ln)) * 0.80;
         let hv = normalize(normalize(-rd) + ln);
-        col += pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0) * 0.65;
+        col += lc * pow(max(0.0, dot(h.normal, hv)), h.shininess + 1.0) * 0.65;
     }
     return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
 }
@@ -283,34 +287,50 @@ fn trace(ray: Ray, lp: vec3<f32>) -> vec3<f32> {
     return col;
 }
 
+fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
+    let fwd = rt.camFwd.xyz;
+    let rgt = rt.camRgt.xyz;
+    let up  = rt.camUp.xyz;
+    // WebGPU: y=0 at top → flip y for standard NDC
+    let ndc = vec2<f32>(
+        (px.x / res.x) * 2.0 - 1.0,
+        1.0 - (px.y / res.y) * 2.0
+    );
+    var ray: Ray;
+    ray.origin = rt.camOri.xyz;
+    ray.dir    = normalize(fwd
+                         + rgt * (ndc.x * rt.tanHalfFov.x * rt.aspect.x)
+                         + up  * (ndc.y * rt.tanHalfFov.x));
+    return ray;
+}
+
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let res  = rt.iRes.xy;
     let time = rt.iTime.x;
 
-    // NDC: WebGPU y=0 is at top, flip to get y=+1 at top of screen.
-    let ndc = vec2<f32>(
-        (fragPos.x / res.x) * 2.0 - 1.0,
-        1.0 - (fragPos.y / res.y) * 2.0
-    );
+    let lc = rt.lightPos.xyz;
 
-    let fwd = rt.camFwd.xyz;
-    let rgt = rt.camRgt.xyz;
-    let up  = rt.camUp.xyz;
-    let tf  = rt.tanHalfFov.x;
-    let asp = rt.aspect.x;
+    // Each RGSS sample tests a slightly different point on the area light (XZ plane).
+    // Fixed offsets — no hash, no noise, no extra rays.  Radius controls penumbra width.
+    let lr = 0.05;
+    let lp0 = lc + vec3<f32>( lr,  0.0,  0.0);
+    let lp1 = lc + vec3<f32>(-lr,  0.0,  0.0);
+    let lp2 = lc + vec3<f32>( 0.0, 0.0,  lr);
+    let lp3 = lc + vec3<f32>( 0.0, 0.0, -lr);
 
-    var ray: Ray;
-    ray.origin = rt.camOri.xyz;
-    ray.dir    = normalize(fwd + rgt * (ndc.x * tf * asp) + up * (ndc.y * tf));
+    // RGSS 4-sample anti-aliasing — rotated 2×2 grid, offsets in pixels
+    let o0 = vec2<f32>( 0.125,  0.375);
+    let o1 = vec2<f32>(-0.375,  0.125);
+    let o2 = vec2<f32>( 0.375, -0.125);
+    let o3 = vec2<f32>(-0.125, -0.375);
 
-    let lp = vec3<f32>(
-        5.0 * cos(time * 0.6),
-        6.0 + sin(time * 0.3),
-       -2.0 + 4.0 * sin(time * 0.6)
-    );
+    var col = trace(makeRay(fragPos.xy + o0, res), lp0)
+            + trace(makeRay(fragPos.xy + o1, res), lp1)
+            + trace(makeRay(fragPos.xy + o2, res), lp2)
+            + trace(makeRay(fragPos.xy + o3, res), lp3);
+    col *= 0.25;  // average in linear space, then gamma
 
-    var col = trace(ray, lp);
     col = pow(clamp(col, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
     return vec4<f32>(col, 1.0);
 }
@@ -342,8 +362,7 @@ static std::pair<Color, float> extractMaterial(const Material* mat) {
 // ---------------------------------------------------------------------------
 static std::vector<unsigned char> buildAtlas(
         const std::vector<std::shared_ptr<Mesh>>& meshes,
-        std::unordered_map<Texture*, int>& texSlotMap)
-{
+        std::unordered_map<Texture*, int>& texSlotMap) {
     const int atlasW = MAX_TEX_SLOTS * TILE_SIZE;
     std::vector<unsigned char> atlas(atlasW * TILE_SIZE * 4, 255);
 
@@ -353,7 +372,7 @@ static std::vector<unsigned char> buildAtlas(
         auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get());
         if (!mwm || !mwm->map) continue;
         Texture* tex = mwm->map.get();
-        if (texSlotMap.count(tex)) continue;  // already assigned
+        if (texSlotMap.count(tex)) continue;// already assigned
 
         // Get raw image data (assume uchar RGBA/RGB)
         auto& img = tex->image();
@@ -390,8 +409,8 @@ static std::vector<unsigned char> buildAtlas(
 static int buildGeometryBuffers(
         const std::vector<std::shared_ptr<Mesh>>& meshes,
         const std::unordered_map<Texture*, int>& texSlotMap,
-        std::vector<float>& triBuffer,   // MAX_TRIS * TRI_TEX_HEIGHT rows * 4 floats
-        std::vector<float>& matBuffer)   // MAX_MATS * MAT_TEX_HEIGHT rows * 4 floats
+        std::vector<float>& triBuffer,// MAX_TRIS * TRI_TEX_HEIGHT rows * 4 floats
+        std::vector<float>& matBuffer)// MAX_MATS * MAT_TEX_HEIGHT rows * 4 floats
 {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
@@ -402,8 +421,10 @@ static int buildGeometryBuffers(
     auto setTexel = [&](std::vector<float>& buf, int width, int col, int row,
                         float x, float y, float z, float w) {
         const int idx = (row * width + col) * 4;
-        buf[idx + 0] = x; buf[idx + 1] = y;
-        buf[idx + 2] = z; buf[idx + 3] = w;
+        buf[idx + 0] = x;
+        buf[idx + 1] = y;
+        buf[idx + 2] = z;
+        buf[idx + 3] = w;
     };
 
     for (auto& mesh : meshes) {
@@ -457,7 +478,7 @@ static int buildGeometryBuffers(
         };
 
         const int nTris = idx ? static_cast<int>(idx->count()) / 3
-                               : static_cast<int>(pos->count()) / 3;
+                              : static_cast<int>(pos->count()) / 3;
         for (int i = 0; i < nTris && triCount < MAX_TRIS; ++i) {
             const int i0 = vi(i, 0), i1 = vi(i, 1), i2 = vi(i, 2);
             const Vector3 v0 = vert(i0), v1 = vert(i1), v2 = vert(i2);
@@ -485,9 +506,9 @@ static int buildGeometryBuffers(
 // ---------------------------------------------------------------------------
 struct BvhNode {
     float minX, minY, minZ;
-    int   left;   // >= 0: left child index   < 0: leaf, triStart = -left-1
+    int left;// >= 0: left child index   < 0: leaf, triStart = -left-1
     float maxX, maxY, maxZ;
-    int   right;  // interior: right child index   leaf: triangle count
+    int right;// interior: right child index   leaf: triangle count
 };
 
 // Read one float component from the flat triBuffer (row-major, RGBA texels)
@@ -499,30 +520,37 @@ static int buildBvhNode(
         std::vector<BvhNode>& nodes,
         std::vector<int>& idx,
         const std::vector<float>& buf,
-        int start, int end)
-{
+        int start, int end) {
     const int ni = static_cast<int>(nodes.size());
     nodes.emplace_back();
 
     // Compute AABB over triangles in [start, end)
     float minX = 1e30f, minY = 1e30f, minZ = 1e30f;
-    float maxX =-1e30f, maxY =-1e30f, maxZ =-1e30f;
+    float maxX = -1e30f, maxY = -1e30f, maxZ = -1e30f;
     for (int i = start; i < end; i++) {
         const int ti = idx[i];
         for (int r = 0; r <= 2; r++) {
             const float x = triGet(buf, ti, r, 0);
             const float y = triGet(buf, ti, r, 1);
             const float z = triGet(buf, ti, r, 2);
-            minX = std::min(minX, x); minY = std::min(minY, y); minZ = std::min(minZ, z);
-            maxX = std::max(maxX, x); maxY = std::max(maxY, y); maxZ = std::max(maxZ, z);
+            minX = std::min(minX, x);
+            minY = std::min(minY, y);
+            minZ = std::min(minZ, z);
+            maxX = std::max(maxX, x);
+            maxY = std::max(maxY, y);
+            maxZ = std::max(maxZ, z);
         }
     }
-    nodes[ni].minX = minX; nodes[ni].minY = minY; nodes[ni].minZ = minZ;
-    nodes[ni].maxX = maxX; nodes[ni].maxY = maxY; nodes[ni].maxZ = maxZ;
+    nodes[ni].minX = minX;
+    nodes[ni].minY = minY;
+    nodes[ni].minZ = minZ;
+    nodes[ni].maxX = maxX;
+    nodes[ni].maxY = maxY;
+    nodes[ni].maxZ = maxZ;
 
     const int count = end - start;
     if (count <= 2) {
-        nodes[ni].left  = -(start + 1);  // leaf: encode triStart as negative
+        nodes[ni].left = -(start + 1);// leaf: encode triStart as negative
         nodes[ni].right = count;
         return ni;
     }
@@ -535,9 +563,7 @@ static int buildBvhNode(
     const float split = (axMins[axis] + axMaxs[axis]) * 0.5f;
 
     auto mid = std::partition(idx.begin() + start, idx.begin() + end, [&](int ti) {
-        const float c = (triGet(buf, ti, 0, axis)
-                       + triGet(buf, ti, 1, axis)
-                       + triGet(buf, ti, 2, axis)) / 3.f;
+        const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis) + triGet(buf, ti, 2, axis)) / 3.f;
         return c < split;
     });
     int sp = static_cast<int>(mid - idx.begin());
@@ -545,7 +571,7 @@ static int buildBvhNode(
 
     const int lc = buildBvhNode(nodes, idx, buf, start, sp);
     const int rc = buildBvhNode(nodes, idx, buf, sp, end);
-    nodes[ni].left  = lc;
+    nodes[ni].left = lc;
     nodes[ni].right = rc;
     return ni;
 }
@@ -567,7 +593,7 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
         for (int row = 0; row < TRI_TEX_HEIGHT; row++)
             for (int c = 0; c < 4; c++)
                 sorted[(row * MAX_TRIS + ni) * 4 + c] =
-                    triBuffer[(row * MAX_TRIS + oi) * 4 + c];
+                        triBuffer[(row * MAX_TRIS + oi) * 4 + c];
     }
     triBuffer = std::move(sorted);
 
@@ -634,26 +660,28 @@ int main() {
     displayCam.position.z = 1.f;
 
     auto rtMat = ShaderMaterial::create();
-    rtMat->vertexShader   = vsWGSL;
+    rtMat->vertexShader = vsWGSL;
     rtMat->fragmentShader = fsWGSL;
 
     // Custom textures bound alphabetically: bvhData(3,4) matData(5,6) texAtlas(7,8) triData(9,10)
-    rtMat->customTextures["bvhData"]  = &bvhTex;
-    rtMat->customTextures["matData"]  = &matTex;
+    rtMat->customTextures["bvhData"] = &bvhTex;
+    rtMat->customTextures["matData"] = &matTex;
     rtMat->customTextures["texAtlas"] = &texAtlasTex;
-    rtMat->customTextures["triData"]  = &triTex;
+    rtMat->customTextures["triData"] = &triTex;
 
-    // Uniforms (alphabetical: aspect camFwd camOri camRgt camUp iRes iTime tanHalfFov triCount)
+    // Uniforms (alphabetical: aspect camFwd camOri camRgt camUp iRes iTime lightCol lightPos tanHalfFov triCount)
     auto sz = canvas.size();
-    rtMat->uniforms["aspect"]     = Uniform(aspect);
-    rtMat->uniforms["camFwd"]     = Uniform(Color(0.f, -0.35f, -0.94f));
-    rtMat->uniforms["camOri"]     = Uniform(Color(0.f,  3.f,    8.f));
-    rtMat->uniforms["camRgt"]     = Uniform(Color(1.f,  0.f,    0.f));
-    rtMat->uniforms["camUp"]      = Uniform(Color(0.f,  1.f,    0.f));
-    rtMat->uniforms["iRes"]       = Uniform(Color(float(sz.width()), float(sz.height()), 0.f));
-    rtMat->uniforms["iTime"]      = Uniform(0.f);
+    rtMat->uniforms["aspect"] = Uniform(aspect);
+    rtMat->uniforms["camFwd"] = Uniform(Color(0.f, -0.35f, -0.94f));
+    rtMat->uniforms["camOri"] = Uniform(Color(0.f, 3.f, 8.f));
+    rtMat->uniforms["camRgt"] = Uniform(Color(1.f, 0.f, 0.f));
+    rtMat->uniforms["camUp"] = Uniform(Color(0.f, 1.f, 0.f));
+    rtMat->uniforms["iRes"] = Uniform(Color(float(sz.width()), float(sz.height()), 0.f));
+    rtMat->uniforms["iTime"] = Uniform(0.f);
+    rtMat->uniforms["lightCol"] = Uniform(Color(1.f, 0.95f, 0.8f));
+    rtMat->uniforms["lightPos"] = Uniform(Color(5.f, 6.f, -2.f));
     rtMat->uniforms["tanHalfFov"] = Uniform(tanHalfFov);
-    rtMat->uniforms["triCount"]   = Uniform(0.f);
+    rtMat->uniforms["triCount"] = Uniform(0.f);
 
     Scene displayScene;
     displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), rtMat));
@@ -680,14 +708,14 @@ int main() {
 
     // Shiny red sphere (left)
     auto sphere1 = Mesh::create(
-            SphereGeometry::create(0.85f),
+            SphereGeometry::create(0.85f, 32, 32),
             MeshStandardMaterial::create({{"color", Color(0.90f, 0.18f, 0.10f)},
-                                          {"roughness", 0.7f}}));
+                                          {"roughness", 0.85f}}));
     sphere1->position.set(-2.8f, 1.f, 0.f);
 
     // Semi-shiny blue sphere (right)
     auto sphere2 = Mesh::create(
-            SphereGeometry::create(0.85f ),
+            SphereGeometry::create(0.85f, 32, 32),
             MeshStandardMaterial::create({{"color", Color(0.15f, 0.45f, 0.95f)},
                                           {"roughness", 0.25f}}));
     sphere2->position.set(2.8f, 1.f, 0.f);
@@ -702,6 +730,10 @@ int main() {
 
     // Collect all RT scene meshes
     std::vector<std::shared_ptr<Mesh>> rtMeshes = {boxMesh, sphere1, sphere2, floor};
+
+    // ---- Point light ----
+    auto pointLight = PointLight::create(Color::lightyellow, 0.8f);
+    pointLight->position.set(5.f, 6.f, -2.f);
 
     // Build texture atlas (once — textures don't change per-frame)
     std::unordered_map<Texture*, int> texSlotMap;
@@ -720,12 +752,18 @@ int main() {
         boxMesh->rotation.y += dt * 0.6f;
         boxMesh->rotation.x += dt * 0.3f;
 
+        // Animate the point light
+        pointLight->position.set(
+                5.f * std::cos(elapsed * 0.6f),
+                6.f + std::sin(elapsed * 0.3f),
+                -2.f + 4.f * std::sin(elapsed * 0.6f));
+
         // Update camera orientation from OrbitControls
         controls.update();
         const Vector3& pos = rtCam.position;
         Vector3 fwd = Vector3(controls.target).sub(pos).normalize();
         Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
-        Vector3 up  = Vector3(rgt).cross(fwd);
+        Vector3 up = Vector3(rgt).cross(fwd);
 
         // Rebuild world-space triangle data, then BVH (triBuffer is reordered in-place)
         const int triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer);
@@ -736,15 +774,21 @@ int main() {
         matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
 
         // Push uniforms
-        rtMat->uniforms["aspect"]     = Uniform(aspect);
-        rtMat->uniforms["camFwd"]     = Uniform(Color(fwd.x, fwd.y, fwd.z));
-        rtMat->uniforms["camOri"]     = Uniform(Color(pos.x, pos.y, pos.z));
-        rtMat->uniforms["camRgt"]     = Uniform(Color(rgt.x, rgt.y, rgt.z));
-        rtMat->uniforms["camUp"]      = Uniform(Color(up.x,  up.y,  up.z));
-        rtMat->uniforms["iTime"]      = Uniform(elapsed);
+        const auto& lp = pointLight->position;
+        const auto& lc = pointLight->color;
+        const float li = pointLight->intensity;
+        rtMat->uniforms["lightCol"] = Uniform(Color(lc.r * li, lc.g * li, lc.b * li));
+        rtMat->uniforms["lightPos"] = Uniform(Color(lp.x, lp.y, lp.z));
+
+        rtMat->uniforms["aspect"] = Uniform(aspect);
+        rtMat->uniforms["camFwd"] = Uniform(Color(fwd.x, fwd.y, fwd.z));
+        rtMat->uniforms["camOri"] = Uniform(Color(pos.x, pos.y, pos.z));
+        rtMat->uniforms["camRgt"] = Uniform(Color(rgt.x, rgt.y, rgt.z));
+        rtMat->uniforms["camUp"] = Uniform(Color(up.x, up.y, up.z));
+        rtMat->uniforms["iTime"] = Uniform(elapsed);
         rtMat->uniforms["tanHalfFov"] = Uniform(tanHalfFov);
-        rtMat->uniforms["triCount"]   = Uniform(static_cast<float>(triCount));
-        rtMat->uniformsNeedUpdate     = true;
+        rtMat->uniforms["triCount"] = Uniform(static_cast<float>(triCount));
+        rtMat->uniformsNeedUpdate = true;
 
         renderer.render(displayScene, displayCam);
     });
