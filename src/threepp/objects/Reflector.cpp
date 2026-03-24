@@ -143,6 +143,17 @@ struct Reflector::Impl {
 
             auto _renderer = static_cast<Renderer*>(renderer);
 
+            // WebGPU render targets have UV (0,0) at top-left; GL has bottom-left.
+            // Flip the Y row of the textureMatrix: new_row1 = row3 - row1
+            // so that UV.y' / w = 1 - UV.y / w.
+            if (_renderer->renderTargetFlipY()) {
+                auto& e = textureMatrix.elements;
+                e[1]  = e[3]  - e[1];
+                e[5]  = e[7]  - e[5];
+                e[9]  = e[11] - e[9];
+                e[13] = e[15] - e[13];
+            }
+
             renderTarget->texture->encoding = _renderer->outputEncoding;
             reflector_.visible = false;
             const auto currentRenderTarget = _renderer->getRenderTarget();

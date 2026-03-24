@@ -225,7 +225,14 @@ namespace threepp::wgpu {
             out << "layout(location=0) in vec3 position;\n";
             out << "layout(location=1) in vec3 normal;\n";
             out << "layout(location=2) in vec2 uv;\n";
-            out << "layout(location=3) in vec3 color;\n\n";
+            // Skip the color vertex attribute if 'color' is already declared as a
+            // custom uniform — injecting both would cause a redefinition error.
+            bool colorIsUniform = std::ranges::any_of(customFields,
+                    [](const auto& f) { return f.second == "color"; });
+            if (!colorIsUniform) {
+                out << "layout(location=3) in vec3 color;\n";
+            }
+            out << "\n";
         }
 
         // --- Fragment color output (fragment stage only) ---
@@ -286,7 +293,8 @@ namespace threepp::wgpu {
             }
         }
 
-        // 5. texture2D/textureCube -> texture
+        // 5. texture2D/textureCube/texture2DProj -> texture/textureProj
+        body = std::regex_replace(body, std::regex(R"(\btexture2DProj\s*\()"), "textureProj(");
         body = std::regex_replace(body, std::regex(R"(\btexture2D\s*\()"), "texture(");
         body = std::regex_replace(body, std::regex(R"(\btextureCube\s*\()"), "texture(");
 
