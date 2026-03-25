@@ -367,21 +367,40 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
     if (h0.t >= 1e30) { return sampleEnv(ray.dir); }
     var col = shade(h0, ray.dir);
+
+    // Specular mirror bounces (two levels, unrolled — deterministic, no seed needed).
     if (h0.shininess < 0.5) {
-        let smoothness = max(0.0, 1.0 - h0.shininess * 2.0);
-        let F0_r  = mix(vec3<f32>(0.04), h0.albedo, h0.metalness);
-        let NdotV = max(0.001, dot(h0.normal, normalize(-ray.dir)));
-        let k     = schlick(NdotV, F0_r) * smoothness;
+        let F0_0   = mix(vec3<f32>(0.04), h0.albedo, h0.metalness);
+        let NdotV0 = max(0.001, dot(h0.normal, normalize(-ray.dir)));
+        let k0     = schlick(NdotV0, F0_0) * max(0.0, 1.0 - h0.shininess * 2.0);
+
         var r1: Ray;
         r1.origin = h0.point + h0.normal * 1e-3;
         r1.dir    = reflect(ray.dir, h0.normal);
-        let h1 = sceneHit(r1);
-        var rc = select(shade(h1, r1.dir), sampleEnv(r1.dir), h1.t >= 1e30);
-        // For metals in a dark enclosure the reflected colour can be near-black,
-        // but the metal still has its characteristic colour in the F0 tint.
-        // Add F0 as a minimum reflected ambient so the metal never looks fully black.
-        rc = max(rc, F0_r * 0.08);
-        col = col * (vec3<f32>(1.0) - k) + rc * k;
+        let h1    = sceneHit(r1);
+
+        var rc1: vec3<f32>;
+        if (h1.t >= 1e30) {
+            rc1 = sampleEnv(r1.dir);
+        } else {
+            var base1 = shade(h1, r1.dir);
+            // Second specular bounce: reflections-of-reflections
+            if (h1.shininess < 0.5) {
+                let F0_1   = mix(vec3<f32>(0.04), h1.albedo, h1.metalness);
+                let NdotV1 = max(0.001, dot(h1.normal, normalize(-r1.dir)));
+                let k1     = schlick(NdotV1, F0_1) * max(0.0, 1.0 - h1.shininess * 2.0);
+                var r2: Ray;
+                r2.origin = h1.point + h1.normal * 1e-3;
+                r2.dir    = reflect(r1.dir, h1.normal);
+                let h2    = sceneHit(r2);
+                var rc2   = select(shade(h2, r2.dir), sampleEnv(r2.dir), h2.t >= 1e30);
+                rc2   = max(rc2, mix(vec3<f32>(0.04), h1.albedo, h1.metalness) * 0.08);
+                base1 = base1 * (vec3<f32>(1.0) - k1) + rc2 * k1;
+            }
+            rc1 = base1;
+        }
+        rc1 = max(rc1, F0_0 * 0.08);
+        col = col * (vec3<f32>(1.0) - k0) + rc1 * k0;
     }
     return col;
 }
@@ -491,7 +510,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if (!isPT) {
         let spp = i32(rt.spp.x);
-        let fp = vec2<f32>(f32(pixel.x), f32(pixel.y));
+        let fp  = vec2<f32>(f32(pixel.x), f32(pixel.y));
         if (spp >= 4) {
             let o0 = vec2<f32>( 0.125,  0.375);
             let o1 = vec2<f32>(-0.375,  0.125);
