@@ -84,7 +84,8 @@ struct BvhNodeGpu {
 @group(0) @binding(6) var texAtlas:      texture_2d<f32>;
 @group(0) @binding(7) var hitMeshRead:   texture_2d<f32>;
 @group(0) @binding(8) var hitMeshWrite:  texture_storage_2d<rgba16float, write>;
-@group(0) @binding(9) var envTex:        texture_2d<f32>;
+@group(0) @binding(9)  var envTex:      texture_2d<f32>;
+@group(0) @binding(10) var gBufWrite:   texture_storage_2d<rgba16float, write>;
 
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
@@ -379,8 +380,12 @@ fn raytrace(ray: Ray) -> vec3<f32> {
 }
 
 fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
-             primaryMeshIdx: ptr<function, u32>) -> vec3<f32> {
-    *primaryMeshIdx = 64u;  // sentinel: no geometry hit (sky)
+             primaryMeshIdx: ptr<function, u32>,
+             primaryNormal:  ptr<function, vec3<f32>>,
+             primaryDepth:   ptr<function, f32>) -> vec3<f32> {
+    *primaryMeshIdx = 64u;
+    *primaryNormal  = vec3<f32>(0.0);
+    *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
     var radiance   = vec3<f32>(0.0);
@@ -391,7 +396,11 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             radiance += throughput * sampleEnv(ray.dir);
             break;
         }
-        if (i == 0) { *primaryMeshIdx = u32(h.meshIdx); }
+        if (i == 0) {
+            *primaryMeshIdx = u32(h.meshIdx);
+            *primaryNormal  = h.normal;
+            *primaryDepth   = h.t;
+        }
 
         radiance += throughput * h.emissive;
 
@@ -496,7 +505,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let jy  = rand(&seed) - 0.5;
         let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
         var primaryMeshIdx: u32;
-        sample  = pathTrace(ray, &seed, &primaryMeshIdx);
+        var primaryNormal:  vec3<f32>;
+        var primaryDepth:   f32;
+        sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth);
 
         let prev     = textureLoad(accumRead, pixel, 0);
         let old      = prev.xyz;
@@ -525,8 +536,9 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let alpha   = 1.0 / (pixelFC + 1.0);
         let blended = old * (1.0 - alpha) + sample * alpha;
-        textureStore(accumWrite,    pixel, vec4<f32>(blended, pixelFC + 1.0));
-        textureStore(hitMeshWrite,  pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
+        textureStore(accumWrite,   pixel, vec4<f32>(blended, pixelFC + 1.0));
+        textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
+        textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
     }
 }
 )";
@@ -655,6 +667,77 @@ fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
 )";
 
 // ---------------------------------------------------------------------------
+// WGSL à-trous edge-avoiding wavelet denoiser
+// Input:  colorIn  (xyz=color, w=pixelFC from accumulation buffer)
+//         gBuf     (xyz=primary-hit world normal, w=primary-hit depth; 0=sky)
+// Output: colorOut (xyz=filtered color)
+// ---------------------------------------------------------------------------
+constexpr const char* atrousWGSL = R"(
+struct AtrousUni { stepSize: u32, _p0: u32, _p1: u32, _p2: u32, }
+
+@group(0) @binding(0) var<uniform> uni:      AtrousUni;
+@group(0) @binding(1) var colorIn:  texture_2d<f32>;
+@group(0) @binding(2) var colorOut: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(3) var gBuf:     texture_2d<f32>;
+
+@compute @workgroup_size(8, 8)
+fn atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pixel = vec2<i32>(gid.xy);
+    let res   = vec2<i32>(textureDimensions(colorIn, 0));
+    if (pixel.x >= res.x || pixel.y >= res.y) { return; }
+
+    let step = i32(uni.stepSize);
+
+    let cSamp  = textureLoad(colorIn, pixel, 0);
+    let cColor = cSamp.xyz;
+    let cFC    = cSamp.w;
+    let cGB    = textureLoad(gBuf, pixel, 0);
+    let cNorm  = cGB.xyz;
+    let cDepth = cGB.w;
+
+    // Sky pixels: pass through unchanged
+    if (cDepth < 1e-6) {
+        textureStore(colorOut, pixel, vec4<f32>(cColor, cFC));
+        return;
+    }
+
+    let cLum = dot(cColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+    // lumSigma relaxes at low sample counts so MC noise gets averaged,
+    // and tightens as accumulation converges to preserve fine detail.
+    let lumSigma = max(0.02, 0.3 / sqrt(cFC + 1.0));
+
+    // 3×3 bilateral filter (smaller radius than the original 5×5 to preserve detail)
+    var colorSum  = vec3<f32>(0.0);
+    var weightSum = 0.0;
+
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let sp     = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
+            let sColor = textureLoad(colorIn, sp, 0).xyz;
+            let sGB    = textureLoad(gBuf, sp, 0);
+            let sNorm  = sGB.xyz;
+            let sDepth = sGB.w;
+
+            // Normal edge-stopping: hard stop across geometric edges
+            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 32.0);
+            // Depth edge-stopping: hard stop across depth discontinuities
+            let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
+            // Luminance edge-stopping
+            let sLum = dot(sColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
+
+            let w = w_n * w_d * w_l;
+            colorSum  += sColor * w;
+            weightSum += w;
+        }
+    }
+
+    let filtered = select(cColor, colorSum / weightSum, weightSum > 1e-6);
+    textureStore(colorOut, pixel, vec4<f32>(filtered, cFC));
+}
+)";
+
+// ---------------------------------------------------------------------------
 // WGSL display shader — blit accumulated texture to screen with ACES + gamma
 // ---------------------------------------------------------------------------
 constexpr const char* displayWGSL = R"(
@@ -718,6 +801,9 @@ struct alignas(16) VtGpuUniforms {
 };
 struct alignas(16) RefitGpuUniforms {
     uint32_t leafCount, _p[3];
+};
+struct alignas(16) AtrousGpuUniforms {
+    uint32_t stepSize, _p[3];
 };
 
 // ---------------------------------------------------------------------------
@@ -1151,6 +1237,14 @@ struct WgpuPathTracer::Impl {
     WgpuTexture envTexGpu;   // equirectangular env map (1x1 placeholder when unused)
     Texture*    prevEnvTex_ = nullptr;
 
+    // Denoiser
+    WgpuTexture gBufTex;        // primary-hit normal.xyz + depth.w
+    WgpuTexture filteredA;      // à-trous ping-pong buffer A
+    WgpuTexture filteredB;      // à-trous ping-pong buffer B
+    WgpuComputePipeline atrousPipeline;
+    WgpuBuffer  atrousUniBuf;
+    bool denoiserEnabled_ = true;
+
     // GPU storage buffers
     WgpuBuffer bvhNodeBuf;
     WgpuBuffer bvhCounterBuf;
@@ -1227,6 +1321,14 @@ struct WgpuPathTracer::Impl {
           readHitMesh(&hitMeshA), writeHitMesh(&hitMeshB),
           envTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
+          gBufTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                  WgpuTexture::Format::RGBA16Float),
+          filteredA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                    WgpuTexture::Format::RGBA16Float),
+          filteredB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                    WgpuTexture::Format::RGBA16Float),
+          atrousPipeline(r, atrousWGSL, "atrous_main"),
+          atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
           // Storage buffers
           bvhNodeBuf(r, static_cast<size_t>(MAX_BVH_NODES) * 12 * sizeof(float),
                      WgpuBuffer::Usage::Storage),
@@ -1275,6 +1377,11 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(5, triTex);
         rtPipeline.setTexture(6, texAtlasTex);
         rtPipeline.setTexture(9, envTexGpu);
+        rtPipeline.setStorageTexture(10, gBufTex);
+
+        // Denoiser: static bindings (gBuf; colorIn/colorOut set per-pass)
+        atrousPipeline.setUniformBuffer(0, atrousUniBuf);
+        atrousPipeline.setTexture(3, gBufTex);
 
         // Zero-fill accumulators
         {
@@ -1322,6 +1429,15 @@ struct WgpuPathTracer::Impl {
         std::vector<float> hitSentinel(w * h * 4, 64.f);
         hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
         hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+
+        gBufTex   = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                                WgpuTexture::Format::RGBA16Float);
+        filteredA = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                                WgpuTexture::Format::RGBA16Float);
+        filteredB = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                                WgpuTexture::Format::RGBA16Float);
+        rtPipeline.setStorageTexture(10, gBufTex);
+        atrousPipeline.setTexture(3, gBufTex);
 
         frameCount_ = 0.f;
     }
@@ -1581,7 +1697,35 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Swap ping-pong
     std::swap(d.readAccum, d.writeAccum);
     std::swap(d.readHitMesh, d.writeHitMesh);
-    d.displayMat->customTextures["accumTex"] = d.readAccum;
+
+    // À-trous denoiser (path tracer mode only)
+    WgpuTexture* displayTex = d.readAccum;
+    if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer) {
+        const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
+        const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
+
+        WgpuTexture* src = d.readAccum;
+        WgpuTexture* dst = &d.filteredA;
+        WgpuTexture* aux = &d.filteredB;
+
+        // More passes while noisy, settling to 1 pass once accumulation converges.
+        // The 3×3 bilateral kernel with tight lumSigma preserves texture detail.
+        const int nPasses = (d.frameCount_ < 4.f)  ? 3 :
+                            (d.frameCount_ < 20.f) ? 2 : 1;
+
+        for (int pass = 0; pass < nPasses; ++pass) {
+            AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), {0u, 0u, 0u}};
+            d.atrousUniBuf.write(&au, sizeof(au));
+            d.atrousPipeline.setTexture(1, *src);
+            d.atrousPipeline.setStorageTexture(2, *dst);
+            d.atrousPipeline.dispatch(gx, gy);
+            src = dst;
+            std::swap(dst, aux);
+        }
+        displayTex = src;
+    }
+
+    d.displayMat->customTextures["accumTex"] = displayTex;
     d.displayMat->uniformsNeedUpdate = true;
     d.frameCount_ += 1.f;
 
@@ -1598,6 +1742,14 @@ void WgpuPathTracer::setMode(Mode mode) {
 
 WgpuPathTracer::Mode WgpuPathTracer::mode() const {
     return pimpl_->mode_;
+}
+
+void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
+    pimpl_->denoiserEnabled_ = enabled;
+}
+
+bool WgpuPathTracer::denoiserEnabled() const {
+    return pimpl_->denoiserEnabled_;
 }
 
 void WgpuPathTracer::setSamplesPerPixel(int spp) {

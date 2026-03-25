@@ -13,7 +13,7 @@ using namespace threepp;
 int main() {
 
     Canvas canvas("Wgpu Path Tracer",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", true}});
 
     WgpuRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
@@ -105,6 +105,7 @@ int main() {
 
     // ---- UI ----
     bool pathTracerOn = false;
+    bool denoiserOn = false;
     bool lightMoving = false;
     bool animateBox = true;
     bool showEnclosingBox = true;
@@ -135,6 +136,8 @@ int main() {
         if (ImGui::Checkbox("Path tracer (T)", &pathTracerOn))
             pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
                                             : WgpuPathTracer::Mode::Raytracer);
+        if (ImGui::Checkbox("Denoiser", &denoiserOn))
+            pathTracer.setDenoiserEnabled(denoiserOn);
         ImGui::Checkbox("Moving light", &lightMoving);
         ImGui::Checkbox("AnimateBox", &animateBox);
         ImGui::Checkbox("EnclosingBox", &showEnclosingBox);

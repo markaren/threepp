@@ -40,6 +40,10 @@ namespace threepp {
         void setSamplesPerPixel(int spp);
         [[nodiscard]] int samplesPerPixel() const;
 
+        /// Enable/disable the à-trous wavelet denoiser (path tracer mode only). Default: true.
+        void setDenoiserEnabled(bool enabled);
+        [[nodiscard]] bool denoiserEnabled() const;
+
         /// Resize accumulation textures. Resets accumulation.
         void setSize(std::pair<int, int> size);
         [[nodiscard]] std::pair<int, int> size() const;
