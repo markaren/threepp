@@ -6,7 +6,7 @@
 
 using namespace threepp;
 
-WgpuBuffer::WgpuBuffer(WgpuRenderer& renderer, size_t size)
+WgpuBuffer::WgpuBuffer(WgpuRenderer& renderer, size_t size, Usage usage)
     : device_(static_cast<WGPUDevice>(renderer.nativeDevice())),
       queue_(static_cast<WGPUQueue>(renderer.nativeQueue())),
       size_(size) {
@@ -14,7 +14,8 @@ WgpuBuffer::WgpuBuffer(WgpuRenderer& renderer, size_t size)
     WGPUBufferDescriptor desc{};
     desc.label = WGPUStringView{"gpu_buffer", WGPU_STRLEN} ;
     desc.size = size;
-    desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+    desc.usage = (usage == Usage::Storage ? WGPUBufferUsage_Storage : WGPUBufferUsage_Uniform)
+                 | WGPUBufferUsage_CopyDst;
     buffer_ = wgpuDeviceCreateBuffer(device_, &desc);
 }
 

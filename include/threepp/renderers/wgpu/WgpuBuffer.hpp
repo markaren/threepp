@@ -13,14 +13,17 @@ namespace threepp {
 
     class WgpuRenderer;
 
-    /// GPU-resident uniform buffer for use with compute and render pipelines.
+    /// GPU-resident buffer for use with compute and render pipelines.
     class WgpuBuffer {
 
     public:
+        enum class Usage { Uniform, Storage };
+
         /// Create a GPU buffer.
         /// @param renderer WgpuRenderer providing the WebGPU device/queue
         /// @param size Buffer size in bytes
-        WgpuBuffer(WgpuRenderer& renderer, size_t size);
+        /// @param usage Uniform (default) or Storage
+        WgpuBuffer(WgpuRenderer& renderer, size_t size, Usage usage = Usage::Uniform);
 
         ~WgpuBuffer();
 

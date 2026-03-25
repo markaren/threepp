@@ -101,6 +101,14 @@ struct WgpuComputePipeline::Impl {
                     e.buffer.type = WGPUBufferBindingType_Uniform;
                     e.buffer.minBindingSize = info.bufferSize;
                     break;
+                case BindingType::StorageBuffer:
+                    e.buffer.type = WGPUBufferBindingType_Storage;
+                    e.buffer.minBindingSize = info.bufferSize;
+                    break;
+                case BindingType::StorageBufferRead:
+                    e.buffer.type = WGPUBufferBindingType_ReadOnlyStorage;
+                    e.buffer.minBindingSize = info.bufferSize;
+                    break;
             }
             bglEntries.push_back(e);
         }
@@ -198,6 +206,34 @@ void WgpuComputePipeline::setUniformBuffer(uint32_t binding, WgpuBuffer& buffer)
     impl_->bindings[binding] = info;
 }
 
+void WgpuComputePipeline::setStorageBuffer(uint32_t binding, WgpuBuffer& buffer) {
+    auto it = impl_->bindings.find(binding);
+    if (it == impl_->bindings.end() ||
+        it->second.type != BindingType::StorageBuffer ||
+        it->second.bufferSize != buffer.size()) {
+        impl_->pipelineBuilt = false;
+    }
+    BindingInfo info{};
+    info.type = BindingType::StorageBuffer;
+    info.buffer = buffer.buffer();
+    info.bufferSize = buffer.size();
+    impl_->bindings[binding] = info;
+}
+
+void WgpuComputePipeline::setStorageBufferRead(uint32_t binding, WgpuBuffer& buffer) {
+    auto it = impl_->bindings.find(binding);
+    if (it == impl_->bindings.end() ||
+        it->second.type != BindingType::StorageBufferRead ||
+        it->second.bufferSize != buffer.size()) {
+        impl_->pipelineBuilt = false;
+    }
+    BindingInfo info{};
+    info.type = BindingType::StorageBufferRead;
+    info.buffer = buffer.buffer();
+    info.bufferSize = buffer.size();
+    impl_->bindings[binding] = info;
+}
+
 void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     if (!impl_->pipelineBuilt) {
         impl_->buildPipeline();
@@ -215,6 +251,8 @@ void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
                 e.textureView = info.textureView;
                 break;
             case BindingType::UniformBuffer:
+            case BindingType::StorageBuffer:
+            case BindingType::StorageBufferRead:
                 e.buffer = info.buffer;
                 e.offset = 0;
                 e.size = info.bufferSize;

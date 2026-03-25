@@ -28,7 +28,9 @@ namespace threepp {
             StorageTextureWrite,   ///< Read-write storage texture (write_only in WGSL)
             StorageTextureRead,    ///< Read-only storage texture (read in WGSL via texture_2d)
             Texture,               ///< Sampled texture (texture_2d + textureLoad)
-            UniformBuffer          ///< Uniform buffer
+            UniformBuffer,         ///< Uniform buffer
+            StorageBuffer,         ///< Read-write storage buffer (var<storage, read_write>)
+            StorageBufferRead,     ///< Read-only storage buffer (var<storage, read>)
         };
 
         /// Create a compute pipeline from WGSL source.
@@ -51,6 +53,12 @@ namespace threepp {
 
         /// Set a uniform buffer binding.
         void setUniformBuffer(uint32_t binding, WgpuBuffer& buffer);
+
+        /// Set a read-write storage buffer binding (var<storage, read_write>).
+        void setStorageBuffer(uint32_t binding, WgpuBuffer& buffer);
+
+        /// Set a read-only storage buffer binding (var<storage, read>).
+        void setStorageBufferRead(uint32_t binding, WgpuBuffer& buffer);
 
         /// Dispatch compute workgroups.
         void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);

@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <numeric>
 #include <unordered_map>
 #include <vector>
@@ -49,6 +50,7 @@ constexpr int MAT_TEX_HEIGHT = 3;// row0: albedo+shininess, row1: texSlot+metaln
 constexpr int TEX_PAGE_WIDTH = 8192;
 constexpr int TRI_TEX_PAGES = (MAX_TRIS + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
 constexpr int BVH_TEX_PAGES = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
+constexpr int MAX_MESHES = 64;
 
 // ---------------------------------------------------------------------------
 // WGSL compute shader — path tracer + accumulator
@@ -80,10 +82,16 @@ struct RtUniforms {
     lightType:  array<vec4<f32>, 4>, // x   = 0 point, 1 directional
 };
 
+struct BvhNodeGpu {
+    row0: vec4<f32>,  // xyz=aabbMin, w=bitcast<i32>=left  (neg leaf: -(triStart+1))
+    row1: vec4<f32>,  // xyz=aabbMax, w=bitcast<i32>=right (leaf: triCount; else child idx)
+    row2: vec4<f32>,  // x=bitcast<i32>=parent (-1 root), yzw=padding
+}
+
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
 @group(0) @binding(1) var accumRead:  texture_2d<f32>;
 @group(0) @binding(2) var accumWrite: texture_storage_2d<rgba32float, write>;
-@group(0) @binding(3) var bvhData:    texture_2d<f32>;
+@group(0) @binding(3) var<storage, read> bvhNodes: array<BvhNodeGpu>;
 @group(0) @binding(4) var matData:    texture_2d<f32>;
 @group(0) @binding(5) var triData:    texture_2d<f32>;
 @group(0) @binding(6) var texAtlas:   texture_2d<f32>;
@@ -92,13 +100,9 @@ const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
 const TILE_SIZE:   i32 = 512;  // must match C++ TILE_SIZE constant
 const MAX_TEX_SLOTS: i32 = 16;
-const BVH_PAGE_W: i32 = 8192;
 
 fn triCoord(ti: i32, row: i32) -> vec2<i32> {
     return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
-}
-fn bvhCoord(ni: i32, row: i32) -> vec2<i32> {
-    return vec2<i32>(ni % BVH_PAGE_W, (ni / BVH_PAGE_W) * 2 + row);
 }
 
 // ---- Types ----
@@ -278,11 +282,10 @@ fn sceneHit(ray: Ray) -> Hit {
     while (top > 0) {
         top -= 1;
         let ni  = stack[top];
-        let nd0 = textureLoad(bvhData, bvhCoord(ni, 0), 0);
-        let nd1 = textureLoad(bvhData, bvhCoord(ni, 1), 0);
-        if (!aabbHit(nd0.xyz, nd1.xyz, ray, h.t)) { continue; }
-        let left  = i32(nd0.w);
-        let right = i32(nd1.w);
+        let nd  = bvhNodes[ni];
+        if (!aabbHit(nd.row0.xyz, nd.row1.xyz, ray, h.t)) { continue; }
+        let left  = bitcast<i32>(nd.row0.w);
+        let right = bitcast<i32>(nd.row1.w);
         if (left < 0) {
             let triStart = -left - 1;
             let triCount = right;
@@ -290,10 +293,10 @@ fn sceneHit(ray: Ray) -> Hit {
                 testTriangle(ray, ti, &h);
             }
         } else {
-            let dL = aabbDist(textureLoad(bvhData, bvhCoord(left,  0), 0).xyz,
-                               textureLoad(bvhData, bvhCoord(left,  1), 0).xyz, ray, h.t);
-            let dR = aabbDist(textureLoad(bvhData, bvhCoord(right, 0), 0).xyz,
-                               textureLoad(bvhData, bvhCoord(right, 1), 0).xyz, ray, h.t);
+            let lnd = bvhNodes[left];
+            let rnd = bvhNodes[right];
+            let dL = aabbDist(lnd.row0.xyz, lnd.row1.xyz, ray, h.t);
+            let dR = aabbDist(rnd.row0.xyz, rnd.row1.xyz, ray, h.t);
             // Push far child first so near child is popped first
             if (dL < dR) {
                 if (dR < 1e30) { stack[top] = right; top += 1; }
@@ -500,6 +503,150 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 )";
 
 // ---------------------------------------------------------------------------
+// WGSL vertex-transform compute shader
+//
+// Reads object-space triangles + per-mesh world/normal matrices,
+// writes world-space result to triData (storage texture).
+//
+// Bindings:
+//   0: objTris  (storage buffer read) — ObjTriData per BVH-ordered triangle
+//   1: meshMats (storage buffer read) — world + normalMat per mesh
+//   2: triOut   (storage texture write) — world-space output (triData)
+//   3: vtUni    (uniform buffer) — triCount
+// ---------------------------------------------------------------------------
+constexpr const char* vtWGSL = R"(
+const TRI_PAGE_W: i32 = 8192;
+const TRI_PAGE_H: i32 = 8;
+
+fn triCoord(ti: i32, row: i32) -> vec2<i32> {
+    return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
+}
+
+struct ObjTriData {
+    v0:   vec4<f32>,  // xyz=pos, w=matIdx (float)
+    v1:   vec4<f32>,  // xyz=pos, w=meshIdx (float)
+    v2:   vec4<f32>,
+    n0:   vec4<f32>,
+    n1:   vec4<f32>,
+    n2:   vec4<f32>,
+    uv01: vec4<f32>,
+    uv2:  vec4<f32>,
+}
+struct MeshMatrices {
+    world:  mat4x4<f32>,
+    normal: mat4x4<f32>,
+}
+struct VtUniforms {
+    triCount: u32,
+    _p0: u32, _p1: u32, _p2: u32,
+}
+
+@group(0) @binding(0) var<storage, read> objTris:  array<ObjTriData>;
+@group(0) @binding(1) var<storage, read> meshMats: array<MeshMatrices>;
+@group(0) @binding(2) var triOut: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var<uniform> vtUni: VtUniforms;
+
+@compute @workgroup_size(64)
+fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= vtUni.triCount) { return; }
+    let ti  = i32(gid.x);
+    let obj = objTris[ti];
+    let mi  = i32(obj.v1.w);
+    let mat = meshMats[mi];
+    let v0  = (mat.world  * vec4<f32>(obj.v0.xyz, 1.0)).xyz;
+    let v1  = (mat.world  * vec4<f32>(obj.v1.xyz, 1.0)).xyz;
+    let v2  = (mat.world  * vec4<f32>(obj.v2.xyz, 1.0)).xyz;
+    let n0  = normalize((mat.normal * vec4<f32>(obj.n0.xyz, 0.0)).xyz);
+    let n1  = normalize((mat.normal * vec4<f32>(obj.n1.xyz, 0.0)).xyz);
+    let n2  = normalize((mat.normal * vec4<f32>(obj.n2.xyz, 0.0)).xyz);
+    textureStore(triOut, triCoord(ti, 0), vec4<f32>(v0, obj.v0.w));
+    textureStore(triOut, triCoord(ti, 1), vec4<f32>(v1, 0.0));
+    textureStore(triOut, triCoord(ti, 2), vec4<f32>(v2, 0.0));
+    textureStore(triOut, triCoord(ti, 3), vec4<f32>(n0, 0.0));
+    textureStore(triOut, triCoord(ti, 4), vec4<f32>(n1, 0.0));
+    textureStore(triOut, triCoord(ti, 5), vec4<f32>(n2, 0.0));
+    textureStore(triOut, triCoord(ti, 6), obj.uv01);
+    textureStore(triOut, triCoord(ti, 7), obj.uv2);
+}
+)";
+
+// ---------------------------------------------------------------------------
+// WGSL BVH refit compute shader
+//
+// One thread per leaf BVH node. Each leaf computes its AABB from
+// world-space triangles in triTex, then walks up using parent pointers
+// with an atomic counter to ensure both children are done before
+// processing a parent (standard GPU bottom-up BVH refit).
+//
+// Bindings:
+//   0: triTex      (texture_2d — world-space tris written by vtPipeline)
+//   1: bvhNodes    (storage buffer read_write)
+//   2: bvhCounters (storage buffer with atomic<u32>, reset to 0 before dispatch)
+//   3: leafIndices (storage buffer read) — indices of leaf nodes
+//   4: refitUni    (uniform buffer) — leafCount
+// ---------------------------------------------------------------------------
+constexpr const char* refitWGSL = R"(
+const TRI_PAGE_W: i32 = 8192;
+const TRI_PAGE_H: i32 = 8;
+
+fn triCoord(ti: i32, row: i32) -> vec2<i32> {
+    return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
+}
+
+struct BvhNodeGpu {
+    row0: vec4<f32>,
+    row1: vec4<f32>,
+    row2: vec4<f32>,
+}
+struct RefitUniforms {
+    leafCount: u32,
+    _p0: u32, _p1: u32, _p2: u32,
+}
+
+@group(0) @binding(0) var triTex:                          texture_2d<f32>;
+@group(0) @binding(1) var<storage, read_write> bvhNodes:   array<BvhNodeGpu>;
+@group(0) @binding(2) var<storage, read_write> bvhCounters: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read>       leafIdxBuf: array<i32>;
+@group(0) @binding(4) var<uniform>             refitUni:   RefitUniforms;
+
+@compute @workgroup_size(64)
+fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
+    if (gid.x >= refitUni.leafCount) { return; }
+    let leafNi   = leafIdxBuf[i32(gid.x)];
+    let triStart = -(bitcast<i32>(bvhNodes[leafNi].row0.w)) - 1;
+    let triCount =   bitcast<i32>(bvhNodes[leafNi].row1.w);
+
+    var bmin = vec3<f32>(1e30);
+    var bmax = vec3<f32>(-1e30);
+    for (var ti = triStart; ti < triStart + triCount; ti++) {
+        for (var row = 0; row < 3; row++) {
+            let v = textureLoad(triTex, triCoord(ti, row), 0).xyz;
+            bmin = min(bmin, v);
+            bmax = max(bmax, v);
+        }
+    }
+    bvhNodes[leafNi].row0 = vec4<f32>(bmin, bvhNodes[leafNi].row0.w);
+    bvhNodes[leafNi].row1 = vec4<f32>(bmax, bvhNodes[leafNi].row1.w);
+
+    var curNi = bitcast<i32>(bvhNodes[leafNi].row2.x);
+    loop {
+        if (curNi < 0) { break; }
+        let cnt = atomicAdd(&bvhCounters[curNi], 1u);
+        if (cnt == 0u) { break; }  // first sibling done — wait for second
+        let lNi = bitcast<i32>(bvhNodes[curNi].row0.w);
+        let rNi = bitcast<i32>(bvhNodes[curNi].row1.w);
+        bvhNodes[curNi].row0 = vec4<f32>(
+            min(bvhNodes[lNi].row0.xyz, bvhNodes[rNi].row0.xyz),
+            bvhNodes[curNi].row0.w);
+        bvhNodes[curNi].row1 = vec4<f32>(
+            max(bvhNodes[lNi].row1.xyz, bvhNodes[rNi].row1.xyz),
+            bvhNodes[curNi].row1.w);
+        curNi = bitcast<i32>(bvhNodes[curNi].row2.x);
+    }
+}
+)";
+
+// ---------------------------------------------------------------------------
 // WGSL display shader — blit accumulated texture to screen with gamma
 //
 // Bindings (ShaderMaterial, no custom uniforms):
@@ -636,14 +783,20 @@ static std::tuple<Color, float, float, Color> extractMaterial(const Material* ma
 // ---------------------------------------------------------------------------
 // Build CPU triangle + material buffers from Mesh objects.
 // Returns the number of triangles written.
+// rawObjTriBuf: MAX_TRIS × 32 floats — object-space tris in mesh order (BVH-sorted later)
+// matrixBuf:    MAX_MESHES × 32 floats — world + normalMat per mesh
 // ---------------------------------------------------------------------------
 static int buildGeometryBuffers(
         const std::vector<Mesh*>& meshes,
         const std::unordered_map<Texture*, int>& texSlotMap,
         std::vector<float>& triBuffer,
-        std::vector<float>& matBuffer) {
+        std::vector<float>& matBuffer,
+        std::vector<float>& rawObjTriBuf,
+        std::vector<float>& matrixBuf) {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
+    std::ranges::fill(rawObjTriBuf, 0.f);
+    std::ranges::fill(matrixBuf, 0.f);
 
     int triCount = 0;
     int matCount = 0;
@@ -662,6 +815,11 @@ static int buildGeometryBuffers(
         buf[idx + 1] = y;
         buf[idx + 2] = z;
         buf[idx + 3] = w;
+    };
+    // Object-space flat layout: triIdx * 32 + field*4 + comp
+    auto setObj = [&](int ti, int field, float x, float y, float z, float w) {
+        float* p = rawObjTriBuf.data() + ti * 32 + field * 4;
+        p[0] = x; p[1] = y; p[2] = z; p[3] = w;
     };
 
     for (auto& mesh : meshes) {
@@ -690,13 +848,21 @@ static int buildGeometryBuffers(
         setTexel(matBuffer, MAX_MATS, matCount, 2, emissive.r, emissive.g, emissive.b, 0.f);
 
         const int matIdx = matCount++;
+        const int meshIdx = matIdx;  // same index (every processed mesh gets a material slot)
 
         mesh->updateWorldMatrix(true, true);
         const auto& world = *mesh->matrixWorld;
-        // Normals must be transformed by the inverse-transpose of the world matrix
-        // to stay perpendicular to surfaces under non-uniform scale.
+        // Normals must be transformed by the inverse-transpose of the world matrix.
         Matrix4 normalMat(world);
         normalMat.invert().transpose();
+
+        // Pack per-mesh matrices for GPU vertex transform
+        if (meshIdx < MAX_MESHES) {
+            float* mp = matrixBuf.data() + meshIdx * 32;
+            std::memcpy(mp,      world.elements.data(),     16 * sizeof(float));
+            std::memcpy(mp + 16, normalMat.elements.data(), 16 * sizeof(float));
+        }
+
         auto* geo = mesh->geometry().get();
         auto* pos = geo->getAttribute<float>("position");
         if (!pos) continue;
@@ -714,6 +880,14 @@ static int buildGeometryBuffers(
             Vector3 n(nrm->getX(i), nrm->getY(i), nrm->getZ(i));
             n.transformDirection(normalMat);
             return n;
+        };
+        // Object-space vertex/normal accessors (no world transform)
+        auto objVert = [&](int i) -> Vector3 {
+            return {pos->getX(i), pos->getY(i), pos->getZ(i)};
+        };
+        auto objNorm = [&](int i) -> Vector3 {
+            if (!nrm) return {0.f, 1.f, 0.f};
+            return {nrm->getX(i), nrm->getY(i), nrm->getZ(i)};
         };
         auto uv = [&](int i) -> std::pair<float, float> {
             if (!uvs) return {0.f, 0.f};
@@ -734,6 +908,7 @@ static int buildGeometryBuffers(
             const auto [u1, v1uv] = uv(i1);
             const auto [u2, v2uv] = uv(i2);
 
+            // World-space triangles → triBuffer (for BVH build quality)
             setTexel(triBuffer, MAX_TRIS, triCount, 0, v0.x, v0.y, v0.z, static_cast<float>(matIdx));
             setTexel(triBuffer, MAX_TRIS, triCount, 1, v1.x, v1.y, v1.z, 0.f);
             setTexel(triBuffer, MAX_TRIS, triCount, 2, v2.x, v2.y, v2.z, 0.f);
@@ -742,6 +917,19 @@ static int buildGeometryBuffers(
             setTexel(triBuffer, MAX_TRIS, triCount, 5, n2.x, n2.y, n2.z, 0.f);
             setTexel(triBuffer, MAX_TRIS, triCount, 6, u0, v0uv, u1, v1uv);
             setTexel(triBuffer, MAX_TRIS, triCount, 7, u2, v2uv, 0.f, 0.f);
+
+            // Object-space triangles → rawObjTriBuf (for GPU vertex transform)
+            const Vector3 ov0 = objVert(i0), ov1 = objVert(i1), ov2 = objVert(i2);
+            const Vector3 on0 = objNorm(i0), on1 = objNorm(i1), on2 = objNorm(i2);
+            setObj(triCount, 0, ov0.x, ov0.y, ov0.z, static_cast<float>(matIdx));
+            setObj(triCount, 1, ov1.x, ov1.y, ov1.z, static_cast<float>(meshIdx));
+            setObj(triCount, 2, ov2.x, ov2.y, ov2.z, 0.f);
+            setObj(triCount, 3, on0.x, on0.y, on0.z, 0.f);
+            setObj(triCount, 4, on1.x, on1.y, on1.z, 0.f);
+            setObj(triCount, 5, on2.x, on2.y, on2.z, 0.f);
+            setObj(triCount, 6, u0, v0uv, u1, v1uv);
+            setObj(triCount, 7, u2, v2uv, 0.f, 0.f);
+
             ++triCount;
         }
     }
@@ -756,6 +944,8 @@ struct BvhNode {
     int left;
     float maxX, maxY, maxZ;
     int right;
+    int parent;   // -1 for root
+    int _pad[3];  // 48-byte total — matches GPU BvhNodeGpu layout
 };
 
 static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
@@ -775,7 +965,7 @@ static int buildBvhNode(
         std::vector<BvhNode>& nodes,
         std::vector<int>& idx,
         const std::vector<float>& buf,
-        int start, int end) {
+        int start, int end, int parentIdx = -1) {
     const int ni = static_cast<int>(nodes.size());
     nodes.emplace_back();
 
@@ -792,7 +982,7 @@ static int buildBvhNode(
             maxZ = std::max(maxZ, triGet(buf, ti, r, 2));
         }
     }
-    nodes[ni] = {minX, minY, minZ, 0, maxX, maxY, maxZ, 0};
+    nodes[ni] = {minX, minY, minZ, 0, maxX, maxY, maxZ, 0, parentIdx, 0, 0, 0};
 
     const int count = end - start;
     if (count <= 4) {
@@ -887,8 +1077,8 @@ static int buildBvhNode(
     int sp = static_cast<int>(mid - idx.begin());
     if (sp == start || sp == end) sp = (start + end) / 2;
 
-    const int lc = buildBvhNode(nodes, idx, buf, start, sp);
-    const int rc = buildBvhNode(nodes, idx, buf, sp, end);
+    const int lc = buildBvhNode(nodes, idx, buf, start, sp, ni);
+    const int rc = buildBvhNode(nodes, idx, buf, sp, end, ni);
     nodes[ni].left = lc;
     nodes[ni].right = rc;
     return ni;
@@ -898,21 +1088,23 @@ static int pagedIdx(int ti, int row) {
     return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
 }
 
-static void packBvhBuffer(const std::vector<BvhNode>& nodes, std::vector<float>& bvhBuf) {
-    std::ranges::fill(bvhBuf, 0.f);
+// Pack BVH nodes into a flat float buffer (storage buffer layout, 12 floats/node = 48 bytes).
+// Matches the WGSL BvhNodeGpu struct:
+//   row0 (vec4): minX,minY,minZ, left(i32 bits)
+//   row1 (vec4): maxX,maxY,maxZ, right(i32 bits)
+//   row2 (vec4): parent(i32 bits), 0,0,0
+static void packBvhNodeBuffer(const std::vector<BvhNode>& nodes, std::vector<float>& buf) {
+    std::ranges::fill(buf, 0.f);
     const int nc = std::min(static_cast<int>(nodes.size()), MAX_BVH_NODES);
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
-        const int page = i / TEX_PAGE_WIDTH;
-        const int col  = i % TEX_PAGE_WIDTH;
-        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 0] = n.minX;
-        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 1] = n.minY;
-        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 2] = n.minZ;
-        bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 3] = static_cast<float>(n.left);
-        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 0] = n.maxX;
-        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 1] = n.maxY;
-        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 2] = n.maxZ;
-        bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 3] = static_cast<float>(n.right);
+        float* p = buf.data() + i * 12;
+        p[0] = n.minX; p[1] = n.minY; p[2] = n.minZ;
+        std::memcpy(p + 3, &n.left,   sizeof(int));  // preserve int bit pattern
+        p[4] = n.maxX; p[5] = n.maxY; p[6] = n.maxZ;
+        std::memcpy(p + 7, &n.right,  sizeof(int));
+        std::memcpy(p + 8, &n.parent, sizeof(int));
+        // p[9..11] = 0 (padding, already cleared)
     }
 }
 
@@ -947,23 +1139,35 @@ static void refitBVH(std::vector<BvhNode>& nodes, const std::vector<float>& triB
     }
 }
 
+// rawObjTriBuf is reordered in-place to match BVH leaf order.
 static void buildBVH(std::vector<float>& triBuffer, int triCount,
-                     std::vector<BvhNode>& nodes, std::vector<int>& indices) {
+                     std::vector<BvhNode>& nodes, std::vector<int>& indices,
+                     std::vector<int>& leafIndices,
+                     std::vector<float>& rawObjTriBuf) {
     indices.resize(triCount);
     std::iota(indices.begin(), indices.end(), 0);
     nodes.clear();
     nodes.reserve(triCount * 2);
-    buildBvhNode(nodes, indices, triBuffer, 0, triCount);
+    buildBvhNode(nodes, indices, triBuffer, 0, triCount, -1);
 
-    // Reorder triBuffer to BVH leaf order
+    // Collect leaf node indices for GPU BVH refit
+    leafIndices.clear();
+    for (int i = 0; i < static_cast<int>(nodes.size()); i++) {
+        if (nodes[i].left < 0) leafIndices.push_back(i);
+    }
+
+    // Reorder triBuffer and rawObjTriBuf to BVH leaf order
     std::vector<float> sorted(triBuffer.size(), 0.f);
+    std::vector<float> sortedObj(rawObjTriBuf.size(), 0.f);
     for (int ni = 0; ni < triCount; ni++) {
         const int oi = indices[ni];
         for (int row = 0; row < TRI_TEX_HEIGHT; row++)
             for (int c = 0; c < 4; c++)
                 sorted[pagedIdx(ni, row) + c] = triBuffer[pagedIdx(oi, row) + c];
+        std::memcpy(sortedObj.data() + ni * 32, rawObjTriBuf.data() + oi * 32, 32 * sizeof(float));
     }
     triBuffer = std::move(sorted);
+    rawObjTriBuf = std::move(sortedObj);
 }
 
 // ---------------------------------------------------------------------------
@@ -979,23 +1183,47 @@ int main() {
 
     auto sz = canvas.size();
 
-    // ---- Geometry textures (shared between frames) ----
-    WgpuTexture bvhTex(renderer, TEX_PAGE_WIDTH, 2 * BVH_TEX_PAGES,
-                       WgpuTexture::Format::RGBA32Float,
-                       WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
-    WgpuTexture matTex(renderer, MAX_MATS, MAT_TEX_HEIGHT,
-                       WgpuTexture::Format::RGBA32Float,
-                       WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+    // ---- Geometry textures ----
+    // triTex written by GPU vertex-transform shader (Storage) and read by raytracer (TextureBinding)
     WgpuTexture triTex(renderer, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * TRI_TEX_PAGES,
+                       WgpuTexture::Format::RGBA32Float,
+                       WgpuTexture::Storage | WgpuTexture::TextureBinding);
+    WgpuTexture matTex(renderer, MAX_MATS, MAT_TEX_HEIGHT,
                        WgpuTexture::Format::RGBA32Float,
                        WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
     WgpuTexture texAtlasTex(renderer, MAX_TEX_SLOTS * TILE_SIZE, TILE_SIZE,
                             WgpuTexture::Format::RGBA8Unorm,
                             WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
 
-    // CPU geometry buffers
+    // ---- GPU geometry storage buffers ----
+    // BVH nodes: MAX_BVH_NODES × 3 vec4 = 12 floats = 48 bytes/node
+    WgpuBuffer bvhNodeBuf(renderer, static_cast<size_t>(MAX_BVH_NODES) * 12 * sizeof(float),
+                          WgpuBuffer::Usage::Storage);
+    // BVH refit atomic counters: one u32 per node
+    WgpuBuffer bvhCounterBuf(renderer, static_cast<size_t>(MAX_BVH_NODES) * sizeof(uint32_t),
+                             WgpuBuffer::Usage::Storage);
+    // Object-space triangles in BVH leaf order: MAX_TRIS × 8 vec4 = 32 floats/tri
+    WgpuBuffer objTriBuf(renderer, static_cast<size_t>(MAX_TRIS) * 32 * sizeof(float),
+                         WgpuBuffer::Usage::Storage);
+    // Per-mesh world + normalMat: MAX_MESHES × 2 mat4 = 32 floats/mesh
+    WgpuBuffer matrixBuf(renderer, static_cast<size_t>(MAX_MESHES) * 32 * sizeof(float),
+                         WgpuBuffer::Usage::Storage);
+    // Leaf node indices for refit: at most MAX_TRIS leaf nodes
+    WgpuBuffer leafIndexBuf(renderer, static_cast<size_t>(MAX_TRIS) * sizeof(int),
+                            WgpuBuffer::Usage::Storage);
+    // Small uniforms for vertex transform and BVH refit
+    struct alignas(16) VtGpuUniforms  { uint32_t triCount,  _p[3]; };
+    struct alignas(16) RefitGpuUniforms{ uint32_t leafCount, _p[3]; };
+    WgpuBuffer vtUniBuf(renderer, sizeof(VtGpuUniforms));
+    WgpuBuffer refitUniBuf(renderer, sizeof(RefitGpuUniforms));
+
+    // CPU geometry buffers (for BVH build and mat texture upload)
     std::vector<float> triBuffer(TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * TRI_TEX_PAGES * 4, 0.f);
     std::vector<float> matBuffer(MAX_MATS * MAT_TEX_HEIGHT * 4, 0.f);
+    std::vector<float> rawObjTriBuf(static_cast<size_t>(MAX_TRIS) * 32, 0.f);
+    std::vector<float> matrixCpuBuf(static_cast<size_t>(MAX_MESHES) * 32, 0.f);
+    std::vector<float> bvhNodeCpuBuf(static_cast<size_t>(MAX_BVH_NODES) * 12, 0.f);
+    static const std::vector<uint32_t> bvhCounterZeros(MAX_BVH_NODES, 0u);
 
     // ---- Accumulation textures (ping-pong, RGBA32Float) ----
     // Default usage includes Storage | TextureBinding | CopyDst
@@ -1016,14 +1244,30 @@ int main() {
         accumB.write(zeros.data(), zeros.size() * sizeof(float));
     }
 
-    // ---- RT uniform buffer (256 bytes, matches RtGpuUniforms) ----
+    // ---- RT uniform buffer (matches RtGpuUniforms) ----
     WgpuBuffer rtUniformBuf(renderer, sizeof(RtGpuUniforms));
 
-    // ---- Compute pipeline ----
+    // ---- Compute pipelines ----
+    // Vertex transform: object-space → world-space per triangle
+    WgpuComputePipeline vtPipeline(renderer, vtWGSL, "vt_main");
+    vtPipeline.setStorageBufferRead(0, objTriBuf);
+    vtPipeline.setStorageBufferRead(1, matrixBuf);
+    vtPipeline.setStorageTexture(2, triTex);
+    vtPipeline.setUniformBuffer(3, vtUniBuf);
+
+    // BVH refit: bottom-up AABB update after vertex transform
+    WgpuComputePipeline refitPipeline(renderer, refitWGSL, "bvh_refit");
+    refitPipeline.setTexture(0, triTex);
+    refitPipeline.setStorageBuffer(1, bvhNodeBuf);
+    refitPipeline.setStorageBuffer(2, bvhCounterBuf);
+    refitPipeline.setStorageBufferRead(3, leafIndexBuf);
+    refitPipeline.setUniformBuffer(4, refitUniBuf);
+
+    // Ray tracer / path tracer
     WgpuComputePipeline rtPipeline(renderer, csWGSL, "rt_main");
     rtPipeline.setUniformBuffer(0, rtUniformBuf);
     // bindings 1, 2 set per-frame (ping-pong)
-    rtPipeline.setTexture(3, bvhTex);
+    rtPipeline.setStorageBufferRead(3, bvhNodeBuf);
     rtPipeline.setTexture(4, matTex);
     rtPipeline.setTexture(5, triTex);
     rtPipeline.setTexture(6, texAtlasTex);
@@ -1118,9 +1362,10 @@ int main() {
     // ---- Persistent BVH state ----
     std::vector<BvhNode> bvhNodes;
     std::vector<int> bvhIndices;
-    std::vector<float> bvhPackedBuffer(TEX_PAGE_WIDTH * 2 * BVH_TEX_PAGES * 4, 0.f);
+    std::vector<int> leafIndices;
     std::vector<Matrix4> prevMeshMatrices;
     int triCount = 0;
+    int numBvhNodes = 0;
 
     // ---- Mode + accumulation state ----
     bool pathTracerOn = false;// press T to toggle
@@ -1232,8 +1477,11 @@ int main() {
         std::vector<DirectionalLight*> dirLights;
         scene.traverseType<DirectionalLight>([&](DirectionalLight& l) { dirLights.push_back(&l); });
 
+        // Detect topology change before updating prevMeshes
+        const bool topoChanged = (rtMeshes != prevMeshes);
+
         // Rebuild texture atlas only when mesh list changes
-        if (rtMeshes != prevMeshes) {
+        if (topoChanged) {
             texSlotMap.clear();
             const auto atlasData = buildAtlas(rtMeshes, texSlotMap);
             texAtlasTex.write(atlasData.data(), atlasData.size());
@@ -1251,14 +1499,49 @@ int main() {
         prevMeshMatrices.resize(rtMeshes.size());
         for (size_t i = 0; i < rtMeshes.size(); ++i) prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
 
-        const bool topoChanged = (rtMeshes != prevMeshes);
-        if (topoChanged || anyMeshMoved) {
-            triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer);
-            buildBVH(triBuffer, triCount, bvhNodes, bvhIndices);
-            packBvhBuffer(bvhNodes, bvhPackedBuffer);
-            bvhTex.write(bvhPackedBuffer.data(), bvhPackedBuffer.size() * sizeof(float));
-            triTex.write(triBuffer.data(), triBuffer.size() * sizeof(float));
+        if (topoChanged) {
+            // Topology changed: rebuild BVH from scratch, re-upload static geometry
+            triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer,
+                                            rawObjTriBuf, matrixCpuBuf);
+            buildBVH(triBuffer, triCount, bvhNodes, bvhIndices, leafIndices, rawObjTriBuf);
+            numBvhNodes = static_cast<int>(bvhNodes.size());
+            packBvhNodeBuffer(bvhNodes, bvhNodeCpuBuf);
+            bvhNodeBuf.write(bvhNodeCpuBuf.data(), numBvhNodes * 12 * sizeof(float));
+            objTriBuf.write(rawObjTriBuf.data(), static_cast<size_t>(triCount) * 32 * sizeof(float));
+            leafIndexBuf.write(leafIndices.data(), leafIndices.size() * sizeof(int));
             matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
+            anyMeshMoved = true;  // force initial vertex transform + refit
+        }
+        if (anyMeshMoved) {
+            // Pack current per-mesh world matrices and dispatch GPU transform + refit
+            // matrixCpuBuf was filled during buildGeometryBuffers (topology change) or needs refresh
+            if (!topoChanged) {
+                // Re-pack only matrices (no BVH rebuild needed)
+                std::ranges::fill(matrixCpuBuf, 0.f);
+                int mi = 0;
+                for (auto* mesh : rtMeshes) {
+                    if (mi >= MAX_MESHES) break;
+                    const auto& w = *mesh->matrixWorld;
+                    Matrix4 nm(w); nm.invert().transpose();
+                    float* p = matrixCpuBuf.data() + mi * 32;
+                    std::memcpy(p,      w.elements.data(),  16 * sizeof(float));
+                    std::memcpy(p + 16, nm.elements.data(), 16 * sizeof(float));
+                    ++mi;
+                }
+            }
+            matrixBuf.write(matrixCpuBuf.data(), static_cast<size_t>(MAX_MESHES) * 32 * sizeof(float));
+
+            VtGpuUniforms vtU{}; vtU.triCount = static_cast<uint32_t>(triCount);
+            vtUniBuf.write(&vtU, sizeof(vtU));
+            const uint32_t vtGx = (static_cast<uint32_t>(triCount) + 63u) / 64u;
+            vtPipeline.dispatch(vtGx);
+
+            RefitGpuUniforms rfU{}; rfU.leafCount = static_cast<uint32_t>(leafIndices.size());
+            refitUniBuf.write(&rfU, sizeof(rfU));
+            bvhCounterBuf.write(bvhCounterZeros.data(),
+                                static_cast<size_t>(numBvhNodes) * sizeof(uint32_t));
+            const uint32_t rfGx = (static_cast<uint32_t>(leafIndices.size()) + 63u) / 64u;
+            refitPipeline.dispatch(rfGx);
         }
         // else: nothing moved — skip all CPU/GPU geometry work
 
