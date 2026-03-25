@@ -1192,6 +1192,7 @@ int main() {
                   {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.shadowMap().enabled = true;
     renderer.setClearColor(Color(0x000000));
 
     auto sz = canvas.size();
@@ -1346,6 +1347,11 @@ int main() {
     floor->rotation.x = -math::PI / 2.f;
     floor->position.y = -1.f;
 
+    boxMesh->castShadow = true;
+    sphere1->castShadow = true;
+    sphere2->castShadow = true;
+    floor->receiveShadow = true;
+
     // ---- Scene graph — add all objects so traversal can find them ----
     Scene scene;
     scene.add(boxMesh);
@@ -1357,6 +1363,7 @@ int main() {
     ModelLoader loader;
     auto obj = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
     obj->traverseType<Mesh>([&](Mesh& m) {
+        m.castShadow = true;
         auto tex = m.material()->as<MaterialWithMap>();
         m.setMaterial(MeshStandardMaterial::create({{"map", tex ? tex->map : nullptr}, {"roughness", 0.9f}}));
     });
@@ -1367,10 +1374,16 @@ int main() {
 
     // ---- Point light ----
     auto pointLight = PointLight::create(Color::white, 0.9f);
+    pointLight->castShadow = true;
+    pointLight->shadow->bias = -0.005f;
+    pointLight->shadow->mapSize.set(1024, 1024);
     pointLight->position.set(5.f, 6.f, -2.f);
     scene.add(pointLight);
 
     auto pointLight2 = PointLight::create(Color::white, 0.4f);
+    pointLight2->castShadow = true;
+    pointLight2->shadow->bias = -0.005f;
+    pointLight2->shadow->mapSize.set(1024, 1024);
     pointLight2->position.set(-5.f, 6.f, 4.f);
     scene.add(pointLight2);
 
