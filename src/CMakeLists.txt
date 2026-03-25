@@ -560,6 +560,7 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/WgpuComputePipeline.hpp"
             "threepp/renderers/wgpu/EffectComposer.hpp"
             "threepp/renderers/wgpu/ShaderPass.hpp"
+            "threepp/renderers/wgpu/WgpuPathTracer.hpp"
     )
     list(APPEND sources
             "threepp/renderers/WgpuRenderer.cpp"
@@ -579,6 +580,7 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/WgpuComputePipeline.cpp"
             "threepp/renderers/wgpu/EffectComposer.cpp"
             "threepp/renderers/wgpu/ShaderPass.cpp"
+            "threepp/renderers/wgpu/WgpuPathTracer.cpp"
     )
     if (APPLE)
         list(APPEND sources
