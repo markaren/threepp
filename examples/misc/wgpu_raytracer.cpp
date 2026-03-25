@@ -183,7 +183,8 @@ fn sampleGGXDir(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
     let hm   = normalize(sinT * cos(phi) * rgt + sinT * sin(phi) * up + cosT * n);
     return reflect(-wo, hm);
 }
-)" R"(
+)"
+                               R"(
 // ---- Atlas colour lookup ----
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let tx = i32(texSlot) * TILE_SIZE
@@ -357,7 +358,8 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     }
     return clamp(col + h.emissive, vec3<f32>(0.0), vec3<f32>(1.0));
 }
-)" R"(
+)"
+                               R"(
 // ---- Deterministic trace with one mirror bounce ----
 fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
@@ -766,10 +768,10 @@ static std::tuple<Color, float, float, Color> extractMaterial(const Material* ma
         albedo = c->color;
     if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
         const float rough = std::max(0.f, std::min(1.f, r->roughness));
-        shininess = std::max(0.04f, rough * rough);   // GGX alpha = roughness²
+        shininess = std::max(0.04f, rough * rough);// GGX alpha = roughness²
     } else if (auto* s = dynamic_cast<const MaterialWithSpecular*>(mat)) {
         const float n = std::max(1.f, s->shininess);
-        shininess = std::max(0.04f, std::sqrt(2.f / (n + 2.f)));  // Phong → GGX alpha
+        shininess = std::max(0.04f, std::sqrt(2.f / (n + 2.f)));// Phong → GGX alpha
     }
     if (auto* m = dynamic_cast<const MaterialWithMetalness*>(mat))
         metalness = std::max(0.f, std::min(1.f, m->metalness));
@@ -819,7 +821,10 @@ static int buildGeometryBuffers(
     // Object-space flat layout: triIdx * 32 + field*4 + comp
     auto setObj = [&](int ti, int field, float x, float y, float z, float w) {
         float* p = rawObjTriBuf.data() + ti * 32 + field * 4;
-        p[0] = x; p[1] = y; p[2] = z; p[3] = w;
+        p[0] = x;
+        p[1] = y;
+        p[2] = z;
+        p[3] = w;
     };
 
     for (auto& mesh : meshes) {
@@ -848,7 +853,7 @@ static int buildGeometryBuffers(
         setTexel(matBuffer, MAX_MATS, matCount, 2, emissive.r, emissive.g, emissive.b, 0.f);
 
         const int matIdx = matCount++;
-        const int meshIdx = matIdx;  // same index (every processed mesh gets a material slot)
+        const int meshIdx = matIdx;// same index (every processed mesh gets a material slot)
 
         mesh->updateWorldMatrix(true, true);
         const auto& world = *mesh->matrixWorld;
@@ -859,7 +864,7 @@ static int buildGeometryBuffers(
         // Pack per-mesh matrices for GPU vertex transform
         if (meshIdx < MAX_MESHES) {
             float* mp = matrixBuf.data() + meshIdx * 32;
-            std::memcpy(mp,      world.elements.data(),     16 * sizeof(float));
+            std::memcpy(mp, world.elements.data(), 16 * sizeof(float));
             std::memcpy(mp + 16, normalMat.elements.data(), 16 * sizeof(float));
         }
 
@@ -944,8 +949,8 @@ struct BvhNode {
     int left;
     float maxX, maxY, maxZ;
     int right;
-    int parent;   // -1 for root
-    int _pad[3];  // 48-byte total — matches GPU BvhNodeGpu layout
+    int parent; // -1 for root
+    int _pad[3];// 48-byte total — matches GPU BvhNodeGpu layout
 };
 
 static float triGet(const std::vector<float>& buf, int ti, int row, int comp) {
@@ -1099,10 +1104,14 @@ static void packBvhNodeBuffer(const std::vector<BvhNode>& nodes, std::vector<flo
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
         float* p = buf.data() + i * 12;
-        p[0] = n.minX; p[1] = n.minY; p[2] = n.minZ;
-        std::memcpy(p + 3, &n.left,   sizeof(int));  // preserve int bit pattern
-        p[4] = n.maxX; p[5] = n.maxY; p[6] = n.maxZ;
-        std::memcpy(p + 7, &n.right,  sizeof(int));
+        p[0] = n.minX;
+        p[1] = n.minY;
+        p[2] = n.minZ;
+        std::memcpy(p + 3, &n.left, sizeof(int));// preserve int bit pattern
+        p[4] = n.maxX;
+        p[5] = n.maxY;
+        p[6] = n.maxZ;
+        std::memcpy(p + 7, &n.right, sizeof(int));
         std::memcpy(p + 8, &n.parent, sizeof(int));
         // p[9..11] = 0 (padding, already cleared)
     }
@@ -1133,8 +1142,12 @@ static void refitBVH(std::vector<BvhNode>& nodes, const std::vector<float>& triB
             // Internal: union of children
             const auto& L = nodes[n.left];
             const auto& R = nodes[n.right];
-            n.minX = std::min(L.minX, R.minX); n.minY = std::min(L.minY, R.minY); n.minZ = std::min(L.minZ, R.minZ);
-            n.maxX = std::max(L.maxX, R.maxX); n.maxY = std::max(L.maxY, R.maxY); n.maxZ = std::max(L.maxZ, R.maxZ);
+            n.minX = std::min(L.minX, R.minX);
+            n.minY = std::min(L.minY, R.minY);
+            n.minZ = std::min(L.minZ, R.minZ);
+            n.maxX = std::max(L.maxX, R.maxX);
+            n.maxY = std::max(L.maxY, R.maxY);
+            n.maxZ = std::max(L.maxZ, R.maxZ);
         }
     }
 }
@@ -1212,8 +1225,12 @@ int main() {
     WgpuBuffer leafIndexBuf(renderer, static_cast<size_t>(MAX_TRIS) * sizeof(int),
                             WgpuBuffer::Usage::Storage);
     // Small uniforms for vertex transform and BVH refit
-    struct alignas(16) VtGpuUniforms  { uint32_t triCount,  _p[3]; };
-    struct alignas(16) RefitGpuUniforms{ uint32_t leafCount, _p[3]; };
+    struct alignas(16) VtGpuUniforms {
+        uint32_t triCount, _p[3];
+    };
+    struct alignas(16) RefitGpuUniforms {
+        uint32_t leafCount, _p[3];
+    };
     WgpuBuffer vtUniBuf(renderer, sizeof(VtGpuUniforms));
     WgpuBuffer refitUniBuf(renderer, sizeof(RefitGpuUniforms));
 
@@ -1310,7 +1327,9 @@ int main() {
     auto sphere1 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
             MeshStandardMaterial::create({{"color", Color::orangered},
-                                          {"roughness", 0.85f}, {"emissive", Color::orangered}, {"emissiveIntensity", 0.9f}}));
+                                          {"roughness", 0.85f},
+                                          {"emissive", Color::orangered},
+                                          {"emissiveIntensity", 0.9f}}));
     sphere1->position.set(-2.8f, 1.f, 0.f);
 
     auto sphere2 = Mesh::create(
@@ -1369,7 +1388,7 @@ int main() {
 
     // ---- Mode + accumulation state ----
     bool pathTracerOn = false;// press T to toggle
-    bool lightMoving  = true;
+    bool lightMoving = true;
     float frameCount = 0.f;
     Vector3 prevCamPos = rtCam.position;
     Vector3 prevTarget = controls.target;
@@ -1387,7 +1406,7 @@ int main() {
 
     float fps = 0.f;
     float fpsAccum = 0.f;
-    int   fpsFrames = 0;
+    int fpsFrames = 0;
 
     bool animateBox = true;
     bool showEnclosingBox = true;
@@ -1435,187 +1454,201 @@ int main() {
 
 
         // FPS (smoothed over 0.5s)
-        fpsAccum += dt; ++fpsFrames;
-        if (fpsAccum >= 0.5f) { fps = fpsFrames / fpsAccum; fpsAccum = 0.f; fpsFrames = 0; }
+        fpsAccum += dt;
+        ++fpsFrames;
+        if (fpsAccum >= 0.5f) {
+            fps = fpsFrames / fpsAccum;
+            fpsAccum = 0.f;
+            fpsFrames = 0;
+        }
 
         if (animateBox) {
             // Animate box and light
             boxMesh->rotation.y += dt * 0.6f;
             boxMesh->rotation.x += dt * 0.3f;
         }
-            if (lightMoving) {
-                pointLight->position.set(
-                        5.f * std::cos(elapsed * 0.6f),
-                        6.f + std::sin(elapsed * 0.3f),
-                        -2.f + 4.f * std::sin(elapsed * 0.6f));
-            }
+        if (lightMoving) {
+            pointLight->position.set(
+                    5.f * std::cos(elapsed * 0.6f),
+                    6.f + std::sin(elapsed * 0.3f),
+                    -2.f + 4.f * std::sin(elapsed * 0.6f));
+        }
 
         // Update camera
         controls.update();
-        const Vector3& camPos = rtCam.position;
-        Vector3 fwd = Vector3(controls.target).sub(camPos).normalize();
-        Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
-        Vector3 up = Vector3(rgt).cross(fwd);
 
-        // Reset accumulation on camera movement
-        const bool camMoved =
-                (camPos - prevCamPos).length() > 1e-5f ||
-                (controls.target - prevTarget).length() > 1e-5f;
-        if (camMoved) {
-            frameCount = 0.f;
-            prevCamPos = camPos;
-            prevTarget = controls.target;
-        }
+        if (!raster) {
+            const Vector3& camPos = rtCam.position;
+            Vector3 fwd = Vector3(controls.target).sub(camPos).normalize();
+            Vector3 rgt = Vector3(fwd).cross(Vector3(0.f, 1.f, 0.f)).normalize();
+            Vector3 up = Vector3(rgt).cross(fwd);
 
-        // Collect visible meshes and lights from scene graph
-        std::vector<Mesh*> rtMeshes;
-        scene.traverseType<Mesh>([&](Mesh& m) {
-            if (m.visible) rtMeshes.push_back(&m);
-        });
-        std::vector<PointLight*> pointLights;
-        scene.traverseType<PointLight>([&](PointLight& l) { pointLights.push_back(&l); });
-        std::vector<DirectionalLight*> dirLights;
-        scene.traverseType<DirectionalLight>([&](DirectionalLight& l) { dirLights.push_back(&l); });
-
-        // Detect topology change before updating prevMeshes
-        const bool topoChanged = (rtMeshes != prevMeshes);
-
-        // Rebuild texture atlas only when mesh list changes
-        if (topoChanged) {
-            texSlotMap.clear();
-            const auto atlasData = buildAtlas(rtMeshes, texSlotMap);
-            texAtlasTex.write(atlasData.data(), atlasData.size());
-            prevMeshes = rtMeshes;
-        }
-
-        scene.updateMatrixWorld();
-
-        // Detect mesh matrix changes for BVH update policy
-        bool anyMeshMoved = (prevMeshMatrices.size() != rtMeshes.size());
-        if (!anyMeshMoved) {
-            for (size_t i = 0; i < rtMeshes.size(); ++i)
-                if (*rtMeshes[i]->matrixWorld != prevMeshMatrices[i]) { anyMeshMoved = true; break; }
-        }
-        prevMeshMatrices.resize(rtMeshes.size());
-        for (size_t i = 0; i < rtMeshes.size(); ++i) prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
-
-        if (topoChanged) {
-            // Topology changed: rebuild BVH from scratch, re-upload static geometry
-            triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer,
-                                            rawObjTriBuf, matrixCpuBuf);
-            buildBVH(triBuffer, triCount, bvhNodes, bvhIndices, leafIndices, rawObjTriBuf);
-            numBvhNodes = static_cast<int>(bvhNodes.size());
-            packBvhNodeBuffer(bvhNodes, bvhNodeCpuBuf);
-            bvhNodeBuf.write(bvhNodeCpuBuf.data(), numBvhNodes * 12 * sizeof(float));
-            objTriBuf.write(rawObjTriBuf.data(), static_cast<size_t>(triCount) * 32 * sizeof(float));
-            leafIndexBuf.write(leafIndices.data(), leafIndices.size() * sizeof(int));
-            matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
-            anyMeshMoved = true;  // force initial vertex transform + refit
-        }
-        if (anyMeshMoved) {
-            // Pack current per-mesh world matrices and dispatch GPU transform + refit
-            // matrixCpuBuf was filled during buildGeometryBuffers (topology change) or needs refresh
-            if (!topoChanged) {
-                // Re-pack only matrices (no BVH rebuild needed)
-                std::ranges::fill(matrixCpuBuf, 0.f);
-                int mi = 0;
-                for (auto* mesh : rtMeshes) {
-                    if (mi >= MAX_MESHES) break;
-                    const auto& w = *mesh->matrixWorld;
-                    Matrix4 nm(w); nm.invert().transpose();
-                    float* p = matrixCpuBuf.data() + mi * 32;
-                    std::memcpy(p,      w.elements.data(),  16 * sizeof(float));
-                    std::memcpy(p + 16, nm.elements.data(), 16 * sizeof(float));
-                    ++mi;
-                }
+            // Reset accumulation on camera movement
+            const bool camMoved =
+                    (camPos - prevCamPos).length() > 1e-5f ||
+                    (controls.target - prevTarget).length() > 1e-5f;
+            if (camMoved) {
+                frameCount = 0.f;
+                prevCamPos = camPos;
+                prevTarget = controls.target;
             }
-            matrixBuf.write(matrixCpuBuf.data(), static_cast<size_t>(MAX_MESHES) * 32 * sizeof(float));
 
-            VtGpuUniforms vtU{}; vtU.triCount = static_cast<uint32_t>(triCount);
-            vtUniBuf.write(&vtU, sizeof(vtU));
-            const uint32_t vtGx = (static_cast<uint32_t>(triCount) + 63u) / 64u;
-            vtPipeline.dispatch(vtGx);
+            // Collect visible meshes and lights from scene graph
+            std::vector<Mesh*> rtMeshes;
+            scene.traverseType<Mesh>([&](Mesh& m) {
+                if (m.visible) rtMeshes.push_back(&m);
+            });
+            std::vector<PointLight*> pointLights;
+            scene.traverseType<PointLight>([&](PointLight& l) { pointLights.push_back(&l); });
+            std::vector<DirectionalLight*> dirLights;
+            scene.traverseType<DirectionalLight>([&](DirectionalLight& l) { dirLights.push_back(&l); });
 
-            RefitGpuUniforms rfU{}; rfU.leafCount = static_cast<uint32_t>(leafIndices.size());
-            refitUniBuf.write(&rfU, sizeof(rfU));
-            bvhCounterBuf.write(bvhCounterZeros.data(),
-                                static_cast<size_t>(numBvhNodes) * sizeof(uint32_t));
-            const uint32_t rfGx = (static_cast<uint32_t>(leafIndices.size()) + 63u) / 64u;
-            refitPipeline.dispatch(rfGx);
-        }
-        // else: nothing moved — skip all CPU/GPU geometry work
+            // Detect topology change before updating prevMeshes
+            const bool topoChanged = (rtMeshes != prevMeshes);
 
-        // Pack uniform buffer
-        RtGpuUniforms u{};
-        u.camOri[0] = camPos.x;
-        u.camOri[1] = camPos.y;
-        u.camOri[2] = camPos.z;
-        u.camFwd[0] = fwd.x;
-        u.camFwd[1] = fwd.y;
-        u.camFwd[2] = fwd.z;
-        u.camRgt[0] = rgt.x;
-        u.camRgt[1] = rgt.y;
-        u.camRgt[2] = rgt.z;
-        u.camUp[0] = up.x;
-        u.camUp[1] = up.y;
-        u.camUp[2] = up.z;
-        const auto curSz = canvas.size();
-        u.iRes[0] = static_cast<float>(curSz.width());
-        u.iRes[1] = static_cast<float>(curSz.height());
-        u.tanHalfFov[0] = tanHalfFov;
-        u.frameCount[0] = frameCount;
-        u.triCount[0] = static_cast<float>(triCount);
-        u.mode[0] = pathTracerOn ? 1.f : 0.f;
+            // Rebuild texture atlas only when mesh list changes
+            if (topoChanged) {
+                texSlotMap.clear();
+                const auto atlasData = buildAtlas(rtMeshes, texSlotMap);
+                texAtlasTex.write(atlasData.data(), atlasData.size());
+                prevMeshes = rtMeshes;
+            }
 
-        // Pack up to 4 lights (point first, then directional)
-        int nLights = 0;
-        auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
-            if (nLights >= 4) return;
-            u.lightPos[nLights][0] = px;
-            u.lightPos[nLights][1] = py;
-            u.lightPos[nLights][2] = pz;
-            u.lightCol[nLights][0] = r;
-            u.lightCol[nLights][1] = g;
-            u.lightCol[nLights][2] = b;
-            u.lightType[nLights][0] = type;
-            ++nLights;
-        };
-        for (auto* l : pointLights) {
-            const auto& lp = l->position;
-            const auto& lc = l->color;
-            const float li = l->intensity;
-            packLight(lp.x, lp.y, lp.z, lc.r * li, lc.g * li, lc.b * li, 0.f);
-        }
-        for (auto* l : dirLights) {
-            // direction = normalize(target - position); store as "toward light" unit vector
-            Vector3 dir = Vector3(l->target().position).sub(l->position).normalize();
-            const auto& lc = l->color;
-            const float li = l->intensity;
-            packLight(dir.x, dir.y, dir.z, lc.r * li, lc.g * li, lc.b * li, 1.f);
-        }
-        u.lightCount[0] = static_cast<float>(nLights);
+            scene.updateMatrixWorld();
 
-        rtUniformBuf.write(&u, sizeof(u));
+            // Detect mesh matrix changes for BVH update policy
+            bool anyMeshMoved = (prevMeshMatrices.size() != rtMeshes.size());
+            if (!anyMeshMoved) {
+                for (size_t i = 0; i < rtMeshes.size(); ++i)
+                    if (*rtMeshes[i]->matrixWorld != prevMeshMatrices[i]) {
+                        anyMeshMoved = true;
+                        break;
+                    }
+            }
+            prevMeshMatrices.resize(rtMeshes.size());
+            for (size_t i = 0; i < rtMeshes.size(); ++i) prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
 
-        // Dispatch: read accumA, write accumB (ping-pong)
-        rtPipeline.setTexture(1, *readAccum);
-        rtPipeline.setStorageTexture(2, *writeAccum);
-        const uint32_t gx = (static_cast<uint32_t>(curSz.width()) + 7u) / 8u;
-        const uint32_t gy = (static_cast<uint32_t>(curSz.height()) + 7u) / 8u;
-        rtPipeline.dispatch(gx, gy);
+            if (topoChanged) {
+                // Topology changed: rebuild BVH from scratch, re-upload static geometry
+                triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer,
+                                                rawObjTriBuf, matrixCpuBuf);
+                buildBVH(triBuffer, triCount, bvhNodes, bvhIndices, leafIndices, rawObjTriBuf);
+                numBvhNodes = static_cast<int>(bvhNodes.size());
+                packBvhNodeBuffer(bvhNodes, bvhNodeCpuBuf);
+                bvhNodeBuf.write(bvhNodeCpuBuf.data(), numBvhNodes * 12 * sizeof(float));
+                objTriBuf.write(rawObjTriBuf.data(), static_cast<size_t>(triCount) * 32 * sizeof(float));
+                leafIndexBuf.write(leafIndices.data(), leafIndices.size() * sizeof(int));
+                matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
+                anyMeshMoved = true;// force initial vertex transform + refit
+            }
+            if (anyMeshMoved) {
+                // Pack current per-mesh world matrices and dispatch GPU transform + refit
+                // matrixCpuBuf was filled during buildGeometryBuffers (topology change) or needs refresh
+                if (!topoChanged) {
+                    // Re-pack only matrices (no BVH rebuild needed)
+                    std::ranges::fill(matrixCpuBuf, 0.f);
+                    int mi = 0;
+                    for (auto* mesh : rtMeshes) {
+                        if (mi >= MAX_MESHES) break;
+                        const auto& w = *mesh->matrixWorld;
+                        Matrix4 nm(w);
+                        nm.invert().transpose();
+                        float* p = matrixCpuBuf.data() + mi * 32;
+                        std::memcpy(p, w.elements.data(), 16 * sizeof(float));
+                        std::memcpy(p + 16, nm.elements.data(), 16 * sizeof(float));
+                        ++mi;
+                    }
+                }
+                matrixBuf.write(matrixCpuBuf.data(), static_cast<size_t>(MAX_MESHES) * 32 * sizeof(float));
 
-        // Swap ping-pong and point display at written result
-        std::swap(readAccum, writeAccum);
-        displayMat->customTextures["accumTex"] = readAccum;
-        displayMat->uniformsNeedUpdate = true;
+                VtGpuUniforms vtU{};
+                vtU.triCount = static_cast<uint32_t>(triCount);
+                vtUniBuf.write(&vtU, sizeof(vtU));
+                const uint32_t vtGx = (static_cast<uint32_t>(triCount) + 63u) / 64u;
+                vtPipeline.dispatch(vtGx);
 
-        frameCount += 1.f;
+                RefitGpuUniforms rfU{};
+                rfU.leafCount = static_cast<uint32_t>(leafIndices.size());
+                refitUniBuf.write(&rfU, sizeof(rfU));
+                bvhCounterBuf.write(bvhCounterZeros.data(),
+                                    static_cast<size_t>(numBvhNodes) * sizeof(uint32_t));
+                const uint32_t rfGx = (static_cast<uint32_t>(leafIndices.size()) + 63u) / 64u;
+                refitPipeline.dispatch(rfGx);
+            }
+            // else: nothing moved — skip all CPU/GPU geometry work
 
-        if (raster) {
-            renderer.render(scene, rtCam);
-        } else {
+            // Pack uniform buffer
+            RtGpuUniforms u{};
+            u.camOri[0] = camPos.x;
+            u.camOri[1] = camPos.y;
+            u.camOri[2] = camPos.z;
+            u.camFwd[0] = fwd.x;
+            u.camFwd[1] = fwd.y;
+            u.camFwd[2] = fwd.z;
+            u.camRgt[0] = rgt.x;
+            u.camRgt[1] = rgt.y;
+            u.camRgt[2] = rgt.z;
+            u.camUp[0] = up.x;
+            u.camUp[1] = up.y;
+            u.camUp[2] = up.z;
+            const auto curSz = canvas.size();
+            u.iRes[0] = static_cast<float>(curSz.width());
+            u.iRes[1] = static_cast<float>(curSz.height());
+            u.tanHalfFov[0] = tanHalfFov;
+            u.frameCount[0] = frameCount;
+            u.triCount[0] = static_cast<float>(triCount);
+            u.mode[0] = pathTracerOn ? 1.f : 0.f;
+
+            // Pack up to 4 lights (point first, then directional)
+            int nLights = 0;
+            auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
+                if (nLights >= 4) return;
+                u.lightPos[nLights][0] = px;
+                u.lightPos[nLights][1] = py;
+                u.lightPos[nLights][2] = pz;
+                u.lightCol[nLights][0] = r;
+                u.lightCol[nLights][1] = g;
+                u.lightCol[nLights][2] = b;
+                u.lightType[nLights][0] = type;
+                ++nLights;
+            };
+            for (auto* l : pointLights) {
+                const auto& lp = l->position;
+                const auto& lc = l->color;
+                const float li = l->intensity;
+                packLight(lp.x, lp.y, lp.z, lc.r * li, lc.g * li, lc.b * li, 0.f);
+            }
+            for (auto* l : dirLights) {
+                // direction = normalize(target - position); store as "toward light" unit vector
+                Vector3 dir = Vector3(l->target().position).sub(l->position).normalize();
+                const auto& lc = l->color;
+                const float li = l->intensity;
+                packLight(dir.x, dir.y, dir.z, lc.r * li, lc.g * li, lc.b * li, 1.f);
+            }
+            u.lightCount[0] = static_cast<float>(nLights);
+
+            rtUniformBuf.write(&u, sizeof(u));
+
+            // Dispatch: read accumA, write accumB (ping-pong)
+            rtPipeline.setTexture(1, *readAccum);
+            rtPipeline.setStorageTexture(2, *writeAccum);
+            const uint32_t gx = (static_cast<uint32_t>(curSz.width()) + 7u) / 8u;
+            const uint32_t gy = (static_cast<uint32_t>(curSz.height()) + 7u) / 8u;
+            rtPipeline.dispatch(gx, gy);
+
+            // Swap ping-pong and point display at written result
+            std::swap(readAccum, writeAccum);
+            displayMat->customTextures["accumTex"] = readAccum;
+            displayMat->uniformsNeedUpdate = true;
+
+            frameCount += 1.f;
+
+
             // Render display quad
             renderer.render(displayScene, displayCam);
+
+        } else {
+            renderer.render(scene, rtCam);
         }
 
         ui.render();
