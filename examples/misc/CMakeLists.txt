@@ -8,6 +8,6 @@ add_example(NAME "multiple_scenes" WEB)
 
 if (THREEPP_WITH_WGPU)
     add_example(NAME "wgpu_triangle")
-    add_example(NAME "wgpu_raytracer")
+    add_example(NAME "wgpu_raytracer" LINK_IMGUI)
     add_example(NAME "water_side_by_side" LINK_IMGUI)
 endif ()

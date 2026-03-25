@@ -16,6 +16,7 @@
 //     matData  row  0  : (albedo.r, albedo.g, albedo.b, shininess)
 //     bvhData  rows 0-1: (aabbMin.xyz, left)  (aabbMax.xyz, right)  per node
 
+#include "threepp/extras/imgui/ImguiContext.hpp"
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/materials/MeshStandardMaterial.hpp"
@@ -378,7 +379,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
     var throughput = vec3<f32>(1.0);
     var radiance   = vec3<f32>(0.0);
 
-    for (var i = 0; i < 5; i++) {
+    for (var i = 0; i < 8; i++) {
         let h = sceneHit(ray);
         if (h.t >= 1e29) {
             radiance += throughput * sky(ray.dir);
@@ -893,36 +894,17 @@ static int buildBvhNode(
     return ni;
 }
 
-static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) {
-    std::vector<int> indices(triCount);
-    std::iota(indices.begin(), indices.end(), 0);
+static int pagedIdx(int ti, int row) {
+    return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
+}
 
-    std::vector<BvhNode> nodes;
-    nodes.reserve(triCount * 2);
-    buildBvhNode(nodes, indices, triBuffer, 0, triCount);
-
-    // Reorder triBuffer to match sorted leaf order
-    auto pagedIdx = [](int ti, int row) -> int {
-        const int page = ti / TEX_PAGE_WIDTH;
-        const int pcol = ti % TEX_PAGE_WIDTH;
-        return ((page * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + pcol) * 4;
-    };
-    std::vector<float> sorted(triBuffer.size(), 0.f);
-    for (int ni = 0; ni < triCount; ni++) {
-        const int oi = indices[ni];
-        for (int row = 0; row < TRI_TEX_HEIGHT; row++)
-            for (int c = 0; c < 4; c++)
-                sorted[pagedIdx(ni, row) + c] = triBuffer[pagedIdx(oi, row) + c];
-    }
-    triBuffer = std::move(sorted);
-
-    // Pack BVH nodes into paged RGBA32Float texture
-    std::vector<float> bvhBuf(TEX_PAGE_WIDTH * 2 * BVH_TEX_PAGES * 4, 0.f);
+static void packBvhBuffer(const std::vector<BvhNode>& nodes, std::vector<float>& bvhBuf) {
+    std::ranges::fill(bvhBuf, 0.f);
     const int nc = std::min(static_cast<int>(nodes.size()), MAX_BVH_NODES);
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
         const int page = i / TEX_PAGE_WIDTH;
-        const int col = i % TEX_PAGE_WIDTH;
+        const int col  = i % TEX_PAGE_WIDTH;
         bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 0] = n.minX;
         bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 1] = n.minY;
         bvhBuf[((page * 2 + 0) * TEX_PAGE_WIDTH + col) * 4 + 2] = n.minZ;
@@ -932,7 +914,56 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
         bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 2] = n.maxZ;
         bvhBuf[((page * 2 + 1) * TEX_PAGE_WIDTH + col) * 4 + 3] = static_cast<float>(n.right);
     }
-    return bvhBuf;
+}
+
+// Bottom-up AABB refit — O(N). Nodes are in pre-order so iterating
+// backwards visits children before parents.
+static void refitBVH(std::vector<BvhNode>& nodes, const std::vector<float>& triBuffer) {
+    for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; --i) {
+        auto& n = nodes[i];
+        if (n.left < 0) {
+            // Leaf: recompute from triangles
+            const int triStart = -n.left - 1;
+            const int triCount = n.right;
+            n.minX = n.minY = n.minZ = 1e30f;
+            n.maxX = n.maxY = n.maxZ = -1e30f;
+            for (int ti = triStart; ti < triStart + triCount; ti++) {
+                for (int r = 0; r <= 2; r++) {
+                    n.minX = std::min(n.minX, triBuffer[pagedIdx(ti, r) + 0]);
+                    n.minY = std::min(n.minY, triBuffer[pagedIdx(ti, r) + 1]);
+                    n.minZ = std::min(n.minZ, triBuffer[pagedIdx(ti, r) + 2]);
+                    n.maxX = std::max(n.maxX, triBuffer[pagedIdx(ti, r) + 0]);
+                    n.maxY = std::max(n.maxY, triBuffer[pagedIdx(ti, r) + 1]);
+                    n.maxZ = std::max(n.maxZ, triBuffer[pagedIdx(ti, r) + 2]);
+                }
+            }
+        } else {
+            // Internal: union of children
+            const auto& L = nodes[n.left];
+            const auto& R = nodes[n.right];
+            n.minX = std::min(L.minX, R.minX); n.minY = std::min(L.minY, R.minY); n.minZ = std::min(L.minZ, R.minZ);
+            n.maxX = std::max(L.maxX, R.maxX); n.maxY = std::max(L.maxY, R.maxY); n.maxZ = std::max(L.maxZ, R.maxZ);
+        }
+    }
+}
+
+static void buildBVH(std::vector<float>& triBuffer, int triCount,
+                     std::vector<BvhNode>& nodes, std::vector<int>& indices) {
+    indices.resize(triCount);
+    std::iota(indices.begin(), indices.end(), 0);
+    nodes.clear();
+    nodes.reserve(triCount * 2);
+    buildBvhNode(nodes, indices, triBuffer, 0, triCount);
+
+    // Reorder triBuffer to BVH leaf order
+    std::vector<float> sorted(triBuffer.size(), 0.f);
+    for (int ni = 0; ni < triCount; ni++) {
+        const int oi = indices[ni];
+        for (int row = 0; row < TRI_TEX_HEIGHT; row++)
+            for (int c = 0; c < 4; c++)
+                sorted[pagedIdx(ni, row) + c] = triBuffer[pagedIdx(oi, row) + c];
+    }
+    triBuffer = std::move(sorted);
 }
 
 // ---------------------------------------------------------------------------
@@ -941,7 +972,7 @@ static std::vector<float> buildBVH(std::vector<float>& triBuffer, int triCount) 
 int main() {
 
     Canvas canvas("Wgpu Path Tracer – Accumulation",
-                  {{"graphicsApi", GraphicsAPI::WebGPU}});
+                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
     renderer.setClearColor(Color(0x000000));
@@ -1026,10 +1057,10 @@ int main() {
             MeshStandardMaterial::create({{"map", tex}, {"roughness", 0.9f}}));
     boxMesh->position.set(0.f, 1.f, -1.f);
 
-    auto boxMesh2 = Mesh::create(
+    auto enclosingBox = Mesh::create(
             BoxGeometry::create(),
             MeshStandardMaterial::create({{"color", Color::black}, {"roughness", 0.9f}}));
-    boxMesh2->scale *= 1000;
+    enclosingBox->scale *= 1000;
 
 
     auto sphere1 = Mesh::create(
@@ -1058,7 +1089,7 @@ int main() {
     scene.add(sphere1);
     scene.add(sphere2);
     scene.add(floor);
-    scene.add(boxMesh2);
+    scene.add(enclosingBox);
 
     ModelLoader loader;
     auto obj = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
@@ -1084,8 +1115,16 @@ int main() {
     std::unordered_map<Texture*, int> texSlotMap;
     std::vector<Mesh*> prevMeshes;// for change detection
 
+    // ---- Persistent BVH state ----
+    std::vector<BvhNode> bvhNodes;
+    std::vector<int> bvhIndices;
+    std::vector<float> bvhPackedBuffer(TEX_PAGE_WIDTH * 2 * BVH_TEX_PAGES * 4, 0.f);
+    std::vector<Matrix4> prevMeshMatrices;
+    int triCount = 0;
+
     // ---- Mode + accumulation state ----
     bool pathTracerOn = false;// press T to toggle
+    bool lightMoving  = true;
     float frameCount = 0.f;
     Vector3 prevCamPos = rtCam.position;
     Vector3 prevTarget = controls.target;
@@ -1101,8 +1140,33 @@ int main() {
     });
     canvas.addKeyListener(keyAdapter);
 
+    float fps = 0.f;
+    float fpsAccum = 0.f;
+    int   fpsFrames = 0;
+
+    bool animateBox = true;
+    bool showEnclosingBox = true;
+    ImguiFunctionalContext ui(canvas, renderer, [&] {
+        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
+        ImGui::SetNextWindowSize({220, 0}, ImGuiCond_Once);
+        ImGui::Begin("Raytracer");
+        ImGui::Text("FPS: %.1f", fps);
+        ImGui::Separator();
+        if (ImGui::Checkbox("Path tracer (T)", &pathTracerOn)) frameCount = 0.f;
+        ImGui::Checkbox("Moving light", &lightMoving);
+        ImGui::Checkbox("AnimateBox", &animateBox);
+        ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
+        ImGui::End();
+    });
+
+    IOCapture ioCapture;
+    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
+    canvas.setIOCapture(&ioCapture);
+
     canvas.onWindowResize([&](const WindowSize& ns) {
         renderer.setSize(ns);
+        rtCam.aspect = canvas.aspect();
+        rtCam.updateProjectionMatrix();
         // Recreate accum textures at new resolution
         accumA = makeAccumTex(static_cast<uint32_t>(ns.width()),
                               static_cast<uint32_t>(ns.height()));
@@ -1122,13 +1186,24 @@ int main() {
         const float dt = clock.getDelta();
         elapsed += dt;
 
-        // Animate box and light
-        boxMesh->rotation.y += dt * 0.6f;
-        boxMesh->rotation.x += dt * 0.3f;
-        pointLight->position.set(
-                5.f * std::cos(elapsed * 0.6f),
-                6.f + std::sin(elapsed * 0.3f),
-                -2.f + 4.f * std::sin(elapsed * 0.6f));
+        enclosingBox->visible = showEnclosingBox;
+
+
+        // FPS (smoothed over 0.5s)
+        fpsAccum += dt; ++fpsFrames;
+        if (fpsAccum >= 0.5f) { fps = fpsFrames / fpsAccum; fpsAccum = 0.f; fpsFrames = 0; }
+
+        if (animateBox) {
+            // Animate box and light
+            boxMesh->rotation.y += dt * 0.6f;
+            boxMesh->rotation.x += dt * 0.3f;
+        }
+            if (lightMoving) {
+                pointLight->position.set(
+                        5.f * std::cos(elapsed * 0.6f),
+                        6.f + std::sin(elapsed * 0.3f),
+                        -2.f + 4.f * std::sin(elapsed * 0.6f));
+            }
 
         // Update camera
         controls.update();
@@ -1165,13 +1240,27 @@ int main() {
             prevMeshes = rtMeshes;
         }
 
-        // Rebuild geometry + BVH each frame (handles animated objects)
-        const int triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer);
-        const auto bvhBuffer = buildBVH(triBuffer, triCount);
+        scene.updateMatrixWorld();
 
-        bvhTex.write(bvhBuffer.data(), bvhBuffer.size() * sizeof(float));
-        triTex.write(triBuffer.data(), triBuffer.size() * sizeof(float));
-        matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
+        // Detect mesh matrix changes for BVH update policy
+        bool anyMeshMoved = (prevMeshMatrices.size() != rtMeshes.size());
+        if (!anyMeshMoved) {
+            for (size_t i = 0; i < rtMeshes.size(); ++i)
+                if (*rtMeshes[i]->matrixWorld != prevMeshMatrices[i]) { anyMeshMoved = true; break; }
+        }
+        prevMeshMatrices.resize(rtMeshes.size());
+        for (size_t i = 0; i < rtMeshes.size(); ++i) prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
+
+        const bool topoChanged = (rtMeshes != prevMeshes);
+        if (topoChanged || anyMeshMoved) {
+            triCount = buildGeometryBuffers(rtMeshes, texSlotMap, triBuffer, matBuffer);
+            buildBVH(triBuffer, triCount, bvhNodes, bvhIndices);
+            packBvhBuffer(bvhNodes, bvhPackedBuffer);
+            bvhTex.write(bvhPackedBuffer.data(), bvhPackedBuffer.size() * sizeof(float));
+            triTex.write(triBuffer.data(), triBuffer.size() * sizeof(float));
+            matTex.write(matBuffer.data(), matBuffer.size() * sizeof(float));
+        }
+        // else: nothing moved — skip all CPU/GPU geometry work
 
         // Pack uniform buffer
         RtGpuUniforms u{};
@@ -1245,6 +1334,8 @@ int main() {
             // Render display quad
             renderer.render(displayScene, displayCam);
         }
+
+        ui.render();
     });
 
     return 0;
