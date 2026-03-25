@@ -543,9 +543,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let old      = prev.xyz;
         var pixelFC  = prev.w;
 
-        // Mesh-identity reset: check previous and current primary hit mesh against
-        // the bitmask of meshes that moved this frame.
-        // (A) Object moved OUT of this pixel — prev hit mesh moved
+        // Mesh-identity reset
         let prevHitMesh = u32(textureLoad(hitMeshRead, pixel, 0).r);
         if (prevHitMesh < 64u) {
             let bit   = prevHitMesh & 31u;
@@ -553,15 +551,12 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                                prevHitMesh >= 32u);
             if (((mbits >> bit) & 1u) != 0u) { pixelFC = 0.0; }
         }
-        // (B) Object moved INTO this pixel — current hit is a moving mesh
         if (primaryMeshIdx < 64u) {
             let bit   = primaryMeshIdx & 31u;
             let mbits = select(rt.movedMeshBits.x, rt.movedMeshBits.y,
                                primaryMeshIdx >= 32u);
             if (((mbits >> bit) & 1u) != 0u) { pixelFC = 0.0; }
         }
-
-        // Camera moved: global reset
         if (fc == 0u) { pixelFC = 0.0; }
 
         let alpha   = 1.0 / (pixelFC + 1.0);
@@ -697,12 +692,116 @@ fn bvh_refit(@builtin(global_invocation_id) gid: vec3<u32>) {
 )";
 
 // ---------------------------------------------------------------------------
-// WGSL à-trous edge-avoiding wavelet denoiser
-// Input:  colorIn  (xyz=color, w=pixelFC from accumulation buffer)
-//         gBuf     (xyz=primary-hit world normal, w=primary-hit depth; 0=sky)
-// Output: colorOut (xyz=filtered color)
+// WGSL TAA-style temporal filter
+// Reprojects previous frame's filtered output, clamps to current neighborhood
+// color box, and blends. Robust against reprojection errors via clamping.
 // ---------------------------------------------------------------------------
-constexpr const char* atrousWGSL = R"(
+constexpr const char* taaWGSL = R"(
+struct TaaUniforms {
+    prevCamOri: vec4<f32>, prevCamFwd: vec4<f32>, prevCamRgt: vec4<f32>, prevCamUp: vec4<f32>,
+    curCamOri:  vec4<f32>, curCamFwd:  vec4<f32>, curCamRgt:  vec4<f32>, curCamUp:  vec4<f32>,
+    iRes:       vec4<f32>,
+    tanHalfFov: vec4<f32>,
+    frameCount: vec4<f32>,
+    movedMeshBits: vec4<u32>,
+}
+
+@group(0) @binding(0) var<uniform> taa:      TaaUniforms;
+@group(0) @binding(1) var accumIn:   texture_2d<f32>;
+@group(0) @binding(2) var gBufCur:   texture_2d<f32>;
+@group(0) @binding(3) var taaHistIn: texture_2d<f32>;
+@group(0) @binding(4) var taaOut:    texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var hitMeshTex: texture_2d<f32>;
+
+@compute @workgroup_size(8, 8)
+fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let pixel = vec2<i32>(gid.xy);
+    let res   = taa.iRes.xy;
+    let iRes  = vec2<i32>(i32(res.x), i32(res.y));
+    if (pixel.x >= iRes.x || pixel.y >= iRes.y) { return; }
+
+    let curSamp  = textureLoad(accumIn, pixel, 0);
+    let curColor = curSamp.xyz;
+    let curFC    = curSamp.w;
+    let curGB    = textureLoad(gBufCur, pixel, 0);
+    let curDepth = curGB.w;
+
+    // Sky pixels: pass through
+    if (curDepth < 1e-6) {
+        textureStore(taaOut, pixel, vec4<f32>(curColor, curFC));
+        return;
+    }
+
+    // Build 3×3 neighborhood color box for clamping
+    var cMin = curColor;
+    var cMax = curColor;
+    for (var dy = -1; dy <= 1; dy++) {
+        for (var dx = -1; dx <= 1; dx++) {
+            let sp = clamp(pixel + vec2<i32>(dx, dy), vec2<i32>(0), iRes - 1);
+            let nc = textureLoad(accumIn, sp, 0).xyz;
+            cMin = min(cMin, nc);
+            cMax = max(cMax, nc);
+        }
+    }
+    // Slightly widen box for robustness (avoids over-clamping due to noise)
+    let boxCenter = (cMin + cMax) * 0.5;
+    let boxExtent = (cMax - cMin) * 0.5;
+    cMin = boxCenter - boxExtent * 1.25;
+    cMax = boxCenter + boxExtent * 1.25;
+
+    // Reproject current pixel into previous frame's screen space
+    let aspect = res.x / res.y;
+    let ndc = vec2<f32>((f32(pixel.x) + 0.5) / res.x * 2.0 - 1.0,
+                         1.0 - (f32(pixel.y) + 0.5) / res.y * 2.0);
+    let rayDir   = normalize(taa.curCamFwd.xyz
+                            + taa.curCamRgt.xyz * (ndc.x * taa.tanHalfFov.x * aspect)
+                            + taa.curCamUp.xyz  * (ndc.y * taa.tanHalfFov.x));
+    let worldPos = taa.curCamOri.xyz + rayDir * curDepth;
+    let toPoint  = worldPos - taa.prevCamOri.xyz;
+    let prevZ    = dot(toPoint, taa.prevCamFwd.xyz);
+
+    var useHist = prevZ > 0.001;
+    let prevNdcX = dot(toPoint, taa.prevCamRgt.xyz) / (prevZ * taa.tanHalfFov.x * aspect);
+    let prevNdcY = dot(toPoint, taa.prevCamUp.xyz)  / (prevZ * taa.tanHalfFov.x);
+    let prevPx   = vec2<f32>((prevNdcX + 1.0) * 0.5 * res.x - 0.5,
+                              (1.0 - prevNdcY) * 0.5 * res.y - 0.5);
+    let prevPixel = vec2<i32>(i32(round(prevPx.x)), i32(round(prevPx.y)));
+
+    // Bounds check
+    useHist = useHist && prevPixel.x >= 0 && prevPixel.x < iRes.x
+                      && prevPixel.y >= 0 && prevPixel.y < iRes.y;
+
+    // Invalidate for moved meshes
+    let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
+    if (meshIdx < 64u) {
+        let bit   = meshIdx & 31u;
+        let mbits = select(taa.movedMeshBits.x, taa.movedMeshBits.y, meshIdx >= 32u);
+        if (((mbits >> bit) & 1u) != 0u) { useHist = false; }
+    }
+
+    // First frame has no history
+    if (taa.frameCount.x < 0.5) { useHist = false; }
+
+    var result = curColor;
+    if (useHist) {
+        let histColor = textureLoad(taaHistIn, prevPixel, 0).xyz;
+        let clamped   = clamp(histColor, cMin, cMax);
+        // Blend: use more history early (noisy), more current once converged
+        let alpha = clamp(1.0 / (curFC * 0.5 + 1.0), 0.1, 1.0);
+        result = mix(clamped, curColor, alpha);
+    }
+
+    textureStore(taaOut, pixel, vec4<f32>(result, curFC));
+}
+)";
+
+// ---------------------------------------------------------------------------
+// WGSL variance-guided à-trous spatial filter
+// Uses the frame count (w channel) to adapt filter strength:
+//   low frame count → more aggressive blur to suppress MC noise
+//   high frame count → gentle filter to preserve converged detail
+// ---------------------------------------------------------------------------
+constexpr const char* svgfAtrousWGSL = R"(
 struct AtrousUni { stepSize: u32, _p0: u32, _p1: u32, _p2: u32, }
 
 @group(0) @binding(0) var<uniform> uni:      AtrousUni;
@@ -710,8 +809,12 @@ struct AtrousUni { stepSize: u32, _p0: u32, _p1: u32, _p2: u32, }
 @group(0) @binding(2) var colorOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var gBuf:     texture_2d<f32>;
 
+fn luminance_a(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
 @compute @workgroup_size(8, 8)
-fn atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let pixel = vec2<i32>(gid.xy);
     let res   = vec2<i32>(textureDimensions(colorIn, 0));
     if (pixel.x >= res.x || pixel.y >= res.y) { return; }
@@ -725,18 +828,17 @@ fn atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cNorm  = cGB.xyz;
     let cDepth = cGB.w;
 
-    // Sky pixels: pass through unchanged
+    // Sky pixels: pass through
     if (cDepth < 1e-6) {
         textureStore(colorOut, pixel, vec4<f32>(cColor, cFC));
         return;
     }
 
-    let cLum = dot(cColor, vec3<f32>(0.2126, 0.7152, 0.0722));
-    // lumSigma relaxes at low sample counts so MC noise gets averaged,
-    // and tightens as accumulation converges to preserve fine detail.
+    let cLum = luminance_a(cColor);
+    // lumSigma adapts to convergence: relaxed when noisy, tight when converged
     let lumSigma = max(0.02, 0.3 / sqrt(cFC + 1.0));
 
-    // 3×3 bilateral filter (smaller radius than the original 5×5 to preserve detail)
+    // 3×3 bilateral filter with edge-preserving weights
     var colorSum  = vec3<f32>(0.0);
     var weightSum = 0.0;
 
@@ -748,12 +850,12 @@ fn atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let sNorm  = sGB.xyz;
             let sDepth = sGB.w;
 
-            // Normal edge-stopping: hard stop across geometric edges
-            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 32.0);
-            // Depth edge-stopping: hard stop across depth discontinuities
+            // Normal edge-stopping
+            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 64.0);
+            // Depth edge-stopping
             let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
             // Luminance edge-stopping
-            let sLum = dot(sColor, vec3<f32>(0.2126, 0.7152, 0.0722));
+            let sLum = luminance_a(sColor);
             let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
 
             let w = w_n * w_d * w_l;
@@ -835,6 +937,15 @@ struct alignas(16) RefitGpuUniforms {
 struct alignas(16) AtrousGpuUniforms {
     uint32_t stepSize, _p[3];
 };
+struct alignas(16) TaaGpuUniforms {
+    float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4];
+    float curCamOri[4],  curCamFwd[4],  curCamRgt[4],  curCamUp[4];
+    float iRes[4];
+    float tanHalfFov[4];
+    float frameCount[4];
+    uint32_t movedMeshBits[4];
+};
+static_assert(sizeof(TaaGpuUniforms) == 192, "TaaGpuUniforms must be 192 bytes");
 
 // ---------------------------------------------------------------------------
 // BVH node (48 bytes, matches GPU BvhNodeGpu)
@@ -1267,13 +1378,34 @@ struct WgpuPathTracer::Impl {
     WgpuTexture envTexGpu;   // equirectangular env map (1x1 placeholder when unused)
     Texture*    prevEnvTex_ = nullptr;
 
-    // Denoiser
-    WgpuTexture gBufTex;        // primary-hit normal.xyz + depth.w
-    WgpuTexture filteredA;      // à-trous ping-pong buffer A
-    WgpuTexture filteredB;      // à-trous ping-pong buffer B
+    // G-buffer ping-pong
+    WgpuTexture gBufA;          // normal.xyz + depth.w
+    WgpuTexture gBufB;
+    WgpuTexture* gBufCur;       // current frame writes here
+    WgpuTexture* gBufPrev;      // previous frame's G-buffer
+
+    // TAA history ping-pong
+    WgpuTexture taaHistA;       // previous TAA output
+    WgpuTexture taaHistB;
+    WgpuTexture* taaHistRead;
+    WgpuTexture* taaHistWrite;
+
+    // Spatial filter ping-pong
+    WgpuTexture filteredA;
+    WgpuTexture filteredB;
+
+    // Denoiser pipelines
+    WgpuComputePipeline taaPipeline;
     WgpuComputePipeline atrousPipeline;
+    WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = true;
+
+    // Previous camera vectors for TAA reprojection
+    float prevCamOri_[3] = {0.f, 0.f, 0.f};
+    float prevCamFwd_[3] = {0.f, 0.f, -1.f};
+    float prevCamRgt_[3] = {1.f, 0.f, 0.f};
+    float prevCamUp_[3]  = {0.f, 1.f, 0.f};
 
     // GPU storage buffers
     WgpuBuffer bvhNodeBuf;
@@ -1319,8 +1451,8 @@ struct WgpuPathTracer::Impl {
     float frameCount_ = 0.f;
     Vector3 prevCamPos_;
     Vector3 prevCamDir_;
-    WgpuPathTracer::Mode mode_ = WgpuPathTracer::Mode::Raytracer;
-    int spp_ = 1;
+    Mode mode_ = Mode::Raytracer;
+    int spp_ = 2;
 
     int width_, height_;
 
@@ -1351,13 +1483,27 @@ struct WgpuPathTracer::Impl {
           readHitMesh(&hitMeshA), writeHitMesh(&hitMeshB),
           envTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
-          gBufTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                  WgpuTexture::Format::RGBA16Float),
+          // G-buffer ping-pong
+          gBufA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                WgpuTexture::Format::RGBA16Float),
+          gBufB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                WgpuTexture::Format::RGBA16Float),
+          gBufCur(&gBufA), gBufPrev(&gBufB),
+          // TAA history ping-pong
+          taaHistA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          taaHistB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          taaHistRead(&taaHistA), taaHistWrite(&taaHistB),
+          // Spatial filter ping-pong
           filteredA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
           filteredB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                     WgpuTexture::Format::RGBA16Float),
-          atrousPipeline(r, atrousWGSL, "atrous_main"),
+          // Denoiser pipelines
+          taaPipeline(r, taaWGSL, "taa_main"),
+          atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
+          taaUniBuf(r, sizeof(TaaGpuUniforms)),
           atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
           // Storage buffers
           bvhNodeBuf(r, static_cast<size_t>(MAX_BVH_NODES) * 12 * sizeof(float),
@@ -1407,17 +1553,23 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(5, triTex);
         rtPipeline.setTexture(6, texAtlasTex);
         rtPipeline.setTexture(9, envTexGpu);
-        rtPipeline.setStorageTexture(10, gBufTex);
+        rtPipeline.setStorageTexture(10, *gBufCur);
 
-        // Denoiser: static bindings (gBuf; colorIn/colorOut set per-pass)
+        // TAA pipeline: uniform buffer is static binding
+        taaPipeline.setUniformBuffer(0, taaUniBuf);
+
+        // Spatial filter: uniform buffer is static binding
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
-        atrousPipeline.setTexture(3, gBufTex);
 
-        // Zero-fill accumulators
+        // Zero-fill accumulators and SVGF textures
         {
             std::vector<float> zeros(w * h * 4, 0.f);
             accumA.write(zeros.data(), zeros.size() * sizeof(float));
             accumB.write(zeros.data(), zeros.size() * sizeof(float));
+            gBufA.write(zeros.data(), zeros.size() * sizeof(float));
+            gBufB.write(zeros.data(), zeros.size() * sizeof(float));
+            taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
+            taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
         }
         // Fill hitMesh textures with sentinel 64.0f (= "no hit")
         {
@@ -1438,36 +1590,46 @@ struct WgpuPathTracer::Impl {
     void recreateAccumTextures(int w, int h) {
         width_ = w;
         height_ = h;
-        accumA = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                             WgpuTexture::Format::RGBA16Float);
-        accumB = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                             WgpuTexture::Format::RGBA16Float);
+        auto uw = static_cast<uint32_t>(w);
+        auto uh = static_cast<uint32_t>(h);
+        auto fmt = WgpuTexture::Format::RGBA16Float;
+
+        accumA = WgpuTexture(renderer, uw, uh, fmt);
+        accumB = WgpuTexture(renderer, uw, uh, fmt);
         readAccum = &accumA;
         writeAccum = &accumB;
 
-        hitMeshA = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                               WgpuTexture::Format::RGBA16Float);
-        hitMeshB = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                               WgpuTexture::Format::RGBA16Float);
+        hitMeshA = WgpuTexture(renderer, uw, uh, fmt);
+        hitMeshB = WgpuTexture(renderer, uw, uh, fmt);
         readHitMesh  = &hitMeshA;
         writeHitMesh = &hitMeshB;
+
+        gBufA = WgpuTexture(renderer, uw, uh, fmt);
+        gBufB = WgpuTexture(renderer, uw, uh, fmt);
+        gBufCur  = &gBufA;
+        gBufPrev = &gBufB;
+
+        taaHistA = WgpuTexture(renderer, uw, uh, fmt);
+        taaHistB = WgpuTexture(renderer, uw, uh, fmt);
+        taaHistRead  = &taaHistA;
+        taaHistWrite = &taaHistB;
+
+        filteredA = WgpuTexture(renderer, uw, uh, fmt);
+        filteredB = WgpuTexture(renderer, uw, uh, fmt);
 
         std::vector<float> zeros(w * h * 4, 0.f);
         accumA.write(zeros.data(), zeros.size() * sizeof(float));
         accumB.write(zeros.data(), zeros.size() * sizeof(float));
+        gBufA.write(zeros.data(), zeros.size() * sizeof(float));
+        gBufB.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
+        taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
 
         std::vector<float> hitSentinel(w * h * 4, 64.f);
         hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
         hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
 
-        gBufTex   = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                                WgpuTexture::Format::RGBA16Float);
-        filteredA = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                                WgpuTexture::Format::RGBA16Float);
-        filteredB = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                                WgpuTexture::Format::RGBA16Float);
-        rtPipeline.setStorageTexture(10, gBufTex);
-        atrousPipeline.setTexture(3, gBufTex);
+        rtPipeline.setStorageTexture(10, *gBufCur);
 
         frameCount_ = 0.f;
     }
@@ -1724,22 +1886,52 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         wgpuCommandEncoderRelease(encoder);
     }
 
-    // Swap ping-pong
+    // Swap ping-pong (accum + hitMesh)
     std::swap(d.readAccum, d.writeAccum);
     std::swap(d.readHitMesh, d.writeHitMesh);
 
-    // À-trous denoiser (path tracer mode only)
+    // Swap gBuf for next frame
+    std::swap(d.gBufCur, d.gBufPrev);
+    d.rtPipeline.setStorageTexture(10, *d.gBufCur);
+
+    // TAA + spatial denoiser (path tracer mode only)
     WgpuTexture* displayTex = d.readAccum;
     if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
-        WgpuTexture* src = d.readAccum;
+        // --- TAA pass: reproject + clamp + blend ---
+        TaaGpuUniforms tu{};
+        tu.prevCamOri[0] = d.prevCamOri_[0]; tu.prevCamOri[1] = d.prevCamOri_[1]; tu.prevCamOri[2] = d.prevCamOri_[2];
+        tu.prevCamFwd[0] = d.prevCamFwd_[0]; tu.prevCamFwd[1] = d.prevCamFwd_[1]; tu.prevCamFwd[2] = d.prevCamFwd_[2];
+        tu.prevCamRgt[0] = d.prevCamRgt_[0]; tu.prevCamRgt[1] = d.prevCamRgt_[1]; tu.prevCamRgt[2] = d.prevCamRgt_[2];
+        tu.prevCamUp[0]  = d.prevCamUp_[0];  tu.prevCamUp[1]  = d.prevCamUp_[1];  tu.prevCamUp[2]  = d.prevCamUp_[2];
+        tu.curCamOri[0] = camPos.x; tu.curCamOri[1] = camPos.y; tu.curCamOri[2] = camPos.z;
+        tu.curCamFwd[0] = fwd.x; tu.curCamFwd[1] = fwd.y; tu.curCamFwd[2] = fwd.z;
+        tu.curCamRgt[0] = rgt.x; tu.curCamRgt[1] = rgt.y; tu.curCamRgt[2] = rgt.z;
+        tu.curCamUp[0]  = up.x;  tu.curCamUp[1]  = up.y;  tu.curCamUp[2]  = up.z;
+        tu.iRes[0] = static_cast<float>(d.width_);
+        tu.iRes[1] = static_cast<float>(d.height_);
+        tu.tanHalfFov[0] = tanHalfFov;
+        tu.frameCount[0] = d.frameCount_;
+        tu.movedMeshBits[0] = movedBits[0];
+        tu.movedMeshBits[1] = movedBits[1];
+        d.taaUniBuf.write(&tu, sizeof(tu));
+
+        d.taaPipeline.setTexture(1, *d.readAccum);
+        d.taaPipeline.setTexture(2, *d.gBufPrev);   // current frame's gBuf (after swap)
+        d.taaPipeline.setTexture(3, *d.taaHistRead);
+        d.taaPipeline.setStorageTexture(4, *d.taaHistWrite);
+        d.taaPipeline.setTexture(5, *d.readHitMesh);
+        d.taaPipeline.dispatch(gx, gy);
+
+        std::swap(d.taaHistRead, d.taaHistWrite);
+
+        // --- Spatial filter on TAA output ---
+        WgpuTexture* src = d.taaHistRead;  // TAA output (after swap)
         WgpuTexture* dst = &d.filteredA;
         WgpuTexture* aux = &d.filteredB;
 
-        // More passes while noisy, settling to 1 pass once accumulation converges.
-        // The 3×3 bilateral kernel with tight lumSigma preserves texture detail.
         const int nPasses = (d.frameCount_ < 4.f)  ? 3 :
                             (d.frameCount_ < 20.f) ? 2 : 1;
 
@@ -1748,11 +1940,18 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.atrousUniBuf.write(&au, sizeof(au));
             d.atrousPipeline.setTexture(1, *src);
             d.atrousPipeline.setStorageTexture(2, *dst);
+            d.atrousPipeline.setTexture(3, *d.gBufPrev);
             d.atrousPipeline.dispatch(gx, gy);
             src = dst;
             std::swap(dst, aux);
         }
         displayTex = src;
+
+        // Store camera for next frame's reprojection
+        d.prevCamOri_[0] = camPos.x; d.prevCamOri_[1] = camPos.y; d.prevCamOri_[2] = camPos.z;
+        d.prevCamFwd_[0] = fwd.x;    d.prevCamFwd_[1] = fwd.y;    d.prevCamFwd_[2] = fwd.z;
+        d.prevCamRgt_[0] = rgt.x;    d.prevCamRgt_[1] = rgt.y;    d.prevCamRgt_[2] = rgt.z;
+        d.prevCamUp_[0]  = up.x;     d.prevCamUp_[1]  = up.y;     d.prevCamUp_[2]  = up.z;
     }
 
     d.displayMat->customTextures["accumTex"] = displayTex;
