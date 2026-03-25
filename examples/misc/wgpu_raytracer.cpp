@@ -32,8 +32,8 @@ int main() {
 
     auto enclosingBox = Mesh::create(
             BoxGeometry::create(),
-            MeshStandardMaterial::create({{"color", Color::black}, {"roughness", 0.9f}}));
-    enclosingBox->scale *= 1000;
+            MeshStandardMaterial::create({{"color", Color::black}, {"roughness", 0.9f}, {"side", Side::Back}}));
+    enclosingBox->scale *= 200;
 
     auto sphere1 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
@@ -46,7 +46,7 @@ int main() {
     auto sphere2 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
             MeshStandardMaterial::create({{"color", Color::steelblue},
-                                          {"roughness", 0.1f},
+                                          {"roughness", 0.01f},
                                           {"metalness", 0.9f}}));
     sphere2->position.set(2.8f, 1.f, 0.f);
 
@@ -97,7 +97,7 @@ int main() {
     scene.add(pointLight2);
 
     // ---- Camera + controls ----
-    PerspectiveCamera rtCam(60.f, canvas.aspect(), 0.1f, 200.f);
+    PerspectiveCamera rtCam(60.f, canvas.aspect(), 0.1f, 300.f);
     rtCam.position.set(0.f, 3.f, 8.f);
     OrbitControls controls{rtCam, canvas};
     controls.target.set(0.f, 0.f, 0.f);
