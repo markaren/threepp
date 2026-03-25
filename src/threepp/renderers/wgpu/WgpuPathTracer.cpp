@@ -35,11 +35,13 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 namespace {
 
-constexpr int MAX_TRIS = 65536;
+constexpr int MAX_TRIS = 131072;
 constexpr int MAX_MATS = 64;
 constexpr int MAX_BVH_NODES = 2 * MAX_TRIS - 1;
 constexpr int MAX_TEX_SLOTS = 16;
-constexpr int TILE_SIZE = 512;
+constexpr int TILE_SIZE = 1024;
+constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
+constexpr int ATLAS_ROWS = (MAX_TEX_SLOTS + ATLAS_COLS - 1) / ATLAS_COLS;
 constexpr int TRI_TEX_HEIGHT = 8;
 constexpr int MAT_TEX_HEIGHT = 3;
 constexpr int TEX_PAGE_WIDTH = 8192;
@@ -91,8 +93,9 @@ struct BvhNodeGpu {
 
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
-const TILE_SIZE:   i32 = 512;
+const TILE_SIZE:   i32 = 1024;
 const MAX_TEX_SLOTS: i32 = 16;
+const ATLAS_COLS:  i32 = 8;
 
 fn triCoord(ti: i32, row: i32) -> vec2<i32> {
     return vec2<i32>(ti % TRI_PAGE_W, (ti / TRI_PAGE_W) * TRI_PAGE_H + row);
@@ -171,8 +174,12 @@ fn sampleGGXDir(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
 )"
 R"(
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
-    let ox  = i32(texSlot) * TILE_SIZE;
-    let ts  = f32(TILE_SIZE);
+    let slot = i32(texSlot);
+    let col  = slot % ATLAS_COLS;
+    let row  = slot / ATLAS_COLS;
+    let ox   = col * TILE_SIZE;
+    let oy   = row * TILE_SIZE;
+    let ts   = f32(TILE_SIZE);
     // Bilinear filter, clamped within the tile to avoid atlas bleeding
     let fp  = vec2<f32>(fract(uv.x), fract(uv.y)) * ts - 0.5;
     let x0  = clamp(i32(floor(fp.x)), 0, TILE_SIZE - 1);
@@ -181,10 +188,10 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let y1  = clamp(y0 + 1,          0, TILE_SIZE - 1);
     let wx  = fp.x - floor(fp.x);
     let wy  = fp.y - floor(fp.y);
-    let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, y0), 0).xyz;
-    let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, y0), 0).xyz;
-    let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, y1), 0).xyz;
-    let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, y1), 0).xyz;
+    let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0).xyz;
+    let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), 0).xyz;
+    let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), 0).xyz;
+    let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0).xyz;
     return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
 }
 
@@ -270,11 +277,46 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
 
+    var finalNorm = select(sn, -sn, dot(ray.dir, sn) > 0.0);
+
+    // Normal mapping
+    let normalSlot = mat1.z;
+    if (normalSlot >= 0.0) {
+        let nmSample = sampleAtlas(iuv, normalSlot);
+        let nmTangent = nmSample * 2.0 - 1.0;  // [0,1] → [-1,1]
+        // Compute TBN from triangle edges and UVs
+        let e1  = v1 - v0;
+        let e2  = v2 - v0;
+        let uv0 = vec2<f32>(uv01.x, uv01.y);
+        let uv1 = vec2<f32>(uv01.z, uv01.w);
+        let duv1 = uv1 - uv0;
+        let duv2 = uv2 - uv0;
+        let denom = duv1.x * duv2.y - duv2.x * duv1.y;
+        if (abs(denom) > 1e-8) {
+            let invD = 1.0 / denom;
+            var T = normalize((e1 * duv2.y - e2 * duv1.y) * invD);
+            // Gram-Schmidt orthogonalize T against N
+            T = normalize(T - finalNorm * dot(finalNorm, T));
+            let B = cross(finalNorm, T);
+            finalNorm = normalize(T * nmTangent.x + B * nmTangent.y + finalNorm * nmTangent.z);
+        }
+    }
+
+    // Roughness map
+    var shininess = mat0.w;
+    let roughSlot = mat1.w;
+    if (roughSlot >= 0.0) {
+        let roughSample = sampleAtlas(iuv, roughSlot);
+        // roughnessMap green channel (glTF convention)
+        let mappedRough = roughSample.y;
+        shininess = max(1e-4, mappedRough * mappedRough);
+    }
+
     (*h).t         = isect.t;
     (*h).point     = ray.origin + isect.t * ray.dir;
-    (*h).normal    = select(sn, -sn, dot(ray.dir, sn) > 0.0);
+    (*h).normal    = finalNorm;
     (*h).albedo    = mat0.xyz;
-    (*h).shininess = mat0.w;
+    (*h).shininess = shininess;
     (*h).uv        = iuv;
     (*h).texSlot   = mat1.x;
     (*h).metalness = mat1.y;
@@ -989,31 +1031,30 @@ struct BvhNode {
 static std::vector<unsigned char> buildAtlas(
         const std::vector<Mesh*>& meshes,
         std::unordered_map<Texture*, int>& texSlotMap) {
-    const int atlasW = MAX_TEX_SLOTS * TILE_SIZE;
-    std::vector<unsigned char> atlas(atlasW * TILE_SIZE * 4, 255);
+    const int atlasW = ATLAS_COLS * TILE_SIZE;
+    const int atlasH = ATLAS_ROWS * TILE_SIZE;
+    std::vector<unsigned char> atlas(atlasW * atlasH * 4, 255);
 
-    int slot = 0;
-    for (auto& mesh : meshes) {
-        if (slot >= MAX_TEX_SLOTS) break;
-        auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get());
-        if (!mwm || !mwm->map) continue;
-        Texture* tex = mwm->map.get();
-        if (texSlotMap.count(tex)) continue;
-
+    auto addTexture = [&](Texture* tex, int& slot) {
+        if (!tex || slot >= MAX_TEX_SLOTS) return;
+        if (texSlotMap.count(tex)) return;
         auto& img = tex->image();
-        if (img.width == 0 || img.height == 0) continue;
+        if (img.width == 0 || img.height == 0) return;
         const auto& src = img.data<unsigned char>();
         const int srcW = static_cast<int>(img.width);
         const int srcH = static_cast<int>(img.height);
         const int ch = static_cast<int>(src.size()) / (srcW * srcH);
 
-        const int destX = slot * TILE_SIZE;
+        const int col = slot % ATLAS_COLS;
+        const int row = slot / ATLAS_COLS;
+        const int destX = col * TILE_SIZE;
+        const int destY = row * TILE_SIZE;
         for (int ty = 0; ty < TILE_SIZE; ++ty) {
             const int sy = ty * srcH / TILE_SIZE;
             for (int tx = 0; tx < TILE_SIZE; ++tx) {
                 const int sx = tx * srcW / TILE_SIZE;
                 const int si = (sy * srcW + sx) * ch;
-                const int di = (ty * atlasW + destX + tx) * 4;
+                const int di = ((destY + ty) * atlasW + destX + tx) * 4;
                 atlas[di + 0] = src[si + 0];
                 atlas[di + 1] = src[si + 1];
                 atlas[di + 2] = src[si + 2];
@@ -1021,6 +1062,17 @@ static std::vector<unsigned char> buildAtlas(
             }
         }
         texSlotMap[tex] = slot++;
+    };
+
+    int slot = 0;
+    for (auto& mesh : meshes) {
+        if (slot >= MAX_TEX_SLOTS) break;
+        auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get());
+        if (mwm && mwm->map) addTexture(mwm->map.get(), slot);
+        auto* mnm = dynamic_cast<MaterialWithNormalMap*>(mesh->material().get());
+        if (mnm && mnm->normalMap) addTexture(mnm->normalMap.get(), slot);
+        auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get());
+        if (mwr && mwr->roughnessMap) addTexture(mwr->roughnessMap.get(), slot);
     }
     return atlas;
 }
@@ -1092,6 +1144,7 @@ static int buildGeometryBuffers(
                  albedo.r, albedo.g, albedo.b, shininess);
 
         float texSlot = -1.f;
+        float normalSlot = -1.f;
         float texOffsetX = 0.f, texOffsetY = 0.f;
         float texRepeatX = 1.f, texRepeatY = 1.f;
         if (auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get())) {
@@ -1106,7 +1159,24 @@ static int buildGeometryBuffers(
                 }
             }
         }
-        setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, metalness, 0.f, 0.f);
+        if (auto* mnm = dynamic_cast<MaterialWithNormalMap*>(mesh->material().get())) {
+            if (mnm->normalMap) {
+                auto it = texSlotMap.find(mnm->normalMap.get());
+                if (it != texSlotMap.end()) {
+                    normalSlot = static_cast<float>(it->second);
+                }
+            }
+        }
+        float roughSlot = -1.f;
+        if (auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get())) {
+            if (mwr->roughnessMap) {
+                auto it = texSlotMap.find(mwr->roughnessMap.get());
+                if (it != texSlotMap.end()) {
+                    roughSlot = static_cast<float>(it->second);
+                }
+            }
+        }
+        setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, metalness, normalSlot, roughSlot);
         setTexel(matBuffer, MAX_MATS, matCount, 2, emissive.r, emissive.g, emissive.b, 0.f);
 
         const int matIdx = matCount++;
@@ -1490,7 +1560,7 @@ struct WgpuPathTracer::Impl {
           matTex(r, MAX_MATS, MAT_TEX_HEIGHT,
                  WgpuTexture::Format::RGBA32Float,
                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
-          texAtlasTex(r, MAX_TEX_SLOTS * TILE_SIZE, TILE_SIZE,
+          texAtlasTex(r, ATLAS_COLS * TILE_SIZE, ATLAS_ROWS * TILE_SIZE,
                       WgpuTexture::Format::RGBA8Unorm,
                       WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           // Accumulation textures

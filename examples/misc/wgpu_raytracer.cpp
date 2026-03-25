@@ -75,8 +75,6 @@ int main() {
     auto obj = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
     obj->traverseType<Mesh>([&](Mesh& m) {
         m.castShadow = true;
-        auto texMat = m.material()->as<MaterialWithMap>();
-        m.setMaterial(MeshStandardMaterial::create({{"map", texMat ? texMat->map : nullptr}, {"roughness", 0.9f}}));
     });
     obj->position.z = -4.f;
     obj->position.y = -1.f;
