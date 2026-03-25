@@ -16,6 +16,7 @@
 #include "threepp/math/Matrix4.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
+#include "threepp/textures/Texture.hpp"
 
 #include <webgpu/webgpu.h>
 
@@ -65,6 +66,7 @@ struct RtUniforms {
     lightType:  array<vec4<f32>, 4>,
     spp:          vec4<f32>,
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
+    envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
 };
 
 struct BvhNodeGpu {
@@ -82,6 +84,7 @@ struct BvhNodeGpu {
 @group(0) @binding(6) var texAtlas:      texture_2d<f32>;
 @group(0) @binding(7) var hitMeshRead:   texture_2d<f32>;
 @group(0) @binding(8) var hitMeshWrite:  texture_storage_2d<rgba16float, write>;
+@group(0) @binding(9) var envTex:        texture_2d<f32>;
 
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
@@ -171,7 +174,24 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     return textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
 }
 
-fn sky(d: vec3<f32>) -> vec3<f32> {
+fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
+    let mode = i32(rt.envColor.w);
+    if (mode == 1) {
+        // Solid background color
+        return rt.envColor.xyz;
+    } else if (mode == 2) {
+        // Equirectangular texture
+        let nd  = normalize(d);
+        let phi = atan2(nd.z, nd.x);
+        let theta = asin(clamp(nd.y, -1.0, 1.0));
+        let uv  = vec2<f32>(0.5 + phi / (2.0 * PI),
+                            0.5 - theta / PI);
+        let sz  = vec2<f32>(textureDimensions(envTex, 0));
+        let px  = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
+                            clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
+        return textureLoad(envTex, px, 0).xyz;
+    }
+    // Default: procedural sky gradient
     let t = clamp(0.5 * (normalize(d).y + 1.0), 0.0, 1.0);
     return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.32, 0.52, 1.0), t);
 }
@@ -333,7 +353,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
 R"(
 fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
-    if (h0.t >= 1e30) { return sky(ray.dir); }
+    if (h0.t >= 1e30) { return sampleEnv(ray.dir); }
     var col = shade(h0, ray.dir);
     if (h0.shininess < 0.5) {
         let k = max(0.0, 1.0 - h0.shininess * 2.0) * 0.55;
@@ -341,7 +361,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
         r1.origin = h0.point + h0.normal * 1e-3;
         r1.dir    = reflect(ray.dir, h0.normal);
         let h1 = sceneHit(r1);
-        let rc = select(shade(h1, r1.dir), sky(r1.dir), h1.t >= 1e30);
+        let rc = select(shade(h1, r1.dir), sampleEnv(r1.dir), h1.t >= 1e30);
         col = col * (1.0 - k) + rc * k;
     }
     return col;
@@ -357,7 +377,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     for (var i = 0; i < 8; i++) {
         let h = sceneHit(ray);
         if (h.t >= 1e29) {
-            radiance += throughput * sky(ray.dir);
+            radiance += throughput * sampleEnv(ray.dir);
             break;
         }
         if (i == 0) { *primaryMeshIdx = u32(h.meshIdx); }
@@ -677,7 +697,8 @@ struct alignas(16) RtGpuUniforms {
     float lightType[4][4];
     float    spp[4];
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
-    float    _pad[32];
+    float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
+    float    _pad[28];
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -1116,6 +1137,8 @@ struct WgpuPathTracer::Impl {
     WgpuTexture hitMeshB;
     WgpuTexture* readHitMesh;
     WgpuTexture* writeHitMesh;
+    WgpuTexture envTexGpu;   // equirectangular env map (1x1 placeholder when unused)
+    Texture*    prevEnvTex_ = nullptr;
 
     // GPU storage buffers
     WgpuBuffer bvhNodeBuf;
@@ -1191,6 +1214,8 @@ struct WgpuPathTracer::Impl {
           hitMeshB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                    WgpuTexture::Format::RGBA16Float),
           readHitMesh(&hitMeshA), writeHitMesh(&hitMeshB),
+          envTexGpu(r, 1u, 1u, WgpuTexture::Format::RGBA8Unorm,
+                    WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           // Storage buffers
           bvhNodeBuf(r, static_cast<size_t>(MAX_BVH_NODES) * 12 * sizeof(float),
                      WgpuBuffer::Usage::Storage),
@@ -1238,6 +1263,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(4, matTex);
         rtPipeline.setTexture(5, triTex);
         rtPipeline.setTexture(6, texAtlasTex);
+        rtPipeline.setTexture(9, envTexGpu);
 
         // Zero-fill accumulators
         {
@@ -1430,6 +1456,53 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.spp[0] = static_cast<float>(d.spp_);
     u.movedMeshBits[0] = movedBits[0];
     u.movedMeshBits[1] = movedBits[1];
+
+    // Environment light from scene.background / scene.environment
+    u.envColor[3] = 0.f;  // default: sky gradient
+    if (auto* s = dynamic_cast<Scene*>(&scene)) {
+        // Priority: environment texture > background texture > background color
+        Texture* envTex = s->environment.get();
+        if (!envTex && s->background.isTexture())
+            envTex = s->background.texture().get();
+
+        if (envTex) {
+            if (envTex != d.prevEnvTex_) {
+                // Upload new equirectangular texture (LDR or HDR)
+                auto& img = envTex->image();
+                if (img.width > 0 && img.height > 0) {
+                    bool isHdr = false;
+                    try { (void)img.data<float>(); isHdr = true; }
+                    catch (const std::bad_variant_access&) {}
+
+                    if (isHdr) {
+                        const auto& src = img.data<float>();
+                        d.envTexGpu = WgpuTexture(d.renderer,
+                                                  static_cast<uint32_t>(img.width),
+                                                  static_cast<uint32_t>(img.height),
+                                                  WgpuTexture::Format::RGBA32Float,
+                                                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+                        d.envTexGpu.write(src.data(), src.size() * sizeof(float));
+                    } else {
+                        const auto& src = img.data<unsigned char>();
+                        d.envTexGpu = WgpuTexture(d.renderer,
+                                                  static_cast<uint32_t>(img.width),
+                                                  static_cast<uint32_t>(img.height),
+                                                  WgpuTexture::Format::RGBA8Unorm,
+                                                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+                        d.envTexGpu.write(src.data(), src.size());
+                    }
+                    d.rtPipeline.setTexture(9, d.envTexGpu);
+                }
+                d.prevEnvTex_ = envTex;
+            }
+            u.envColor[3] = 2.f;
+        } else if (s->background.isColor()) {
+            const Color& c = s->background.color();
+            u.envColor[0] = c.r; u.envColor[1] = c.g; u.envColor[2] = c.b;
+            u.envColor[3] = 1.f;
+            d.prevEnvTex_ = nullptr;
+        }
+    }
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {

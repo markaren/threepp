@@ -17,7 +17,6 @@ int main() {
 
     WgpuRenderer renderer(canvas);
     renderer.shadowMap().enabled = true;
-    renderer.setClearColor(Color(0x000000));
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setSamplesPerPixel(2);
@@ -64,6 +63,7 @@ int main() {
     floor->receiveShadow = true;
 
     Scene scene;
+    scene.background = Color::whitesmoke;
     scene.add(boxMesh);
     scene.add(sphere1);
     scene.add(sphere2);
