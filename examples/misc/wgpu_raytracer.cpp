@@ -44,7 +44,7 @@ constexpr int MAX_BVH_NODES = 2 * MAX_TRIS - 1;
 constexpr int MAX_TEX_SLOTS = 16;
 constexpr int TILE_SIZE = 512;   // 16*512=8192=max WebGPU tex width; also update WGSL TILE_SIZE!
 constexpr int TRI_TEX_HEIGHT = 8;// rows: v0 v1 v2 n0 n1 n2 uv01 uv2
-constexpr int MAT_TEX_HEIGHT = 2;// row0: albedo+shininess, row1: texSlot
+constexpr int MAT_TEX_HEIGHT = 3;// row0: albedo+shininess, row1: texSlot+metalness, row2: emissive.rgb
 constexpr int TEX_PAGE_WIDTH = 8192;
 constexpr int TRI_TEX_PAGES = (MAX_TRIS + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
 constexpr int BVH_TEX_PAGES = (MAX_BVH_NODES + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
@@ -111,6 +111,8 @@ struct Hit  {
     shininess: f32,
     uv:        vec2<f32>,
     texSlot:   f32,   // < 0 = no texture
+    metalness: f32,
+    emissive:  vec3<f32>,
 }
 
 // ---- PCG random number generator ----
@@ -247,6 +249,7 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let matIdx = i32(r0.w);
     let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
+    let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
 
     (*h).t         = isect.t;
     (*h).point     = ray.origin + isect.t * ray.dir;
@@ -255,6 +258,8 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     (*h).shininess = mat0.w;
     (*h).uv        = iuv;
     (*h).texSlot   = mat1.x;
+    (*h).metalness = mat1.y;
+    (*h).emissive  = mat2.xyz;
 }
 
 // ---- BVH traversal ----
@@ -322,7 +327,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
             let NdotV = max(0.001, dot(h.normal, wo_s));
             let NdotL2 = max(0.001, NdotL);
             let VdotH = max(0.0, dot(wo_s, hv));
-            let F0_s  = vec3<f32>(0.04);
+            let F0_s  = mix(vec3<f32>(0.04), albedo, h.metalness);
             let Ds    = ggxD(NdotH, h.shininess);
             let Fs    = schlick(VdotH, F0_s);
             let Gs    = ggxG1(NdotV, h.shininess) * ggxG1(NdotL2, h.shininess);
@@ -331,7 +336,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
             col += lc * (f_diff + f_spec) * NdotL;
         }
     }
-    return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+    return clamp(col + h.emissive, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 // ---- Deterministic trace with one mirror bounce ----
@@ -365,6 +370,8 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
             break;
         }
 
+        radiance += throughput * h.emissive;
+
         // Resolve albedo from texture atlas if this material has a texture
         var albedo = h.albedo;
         if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
@@ -390,7 +397,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
                 let NdotH = max(0.0, dot(h.normal, hv));
                 let NdotV = max(0.001, dot(h.normal, wo));
                 let VdotH = max(0.0, dot(wo, hv));
-                let F0    = vec3<f32>(0.04);
+                let F0    = mix(vec3<f32>(0.04), albedo, h.metalness);
                 let D     = ggxD(NdotH, h.shininess);
                 let F     = schlick(VdotH, F0);
                 let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, NdotL), h.shininess);
@@ -411,7 +418,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
 
         // Sample next direction: 50/50 GGX specular vs. cosine-weighted diffuse
         let wo_b = normalize(-ray.dir);
-        let F0_b = vec3<f32>(0.04);
+        let F0_b = mix(vec3<f32>(0.04), albedo, h.metalness);
         var wi_b: vec3<f32>;
         if (rand(seed) < 0.5) {
             // GGX specular sample
@@ -586,10 +593,12 @@ static std::vector<unsigned char> buildAtlas(
 // ---------------------------------------------------------------------------
 // Extract material properties
 // ---------------------------------------------------------------------------
-static std::pair<Color, float> extractMaterial(const Material* mat) {
+static std::tuple<Color, float, float, Color> extractMaterial(const Material* mat) {
     Color albedo(0.8f, 0.8f, 0.8f);
     float shininess = 8.f;
-    if (!mat) return {albedo, shininess};
+    float metalness = 0.f;
+    Color emissive(0.f, 0.f, 0.f);
+    if (!mat) return {albedo, shininess, metalness, emissive};
     if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
         albedo = c->color;
     if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
@@ -599,7 +608,13 @@ static std::pair<Color, float> extractMaterial(const Material* mat) {
         const float n = std::max(1.f, s->shininess);
         shininess = std::max(0.04f, std::sqrt(2.f / (n + 2.f)));  // Phong → GGX alpha
     }
-    return {albedo, shininess};
+    if (auto* m = dynamic_cast<const MaterialWithMetalness*>(mat))
+        metalness = std::max(0.f, std::min(1.f, m->metalness));
+    if (auto* e = dynamic_cast<const MaterialWithEmissive*>(mat))
+        emissive = Color(e->emissive.r * e->emissiveIntensity,
+                         e->emissive.g * e->emissiveIntensity,
+                         e->emissive.b * e->emissiveIntensity);
+    return {albedo, shininess, metalness, emissive};
 }
 
 // ---------------------------------------------------------------------------
@@ -636,7 +651,7 @@ static int buildGeometryBuffers(
     for (auto& mesh : meshes) {
         if (triCount >= MAX_TRIS || matCount >= MAX_MATS) break;
 
-        auto [albedo, shininess] = extractMaterial(mesh->material().get());
+        auto [albedo, shininess, metalness, emissive] = extractMaterial(mesh->material().get());
         setTexel(matBuffer, MAX_MATS, matCount, 0,
                  albedo.r, albedo.g, albedo.b, shininess);
 
@@ -655,7 +670,8 @@ static int buildGeometryBuffers(
                 }
             }
         }
-        setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, 0.f, 0.f, 0.f);
+        setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, metalness, 0.f, 0.f);
+        setTexel(matBuffer, MAX_MATS, matCount, 2, emissive.r, emissive.g, emissive.b, 0.f);
 
         const int matIdx = matCount++;
 
@@ -1004,13 +1020,14 @@ int main() {
     auto sphere1 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
             MeshStandardMaterial::create({{"color", Color::orangered},
-                                          {"roughness", 0.85f}}));
+                                          {"roughness", 0.85f}, {"emissive", Color::orangered}, {"emissiveIntensity", 0.9f}}));
     sphere1->position.set(-2.8f, 1.f, 0.f);
 
     auto sphere2 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
             MeshStandardMaterial::create({{"color", Color::steelblue},
-                                          {"roughness", 0.45f}}));
+                                          {"roughness", 0.1f},
+                                          {"metalness", 0.9f}}));
     sphere2->position.set(2.8f, 1.f, 0.f);
 
     auto floor = Mesh::create(
