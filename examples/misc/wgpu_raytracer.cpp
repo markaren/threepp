@@ -20,6 +20,7 @@ int main() {
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setSamplesPerPixel(2);
+    pathTracer.setDenoiserEnabled(false);
 
     // ---- Scene objects ----
     TextureLoader tl;
@@ -105,7 +106,7 @@ int main() {
 
     // ---- UI ----
     bool pathTracerOn = false;
-    bool denoiserOn = false;
+    bool denoiserOn = pathTracer.denoiserEnabled();
     bool lightMoving = false;
     bool animateBox = true;
     bool showEnclosingBox = true;

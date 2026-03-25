@@ -368,13 +368,20 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     if (h0.t >= 1e30) { return sampleEnv(ray.dir); }
     var col = shade(h0, ray.dir);
     if (h0.shininess < 0.5) {
-        let k = max(0.0, 1.0 - h0.shininess * 2.0) * 0.55;
+        let smoothness = max(0.0, 1.0 - h0.shininess * 2.0);
+        let F0_r  = mix(vec3<f32>(0.04), h0.albedo, h0.metalness);
+        let NdotV = max(0.001, dot(h0.normal, normalize(-ray.dir)));
+        let k     = schlick(NdotV, F0_r) * smoothness;
         var r1: Ray;
         r1.origin = h0.point + h0.normal * 1e-3;
         r1.dir    = reflect(ray.dir, h0.normal);
         let h1 = sceneHit(r1);
-        let rc = select(shade(h1, r1.dir), sampleEnv(r1.dir), h1.t >= 1e30);
-        col = col * (1.0 - k) + rc * k;
+        var rc = select(shade(h1, r1.dir), sampleEnv(r1.dir), h1.t >= 1e30);
+        // For metals in a dark enclosure the reflected colour can be near-black,
+        // but the metal still has its characteristic colour in the F0 tint.
+        // Add F0 as a minimum reflected ambient so the metal never looks fully black.
+        rc = max(rc, F0_r * 0.08);
+        col = col * (vec3<f32>(1.0) - k) + rc * k;
     }
     return col;
 }
@@ -447,19 +454,23 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         let wo_b = normalize(-ray.dir);
         let F0_b = mix(vec3<f32>(0.04), albedo, h.metalness);
         var wi_b: vec3<f32>;
-        if (rand(seed) < 0.5) {
+        // Importance-sample the lobe type by metalness:
+        // metals are pure specular (p_spec→1), dielectrics split 50/50.
+        let p_spec = mix(0.5, 0.98, h.metalness);
+        if (rand(seed) < p_spec) {
             wi_b = sampleGGXDir(wo_b, h.normal, h.shininess, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
             let hb  = normalize(wo_b + wi_b);
             let Fb  = schlick(max(0.0, dot(wo_b, hb)), F0_b);
             let G1L = ggxG1(cos_b, h.shininess);
-            throughput *= Fb * G1L * 2.0;
+            throughput *= Fb * G1L / p_spec;
         } else {
             wi_b = cosineHemisphere(h.normal, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
-            throughput *= albedo * 2.0;
+            // Diffuse contribution is zero for pure metals, scales with (1-metalness)
+            throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
         }
         ray.origin = h.point + h.normal * 1e-3;
         ray.dir    = wi_b;
@@ -871,7 +882,7 @@ static std::tuple<Color, float, float, Color> extractMaterial(const Material* ma
         albedo = c->color;
     if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
         const float rough = std::max(0.f, std::min(1.f, r->roughness));
-        shininess = std::max(0.04f, rough * rough);
+        shininess = std::max(1e-4f, rough * rough);
     } else if (auto* s = dynamic_cast<const MaterialWithSpecular*>(mat)) {
         const float n = std::max(1.f, s->shininess);
         shininess = std::max(0.04f, std::sqrt(2.f / (n + 2.f)));
