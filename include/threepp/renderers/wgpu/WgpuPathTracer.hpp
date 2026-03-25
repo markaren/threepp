@@ -36,6 +36,10 @@ namespace threepp {
         void setMode(Mode mode);
         [[nodiscard]] Mode mode() const;
 
+        /// Set samples per pixel for raytracer mode (1, 2, or 4). Default: 1.
+        void setSamplesPerPixel(int spp);
+        [[nodiscard]] int samplesPerPixel() const;
+
         /// Resize accumulation textures. Resets accumulation.
         void setSize(std::pair<int, int> size);
         [[nodiscard]] std::pair<int, int> size() const;

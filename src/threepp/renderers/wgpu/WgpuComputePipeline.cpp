@@ -234,7 +234,7 @@ void WgpuComputePipeline::setStorageBufferRead(uint32_t binding, WgpuBuffer& buf
     impl_->bindings[binding] = info;
 }
 
-void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
+void WgpuComputePipeline::encode(WGPUComputePassEncoder pass, uint32_t x, uint32_t y, uint32_t z) {
     if (!impl_->pipelineBuilt) {
         impl_->buildPipeline();
     }
@@ -268,7 +268,14 @@ void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     bgDesc.entries = entries.data();
     WGPUBindGroup bindGroup = wgpuDeviceCreateBindGroup(impl_->device, &bgDesc);
 
-    // Create command encoder and dispatch
+    wgpuComputePassEncoderSetPipeline(pass, impl_->pipeline);
+    wgpuComputePassEncoderSetBindGroup(pass, 0, bindGroup, 0, nullptr);
+    wgpuComputePassEncoderDispatchWorkgroups(pass, x, y, z);
+
+    wgpuBindGroupRelease(bindGroup);
+}
+
+void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     WGPUCommandEncoderDescriptor encDesc{};
     encDesc.label = WGPUStringView{"compute_enc", WGPU_STRLEN} ;
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(impl_->device, &encDesc);
@@ -277,9 +284,8 @@ void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
     passDesc.label = WGPUStringView{"compute_pass", WGPU_STRLEN} ;
     WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
 
-    wgpuComputePassEncoderSetPipeline(pass, impl_->pipeline);
-    wgpuComputePassEncoderSetBindGroup(pass, 0, bindGroup, 0, nullptr);
-    wgpuComputePassEncoderDispatchWorkgroups(pass, x, y, z);
+    encode(pass, x, y, z);
+
     wgpuComputePassEncoderEnd(pass);
     wgpuComputePassEncoderRelease(pass);
 
@@ -290,5 +296,4 @@ void WgpuComputePipeline::dispatch(uint32_t x, uint32_t y, uint32_t z) {
 
     wgpuCommandBufferRelease(cmd);
     wgpuCommandEncoderRelease(encoder);
-    wgpuBindGroupRelease(bindGroup);
 }

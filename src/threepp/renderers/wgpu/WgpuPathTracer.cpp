@@ -17,6 +17,8 @@
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+#include <webgpu/webgpu.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -61,6 +63,7 @@ struct RtUniforms {
     lightPos:   array<vec4<f32>, 4>,
     lightCol:   array<vec4<f32>, 4>,
     lightType:  array<vec4<f32>, 4>,
+    spp:        vec4<f32>,
 };
 
 struct BvhNodeGpu {
@@ -71,7 +74,7 @@ struct BvhNodeGpu {
 
 @group(0) @binding(0) var<uniform> rt:          RtUniforms;
 @group(0) @binding(1) var accumRead:  texture_2d<f32>;
-@group(0) @binding(2) var accumWrite: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(2) var accumWrite: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<storage, read> bvhNodes: array<BvhNodeGpu>;
 @group(0) @binding(4) var matData:    texture_2d<f32>;
 @group(0) @binding(5) var triData:    texture_2d<f32>;
@@ -427,15 +430,25 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var sample: vec3<f32>;
 
     if (!isPT) {
-        let o0 = vec2<f32>( 0.125,  0.375);
-        let o1 = vec2<f32>(-0.375,  0.125);
-        let o2 = vec2<f32>( 0.375, -0.125);
-        let o3 = vec2<f32>(-0.125, -0.375);
+        let spp = i32(rt.spp.x);
         let fp = vec2<f32>(f32(pixel.x), f32(pixel.y));
-        sample = (raytrace(makeRay(fp + o0, res))
-                + raytrace(makeRay(fp + o1, res))
-                + raytrace(makeRay(fp + o2, res))
-                + raytrace(makeRay(fp + o3, res))) * 0.25;
+        if (spp >= 4) {
+            let o0 = vec2<f32>( 0.125,  0.375);
+            let o1 = vec2<f32>(-0.375,  0.125);
+            let o2 = vec2<f32>( 0.375, -0.125);
+            let o3 = vec2<f32>(-0.125, -0.375);
+            sample = (raytrace(makeRay(fp + o0, res))
+                    + raytrace(makeRay(fp + o1, res))
+                    + raytrace(makeRay(fp + o2, res))
+                    + raytrace(makeRay(fp + o3, res))) * 0.25;
+        } else if (spp >= 2) {
+            let o0 = vec2<f32>( 0.25,  0.25);
+            let o1 = vec2<f32>(-0.25, -0.25);
+            sample = (raytrace(makeRay(fp + o0, res))
+                    + raytrace(makeRay(fp + o1, res))) * 0.5;
+        } else {
+            sample = raytrace(makeRay(fp + vec2<f32>(0.5, 0.5), res));
+        }
         textureStore(accumWrite, pixel, vec4<f32>(sample, 1.0));
     } else {
         var seed = pcg(gid.x * 1973u + 1u) ^ pcg(gid.y * 9277u + 1u) ^ pcg(fc * 26699u + 1u);
@@ -627,7 +640,8 @@ struct alignas(16) RtGpuUniforms {
     float lightPos[4][4];
     float lightCol[4][4];
     float lightType[4][4];
-    float _pad[40];
+    float spp[4];
+    float _pad[36];
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -1051,6 +1065,8 @@ static void buildBVH(std::vector<float>& triBuffer, int triCount,
 // ---------------------------------------------------------------------------
 struct WgpuPathTracer::Impl {
     WgpuRenderer& renderer;
+    WGPUDevice device;
+    WGPUQueue queue;
 
     // GPU textures
     WgpuTexture triTex;
@@ -1106,11 +1122,14 @@ struct WgpuPathTracer::Impl {
     Vector3 prevCamPos_;
     Vector3 prevCamDir_;
     WgpuPathTracer::Mode mode_ = WgpuPathTracer::Mode::Raytracer;
+    int spp_ = 1;
 
     int width_, height_;
 
     Impl(WgpuRenderer& r, int w, int h)
         : renderer(r),
+          device(static_cast<WGPUDevice>(r.nativeDevice())),
+          queue(static_cast<WGPUQueue>(r.nativeQueue())),
           // Geometry textures
           triTex(r, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * TRI_TEX_PAGES,
                  WgpuTexture::Format::RGBA32Float,
@@ -1123,9 +1142,9 @@ struct WgpuPathTracer::Impl {
                       WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           // Accumulation textures
           accumA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                 WgpuTexture::Format::RGBA32Float),
+                 WgpuTexture::Format::RGBA16Float),
           accumB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                 WgpuTexture::Format::RGBA32Float),
+                 WgpuTexture::Format::RGBA16Float),
           readAccum(&accumA), writeAccum(&accumB),
           // Storage buffers
           bvhNodeBuf(r, static_cast<size_t>(MAX_BVH_NODES) * 12 * sizeof(float),
@@ -1195,9 +1214,9 @@ struct WgpuPathTracer::Impl {
         width_ = w;
         height_ = h;
         accumA = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                             WgpuTexture::Format::RGBA32Float);
+                             WgpuTexture::Format::RGBA16Float);
         accumB = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
-                             WgpuTexture::Format::RGBA32Float);
+                             WgpuTexture::Format::RGBA16Float);
         readAccum = &accumA;
         writeAccum = &accumB;
 
@@ -1306,16 +1325,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         VtGpuUniforms vtU{};
         vtU.triCount = static_cast<uint32_t>(d.triCount_);
         d.vtUniBuf.write(&vtU, sizeof(vtU));
-        const uint32_t vtGx = (static_cast<uint32_t>(d.triCount_) + 63u) / 64u;
-        d.vtPipeline.dispatch(vtGx);
 
         RefitGpuUniforms rfU{};
         rfU.leafCount = static_cast<uint32_t>(d.leafIndices.size());
         d.refitUniBuf.write(&rfU, sizeof(rfU));
         d.bvhCounterBuf.write(d.bvhCounterZeros.data(),
                               static_cast<size_t>(d.numBvhNodes_) * sizeof(uint32_t));
-        const uint32_t rfGx = (static_cast<uint32_t>(d.leafIndices.size()) + 63u) / 64u;
-        d.refitPipeline.dispatch(rfGx);
     }
 
     // Compute tanHalfFov from the camera
@@ -1336,6 +1351,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.frameCount[0] = d.frameCount_;
     u.triCount[0] = static_cast<float>(d.triCount_);
     u.mode[0] = (d.mode_ == Mode::PathTracer) ? 1.f : 0.f;
+    u.spp[0] = static_cast<float>(d.spp_);
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -1360,12 +1376,43 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.lightCount[0] = static_cast<float>(nLights);
     d.rtUniformBuf.write(&u, sizeof(u));
 
-    // Dispatch ray trace
+    // Set per-frame accum texture bindings
     d.rtPipeline.setTexture(1, *d.readAccum);
     d.rtPipeline.setStorageTexture(2, *d.writeAccum);
-    const uint32_t gx = (static_cast<uint32_t>(d.width_) + 7u) / 8u;
-    const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
-    d.rtPipeline.dispatch(gx, gy);
+
+    // Batched GPU dispatch — single command encoder + compute pass
+    {
+        WGPUCommandEncoderDescriptor encDesc{};
+        encDesc.label = WGPUStringView{"pt_enc", WGPU_STRLEN};
+        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(d.device, &encDesc);
+
+        WGPUComputePassDescriptor passDesc{};
+        passDesc.label = WGPUStringView{"pt_pass", WGPU_STRLEN};
+        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, &passDesc);
+
+        if (anyMeshMoved) {
+            const uint32_t vtGx = (static_cast<uint32_t>(d.triCount_) + 63u) / 64u;
+            d.vtPipeline.encode(pass, vtGx);
+
+            const uint32_t rfGx = (static_cast<uint32_t>(d.leafIndices.size()) + 63u) / 64u;
+            d.refitPipeline.encode(pass, rfGx);
+        }
+
+        const uint32_t gx = (static_cast<uint32_t>(d.width_) + 7u) / 8u;
+        const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
+        d.rtPipeline.encode(pass, gx, gy);
+
+        wgpuComputePassEncoderEnd(pass);
+        wgpuComputePassEncoderRelease(pass);
+
+        WGPUCommandBufferDescriptor cmdDesc{};
+        cmdDesc.label = WGPUStringView{"pt_cmd", WGPU_STRLEN};
+        WGPUCommandBuffer cmd = wgpuCommandEncoderFinish(encoder, &cmdDesc);
+        wgpuQueueSubmit(d.queue, 1, &cmd);
+
+        wgpuCommandBufferRelease(cmd);
+        wgpuCommandEncoderRelease(encoder);
+    }
 
     // Swap ping-pong
     std::swap(d.readAccum, d.writeAccum);
@@ -1386,6 +1433,14 @@ void WgpuPathTracer::setMode(Mode mode) {
 
 WgpuPathTracer::Mode WgpuPathTracer::mode() const {
     return pimpl_->mode_;
+}
+
+void WgpuPathTracer::setSamplesPerPixel(int spp) {
+    pimpl_->spp_ = (spp >= 4) ? 4 : (spp >= 2) ? 2 : 1;
+}
+
+int WgpuPathTracer::samplesPerPixel() const {
+    return pimpl_->spp_;
 }
 
 void WgpuPathTracer::setSize(std::pair<int, int> size) {

@@ -9,6 +9,7 @@
 typedef struct WGPUDeviceImpl* WGPUDevice;
 typedef struct WGPUQueueImpl* WGPUQueue;
 typedef struct WGPUComputePipelineImpl* WGPUComputePipeline;
+typedef struct WGPUComputePassEncoderImpl* WGPUComputePassEncoder;
 typedef struct WGPUBindGroupLayoutImpl* WGPUBindGroupLayout;
 typedef struct WGPUPipelineLayoutImpl* WGPUPipelineLayout;
 typedef struct WGPUShaderModuleImpl* WGPUShaderModule;
@@ -60,7 +61,10 @@ namespace threepp {
         /// Set a read-only storage buffer binding (var<storage, read>).
         void setStorageBufferRead(uint32_t binding, WgpuBuffer& buffer);
 
-        /// Dispatch compute workgroups.
+        /// Encode a dispatch into an existing compute pass (no submission).
+        void encode(WGPUComputePassEncoder pass, uint32_t x, uint32_t y = 1, uint32_t z = 1);
+
+        /// Create an encoder, dispatch, and submit (convenience wrapper).
         void dispatch(uint32_t x, uint32_t y = 1, uint32_t z = 1);
 
     private:

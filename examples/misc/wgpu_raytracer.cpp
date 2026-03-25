@@ -20,6 +20,7 @@ int main() {
     renderer.setClearColor(Color(0x000000));
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
+    pathTracer.setSamplesPerPixel(2);
 
     // ---- Scene objects ----
     TextureLoader tl;
