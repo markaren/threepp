@@ -63,8 +63,8 @@ struct RtUniforms {
     lightPos:   array<vec4<f32>, 4>,
     lightCol:   array<vec4<f32>, 4>,
     lightType:  array<vec4<f32>, 4>,
-    spp:        vec4<f32>,
-    sceneMotion: vec4<f32>,
+    spp:          vec4<f32>,
+    movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
 };
 
 struct BvhNodeGpu {
@@ -78,8 +78,10 @@ struct BvhNodeGpu {
 @group(0) @binding(2) var accumWrite: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<storage, read> bvhNodes: array<BvhNodeGpu>;
 @group(0) @binding(4) var matData:    texture_2d<f32>;
-@group(0) @binding(5) var triData:    texture_2d<f32>;
-@group(0) @binding(6) var texAtlas:   texture_2d<f32>;
+@group(0) @binding(5) var triData:       texture_2d<f32>;
+@group(0) @binding(6) var texAtlas:      texture_2d<f32>;
+@group(0) @binding(7) var hitMeshRead:   texture_2d<f32>;
+@group(0) @binding(8) var hitMeshWrite:  texture_storage_2d<rgba16float, write>;
 
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
@@ -102,6 +104,7 @@ struct Hit  {
     texSlot:   f32,
     metalness: f32,
     emissive:  vec3<f32>,
+    meshIdx:   i32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -207,10 +210,11 @@ fn aabbHit(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> bool {
 }
 
 fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
-    let r0 = textureLoad(triData, triCoord(ti, 0), 0);
-    let v0 = r0.xyz;
-    let v1 = textureLoad(triData, triCoord(ti, 1), 0).xyz;
-    let v2 = textureLoad(triData, triCoord(ti, 2), 0).xyz;
+    let r0  = textureLoad(triData, triCoord(ti, 0), 0);
+    let v0  = r0.xyz;
+    let r1  = textureLoad(triData, triCoord(ti, 1), 0);
+    let v1  = r1.xyz;
+    let v2  = textureLoad(triData, triCoord(ti, 2), 0).xyz;
 
     let isect = triIntersect(ray, v0, v1, v2);
     if (isect.t >= (*h).t) { return; }
@@ -241,10 +245,11 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     (*h).texSlot   = mat1.x;
     (*h).metalness = mat1.y;
     (*h).emissive  = mat2.xyz;
+    (*h).meshIdx   = i32(r1.w);
 }
 
 fn sceneHit(ray: Ray) -> Hit {
-    var h: Hit; h.t = 1e30;
+    var h: Hit; h.t = 1e30; h.meshIdx = -1;
     var stack: array<i32, 64>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
@@ -342,7 +347,9 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     return col;
 }
 
-fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
+fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
+             primaryMeshIdx: ptr<function, u32>) -> vec3<f32> {
+    *primaryMeshIdx = 64u;  // sentinel: no geometry hit (sky)
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
     var radiance   = vec3<f32>(0.0);
@@ -353,6 +360,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>) -> vec3<f32> {
             radiance += throughput * sky(ray.dir);
             break;
         }
+        if (i == 0) { *primaryMeshIdx = u32(h.meshIdx); }
 
         radiance += throughput * h.emissive;
 
@@ -456,30 +464,38 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let jx  = rand(&seed) - 0.5;
         let jy  = rand(&seed) - 0.5;
         let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
-        sample  = pathTrace(ray, &seed);
+        var primaryMeshIdx: u32;
+        sample  = pathTrace(ray, &seed, &primaryMeshIdx);
 
         let prev     = textureLoad(accumRead, pixel, 0);
         let old      = prev.xyz;
         var pixelFC  = prev.w;
 
-        // Per-pixel motion detection: if scene has moving objects,
-        // check if this pixel's new sample deviates from its running average.
-        // Threshold adapts to convergence level — well-converged pixels
-        // have low expected variance so detect change more easily.
-        if (rt.sceneMotion.x > 0.5) {
-            let diff = length(sample - old);
-            let threshold = rt.sceneMotion.y / max(sqrt(pixelFC + 1.0), 1.0);
-            if (diff > threshold) {
-                pixelFC = 0.0;
-            }
+        // Mesh-identity reset: check previous and current primary hit mesh against
+        // the bitmask of meshes that moved this frame.
+        // (A) Object moved OUT of this pixel — prev hit mesh moved
+        let prevHitMesh = u32(textureLoad(hitMeshRead, pixel, 0).r);
+        if (prevHitMesh < 64u) {
+            let bit   = prevHitMesh & 31u;
+            let mbits = select(rt.movedMeshBits.x, rt.movedMeshBits.y,
+                               prevHitMesh >= 32u);
+            if (((mbits >> bit) & 1u) != 0u) { pixelFC = 0.0; }
+        }
+        // (B) Object moved INTO this pixel — current hit is a moving mesh
+        if (primaryMeshIdx < 64u) {
+            let bit   = primaryMeshIdx & 31u;
+            let mbits = select(rt.movedMeshBits.x, rt.movedMeshBits.y,
+                               primaryMeshIdx >= 32u);
+            if (((mbits >> bit) & 1u) != 0u) { pixelFC = 0.0; }
         }
 
-        // Global camera reset overrides per-pixel count
+        // Camera moved: global reset
         if (fc == 0u) { pixelFC = 0.0; }
 
         let alpha   = 1.0 / (pixelFC + 1.0);
         let blended = old * (1.0 - alpha) + sample * alpha;
-        textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
+        textureStore(accumWrite,    pixel, vec4<f32>(blended, pixelFC + 1.0));
+        textureStore(hitMeshWrite,  pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
     }
 }
 )";
@@ -533,7 +549,7 @@ fn vt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n1  = normalize((mat.normal * vec4<f32>(obj.n1.xyz, 0.0)).xyz);
     let n2  = normalize((mat.normal * vec4<f32>(obj.n2.xyz, 0.0)).xyz);
     textureStore(triOut, triCoord(ti, 0), vec4<f32>(v0, obj.v0.w));
-    textureStore(triOut, triCoord(ti, 1), vec4<f32>(v1, 0.0));
+    textureStore(triOut, triCoord(ti, 1), vec4<f32>(v1, f32(mi)));
     textureStore(triOut, triCoord(ti, 2), vec4<f32>(v2, 0.0));
     textureStore(triOut, triCoord(ti, 3), vec4<f32>(n0, 0.0));
     textureStore(triOut, triCoord(ti, 4), vec4<f32>(n1, 0.0));
@@ -659,9 +675,9 @@ struct alignas(16) RtGpuUniforms {
     float lightPos[4][4];
     float lightCol[4][4];
     float lightType[4][4];
-    float spp[4];
-    float sceneMotion[4];
-    float _pad[32];
+    float    spp[4];
+    uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
+    float    _pad[32];
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -1096,6 +1112,10 @@ struct WgpuPathTracer::Impl {
     WgpuTexture accumB;
     WgpuTexture* readAccum;
     WgpuTexture* writeAccum;
+    WgpuTexture hitMeshA;
+    WgpuTexture hitMeshB;
+    WgpuTexture* readHitMesh;
+    WgpuTexture* writeHitMesh;
 
     // GPU storage buffers
     WgpuBuffer bvhNodeBuf;
@@ -1143,7 +1163,6 @@ struct WgpuPathTracer::Impl {
     Vector3 prevCamDir_;
     WgpuPathTracer::Mode mode_ = WgpuPathTracer::Mode::Raytracer;
     int spp_ = 1;
-    float motionThreshold_ = 3.f;
 
     int width_, height_;
 
@@ -1167,6 +1186,11 @@ struct WgpuPathTracer::Impl {
           accumB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                  WgpuTexture::Format::RGBA16Float),
           readAccum(&accumA), writeAccum(&accumB),
+          hitMeshA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          hitMeshB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                   WgpuTexture::Format::RGBA16Float),
+          readHitMesh(&hitMeshA), writeHitMesh(&hitMeshB),
           // Storage buffers
           bvhNodeBuf(r, static_cast<size_t>(MAX_BVH_NODES) * 12 * sizeof(float),
                      WgpuBuffer::Usage::Storage),
@@ -1221,6 +1245,12 @@ struct WgpuPathTracer::Impl {
             accumA.write(zeros.data(), zeros.size() * sizeof(float));
             accumB.write(zeros.data(), zeros.size() * sizeof(float));
         }
+        // Fill hitMesh textures with sentinel 64.0f (= "no hit")
+        {
+            std::vector<float> hitSentinel(w * h * 4, 64.f);
+            hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+            hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+        }
 
         // Display quad
         displayCam.position.z = 1.f;
@@ -1241,9 +1271,20 @@ struct WgpuPathTracer::Impl {
         readAccum = &accumA;
         writeAccum = &accumB;
 
+        hitMeshA = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                               WgpuTexture::Format::RGBA16Float);
+        hitMeshB = WgpuTexture(renderer, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                               WgpuTexture::Format::RGBA16Float);
+        readHitMesh  = &hitMeshA;
+        writeHitMesh = &hitMeshB;
+
         std::vector<float> zeros(w * h * 4, 0.f);
         accumA.write(zeros.data(), zeros.size() * sizeof(float));
         accumB.write(zeros.data(), zeros.size() * sizeof(float));
+
+        std::vector<float> hitSentinel(w * h * 4, 64.f);
+        hitMeshA.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
+        hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
 
         frameCount_ = 0.f;
     }
@@ -1300,15 +1341,29 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     scene.updateMatrixWorld();
 
-    // Detect mesh matrix changes
+    // Detect per-mesh matrix changes; build bitmask of which meshes moved.
+    // movedBits is used by the GPU for per-pixel accumulation reset.
+    // anyMeshMoved drives the vertex-transform and BVH-refit pipelines.
+    uint32_t movedBits[2] = {0u, 0u};
     bool anyMeshMoved = (d.prevMeshMatrices.size() != rtMeshes.size());
-    if (!anyMeshMoved) {
-        for (size_t i = 0; i < rtMeshes.size(); ++i)
+
+    if (topoChanged) {
+        // Topology change: all pixels need to re-accumulate (mesh-to-triangle mapping changed)
+        movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
+        anyMeshMoved = true;
+    } else if (anyMeshMoved) {
+        // Mesh count mismatch (shouldn't happen without topo change, but be safe)
+        movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
+    } else {
+        for (size_t i = 0; i < rtMeshes.size() && i < static_cast<size_t>(MAX_MESHES); ++i) {
             if (*rtMeshes[i]->matrixWorld != d.prevMeshMatrices[i]) {
                 anyMeshMoved = true;
-                break;
+                if (i < 32u) movedBits[0] |= (1u << i);
+                else         movedBits[1] |= (1u << (i - 32u));
             }
+        }
     }
+    // Note: camMoved resets all pixels via fc==0u in the shader; no movedBits needed for that.
     d.prevMeshMatrices.resize(rtMeshes.size());
     for (size_t i = 0; i < rtMeshes.size(); ++i)
         d.prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
@@ -1373,8 +1428,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.triCount[0] = static_cast<float>(d.triCount_);
     u.mode[0] = (d.mode_ == Mode::PathTracer) ? 1.f : 0.f;
     u.spp[0] = static_cast<float>(d.spp_);
-    u.sceneMotion[0] = anyMeshMoved ? 1.f : 0.f;
-    u.sceneMotion[1] = d.motionThreshold_;
+    u.movedMeshBits[0] = movedBits[0];
+    u.movedMeshBits[1] = movedBits[1];
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -1399,9 +1454,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.lightCount[0] = static_cast<float>(nLights);
     d.rtUniformBuf.write(&u, sizeof(u));
 
-    // Set per-frame accum texture bindings
+    // Set per-frame texture bindings (accum + hitMesh ping-pong)
     d.rtPipeline.setTexture(1, *d.readAccum);
     d.rtPipeline.setStorageTexture(2, *d.writeAccum);
+    d.rtPipeline.setTexture(7, *d.readHitMesh);
+    d.rtPipeline.setStorageTexture(8, *d.writeHitMesh);
 
     // Batched GPU dispatch — single command encoder + compute pass
     {
@@ -1439,6 +1496,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Swap ping-pong
     std::swap(d.readAccum, d.writeAccum);
+    std::swap(d.readHitMesh, d.writeHitMesh);
     d.displayMat->customTextures["accumTex"] = d.readAccum;
     d.displayMat->uniformsNeedUpdate = true;
     d.frameCount_ += 1.f;
@@ -1464,14 +1522,6 @@ void WgpuPathTracer::setSamplesPerPixel(int spp) {
 
 int WgpuPathTracer::samplesPerPixel() const {
     return pimpl_->spp_;
-}
-
-void WgpuPathTracer::setMotionThreshold(float threshold) {
-    pimpl_->motionThreshold_ = threshold;
-}
-
-float WgpuPathTracer::motionThreshold() const {
-    return pimpl_->motionThreshold_;
 }
 
 void WgpuPathTracer::setSize(std::pair<int, int> size) {

@@ -40,13 +40,6 @@ namespace threepp {
         void setSamplesPerPixel(int spp);
         [[nodiscard]] int samplesPerPixel() const;
 
-        /// Per-pixel motion detection threshold for path tracer accumulation.
-        /// Higher = less sensitive (fewer resets, more ghosting on moving objects).
-        /// Lower = more sensitive (faster response, but may add noise to static objects).
-        /// Default: 3.0.
-        void setMotionThreshold(float threshold);
-        [[nodiscard]] float motionThreshold() const;
-
         /// Resize accumulation textures. Resets accumulation.
         void setSize(std::pair<int, int> size);
         [[nodiscard]] std::pair<int, int> size() const;
