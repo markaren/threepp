@@ -84,6 +84,7 @@ namespace threepp::wgpu {
         WGPUBindGroupLayout depthBindGroupLayout_ = nullptr;
         WGPUShaderModule depthShader_ = nullptr;
         WGPUBuffer depthTransformBuffer_ = nullptr;
+        WGPUBindGroup depthBindGroup_ = nullptr;
 
         // Per-light entries (dir/spot)
         std::vector<ShadowLightEntry> lights_;
@@ -91,8 +92,6 @@ namespace threepp::wgpu {
         void init();
         void renderPass(WGPUCommandEncoder encoder, Object3D& scene,
                         const Matrix4& lightVP, int lightIndex);
-        void renderObject(WGPURenderPassEncoder pass, Object3D& object,
-                          const Matrix4& lightVP);
     };
 
 }// namespace threepp::wgpu

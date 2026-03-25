@@ -16,6 +16,22 @@
 using namespace threepp;
 using namespace threepp::wgpu;
 
+namespace {
+
+    constexpr int kMaxShadowMeshes = 256;
+    constexpr uint32_t kDynStride  = 256; // minUniformBufferOffsetAlignment
+
+    void collectShadowMeshes(Object3D& obj, std::vector<Mesh*>& out) {
+        if (auto mesh = obj.as<Mesh>()) {
+            auto geom = mesh->geometry();
+            if (mesh->castShadow && geom && geom->hasAttribute("position"))
+                out.push_back(mesh);
+        }
+        for (auto& child : obj.children) collectShadowMeshes(*child, out);
+    }
+
+}// namespace
+
 WgpuShadowMap::WgpuShadowMap(WgpuState& state, WgpuGeometries& geometries)
     : state_(state), geometries_(geometries) {}
 
@@ -135,11 +151,11 @@ void WgpuShadowMap::init() {
         ptUniformBuffer_ = wgpuDeviceCreateBuffer(state_.device, &bd);
     }
 
-    // Depth-only transform buffer (one mat4x4)
+    // Depth-only transform buffer (kMaxShadowMeshes × 256-byte aligned slots)
     {
         WGPUBufferDescriptor bd{};
         bd.label = WGPUStringView{"shadow_xform", WGPU_STRLEN} ;
-        bd.size = 64;
+        bd.size = static_cast<uint64_t>(kMaxShadowMeshes) * kDynStride;
         bd.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         depthTransformBuffer_ = wgpuDeviceCreateBuffer(state_.device, &bd);
     }
@@ -156,11 +172,12 @@ void WgpuShadowMap::init() {
     smd.label = WGPUStringView{"shadow_shader", WGPU_STRLEN} ;
     depthShader_ = wgpuDeviceCreateShaderModule(state_.device, &smd);
 
-    // Bind group layout: one uniform buffer at binding 0
+    // Bind group layout: one dynamic-offset uniform buffer at binding 0
     WGPUBindGroupLayoutEntry bglEntry{};
     bglEntry.binding = 0;
     bglEntry.visibility = WGPUShaderStage_Vertex;
     bglEntry.buffer.type = WGPUBufferBindingType_Uniform;
+    bglEntry.buffer.hasDynamicOffset = true;
     bglEntry.buffer.minBindingSize = 64;
 
     WGPUBindGroupLayoutDescriptor bglDesc{};
@@ -174,6 +191,22 @@ void WgpuShadowMap::init() {
     plDesc.bindGroupLayoutCount = 1;
     plDesc.bindGroupLayouts = &depthBindGroupLayout_;
     depthPipelineLayout_ = wgpuDeviceCreatePipelineLayout(state_.device, &plDesc);
+
+    // Persistent bind group (dynamic offset per draw)
+    {
+        WGPUBindGroupEntry bgEntry{};
+        bgEntry.binding = 0;
+        bgEntry.buffer = depthTransformBuffer_;
+        bgEntry.offset = 0;
+        bgEntry.size = 64;
+
+        WGPUBindGroupDescriptor bgDesc{};
+        bgDesc.label = WGPUStringView{"shadow_bg", WGPU_STRLEN} ;
+        bgDesc.layout = depthBindGroupLayout_;
+        bgDesc.entryCount = 1;
+        bgDesc.entries = &bgEntry;
+        depthBindGroup_ = wgpuDeviceCreateBindGroup(state_.device, &bgDesc);
+    }
 
     // Vertex layout (same interleaved format as the main pipeline)
     WGPUVertexAttribute attrs[4]{};
@@ -362,6 +395,11 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
 
         if (!plShadow) continue;
 
+        std::vector<Mesh*> ptMeshes;
+        collectShadowMeshes(scene, ptMeshes);
+        if (static_cast<int>(ptMeshes.size()) > kMaxShadowMeshes)
+            ptMeshes.resize(kMaxShadowMeshes);
+
         for (int face = 0; face < 6; face++) {
             plShadow->updateMatrices(*pl, static_cast<size_t>(face));
 
@@ -375,6 +413,18 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             }
             Matrix4 lightVP;
             lightVP.multiplyMatrices(lightProj, plShadow->camera->matrixWorldInverse);
+
+            // Upload all MVPs for this face before encoding draws.
+            if (!ptMeshes.empty()) {
+                std::vector<uint8_t> staging(ptMeshes.size() * kDynStride, 0);
+                for (int mi = 0; mi < static_cast<int>(ptMeshes.size()); mi++) {
+                    Matrix4 mvp;
+                    mvp.multiplyMatrices(lightVP, *ptMeshes[mi]->matrixWorld);
+                    std::memcpy(staging.data() + mi * kDynStride, mvp.elements.data(), 64);
+                }
+                wgpuQueueWriteBuffer(state_.queue, depthTransformBuffer_, 0,
+                                     staging.data(), staging.size());
+            }
 
             int layerIdx = pi * 6 + face;
 
@@ -397,7 +447,26 @@ void WgpuShadowMap::beginFrame(Object3D& scene) {
             WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
             wgpuRenderPassEncoderSetViewport(pass, 0, 0, mapSize, mapSize, 0.0f, 1.0f);
             wgpuRenderPassEncoderSetPipeline(pass, depthPipeline_);
-            renderObject(pass, scene, lightVP);
+
+            for (int mi = 0; mi < static_cast<int>(ptMeshes.size()); mi++) {
+                uint32_t dynOffset = static_cast<uint32_t>(mi) * kDynStride;
+                wgpuRenderPassEncoderSetBindGroup(pass, 0, depthBindGroup_, 1, &dynOffset);
+
+                auto& gb = geometries_.getOrCreateGeometryBuffers(ptMeshes[mi]->geometry().get());
+                if (gb.vertexBuffer) {
+                    wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
+                                                         gb.vertexCount * VERTEX_STRIDE);
+                    if (gb.indexBuffer) {
+                        wgpuRenderPassEncoderSetIndexBuffer(pass, gb.indexBuffer,
+                                                             WGPUIndexFormat_Uint32, 0,
+                                                             gb.indexCount * sizeof(uint32_t));
+                        wgpuRenderPassEncoderDrawIndexed(pass, gb.indexCount, 1, 0, 0, 0);
+                    } else {
+                        wgpuRenderPassEncoderDraw(pass, gb.vertexCount, 1, 0, 0);
+                    }
+                }
+            }
+
             wgpuRenderPassEncoderEnd(pass);
             wgpuRenderPassEncoderRelease(pass);
 
@@ -419,6 +488,23 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
 
     const auto mapSize = static_cast<float>(state_.shadowLimits.mapSize);
 
+    // Collect shadow-casting meshes and upload all MVPs before encoding draws.
+    std::vector<Mesh*> meshes;
+    collectShadowMeshes(scene, meshes);
+    if (static_cast<int>(meshes.size()) > kMaxShadowMeshes)
+        meshes.resize(kMaxShadowMeshes);
+
+    if (!meshes.empty()) {
+        std::vector<uint8_t> staging(meshes.size() * kDynStride, 0);
+        for (int i = 0; i < static_cast<int>(meshes.size()); i++) {
+            Matrix4 mvp;
+            mvp.multiplyMatrices(lightVP, *meshes[i]->matrixWorld);
+            std::memcpy(staging.data() + i * kDynStride, mvp.elements.data(), 64);
+        }
+        wgpuQueueWriteBuffer(state_.queue, depthTransformBuffer_, 0,
+                             staging.data(), staging.size());
+    }
+
     WGPURenderPassDepthStencilAttachment depthAttachment{};
     depthAttachment.view = lights_[lightIndex].layerView;
     depthAttachment.depthLoadOp = WGPULoadOp_Clear;
@@ -435,59 +521,29 @@ void WgpuShadowMap::renderPass(WGPUCommandEncoder encoder, Object3D& scene,
     wgpuRenderPassEncoderSetViewport(pass, 0, 0, mapSize, mapSize, 0.0f, 1.0f);
     wgpuRenderPassEncoderSetPipeline(pass, depthPipeline_);
 
-    renderObject(pass, scene, lightVP);
+    for (int i = 0; i < static_cast<int>(meshes.size()); i++) {
+        uint32_t dynOffset = static_cast<uint32_t>(i) * kDynStride;
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, depthBindGroup_, 1, &dynOffset);
+
+        auto& gb = geometries_.getOrCreateGeometryBuffers(meshes[i]->geometry().get());
+        if (gb.vertexBuffer) {
+            wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
+                                                 gb.vertexCount * VERTEX_STRIDE);
+            if (gb.indexBuffer) {
+                wgpuRenderPassEncoderSetIndexBuffer(pass, gb.indexBuffer,
+                                                     WGPUIndexFormat_Uint32, 0,
+                                                     gb.indexCount * sizeof(uint32_t));
+                wgpuRenderPassEncoderDrawIndexed(pass, gb.indexCount, 1, 0, 0, 0);
+            } else {
+                wgpuRenderPassEncoderDraw(pass, gb.vertexCount, 1, 0, 0);
+            }
+        }
+    }
 
     wgpuRenderPassEncoderEnd(pass);
     wgpuRenderPassEncoderRelease(pass);
 }
 
-void WgpuShadowMap::renderObject(WGPURenderPassEncoder pass, Object3D& object,
-                                 const Matrix4& lightVP) {
-
-    if (auto mesh = object.as<Mesh>()) {
-        auto geometry = mesh->geometry();
-        if (mesh->castShadow && geometry && geometry->hasAttribute("position")) {
-            Matrix4 mvp;
-            mvp.multiplyMatrices(lightVP, *mesh->matrixWorld);
-
-            wgpuQueueWriteBuffer(state_.queue, depthTransformBuffer_, 0, mvp.elements.data(), 64);
-
-            WGPUBindGroupEntry entry{};
-            entry.binding = 0;
-            entry.buffer = depthTransformBuffer_;
-            entry.offset = 0;
-            entry.size = 64;
-
-            WGPUBindGroupDescriptor bgDesc{};
-            bgDesc.label = WGPUStringView{"shadow_bg", WGPU_STRLEN} ;
-            bgDesc.layout = depthBindGroupLayout_;
-            bgDesc.entryCount = 1;
-            bgDesc.entries = &entry;
-            WGPUBindGroup bg = wgpuDeviceCreateBindGroup(state_.device, &bgDesc);
-
-            wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
-
-            auto& gb = geometries_.getOrCreateGeometryBuffers(geometry.get());
-            if (gb.vertexBuffer) {
-                wgpuRenderPassEncoderSetVertexBuffer(pass, 0, gb.vertexBuffer, 0,
-                                                     gb.vertexCount * VERTEX_STRIDE);
-                if (gb.indexBuffer) {
-                    wgpuRenderPassEncoderSetIndexBuffer(pass, gb.indexBuffer,
-                                                         WGPUIndexFormat_Uint32, 0,
-                                                         gb.indexCount * sizeof(uint32_t));
-                    wgpuRenderPassEncoderDrawIndexed(pass, gb.indexCount, 1, 0, 0, 0);
-                } else {
-                    wgpuRenderPassEncoderDraw(pass, gb.vertexCount, 1, 0, 0);
-                }
-            }
-            wgpuBindGroupRelease(bg);
-        }
-    }
-
-    for (auto& child : object.children) {
-        renderObject(pass, *child, lightVP);
-    }
-}
 
 void WgpuShadowMap::dispose() {
     if (!initialized_) return;
@@ -499,6 +555,7 @@ void WgpuShadowMap::dispose() {
     if (depthArrayTexture_) wgpuTextureRelease(depthArrayTexture_);
     if (comparisonSampler_) wgpuSamplerRelease(comparisonSampler_);
     if (uniformBuffer_) wgpuBufferRelease(uniformBuffer_);
+    if (depthBindGroup_) wgpuBindGroupRelease(depthBindGroup_);
     if (depthTransformBuffer_) wgpuBufferRelease(depthTransformBuffer_);
     if (depthPipeline_) wgpuRenderPipelineRelease(depthPipeline_);
     if (depthPipelineLayout_) wgpuPipelineLayoutRelease(depthPipelineLayout_);
@@ -509,6 +566,7 @@ void WgpuShadowMap::dispose() {
     depthArrayView_ = nullptr;
     comparisonSampler_ = nullptr;
     uniformBuffer_ = nullptr;
+    depthBindGroup_ = nullptr;
     depthTransformBuffer_ = nullptr;
     depthPipeline_ = nullptr;
     depthPipelineLayout_ = nullptr;
