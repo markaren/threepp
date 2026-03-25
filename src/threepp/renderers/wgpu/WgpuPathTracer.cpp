@@ -64,6 +64,7 @@ struct RtUniforms {
     lightCol:   array<vec4<f32>, 4>,
     lightType:  array<vec4<f32>, 4>,
     spp:        vec4<f32>,
+    sceneMotion: vec4<f32>,
 };
 
 struct BvhNodeGpu {
@@ -457,10 +458,28 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
         sample  = pathTrace(ray, &seed);
 
-        let old     = textureLoad(accumRead, pixel, 0).xyz;
-        let alpha   = select(0.1, 1.0, fc == 0u);
+        let prev     = textureLoad(accumRead, pixel, 0);
+        let old      = prev.xyz;
+        var pixelFC  = prev.w;
+
+        // Per-pixel motion detection: if scene has moving objects,
+        // check if this pixel's new sample deviates from its running average.
+        // Threshold adapts to convergence level — well-converged pixels
+        // have low expected variance so detect change more easily.
+        if (rt.sceneMotion.x > 0.5) {
+            let diff = length(sample - old);
+            let threshold = rt.sceneMotion.y / max(sqrt(pixelFC + 1.0), 1.0);
+            if (diff > threshold) {
+                pixelFC = 0.0;
+            }
+        }
+
+        // Global camera reset overrides per-pixel count
+        if (fc == 0u) { pixelFC = 0.0; }
+
+        let alpha   = 1.0 / (pixelFC + 1.0);
         let blended = old * (1.0 - alpha) + sample * alpha;
-        textureStore(accumWrite, pixel, vec4<f32>(blended, 1.0));
+        textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
     }
 }
 )";
@@ -641,7 +660,8 @@ struct alignas(16) RtGpuUniforms {
     float lightCol[4][4];
     float lightType[4][4];
     float spp[4];
-    float _pad[36];
+    float sceneMotion[4];
+    float _pad[32];
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -1123,6 +1143,7 @@ struct WgpuPathTracer::Impl {
     Vector3 prevCamDir_;
     WgpuPathTracer::Mode mode_ = WgpuPathTracer::Mode::Raytracer;
     int spp_ = 1;
+    float motionThreshold_ = 3.f;
 
     int width_, height_;
 
@@ -1352,6 +1373,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.triCount[0] = static_cast<float>(d.triCount_);
     u.mode[0] = (d.mode_ == Mode::PathTracer) ? 1.f : 0.f;
     u.spp[0] = static_cast<float>(d.spp_);
+    u.sceneMotion[0] = anyMeshMoved ? 1.f : 0.f;
+    u.sceneMotion[1] = d.motionThreshold_;
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -1441,6 +1464,14 @@ void WgpuPathTracer::setSamplesPerPixel(int spp) {
 
 int WgpuPathTracer::samplesPerPixel() const {
     return pimpl_->spp_;
+}
+
+void WgpuPathTracer::setMotionThreshold(float threshold) {
+    pimpl_->motionThreshold_ = threshold;
+}
+
+float WgpuPathTracer::motionThreshold() const {
+    return pimpl_->motionThreshold_;
 }
 
 void WgpuPathTracer::setSize(std::pair<int, int> size) {

@@ -21,6 +21,7 @@ int main() {
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setSamplesPerPixel(2);
+    pathTracer.setMotionThreshold(0.1f);
 
     // ---- Scene objects ----
     TextureLoader tl;
