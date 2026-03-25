@@ -105,7 +105,7 @@ namespace threepp {
 
         private:
             std::optional<WindowSize> size_;
-            int antialiasing_{2};
+            int antialiasing_{4};
             std::string title_{"threepp"};
             bool vsync_{true};
             bool resizable_{true};
