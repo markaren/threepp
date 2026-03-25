@@ -168,10 +168,21 @@ fn sampleGGXDir(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
 )"
 R"(
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
-    let tx = i32(texSlot) * TILE_SIZE
-           + clamp(i32(fract(uv.x) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
-    let ty = clamp(i32(fract(uv.y) * f32(TILE_SIZE)), 0, TILE_SIZE - 1);
-    return textureLoad(texAtlas, vec2<i32>(tx, ty), 0).xyz;
+    let ox  = i32(texSlot) * TILE_SIZE;
+    let ts  = f32(TILE_SIZE);
+    // Bilinear filter, clamped within the tile to avoid atlas bleeding
+    let fp  = vec2<f32>(fract(uv.x), fract(uv.y)) * ts - 0.5;
+    let x0  = clamp(i32(floor(fp.x)), 0, TILE_SIZE - 1);
+    let y0  = clamp(i32(floor(fp.y)), 0, TILE_SIZE - 1);
+    let x1  = clamp(x0 + 1,          0, TILE_SIZE - 1);
+    let y1  = clamp(y0 + 1,          0, TILE_SIZE - 1);
+    let wx  = fp.x - floor(fp.x);
+    let wy  = fp.y - floor(fp.y);
+    let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, y0), 0).xyz;
+    let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, y0), 0).xyz;
+    let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, y1), 0).xyz;
+    let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, y1), 0).xyz;
+    return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
 }
 
 fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
