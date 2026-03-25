@@ -178,7 +178,7 @@ fn sampleGGXDir(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
     let hm   = normalize(sinT * cos(phi) * rgt + sinT * sin(phi) * up + cosT * n);
     return reflect(-wo, hm);
 }
-
+)" R"(
 // ---- Atlas colour lookup ----
 fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let tx = i32(texSlot) * TILE_SIZE
@@ -215,13 +215,18 @@ fn triIntersect(ray: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> Isect 
 }
 
 // ---- Slab AABB test ----
-fn aabbHit(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> bool {
+// Returns tNear if hit, else 1e30
+fn aabbDist(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> f32 {
     let invD  = vec3<f32>(1.0) / ray.dir;
     let t1    = (bmin - ray.origin) * invD;
     let t2    = (bmax - ray.origin) * invD;
     let tNear = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
     let tFar  = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));
-    return tFar >= max(tNear, 0.0) && tNear < tmax;
+    if (tFar >= max(tNear, 0.0) && tNear < tmax) { return max(tNear, 0.0); }
+    return 1e30;
+}
+fn aabbHit(bmin: vec3<f32>, bmax: vec3<f32>, ray: Ray, tmax: f32) -> bool {
+    return aabbDist(bmin, bmax, ray, tmax) < 1e30;
 }
 
 // ---- Load triangle, update h if closer ----
@@ -284,8 +289,18 @@ fn sceneHit(ray: Ray) -> Hit {
                 testTriangle(ray, ti, &h);
             }
         } else {
-            stack[top] = right; top += 1;
-            stack[top] = left;  top += 1;
+            let dL = aabbDist(textureLoad(bvhData, bvhCoord(left,  0), 0).xyz,
+                               textureLoad(bvhData, bvhCoord(left,  1), 0).xyz, ray, h.t);
+            let dR = aabbDist(textureLoad(bvhData, bvhCoord(right, 0), 0).xyz,
+                               textureLoad(bvhData, bvhCoord(right, 1), 0).xyz, ray, h.t);
+            // Push far child first so near child is popped first
+            if (dL < dR) {
+                if (dR < 1e30) { stack[top] = right; top += 1; }
+                if (dL < 1e30) { stack[top] = left;  top += 1; }
+            } else {
+                if (dL < 1e30) { stack[top] = left;  top += 1; }
+                if (dR < 1e30) { stack[top] = right; top += 1; }
+            }
         }
     }
     return h;
@@ -338,7 +353,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     }
     return clamp(col + h.emissive, vec3<f32>(0.0), vec3<f32>(1.0));
 }
-
+)" R"(
 // ---- Deterministic trace with one mirror bounce ----
 fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
