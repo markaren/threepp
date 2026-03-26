@@ -16,6 +16,7 @@
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
+#include "threepp/objects/Line.hpp"
 #include "threepp/objects/Mesh.hpp"
 #include "threepp/scenes/Scene.hpp"
 #include "threepp/textures/Texture.hpp"
@@ -24,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <cstring>
 #include <numeric>
 #include <unordered_map>
@@ -596,6 +598,12 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
             sample = raytrace(makeRay(fp + vec2<f32>(0.5, 0.5), res));
         }
         textureStore(accumWrite, pixel, vec4<f32>(sample, 1.0));
+        // Write primary-hit depth to gBuffer for raster overlay occlusion.
+        // Use 0.0 as the miss sentinel (same convention as path-tracer mode);
+        // sceneHit() returns t=1e30 for misses which overflows float16 to +inf.
+        let centerHit = sceneHit(makeRay(fp + vec2<f32>(0.5, 0.5), res));
+        let tVal = select(centerHit.t, 0.0, centerHit.t >= 1e20);
+        textureStore(gBufWrite, pixel, vec4<f32>(vec3<f32>(0.0), tVal));
     } else {
         var seed = pcg(gid.x * 1973u + 1u) ^ pcg(gid.y * 9277u + 1u) ^ pcg(fc * 26699u + 1u);
         let jx  = rand(&seed) - 0.5;
@@ -937,6 +945,47 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 )";
 
 // ---------------------------------------------------------------------------
+// WGSL depth-fill shader — reconstruct rasterizer depth from path-tracer gBuffer.
+// Reads primary-ray hit distance (t) from the gBuffer's w channel, reconstructs
+// the world-space hit point, then projects it to WebGPU NDC [0,1] depth.
+// ---------------------------------------------------------------------------
+constexpr const char* depthFillWGSL = R"(
+struct DepthFillUniforms {
+    projView:   mat4x4<f32>,
+    camOri:     vec4<f32>,
+    camFwd:     vec4<f32>,
+    camRgt:     vec4<f32>,
+    camUp:      vec4<f32>,
+    iRes:       vec4<f32>,
+    tanHalfFov: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> u: DepthFillUniforms;
+@group(0) @binding(1) var gBuf: texture_2d<f32>;
+
+@vertex fn vs(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+    let x = f32(vid & 1u) * 4.0 - 1.0;
+    let y = f32((vid >> 1u) & 1u) * 4.0 - 1.0;
+    return vec4<f32>(x, y, 0.0, 1.0);
+}
+
+@fragment fn fs(@builtin(position) fpos: vec4<f32>) -> @builtin(frag_depth) f32 {
+    let px  = vec2<i32>(i32(fpos.x), i32(fpos.y));
+    let t   = textureLoad(gBuf, px, 0).w;
+    if (t <= 0.0) { return 1.0; }
+    let ndc    = vec2<f32>((fpos.x / u.iRes.x) * 2.0 - 1.0,
+                            1.0 - (fpos.y / u.iRes.y) * 2.0);
+    let aspect = u.iRes.x / u.iRes.y;
+    let rayDir = normalize(u.camFwd.xyz
+                         + u.camRgt.xyz * (ndc.x * u.tanHalfFov.x * aspect)
+                         + u.camUp.xyz  * (ndc.y * u.tanHalfFov.x));
+    let worldPos = u.camOri.xyz + t * rayDir;
+    let clip     = u.projView * vec4<f32>(worldPos, 1.0);
+    if (clip.w <= 0.0) { return 1.0; }
+    return clamp(clip.z / clip.w, 0.0, 1.0);
+}
+)";
+
+// ---------------------------------------------------------------------------
 // WGSL display shader — blit accumulated texture to screen with ACES + gamma
 // ---------------------------------------------------------------------------
 constexpr const char* displayWGSL = R"(
@@ -1005,6 +1054,16 @@ struct alignas(16) RefitGpuUniforms {
 };
 struct alignas(16) AtrousGpuUniforms {
     uint32_t stepSize, _p[3];
+};
+struct alignas(16) DepthFillUniforms {
+    float projView[16];   // NDC-remapped proj * view  (64 bytes)
+    float camOri[4];      // camera position            (16 bytes)
+    float camFwd[4];      // camera forward             (16 bytes)
+    float camRgt[4];      // camera right               (16 bytes)
+    float camUp[4];       // camera up                  (16 bytes)
+    float iRes[4];        // resolution xy              (16 bytes)
+    float tanHalfFov[4];  // x = tanHalfFov             (16 bytes)
+    // total = 160 bytes (16-byte aligned, no padding needed)
 };
 struct alignas(16) TaaGpuUniforms {
     float prevCamOri[4], prevCamFwd[4], prevCamRgt[4], prevCamUp[4];
@@ -1522,6 +1581,14 @@ struct WgpuPathTracer::Impl {
     WgpuComputePipeline refitPipeline;
     WgpuComputePipeline rtPipeline;
 
+    // Depth-fill pipeline — writes NDC depth from gBuffer primary-ray t values
+    WGPURenderPipeline      depthFillPipeline_ = nullptr;
+    WGPUPipelineLayout      depthFillPipeLayout_ = nullptr;
+    WGPUBindGroupLayout     depthFillBGL_ = nullptr;
+    WGPUShaderModule        depthFillShader_ = nullptr;
+    WGPUBuffer              depthFillUniBuf_ = nullptr;
+    uint32_t                depthFillSampleCount_ = 0;  // 0 = not yet built
+
     // Display pipeline
     OrthographicCamera displayCam;
     Scene displayScene;
@@ -1683,6 +1750,73 @@ struct WgpuPathTracer::Impl {
         displayMat->fragmentShader = displayWGSL;
         displayMat->customTextures["accumTex"] = readAccum;
         displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), displayMat));
+
+        // Depth-fill: build shader, BGL, layout, and uniform buffer now.
+        // The pipeline itself is created lazily on first use (needs sample count from live frame).
+        {
+            WGPUShaderModuleDescriptor smDesc{};
+            smDesc.label = WGPUStringView{"depth_fill_sm", WGPU_STRLEN};
+            WGPUShaderSourceWGSL wgslSrc{};
+            wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
+            wgslSrc.code = WGPUStringView{depthFillWGSL, WGPU_STRLEN};
+            smDesc.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&wgslSrc);
+            depthFillShader_ = wgpuDeviceCreateShaderModule(device, &smDesc);
+
+            WGPUBindGroupLayoutEntry bglEntries[2]{};
+            bglEntries[0].binding = 0;
+            bglEntries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+            bglEntries[0].buffer.type = WGPUBufferBindingType_Uniform;
+            bglEntries[0].buffer.minBindingSize = sizeof(DepthFillUniforms);
+            bglEntries[1].binding = 1;
+            bglEntries[1].visibility = WGPUShaderStage_Fragment;
+            bglEntries[1].texture.sampleType = WGPUTextureSampleType_Float;  // RGBA16Float is filterable
+            bglEntries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
+            WGPUBindGroupLayoutDescriptor bglDesc{};
+            bglDesc.label = WGPUStringView{"depth_fill_bgl", WGPU_STRLEN};
+            bglDesc.entryCount = 2;
+            bglDesc.entries = bglEntries;
+            depthFillBGL_ = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
+
+            WGPUPipelineLayoutDescriptor plDesc{};
+            plDesc.label = WGPUStringView{"depth_fill_pl", WGPU_STRLEN};
+            plDesc.bindGroupLayoutCount = 1;
+            plDesc.bindGroupLayouts = &depthFillBGL_;
+            depthFillPipeLayout_ = wgpuDeviceCreatePipelineLayout(device, &plDesc);
+
+            WGPUBufferDescriptor ubDesc{};
+            ubDesc.label = WGPUStringView{"depth_fill_uni", WGPU_STRLEN};
+            ubDesc.size = sizeof(DepthFillUniforms);
+            ubDesc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+            depthFillUniBuf_ = wgpuDeviceCreateBuffer(device, &ubDesc);
+        }
+    }
+
+    // Build (or rebuild) the depth-fill render pipeline for a given MSAA sample count.
+    void ensureDepthFillPipeline(uint32_t sampleCount) {
+        if (depthFillPipeline_ && depthFillSampleCount_ == sampleCount) return;
+        if (depthFillPipeline_) { wgpuRenderPipelineRelease(depthFillPipeline_); depthFillPipeline_ = nullptr; }
+        WGPURenderPipelineDescriptor rpDesc{};
+        rpDesc.label = WGPUStringView{"depth_fill_rp", WGPU_STRLEN};
+        rpDesc.layout = depthFillPipeLayout_;
+        rpDesc.vertex.module = depthFillShader_;
+        rpDesc.vertex.entryPoint = WGPUStringView{"vs", WGPU_STRLEN};
+        WGPUPrimitiveState prim{};
+        prim.topology = WGPUPrimitiveTopology_TriangleList;
+        rpDesc.primitive = prim;
+        WGPUDepthStencilState ds{};
+        ds.format = WGPUTextureFormat_Depth24Plus;
+        ds.depthWriteEnabled = WGPUOptionalBool_True;
+        ds.depthCompare = WGPUCompareFunction_Always;
+        rpDesc.depthStencil = &ds;
+        WGPUFragmentState frag{};
+        frag.module = depthFillShader_;
+        frag.entryPoint = WGPUStringView{"fs", WGPU_STRLEN};
+        frag.targetCount = 0;
+        rpDesc.fragment = &frag;
+        rpDesc.multisample.count = sampleCount;
+        rpDesc.multisample.mask  = 0xFFFFFFFF;
+        depthFillPipeline_ = wgpuDeviceCreateRenderPipeline(device, &rpDesc);
+        depthFillSampleCount_ = sampleCount;
     }
 
     void recreateAccumTextures(int w, int h) {
@@ -2082,6 +2216,118 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Blit to screen
     d.renderer.render(d.displayScene, d.displayCam);
+
+    // Raster overlay: draw wireframe meshes and Line geometry on top.
+    // Collect overlay objects and temporarily hide everything else so the
+    // renderer only draws the overlay. Depth is cleared so overlays render
+    // without being occluded by the blit quad's depth writes; color is loaded
+    // so the path-traced image is preserved.
+    {
+        struct Entry { Object3D* obj; bool wasVisible; };
+        std::vector<Entry> hidden;
+        bool hasOverlay = false;
+
+        // Only toggle renderable objects (Mesh / Line), never containers/groups,
+        // so parent nodes remain visible and their children are reachable.
+        scene.traverse([&](Object3D& obj) {
+            if (!obj.visible) return;
+            if (auto* mesh = obj.as<Mesh>()) {
+                auto* mat = mesh->material().get();
+                auto* mww = dynamic_cast<MaterialWithWireframe*>(mat);
+                bool isOverlay = (mww && mww->wireframe) ||
+                                 dynamic_cast<LineBasicMaterial*>(mat) != nullptr;
+                if (isOverlay) {
+                    hasOverlay = true;
+                } else {
+                    hidden.push_back({mesh, true});
+                    mesh->visible = false;
+                }
+            } else if (obj.is<Line>()) {
+                hasOverlay = true;
+                // Line objects remain visible — they ARE the overlay
+            }
+        });
+
+        if (hasOverlay) {
+            // Reconstruct rasterizer depth from path-traced primary-hit t values.
+            // This lets wireframe/line objects be correctly occluded by path-traced geometry.
+            auto* encoder = static_cast<WGPUCommandEncoder>(d.renderer.nativeRenderCommandEncoder());
+            auto* depthView = static_cast<WGPUTextureView>(d.renderer.nativeFrameDepthView());
+            const uint32_t depthSamples = d.renderer.nativeFrameDepthSampleCount();
+            d.ensureDepthFillPipeline(depthSamples);
+            if (encoder && depthView && d.depthFillPipeline_) {
+                // Upload depth-fill uniforms (projView + camera vectors)
+                DepthFillUniforms dfu{};
+                {
+                    Matrix4 proj = camera.projectionMatrix;
+                    // Apply the same NDC z remap as WgpuRenderer::render()
+                    auto& e = proj.elements;
+                    e[2]  = 0.5f * e[2]  + 0.5f * e[3];
+                    e[6]  = 0.5f * e[6]  + 0.5f * e[7];
+                    e[10] = 0.5f * e[10] + 0.5f * e[11];
+                    e[14] = 0.5f * e[14] + 0.5f * e[15];
+                    Matrix4 pv;
+                    pv.multiplyMatrices(proj, camera.matrixWorldInverse);
+                    const auto& pe = pv.elements;
+                    for (int i = 0; i < 16; ++i) dfu.projView[i] = pe[i];
+                }
+                dfu.camOri[0] = camPos.x; dfu.camOri[1] = camPos.y; dfu.camOri[2] = camPos.z;
+                dfu.camFwd[0] = fwd.x;    dfu.camFwd[1] = fwd.y;    dfu.camFwd[2] = fwd.z;
+                dfu.camRgt[0] = rgt.x;    dfu.camRgt[1] = rgt.y;    dfu.camRgt[2] = rgt.z;
+                dfu.camUp[0]  = up.x;     dfu.camUp[1]  = up.y;     dfu.camUp[2]  = up.z;
+                dfu.iRes[0]   = static_cast<float>(d.width_);
+                dfu.iRes[1]   = static_cast<float>(d.height_);
+                dfu.tanHalfFov[0] = tanHalfFov;
+                wgpuQueueWriteBuffer(d.queue, d.depthFillUniBuf_, 0, &dfu, sizeof(dfu));
+
+                // Build bind group: uniform (0) + gBufPrev (1)
+                WGPUBindGroupEntry bgEntries[2]{};
+                bgEntries[0].binding = 0;
+                bgEntries[0].buffer  = d.depthFillUniBuf_;
+                bgEntries[0].offset  = 0;
+                bgEntries[0].size    = sizeof(DepthFillUniforms);
+                bgEntries[1].binding    = 1;
+                bgEntries[1].textureView = d.gBufPrev->view();
+                WGPUBindGroupDescriptor bgDesc{};
+                bgDesc.layout     = d.depthFillBGL_;
+                bgDesc.entryCount = 2;
+                bgDesc.entries    = bgEntries;
+                WGPUBindGroup bg = wgpuDeviceCreateBindGroup(d.device, &bgDesc);
+
+                // Depth-fill render pass: loads existing depth, then overwrites with
+                // reconstructed path-traced depth. No color attachment.
+                WGPURenderPassDepthStencilAttachment depthAtt{};
+                depthAtt.view            = depthView;
+                depthAtt.depthLoadOp     = WGPULoadOp_Clear;
+                depthAtt.depthStoreOp    = WGPUStoreOp_Store;
+                depthAtt.depthClearValue = 1.0f;
+                WGPURenderPassDescriptor passDesc{};
+                passDesc.label                    = WGPUStringView{"depth_fill_pass", WGPU_STRLEN};
+                passDesc.colorAttachmentCount     = 0;
+                passDesc.depthStencilAttachment   = &depthAtt;
+                WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
+                wgpuRenderPassEncoderSetPipeline(pass, d.depthFillPipeline_);
+                wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
+                wgpuRenderPassEncoderSetViewport(pass, 0.f, 0.f,
+                    static_cast<float>(d.width_), static_cast<float>(d.height_), 0.f, 1.f);
+                wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+                wgpuRenderPassEncoderEnd(pass);
+                wgpuRenderPassEncoderRelease(pass);
+                wgpuBindGroupRelease(bg);
+            }
+
+            // Overlay render: preserve color AND depth (use reconstructed depth for occlusion).
+            const bool savedAutoClear       = d.renderer.autoClear;
+            const bool savedShadowAutoUpdate = d.renderer.shadowMapAutoUpdate;
+            d.renderer.autoClear           = false;  // no color or depth clear
+            d.renderer.shadowMapAutoUpdate = false;  // skip shadow re-render
+            d.renderer.render(scene, camera);
+            d.renderer.autoClear           = savedAutoClear;
+            d.renderer.shadowMapAutoUpdate = savedShadowAutoUpdate;
+        }
+
+        for (auto& e : hidden) e.obj->visible = e.wasVisible;
+    }
 }
 
 void WgpuPathTracer::setMode(Mode mode) {
@@ -2136,5 +2382,10 @@ void WgpuPathTracer::resetAccumulation() {
 }
 
 void WgpuPathTracer::dispose() {
-    // Resources are cleaned up by destructors
+    auto& d = *pimpl_;
+    if (d.depthFillPipeline_)   { wgpuRenderPipelineRelease(d.depthFillPipeline_);   d.depthFillPipeline_ = nullptr; }
+    if (d.depthFillPipeLayout_) { wgpuPipelineLayoutRelease(d.depthFillPipeLayout_); d.depthFillPipeLayout_ = nullptr; }
+    if (d.depthFillBGL_)        { wgpuBindGroupLayoutRelease(d.depthFillBGL_);       d.depthFillBGL_ = nullptr; }
+    if (d.depthFillShader_)     { wgpuShaderModuleRelease(d.depthFillShader_);       d.depthFillShader_ = nullptr; }
+    if (d.depthFillUniBuf_)     { wgpuBufferRelease(d.depthFillUniBuf_);             d.depthFillUniBuf_ = nullptr; }
 }

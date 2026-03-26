@@ -2745,6 +2745,21 @@ uint32_t WgpuRenderer::nativeSurfaceFormat() const {
     return static_cast<uint32_t>(pimpl_->surfaceFormat);
 }
 
+void* WgpuRenderer::nativeFrameDepthView() const {
+    if (!pimpl_->frame_.active) return nullptr;
+    if (pimpl_->needsToneMapPass()) return static_cast<void*>(pimpl_->toneMap_.depthView);
+    return static_cast<void*>(pimpl_->frame_.depthView);
+}
+
+uint32_t WgpuRenderer::nativeFrameDepthSampleCount() const {
+    if (!pimpl_->frame_.active) return 1;
+    return pimpl_->needsToneMapPass() ? 1u : pimpl_->sampleCount_;
+}
+
+void* WgpuRenderer::nativeRenderCommandEncoder() const {
+    return static_cast<void*>(pimpl_->renderEncoder_);
+}
+
 void WgpuRenderer::setSampleCount(uint32_t count) {
     if (count != 1 && count != 4) {
         std::cerr << "WgpuRenderer::setSampleCount: unsupported count " << count

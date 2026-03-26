@@ -118,6 +118,18 @@ namespace threepp {
         /// Avoids exposing WebGPU types in the public header.
         [[nodiscard]] uint32_t nativeSurfaceFormat() const;
 
+        /// Current frame's depth texture view (WGPUTextureView, type-erased).
+        /// Valid after the first render() call in a frame; nullptr otherwise.
+        [[nodiscard]] void* nativeFrameDepthView() const;
+
+        /// Active render command encoder (WGPUCommandEncoder, type-erased).
+        /// Valid after the first render() call in a frame; nullptr otherwise.
+        [[nodiscard]] void* nativeRenderCommandEncoder() const;
+
+        /// MSAA sample count of the current frame's depth buffer (1 or getSampleCount()).
+        /// Returns 1 when a tone-mapping intermediate RT is in use.
+        [[nodiscard]] uint32_t nativeFrameDepthSampleCount() const;
+
         /// Finalize the current frame: run any deferred post-processing (tone
         /// mapping blit, ImGui overlay) and present the surface texture.
         /// Normally called automatically by the Canvas animate loop. Call
