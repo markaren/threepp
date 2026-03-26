@@ -199,12 +199,12 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
 }
 
+// Returns the raw environment/background color with no intensity scaling.
+// Callers apply rt.envIntensity.x themselves when using this as a light source.
 fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
-    let intensity = rt.envIntensity.x;
     let mode = i32(rt.envColor.w);
     if (mode == 1) {
-        // Solid background color
-        return rt.envColor.xyz * intensity;
+        return rt.envColor.xyz;
     } else if (mode == 2) {
         // Equirectangular texture
         let nd  = normalize(d);
@@ -215,11 +215,11 @@ fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
         let sz  = vec2<f32>(textureDimensions(envTex, 0));
         let px  = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
                             clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
-        return textureLoad(envTex, px, 0).xyz * intensity;
+        return textureLoad(envTex, px, 0).xyz;
     }
     // Default: procedural sky gradient
     let t = clamp(0.5 * (normalize(d).y + 1.0), 0.0, 1.0);
-    return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.32, 0.52, 1.0), t) * intensity;
+    return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.32, 0.52, 1.0), t);
 }
 
 fn triIntersect(ray: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> Isect {
@@ -441,7 +441,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
 
         var rc1: vec3<f32>;
         if (h1.t >= 1e30) {
-            rc1 = sampleEnv(r1.dir);
+            rc1 = sampleEnv(r1.dir) * rt.envIntensity.x;
         } else {
             var base1 = shade(h1, r1.dir);
             // Second specular bounce: reflections-of-reflections
@@ -453,7 +453,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
                 r2.origin = h1.point + h1.normal * 1e-3;
                 r2.dir    = reflect(r1.dir, h1.normal);
                 let h2    = sceneHit(r2);
-                var rc2   = select(shade(h2, r2.dir), sampleEnv(r2.dir), h2.t >= 1e30);
+                var rc2   = select(shade(h2, r2.dir), sampleEnv(r2.dir) * rt.envIntensity.x, h2.t >= 1e30);
                 rc2   = max(rc2, mix(vec3<f32>(0.04), h1.albedo, h1.metalness) * 0.08);
                 base1 = base1 * (vec3<f32>(1.0) - k1) + rc2 * k1;
             }
@@ -479,7 +479,10 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     for (var i = 0; i < 8; i++) {
         let h = sceneHit(ray);
         if (h.t >= 1e29) {
-            radiance += throughput * sampleEnv(ray.dir);
+            // Primary ray miss = background pixel: show full color.
+            // Indirect bounces: scale by envIntensity to control env light contribution.
+            let envScale = select(rt.envIntensity.x, 1.0, i == 0);
+            radiance += throughput * sampleEnv(ray.dir) * envScale;
             break;
         }
         if (i == 0) {
@@ -1001,6 +1004,8 @@ struct TransformUniforms {
 };
 @group(0) @binding(0) var<uniform> transform: TransformUniforms;
 @group(0) @binding(2) var accumTex: texture_2d<f32>;
+// binding 3 = accumTex sampler (unused)
+@group(0) @binding(4) var gBufTex:  texture_2d<f32>;  // gBuf: .w = primary hit t, 0 = background
 
 @vertex
 fn vs_main(@location(0) position: vec3<f32>) -> @builtin(position) vec4<f32> {
@@ -1014,8 +1019,17 @@ fn aces(x: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
-    let col = textureLoad(accumTex, vec2<i32>(fragPos.xy), 0).xyz;
-    let gc  = pow(aces(col), vec3<f32>(1.0 / 2.2));
+    let px  = vec2<i32>(fragPos.xy);
+    let col = textureLoad(accumTex, px, 0).xyz;
+    let t   = textureLoad(gBufTex,  px, 0).w;
+    // Background pixels (primary ray miss): just gamma-correct, no tone mapping.
+    // Geometry pixels: ACES tone mapping + gamma.
+    var gc: vec3<f32>;
+    if (t <= 0.0) {
+        gc = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
+    } else {
+        gc = pow(aces(col), vec3<f32>(1.0 / 2.2));
+    }
     return vec4<f32>(gc, 1.0);
 }
 )";
@@ -1750,6 +1764,7 @@ struct WgpuPathTracer::Impl {
         displayMat->vertexShader = displayWGSL;
         displayMat->fragmentShader = displayWGSL;
         displayMat->customTextures["accumTex"] = readAccum;
+        displayMat->customTextures["gBufTex"]  = gBufPrev;
         displayScene.add(Mesh::create(PlaneGeometry::create(2.f, 2.f), displayMat));
 
         // Depth-fill: build shader, BGL, layout, and uniform buffer now.
@@ -2213,6 +2228,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
 
     d.displayMat->customTextures["accumTex"] = displayTex;
+    d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;  // used to skip ACES on background pixels
     d.displayMat->uniformsNeedUpdate = true;
     d.frameCount_ += 1.f;
 
