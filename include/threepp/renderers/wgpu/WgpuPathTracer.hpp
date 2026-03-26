@@ -56,6 +56,11 @@ namespace threepp {
         [[nodiscard]] int frameCount() const;
         void resetAccumulation();
 
+        /// Objects on this layer are rasterized as overlay (bypassing path tracing entirely).
+        /// Useful for gizmos like TransformControls. Set to -1 to disable (default).
+        void setOverlayLayer(int channel);
+        [[nodiscard]] int overlayLayer() const;
+
         void dispose();
 
     private:

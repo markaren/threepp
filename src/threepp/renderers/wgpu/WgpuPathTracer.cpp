@@ -1618,6 +1618,7 @@ struct WgpuPathTracer::Impl {
     Vector3 prevCamDir_;
     Mode mode_ = Mode::Raytracer;
     int spp_ = 2;
+    int overlayLayer_ = -1;  // -1 = disabled; objects on this layer bypass path tracing and go to raster overlay
 
     int width_, height_;
 
@@ -1900,6 +1901,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     std::vector<Mesh*> rtMeshes;
     scene.traverseType<Mesh>([&](Mesh& m) {
         if (!m.visible) return;
+        if (d.overlayLayer_ >= 0 && m.layers.isEnabled(static_cast<unsigned>(d.overlayLayer_))) return;
         auto* mat = m.material().get();
         auto* mww = mat->as<MaterialWithWireframe>();
         if (mww && mww->wireframe) return;
@@ -2231,10 +2233,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // so parent nodes remain visible and their children are reachable.
         scene.traverse([&](Object3D& obj) {
             if (!obj.visible) return;
+            const bool onOverlayLayer = (d.overlayLayer_ >= 0 &&
+                                         obj.layers.isEnabled(static_cast<unsigned>(d.overlayLayer_)));
             if (auto* mesh = obj.as<Mesh>()) {
                 auto* mat = mesh->material().get();
                 auto* mww = dynamic_cast<MaterialWithWireframe*>(mat);
-                bool isOverlay = (mww && mww->wireframe) ||
+                bool isOverlay = onOverlayLayer ||
+                                 (mww && mww->wireframe) ||
                                  dynamic_cast<LineBasicMaterial*>(mat) != nullptr;
                 if (isOverlay) {
                     hasOverlay = true;
@@ -2242,9 +2247,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     hidden.push_back({mesh, true});
                     mesh->visible = false;
                 }
-            } else if (obj.is<Line>()) {
+            } else if (obj.is<Line>() || onOverlayLayer) {
                 hasOverlay = true;
-                // Line objects remain visible — they ARE the overlay
             }
         });
 
@@ -2379,6 +2383,14 @@ int WgpuPathTracer::frameCount() const {
 
 void WgpuPathTracer::resetAccumulation() {
     pimpl_->frameCount_ = 0.f;
+}
+
+void WgpuPathTracer::setOverlayLayer(int channel) {
+    pimpl_->overlayLayer_ = channel;
+}
+
+int WgpuPathTracer::overlayLayer() const {
+    return pimpl_->overlayLayer_;
 }
 
 void WgpuPathTracer::dispose() {
