@@ -40,6 +40,11 @@ namespace threepp {
         void setSamplesPerPixel(int spp);
         [[nodiscard]] int samplesPerPixel() const;
 
+        /// Scale applied to environment/sky light contribution. Default: 1.0.
+        /// Set < 1.0 to reduce env light influence on path-traced results.
+        void setEnvIntensity(float intensity);
+        [[nodiscard]] float envIntensity() const;
+
         /// Enable/disable the à-trous wavelet denoiser (path tracer mode only). Default: true.
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;

@@ -12,6 +12,7 @@
 #include "threepp/lights/DirectionalLight.hpp"
 #include "threepp/lights/PointLight.hpp"
 #include "threepp/lights/SpotLight.hpp"
+#include "threepp/materials/LineBasicMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/interfaces.hpp"
 #include "threepp/math/Matrix4.hpp"
@@ -71,6 +72,7 @@ struct RtUniforms {
     spp:          vec4<f32>,
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
+    envIntensity:  vec4<f32>,  // x = intensity scale for env/sky light
 };
 
 struct BvhNodeGpu {
@@ -196,10 +198,11 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
 }
 
 fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
+    let intensity = rt.envIntensity.x;
     let mode = i32(rt.envColor.w);
     if (mode == 1) {
         // Solid background color
-        return rt.envColor.xyz;
+        return rt.envColor.xyz * intensity;
     } else if (mode == 2) {
         // Equirectangular texture
         let nd  = normalize(d);
@@ -210,11 +213,11 @@ fn sampleEnv(d: vec3<f32>) -> vec3<f32> {
         let sz  = vec2<f32>(textureDimensions(envTex, 0));
         let px  = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
                             clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
-        return textureLoad(envTex, px, 0).xyz;
+        return textureLoad(envTex, px, 0).xyz * intensity;
     }
     // Default: procedural sky gradient
     let t = clamp(0.5 * (normalize(d).y + 1.0), 0.0, 1.0);
-    return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.32, 0.52, 1.0), t);
+    return mix(vec3<f32>(1.0, 1.0, 1.0), vec3<f32>(0.32, 0.52, 1.0), t) * intensity;
 }
 
 fn triIntersect(ray: Ray, v0: vec3<f32>, v1: vec3<f32>, v2: vec3<f32>) -> Isect {
@@ -989,7 +992,8 @@ struct alignas(16) RtGpuUniforms {
     float    spp[4];
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
-    float    _pad[12];
+    float    envIntensity[4];   // x = env/sky light intensity scale
+    float    _pad[8];
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -1493,6 +1497,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = true;
+    float envIntensity_ = 1.0f;
 
     // Previous camera vectors for TAA reprojection
     float prevCamOri_[3] = {0.f, 0.f, 0.f};
@@ -1757,10 +1762,15 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.prevCamDir_ = fwd;
     }
 
-    // Collect visible meshes and lights
+    // Collect visible, non-wireframe, non-line meshes and lights
     std::vector<Mesh*> rtMeshes;
     scene.traverseType<Mesh>([&](Mesh& m) {
-        if (m.visible) rtMeshes.push_back(&m);
+        if (!m.visible) return;
+        auto* mat = m.material().get();
+        auto* mww = mat->as<MaterialWithWireframe>();
+        if (mww && mww->wireframe) return;
+        if (mat->is<LineBasicMaterial>()) return;
+        rtMeshes.push_back(&m);
     });
     std::vector<PointLight*> pointLights;
     scene.traverseType<PointLight>([&](PointLight& l) { pointLights.push_back(&l); });
@@ -1917,6 +1927,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.prevEnvTex_ = nullptr;
         }
     }
+    u.envIntensity[0] = d.envIntensity_;
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -1933,7 +1944,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         packLight(lp.x, lp.y, lp.z, lc.r * li, lc.g * li, lc.b * li, 0.f);
     }
     for (auto* l : dirLights) {
-        Vector3 dir = Vector3(l->target().position).sub(l->position).normalize();
+        Vector3 dir = Vector3(l->position).sub(l->target().position).normalize();
         const auto& lc = l->color;
         const float li = l->intensity;
         packLight(dir.x, dir.y, dir.z, lc.r * li, lc.g * li, lc.b * li, 1.f);
@@ -2082,6 +2093,14 @@ void WgpuPathTracer::setMode(Mode mode) {
 
 WgpuPathTracer::Mode WgpuPathTracer::mode() const {
     return pimpl_->mode_;
+}
+
+void WgpuPathTracer::setEnvIntensity(float intensity) {
+    pimpl_->envIntensity_ = intensity;
+}
+
+float WgpuPathTracer::envIntensity() const {
+    return pimpl_->envIntensity_;
 }
 
 void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
