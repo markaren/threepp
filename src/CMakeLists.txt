@@ -574,6 +574,7 @@ if (THREEPP_WITH_WGPU)
             "threepp/renderers/wgpu/WgpuRenderTargets.cpp"
             "threepp/renderers/wgpu/WgpuShaders.cpp"
             "threepp/renderers/wgpu/WgpuShadowMap.cpp"
+            "threepp/renderers/wgpu/WgpuMipmapGenerator.cpp"
             "threepp/renderers/wgpu/WgpuTextures.cpp"
             "threepp/renderers/wgpu/WgpuTexture.cpp"
             "threepp/renderers/wgpu/WgpuBuffer.cpp"

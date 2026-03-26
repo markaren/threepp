@@ -179,6 +179,7 @@ struct Canvas::Impl {
     bool close_{false};
     bool exitOnKeyEscape_;
     bool vsync_;
+    int antialiasing_;
 
     std::vector<std::function<void(WindowSize)>> resizeListener;
     std::vector<std::function<void(int monitor)>> monitorChangesListener;
@@ -186,7 +187,7 @@ struct Canvas::Impl {
     bool insideAnimateLoop_{false};
 
     explicit Impl(Canvas& scope, const Parameters& params)
-        : scope(scope), graphicsApi_(params.graphicsApi_), exitOnKeyEscape_(params.exitOnKeyEscape_), vsync_(params.vsync_) {
+        : scope(scope), graphicsApi_(params.graphicsApi_), exitOnKeyEscape_(params.exitOnKeyEscape_), vsync_(params.vsync_), antialiasing_(params.antialiasing_) {
 
         initGLfw();
 
@@ -496,6 +497,11 @@ GraphicsAPI Canvas::graphicsApi() const {
 bool Canvas::vsync() const {
 
     return pimpl_->vsync_;
+}
+
+int Canvas::samples() const {
+
+    return pimpl_->antialiasing_;
 }
 
 void Canvas::setFrameEndCallback(std::function<void()> callback) {

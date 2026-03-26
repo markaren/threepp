@@ -67,7 +67,7 @@ public:
                 initInfo.Device = static_cast<WGPUDevice>(wgpuRenderer_->nativeDevice());
                 initInfo.RenderTargetFormat = static_cast<WGPUTextureFormat>(wgpuRenderer_->nativeSurfaceFormat());
                 initInfo.DepthStencilFormat = WGPUTextureFormat_Depth24Plus;
-                initInfo.PipelineMultisampleState.count = wgpuRenderer_->getSampleCount();
+                initInfo.PipelineMultisampleState.count = 1; // overlay renders to resolved (non-MSAA) surface
 
                 ImGui_ImplWGPU_Init(&initInfo);
 

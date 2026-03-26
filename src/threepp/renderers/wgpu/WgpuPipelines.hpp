@@ -86,7 +86,9 @@ namespace threepp::wgpu {
     private:
         WgpuState& state_;
         std::unordered_map<uint64_t, PipelineEntry> pipelineCache_;
-        std::unordered_map<unsigned int, CustomPipelineEntry> customPipelineCache_;
+        // Key: (uint64_t(materialId) | (sampleCount > 1 ? (1ULL << 32) : 0))
+        // so that pipelines compiled for different MSAA counts are cached separately.
+        std::unordered_map<uint64_t, CustomPipelineEntry> customPipelineCache_;
 
         std::vector<WGPUBindGroupLayoutEntry> buildBindGroupLayoutEntries(uint64_t features) const;
 

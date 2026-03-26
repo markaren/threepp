@@ -3,9 +3,11 @@
 #ifndef THREEPP_WGPUTEXTURES_HPP
 #define THREEPP_WGPUTEXTURES_HPP
 
+#include "WgpuMipmapGenerator.hpp"
 #include "WgpuState.hpp"
 
 #include <unordered_map>
+#include <vector>
 #include <webgpu/webgpu.h>
 
 namespace threepp {
@@ -36,12 +38,24 @@ namespace threepp::wgpu {
 
         [[nodiscard]] const TextureEntry* findTexture(unsigned int id) const;
 
+        // Flush any pending mipmap generation work.
+        // Must be called BEFORE the main render pass begins each frame so that
+        // mipmap command buffers are submitted while no render pass is active.
+        void flushPendingMipmaps();
+
         void dispose();
 
         [[nodiscard]] size_t count() const { return cache_.size(); }
 
     private:
+        struct PendingMipmap {
+            WGPUTexture texture;
+            uint32_t width, height, mipLevels;
+            bool isCube;
+        };
         WgpuState& state_;
+        WgpuMipmapGenerator mipmapGen_;
+        std::vector<PendingMipmap> pendingMipmaps_;
         std::unordered_map<unsigned int, TextureEntry> cache_;
         std::unordered_map<unsigned int, TextureEntry> cubeCache_;
         TextureEntry dummyTexture_;

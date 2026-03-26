@@ -250,7 +250,10 @@ namespace threepp::wgpu {
     PipelineEntry& WgpuPipelines::getOrCreatePipeline(uint64_t features,
                                                        WGPUTextureFormat surfaceFormat,
                                                        uint32_t sampleCount) {
-        auto it = pipelineCache_.find(features);
+        // Encode sampleCount in bit 62 so pipelines compiled for different MSAA
+        // counts are cached separately and never used in a mismatched render pass.
+        const uint64_t cacheKey = features | (sampleCount > 1 ? (1ULL << 62) : 0ULL);
+        auto it = pipelineCache_.find(cacheKey);
         if (it != pipelineCache_.end()) return it->second;
 
         PipelineEntry entry{};
@@ -405,8 +408,8 @@ namespace threepp::wgpu {
                       << std::hex << features << std::dec << std::endl;
         }
 
-        pipelineCache_[features] = entry;
-        return pipelineCache_[features];
+        pipelineCache_[cacheKey] = entry;
+        return pipelineCache_[cacheKey];
     }
 
     CustomPipelineEntry& WgpuPipelines::getOrCreateCustomPipeline(
@@ -417,10 +420,14 @@ namespace threepp::wgpu {
         const bool isGlsl = sm->vertexShader.find("gl_Position") != std::string::npos ||
                              sm->fragmentShader.find("gl_FragColor") != std::string::npos;
 
+        // Encode sampleCount in bit 32 so MSAA and non-MSAA variants are cached separately.
+        const uint64_t customCacheKey = static_cast<uint64_t>(sm->id)
+                                      | (sampleCount > 1 ? (1ULL << 32) : 0ULL);
+
 #ifndef THREEPP_WGPU_GLSL_COMPAT
         if (isGlsl) {
             // GLSL compat disabled at build time — skip silently
-            return customPipelineCache_[sm->id];
+            return customPipelineCache_[customCacheKey];
         }
 #endif
 
@@ -429,7 +436,7 @@ namespace threepp::wgpu {
         std::string wgsl = isGlsl ? "" : (sm->vertexShader + "\n" + sm->fragmentShader);
         size_t shaderHash = std::hash<std::string>{}(sm->vertexShader + "##" + sm->fragmentShader);
 
-        auto it = customPipelineCache_.find(sm->id);
+        auto it = customPipelineCache_.find(customCacheKey);
         bool needRebuild = (it == customPipelineCache_.end() || it->second.shaderHash != shaderHash);
 
         if (needRebuild) {
@@ -474,8 +481,8 @@ namespace threepp::wgpu {
                 if (!translated.success()) {
                     std::cerr << "[WgpuPipelines] GLSL translation failed for material "
                               << sm->id << ":\n" << translated.errorMessage << std::endl;
-                    customPipelineCache_[sm->id] = CustomPipelineEntry{};
-                    return customPipelineCache_[sm->id];
+                    customPipelineCache_[customCacheKey] = CustomPipelineEntry{};
+                    return customPipelineCache_[customCacheKey];
                 }
 
                 entry.customUniformNames = translated.customUniformNames;
@@ -495,8 +502,8 @@ namespace threepp::wgpu {
                     entry.vertShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
                     if (!entry.vertShader) {
                         std::cerr << "[WgpuPipelines] Failed to create vertex SPIR-V module\n";
-                        customPipelineCache_[sm->id] = CustomPipelineEntry{};
-                        return customPipelineCache_[sm->id];
+                        customPipelineCache_[customCacheKey] = CustomPipelineEntry{};
+                        return customPipelineCache_[customCacheKey];
                     }
                 }
 
@@ -515,8 +522,8 @@ namespace threepp::wgpu {
                     if (!entry.fragShader) {
                         std::cerr << "[WgpuPipelines] Failed to create fragment SPIR-V module\n";
                         wgpuShaderModuleRelease(entry.vertShader);
-                        customPipelineCache_[sm->id] = CustomPipelineEntry{};
-                        return customPipelineCache_[sm->id];
+                        customPipelineCache_[customCacheKey] = CustomPipelineEntry{};
+                        return customPipelineCache_[customCacheKey];
                     }
                 }
             } else
@@ -542,8 +549,8 @@ namespace threepp::wgpu {
                         entry.vertShader = wgpuDeviceCreateShaderModule(state_.device, &desc);
                         if (!entry.vertShader) {
                             std::cerr << "[WgpuPipelines] Failed to create separate vertex WGSL module\n";
-                            customPipelineCache_[sm->id] = CustomPipelineEntry{};
-                            return customPipelineCache_[sm->id];
+                            customPipelineCache_[customCacheKey] = CustomPipelineEntry{};
+                            return customPipelineCache_[customCacheKey];
                         }
                     }
                     // Create separate fragment WGSL module
@@ -560,8 +567,8 @@ namespace threepp::wgpu {
                         if (!entry.fragShader) {
                             std::cerr << "[WgpuPipelines] Failed to create separate fragment WGSL module\n";
                             wgpuShaderModuleRelease(entry.vertShader);
-                            customPipelineCache_[sm->id] = CustomPipelineEntry{};
-                            return customPipelineCache_[sm->id];
+                            customPipelineCache_[customCacheKey] = CustomPipelineEntry{};
+                            return customPipelineCache_[customCacheKey];
                         }
                     }
                 } else {
@@ -804,10 +811,10 @@ namespace threepp::wgpu {
 
             entry.pipeline = wgpuDeviceCreateRenderPipeline(state_.device, &pipelineDesc);
 
-            customPipelineCache_[sm->id] = entry;
+            customPipelineCache_[customCacheKey] = entry;
         }
 
-        return customPipelineCache_[sm->id];
+        return customPipelineCache_[customCacheKey];
     }
 
     void WgpuPipelines::invalidateAll() {
@@ -831,16 +838,19 @@ namespace threepp::wgpu {
     }
 
     void WgpuPipelines::onMaterialDispose(unsigned int materialId) {
-        auto it = customPipelineCache_.find(materialId);
-        if (it != customPipelineCache_.end()) {
-            auto& entry = it->second;
-            if (entry.pipeline)    wgpuRenderPipelineRelease(entry.pipeline);
-            if (entry.layout)      wgpuPipelineLayoutRelease(entry.layout);
-            if (entry.bindGroupLayout) wgpuBindGroupLayoutRelease(entry.bindGroupLayout);
-            if (entry.shader)      wgpuShaderModuleRelease(entry.shader);
-            if (entry.vertShader)  wgpuShaderModuleRelease(entry.vertShader);
-            if (entry.fragShader)  wgpuShaderModuleRelease(entry.fragShader);
-            customPipelineCache_.erase(it);
+        // Remove both the 1x and 4x MSAA cached variants (bit 32 encodes sampleCount > 1).
+        for (uint64_t extra : {0ULL, 1ULL << 32}) {
+            auto it = customPipelineCache_.find(static_cast<uint64_t>(materialId) | extra);
+            if (it != customPipelineCache_.end()) {
+                auto& entry = it->second;
+                if (entry.pipeline)    wgpuRenderPipelineRelease(entry.pipeline);
+                if (entry.layout)      wgpuPipelineLayoutRelease(entry.layout);
+                if (entry.bindGroupLayout) wgpuBindGroupLayoutRelease(entry.bindGroupLayout);
+                if (entry.shader)      wgpuShaderModuleRelease(entry.shader);
+                if (entry.vertShader)  wgpuShaderModuleRelease(entry.vertShader);
+                if (entry.fragShader)  wgpuShaderModuleRelease(entry.fragShader);
+                customPipelineCache_.erase(it);
+            }
         }
     }
 

@@ -60,6 +60,8 @@ namespace threepp {
 
         [[nodiscard]] bool vsync() const;
 
+        [[nodiscard]] int samples() const;
+
         /// Register a callback invoked at the end of each frame (after the user
         /// animate callback, before glfwPollEvents). Used by WgpuRenderer to
         /// present the surface texture, analogous to glfwSwapBuffers for GL.

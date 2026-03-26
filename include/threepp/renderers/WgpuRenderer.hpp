@@ -91,7 +91,7 @@ namespace threepp {
         /// Returns nullptr for headless canvases.
         [[nodiscard]] void* nativeSurface() const;
 
-        /// Set MSAA sample count (1 = no MSAA, 4 = 4x MSAA).
+        /// Set MSAA sample count (1 = no MSAA, 4 = 4x MSAA). Default: 1.
         /// Must be 1 or 4. Invalidates cached pipelines.
         void setSampleCount(uint32_t count);
         [[nodiscard]] uint32_t getSampleCount() const;

@@ -53,6 +53,7 @@ namespace threepp::wgpu {
         WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
         LightLimits lightLimits;
         ShadowLimits shadowLimits;
+        uint32_t maxAnisotropy = 16;  // Capped at common hardware maximum; wgpu-native validates
     };
 
 }// namespace threepp::wgpu

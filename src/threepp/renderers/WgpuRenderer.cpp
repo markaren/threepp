@@ -477,6 +477,7 @@ struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
         fs.targets = &ct;
 
         WGPURenderPipelineDescriptor rpd{};
+        rpd.label = WGPUStringView{"retain_blit_pipe", WGPU_STRLEN};
         rpd.layout = retainBlit_.pipelineLayout;
         rpd.vertex = vs;
         rpd.fragment = &fs;
@@ -543,6 +544,7 @@ struct ClearColor { color: vec4<f32> }
         ds.depthCompare = WGPUCompareFunction_Always;
 
         WGPURenderPipelineDescriptor pd{};
+        pd.label = WGPUStringView{"scissor_clear_pipe", WGPU_STRLEN};
         auto vsEntry = WGPUStringView{"vs_main", sizeof("vs_main") - 1};
         pd.layout = clearPipelineLayout_;
         pd.vertex.module = clearShader_; pd.vertex.entryPoint = vsEntry;
@@ -662,6 +664,12 @@ struct ClearColor { color: vec4<f32> }
         wgpuState.device = device;
         wgpuState.queue = queue;
         wgpuState.surfaceFormat = surfaceFormat;
+
+        // Inherit MSAA from Canvas parameters (WebGPU only supports 1 or 4).
+        {
+            const int s = canvas.samples();
+            sampleCount_ = (s >= 4) ? 4u : 1u;
+        }
 
         // Initialize subsystems
         textures = std::make_unique<wgpu::WgpuTextures>(wgpuState);
@@ -1544,6 +1552,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                 resolveView = rt.colorView;
             } else {
                 colorView = rt.colorView;
+                effectiveSampleCount_ = 1; // RT has no MSAA; use 1-sample pipelines
             }
         }
 
@@ -1556,6 +1565,11 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             renderEncoder_ = wgpuDeviceCreateCommandEncoder(device, &encDesc);
         }
         WGPUCommandEncoder encoder = renderEncoder_;
+
+        // Flush any pending mipmap generation before the render pass begins.
+        // Mipmap command buffers must be submitted while no render pass is active
+        // to avoid wgpu-native validation errors with MSAA render passes.
+        textures->flushPendingMipmaps();
 
         // Determine clear color
         auto* sceneObj = scene.as<Scene>();

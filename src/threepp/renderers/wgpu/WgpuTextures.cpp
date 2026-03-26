@@ -1,14 +1,45 @@
 
 #include "WgpuTextures.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <webgpu/webgpu.h>
+#include "threepp/constants.hpp"
 #include "threepp/textures/Texture.hpp"
 
 using namespace threepp;
 using namespace threepp::wgpu;
 
+namespace {
+    // Returns the number of mip levels for a texture of the given dimensions.
+    uint32_t calcMipLevels(uint32_t w, uint32_t h) {
+        return static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(std::max(w, h))))) + 1u;
+    }
+
+    // Whether the minFilter mode requires mipmaps.
+    bool filterUsesMips(Filter f) {
+        return f == Filter::NearestMipmapNearest ||
+               f == Filter::NearestMipmapLinear  ||
+               f == Filter::LinearMipmapNearest  ||
+               f == Filter::LinearMipmapLinear;
+    }
+
+    WGPUMipmapFilterMode toMipmapFilter(Filter f) {
+        switch (f) {
+            case Filter::NearestMipmapNearest:
+            case Filter::LinearMipmapNearest:
+                return WGPUMipmapFilterMode_Nearest;
+            case Filter::NearestMipmapLinear:
+            case Filter::LinearMipmapLinear:
+                return WGPUMipmapFilterMode_Linear;
+            default:
+                return WGPUMipmapFilterMode_Nearest;
+        }
+    }
+}
+
 WgpuTextures::WgpuTextures(WgpuState& state)
-    : state_(state) {}
+    : state_(state), mipmapGen_(state) {}
 
 void WgpuTextures::createDummyTexture() {
     WGPUTextureDescriptor td{};
@@ -109,14 +140,18 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     auto& data = img.data<unsigned char>();
     if (data.empty()) return dummyTexture_; // e.g. render target texture with no CPU-side data
 
+    const bool needsMips = tex->generateMipmaps && filterUsesMips(tex->minFilter);
+    const uint32_t mipLevels = needsMips ? calcMipLevels(w, h) : 1u;
+
     WGPUTextureDescriptor td{};
     td.label = WGPUStringView{"user_tex", WGPU_STRLEN} ;
     td.size = {w, h, 1};
-    td.mipLevelCount = 1;
+    td.mipLevelCount = mipLevels;
     td.sampleCount = 1;
     td.dimension = WGPUTextureDimension_2D;
     td.format = WGPUTextureFormat_RGBA8Unorm;
-    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst
+             | (needsMips ? WGPUTextureUsage_RenderAttachment : 0u);
     entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
     entry.view = wgpuTextureCreateView(entry.texture, nullptr);
 
@@ -144,11 +179,16 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     WGPUExtent3D extent = {w, h, 1};
     wgpuQueueWriteTexture(state_.queue, &dst, srcData, srcSize, &layout, &extent);
 
+    if (needsMips) {
+        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, false});
+    }
+
     WGPUSamplerDescriptor sd{};
     sd.label = WGPUStringView{"tex_sampler", WGPU_STRLEN} ;
     sd.magFilter = (tex->magFilter == Filter::Nearest) ? WGPUFilterMode_Nearest : WGPUFilterMode_Linear;
     sd.minFilter = (tex->minFilter == Filter::Nearest || tex->minFilter == Filter::NearestMipmapNearest || tex->minFilter == Filter::NearestMipmapLinear)
         ? WGPUFilterMode_Nearest : WGPUFilterMode_Linear;
+    sd.mipmapFilter = needsMips ? toMipmapFilter(tex->minFilter) : WGPUMipmapFilterMode_Nearest;
     auto mapWrap = [](TextureWrapping w) {
         switch (w) {
             case TextureWrapping::Repeat: return WGPUAddressMode_Repeat;
@@ -159,7 +199,13 @@ TextureEntry& WgpuTextures::getOrCreateTexture(Texture* tex) {
     sd.addressModeU = mapWrap(tex->wrapS);
     sd.addressModeV = mapWrap(tex->wrapT);
     sd.addressModeW = WGPUAddressMode_ClampToEdge;
-    sd.maxAnisotropy = 1;
+    // Anisotropic filtering: requires linear min+mag and mipmaps to be meaningful.
+    {
+        auto aniso = static_cast<uint32_t>(tex->anisotropy);
+        aniso = std::min(aniso, state_.maxAnisotropy);
+        sd.maxAnisotropy = (aniso > 1 && sd.minFilter == WGPUFilterMode_Linear
+                            && sd.magFilter == WGPUFilterMode_Linear) ? aniso : 1u;
+    }
     entry.sampler = wgpuDeviceCreateSampler(state_.device, &sd);
 
     entry.version = tex->version();
@@ -186,14 +232,18 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     auto h = static_cast<uint32_t>(images[0].height);
     if (w == 0 || h == 0) return dummyCubeTexture_;
 
+    const bool needsMips = tex->generateMipmaps && filterUsesMips(tex->minFilter);
+    const uint32_t mipLevels = needsMips ? calcMipLevels(w, h) : 1u;
+
     WGPUTextureDescriptor td{};
     td.label = WGPUStringView{"cube_tex", WGPU_STRLEN} ;
     td.size = {w, h, 6};
-    td.mipLevelCount = 1;
+    td.mipLevelCount = mipLevels;
     td.sampleCount = 1;
     td.dimension = WGPUTextureDimension_2D;
     td.format = WGPUTextureFormat_RGBA8Unorm;
-    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst
+             | (needsMips ? WGPUTextureUsage_RenderAttachment : 0u);
     entry.texture = wgpuDeviceCreateTexture(state_.device, &td);
 
     // Upload each face
@@ -227,12 +277,16 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
         wgpuQueueWriteTexture(state_.queue, &dst, srcData, srcSize, &layout, &extent);
     }
 
+    if (needsMips) {
+        pendingMipmaps_.push_back({entry.texture, w, h, mipLevels, true});
+    }
+
     WGPUTextureViewDescriptor vd{};
     vd.label = WGPUStringView{"cube_view", WGPU_STRLEN} ;
     vd.format = WGPUTextureFormat_RGBA8Unorm;
     vd.dimension = WGPUTextureViewDimension_Cube;
     vd.baseMipLevel = 0;
-    vd.mipLevelCount = 1;
+    vd.mipLevelCount = mipLevels;
     vd.baseArrayLayer = 0;
     vd.arrayLayerCount = 6;
     vd.aspect = WGPUTextureAspect_All;
@@ -242,6 +296,7 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     sd.label = WGPUStringView{"cube_sampler", WGPU_STRLEN} ;
     sd.magFilter = WGPUFilterMode_Linear;
     sd.minFilter = WGPUFilterMode_Linear;
+    sd.mipmapFilter = needsMips ? WGPUMipmapFilterMode_Linear : WGPUMipmapFilterMode_Nearest;
     sd.addressModeU = WGPUAddressMode_ClampToEdge;
     sd.addressModeV = WGPUAddressMode_ClampToEdge;
     sd.addressModeW = WGPUAddressMode_ClampToEdge;
@@ -251,6 +306,18 @@ TextureEntry& WgpuTextures::getOrCreateCubeTexture(Texture* tex) {
     entry.version = tex->version();
     cubeCache_[tex->id] = entry;
     return cubeCache_[tex->id];
+}
+
+void WgpuTextures::flushPendingMipmaps() {
+    if (pendingMipmaps_.empty()) return;
+    for (auto& pm : pendingMipmaps_) {
+        if (pm.isCube) {
+            mipmapGen_.generateCube(pm.texture, pm.width, pm.mipLevels, WGPUTextureFormat_RGBA8Unorm);
+        } else {
+            mipmapGen_.generate2D(pm.texture, pm.width, pm.height, pm.mipLevels, WGPUTextureFormat_RGBA8Unorm);
+        }
+    }
+    pendingMipmaps_.clear();
 }
 
 const TextureEntry* WgpuTextures::findTexture(unsigned int id) const {
