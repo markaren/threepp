@@ -811,3 +811,70 @@ struct VertexInput { @location(0) position: vec3<f32>, @location(1) normal: vec3
 @fragment fn fs_main() {}
 )";
 }
+
+std::string threepp::wgpu::buildSkinnedDepthWGSL() {
+    return R"(
+struct DepthUniforms { mvp: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> u: DepthUniforms;
+
+struct SkinData {
+    bindMatrix: mat4x4<f32>,
+    bindMatrixInverse: mat4x4<f32>,
+    boneCount: u32, _pad0: u32, _pad1: u32, _pad2: u32,
+    bones: array<mat4x4<f32>>,
+};
+@group(0) @binding(1) var<storage, read> skin: SkinData;
+
+struct SkinVertex { index: vec4<f32>, weight: vec4<f32> };
+@group(0) @binding(2) var<storage, read> skinVertices: array<SkinVertex>;
+
+struct VI { @location(0) position: vec3<f32> };
+
+@vertex fn vs_main(in: VI, @builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+    let sv = skinVertices[vid];
+    var sp = vec4<f32>(0.0);
+    let bp = skin.bindMatrix * vec4<f32>(in.position, 1.0);
+    for (var i = 0u; i < 4u; i++) {
+        let w = sv.weight[i];
+        if (w > 0.0) {
+            sp += (skin.bones[u32(sv.index[i])] * bp) * w;
+        }
+    }
+    let finalPos = (skin.bindMatrixInverse * sp).xyz;
+    return u.mvp * vec4<f32>(finalPos, 1.0);
+}
+@fragment fn fs_main() {}
+)";
+}
+
+std::string threepp::wgpu::buildMorphDepthWGSL() {
+    return R"(
+struct DepthUniforms { mvp: mat4x4<f32> };
+@group(0) @binding(0) var<uniform> u: DepthUniforms;
+
+struct MorphData {
+    numTargets: u32,
+    _pad0: u32, _pad1: u32, _pad2: u32,
+    influences: array<vec4<f32>, 2>,
+    positions: array<vec4<f32>>,
+};
+@group(0) @binding(1) var<storage, read> morph: MorphData;
+
+struct VI { @location(0) position: vec3<f32> };
+
+@vertex fn vs_main(in: VI, @builtin(vertex_index) vid: u32) -> @builtin(position) vec4<f32> {
+    var pos = in.position;
+    let numT = morph.numTargets;
+    let totalVerts = arrayLength(&morph.positions) / max(numT, 1u);
+    for (var t = 0u; t < numT; t++) {
+        let inf = morph.influences[t / 4u][t % 4u];
+        if (inf > 0.0) {
+            let mp = morph.positions[t * totalVerts + vid];
+            pos = pos + (mp.xyz - in.position) * inf;
+        }
+    }
+    return u.mvp * vec4<f32>(pos, 1.0);
+}
+@fragment fn fs_main() {}
+)";
+}

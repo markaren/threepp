@@ -1,6 +1,7 @@
 
 #include "threepp/renderers/WgpuRenderer.hpp"
 
+#include "wgpu/WgpuBindGroupCache.hpp"
 #include "wgpu/WgpuBindGroups.hpp"
 #include "wgpu/WgpuBufferPool.hpp"
 #include "wgpu/WgpuGeometries.hpp"
@@ -243,6 +244,9 @@ struct WgpuRenderer::Impl {
 
     // Subsystem: bind group assembly (hot path, reuses internal vector)
     std::unique_ptr<wgpu::WgpuBindGroups> bindGroups;
+
+    // Subsystem: bind group cache — avoids per-draw wgpuDeviceCreateBindGroup()
+    std::unique_ptr<wgpu::WgpuBindGroupCache> bindGroupCache;
 
     // Material dispose listener and set of materials with the listener registered
     OnMaterialDispose onMaterialDispose;
@@ -681,6 +685,7 @@ struct ClearColor { color: vec4<f32> }
         lights = std::make_unique<wgpu::WgpuLights>(wgpuState);
         renderTargets = std::make_unique<wgpu::WgpuRenderTargets>(wgpuState);
         bindGroups = std::make_unique<wgpu::WgpuBindGroups>();
+        bindGroupCache = std::make_unique<wgpu::WgpuBindGroupCache>(device);
 
         initialized = true;
         std::cout << "WgpuRenderer: WebGPU initialized successfully"
@@ -1390,8 +1395,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (!initialized) return;
 
         if (!frame_.active) {
-            // New frame — recycle per-draw buffers
+            // New frame — recycle per-draw buffers and evict stale bind groups
             bufferPool->beginFrame();
+            bindGroupCache->beginFrame();
         }
 
         // Reset per-frame statistics
@@ -1926,12 +1932,10 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                                                  customUniformBuf, pe.customUniformSize,
                                                  sm, unifiedTextures);
 
-        WGPUBindGroupDescriptor bgDesc{};
-        bgDesc.label = WGPUStringView{"custom_bg", sizeof("custom_bg") - 1};
-        bgDesc.layout = pe.bindGroupLayout;
-        bgDesc.entryCount = entries.size();
-        bgDesc.entries = entries.data();
-        WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgDesc);
+        WGPUBindGroup bg = bindGroupCache->get(
+                mesh, sm,
+                pe.bindGroupLayout, entries.data(), static_cast<uint32_t>(entries.size()),
+                WGPUStringView{"custom_bg", sizeof("custom_bg") - 1});
 
         wgpuRenderPassEncoderSetPipeline(pass, pe.pipeline);
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
@@ -1954,7 +1958,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
         }
 
-        wgpuBindGroupRelease(bg);
+        // Bind group is owned by the cache; do not release here.
     }
 
     // Collect all renderable objects into the render list with z-depth for sorting.
@@ -2396,12 +2400,10 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         };
         auto& entries = bindGroups->buildStandard(bgInputs);
 
-        WGPUBindGroupDescriptor bgDesc{};
-        bgDesc.label = WGPUStringView{"obj_bg", sizeof("obj_bg") - 1};
-        bgDesc.layout = pe.bindGroupLayout;
-        bgDesc.entryCount = entries.size();
-        bgDesc.entries = entries.data();
-        WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgDesc);
+        WGPUBindGroup bg = bindGroupCache->get(
+                object, rawMat,
+                pe.bindGroupLayout, entries.data(), static_cast<uint32_t>(entries.size()),
+                WGPUStringView{"obj_bg", sizeof("obj_bg") - 1});
 
         wgpuRenderPassEncoderSetPipeline(pass, pe.pipeline);
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
@@ -2468,8 +2470,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             }
         }
 
-        // Bind group is lightweight — release immediately. Buffers are managed by the pool.
-        wgpuBindGroupRelease(bg);
+        // Bind group is owned by the cache; do not release here.
     }
 
     void dispose() {
@@ -2529,6 +2530,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         if (clearBGL_) { wgpuBindGroupLayoutRelease(clearBGL_); clearBGL_ = nullptr; }
         if (clearShader_) { wgpuShaderModuleRelease(clearShader_); clearShader_ = nullptr; }
 
+        if (bindGroupCache) bindGroupCache->dispose();
         if (bufferPool) bufferPool->dispose();
         if (geometries) geometries->dispose();
         if (textures) textures->dispose();

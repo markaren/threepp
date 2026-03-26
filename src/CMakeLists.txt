@@ -564,6 +564,7 @@ if (THREEPP_WITH_WGPU)
     )
     list(APPEND sources
             "threepp/renderers/WgpuRenderer.cpp"
+            "threepp/renderers/wgpu/WgpuBindGroupCache.cpp"
             "threepp/renderers/wgpu/WgpuBindGroups.cpp"
             "threepp/renderers/wgpu/WgpuBufferPool.cpp"
             "threepp/renderers/wgpu/WgpuGeometries.cpp"

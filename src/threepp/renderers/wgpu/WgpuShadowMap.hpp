@@ -11,11 +11,13 @@
 #include "threepp/math/Matrix4.hpp"
 
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 #include <webgpu/webgpu.h>
 
 namespace threepp {
     class Object3D;
+    class Mesh;
     class Light;
     class LightWithShadow;
 }// namespace threepp
@@ -78,7 +80,7 @@ namespace threepp::wgpu {
         WGPUBuffer ptUniformBuffer_ = nullptr;
         std::vector<WGPUTextureView> ptLayerViews_;
 
-        // Depth-only render pipeline
+        // Plain depth-only pipeline (no skinning/morphing)
         WGPURenderPipeline depthPipeline_ = nullptr;
         WGPUPipelineLayout depthPipelineLayout_ = nullptr;
         WGPUBindGroupLayout depthBindGroupLayout_ = nullptr;
@@ -86,12 +88,45 @@ namespace threepp::wgpu {
         WGPUBuffer depthTransformBuffer_ = nullptr;
         WGPUBindGroup depthBindGroup_ = nullptr;
 
+        // Skinned depth pipeline
+        WGPURenderPipeline skinnedDepthPipeline_ = nullptr;
+        WGPUPipelineLayout skinnedDepthPipelineLayout_ = nullptr;
+        WGPUBindGroupLayout skinnedDepthBGL_ = nullptr;
+        WGPUShaderModule skinnedDepthShader_ = nullptr;
+
+        // Morph-target depth pipeline
+        WGPURenderPipeline morphDepthPipeline_ = nullptr;
+        WGPUPipelineLayout morphDepthPipelineLayout_ = nullptr;
+        WGPUBindGroupLayout morphDepthBGL_ = nullptr;
+        WGPUShaderModule morphDepthShader_ = nullptr;
+
+        // Per-mesh persistent GPU buffers for skinning (indices/weights static; matrices updated per frame)
+        struct SkinBuffers {
+            WGPUBuffer skinBuf    = nullptr;  // bone matrices + bind matrices
+            WGPUBuffer vertexBuf  = nullptr;  // per-vertex skin index/weight
+            size_t skinBufSize    = 0;
+            size_t vertexBufSize  = 0;
+        };
+        std::unordered_map<const Mesh*, SkinBuffers> skinCache_;
+
+        // Per-mesh persistent GPU buffer for morph data (positions + influences)
+        struct MorphBuffers {
+            WGPUBuffer buf  = nullptr;
+            size_t bufSize  = 0;
+        };
+        std::unordered_map<const Mesh*, MorphBuffers> morphCache_;
+
         // Per-light entries (dir/spot)
         std::vector<ShadowLightEntry> lights_;
 
         void init();
         void renderPass(WGPUCommandEncoder encoder, Object3D& scene,
                         const Matrix4& lightVP, int lightIndex);
+
+        // Helpers that return a freshly-created (caller must release) bind group for
+        // a skinned or morph-target mesh, uploading/updating the cached GPU buffers.
+        WGPUBindGroup buildSkinnedBindGroup(Mesh* mesh);
+        WGPUBindGroup buildMorphBindGroup(Mesh* mesh);
     };
 
 }// namespace threepp::wgpu

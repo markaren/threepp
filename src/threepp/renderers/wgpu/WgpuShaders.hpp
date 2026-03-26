@@ -131,6 +131,12 @@ namespace threepp::wgpu {
     // Generate the depth-only WGSL shader for shadow passes.
     std::string buildDepthWGSL();
 
+    // Depth shader variant for skinned (skeletal) meshes.
+    std::string buildSkinnedDepthWGSL();
+
+    // Depth shader variant for morph-target meshes.
+    std::string buildMorphDepthWGSL();
+
 }// namespace threepp::wgpu
 
 #endif//THREEPP_WGPUSHADERS_HPP
