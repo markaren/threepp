@@ -82,6 +82,10 @@ int main() {
     scene.add(floor);
     scene.add(enclosingBox);
 
+    auto grid = GridHelper::create(16);
+    grid->position.y = -0.99f;
+    scene.add(grid);
+
     ModelLoader loader;
     auto obj = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
     obj->traverseType<Mesh>([&](Mesh& m) {
