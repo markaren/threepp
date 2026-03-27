@@ -1470,6 +1470,11 @@ static float boxSurfaceArea(float mnX, float mnY, float mnZ,
     return 2.f * (dx * dy + dy * dz + dz * dx);
 }
 
+// Compute centroid of triangle ti along a given axis (0=X, 1=Y, 2=Z).
+static float triCentroid(const std::vector<float>& buf, int ti, int axis) {
+    return (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis) + triGet(buf, ti, 2, axis)) / 3.f;
+}
+
 static int buildBvhNode(
         std::vector<BvhNode>& nodes,
         std::vector<int>& idx,
@@ -1478,6 +1483,7 @@ static int buildBvhNode(
     const int ni = static_cast<int>(nodes.size());
     nodes.emplace_back();
 
+    // Compute full AABB of all triangles in [start, end)
     float minX = 1e30f, minY = 1e30f, minZ = 1e30f;
     float maxX = -1e30f, maxY = -1e30f, maxZ = -1e30f;
     for (int i = start; i < end; i++) {
@@ -1494,13 +1500,27 @@ static int buildBvhNode(
     nodes[ni] = {minX, minY, minZ, 0, maxX, maxY, maxZ, 0, parentIdx, {0, 0, 0}};
 
     const int count = end - start;
-    if (count <= 4) {
+    if (count <= 2) {
         nodes[ni].left = -(start + 1);
         nodes[ni].right = count;
         return ni;
     }
 
-    constexpr int NB = 8;
+    // Compute centroid AABB for tighter bucket distribution
+    float cMinX = 1e30f, cMinY = 1e30f, cMinZ = 1e30f;
+    float cMaxX = -1e30f, cMaxY = -1e30f, cMaxZ = -1e30f;
+    for (int i = start; i < end; i++) {
+        const int ti = idx[i];
+        const float cx = triCentroid(buf, ti, 0);
+        const float cy = triCentroid(buf, ti, 1);
+        const float cz = triCentroid(buf, ti, 2);
+        cMinX = std::min(cMinX, cx); cMaxX = std::max(cMaxX, cx);
+        cMinY = std::min(cMinY, cy); cMaxY = std::max(cMaxY, cy);
+        cMinZ = std::min(cMinZ, cz); cMaxZ = std::max(cMaxZ, cz);
+    }
+
+    constexpr int NB = 32;
+    constexpr float C_trav = 1.0f;  // traversal cost relative to intersection
     struct Bucket {
         float mnX = 1e30f, mnY = 1e30f, mnZ = 1e30f;
         float mxX = -1e30f, mxY = -1e30f, mxZ = -1e30f;
@@ -1508,22 +1528,24 @@ static int buildBvhNode(
     };
 
     float bestCost = 1e30f;
-    int bestAxis = 0;
+    int bestAxis = -1;
     int bestSplit = NB / 2;
 
     const float nodeArea = boxSurfaceArea(minX, minY, minZ, maxX, maxY, maxZ);
+    const float leafCost = static_cast<float>(count);  // cost of making this a leaf
+
+    const float centMin[3] = {cMinX, cMinY, cMinZ};
+    const float centMax[3] = {cMaxX, cMaxY, cMaxZ};
 
     for (int axis = 0; axis < 3; axis++) {
-        const float axMin = (axis == 0) ? minX : (axis == 1 ? minY : minZ);
-        const float axMax = (axis == 0) ? maxX : (axis == 1 ? maxY : maxZ);
-        if (axMax - axMin < 1e-6f) continue;
-        const float scale = NB / (axMax - axMin);
+        if (centMax[axis] - centMin[axis] < 1e-6f) continue;
+        const float scale = NB / (centMax[axis] - centMin[axis]);
 
         Bucket buckets[NB];
         for (int i = start; i < end; i++) {
             const int ti = idx[i];
-            const float c = (triGet(buf, ti, 0, axis) + triGet(buf, ti, 1, axis) + triGet(buf, ti, 2, axis)) / 3.f;
-            const int bi = std::clamp(static_cast<int>((c - axMin) * scale), 0, NB - 1);
+            const float c = triCentroid(buf, ti, axis);
+            const int bi = std::clamp(static_cast<int>((c - centMin[axis]) * scale), 0, NB - 1);
             for (int r = 0; r <= 2; r++) {
                 buckets[bi].mnX = std::min(buckets[bi].mnX, triGet(buf, ti, r, 0));
                 buckets[bi].mnY = std::min(buckets[bi].mnY, triGet(buf, ti, r, 1));
@@ -1535,36 +1557,58 @@ static int buildBvhNode(
             buckets[bi].cnt++;
         }
 
+        // Forward prefix scan: prefixArea[s] and prefixCnt[s] cover buckets [0..s]
+        float prefixArea[NB];
+        int prefixCnt[NB];
+        {
+            float pmnX = 1e30f, pmnY = 1e30f, pmnZ = 1e30f;
+            float pmxX = -1e30f, pmxY = -1e30f, pmxZ = -1e30f;
+            int pcnt = 0;
+            for (int b = 0; b < NB; b++) {
+                if (buckets[b].cnt) {
+                    pmnX = std::min(pmnX, buckets[b].mnX);
+                    pmnY = std::min(pmnY, buckets[b].mnY);
+                    pmnZ = std::min(pmnZ, buckets[b].mnZ);
+                    pmxX = std::max(pmxX, buckets[b].mxX);
+                    pmxY = std::max(pmxY, buckets[b].mxY);
+                    pmxZ = std::max(pmxZ, buckets[b].mxZ);
+                    pcnt += buckets[b].cnt;
+                }
+                prefixArea[b] = pcnt > 0 ? boxSurfaceArea(pmnX, pmnY, pmnZ, pmxX, pmxY, pmxZ) : 0.f;
+                prefixCnt[b] = pcnt;
+            }
+        }
+
+        // Backward prefix scan: suffixArea[s] and suffixCnt[s] cover buckets [s..NB-1]
+        float suffixArea[NB];
+        int suffixCnt[NB];
+        {
+            float smnX = 1e30f, smnY = 1e30f, smnZ = 1e30f;
+            float smxX = -1e30f, smxY = -1e30f, smxZ = -1e30f;
+            int scnt = 0;
+            for (int b = NB - 1; b >= 0; b--) {
+                if (buckets[b].cnt) {
+                    smnX = std::min(smnX, buckets[b].mnX);
+                    smnY = std::min(smnY, buckets[b].mnY);
+                    smnZ = std::min(smnZ, buckets[b].mnZ);
+                    smxX = std::max(smxX, buckets[b].mxX);
+                    smxY = std::max(smxY, buckets[b].mxY);
+                    smxZ = std::max(smxZ, buckets[b].mxZ);
+                    scnt += buckets[b].cnt;
+                }
+                suffixArea[b] = scnt > 0 ? boxSurfaceArea(smnX, smnY, smnZ, smxX, smxY, smxZ) : 0.f;
+                suffixCnt[b] = scnt;
+            }
+        }
+
+        // Evaluate split between bucket s-1 and s (left = [0..s-1], right = [s..NB-1])
         for (int s = 1; s < NB; s++) {
-            float lmnX = 1e30f, lmnY = 1e30f, lmnZ = 1e30f;
-            float lmxX = -1e30f, lmxY = -1e30f, lmxZ = -1e30f;
-            int lcnt = 0;
-            for (int b = 0; b < s; b++) {
-                if (!buckets[b].cnt) continue;
-                lmnX = std::min(lmnX, buckets[b].mnX);
-                lmnY = std::min(lmnY, buckets[b].mnY);
-                lmnZ = std::min(lmnZ, buckets[b].mnZ);
-                lmxX = std::max(lmxX, buckets[b].mxX);
-                lmxY = std::max(lmxY, buckets[b].mxY);
-                lmxZ = std::max(lmxZ, buckets[b].mxZ);
-                lcnt += buckets[b].cnt;
-            }
-            float rmnX = 1e30f, rmnY = 1e30f, rmnZ = 1e30f;
-            float rmxX = -1e30f, rmxY = -1e30f, rmxZ = -1e30f;
-            int rcnt = 0;
-            for (int b = s; b < NB; b++) {
-                if (!buckets[b].cnt) continue;
-                rmnX = std::min(rmnX, buckets[b].mnX);
-                rmnY = std::min(rmnY, buckets[b].mnY);
-                rmnZ = std::min(rmnZ, buckets[b].mnZ);
-                rmxX = std::max(rmxX, buckets[b].mxX);
-                rmxY = std::max(rmxY, buckets[b].mxY);
-                rmxZ = std::max(rmxZ, buckets[b].mxZ);
-                rcnt += buckets[b].cnt;
-            }
+            const int lcnt = prefixCnt[s - 1];
+            const int rcnt = suffixCnt[s];
             if (!lcnt || !rcnt) continue;
 
-            const float cost = (static_cast<float>(lcnt) * boxSurfaceArea(lmnX, lmnY, lmnZ, lmxX, lmxY, lmxZ) + static_cast<float>(rcnt) * boxSurfaceArea(rmnX, rmnY, rmnZ, rmxX, rmxY, rmxZ)) / nodeArea;
+            const float cost = C_trav + (static_cast<float>(lcnt) * prefixArea[s - 1]
+                             + static_cast<float>(rcnt) * suffixArea[s]) / nodeArea;
             if (cost < bestCost) {
                 bestCost = cost;
                 bestAxis = axis;
@@ -1573,13 +1617,18 @@ static int buildBvhNode(
         }
     }
 
-    const float axMin = (bestAxis == 0) ? minX : (bestAxis == 1 ? minY : minZ);
-    const float axMax = (bestAxis == 0) ? maxX : (bestAxis == 1 ? maxY : maxZ);
-    const float splitPos = axMin + (axMax - axMin) * static_cast<float>(bestSplit) / NB;
+    // If no good split found, or splitting is more expensive than a leaf, make a leaf
+    if (bestAxis < 0 || bestCost >= leafCost) {
+        nodes[ni].left = -(start + 1);
+        nodes[ni].right = count;
+        return ni;
+    }
+
+    const float splitPos = centMin[bestAxis]
+        + (centMax[bestAxis] - centMin[bestAxis]) * static_cast<float>(bestSplit) / NB;
 
     auto mid = std::partition(idx.begin() + start, idx.begin() + end, [&](int ti) {
-        const float c = (triGet(buf, ti, 0, bestAxis) + triGet(buf, ti, 1, bestAxis) + triGet(buf, ti, 2, bestAxis)) / 3.f;
-        return c < splitPos;
+        return triCentroid(buf, ti, bestAxis) < splitPos;
     });
     int sp = static_cast<int>(mid - idx.begin());
     if (sp == start || sp == end) sp = (start + end) / 2;
