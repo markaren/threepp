@@ -133,6 +133,14 @@ fn rand(seed: ptr<function, u32>) -> f32 {
     return f32(*seed) / 4294967296.0;
 }
 
+// R2 quasi-random sequence (Martin Roberts) — low-discrepancy 2D points
+// Uses the plastic constant for optimal 2D stratification
+const R2_A1: f32 = 0.7548776662466927;  // 1/phi2
+const R2_A2: f32 = 0.5698402909980532;  // 1/phi2^2
+fn r2Seq(n: u32) -> vec2<f32> {
+    return fract(vec2<f32>(f32(n) * R2_A1, f32(n) * R2_A2));
+}
+
 fn cosineHemisphere(n: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
     let u1  = rand(seed);
     let u2  = rand(seed);
@@ -703,9 +711,13 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let tVal = select(centerHit.t, 0.0, centerHit.t >= 1e20);
         textureStore(gBufWrite, pixel, vec4<f32>(vec3<f32>(0.0), tVal));
     } else {
+        // R2 quasi-random sub-pixel jitter (low-discrepancy stratification)
+        let r2  = r2Seq(fc);
+        // Per-pixel Cranley-Patterson rotation: offset R2 by a spatial hash to decorrelate pixels
+        let pixHash = pcg(gid.x + gid.y * 65537u);
+        let jx  = fract(r2.x + f32(pixHash) / 4294967296.0) - 0.5;
+        let jy  = fract(r2.y + f32(pcg(pixHash)) / 4294967296.0) - 0.5;
         var seed = pcg(gid.x * 1973u + 1u) ^ pcg(gid.y * 9277u + 1u) ^ pcg(fc * 26699u + 1u);
-        let jx  = rand(&seed) - 0.5;
-        let jy  = rand(&seed) - 0.5;
         let ray = makeRay(vec2<f32>(f32(pixel.x) + jx, f32(pixel.y) + jy), res);
         var primaryMeshIdx: u32;
         var primaryNormal:  vec3<f32>;
