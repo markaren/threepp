@@ -46,7 +46,7 @@ constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
 constexpr int ATLAS_ROWS = (MAX_TEX_SLOTS + ATLAS_COLS - 1) / ATLAS_COLS;
 constexpr int TRI_TEX_HEIGHT = 8;
-constexpr int MAT_TEX_HEIGHT = 3;
+constexpr int MAT_TEX_HEIGHT = 4;
 constexpr int TEX_PAGE_WIDTH = 8192;
 constexpr int TRI_TEX_PAGES = (MAX_TRIS + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
 constexpr int MAX_MESHES = 64;
@@ -108,16 +108,19 @@ fn triCoord(ti: i32, row: i32) -> vec2<i32> {
 struct Ray  { origin: vec3<f32>, dir: vec3<f32> }
 struct Isect { t: f32, u: f32, v: f32 }
 struct Hit  {
-    t:         f32,
-    point:     vec3<f32>,
-    normal:    vec3<f32>,
-    albedo:    vec3<f32>,
-    shininess: f32,
-    uv:        vec2<f32>,
-    texSlot:   f32,
-    metalness: f32,
-    emissive:  vec3<f32>,
-    meshIdx:   i32,
+    t:            f32,
+    point:        vec3<f32>,
+    normal:       vec3<f32>,
+    albedo:       vec3<f32>,
+    shininess:    f32,
+    uv:           vec2<f32>,
+    texSlot:      f32,
+    metalness:    f32,
+    emissive:     vec3<f32>,
+    meshIdx:      i32,
+    transmission: f32,
+    ior:          f32,
+    frontFace:    f32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -281,8 +284,10 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let mat0   = textureLoad(matData, vec2<i32>(matIdx, 0), 0);
     let mat1   = textureLoad(matData, vec2<i32>(matIdx, 1), 0);
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
+    let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
-    var finalNorm = select(sn, -sn, dot(ray.dir, sn) > 0.0);
+    let isFrontFace = dot(ray.dir, sn) < 0.0;
+    var finalNorm = select(-sn, sn, isFrontFace);
 
     // Normal mapping
     let normalSlot = mat1.z;
@@ -325,12 +330,15 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     (*h).uv        = iuv;
     (*h).texSlot   = mat1.x;
     (*h).metalness = mat1.y;
-    (*h).emissive  = mat2.xyz;
-    (*h).meshIdx   = i32(r1.w);
+    (*h).emissive     = mat2.xyz;
+    (*h).transmission = mat2.w;
+    (*h).ior          = mat3.x;
+    (*h).frontFace    = select(0.0, 1.0, isFrontFace);
+    (*h).meshIdx      = i32(r1.w);
 }
 
 fn sceneHit(ray: Ray) -> Hit {
-    var h: Hit; h.t = 1e30; h.meshIdx = -1;
+    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
     var stack: array<i32, 64>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
@@ -402,8 +410,17 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
         }
 
         var sr: Ray; sr.origin = h.point + h.normal * 1e-3; sr.dir = ln;
-        let sh = sceneHit(sr);
-        if (sh.t >= ld - 1e-3) {
+        var shAtten = vec3<f32>(1.0);
+        for (var si = 0; si < 4; si++) {
+            let sh = sceneHit(sr);
+            if (sh.t >= ld - 1e-3) { break; }
+            if (sh.transmission < 0.01) { shAtten = vec3<f32>(0.0); break; }
+            var shAlb = sh.albedo;
+            if (sh.texSlot >= 0.0) { shAlb = sampleAtlas(sh.uv, sh.texSlot); }
+            shAtten *= shAlb * sh.transmission;
+            sr.origin = sh.point - sh.normal * 1e-3;
+        }
+        if (shAtten.x + shAtten.y + shAtten.z > 0.001) {
             let NdotL = max(0.0, dot(h.normal, ln));
             let hv    = normalize(wo_s + ln);
             let NdotH = max(0.0, dot(h.normal, hv));
@@ -416,7 +433,7 @@ fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
             let Gs    = ggxG1(NdotV, h.shininess) * ggxG1(NdotL2, h.shininess);
             let f_spec = Ds * Fs * Gs / max(4.0 * NdotV * NdotL2, 1e-6);
             let f_diff = (vec3<f32>(1.0) - Fs) * albedo / PI;
-            col += lc * (f_diff + f_spec) * NdotL;
+            col += shAtten * lc * (f_diff + f_spec) * NdotL;
         }
     }
     return clamp(col + h.emissive, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -426,6 +443,34 @@ R"(
 fn raytrace(ray: Ray) -> vec3<f32> {
     let h0 = sceneHit(ray);
     if (h0.t >= 1e30) { return sampleEnv(ray.dir); }
+
+    // Transmission: one-level refraction for raytracer mode (smooth surfaces only)
+    if (h0.transmission > 0.5 && h0.shininess < 0.1) {
+        let entering = h0.frontFace > 0.5;
+        let eta = select(h0.ior, 1.0 / h0.ior, entering);
+        let refDir = refract(normalize(ray.dir), h0.normal, eta);
+        if (length(refDir) > 0.001) {
+            var rr: Ray;
+            rr.origin = h0.point - h0.normal * 1e-3;
+            rr.dir    = refDir;
+            let hr = sceneHit(rr);
+            if (hr.t >= 1e30) { return sampleEnv(rr.dir) * h0.albedo; }
+            // Second refraction (exit surface)
+            let exitEnter = hr.frontFace > 0.5;
+            let eta2 = select(hr.ior, 1.0 / hr.ior, exitEnter);
+            let refDir2 = refract(normalize(rr.dir), hr.normal, eta2);
+            if (length(refDir2) > 0.001) {
+                var rr2: Ray;
+                rr2.origin = hr.point - hr.normal * 1e-3;
+                rr2.dir    = refDir2;
+                let hr2 = sceneHit(rr2);
+                if (hr2.t >= 1e30) { return sampleEnv(rr2.dir) * h0.albedo; }
+                return shade(hr2, rr2.dir) * h0.albedo;
+            }
+            return shade(hr, rr.dir) * h0.albedo;
+        }
+    }
+
     var col = shade(h0, ray.dir);
 
     // Specular mirror bounces (two levels, unrolled — deterministic, no seed needed).
@@ -517,8 +562,17 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             var sr: Ray;
             sr.origin = h.point + h.normal * 1e-3;
             sr.dir    = ln;
-            let sh = sceneHit(sr);
-            if (sh.t >= ld - 1e-3) {
+            var shadowAtten = vec3<f32>(1.0);
+            for (var si = 0; si < 4; si++) {
+                let sh = sceneHit(sr);
+                if (sh.t >= ld - 1e-3) { break; }
+                if (sh.transmission < 0.01) { shadowAtten = vec3<f32>(0.0); break; }
+                var shAlbedo = sh.albedo;
+                if (sh.texSlot >= 0.0) { shAlbedo = sampleAtlas(sh.uv, sh.texSlot); }
+                shadowAtten *= shAlbedo * sh.transmission;
+                sr.origin = sh.point - sh.normal * 1e-3;
+            }
+            if (shadowAtten.x + shadowAtten.y + shadowAtten.z > 0.001) {
                 let NdotL = dot(h.normal, ln);
                 if (NdotL <= 0.0) { continue; }
                 let hv    = normalize(wo + ln);
@@ -531,7 +585,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, NdotL), h.shininess);
                 let f_spec = D * F * G / max(4.0 * NdotV * NdotL, 1e-6);
                 let f_diff = (vec3<f32>(1.0) - F) * albedo / PI;
-                radiance  += throughput * (f_diff + f_spec) * NdotL * lc;
+                radiance  += throughput * shadowAtten * (f_diff + f_spec) * NdotL * lc;
             }
         }
         radiance += throughput * albedo * 0.03;
@@ -540,6 +594,47 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             let p = max(max(throughput.r, throughput.g), throughput.b);
             if (rand(seed) > p) { break; }
             throughput /= p;
+        }
+
+        // Transmission lobe: refract through transmissive surfaces
+        if (h.transmission > 0.0 && rand(seed) < h.transmission) {
+            let entering = h.frontFace > 0.5;
+            let eta = select(h.ior, 1.0 / h.ior, entering);
+
+            // Perturb normal by roughness (frosted glass)
+            var tNorm = h.normal;
+            if (h.shininess > 1e-3) {
+                let wo_t = normalize(-ray.dir);
+                let hm = sampleGGXDir(wo_t, h.normal, h.shininess, seed);
+                // Only use microfacet normal if it's in the same hemisphere
+                if (dot(hm, h.normal) > 0.0) { tNorm = hm; }
+            }
+
+            // Dielectric Fresnel (Schlick approximation)
+            let cosI    = abs(dot(normalize(ray.dir), tNorm));
+            let r0      = pow((1.0 - h.ior) / (1.0 + h.ior), 2.0);
+            let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
+
+            var wi_t: vec3<f32>;
+            if (rand(seed) < fresnel) {
+                // Fresnel reflection
+                wi_t = reflect(ray.dir, tNorm);
+                ray.origin = h.point + h.normal * 1e-3;
+            } else {
+                // Snell's law refraction
+                let refracted = refract(normalize(ray.dir), tNorm, eta);
+                if (length(refracted) < 0.001) {
+                    // Total internal reflection
+                    wi_t = reflect(ray.dir, tNorm);
+                    ray.origin = h.point + h.normal * 1e-3;
+                } else {
+                    wi_t = refracted;
+                    ray.origin = h.point - h.normal * 1e-3;
+                }
+            }
+            throughput *= albedo;
+            ray.dir = wi_t;
+            continue;
         }
 
         let wo_b = normalize(-ray.dir);
@@ -1154,12 +1249,14 @@ static std::vector<unsigned char> buildAtlas(
     return atlas;
 }
 
-static std::tuple<Color, float, float, Color> extractMaterial(const Material* mat) {
+static std::tuple<Color, float, float, Color, float, float> extractMaterial(const Material* mat) {
     Color albedo(0.8f, 0.8f, 0.8f);
     float shininess = 8.f;
     float metalness = 0.f;
     Color emissive(0.f, 0.f, 0.f);
-    if (!mat) return {albedo, shininess, metalness, emissive};
+    float transmission = 0.f;
+    float ior = 1.5f;
+    if (!mat) return {albedo, shininess, metalness, emissive, transmission, ior};
     if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
         albedo = c->color;
     if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
@@ -1175,7 +1272,11 @@ static std::tuple<Color, float, float, Color> extractMaterial(const Material* ma
         emissive = Color(e->emissive.r * e->emissiveIntensity,
                          e->emissive.g * e->emissiveIntensity,
                          e->emissive.b * e->emissiveIntensity);
-    return {albedo, shininess, metalness, emissive};
+    if (auto* t = dynamic_cast<const MaterialWithTransmission*>(mat)) {
+        transmission = std::clamp(t->transmission, 0.f, 1.f);
+        ior = std::max(1.f, t->ior);
+    }
+    return {albedo, shininess, metalness, emissive, transmission, ior};
 }
 
 static int buildGeometryBuffers(
@@ -1216,7 +1317,7 @@ static int buildGeometryBuffers(
     for (auto& mesh : meshes) {
         if (triCount >= MAX_TRIS || matCount >= MAX_MATS) break;
 
-        auto [albedo, shininess, metalness, emissive] = extractMaterial(mesh->material().get());
+        auto [albedo, shininess, metalness, emissive, transmission, ior] = extractMaterial(mesh->material().get());
         setTexel(matBuffer, MAX_MATS, matCount, 0,
                  albedo.r, albedo.g, albedo.b, shininess);
 
@@ -1254,7 +1355,8 @@ static int buildGeometryBuffers(
             }
         }
         setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, metalness, normalSlot, roughSlot);
-        setTexel(matBuffer, MAX_MATS, matCount, 2, emissive.r, emissive.g, emissive.b, 0.f);
+        setTexel(matBuffer, MAX_MATS, matCount, 2, emissive.r, emissive.g, emissive.b, transmission);
+        setTexel(matBuffer, MAX_MATS, matCount, 3, ior, 0.f, 0.f, 0.f);
 
         const int matIdx = matCount++;
         const int meshIdx = matIdx;

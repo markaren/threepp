@@ -52,6 +52,15 @@ int main() {
                                           {"metalness", 0.9f}}));
     sphere2->position.set(2.8f, 1.f, 0.f);
 
+    auto glassSphere = Mesh::create(
+            SphereGeometry::create(0.45f, 32, 32),
+            MeshStandardMaterial::create({{"color", Color::pink},
+                                          {"transmission", 0.7f},
+                                          {"ior", 1.5f},
+                                          {"roughness", 0.2f},
+                                          {"metalness", 0.f}}));
+    glassSphere->position.set(0.f, 1.f, 6.f);
+
     auto floor = Mesh::create(
             PlaneGeometry::create(16.f, 16.f, 4, 4),
             MeshStandardMaterial::create({{"color", Color::darkgrey},
@@ -69,6 +78,7 @@ int main() {
     scene.add(boxMesh);
     scene.add(sphere1);
     scene.add(sphere2);
+    scene.add(glassSphere);
     scene.add(floor);
     scene.add(enclosingBox);
 
