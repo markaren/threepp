@@ -45,6 +45,25 @@ namespace threepp {
         void setEnvIntensity(float intensity);
         [[nodiscard]] float envIntensity() const;
 
+        /// Maximum number of bounces for path tracing. Default: 8.
+        /// Higher values improve light transport accuracy at the cost of performance.
+        void setMaxBounces(int bounces);
+        [[nodiscard]] int maxBounces() const;
+
+        /// Exposure multiplier applied during tone mapping. Default: 1.0.
+        /// Adjusting this does not reset accumulation.
+        void setExposure(float exposure);
+        [[nodiscard]] float exposure() const;
+
+        /// Ambient light factor added per bounce. Default: 0.03.
+        void setAmbientFactor(float factor);
+        [[nodiscard]] float ambientFactor() const;
+
+        /// Per-pixel frame count cap when a shadow/bounce ray hits a moved mesh. Default: 6.
+        /// Lower values make shadows on static surfaces refresh faster after object movement.
+        void setMovedPixelFC(float fc);
+        [[nodiscard]] float movedPixelFC() const;
+
         /// Enable/disable the à-trous wavelet denoiser (path tracer mode only). Default: true.
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;

@@ -30,7 +30,7 @@ int main() {
     auto boxMesh = Mesh::create(
             BoxGeometry::create(1.5f, 1.5f, 1.5f),
             MeshStandardMaterial::create({{"map", tex}, {"roughness", 0.9f}}));
-    boxMesh->position.set(0.f, 1.f, -1.f);
+    boxMesh->position.set(-2.8f, 1.f, 3.f);
 
     auto enclosingBox = Mesh::create(
             BoxGeometry::create(),
@@ -42,8 +42,8 @@ int main() {
             MeshStandardMaterial::create({{"color", Color::orangered},
                                           {"roughness", 0.85f},
                                           {"emissive", Color::orangered},
-                                          {"emissiveIntensity", 0.9f}}));
-    sphere1->position.set(-2.8f, 1.f, 0.f);
+                                          {"emissiveIntensity", 0.8f}}));
+    sphere1->position.set(2.8f, 2.f, -6.f);
 
     auto sphere2 = Mesh::create(
             SphereGeometry::create(0.85f, 32, 32),
@@ -55,11 +55,11 @@ int main() {
     auto glassSphere = Mesh::create(
             SphereGeometry::create(0.45f, 32, 32),
             MeshStandardMaterial::create({{"color", Color::pink},
-                                          {"transmission", 0.7f},
+                                          {"transmission", 0.8f},
                                           {"ior", 1.5f},
-                                          {"roughness", 0.2f},
+                                          {"roughness", 0.1f},
                                           {"metalness", 0.f}}));
-    glassSphere->position.set(0.f, 1.f, 6.f);
+    glassSphere->position.set(0.f, 0.2f, 3.f);
 
     auto floor = Mesh::create(
             PlaneGeometry::create(16.f, 16.f, 4, 4),
@@ -124,38 +124,59 @@ int main() {
     bool animateBox = true;
     bool showEnclosingBox = true;
     bool raster = false;
+    int maxBounces = pathTracer.maxBounces();
+    float exposure = pathTracer.exposure();
+    float ambientFactor = pathTracer.ambientFactor();
+    float movedPixelFC = pathTracer.movedPixelFC();
 
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
 
+    std::cout << "Press T to switch render mode: Raster -> Raytracer -> PathTracer" << std::endl;
+    int renderMode = 0;// 0=raytracer, 1=pathtracer, 2=raster,
+    std::vector<std::string> renderModeNames = {"Raytracer", "PathTracer", "Raster"};
     KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
         if (ev.key == Key::T) {
-            pathTracerOn = !pathTracerOn;
-            pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
-                                            : WgpuPathTracer::Mode::Raytracer);
-        } else if (ev.key == Key::R) {
-            raster = !raster;
+            renderMode = (renderMode + 1) % 3;
+            raster = (renderMode == 2);
+            pathTracerOn = (renderMode == 1);
+            if (!raster) {
+                pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
+                                                : WgpuPathTracer::Mode::Raytracer);
+            }
         }
     });
     canvas.addKeyListener(keyAdapter);
 
     ImguiFunctionalContext ui(canvas, renderer, [&] {
-        ImGui::SetNextWindowPos({10, 10}, ImGuiCond_Once);
-        ImGui::SetNextWindowSize({220, 0}, ImGuiCond_Once);
-        ImGui::Begin("Raytracer");
+        ImGui::SetNextWindowPos({});
+        ImGui::SetNextWindowSize({});
+        ImGui::Begin(renderModeNames[renderMode].c_str());
         ImGui::Text("FPS: %.1f", fps);
-        ImGui::Text("Frames: %d", pathTracer.frameCount());
+        if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
-        if (ImGui::Checkbox("Path tracer (T)", &pathTracerOn))
-            pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
-                                            : WgpuPathTracer::Mode::Raytracer);
-        if (ImGui::Checkbox("Denoiser", &denoiserOn))
-            pathTracer.setDenoiserEnabled(denoiserOn);
+
         ImGui::Checkbox("Moving light", &lightMoving);
         ImGui::Checkbox("AnimateBox", &animateBox);
         ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
-        ImGui::Checkbox("Raster (R)", &raster);
+
+        if (renderMode == 0 || renderMode == 1) {
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
+                pathTracer.setExposure(exposure);
+        }
+
+        if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::Checkbox("Denoiser", &denoiserOn))
+                pathTracer.setDenoiserEnabled(denoiserOn);
+            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
+                pathTracer.setMaxBounces(maxBounces);
+            if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
+                pathTracer.setAmbientFactor(ambientFactor);
+            if (ImGui::SliderFloat("Moved FC", &movedPixelFC, 0.0f, 20.0f))
+                pathTracer.setMovedPixelFC(movedPixelFC);
+        }
+
         ImGui::End();
     });
 

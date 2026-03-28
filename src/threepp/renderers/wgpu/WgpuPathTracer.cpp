@@ -75,6 +75,7 @@ struct RtUniforms {
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale for env/sky light
+    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = movedPixelFC
 };
 
 struct BvhNodeGpu {
@@ -518,18 +519,28 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     return col;
 }
 
+fn isMeshMoved(idx: i32) -> bool {
+    if (idx < 0 || idx >= 64) { return false; }
+    let ui = u32(idx);
+    let bit  = ui & 31u;
+    let word = select(rt.movedMeshBits.x, rt.movedMeshBits.y, ui >= 32u);
+    return ((word >> bit) & 1u) != 0u;
+}
+
 fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryMeshIdx: ptr<function, u32>,
              primaryNormal:  ptr<function, vec3<f32>>,
-             primaryDepth:   ptr<function, f32>) -> vec3<f32> {
+             primaryDepth:   ptr<function, f32>,
+             touchedMoved:   ptr<function, bool>) -> vec3<f32> {
     *primaryMeshIdx = 64u;
     *primaryNormal  = vec3<f32>(0.0);
     *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
+    *touchedMoved   = false;
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
     var radiance   = vec3<f32>(0.0);
 
-    for (var i = 0; i < 8; i++) {
+    for (var i = 0; i < i32(rt.params.x); i++) {
         let h = sceneHit(ray);
         if (h.t >= 1e29) {
             // Primary ray miss = background pixel: show full color.
@@ -542,6 +553,8 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *primaryMeshIdx = u32(h.meshIdx);
             *primaryNormal  = h.normal;
             *primaryDepth   = h.t;
+        } else if (isMeshMoved(h.meshIdx)) {
+            *touchedMoved = true;
         }
 
         radiance += throughput * h.emissive;
@@ -574,6 +587,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             for (var si = 0; si < 4; si++) {
                 let sh = sceneHit(sr);
                 if (sh.t >= ld - 1e-3) { break; }
+                if (isMeshMoved(sh.meshIdx)) { *touchedMoved = true; }
                 if (sh.transmission < 0.01) { shadowAtten = vec3<f32>(0.0); break; }
                 var shAlbedo = sh.albedo;
                 if (sh.texSlot >= 0.0) { shAlbedo = sampleAtlas(sh.uv, sh.texSlot); }
@@ -596,7 +610,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 radiance  += throughput * shadowAtten * (f_diff + f_spec) * NdotL * lc;
             }
         }
-        radiance += throughput * albedo * 0.03;
+        radiance += throughput * albedo * rt.params.y;
 
         if (i > 0) {
             let p = max(max(throughput.r, throughput.g), throughput.b);
@@ -722,26 +736,23 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var primaryMeshIdx: u32;
         var primaryNormal:  vec3<f32>;
         var primaryDepth:   f32;
-        sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth);
+        var touchedMoved:   bool;
+        sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth, &touchedMoved);
 
         let prev     = textureLoad(accumRead, pixel, 0);
         let old      = prev.xyz;
         var pixelFC  = prev.w;
 
-        // Mesh-identity reset
-        let prevHitMesh = u32(textureLoad(hitMeshRead, pixel, 0).r);
-        if (prevHitMesh < 64u) {
-            let bit   = prevHitMesh & 31u;
-            let mbits = select(rt.movedMeshBits.x, rt.movedMeshBits.y,
-                               prevHitMesh >= 32u);
-            if (((mbits >> bit) & 1u) != 0u) { pixelFC = 0.0; }
-        }
+        // Only reset pixels whose *current* primary ray hits a moved mesh.
+        // The previous-hit mesh is not checked: when a moved object leaves a
+        // pixel, the pixel now sees a static surface and should converge normally.
+        var meshMoved = false;
         if (primaryMeshIdx < 64u) {
-            let bit   = primaryMeshIdx & 31u;
-            let mbits = select(rt.movedMeshBits.x, rt.movedMeshBits.y,
-                               primaryMeshIdx >= 32u);
-            if (((mbits >> bit) & 1u) != 0u) { pixelFC = 0.0; }
+            meshMoved = isMeshMoved(i32(primaryMeshIdx));
         }
+        if (meshMoved) { pixelFC = 0.0; }
+        // Shadow/bounce rays hit a moved mesh — partially reset so shadows refresh.
+        if (touchedMoved && !meshMoved) { pixelFC = min(pixelFC, rt.params.z); }
         if (fc == 0u) { pixelFC = 0.0; }
 
         let alpha   = 1.0 / (pixelFC + 1.0);
@@ -956,12 +967,13 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     useHist = useHist && prevPixel.x >= 0 && prevPixel.x < iRes.x
                       && prevPixel.y >= 0 && prevPixel.y < iRes.y;
 
-    // Invalidate for moved meshes
+    // Reduce history weight for moved meshes (but don't fully discard)
+    var movedMesh = false;
     let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
     if (meshIdx < 64u) {
         let bit   = meshIdx & 31u;
         let mbits = select(taa.movedMeshBits.x, taa.movedMeshBits.y, meshIdx >= 32u);
-        if (((mbits >> bit) & 1u) != 0u) { useHist = false; }
+        if (((mbits >> bit) & 1u) != 0u) { movedMesh = true; }
     }
 
     // First frame has no history
@@ -971,8 +983,10 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (useHist) {
         let histColor = textureLoad(taaHistIn, prevPixel, 0).xyz;
         let clamped   = clamp(histColor, cMin, cMax);
-        // Blend: use more history early (noisy), more current once converged
-        let alpha = clamp(1.0 / (curFC * 0.5 + 1.0), 0.1, 1.0);
+        // Blend: use more history early (noisy), more current once converged.
+        // For moved meshes, bias toward current sample but still use some history.
+        var alpha = clamp(1.0 / (curFC * 0.5 + 1.0), 0.1, 1.0);
+        if (movedMesh) { alpha = max(alpha, 0.9); }
         result = mix(clamped, curColor, alpha);
     }
 
@@ -1129,13 +1143,14 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let px  = vec2<i32>(fragPos.xy);
     let col = textureLoad(accumTex, px, 0).xyz;
     let t   = textureLoad(gBufTex,  px, 0).w;
+    let exposure = transform.cameraPos.z;
     // Background pixels (primary ray miss): just gamma-correct, no tone mapping.
-    // Geometry pixels: ACES tone mapping + gamma.
+    // Geometry pixels: exposure + ACES tone mapping + gamma.
     var gc: vec3<f32>;
     if (t <= 0.0) {
         gc = pow(max(col, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     } else {
-        gc = pow(aces(col), vec3<f32>(1.0 / 2.2));
+        gc = pow(aces(col * exposure), vec3<f32>(1.0 / 2.2));
     }
     return vec4<f32>(gc, 1.0);
 }
@@ -1163,7 +1178,8 @@ struct alignas(16) RtGpuUniforms {
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
     float    envIntensity[4];   // x = env/sky light intensity scale
-    float    _pad[8];
+    float    params[4];        // x = maxBounces, y = ambientFactor
+    float    _pad[4];
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -1734,6 +1750,10 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = true;
     float envIntensity_ = 1.0f;
+    int maxBounces_ = 8;
+    float exposure_ = 1.0f;
+    float ambientFactor_ = 0.03f;
+    float movedPixelFC_ = 6.0f;
 
     // Previous camera vectors for TAA reprojection
     float prevCamOri_[3] = {0.f, 0.f, 0.f};
@@ -2242,6 +2262,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
     }
     u.envIntensity[0] = d.envIntensity_;
+    u.params[0] = static_cast<float>(d.maxBounces_);
+    u.params[1] = d.ambientFactor_;
+    u.params[2] = d.movedPixelFC_;
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -2368,8 +2391,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         WgpuTexture* dst = &d.filteredA;
         WgpuTexture* aux = &d.filteredB;
 
-        const int nPasses = (d.frameCount_ < 4.f)  ? 3 :
-                            (d.frameCount_ < 20.f) ? 2 : 1;
+        // More passes when noisy: early frames or when objects are moving.
+        const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
+        const int nPasses = (d.frameCount_ < 4.f || hasMotion) ? 3 :
+                            (d.frameCount_ < 20.f)             ? 2 : 1;
 
         for (int pass = 0; pass < nPasses; ++pass) {
             AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), {0u, 0u, 0u}};
@@ -2394,6 +2419,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.displayMat->customTextures["gBufTex"]  = d.gBufPrev;  // used to skip ACES on background pixels
     d.displayMat->uniformsNeedUpdate = true;
     d.frameCount_ += 1.f;
+
+    // Pass exposure to display shader via ortho camera z-position (read as transform.cameraPos.z).
+    // Default z=1.0 matches identity exposure; ortho projection is unaffected by z translation.
+    d.displayCam.position.z = d.exposure_;
 
     // Blit to screen
     d.renderer.render(d.displayScene, d.displayCam);
@@ -2531,6 +2560,46 @@ void WgpuPathTracer::setEnvIntensity(float intensity) {
 float WgpuPathTracer::envIntensity() const {
     return pimpl_->envIntensity_;
 }
+
+void WgpuPathTracer::setMaxBounces(int bounces) {
+    bounces = std::max(1, std::min(bounces, 32));
+    if (pimpl_->maxBounces_ != bounces) {
+        pimpl_->maxBounces_ = bounces;
+        pimpl_->frameCount_ = 0.f;
+    }
+}
+
+int WgpuPathTracer::maxBounces() const {
+    return pimpl_->maxBounces_;
+}
+
+void WgpuPathTracer::setExposure(float exposure) {
+    pimpl_->exposure_ = exposure;
+}
+
+float WgpuPathTracer::exposure() const {
+    return pimpl_->exposure_;
+}
+
+void WgpuPathTracer::setAmbientFactor(float factor) {
+    if (pimpl_->ambientFactor_ != factor) {
+        pimpl_->ambientFactor_ = factor;
+        pimpl_->frameCount_ = 0.f;
+    }
+}
+
+float WgpuPathTracer::ambientFactor() const {
+    return pimpl_->ambientFactor_;
+}
+
+void WgpuPathTracer::setMovedPixelFC(float fc) {
+    pimpl_->movedPixelFC_ = fc;
+}
+
+float WgpuPathTracer::movedPixelFC() const {
+    return pimpl_->movedPixelFC_;
+}
+
 
 void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
     pimpl_->denoiserEnabled_ = enabled;
