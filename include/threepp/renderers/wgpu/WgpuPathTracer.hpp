@@ -59,6 +59,10 @@ namespace threepp {
         void setAmbientFactor(float factor);
         [[nodiscard]] float ambientFactor() const;
 
+        /// Max radiance clamp to suppress fireflies. Default: 10.0. Set 0 to disable.
+        void setFireflyClamp(float clamp);
+        [[nodiscard]] float fireflyClamp() const;
+
         /// Per-pixel frame count cap when a shadow/bounce ray hits a moved mesh. Default: 6.
         /// Lower values make shadows on static surfaces refresh faster after object movement.
         void setMovedPixelFC(float fc);

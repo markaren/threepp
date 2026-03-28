@@ -75,7 +75,8 @@ struct RtUniforms {
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale for env/sky light
-    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = movedPixelFC
+    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = movedPixelFC, w = fireflyClamp
+    emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive area
 };
 
 struct BvhNodeGpu {
@@ -95,6 +96,7 @@ struct BvhNodeGpu {
 @group(0) @binding(8) var hitMeshWrite:  texture_storage_2d<rgba16float, write>;
 @group(0) @binding(9)  var envTex:      texture_2d<f32>;
 @group(0) @binding(10) var gBufWrite:   texture_storage_2d<rgba16float, write>;
+@group(0) @binding(11) var<storage, read> emissiveTris: array<vec4<f32>>;  // per tri: (triIndex, area, 0, 0)
 
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
@@ -557,13 +559,20 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             *touchedMoved = true;
         }
 
-        radiance += throughput * h.emissive;
+        let emTriCount = i32(rt.emissiveInfo.x);
+
+        // Emissive hit: always add on primary ray; on bounces, only if no emissive NEE
+        if (i == 0 || emTriCount == 0) {
+            radiance += throughput * h.emissive;
+        }
 
         var albedo = h.albedo;
         if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
 
-        let lcount = i32(rt.lightCount.x);
         let wo = normalize(-ray.dir);
+
+        // --- Analytical light NEE ---
+        let lcount = i32(rt.lightCount.x);
         for (var li = 0; li < 4; li++) {
             if (li >= lcount) { break; }
             var lc    = rt.lightCol[li].xyz;
@@ -610,6 +619,69 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 radiance  += throughput * shadowAtten * (f_diff + f_spec) * NdotL * lc;
             }
         }
+)"
+R"(
+        // --- Emissive surface NEE ---
+        if (emTriCount > 0) {
+            // Uniform random selection of an emissive triangle
+            let eti = i32(rand(seed) * f32(emTriCount));
+            let etIdx = min(eti, emTriCount - 1);
+            let emInfo = emissiveTris[etIdx];  // x=triIndex, y=area
+            let eTi   = i32(emInfo.x);
+            let eArea = emInfo.y;
+
+            // Load emissive triangle vertices from triData (world space)
+            let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
+            let ev1 = textureLoad(triData, triCoord(eTi, 1), 0).xyz;
+            let ev2 = textureLoad(triData, triCoord(eTi, 2), 0).xyz;
+
+            // Uniform sample point on triangle
+            let su1 = sqrt(rand(seed));
+            let u2  = rand(seed);
+            let lightPoint = (1.0 - su1) * ev0 + su1 * (1.0 - u2) * ev1 + su1 * u2 * ev2;
+
+            let toLight = lightPoint - h.point;
+            let dist    = length(toLight);
+            let ln      = toLight / dist;
+            let NdotL   = dot(h.normal, ln);
+
+            // Light surface normal (geometric)
+            let lightNormal = normalize(cross(ev1 - ev0, ev2 - ev0));
+            let cosLight    = abs(dot(lightNormal, -ln));
+
+            if (NdotL > 0.0 && cosLight > 1e-6) {
+                // Shadow ray to emissive surface
+                var sr: Ray;
+                sr.origin = h.point + h.normal * 1e-3;
+                sr.dir    = ln;
+                let sh    = sceneHit(sr);
+
+                // Check if we actually hit the emissive triangle (not occluded)
+                if (sh.t >= dist - 1e-2) {
+                    // Load emissive color from material
+                    let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
+                    let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
+
+                    // PDF: 1/area for triangle sampling, convert to solid angle
+                    let pdf = (dist * dist) / (eArea * cosLight * f32(emTriCount));
+
+                    // Evaluate BRDF at hit point for light direction
+                    let hv    = normalize(wo + ln);
+                    let NdotH = max(0.0, dot(h.normal, hv));
+                    let NdotV = max(0.001, dot(h.normal, wo));
+                    let VdotH = max(0.0, dot(wo, hv));
+                    let F0    = mix(vec3<f32>(0.04), albedo, h.metalness);
+                    let D     = ggxD(NdotH, h.shininess);
+                    let F     = schlick(VdotH, F0);
+                    let G     = ggxG1(NdotV, h.shininess) * ggxG1(max(0.001, NdotL), h.shininess);
+                    let f_spec = D * F * G / max(4.0 * NdotV * NdotL, 1e-6);
+                    let f_diff = (vec3<f32>(1.0) - F) * albedo / PI;
+
+                    radiance += throughput * (f_diff + f_spec) * NdotL * emColor / pdf;
+                }
+            }
+        }
+
         radiance += throughput * albedo * rt.params.y;
 
         if (i > 0) {
@@ -683,6 +755,12 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         ray.origin = h.point + h.normal * 1e-3;
         ray.dir    = wi_b;
     }
+    // Firefly clamping
+    let clampMax = rt.params.w;
+    if (clampMax > 0.0) {
+        let maxC = max(max(radiance.r, radiance.g), radiance.b);
+        if (maxC > clampMax) { radiance *= clampMax / maxC; }
+    }
     return radiance;
 }
 
@@ -744,8 +822,6 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var pixelFC  = prev.w;
 
         // Only reset pixels whose *current* primary ray hits a moved mesh.
-        // The previous-hit mesh is not checked: when a moved object leaves a
-        // pixel, the pixel now sees a static surface and should converge normally.
         var meshMoved = false;
         if (primaryMeshIdx < 64u) {
             meshMoved = isMeshMoved(i32(primaryMeshIdx));
@@ -1178,8 +1254,8 @@ struct alignas(16) RtGpuUniforms {
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
     float    envIntensity[4];   // x = env/sky light intensity scale
-    float    params[4];        // x = maxBounces, y = ambientFactor
-    float    _pad[4];
+    float    params[4];        // x = maxBounces, y = ambientFactor, z = movedPixelFC, w = fireflyClamp
+    float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
 
@@ -1754,6 +1830,7 @@ struct WgpuPathTracer::Impl {
     float exposure_ = 1.0f;
     float ambientFactor_ = 0.03f;
     float movedPixelFC_ = 6.0f;
+    float fireflyClamp_ = 10.0f;
 
     // Previous camera vectors for TAA reprojection
     float prevCamOri_[3] = {0.f, 0.f, 0.f};
@@ -1767,6 +1844,12 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer objTriBuf;
     WgpuBuffer matrixBuf;
     WgpuBuffer leafIndexBuf;
+
+    // Emissive triangle NEE
+    WgpuBuffer emissiveTriBuf;
+    std::vector<float> emissiveTriCpu;  // packed vec4: (triIndex, area, 0, 0) per emissive tri
+    int emissiveTriCount_ = 0;
+    float emissiveTotalArea_ = 0.f;
 
     // GPU uniform buffers
     WgpuBuffer vtUniBuf;
@@ -1879,6 +1962,8 @@ struct WgpuPathTracer::Impl {
                     WgpuBuffer::Usage::Storage),
           leafIndexBuf(r, static_cast<size_t>(MAX_TRIS) * sizeof(int),
                        WgpuBuffer::Usage::Storage),
+          emissiveTriBuf(r, static_cast<size_t>(MAX_TRIS) * 4 * sizeof(float),
+                         WgpuBuffer::Usage::Storage),
           // Uniform buffers
           vtUniBuf(r, sizeof(VtGpuUniforms)),
           refitUniBuf(r, sizeof(RefitGpuUniforms)),
@@ -1917,6 +2002,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setTexture(6, texAtlasTex);
         rtPipeline.setTexture(9, envTexGpu);
         rtPipeline.setStorageTexture(10, *gBufCur);
+        rtPipeline.setStorageBufferRead(11, emissiveTriBuf);
 
         // TAA pipeline: uniform buffer is static binding
         taaPipeline.setUniformBuffer(0, taaUniBuf);
@@ -2163,6 +2249,44 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 32 * sizeof(float));
         d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
         d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
+
+        // Collect emissive triangles for NEE sampling.
+        // triBuffer is already BVH-reordered, so triangle indices match GPU triData.
+        d.emissiveTriCpu.clear();
+        d.emissiveTriCount_ = 0;
+        d.emissiveTotalArea_ = 0.f;
+        for (int ti = 0; ti < d.triCount_; ti++) {
+            // matIdx is in row 0's .w component of triBuffer
+            const int matIdx = static_cast<int>(d.triBuffer[pagedIdx(ti, 0) + 3]);
+            // emissive color is in matBuffer row 2 (r,g,b)
+            const float er = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 0];
+            const float eg = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 1];
+            const float eb = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 2];
+            if (er + eg + eb > 0.001f) {
+                // Get world-space vertices from triBuffer
+                const float* v0p = d.triBuffer.data() + pagedIdx(ti, 0);
+                const float* v1p = d.triBuffer.data() + pagedIdx(ti, 1);
+                const float* v2p = d.triBuffer.data() + pagedIdx(ti, 2);
+                Vector3 v0(v0p[0], v0p[1], v0p[2]);
+                Vector3 v1(v1p[0], v1p[1], v1p[2]);
+                Vector3 v2(v2p[0], v2p[1], v2p[2]);
+                Vector3 cross;
+                cross.crossVectors(v1 - v0, v2 - v0);
+                const float area = cross.length() * 0.5f;
+                if (area > 1e-8f) {
+                    d.emissiveTriCpu.push_back(static_cast<float>(ti));  // triIndex
+                    d.emissiveTriCpu.push_back(area);
+                    d.emissiveTriCpu.push_back(0.f);
+                    d.emissiveTriCpu.push_back(0.f);
+                    d.emissiveTriCount_++;
+                    d.emissiveTotalArea_ += area;
+                }
+            }
+        }
+        if (d.emissiveTriCount_ > 0) {
+            d.emissiveTriBuf.write(d.emissiveTriCpu.data(),
+                                   d.emissiveTriCpu.size() * sizeof(float));
+        }
         anyMeshMoved = true;
     }
     if (anyMeshMoved) {
@@ -2265,6 +2389,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.params[0] = static_cast<float>(d.maxBounces_);
     u.params[1] = d.ambientFactor_;
     u.params[2] = d.movedPixelFC_;
+    u.params[3] = d.fireflyClamp_;
+    u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
+    u.emissiveInfo[1] = d.emissiveTotalArea_;
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
@@ -2590,6 +2717,14 @@ void WgpuPathTracer::setAmbientFactor(float factor) {
 
 float WgpuPathTracer::ambientFactor() const {
     return pimpl_->ambientFactor_;
+}
+
+void WgpuPathTracer::setFireflyClamp(float clamp) {
+    pimpl_->fireflyClamp_ = clamp;
+}
+
+float WgpuPathTracer::fireflyClamp() const {
+    return pimpl_->fireflyClamp_;
 }
 
 void WgpuPathTracer::setMovedPixelFC(float fc) {

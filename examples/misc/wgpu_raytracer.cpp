@@ -42,7 +42,7 @@ int main() {
             MeshStandardMaterial::create({{"color", Color::orangered},
                                           {"roughness", 0.85f},
                                           {"emissive", Color::orangered},
-                                          {"emissiveIntensity", 0.8f}}));
+                                          {"emissiveIntensity", 5.8f}}));
     sphere1->position.set(2.8f, 2.f, -6.f);
 
     auto sphere2 = Mesh::create(
@@ -103,12 +103,12 @@ int main() {
     pointLight->position.set(5.f, 6.f, -2.f);
     scene.add(pointLight);
 
-    auto pointLight2 = PointLight::create(Color::white, 0.4f);
-    pointLight2->castShadow = true;
-    pointLight2->shadow->bias = -0.005f;
-    pointLight2->shadow->mapSize.set(1024, 1024);
-    pointLight2->position.set(-5.f, 6.f, 4.f);
-    scene.add(pointLight2);
+    // auto pointLight2 = PointLight::create(Color::white, 0.4f);
+    // pointLight2->castShadow = true;
+    // pointLight2->shadow->bias = -0.005f;
+    // pointLight2->shadow->mapSize.set(1024, 1024);
+    // pointLight2->position.set(-5.f, 6.f, 4.f);
+    // scene.add(pointLight2);
 
     // ---- Camera + controls ----
     PerspectiveCamera rtCam(60.f, canvas.aspect(), 0.1f, 300.f);
