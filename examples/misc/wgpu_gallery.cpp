@@ -252,8 +252,8 @@ int main() {
     pathTracer.setExposure(1.0f);
     pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
-    pathTracer.setMaxBounces(8);
-    pathTracer.setFireflyClamp(10.0f);
+    pathTracer.setMaxBounces(5);
+    pathTracer.setFireflyClamp(0.9f);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
 
     // ---- Scene ----
@@ -310,9 +310,17 @@ int main() {
     scene.add(trooper);
 
     // Emissive orb (floating, back-left)
-    auto emOrb = Mesh::create(SphereGeometry::create(0.4f, 32, 32), matEmissive(Color(0.2f, 1.0f, 0.6f), 8.0f));
-    emOrb->position.set(-6.f, 3.f, -6.f);
+    auto emOrb = Mesh::create(SphereGeometry::create(0.4f, 32, 32), matEmissive(Color(0.2f, 1.0f, 0.6f), 4.0f));
+    emOrb->position.set(-9.f, 0.5f, -9.f);
     scene.add(emOrb);
+
+    // text geom
+    // FontLoader fontLoader;
+    // auto font = fontLoader.defaultFont();
+    // auto textGeom = Text3D::create(ExtrudeTextGeometry::Options(font, 1, 0.1f), "threepp!", matEmissive(Color::red, 0.7f));
+    // textGeom->geometry()->center();
+    // textGeom->position.set(0,5,-10.f);
+    // scene.add(textGeom);
 
     // Cone (mid-right)
     auto cone = Mesh::create(ConeGeometry::create(0.6f, 1.5f, 32),
@@ -351,7 +359,6 @@ int main() {
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float ambientFactor = pathTracer.ambientFactor();
-    float movedPixelFC = pathTracer.movedPixelFC();
     float fireflyClamp = pathTracer.fireflyClamp();
 
     float fps = 0.f;
@@ -396,8 +403,6 @@ int main() {
                 pathTracer.setMaxBounces(maxBounces);
             if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
                 pathTracer.setAmbientFactor(ambientFactor);
-            if (ImGui::SliderFloat("Moved FC", &movedPixelFC, 0.0f, 20.0f))
-                pathTracer.setMovedPixelFC(movedPixelFC);
             if (ImGui::SliderFloat("Firefly clamp", &fireflyClamp, 0.0f, 50.0f))
                 pathTracer.setFireflyClamp(fireflyClamp);
         }
