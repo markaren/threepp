@@ -76,7 +76,7 @@ struct RtUniforms {
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale for env/sky light
     params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = movedPixelFC, w = fireflyClamp
-    emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive area
+    emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
 };
 
 struct BvhNodeGpu {
@@ -619,7 +619,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         }
 
         let emTriCount = i32(rt.emissiveInfo.x);
-        let totalArea  = rt.emissiveInfo.y;
+        let totalPower = rt.emissiveInfo.y;
 
         // Emissive hit with MIS balance heuristic
         if (length(h.emissive) > 0.0) {
@@ -630,7 +630,9 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
                 // MIS: BRDF sampling hit emissive — weight by balance heuristic
                 let cosLight = abs(dot(h.geoNormal, -ray.dir));
                 if (cosLight > 1e-6) {
-                    let pdf_light = (h.t * h.t) / (totalArea * cosLight);
+                    // Power-weighted light PDF: (luminance * dist²) / (totalPower * cosLight)
+                    let emLum = 0.2126 * h.emissive.r + 0.7152 * h.emissive.g + 0.0722 * h.emissive.b;
+                    let pdf_light = (emLum * h.t * h.t) / (totalPower * cosLight);
                     let pdf_brdf  = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                     let w = pdf_brdf / max(pdf_brdf + pdf_light, 1e-8);
                     // Guard against NaN/inf from degenerate PDFs
@@ -696,19 +698,21 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         }
 )"
 R"(
-        // --- Emissive surface NEE (area-weighted CDF sampling) ---
+        // --- Emissive surface NEE (power-weighted CDF sampling) ---
         if (emTriCount > 0) {
-            // Area-weighted selection via binary search on cumulative area (stored in .z)
-            let xi = rand(seed) * totalArea;
+            // Power-weighted selection via binary search on cumulative power (.z)
+            let totalPower = rt.emissiveInfo.y;
+            let xi = rand(seed) * totalPower;
             var lo = 0;
             var hi = emTriCount - 1;
             while (lo < hi) {
                 let mid = (lo + hi) >> 1;
                 if (emissiveTris[mid].z < xi) { lo = mid + 1; } else { hi = mid; }
             }
-            let emInfo = emissiveTris[lo];  // x=triIndex, y=area, z=cumulativeArea
+            let emInfo = emissiveTris[lo];  // x=triIndex, y=area, z=cumulativePower, w=power
             let eTi   = i32(emInfo.x);
             let eArea = emInfo.y;
+            let ePower = emInfo.w;
 
             // Load emissive triangle vertices from triData (world space)
             let ev0 = textureLoad(triData, triCoord(eTi, 0), 0).xyz;
@@ -742,9 +746,10 @@ R"(
                     let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
-                    // PDF: (area_i / totalArea) for selection, then 1/area_i on triangle → 1/totalArea
-                    // Convert to solid angle: pdf_solidAngle = pdf_area * dist² / cosLight
-                    let pdf = (dist * dist) / (totalArea * cosLight);
+                    // PDF: (power_i / totalPower) for selection, then 1/area_i on triangle
+                    // Area PDF = power_i / (totalPower * area_i)
+                    // Convert to solid angle: pdf = areaPdf * dist² / cosLight
+                    let pdf = (ePower * dist * dist) / (totalPower * eArea * cosLight);
 
                     // Evaluate BRDF at hit point for light direction
                     let hv    = normalize(wo + ln);
@@ -1957,6 +1962,7 @@ struct WgpuPathTracer::Impl {
     std::vector<float> emissiveTriCpu;  // packed vec4: (triIndex, area, 0, 0) per emissive tri
     int emissiveTriCount_ = 0;
     float emissiveTotalArea_ = 0.f;
+    float emissiveTotalPower_ = 0.f;
 
     // GPU uniform buffers
     WgpuBuffer vtUniBuf;
@@ -2362,6 +2368,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.emissiveTriCpu.clear();
         d.emissiveTriCount_ = 0;
         d.emissiveTotalArea_ = 0.f;
+        d.emissiveTotalPower_ = 0.f;
         for (int ti = 0; ti < d.triCount_; ti++) {
             // matIdx is in row 0's .w component of triBuffer
             const int matIdx = static_cast<int>(d.triBuffer[pagedIdx(ti, 0) + 3]);
@@ -2369,7 +2376,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             const float er = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 0];
             const float eg = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 1];
             const float eb = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 2];
-            if (er + eg + eb > 0.001f) {
+            const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
+            if (luminance > 0.001f) {
                 // Get world-space vertices from triBuffer
                 const float* v0p = d.triBuffer.data() + pagedIdx(ti, 0);
                 const float* v1p = d.triBuffer.data() + pagedIdx(ti, 1);
@@ -2381,11 +2389,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 cross.crossVectors(v1 - v0, v2 - v0);
                 const float area = cross.length() * 0.5f;
                 if (area > 1e-8f) {
+                    const float power = area * luminance;
                     d.emissiveTotalArea_ += area;
+                    d.emissiveTotalPower_ += power;
                     d.emissiveTriCpu.push_back(static_cast<float>(ti));  // triIndex
                     d.emissiveTriCpu.push_back(area);                    // individual area
-                    d.emissiveTriCpu.push_back(d.emissiveTotalArea_);    // cumulative area (CDF)
-                    d.emissiveTriCpu.push_back(0.f);
+                    d.emissiveTriCpu.push_back(d.emissiveTotalPower_);   // cumulative power (CDF)
+                    d.emissiveTriCpu.push_back(power);                   // individual power
                     d.emissiveTriCount_++;
                 }
             }
@@ -2498,7 +2508,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     u.params[2] = d.movedPixelFC_;
     u.params[3] = d.fireflyClamp_;
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
-    u.emissiveInfo[1] = d.emissiveTotalArea_;
+    u.emissiveInfo[1] = d.emissiveTotalPower_;
 
     int nLights = 0;
     auto packLight = [&](float px, float py, float pz, float r, float g, float b, float type) {
