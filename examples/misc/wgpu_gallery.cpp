@@ -1,0 +1,442 @@
+// Material gallery — demanding path tracer stress test.
+// Mix of geometries, multiple emissive light sources, and varied materials.
+
+#include "threepp/extras/imgui/ImguiContext.hpp"
+#include "threepp/geometries/TorusKnotGeometry.hpp"
+#include "threepp/lights/PointLight.hpp"
+#include "threepp/materials/MeshStandardMaterial.hpp"
+#include "threepp/renderers/WgpuRenderer.hpp"
+#include "threepp/renderers/wgpu/WgpuPathTracer.hpp"
+#include "threepp/threepp.hpp"
+
+using namespace threepp;
+
+namespace {
+
+    // --- Materials ---
+
+    auto matChrome() {
+        return MeshStandardMaterial::create({
+                {"color", Color(0.95f, 0.93f, 0.88f)},
+                {"roughness", 0.02f},
+                {"metalness", 1.0f},
+        });
+    }
+
+    auto matGold() {
+        return MeshStandardMaterial::create({
+                {"color", Color(1.0f, 0.76f, 0.33f)},
+                {"roughness", 0.1f},
+                {"metalness", 1.0f},
+        });
+    }
+
+    auto matCopper() {
+        return MeshStandardMaterial::create({
+                {"color", Color(0.72f, 0.45f, 0.20f)},
+                {"roughness", 0.15f},
+                {"metalness", 1.0f},
+        });
+    }
+
+    auto matGlass(Color tint = Color::white) {
+        return MeshStandardMaterial::create({
+                {"color", tint},
+                {"transmission", 0.95f},
+                {"ior", 1.5f},
+                {"roughness", 0.0f},
+                {"metalness", 0.0f},
+        });
+    }
+
+    auto matRoughDiffuse(Color c, float roughness = 0.9f) {
+        return MeshStandardMaterial::create({
+                {"color", c},
+                {"roughness", roughness},
+        });
+    }
+
+    auto matEmissive(Color c, float intensity) {
+        return MeshStandardMaterial::create({
+                {"color", c},
+                {"emissive", c},
+                {"emissiveIntensity", intensity},
+                {"roughness", 1.0f},
+        });
+    }
+
+    // --- Room (open-front box, 20x10x20) ---
+
+    struct RoomResult {
+        std::shared_ptr<Group> room;
+        std::shared_ptr<Group> windowGroup;
+        std::shared_ptr<Mesh> solidWall;
+    };
+
+    auto makeRoom() {
+        auto group = Group::create();
+        constexpr float W = 20.f; // width (x)
+        constexpr float H = 10.f; // height (y)
+        constexpr float D = 20.f; // depth (z)
+
+        // Floor
+        auto floor = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.6f, 0.6f, 0.6f)));
+        floor->rotation.x = -math::PI / 2.f;
+        group->add(floor);
+
+        // Ceiling
+        auto ceiling = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.85f, 0.85f, 0.85f)));
+        ceiling->rotation.x = math::PI / 2.f;
+        ceiling->position.y = H;
+        group->add(ceiling);
+
+        // Back wall
+        auto back = Mesh::create(PlaneGeometry::create(W, H), matRoughDiffuse(Color(0.75f, 0.75f, 0.75f)));
+        back->position.set(0.f, H / 2.f, -D / 2.f);
+        group->add(back);
+
+        // Solid left wall (shown when window is off)
+        auto wallMat = matRoughDiffuse(Color(0.7f, 0.35f, 0.2f));
+        auto leftSolid = Mesh::create(PlaneGeometry::create(D, H), wallMat);
+        leftSolid->rotation.y = math::PI / 2.f;
+        leftSolid->position.set(-W / 2.f, H / 2.f, 0.f);
+        leftSolid->visible = false;
+        group->add(leftSolid);
+
+        // Left wall with window opening (warm terracotta)
+        // Window: 4 wide x 3 tall, centred at y=5, z=2
+        constexpr float winW = 4.f, winH = 3.f;
+        constexpr float winCY = 5.f, winCZ = 2.f;
+
+        auto windowGroup = Group::create();
+
+        // Below window
+        float belowH = winCY - winH / 2.f;
+        auto leftBelow = Mesh::create(PlaneGeometry::create(D, belowH), wallMat);
+        leftBelow->rotation.y = math::PI / 2.f;
+        leftBelow->position.set(-W / 2.f, belowH / 2.f, 0.f);
+        windowGroup->add(leftBelow);
+
+        // Above window
+        float aboveH = H - (winCY + winH / 2.f);
+        auto leftAbove = Mesh::create(PlaneGeometry::create(D, aboveH), wallMat);
+        leftAbove->rotation.y = math::PI / 2.f;
+        leftAbove->position.set(-W / 2.f, H - aboveH / 2.f, 0.f);
+        windowGroup->add(leftAbove);
+
+        // Left of window
+        float leftOfW = (D / 2.f) + (winCZ - winW / 2.f);
+        auto leftLeft = Mesh::create(PlaneGeometry::create(leftOfW, winH), wallMat);
+        leftLeft->rotation.y = math::PI / 2.f;
+        leftLeft->position.set(-W / 2.f, winCY, -D / 2.f + leftOfW / 2.f);
+        windowGroup->add(leftLeft);
+
+        // Right of window
+        float rightOfW = (D / 2.f) - (winCZ + winW / 2.f);
+        auto leftRight = Mesh::create(PlaneGeometry::create(rightOfW, winH), wallMat);
+        leftRight->rotation.y = math::PI / 2.f;
+        leftRight->position.set(-W / 2.f, winCY, D / 2.f - rightOfW / 2.f);
+        windowGroup->add(leftRight);
+
+        // Bright emissive panel filling the window opening (flush with wall)
+        auto sunPanel = Mesh::create(PlaneGeometry::create(winW + 2, winH + 2),
+                                     matEmissive(Color(1.0f, 0.95f, 0.8f), 15.0f));
+        sunPanel->rotation.y = math::PI / 2.f;
+        sunPanel->position.set(-W / 2.f - 0.1f, winCY, winCZ);
+        windowGroup->add(sunPanel);
+
+        // Window cross frames
+        constexpr float frameT = 0.08f;
+        auto frameMat = matRoughDiffuse(Color(0.15f, 0.12f, 0.1f), 0.8f);
+
+        // Horizontal bar
+        auto hBar = Mesh::create(BoxGeometry::create(frameT, winH, frameT), frameMat);
+        hBar->rotation.y = math::PI / 2.f;
+        hBar->position.set(-W / 2.f + 0.01f, winCY, winCZ);
+        windowGroup->add(hBar);
+
+        // Vertical bar
+        auto vBar = Mesh::create(BoxGeometry::create(frameT, frameT, winW), frameMat);
+        vBar->position.set(-W / 2.f + 0.01f, winCY, winCZ);
+        windowGroup->add(vBar);
+
+        group->add(windowGroup);
+
+        // Right wall (cool blue-grey)
+        auto right = Mesh::create(PlaneGeometry::create(D, H),
+                                  matRoughDiffuse(Color(0.3f, 0.4f, 0.55f)));
+        right->rotation.y = -math::PI / 2.f;
+        right->position.set(W / 2.f, H / 2.f, 0.f);
+        group->add(right);
+
+        return RoomResult{group, windowGroup, leftSolid};
+    }
+
+    // --- Emissive light panels ---
+
+    auto makeLightPanels() {
+        auto group = Group::create();
+
+        // Main warm ceiling panel
+        // auto main = Mesh::create(PlaneGeometry::create(4.f, 4.f), matEmissive(Color(1.0f, 0.95f, 0.85f), 6.0f));
+        // main->rotation.x = math::PI / 2.f;
+        // main->position.set(0.f, 9.98f, -2.f);
+        // group->add(main);
+
+        // // Small cool accent panel (left wall)
+        // auto accent1 = Mesh::create(PlaneGeometry::create(2.f, 1.5f), matEmissive(Color(0.4f, 0.6f, 1.0f), 4.0f));
+        // accent1->rotation.y = math::PI / 2.f;
+        // accent1->position.set(-9.98f, 7.f, 4.f);
+        // group->add(accent1);
+        //
+        // // Small warm accent panel (right wall)
+        // auto accent2 = Mesh::create(PlaneGeometry::create(2.f, 1.5f), matEmissive(Color(1.0f, 0.5f, 0.2f), 4.0f));
+        // accent2->rotation.y = -math::PI / 2.f;
+        // accent2->position.set(9.98f, 7.f, -4.f);
+        // group->add(accent2);
+
+        return group;
+    }
+
+    // --- Object pedestals (simple cylinders) ---
+
+    auto makePedestal(float x, float z, float radius = 0.8f, float height = 0.4f) {
+        auto mesh = Mesh::create(CylinderGeometry::create(radius, radius, height, 32),
+                                 matRoughDiffuse(Color(0.25f, 0.25f, 0.28f), 0.7f));
+        mesh->position.set(x, height / 2.f, z);
+        return mesh;
+    }
+
+    // --- Grid of small spheres (geometry stress) ---
+
+    auto makeSphereGrid() {
+        auto group = Group::create();
+        // 5x5 grid of spheres with varying roughness/metalness
+        for (int ix = 0; ix < 5; ix++) {
+            for (int iz = 0; iz < 5; iz++) {
+                float roughness = static_cast<float>(ix) / 4.f;
+                float metalness = static_cast<float>(iz) / 4.f;
+                float hue = static_cast<float>(ix * 5 + iz) / 25.f;
+
+                // Simple hue-to-RGB
+                Color c;
+                c.setHSL(hue, 0.7f, 0.5f);
+
+                auto mat = MeshStandardMaterial::create({
+                        {"color", c},
+                        {"roughness", roughness},
+                        {"metalness", metalness},
+                });
+
+                auto sphere = Mesh::create(SphereGeometry::create(0.3f, 24, 24), mat);
+                float x = -6.f + ix * 1.0f;
+                float z = -6.f + iz * 1.0f;
+                sphere->position.set(x, 0.35f, z);
+                group->add(sphere);
+            }
+        }
+        return group;
+    }
+
+}// namespace
+
+int main() {
+
+    Canvas canvas("Material Gallery",
+                  {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
+
+    WgpuRenderer renderer(canvas);
+
+    WgpuPathTracer pathTracer(renderer, canvas.size());
+    pathTracer.setEnvIntensity(0.0f);
+    pathTracer.setExposure(1.0f);
+    pathTracer.setSamplesPerPixel(2);
+    pathTracer.setDenoiserEnabled(false);
+    pathTracer.setMaxBounces(8);
+    pathTracer.setFireflyClamp(10.0f);
+    pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
+
+    // ---- Scene ----
+    Scene scene;
+    scene.background = Color::black;
+
+    auto [room, windowGroup, solidWall] = makeRoom();
+    scene.add(room);
+    scene.add(makeLightPanels());
+
+    // --- Hero objects on pedestals ---
+
+    // Chrome torus knot (centre-back)
+    auto ped1 = makePedestal(0.f, -4.f);
+    scene.add(ped1);
+    auto torusKnot = Mesh::create(TorusKnotGeometry::create(0.7f, 0.22f, 128, 32), matChrome());
+    torusKnot->position.set(0.f, 1.4f, -4.f);
+    scene.add(torusKnot);
+
+    // Gold torus (near stormtrooper)
+    auto ped2 = makePedestal(3.5f, -5.f);
+    scene.add(ped2);
+    auto torus = Mesh::create(TorusGeometry::create(0.65f, 0.25f, 32, 48), matGold());
+    torus->position.set(3.5f, 1.2f, -5.f);
+    torus->rotation.x = 0.4f;
+    scene.add(torus);
+
+    // Copper icosahedron (right)
+    auto ped3 = makePedestal(5.f, -1.f);
+    scene.add(ped3);
+    auto ico = Mesh::create(IcosahedronGeometry::create(0.7f, 4), matCopper());
+    ico->position.set(5.f, 1.3f, -1.f);
+    scene.add(ico);
+
+    // Glass sphere (front-left)
+    auto ped4 = makePedestal(-3.f, 4.f);
+    scene.add(ped4);
+    auto glassBall = Mesh::create(SphereGeometry::create(0.6f, 48, 48), matGlass());
+    glassBall->position.set(-3.f, 1.1f, 4.f);
+    scene.add(glassBall);
+
+    // Tinted glass sphere (front-right)
+    auto ped5 = makePedestal(3.f, 4.f);
+    scene.add(ped5);
+    auto tintedGlass = Mesh::create(SphereGeometry::create(0.6f, 48, 48), matGlass(Color(0.3f, 0.8f, 0.4f)));
+    tintedGlass->position.set(3.f, 1.1f, 4.f);
+    scene.add(tintedGlass);
+
+    // Stormtrooper model (back-right)
+    ModelLoader loader;
+    auto trooper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+    trooper->position.set(6.f, 0.f, -6.f);
+    trooper->rotation.y = -0.5f;
+    scene.add(trooper);
+
+    // Emissive orb (floating, back-left)
+    auto emOrb = Mesh::create(SphereGeometry::create(0.4f, 32, 32), matEmissive(Color(0.2f, 1.0f, 0.6f), 8.0f));
+    emOrb->position.set(-6.f, 3.f, -6.f);
+    scene.add(emOrb);
+
+    // Cone (mid-right)
+    auto cone = Mesh::create(ConeGeometry::create(0.6f, 1.5f, 32),
+                             matRoughDiffuse(Color(0.9f, 0.85f, 0.3f), 0.4f));
+    cone->position.set(6.f, 0.75f, 2.f);
+    scene.add(cone);
+
+    // Capsule (mid-left)
+    auto capsule = Mesh::create(CapsuleGeometry::create(0.35f, 1.0f, 16, 24),
+                                matRoughDiffuse(Color(0.4f, 0.2f, 0.6f), 0.6f));
+    capsule->position.set(-6.f, 0.85f, 2.f);
+    scene.add(capsule);
+
+    // Sphere grid (roughness/metalness matrix)
+    scene.add(makeSphereGrid());
+
+    // Point light for raytracer mode
+    auto light = PointLight::create(Color::white, 1.5f);
+    light->position.set(0.f, 9.f, 0.f);
+    // scene.add(light);
+
+    // ---- Camera ----
+    PerspectiveCamera camera(50.f, canvas.aspect(), 0.1f, 100.f);
+    camera.position.set(0.f, 5.f, 16.f);
+    OrbitControls controls{camera, canvas};
+    controls.target.set(0.f, 3.f, -1.f);
+    controls.update();
+
+    // ---- UI ----
+    int renderMode = 0;
+    std::vector<std::string> renderModeNames = {"Raytracer", "PathTracer", "Raster"};
+    bool raster = false;
+    bool pathTracerOn = false;
+    bool showWindow = true;
+    bool denoiserOn = pathTracer.denoiserEnabled();
+    int maxBounces = pathTracer.maxBounces();
+    float exposure = pathTracer.exposure();
+    float ambientFactor = pathTracer.ambientFactor();
+    float movedPixelFC = pathTracer.movedPixelFC();
+    float fireflyClamp = pathTracer.fireflyClamp();
+
+    float fps = 0.f;
+    float fpsAccum = 0.f;
+    int fpsFrames = 0;
+
+    KeyAdapter keyAdapter(KeyAdapter::Mode::KEY_PRESSED, [&](KeyEvent ev) {
+        if (ev.key == Key::T) {
+            renderMode = (renderMode + 1) % 3;
+            raster = (renderMode == 2);
+            pathTracerOn = (renderMode == 1);
+            if (!raster) {
+                pathTracer.setMode(pathTracerOn ? WgpuPathTracer::Mode::PathTracer
+                                                : WgpuPathTracer::Mode::Raytracer);
+            }
+        }
+    });
+    canvas.addKeyListener(keyAdapter);
+
+    ImguiFunctionalContext ui(canvas, renderer, [&] {
+        ImGui::SetNextWindowPos({});
+        ImGui::SetNextWindowSize({});
+        ImGui::Begin(renderModeNames[renderMode].c_str());
+        ImGui::Text("FPS: %.1f", fps);
+        if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
+        ImGui::Separator();
+
+        if (ImGui::Checkbox("Window", &showWindow)) {
+            windowGroup->visible = showWindow;
+            solidWall->visible = !showWindow;
+        }
+
+        if (renderMode == 0 || renderMode == 1) {
+            if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
+                pathTracer.setExposure(exposure);
+        }
+
+        if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {
+            if (ImGui::Checkbox("Denoiser", &denoiserOn))
+                pathTracer.setDenoiserEnabled(denoiserOn);
+            if (ImGui::SliderInt("Max bounces", &maxBounces, 1, 16))
+                pathTracer.setMaxBounces(maxBounces);
+            if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
+                pathTracer.setAmbientFactor(ambientFactor);
+            if (ImGui::SliderFloat("Moved FC", &movedPixelFC, 0.0f, 20.0f))
+                pathTracer.setMovedPixelFC(movedPixelFC);
+            if (ImGui::SliderFloat("Firefly clamp", &fireflyClamp, 0.0f, 50.0f))
+                pathTracer.setFireflyClamp(fireflyClamp);
+        }
+
+        ImGui::End();
+    });
+
+    IOCapture ioCapture;
+    ioCapture.preventMouseEvent = []() -> bool { return ImGui::GetIO().WantCaptureMouse; };
+    canvas.setIOCapture(&ioCapture);
+
+    canvas.onWindowResize([&](const WindowSize& ns) {
+        renderer.setSize(ns);
+        pathTracer.setSize({ns.width(), ns.height()});
+        camera.aspect = canvas.aspect();
+        camera.updateProjectionMatrix();
+    });
+
+    Clock clock;
+
+    canvas.animate([&] {
+        const float dt = clock.getDelta();
+
+        fpsAccum += dt;
+        ++fpsFrames;
+        if (fpsAccum >= 0.5f) {
+            fps = fpsFrames / fpsAccum;
+            fpsAccum = 0.f;
+            fpsFrames = 0;
+        }
+
+        controls.update();
+
+        if (!raster) {
+            pathTracer.render(scene, camera);
+        } else {
+            renderer.render(scene, camera);
+        }
+
+        ui.render();
+    });
+}
