@@ -114,6 +114,7 @@ struct Hit  {
     t:            f32,
     point:        vec3<f32>,
     normal:       vec3<f32>,
+    geoNormal:    vec3<f32>,
     albedo:       vec3<f32>,
     shininess:    f32,
     uv:           vec2<f32>,
@@ -175,19 +176,62 @@ fn schlick(cosTheta: f32, F0: vec3<f32>) -> vec3<f32> {
     return F0 + (vec3<f32>(1.0) - F0) * pow(max(0.0, 1.0 - cosTheta), 5.0);
 }
 
-fn sampleGGXDir(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
-                seed: ptr<function, u32>) -> vec3<f32> {
-    let u1   = rand(seed);
-    let u2   = rand(seed);
-    let a2   = alpha * alpha;
-    let phi  = 2.0 * PI * u1;
-    let cosT = sqrt((1.0 - u2) / max(1.0 + (a2 - 1.0) * u2, 1e-6));
-    let sinT = sqrt(max(0.0, 1.0 - cosT * cosT));
-    let nt   = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
-    let rgt  = normalize(cross(nt, n));
-    let up   = cross(n, rgt);
-    let hm   = normalize(sinT * cos(phi) * rgt + sinT * sin(phi) * up + cosT * n);
+// Heitz 2018 VNDF (Visible Normal Distribution Function) sampling.
+// Samples half-vectors proportional to the visible microfacet area,
+// eliminating wasted below-horizon samples from plain D(h) sampling.
+fn sampleVNDF(wo: vec3<f32>, n: vec3<f32>, alpha: f32,
+              seed: ptr<function, u32>) -> vec3<f32> {
+    // Build local frame around n
+    let nt  = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
+    let t1  = normalize(cross(nt, n));
+    let t2  = cross(n, t1);
+    // Transform wo to local frame (t1, t2, n)
+    let woLocal = vec3<f32>(dot(wo, t1), dot(wo, t2), dot(wo, n));
+    // Stretch to isotropic configuration (isotropic alpha)
+    let woStr = normalize(vec3<f32>(alpha * woLocal.x, alpha * woLocal.y, woLocal.z));
+    // Build orthonormal basis around stretched wo
+    let lensq = woStr.x * woStr.x + woStr.y * woStr.y;
+    let T1 = select(vec3<f32>(1.0, 0.0, 0.0),
+                    vec3<f32>(-woStr.y, woStr.x, 0.0) / sqrt(lensq),
+                    lensq > 1e-7);
+    let T2 = cross(woStr, T1);
+    // Sample projected disk
+    let u1  = rand(seed);
+    let u2  = rand(seed);
+    let r   = sqrt(u1);
+    let phi = 2.0 * PI * u2;
+    let t1s = r * cos(phi);
+    let s   = 0.5 * (1.0 + woStr.z);
+    let t2s = mix(sqrt(max(0.0, 1.0 - t1s * t1s)), r * sin(phi), s);
+    // Compute half-vector in stretched space, then unstretch
+    let nhLocal = t1s * T1 + t2s * T2
+                + sqrt(max(0.0, 1.0 - t1s * t1s - t2s * t2s)) * woStr;
+    let hLocal = normalize(vec3<f32>(alpha * nhLocal.x, alpha * nhLocal.y, max(1e-6, nhLocal.z)));
+    // Transform back to world space
+    let hm = hLocal.x * t1 + hLocal.y * t2 + hLocal.z * n;
     return reflect(-wo, hm);
+}
+
+// PDF of the VNDF sampling strategy, expressed in reflected-direction (wi) space.
+fn vndfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32) -> f32 {
+    let hm    = normalize(wo + wi);
+    let NdotH = max(0.0, dot(n, hm));
+    let NdotV = max(1e-6, dot(n, wo));
+    let D     = ggxD(NdotH, alpha);
+    let G1v   = ggxG1(NdotV, alpha);
+    // VNDF PDF_h = D * G1 * VdotH / NdotV; Jacobian to wi: / (4 * VdotH)
+    // VdotH cancels → PDF_wi = D * G1 / (4 * NdotV)
+    return D * G1v / (4.0 * NdotV);
+}
+
+// Combined BRDF PDF (mixed specular + diffuse lobes, matching the path tracer's sampling strategy).
+fn brdfPdf(wo: vec3<f32>, wi: vec3<f32>, n: vec3<f32>, alpha: f32, metalness: f32) -> f32 {
+    let NdotL = dot(n, wi);
+    if (NdotL <= 0.0) { return 0.0; }
+    let p_spec  = mix(0.5, 0.98, metalness);
+    let specPdf = vndfPdf(wo, wi, n, alpha);
+    let diffPdf = NdotL / PI;
+    return p_spec * specPdf + (1.0 - p_spec) * diffPdf;
 }
 )"
 R"(
@@ -333,9 +377,17 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
         shininess = max(1e-4, mappedRough * mappedRough);
     }
 
+    // Geometric (flat) normal — needed for MIS PDF of emissive surfaces
+    let geoNcross = cross(v1 - v0, v2 - v0);
+    let geoNlen   = length(geoNcross);
+    // Fall back to shading normal for degenerate triangles (avoids NaN from normalize(0))
+    let geoN    = select(sn, geoNcross / geoNlen, geoNlen > 1e-8);
+    let geoNorm = select(-geoN, geoN, isFrontFace);
+
     (*h).t         = isect.t;
     (*h).point     = ray.origin + isect.t * ray.dir;
     (*h).normal    = finalNorm;
+    (*h).geoNormal = geoNorm;
     (*h).albedo    = mat0.xyz;
     (*h).shininess = shininess;
     (*h).uv        = iuv;
@@ -349,7 +401,7 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
 }
 
 fn sceneHit(ray: Ray) -> Hit {
-    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0;
+    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0);
     var stack: array<i32, 64>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
@@ -542,6 +594,13 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
     var throughput = vec3<f32>(1.0);
     var radiance   = vec3<f32>(0.0);
 
+    // Previous-bounce surface properties for MIS weighting
+    var prevNormal    = vec3<f32>(0.0, 1.0, 0.0);
+    var prevAlpha     = 0.0;
+    var prevMetalness = 0.0;
+    var prevWo        = vec3<f32>(0.0);
+    var afterTransmission = false;
+
     for (var i = 0; i < i32(rt.params.x); i++) {
         let h = sceneHit(ray);
         if (h.t >= 1e29) {
@@ -560,10 +619,26 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         }
 
         let emTriCount = i32(rt.emissiveInfo.x);
+        let totalArea  = rt.emissiveInfo.y;
 
-        // Emissive hit: always add on primary ray; on bounces, only if no emissive NEE
-        if (i == 0 || emTriCount == 0) {
-            radiance += throughput * h.emissive;
+        // Emissive hit with MIS balance heuristic
+        if (length(h.emissive) > 0.0) {
+            if (i == 0 || emTriCount == 0 || afterTransmission) {
+                // Primary ray, no NEE available, or after transmission: full weight
+                radiance += throughput * h.emissive;
+            } else {
+                // MIS: BRDF sampling hit emissive — weight by balance heuristic
+                let cosLight = abs(dot(h.geoNormal, -ray.dir));
+                if (cosLight > 1e-6) {
+                    let pdf_light = (h.t * h.t) / (totalArea * cosLight);
+                    let pdf_brdf  = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
+                    let w = pdf_brdf / max(pdf_brdf + pdf_light, 1e-8);
+                    // Guard against NaN/inf from degenerate PDFs
+                    if (w == w && w < 1e10) {
+                        radiance += throughput * h.emissive * w;
+                    }
+                }
+            }
         }
 
         var albedo = h.albedo;
@@ -624,7 +699,6 @@ R"(
         // --- Emissive surface NEE (area-weighted CDF sampling) ---
         if (emTriCount > 0) {
             // Area-weighted selection via binary search on cumulative area (stored in .z)
-            let totalArea = rt.emissiveInfo.y;
             let xi = rand(seed) * totalArea;
             var lo = 0;
             var hi = emTriCount - 1;
@@ -684,7 +758,10 @@ R"(
                     let f_spec = D * F * G / max(4.0 * NdotV * NdotL, 1e-6);
                     let f_diff = (vec3<f32>(1.0) - F) * albedo / PI;
 
-                    radiance += throughput * (f_diff + f_spec) * NdotL * emColor / pdf;
+                    // MIS balance heuristic: weight light sample against BRDF sample
+                    let pdf_brdf_nee = brdfPdf(wo, ln, h.normal, h.shininess, h.metalness);
+                    let w_light = pdf / max(pdf + pdf_brdf_nee, 1e-8);
+                    radiance += throughput * (f_diff + f_spec) * NdotL * emColor * w_light / pdf;
                 }
             }
         }
@@ -706,7 +783,7 @@ R"(
             var tNorm = h.normal;
             if (h.shininess > 1e-3) {
                 let wo_t = normalize(-ray.dir);
-                let hm = sampleGGXDir(wo_t, h.normal, h.shininess, seed);
+                let hm = sampleVNDF(wo_t, h.normal, h.shininess, seed);
                 // Only use microfacet normal if it's in the same hemisphere
                 if (dot(hm, h.normal) > 0.0) { tNorm = hm; }
             }
@@ -717,6 +794,7 @@ R"(
             let fresnel = r0 + (1.0 - r0) * pow(1.0 - cosI, 5.0);
 
             var wi_t: vec3<f32>;
+            var didRefract = false;
             if (rand(seed) < fresnel) {
                 // Fresnel reflection
                 wi_t = reflect(ray.dir, tNorm);
@@ -731,25 +809,27 @@ R"(
                 } else {
                     wi_t = refracted;
                     ray.origin = h.point - h.normal * 1e-3;
+                    didRefract = true;
                 }
             }
-            throughput *= albedo;
+            // eta² Jacobian: solid angle compression when refracting between media
+            throughput *= select(albedo, albedo * eta * eta, didRefract);
+            afterTransmission = true;
             ray.dir = wi_t;
             continue;
         }
 
-        let wo_b = normalize(-ray.dir);
         let F0_b = mix(vec3<f32>(0.04), albedo, h.metalness);
         var wi_b: vec3<f32>;
         // Importance-sample the lobe type by metalness:
         // metals are pure specular (p_spec→1), dielectrics split 50/50.
         let p_spec = mix(0.5, 0.98, h.metalness);
         if (rand(seed) < p_spec) {
-            wi_b = sampleGGXDir(wo_b, h.normal, h.shininess, seed);
+            wi_b = sampleVNDF(wo, h.normal, h.shininess, seed);
             let cos_b = dot(h.normal, wi_b);
             if (cos_b <= 0.0) { break; }
-            let hb  = normalize(wo_b + wi_b);
-            let Fb  = schlick(max(0.0, dot(wo_b, hb)), F0_b);
+            let hb  = normalize(wo + wi_b);
+            let Fb  = schlick(max(0.0, dot(wo, hb)), F0_b);
             let G1L = ggxG1(cos_b, h.shininess);
             throughput *= Fb * G1L / p_spec;
         } else {
@@ -759,6 +839,12 @@ R"(
             // Diffuse contribution is zero for pure metals, scales with (1-metalness)
             throughput *= albedo * (1.0 - h.metalness) / (1.0 - p_spec);
         }
+        // Save prev-bounce properties for MIS on next iteration
+        prevWo        = wo;
+        prevNormal    = h.normal;
+        prevAlpha     = h.shininess;
+        prevMetalness = h.metalness;
+        afterTransmission = false;
         ray.origin = h.point + h.normal * 1e-3;
         ray.dir    = wi_b;
     }
@@ -838,9 +924,23 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         if (touchedMoved && !meshMoved) { pixelFC = min(pixelFC, rt.params.z); }
         if (fc == 0u) { pixelFC = 0.0; }
 
-        let alpha   = 1.0 / (pixelFC + 1.0);
-        let blended = old * (1.0 - alpha) + sample * alpha;
-        textureStore(accumWrite,   pixel, vec4<f32>(blended, pixelFC + 1.0));
+        // NaN guard: reject corrupted samples to prevent permanent accumulation damage
+        // (NaN * 0 = NaN, so even full resets can't recover once NaN enters the buffer)
+        let sampleClean = select(vec3<f32>(0.0), sample, sample.x == sample.x);
+        let oldClean    = select(vec3<f32>(0.0), old,    old.x == old.x);
+
+        // Stop accumulating once float16 precision is exhausted (~1024 frames)
+        if (pixelFC < 1024.0) {
+            let alpha   = 1.0 / (pixelFC + 1.0);
+            var blended = oldClean * (1.0 - alpha) + sampleClean * alpha;
+            let clampMax = rt.params.w;
+            if (clampMax > 0.0) {
+                blended = min(blended, vec3<f32>(clampMax));
+            }
+            textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
+        } else {
+            textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
+        }
         textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
         textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
     }
