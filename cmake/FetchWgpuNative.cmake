@@ -3,7 +3,7 @@
 
 include(FetchContent)
 
-set(WGPU_NATIVE_VERSION "v29.0.1" CACHE STRING "wgpu-native release version")
+set(WGPU_NATIVE_VERSION "v27.0.4.0" CACHE STRING "wgpu-native release version")
 
 # Determine platform
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
