@@ -621,12 +621,18 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
         }
 )"
 R"(
-        // --- Emissive surface NEE ---
+        // --- Emissive surface NEE (area-weighted CDF sampling) ---
         if (emTriCount > 0) {
-            // Uniform random selection of an emissive triangle
-            let eti = i32(rand(seed) * f32(emTriCount));
-            let etIdx = min(eti, emTriCount - 1);
-            let emInfo = emissiveTris[etIdx];  // x=triIndex, y=area
+            // Area-weighted selection via binary search on cumulative area (stored in .z)
+            let totalArea = rt.emissiveInfo.y;
+            let xi = rand(seed) * totalArea;
+            var lo = 0;
+            var hi = emTriCount - 1;
+            while (lo < hi) {
+                let mid = (lo + hi) >> 1;
+                if (emissiveTris[mid].z < xi) { lo = mid + 1; } else { hi = mid; }
+            }
+            let emInfo = emissiveTris[lo];  // x=triIndex, y=area, z=cumulativeArea
             let eTi   = i32(emInfo.x);
             let eArea = emInfo.y;
 
@@ -662,8 +668,9 @@ R"(
                     let eMatIdx = i32(textureLoad(triData, triCoord(eTi, 0), 0).w);
                     let emColor = textureLoad(matData, vec2<i32>(eMatIdx, 2), 0).xyz;
 
-                    // PDF: 1/area for triangle sampling, convert to solid angle
-                    let pdf = (dist * dist) / (eArea * cosLight * f32(emTriCount));
+                    // PDF: (area_i / totalArea) for selection, then 1/area_i on triangle → 1/totalArea
+                    // Convert to solid angle: pdf_solidAngle = pdf_area * dist² / cosLight
+                    let pdf = (dist * dist) / (totalArea * cosLight);
 
                     // Evaluate BRDF at hit point for light direction
                     let hv    = normalize(wo + ln);
@@ -2274,12 +2281,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 cross.crossVectors(v1 - v0, v2 - v0);
                 const float area = cross.length() * 0.5f;
                 if (area > 1e-8f) {
+                    d.emissiveTotalArea_ += area;
                     d.emissiveTriCpu.push_back(static_cast<float>(ti));  // triIndex
-                    d.emissiveTriCpu.push_back(area);
-                    d.emissiveTriCpu.push_back(0.f);
+                    d.emissiveTriCpu.push_back(area);                    // individual area
+                    d.emissiveTriCpu.push_back(d.emissiveTotalArea_);    // cumulative area (CDF)
                     d.emissiveTriCpu.push_back(0.f);
                     d.emissiveTriCount_++;
-                    d.emissiveTotalArea_ += area;
                 }
             }
         }
