@@ -9,6 +9,7 @@
 #include "threepp/renderers/GLRenderer.hpp"
 #include "threepp/textures/DepthTexture.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <random>
@@ -41,16 +42,37 @@ namespace {
 
         if (ax >= ay && ax >= az) {
             denom = ax;
-            if (dx > 0.f) { face = 0; num_u = -dz; num_v = -dy; }
-            else           { face = 1; num_u =  dz; num_v = -dy; }
+            if (dx > 0.f) {
+                face = 0;
+                num_u = -dz;
+                num_v = -dy;
+            } else {
+                face = 1;
+                num_u = dz;
+                num_v = -dy;
+            }
         } else if (ay >= ax && ay >= az) {
             denom = ay;
-            if (dy > 0.f) { face = 2; num_u = dx;  num_v =  dz; }
-            else           { face = 3; num_u = dx;  num_v = -dz; }
+            if (dy > 0.f) {
+                face = 2;
+                num_u = dx;
+                num_v = dz;
+            } else {
+                face = 3;
+                num_u = dx;
+                num_v = -dz;
+            }
         } else {
             denom = az;
-            if (dz > 0.f) { face = 4; num_u =  dx; num_v = -dy; }
-            else           { face = 5; num_u = -dx; num_v = -dy; }
+            if (dz > 0.f) {
+                face = 4;
+                num_u = dx;
+                num_v = -dy;
+            } else {
+                face = 5;
+                num_u = -dx;
+                num_v = -dy;
+            }
         }
 
         const float inv = 1.f / denom;
@@ -66,14 +88,16 @@ namespace {
 
 void LidarSensor::init(float near, float far) {
 
-    struct FaceDesc { Vector3 lookAt, up; };
+    struct FaceDesc {
+        Vector3 lookAt, up;
+    };
     static const std::array<FaceDesc, kNumFaces> kFaces{{
-        {{1,  0,  0}, {0, -1,  0}},  // +X
-        {{-1, 0,  0}, {0, -1,  0}},  // -X
-        {{0,  1,  0}, {0,  0,  1}},  // +Y
-        {{0, -1,  0}, {0,  0, -1}},  // -Y
-        {{0,  0,  1}, {0, -1,  0}},  // +Z
-        {{0,  0, -1}, {0, -1,  0}},  // -Z
+            {{1, 0, 0}, {0, -1, 0}}, // +X
+            {{-1, 0, 0}, {0, -1, 0}},// -X
+            {{0, 1, 0}, {0, 0, 1}},  // +Y
+            {{0, -1, 0}, {0, 0, -1}},// -Y
+            {{0, 0, 1}, {0, -1, 0}}, // +Z
+            {{0, 0, -1}, {0, -1, 0}},// -Z
     }};
 
     for (int i = 0; i < kNumFaces; ++i) {
@@ -131,16 +155,16 @@ void LidarSensor::init(float near, float far) {
         }
     )";
     postMaterial_->uniforms = {
-        {"tDepth", Uniform()},
-        {"cameraNear", Uniform(near_)},
-        {"cameraFar", Uniform(far_)}};
+            {"tDepth", Uniform()},
+            {"cameraNear", Uniform(near_)},
+            {"cameraFar", Uniform(far_)}};
 
     postScene_.add(Mesh::create(PlaneGeometry::create(2, 2), postMaterial_));
 }
 
 void LidarSensor::buildBeamTable(const LidarModel& model) {
     const int numAzSteps = static_cast<int>(
-        std::round((model.azimuthMax - model.azimuthMin) / model.azimuthResolution));
+            std::round((model.azimuthMax - model.azimuthMin) / model.azimuthResolution));
 
     beams_.clear();
     beams_.reserve(numAzSteps * static_cast<int>(model.elevationAngles.size()));
@@ -267,9 +291,9 @@ void LidarSensor::unprojectDense(std::vector<Vector3>& points) const {
 
                 const float xd = dir_[x];
                 points.emplace_back(
-                    (m0 * xd + ry0 - m8) * depth + m12,
-                    (m1 * xd + ry1 - m9) * depth + m13,
-                    (m2 * xd + ry2 - m10) * depth + m14);
+                        (m0 * xd + ry0 - m8) * depth + m12,
+                        (m1 * xd + ry1 - m9) * depth + m13,
+                        (m2 * xd + ry2 - m10) * depth + m14);
             }
         }
     }
@@ -308,8 +332,8 @@ void LidarSensor::unprojectBeams(std::vector<Vector3>& points) const {
         // transformed to world space via the face camera's world matrix
         const float* me = faceMat[b.face];
         points.emplace_back(
-            (me[0] * b.u + me[4] * b.v - me[8])  * depth + me[12],
-            (me[1] * b.u + me[5] * b.v - me[9])  * depth + me[13],
-            (me[2] * b.u + me[6] * b.v - me[10]) * depth + me[14]);
+                (me[0] * b.u + me[4] * b.v - me[8]) * depth + me[12],
+                (me[1] * b.u + me[5] * b.v - me[9]) * depth + me[13],
+                (me[2] * b.u + me[6] * b.v - me[10]) * depth + me[14]);
     }
 }
