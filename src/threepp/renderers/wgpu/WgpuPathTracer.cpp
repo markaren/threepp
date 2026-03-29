@@ -29,6 +29,7 @@
 #include <cstring>
 #include <numeric>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 using namespace threepp;
@@ -44,7 +45,6 @@ constexpr int MAX_BVH_NODES = 2 * MAX_TRIS - 1;
 constexpr int MAX_TEX_SLOTS = 64;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
-constexpr int ATLAS_ROWS = (MAX_TEX_SLOTS + ATLAS_COLS - 1) / ATLAS_COLS;
 constexpr int TRI_TEX_HEIGHT = 8;
 constexpr int MAT_TEX_HEIGHT = 4;
 constexpr int TEX_PAGE_WIDTH = 8192;
@@ -1446,11 +1446,36 @@ struct BvhNode {
 // Helper functions
 // ---------------------------------------------------------------------------
 
-static std::vector<unsigned char> buildAtlas(
+/// Build texture atlas sized to actual slot usage (not MAX_TEX_SLOTS).
+/// Returns {pixel data, rows used (>= 1)}.
+static std::pair<std::vector<unsigned char>, int> buildAtlas(
         const std::vector<Mesh*>& meshes,
         std::unordered_map<Texture*, int>& texSlotMap) {
+    // First pass: count unique textures to determine atlas size.
+    int slotCount = 0;
+    std::unordered_set<Texture*> seen;
+    for (auto* mesh : meshes) {
+        if (slotCount >= MAX_TEX_SLOTS) break;
+        auto countTex = [&](Texture* tex) {
+            if (tex && slotCount < MAX_TEX_SLOTS && !seen.count(tex)) {
+                auto& img = tex->image();
+                if (img.width > 0 && img.height > 0) {
+                    seen.insert(tex);
+                    ++slotCount;
+                }
+            }
+        };
+        if (auto* mwm = dynamic_cast<MaterialWithMap*>(mesh->material().get()))
+            countTex(mwm->map.get());
+        if (auto* mnm = dynamic_cast<MaterialWithNormalMap*>(mesh->material().get()))
+            countTex(mnm->normalMap.get());
+        if (auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get()))
+            countTex(mwr->roughnessMap.get());
+    }
+
+    const int rows = std::max(1, (slotCount + ATLAS_COLS - 1) / ATLAS_COLS);
     const int atlasW = ATLAS_COLS * TILE_SIZE;
-    const int atlasH = ATLAS_ROWS * TILE_SIZE;
+    const int atlasH = rows * TILE_SIZE;
     std::vector<unsigned char> atlas(atlasW * atlasH * 4, 255);
 
     auto addTexture = [&](Texture* tex, int& slot) {
@@ -1492,7 +1517,7 @@ static std::vector<unsigned char> buildAtlas(
         auto* mwr = dynamic_cast<MaterialWithRoughness*>(mesh->material().get());
         if (mwr && mwr->roughnessMap) addTexture(mwr->roughnessMap.get(), slot);
     }
-    return atlas;
+    return {std::move(atlas), rows};
 }
 
 static std::tuple<Color, float, float, Color, float, float, float> extractMaterial(const Material* mat) {
@@ -1938,6 +1963,7 @@ struct WgpuPathTracer::Impl {
     WgpuTexture triTex;
     WgpuTexture matTex;
     WgpuTexture texAtlasTex;
+    int atlasRows_ = 0;  // current atlas row count (0 = initial placeholder)
     WgpuTexture accumA;
     WgpuTexture accumB;
     WgpuTexture* readAccum;
@@ -2061,7 +2087,7 @@ struct WgpuPathTracer::Impl {
           matTex(r, MAX_MATS, MAT_TEX_HEIGHT,
                  WgpuTexture::Format::RGBA32Float,
                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
-          texAtlasTex(r, ATLAS_COLS * TILE_SIZE, ATLAS_ROWS * TILE_SIZE,
+          texAtlasTex(r, 1u, 1u,
                       WgpuTexture::Format::RGBA8Unorm,
                       WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           // Accumulation textures
@@ -2352,7 +2378,15 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     if (topoChanged) {
         d.texSlotMap.clear();
-        const auto atlasData = buildAtlas(rtMeshes, d.texSlotMap);
+        auto [atlasData, atlasRows] = buildAtlas(rtMeshes, d.texSlotMap);
+        if (atlasRows != d.atlasRows_) {
+            d.atlasRows_ = atlasRows;
+            d.texAtlasTex = WgpuTexture(d.renderer,
+                    ATLAS_COLS * TILE_SIZE, atlasRows * TILE_SIZE,
+                    WgpuTexture::Format::RGBA8Unorm,
+                    WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+            d.rtPipeline.setTexture(6, d.texAtlasTex);
+        }
         d.texAtlasTex.write(atlasData.data(), atlasData.size());
         d.prevMeshes = rtMeshes;
     }
