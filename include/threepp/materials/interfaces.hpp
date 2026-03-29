@@ -228,6 +228,15 @@ namespace threepp {
         bool morphNormals = false;
     };
 
+    struct MaterialWithTransmission: virtual Material {
+
+        float transmission{0.f}; // 0 = opaque, 1 = fully transmissive
+        float ior{1.5f};         // index of refraction
+
+        MaterialWithTransmission() = default;
+        MaterialWithTransmission(float transmission, float ior): transmission(transmission), ior(ior) {}
+    };
+
 }// namespace threepp
 
 
