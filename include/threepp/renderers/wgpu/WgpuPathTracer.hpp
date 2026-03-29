@@ -45,6 +45,12 @@ namespace threepp {
         void setEnvIntensity(float intensity);
         [[nodiscard]] float envIntensity() const;
 
+        /// Scale applied to material emissive values. Default: 1.0.
+        /// Useful for GLTF models whose emissive values are calibrated for raster
+        /// but too bright as physical radiance in path tracing.
+        void setEmissiveScale(float scale);
+        [[nodiscard]] float emissiveScale() const;
+
         /// Maximum number of bounces for path tracing. Default: 8.
         /// Higher values improve light transport accuracy at the cost of performance.
         void setMaxBounces(int bounces);
@@ -83,6 +89,9 @@ namespace threepp {
         /// Useful for gizmos like TransformControls. Set to -1 to disable (default).
         void setOverlayLayer(int channel);
         [[nodiscard]] int overlayLayer() const;
+
+        /// Force a full scene rebuild (geometry + materials) on the next render call.
+        void markDirty();
 
         void dispose();
 

@@ -41,7 +41,7 @@ namespace {
 constexpr int MAX_TRIS = 131072;
 constexpr int MAX_MATS = 64;
 constexpr int MAX_BVH_NODES = 2 * MAX_TRIS - 1;
-constexpr int MAX_TEX_SLOTS = 16;
+constexpr int MAX_TEX_SLOTS = 64;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
 constexpr int ATLAS_ROWS = (MAX_TEX_SLOTS + ATLAS_COLS - 1) / ATLAS_COLS;
@@ -101,7 +101,7 @@ struct BvhNodeGpu {
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
 const TILE_SIZE:   i32 = 1024;
-const MAX_TEX_SLOTS: i32 = 16;
+const MAX_TEX_SLOTS: i32 = 64;
 const ATLAS_COLS:  i32 = 8;
 
 fn triCoord(ti: i32, row: i32) -> vec2<i32> {
@@ -250,11 +250,33 @@ fn sampleAtlas(uv: vec2<f32>, texSlot: f32) -> vec3<f32> {
     let y1  = clamp(y0 + 1,          0, TILE_SIZE - 1);
     let wx  = fp.x - floor(fp.x);
     let wy  = fp.y - floor(fp.y);
-    let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0).xyz;
-    let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), 0).xyz;
-    let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), 0).xyz;
-    let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0).xyz;
-    return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
+    let c00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0);
+    let c10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), 0);
+    let c01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), 0);
+    let c11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0);
+    let blended = mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
+    return blended.xyz;
+}
+
+fn sampleAtlasAlpha(uv: vec2<f32>, texSlot: f32) -> f32 {
+    let slot = i32(texSlot);
+    let col  = slot % ATLAS_COLS;
+    let row  = slot / ATLAS_COLS;
+    let ox   = col * TILE_SIZE;
+    let oy   = row * TILE_SIZE;
+    let ts   = f32(TILE_SIZE);
+    let fp  = vec2<f32>(fract(uv.x), fract(uv.y)) * ts - 0.5;
+    let x0  = clamp(i32(floor(fp.x)), 0, TILE_SIZE - 1);
+    let y0  = clamp(i32(floor(fp.y)), 0, TILE_SIZE - 1);
+    let x1  = clamp(x0 + 1,          0, TILE_SIZE - 1);
+    let y1  = clamp(y0 + 1,          0, TILE_SIZE - 1);
+    let wx  = fp.x - floor(fp.x);
+    let wy  = fp.y - floor(fp.y);
+    let a00 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y0), 0).w;
+    let a10 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y0), 0).w;
+    let a01 = textureLoad(texAtlas, vec2<i32>(ox + x0, oy + y1), 0).w;
+    let a11 = textureLoad(texAtlas, vec2<i32>(ox + x1, oy + y1), 0).w;
+    return mix(mix(a00, a10, wx), mix(a01, a11, wx), wy);
 }
 
 // Returns the raw environment/background color with no intensity scaling.
@@ -341,6 +363,13 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     let mat2   = textureLoad(matData, vec2<i32>(matIdx, 2), 0);
     let mat3   = textureLoad(matData, vec2<i32>(matIdx, 3), 0);
 
+    // Alpha test: discard hit if texture alpha is below threshold
+    let alphaTest = mat3.y;
+    if (alphaTest > 0.0 && mat1.x >= 0.0) {
+        let texAlpha = sampleAtlasAlpha(iuv, mat1.x);
+        if (texAlpha < alphaTest) { return; }
+    }
+
     let isFrontFace = dot(ray.dir, sn) < 0.0;
     var finalNorm = select(-sn, sn, isFrontFace);
 
@@ -380,7 +409,6 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     // Geometric (flat) normal — needed for MIS PDF of emissive surfaces
     let geoNcross = cross(v1 - v0, v2 - v0);
     let geoNlen   = length(geoNcross);
-    // Fall back to shading normal for degenerate triangles (avoids NaN from normalize(0))
     let geoN    = select(sn, geoNcross / geoNlen, geoNlen > 1e-8);
     let geoNorm = select(-geoN, geoN, isFrontFace);
 
@@ -509,6 +537,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
 
     // Transmission: one-level refraction for raytracer mode (smooth surfaces only)
     if (h0.transmission > 0.5 && h0.shininess < 0.1) {
+        let glassTint = mix(h0.albedo, vec3<f32>(1.0), h0.transmission);
         let entering = h0.frontFace > 0.5;
         let eta = select(h0.ior, 1.0 / h0.ior, entering);
         let refDir = refract(normalize(ray.dir), h0.normal, eta);
@@ -517,7 +546,7 @@ fn raytrace(ray: Ray) -> vec3<f32> {
             rr.origin = h0.point - h0.normal * 1e-3;
             rr.dir    = refDir;
             let hr = sceneHit(rr);
-            if (hr.t >= 1e30) { return sampleEnv(rr.dir) * h0.albedo; }
+            if (hr.t >= 1e30) { return sampleEnv(rr.dir) * glassTint; }
             // Second refraction (exit surface)
             let exitEnter = hr.frontFace > 0.5;
             let eta2 = select(hr.ior, 1.0 / hr.ior, exitEnter);
@@ -527,10 +556,10 @@ fn raytrace(ray: Ray) -> vec3<f32> {
                 rr2.origin = hr.point - hr.normal * 1e-3;
                 rr2.dir    = refDir2;
                 let hr2 = sceneHit(rr2);
-                if (hr2.t >= 1e30) { return sampleEnv(rr2.dir) * h0.albedo; }
-                return shade(hr2, rr2.dir) * h0.albedo;
+                if (hr2.t >= 1e30) { return sampleEnv(rr2.dir) * glassTint; }
+                return shade(hr2, rr2.dir) * glassTint;
             }
-            return shade(hr, rr.dir) * h0.albedo;
+            return shade(hr, rr.dir) * glassTint;
         }
     }
 
@@ -818,7 +847,8 @@ R"(
                 }
             }
             // eta² Jacobian: solid angle compression when refracting between media
-            throughput *= select(albedo, albedo * eta * eta, didRefract);
+            let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission);
+            throughput *= select(glassTint, glassTint * eta * eta, didRefract);
             afterTransmission = true;
             ray.dir = wi_t;
             continue;
@@ -1465,14 +1495,15 @@ static std::vector<unsigned char> buildAtlas(
     return atlas;
 }
 
-static std::tuple<Color, float, float, Color, float, float> extractMaterial(const Material* mat) {
+static std::tuple<Color, float, float, Color, float, float, float> extractMaterial(const Material* mat) {
     Color albedo(0.8f, 0.8f, 0.8f);
     float shininess = 8.f;
     float metalness = 0.f;
     Color emissive(0.f, 0.f, 0.f);
     float transmission = 0.f;
     float ior = 1.5f;
-    if (!mat) return {albedo, shininess, metalness, emissive, transmission, ior};
+    float alphaTest = 0.f;
+    if (!mat) return {albedo, shininess, metalness, emissive, transmission, ior, alphaTest};
     if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
         albedo = c->color;
     if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
@@ -1492,7 +1523,8 @@ static std::tuple<Color, float, float, Color, float, float> extractMaterial(cons
         transmission = std::clamp(t->transmission, 0.f, 1.f);
         ior = std::max(1.f, t->ior);
     }
-    return {albedo, shininess, metalness, emissive, transmission, ior};
+    alphaTest = mat->alphaTest;
+    return {albedo, shininess, metalness, emissive, transmission, ior, alphaTest};
 }
 
 static int buildGeometryBuffers(
@@ -1501,7 +1533,8 @@ static int buildGeometryBuffers(
         std::vector<float>& triBuffer,
         std::vector<float>& matBuffer,
         std::vector<float>& rawObjTriBuf,
-        std::vector<float>& matrixBuf) {
+        std::vector<float>& matrixBuf,
+        float emissiveScale) {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
     std::ranges::fill(rawObjTriBuf, 0.f);
@@ -1533,7 +1566,7 @@ static int buildGeometryBuffers(
     for (auto& mesh : meshes) {
         if (triCount >= MAX_TRIS || matCount >= MAX_MATS) break;
 
-        auto [albedo, shininess, metalness, emissive, transmission, ior] = extractMaterial(mesh->material().get());
+        auto [albedo, shininess, metalness, emissive, transmission, ior, alphaTest] = extractMaterial(mesh->material().get());
         setTexel(matBuffer, MAX_MATS, matCount, 0,
                  albedo.r, albedo.g, albedo.b, shininess);
 
@@ -1571,8 +1604,9 @@ static int buildGeometryBuffers(
             }
         }
         setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, metalness, normalSlot, roughSlot);
-        setTexel(matBuffer, MAX_MATS, matCount, 2, emissive.r, emissive.g, emissive.b, transmission);
-        setTexel(matBuffer, MAX_MATS, matCount, 3, ior, 0.f, 0.f, 0.f);
+        setTexel(matBuffer, MAX_MATS, matCount, 2,
+                emissive.r * emissiveScale, emissive.g * emissiveScale, emissive.b * emissiveScale, transmission);
+        setTexel(matBuffer, MAX_MATS, matCount, 3, ior, alphaTest, 0.f, 0.f);
 
         const int matIdx = matCount++;
         const int meshIdx = matIdx;
@@ -1938,6 +1972,7 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer  atrousUniBuf;
     bool denoiserEnabled_ = true;
     float envIntensity_ = 1.0f;
+    float emissiveScale_ = 1.0f;
     int maxBounces_ = 8;
     float exposure_ = 1.0f;
     float ambientFactor_ = 0.03f;
@@ -2354,7 +2389,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Three-tier geometry update
     if (topoChanged) {
         d.triCount_ = buildGeometryBuffers(rtMeshes, d.texSlotMap, d.triBuffer, d.matBuffer,
-                                            d.rawObjTriBuf, d.matrixCpuBuf);
+                                            d.rawObjTriBuf, d.matrixCpuBuf, d.emissiveScale_);
         buildBVH(d.triBuffer, d.triCount_, d.bvhNodes, d.bvhIndices, d.leafIndices, d.rawObjTriBuf);
         d.numBvhNodes_ = static_cast<int>(d.bvhNodes.size());
         packBvhNodeBuffer(d.bvhNodes, d.bvhNodeCpuBuf);
@@ -2805,6 +2840,15 @@ float WgpuPathTracer::envIntensity() const {
     return pimpl_->envIntensity_;
 }
 
+void WgpuPathTracer::setEmissiveScale(float scale) {
+    pimpl_->emissiveScale_ = scale;
+    pimpl_->prevMeshes.clear();
+}
+
+float WgpuPathTracer::emissiveScale() const {
+    return pimpl_->emissiveScale_;
+}
+
 void WgpuPathTracer::setMaxBounces(int bounces) {
     bounces = std::max(1, std::min(bounces, 32));
     if (pimpl_->maxBounces_ != bounces) {
@@ -2891,6 +2935,10 @@ void WgpuPathTracer::setOverlayLayer(int channel) {
 
 int WgpuPathTracer::overlayLayer() const {
     return pimpl_->overlayLayer_;
+}
+
+void WgpuPathTracer::markDirty() {
+    pimpl_->prevMeshes.clear();
 }
 
 void WgpuPathTracer::dispose() {
