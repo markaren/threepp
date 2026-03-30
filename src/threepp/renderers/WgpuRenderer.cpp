@@ -189,6 +189,7 @@ struct WgpuRenderer::Impl {
 
     WindowSize size_;
     float pixelRatio_ = 1.0f;
+    float uniformPad_ = 1.0f;  // written to transformData[63] (_pad), used by path tracer display shader
     Color clearColor_{0x000000};
     float clearAlpha_ = 1.0f;
 
@@ -1826,7 +1827,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         transformData[60] = camPos.x;
         transformData[61] = camPos.y;
         transformData[62] = camPos.z;
-        transformData[63] = 0;
+        transformData[63] = uniformPad_;
 
         constexpr auto kUniformUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
         WGPUBuffer perDrawTransformBuf = bufferPool->acquire(wgpu::TRANSFORM_UNIFORM_SIZE, kUniformUsage, transformData);
@@ -2195,7 +2196,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         transformData[60] = camPos.x;
         transformData[61] = camPos.y;
         transformData[62] = camPos.z;
-        transformData[63] = 0;
+        transformData[63] = uniformPad_;
 
         // Per-draw transform buffer — must be a unique buffer per draw call because it
         // contains the view and projection matrices (camera-dependent data).  A persistent
@@ -2594,6 +2595,10 @@ float WgpuRenderer::getTargetPixelRatio() const {
 void WgpuRenderer::setPixelRatio(float value) {
     pimpl_->pixelRatio_ = value;
     setSize({pimpl_->size_.width(), pimpl_->size_.height()});
+}
+
+void WgpuRenderer::setPixelRatioHint(float value) {
+    pimpl_->uniformPad_ = value;
 }
 
 void WgpuRenderer::setViewport(const Vector4& v) {

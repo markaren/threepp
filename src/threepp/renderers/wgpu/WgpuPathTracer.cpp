@@ -27,6 +27,7 @@
 #include <cmath>
 #include <iostream>
 #include <cstring>
+#include <future>
 #include <numeric>
 #include <unordered_map>
 #include <unordered_set>
@@ -482,10 +483,34 @@ fn makeRay(px: vec2<f32>, res: vec2<f32>) -> Ray {
     return ray;
 }
 
+fn hemisphereAmbient(n: vec3<f32>) -> vec3<f32> {
+    // Sample environment in 6 fixed hemisphere directions around the normal
+    // for cheap but decent ambient/indirect approximation.
+    let nt = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(n.y) < 0.99);
+    let T  = normalize(cross(n, nt));
+    let B  = cross(n, T);
+    // 6 directions: normal, 4 tilted 60° around normal, and one at 45°
+    var acc = sampleEnv(n);                                          // straight up
+    acc += sampleEnv(normalize(n + T * 0.866));                      // 60° tilt
+    acc += sampleEnv(normalize(n - T * 0.866));
+    acc += sampleEnv(normalize(n + B * 0.866));
+    acc += sampleEnv(normalize(n - B * 0.866));
+    acc += sampleEnv(normalize(n + T * 0.5 + B * 0.5));             // 45° diagonal
+    return acc / 6.0;
+}
+
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
-    var col = albedo * 0.02;
+    // Environment-based ambient: hemisphere average scaled by envIntensity
+    let ambient = hemisphereAmbient(h.normal) * rt.envIntensity.x;
+    let F0_a    = mix(vec3<f32>(0.04), albedo, h.metalness);
+    let NdotV_a = max(0.001, dot(h.normal, normalize(-rd)));
+    let F_a     = schlick(NdotV_a, F0_a);
+    // Diffuse ambient (non-metals) + specular ambient (Fresnel-weighted env reflection)
+    let diffAmb = albedo * (vec3<f32>(1.0) - F_a) * (1.0 - h.metalness) * ambient;
+    let specAmb = F_a * sampleEnv(reflect(rd, h.normal)) * rt.envIntensity.x;
+    var col = diffAmb * 0.3 + specAmb * 0.15;
     let count = i32(rt.lightCount.x);
     let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
@@ -1385,7 +1410,12 @@ fn aces(x: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
-    let px  = vec2<i32>(fragPos.xy);
+    // _pad carries the renderer's pixelRatio (== path tracer pixelScale).
+    // Accum texture is at scaled resolution; screen is at full resolution.
+    // Map screen pixel → accum pixel by multiplying by the scale factor.
+    let pixScale  = max(transform._pad, 0.01);
+    let accumSize = vec2<i32>(textureDimensions(accumTex, 0));
+    let px  = clamp(vec2<i32>(fragPos.xy * pixScale), vec2<i32>(0), accumSize - 1);
     let col = textureLoad(accumTex, px, 0).xyz;
     let t   = textureLoad(gBufTex,  px, 0).w;
     let exposure = transform.cameraPos.z;
@@ -1519,16 +1549,37 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
         const int row = slot / ATLAS_COLS;
         const int destX = col * TILE_SIZE;
         const int destY = row * TILE_SIZE;
-        for (int ty = 0; ty < TILE_SIZE; ++ty) {
-            const int sy = ty * srcH / TILE_SIZE;
-            for (int tx = 0; tx < TILE_SIZE; ++tx) {
-                const int sx = tx * srcW / TILE_SIZE;
-                const int si = (sy * srcW + sx) * ch;
-                const int di = ((destY + ty) * atlasW + destX + tx) * 4;
-                atlas[di + 0] = src[si + 0];
-                atlas[di + 1] = src[si + 1];
-                atlas[di + 2] = src[si + 2];
-                atlas[di + 3] = ch == 4 ? src[si + 3] : 255u;
+
+        if (srcW == TILE_SIZE && srcH == TILE_SIZE && ch == 4) {
+            // Fast path: direct row memcpy when source matches tile dimensions and has 4 channels
+            for (int ty = 0; ty < TILE_SIZE; ++ty) {
+                const int di = ((destY + ty) * atlasW + destX) * 4;
+                const int si = ty * srcW * 4;
+                std::memcpy(atlas.data() + di, src.data() + si, TILE_SIZE * 4);
+            }
+        } else {
+            // Precompute X mapping table to avoid repeated division in inner loop
+            int xmap[TILE_SIZE];
+            for (int tx = 0; tx < TILE_SIZE; ++tx)
+                xmap[tx] = tx * srcW / TILE_SIZE;
+            for (int ty = 0; ty < TILE_SIZE; ++ty) {
+                const int sy = ty * srcH / TILE_SIZE;
+                const int srcRowOff = sy * srcW;
+                unsigned char* dst = atlas.data() + ((destY + ty) * atlasW + destX) * 4;
+                if (ch == 4) {
+                    for (int tx = 0; tx < TILE_SIZE; ++tx) {
+                        std::memcpy(dst + tx * 4, src.data() + (srcRowOff + xmap[tx]) * 4, 4);
+                    }
+                } else {
+                    for (int tx = 0; tx < TILE_SIZE; ++tx) {
+                        const int si = (srcRowOff + xmap[tx]) * ch;
+                        const int di = tx * 4;
+                        dst[di + 0] = src[si + 0];
+                        dst[di + 1] = src[si + 1];
+                        dst[di + 2] = src[si + 2];
+                        dst[di + 3] = ch >= 4 ? src[si + 3] : 255u;
+                    }
+                }
             }
         }
         texSlotMap[tex] = slot++;
@@ -2035,14 +2086,17 @@ struct WgpuPathTracer::Impl {
     WgpuComputePipeline atrousPipeline;
     WgpuBuffer  taaUniBuf;
     WgpuBuffer  atrousUniBuf;
-    bool denoiserEnabled_ = true;
+    bool denoiserEnabled_ = false;
     float envIntensity_ = 1.0f;
     float emissiveScale_ = 1.0f;
-    int maxBounces_ = 8;
+    int maxBounces_ = 6;
     float exposure_ = 1.0f;
     float ambientFactor_ = 0.03f;
     float movedPixelFC_ = 6.0f;
     float fireflyClamp_ = 10.0f;
+    float pixelScale_ = 1.0f;
+    int fullWidth_ = 0;   // unscaled window size
+    int fullHeight_ = 0;
 
     // Previous camera vectors for TAA reprojection
     float prevCamOri_[3] = {0.f, 0.f, 0.f};
@@ -2099,6 +2153,30 @@ struct WgpuPathTracer::Impl {
     std::vector<BvhNode> bvhNodes;
     std::vector<int> bvhIndices;
     std::vector<int> leafIndices;
+
+    // Async scene build result — CPU work done on background thread
+    struct AsyncBuildResult {
+        std::vector<unsigned char> atlasData;
+        int atlasRows = 0;
+        std::unordered_map<Texture*, int> texSlotMap;
+        std::vector<float> triBuffer;
+        std::vector<float> matBuffer;
+        std::vector<float> rawObjTriBuf;
+        std::vector<float> matrixCpuBuf;
+        std::vector<BvhNode> bvhNodes;
+        std::vector<int> bvhIndices;
+        std::vector<int> leafIndices;
+        std::vector<float> bvhNodeCpuBuf;
+        std::vector<float> emissiveTriCpu;
+        int triCount = 0;
+        int numBvhNodes = 0;
+        int emissiveTriCount = 0;
+        float emissiveTotalArea = 0.f;
+        float emissiveTotalPower = 0.f;
+        std::vector<Mesh*> meshes;  // snapshot of mesh list
+    };
+    std::future<AsyncBuildResult> asyncBuild_;
+    bool buildPending_ = false;
 
     // Frame state
     std::unordered_map<Texture*, int> texSlotMap;
@@ -2194,7 +2272,8 @@ struct WgpuPathTracer::Impl {
           matrixCpuBuf(static_cast<size_t>(MAX_MESHES) * 32, 0.f),
           bvhNodeCpuBuf(static_cast<size_t>(MAX_BVH_NODES) * 12, 0.f),
           bvhCounterZeros(MAX_BVH_NODES, 0u),
-          width_(w), height_(h) {
+          width_(w), height_(h),
+          fullWidth_(w), fullHeight_(h) {
 
         // Wire compute pipeline bindings
         vtPipeline.setStorageBufferRead(0, objTriBuf);
@@ -2415,19 +2494,122 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Detect topology change
     const bool topoChanged = (rtMeshes != d.prevMeshes);
 
-    if (topoChanged) {
-        d.texSlotMap.clear();
-        auto [atlasData, atlasRows] = buildAtlas(rtMeshes, d.texSlotMap);
-        if (atlasRows != d.atlasRows_) {
-            d.atlasRows_ = atlasRows;
+    // Kick off async build on background thread when topology changes
+    if (topoChanged && !d.buildPending_) {
+        d.buildPending_ = true;
+        d.prevMeshes = rtMeshes;
+
+        // Capture what we need for the background thread (CPU-only work)
+        auto meshes = rtMeshes;
+        float emissiveScale = d.emissiveScale_;
+        d.asyncBuild_ = std::async(std::launch::async, [meshes, emissiveScale]() {
+            Impl::AsyncBuildResult r;
+            r.meshes = meshes;
+            r.texSlotMap.clear();
+            auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
+            r.atlasData = std::move(atlasData);
+            r.atlasRows = atlasRows;
+
+            r.triBuffer.resize(TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * TRI_TEX_PAGES * 4, 0.f);
+            r.matBuffer.resize(MAX_MATS * MAT_TEX_HEIGHT * 4, 0.f);
+            r.rawObjTriBuf.resize(static_cast<size_t>(MAX_TRIS) * 32, 0.f);
+            r.matrixCpuBuf.resize(static_cast<size_t>(MAX_MESHES) * 32, 0.f);
+
+            r.triCount = buildGeometryBuffers(meshes, r.texSlotMap, r.triBuffer, r.matBuffer,
+                                               r.rawObjTriBuf, r.matrixCpuBuf, emissiveScale);
+            buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
+            r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
+            r.bvhNodeCpuBuf.resize(static_cast<size_t>(MAX_BVH_NODES) * 12, 0.f);
+            packBvhNodeBuffer(r.bvhNodes, r.bvhNodeCpuBuf);
+
+            // Collect emissive triangles
+            r.emissiveTriCount = 0;
+            r.emissiveTotalArea = 0.f;
+            r.emissiveTotalPower = 0.f;
+            for (int ti = 0; ti < r.triCount; ti++) {
+                const int matIdx = static_cast<int>(r.triBuffer[pagedIdx(ti, 0) + 3]);
+                const float er = r.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 0];
+                const float eg = r.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 1];
+                const float eb = r.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 2];
+                const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
+                if (luminance > 0.001f) {
+                    const float* v0p = r.triBuffer.data() + pagedIdx(ti, 0);
+                    const float* v1p = r.triBuffer.data() + pagedIdx(ti, 1);
+                    const float* v2p = r.triBuffer.data() + pagedIdx(ti, 2);
+                    Vector3 v0(v0p[0], v0p[1], v0p[2]);
+                    Vector3 v1(v1p[0], v1p[1], v1p[2]);
+                    Vector3 v2(v2p[0], v2p[1], v2p[2]);
+                    Vector3 cross;
+                    cross.crossVectors(v1 - v0, v2 - v0);
+                    const float area = cross.length() * 0.5f;
+                    if (area > 1e-8f) {
+                        const float power = area * luminance;
+                        r.emissiveTotalArea += area;
+                        r.emissiveTotalPower += power;
+                        r.emissiveTriCpu.push_back(static_cast<float>(ti));
+                        r.emissiveTriCpu.push_back(area);
+                        r.emissiveTriCpu.push_back(r.emissiveTotalPower);
+                        r.emissiveTriCpu.push_back(power);
+                        r.emissiveTriCount++;
+                    }
+                }
+            }
+            return r;
+        });
+    }
+
+    // Check if async build finished — upload results to GPU (must happen on main thread)
+    bool topoJustFinished = false;
+    if (d.buildPending_ && d.asyncBuild_.valid() &&
+        d.asyncBuild_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+
+        auto r = d.asyncBuild_.get();
+        d.buildPending_ = false;
+        topoJustFinished = true;
+
+        // Move CPU results into Impl
+        d.texSlotMap = std::move(r.texSlotMap);
+        d.triBuffer = std::move(r.triBuffer);
+        d.matBuffer = std::move(r.matBuffer);
+        d.rawObjTriBuf = std::move(r.rawObjTriBuf);
+        d.matrixCpuBuf = std::move(r.matrixCpuBuf);
+        d.bvhNodes = std::move(r.bvhNodes);
+        d.bvhIndices = std::move(r.bvhIndices);
+        d.leafIndices = std::move(r.leafIndices);
+        d.bvhNodeCpuBuf = std::move(r.bvhNodeCpuBuf);
+        d.emissiveTriCpu = std::move(r.emissiveTriCpu);
+        d.triCount_ = r.triCount;
+        d.numBvhNodes_ = r.numBvhNodes;
+        d.emissiveTriCount_ = r.emissiveTriCount;
+        d.emissiveTotalArea_ = r.emissiveTotalArea;
+        d.emissiveTotalPower_ = r.emissiveTotalPower;
+
+        // Upload atlas
+        if (r.atlasRows != d.atlasRows_) {
+            d.atlasRows_ = r.atlasRows;
             d.texAtlasTex = WgpuTexture(d.renderer,
-                    ATLAS_COLS * TILE_SIZE, atlasRows * TILE_SIZE,
+                    ATLAS_COLS * TILE_SIZE, r.atlasRows * TILE_SIZE,
                     WgpuTexture::Format::RGBA8Unorm,
                     WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
             d.rtPipeline.setTexture(6, d.texAtlasTex);
         }
-        d.texAtlasTex.write(atlasData.data(), atlasData.size());
-        d.prevMeshes = rtMeshes;
+        d.texAtlasTex.write(r.atlasData.data(), r.atlasData.size());
+
+        // Upload geometry + BVH
+        d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * 12 * sizeof(float));
+        d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 32 * sizeof(float));
+        d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
+        d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
+
+        if (d.emissiveTriCount_ > 0) {
+            d.emissiveTriBuf.write(d.emissiveTriCpu.data(),
+                                   d.emissiveTriCpu.size() * sizeof(float));
+        }
+    }
+
+    // While building, skip RT dispatch — just return so the window stays responsive
+    if (d.buildPending_) {
+        return;
     }
 
     scene.updateMatrixWorld();
@@ -2438,7 +2620,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     uint32_t movedBits[2] = {0u, 0u};
     bool anyMeshMoved = (d.prevMeshMatrices.size() != rtMeshes.size());
 
-    if (topoChanged) {
+    if (topoJustFinished) {
         // Topology change: all pixels need to re-accumulate (mesh-to-triangle mapping changed)
         movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
         anyMeshMoved = true;
@@ -2458,62 +2640,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.prevMeshMatrices.resize(rtMeshes.size());
     for (size_t i = 0; i < rtMeshes.size(); ++i)
         d.prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
-
-    // Three-tier geometry update
-    if (topoChanged) {
-        d.triCount_ = buildGeometryBuffers(rtMeshes, d.texSlotMap, d.triBuffer, d.matBuffer,
-                                            d.rawObjTriBuf, d.matrixCpuBuf, d.emissiveScale_);
-        buildBVH(d.triBuffer, d.triCount_, d.bvhNodes, d.bvhIndices, d.leafIndices, d.rawObjTriBuf);
-        d.numBvhNodes_ = static_cast<int>(d.bvhNodes.size());
-        packBvhNodeBuffer(d.bvhNodes, d.bvhNodeCpuBuf);
-        d.bvhNodeBuf.write(d.bvhNodeCpuBuf.data(), d.numBvhNodes_ * 12 * sizeof(float));
-        d.objTriBuf.write(d.rawObjTriBuf.data(), static_cast<size_t>(d.triCount_) * 32 * sizeof(float));
-        d.leafIndexBuf.write(d.leafIndices.data(), d.leafIndices.size() * sizeof(int));
-        d.matTex.write(d.matBuffer.data(), d.matBuffer.size() * sizeof(float));
-
-        // Collect emissive triangles for NEE sampling.
-        // triBuffer is already BVH-reordered, so triangle indices match GPU triData.
-        d.emissiveTriCpu.clear();
-        d.emissiveTriCount_ = 0;
-        d.emissiveTotalArea_ = 0.f;
-        d.emissiveTotalPower_ = 0.f;
-        for (int ti = 0; ti < d.triCount_; ti++) {
-            // matIdx is in row 0's .w component of triBuffer
-            const int matIdx = static_cast<int>(d.triBuffer[pagedIdx(ti, 0) + 3]);
-            // emissive color is in matBuffer row 2 (r,g,b)
-            const float er = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 0];
-            const float eg = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 1];
-            const float eb = d.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 2];
-            const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
-            if (luminance > 0.001f) {
-                // Get world-space vertices from triBuffer
-                const float* v0p = d.triBuffer.data() + pagedIdx(ti, 0);
-                const float* v1p = d.triBuffer.data() + pagedIdx(ti, 1);
-                const float* v2p = d.triBuffer.data() + pagedIdx(ti, 2);
-                Vector3 v0(v0p[0], v0p[1], v0p[2]);
-                Vector3 v1(v1p[0], v1p[1], v1p[2]);
-                Vector3 v2(v2p[0], v2p[1], v2p[2]);
-                Vector3 cross;
-                cross.crossVectors(v1 - v0, v2 - v0);
-                const float area = cross.length() * 0.5f;
-                if (area > 1e-8f) {
-                    const float power = area * luminance;
-                    d.emissiveTotalArea_ += area;
-                    d.emissiveTotalPower_ += power;
-                    d.emissiveTriCpu.push_back(static_cast<float>(ti));  // triIndex
-                    d.emissiveTriCpu.push_back(area);                    // individual area
-                    d.emissiveTriCpu.push_back(d.emissiveTotalPower_);   // cumulative power (CDF)
-                    d.emissiveTriCpu.push_back(power);                   // individual power
-                    d.emissiveTriCount_++;
-                }
-            }
-        }
-        if (d.emissiveTriCount_ > 0) {
-            d.emissiveTriBuf.write(d.emissiveTriCpu.data(),
-                                   d.emissiveTriCpu.size() * sizeof(float));
-        }
-        anyMeshMoved = true;
-    }
     if (anyMeshMoved) {
         if (!topoChanged) {
             std::ranges::fill(d.matrixCpuBuf, 0.f);
@@ -2987,11 +3113,32 @@ int WgpuPathTracer::samplesPerPixel() const {
 }
 
 void WgpuPathTracer::setSize(std::pair<int, int> size) {
-    pimpl_->recreateAccumTextures(size.first, size.second);
+    pimpl_->fullWidth_ = size.first;
+    pimpl_->fullHeight_ = size.second;
+    const int sw = std::max(1, static_cast<int>(size.first * pimpl_->pixelScale_));
+    const int sh = std::max(1, static_cast<int>(size.second * pimpl_->pixelScale_));
+    pimpl_->recreateAccumTextures(sw, sh);
 }
 
 std::pair<int, int> WgpuPathTracer::size() const {
-    return {pimpl_->width_, pimpl_->height_};
+    return {pimpl_->fullWidth_, pimpl_->fullHeight_};
+}
+
+void WgpuPathTracer::setPixelScale(float scale) {
+    scale = std::clamp(scale, 0.1f, 2.0f);
+    if (scale == pimpl_->pixelScale_) return;
+    pimpl_->pixelScale_ = scale;
+    // Set renderer hint so the display shader reads pixelScale from transform._pad
+    pimpl_->renderer.setPixelRatioHint(scale);
+    if (pimpl_->fullWidth_ > 0 && pimpl_->fullHeight_ > 0) {
+        const int sw = std::max(1, static_cast<int>(pimpl_->fullWidth_ * scale));
+        const int sh = std::max(1, static_cast<int>(pimpl_->fullHeight_ * scale));
+        pimpl_->recreateAccumTextures(sw, sh);
+    }
+}
+
+float WgpuPathTracer::pixelScale() const {
+    return pimpl_->pixelScale_;
 }
 
 int WgpuPathTracer::frameCount() const {

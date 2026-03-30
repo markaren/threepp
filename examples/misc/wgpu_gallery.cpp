@@ -360,6 +360,7 @@ int main() {
     float ambientFactor = pathTracer.ambientFactor();
     float fireflyClamp = pathTracer.fireflyClamp();
 
+    float pixelScale = pathTracer.pixelScale();
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;
@@ -393,6 +394,8 @@ int main() {
         if (renderMode == 0 || renderMode == 1) {
             if (ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f))
                 pathTracer.setExposure(exposure);
+            if (ImGui::SliderFloat("Pixel Scale", &pixelScale, 0.25f, 2.0f, "%.2f"))
+                pathTracer.setPixelScale(pixelScale);
         }
 
         if (renderMode == 1 && ImGui::CollapsingHeader("Path Tracer", ImGuiTreeNodeFlags_DefaultOpen)) {

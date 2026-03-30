@@ -39,6 +39,11 @@ namespace threepp {
         [[nodiscard]] float getTargetPixelRatio() const override;
         void setPixelRatio(float value) override;
 
+        /// Set the pixel-ratio value that appears in shader uniforms (_pad field)
+        /// WITHOUT reconfiguring the surface. Use when you need shaders to see a
+        /// scale factor but want the surface to stay at its current resolution.
+        void setPixelRatioHint(float value);
+
         void setViewport(const Vector4& v) override;
         void setViewport(int x, int y, int width, int height) override;
         void getViewport(Vector4& target) const;

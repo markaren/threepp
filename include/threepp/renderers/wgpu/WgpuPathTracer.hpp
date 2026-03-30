@@ -82,6 +82,11 @@ namespace threepp {
         void setSize(std::pair<int, int> size);
         [[nodiscard]] std::pair<int, int> size() const;
 
+        /// Render resolution scale factor. Default: 1.0 (native).
+        /// Set < 1.0 to render at lower resolution for higher FPS (e.g. 0.5 = half res).
+        void setPixelScale(float scale);
+        [[nodiscard]] float pixelScale() const;
+
         [[nodiscard]] int frameCount() const;
         void resetAccumulation();
 
