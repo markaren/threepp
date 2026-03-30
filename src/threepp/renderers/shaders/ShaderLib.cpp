@@ -80,7 +80,7 @@ ShaderLib::ShaderLib()
                                       }
                               }),// clang-format on
 
-              ShaderChunk::instance().meshphong_vert(),
+              ShaderChunk::instance().meshphysical_vert(),
               ShaderChunk::instance().meshphysical_frag()},
       toon{
               mergeUniforms({// clang-format off

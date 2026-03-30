@@ -500,7 +500,6 @@ void GLUniforms::upload(std::vector<UniformObject*>& seq, UniformMap& values, GL
 
         if (!v.needsUpdate || (v.needsUpdate && v.needsUpdate.value())) {
 
-            // note: always updating when .needsUpdate is undefined
             u->setValue(v.value(), textures);
         }
     }

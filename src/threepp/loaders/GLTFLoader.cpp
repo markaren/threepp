@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <threepp/loaders/ImageLoader.hpp>
+#include <threepp/materials/MeshPhysicalMaterial.hpp>
 #include <threepp/objects/Bone.hpp>
 #include <threepp/objects/Skeleton.hpp>
 #include <threepp/objects/SkinnedMesh.hpp>
@@ -436,7 +437,26 @@ namespace threepp {
                 if (it != materialCache.end()) return it->second;
 
                 const auto& matDef = gltf["materials"][matIdx];
-                auto mat = MeshStandardMaterial::create();
+
+                // Check if we need MeshPhysicalMaterial (for transmission, clearcoat, etc.)
+                bool needsPhysical = false;
+                if (matDef.contains("extensions")) {
+                    const auto& ext = matDef["extensions"];
+                    if (ext.contains("KHR_materials_transmission") ||
+                        ext.contains("KHR_materials_clearcoat") ||
+                        ext.contains("KHR_materials_ior")) {
+                        needsPhysical = true;
+                    }
+                }
+
+                std::shared_ptr<MeshStandardMaterial> mat;
+                std::shared_ptr<MeshPhysicalMaterial> physMat;
+                if (needsPhysical) {
+                    physMat = MeshPhysicalMaterial::create();
+                    mat = physMat;
+                } else {
+                    mat = MeshStandardMaterial::create();
+                }
                 mat->name = matDef.value("name", "");
 
                 // PBR Metallic-Roughness
@@ -505,6 +525,48 @@ namespace threepp {
                 // Double-sided
                 if (matDef.value("doubleSided", false)) {
                     mat->side = Side::Double;
+                }
+
+                // Extensions (MeshPhysicalMaterial properties)
+                if (physMat && matDef.contains("extensions")) {
+                    const auto& ext = matDef["extensions"];
+
+                    // KHR_materials_transmission
+                    if (ext.contains("KHR_materials_transmission")) {
+                        const auto& tr = ext["KHR_materials_transmission"];
+                        physMat->transmission = tr.value("transmissionFactor", 0.0f);
+                        if (tr.contains("transmissionTexture")) {
+                            int ti = tr["transmissionTexture"]["index"].get<int>();
+                            physMat->transmissionMap = loadTexture(ti);
+                        }
+                    }
+
+                    // KHR_materials_ior
+                    if (ext.contains("KHR_materials_ior")) {
+                        const auto& iorExt = ext["KHR_materials_ior"];
+                        physMat->setIor(iorExt.value("ior", 1.5f));
+                    }
+
+                    // KHR_materials_clearcoat
+                    if (ext.contains("KHR_materials_clearcoat")) {
+                        const auto& cc = ext["KHR_materials_clearcoat"];
+                        physMat->clearcoat = cc.value("clearcoatFactor", 0.0f);
+                        if (cc.contains("clearcoatTexture")) {
+                            int ti = cc["clearcoatTexture"]["index"].get<int>();
+                            physMat->clearcoatMap = loadTexture(ti);
+                        }
+                        physMat->clearcoatRoughness = cc.value("clearcoatRoughnessFactor", 0.0f);
+                        if (cc.contains("clearcoatRoughnessTexture")) {
+                            int ti = cc["clearcoatRoughnessTexture"]["index"].get<int>();
+                            physMat->clearcoatRoughnessMap = loadTexture(ti);
+                        }
+                        if (cc.contains("clearcoatNormalTexture")) {
+                            int ti = cc["clearcoatNormalTexture"]["index"].get<int>();
+                            physMat->clearcoatNormalMap = loadTexture(ti);
+                            float scale = cc["clearcoatNormalTexture"].value("scale", 1.0f);
+                            physMat->clearcoatNormalScale = Vector2{scale, scale};
+                        }
+                    }
                 }
 
                 materialCache[matIdx] = mat;

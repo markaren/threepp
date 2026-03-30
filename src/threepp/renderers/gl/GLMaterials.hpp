@@ -8,6 +8,12 @@
 #include "threepp/core/Uniform.hpp"
 #include "threepp/scenes/Scene.hpp"
 
+namespace threepp {
+
+    class GLRenderTarget;
+
+}
+
 namespace threepp::gl {
 
     class GLProperties;
@@ -18,7 +24,7 @@ namespace threepp::gl {
 
         void refreshFogUniforms(UniformMap& uniforms, FogVariant& fog);
 
-        void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height);
+        void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, GLRenderTarget* transmissionRenderTarget = nullptr);
 
         ~GLMaterials();
 

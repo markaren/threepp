@@ -1,6 +1,8 @@
 
 #include "threepp/renderers/gl/GLRenderLists.hpp"
 
+#include "threepp/materials/interfaces.hpp"
+
 #include <algorithm>
 #include <memory>
 
@@ -52,6 +54,7 @@ void gl::GLRenderList::init() {
     renderItemsIndex = 0;
 
     opaque.clear();
+    transmissive.clear();
     transparent.clear();
 }
 
@@ -107,7 +110,12 @@ void gl::GLRenderList::push(
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
-    if (material->transparent) {
+    auto transmissionMaterial = dynamic_cast<MaterialWithTransmission*>(material);
+    if (transmissionMaterial && transmissionMaterial->transmission > 0.f) {
+
+        transmissive.emplace_back(renderItem);
+
+    } else if (material->transparent) {
 
         transparent.emplace_back(renderItem);
 
@@ -125,7 +133,12 @@ void GLRenderList::unshift(
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
-    if (material->transparent) {
+    auto transmissionMaterial = dynamic_cast<MaterialWithTransmission*>(material);
+    if (transmissionMaterial && transmissionMaterial->transmission > 0.f) {
+
+        transmissive.insert(transmissive.begin(), renderItem);
+
+    } else if (material->transparent) {
 
         transparent.insert(transparent.begin(), renderItem);
 
@@ -138,6 +151,7 @@ void GLRenderList::unshift(
 void GLRenderList::sort() {
 
     if (opaque.size() > 1) std::stable_sort(opaque.begin(), opaque.end(), painterSortStable);
+    if (transmissive.size() > 1) std::stable_sort(transmissive.begin(), transmissive.end(), reversePainterSortStable);
     if (transparent.size() > 1) std::stable_sort(transparent.begin(), transparent.end(), reversePainterSortStable);
 }
 

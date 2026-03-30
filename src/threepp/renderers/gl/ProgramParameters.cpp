@@ -54,7 +54,9 @@ ProgramParameters::ProgramParameters(
     auto sheenMaterial = dynamic_cast<MaterialWithSheen*>(material);
     auto shaderMaterial = dynamic_cast<ShaderMaterial*>(material);
     auto definesMaterial = dynamic_cast<MaterialWithDefines*>(material);
-    // auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
+    auto thicknessMaterial = dynamic_cast<MaterialWithThickness*>(material);
+    auto clearcoatMaterial = dynamic_cast<MaterialWithClearcoat*>(material);
+    auto transmissionMaterial = dynamic_cast<MaterialWithTransmission*>(material);
     auto roughnessMaterial = dynamic_cast<MaterialWithRoughness*>(material);
     auto metallnessMaterial = dynamic_cast<MaterialWithMetalness*>(material);
 
@@ -113,9 +115,9 @@ ProgramParameters::ProgramParameters(
     normalMap = normalMaterial && normalMaterial->normalMap;
     objectSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == NormalMapType::ObjectSpace;
     tangentSpaceNormalMap = normalMaterial && normalMaterial->normalMapType == NormalMapType::TangentSpace;
-    clearcoatMap = false;         //TODO
-    clearcoatRoughnessMap = false;//TODO
-    clearcoatNormalMap = false;   //TODO
+    clearcoatMap = clearcoatMaterial && clearcoatMaterial->clearcoatMap;
+    clearcoatRoughnessMap = clearcoatMaterial && clearcoatMaterial->clearcoatRoughnessMap;
+    clearcoatNormalMap = clearcoatMaterial && clearcoatMaterial->clearcoatNormalMap;
     displacementMap = displacementMapMaterial && displacementMapMaterial->displacementMap;
     roughnessMap = roughnessMaterial && roughnessMaterial->roughnessMap;
     metalnessMap = metallnessMaterial && metallnessMaterial->metalnessMap;
@@ -128,9 +130,9 @@ ProgramParameters::ProgramParameters(
         sheen = sheenMaterial->sheen;
     }
 
-    transmission = false;   //TODO
-    transmissionMap = false;//TODO
-    thicknessMap = false;   //TODO
+    transmission = transmissionMaterial && transmissionMaterial->transmission > 0;
+    transmissionMap = transmissionMaterial && transmissionMaterial->transmissionMap;
+    thicknessMap = thicknessMaterial && thicknessMaterial->thicknessMap;
 
     if (combineMaterial) {
         combine = combineMaterial->combine;
