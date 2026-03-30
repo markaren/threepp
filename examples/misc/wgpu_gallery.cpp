@@ -40,7 +40,7 @@ namespace {
     }
 
     auto matGlass(Color tint = Color::white) {
-        return MeshStandardMaterial::create({
+        return MeshPhysicalMaterial::create({
                 {"color", tint},
                 {"transmission", 0.95f},
                 {"ior", 1.5f},

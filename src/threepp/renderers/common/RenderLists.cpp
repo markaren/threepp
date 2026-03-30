@@ -1,6 +1,8 @@
 
 #include "RenderLists.hpp"
 
+#include "threepp/materials/interfaces.hpp"
+
 #include <algorithm>
 #include <memory>
 
@@ -10,7 +12,7 @@ namespace {
 
     struct {
 
-        bool operator()(const RenderItem* a, const RenderItem* b) {
+        bool operator()(const RenderItem* a, const RenderItem* b) const {
             if (a->groupOrder != b->groupOrder) {
                 return a->groupOrder < b->groupOrder;
             } else if (a->renderOrder != b->renderOrder) {
@@ -28,7 +30,7 @@ namespace {
     } painterSortStable;
 
     struct {
-        bool operator()(const RenderItem* a, const RenderItem* b) {
+        bool operator()(const RenderItem* a, const RenderItem* b) const {
 
             if (a->groupOrder != b->groupOrder) {
                 return a->groupOrder < b->groupOrder;
@@ -51,6 +53,7 @@ void RenderList::init() {
     renderItemsIndex = 0;
 
     opaque.clear();
+    transmissive.clear();
     transparent.clear();
 }
 
@@ -105,7 +108,12 @@ void RenderList::push(
 
     auto renderItem = getNextRenderItem(object, geometry, material, groupOrder, z, group);
 
-    if (material->transparent) {
+    auto transmissionMaterial = dynamic_cast<MaterialWithTransmission*>(material);
+    if (transmissionMaterial && transmissionMaterial->transmission > 0.f) {
+
+        transmissive.insert(transmissive.begin(), renderItem);
+
+    } else if (material->transparent) {
 
         transparent.emplace_back(renderItem);
 
@@ -136,6 +144,7 @@ void RenderList::unshift(
 void RenderList::sort() {
 
     if (opaque.size() > 1) std::stable_sort(opaque.begin(), opaque.end(), painterSortStable);
+    if (transmissive.size() > 1) std::stable_sort(transmissive.begin(), transmissive.end(), reversePainterSortStable);
     if (transparent.size() > 1) std::stable_sort(transparent.begin(), transparent.end(), reversePainterSortStable);
 }
 

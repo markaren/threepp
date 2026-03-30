@@ -20,13 +20,9 @@ namespace threepp {
     public:
         [[nodiscard]] std::string type() const override;
 
-        [[nodiscard]] float ior() const {
-
-            return (1.f + 0.4f * reflectivity) / (1.f - 0.4f * reflectivity);
-        }
-
         void setIor(float value) {
 
+            MaterialWithTransmission::ior = std::max(1.f, value);
             reflectivity = std::clamp(2.5f * (value - 1.f) / (value + 1.f), 0.f, 1.f);
         }
 

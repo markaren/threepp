@@ -198,6 +198,7 @@ namespace threepp {
     struct MaterialWithTransmission: virtual Material {
 
         float transmission = 0;
+        float ior = 1.5f;
         std::shared_ptr<Texture> transmissionMap;
     };
 

@@ -142,7 +142,7 @@ struct GLRenderer::Impl {
     gl::GLCubeMaps cubemaps;
     gl::GLBackground background;
 
-    std::unique_ptr<GLRenderTarget> _transmissionRenderTarget;
+    std::unique_ptr<RenderTarget> _transmissionRenderTarget;
 
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
@@ -589,14 +589,14 @@ struct GLRenderer::Impl {
 
         if (!_transmissionRenderTarget) {
 
-            GLRenderTarget::Options options;
+            RenderTarget::Options options;
             options.generateMipmaps = true;
             options.minFilter = Filter::LinearMipmapLinear;
             options.magFilter = Filter::Nearest;
             options.wrapS = TextureWrapping::ClampToEdge;
             options.wrapT = TextureWrapping::ClampToEdge;
 
-            _transmissionRenderTarget = GLRenderTarget::create(1024*2, 1024*2, options);
+            _transmissionRenderTarget = RenderTarget::create(1024*2, 1024*2, options);
         }
 
         auto currentRenderTarget = _currentRenderTarget;

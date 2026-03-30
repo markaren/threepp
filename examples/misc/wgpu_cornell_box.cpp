@@ -97,7 +97,7 @@ namespace {
 
     // Glass sphere on the floor
     auto makeGlassSphere() {
-        auto mat = MeshStandardMaterial::create({
+        auto mat = MeshPhysicalMaterial::create({
                 {"color", Color::white},
                 {"transmission", 0.95f},
                 {"ior", 1.5f},

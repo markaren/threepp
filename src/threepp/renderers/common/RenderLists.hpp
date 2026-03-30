@@ -36,6 +36,7 @@ namespace threepp {
     struct RenderList {
 
         std::vector<RenderItem*> opaque;
+        std::vector<RenderItem*> transmissive;
         std::vector<RenderItem*> transparent;
 
         std::vector<std::unique_ptr<RenderItem>> renderItems;

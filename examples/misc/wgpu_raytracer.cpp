@@ -54,7 +54,7 @@ int main() {
 
     auto glassSphere = Mesh::create(
             SphereGeometry::create(0.45f, 32, 32),
-            MeshStandardMaterial::create({{"color", Color::pink},
+            MeshPhysicalMaterial::create({{"color", Color::pink},
                                           {"transmission", 0.8f},
                                           {"ior", 1.5f},
                                           {"roughness", 0.1f},
