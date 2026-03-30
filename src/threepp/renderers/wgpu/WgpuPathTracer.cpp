@@ -46,7 +46,7 @@ constexpr int MAX_TEX_SLOTS = 64;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
 constexpr int TRI_TEX_HEIGHT = 8;
-constexpr int MAT_TEX_HEIGHT = 4;
+constexpr int MAT_TEX_HEIGHT = 5;
 constexpr int TEX_PAGE_WIDTH = 8192;
 constexpr int TRI_TEX_PAGES = (MAX_TRIS + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
 constexpr int MAX_MESHES = 64;
@@ -125,6 +125,8 @@ struct Hit  {
     transmission: f32,
     ior:          f32,
     frontFace:    f32,
+    attenuationColor: vec3<f32>,
+    attenuationDist:  f32,
 }
 
 fn pcg(v: u32) -> u32 {
@@ -426,10 +428,14 @@ fn testTriangle(ray: Ray, ti: i32, h: ptr<function, Hit>) {
     (*h).ior          = mat3.x;
     (*h).frontFace    = select(0.0, 1.0, isFrontFace);
     (*h).meshIdx      = i32(r1.w);
+    // Row 4: attenuationColor.rgb + attenuationDistance
+    let mat4 = textureLoad(matData, vec2<i32>(matIdx, 4), 0);
+    (*h).attenuationColor = mat4.xyz;
+    (*h).attenuationDist  = mat4.w;
 }
 
 fn sceneHit(ray: Ray) -> Hit {
-    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0);
+    var h: Hit; h.t = 1e30; h.meshIdx = -1; h.transmission = 0.0; h.ior = 1.5; h.frontFace = 1.0; h.geoNormal = vec3<f32>(0.0); h.attenuationColor = vec3<f32>(1.0); h.attenuationDist = 0.0;
     var stack: array<i32, 64>;
     var top: i32 = 0;
     stack[0] = 0; top = 1;
@@ -547,6 +553,12 @@ fn raytrace(ray: Ray) -> vec3<f32> {
             rr.dir    = refDir;
             let hr = sceneHit(rr);
             if (hr.t >= 1e30) { return sampleEnv(rr.dir) * glassTint; }
+            // Beer's law attenuation through the medium
+            var volAtten = vec3<f32>(1.0);
+            if (h0.attenuationDist > 0.0) {
+                let absorbCoeff = -log(max(h0.attenuationColor, vec3<f32>(1e-6))) / h0.attenuationDist;
+                volAtten = exp(-absorbCoeff * hr.t);
+            }
             // Second refraction (exit surface)
             let exitEnter = hr.frontFace > 0.5;
             let eta2 = select(hr.ior, 1.0 / hr.ior, exitEnter);
@@ -556,10 +568,10 @@ fn raytrace(ray: Ray) -> vec3<f32> {
                 rr2.origin = hr.point - hr.normal * 1e-3;
                 rr2.dir    = refDir2;
                 let hr2 = sceneHit(rr2);
-                if (hr2.t >= 1e30) { return sampleEnv(rr2.dir) * glassTint; }
-                return shade(hr2, rr2.dir) * glassTint;
+                if (hr2.t >= 1e30) { return sampleEnv(rr2.dir) * glassTint * volAtten; }
+                return shade(hr2, rr2.dir) * glassTint * volAtten;
             }
-            return shade(hr, rr.dir) * glassTint;
+            return shade(hr, rr.dir) * glassTint * volAtten;
         }
     }
 
@@ -815,11 +827,12 @@ R"(
 
             // Perturb normal by roughness (frosted glass)
             var tNorm = h.normal;
+            var usedMicrofacet = false;
             if (h.shininess > 1e-3) {
                 let wo_t = normalize(-ray.dir);
                 let hm = sampleVNDF(wo_t, h.normal, h.shininess, seed);
                 // Only use microfacet normal if it's in the same hemisphere
-                if (dot(hm, h.normal) > 0.0) { tNorm = hm; }
+                if (dot(hm, h.normal) > 0.0) { tNorm = hm; usedMicrofacet = true; }
             }
 
             // Dielectric Fresnel (Schlick approximation)
@@ -846,9 +859,23 @@ R"(
                     didRefract = true;
                 }
             }
+            // G1 masking-shadowing for microfacet transmission (energy conservation)
+            // VNDF importance sampling cancels G1(wo) from the PDF, leaving G1(wi).
+            var microWeight = 1.0;
+            if (usedMicrofacet) {
+                let cosOut = abs(dot(wi_t, h.normal));
+                microWeight = ggxG1(cosOut, h.shininess);
+            }
             // eta² Jacobian: solid angle compression when refracting between media
-            let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission);
-            throughput *= select(glassTint, glassTint * eta * eta, didRefract);
+            let glassTint = mix(albedo, vec3<f32>(1.0), h.transmission) * microWeight;
+            var volAtten = vec3<f32>(1.0);
+            // Beer's law volume attenuation: colored absorption over distance
+            if (didRefract && h.attenuationDist > 0.0 && !entering) {
+                // We're exiting the medium — apply attenuation based on path length
+                let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
+                volAtten = exp(-absorbCoeff * h.t);
+            }
+            throughput *= select(glassTint * volAtten, glassTint * volAtten * eta * eta, didRefract);
             afterTransmission = true;
             ray.dir = wi_t;
             continue;
@@ -1520,36 +1547,46 @@ static std::pair<std::vector<unsigned char>, int> buildAtlas(
     return {std::move(atlas), rows};
 }
 
-static std::tuple<Color, float, float, Color, float, float, float> extractMaterial(const Material* mat) {
-    Color albedo(0.8f, 0.8f, 0.8f);
+struct ExtractedMaterial {
+    Color albedo{0.8f, 0.8f, 0.8f};
     float shininess = 8.f;
     float metalness = 0.f;
-    Color emissive(0.f, 0.f, 0.f);
+    Color emissive{0.f, 0.f, 0.f};
     float transmission = 0.f;
     float ior = 1.5f;
     float alphaTest = 0.f;
-    if (!mat) return {albedo, shininess, metalness, emissive, transmission, ior, alphaTest};
+    Color attenuationColor{1.f, 1.f, 1.f};
+    float attenuationDistance = 0.f;
+};
+
+static ExtractedMaterial extractMaterial(const Material* mat) {
+    ExtractedMaterial m;
+    if (!mat) return m;
     if (auto* c = dynamic_cast<const MaterialWithColor*>(mat))
-        albedo = c->color;
+        m.albedo = c->color;
     if (auto* r = dynamic_cast<const MaterialWithRoughness*>(mat)) {
         const float rough = std::max(0.f, std::min(1.f, r->roughness));
-        shininess = std::max(1e-4f, rough * rough);
+        m.shininess = std::max(1e-4f, rough * rough);
     } else if (auto* s = dynamic_cast<const MaterialWithSpecular*>(mat)) {
         const float n = std::max(1.f, s->shininess);
-        shininess = std::max(0.04f, std::sqrt(2.f / (n + 2.f)));
+        m.shininess = std::max(0.04f, std::sqrt(2.f / (n + 2.f)));
     }
-    if (auto* m = dynamic_cast<const MaterialWithMetalness*>(mat))
-        metalness = std::max(0.f, std::min(1.f, m->metalness));
+    if (auto* mm = dynamic_cast<const MaterialWithMetalness*>(mat))
+        m.metalness = std::max(0.f, std::min(1.f, mm->metalness));
     if (auto* e = dynamic_cast<const MaterialWithEmissive*>(mat))
-        emissive = Color(e->emissive.r * e->emissiveIntensity,
+        m.emissive = Color(e->emissive.r * e->emissiveIntensity,
                          e->emissive.g * e->emissiveIntensity,
                          e->emissive.b * e->emissiveIntensity);
     if (auto* t = dynamic_cast<const MaterialWithTransmission*>(mat)) {
-        transmission = std::clamp(t->transmission, 0.f, 1.f);
-        ior = std::max(1.f, t->ior);
+        m.transmission = std::clamp(t->transmission, 0.f, 1.f);
+        m.ior = std::max(1.f, t->ior);
     }
-    alphaTest = mat->alphaTest;
-    return {albedo, shininess, metalness, emissive, transmission, ior, alphaTest};
+    if (auto* a = dynamic_cast<const MaterialWithAttenuation*>(mat)) {
+        m.attenuationColor = a->attenuationColor;
+        m.attenuationDistance = std::max(0.f, a->attenuationDistance);
+    }
+    m.alphaTest = mat->alphaTest;
+    return m;
 }
 
 static int buildGeometryBuffers(
@@ -1591,9 +1628,9 @@ static int buildGeometryBuffers(
     for (auto& mesh : meshes) {
         if (triCount >= MAX_TRIS || matCount >= MAX_MATS) break;
 
-        auto [albedo, shininess, metalness, emissive, transmission, ior, alphaTest] = extractMaterial(mesh->material().get());
+        auto em = extractMaterial(mesh->material().get());
         setTexel(matBuffer, MAX_MATS, matCount, 0,
-                 albedo.r, albedo.g, albedo.b, shininess);
+                 em.albedo.r, em.albedo.g, em.albedo.b, em.shininess);
 
         float texSlot = -1.f;
         float normalSlot = -1.f;
@@ -1628,10 +1665,12 @@ static int buildGeometryBuffers(
                 }
             }
         }
-        setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, metalness, normalSlot, roughSlot);
+        setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, em.metalness, normalSlot, roughSlot);
         setTexel(matBuffer, MAX_MATS, matCount, 2,
-                emissive.r * emissiveScale, emissive.g * emissiveScale, emissive.b * emissiveScale, transmission);
-        setTexel(matBuffer, MAX_MATS, matCount, 3, ior, alphaTest, 0.f, 0.f);
+                em.emissive.r * emissiveScale, em.emissive.g * emissiveScale, em.emissive.b * emissiveScale, em.transmission);
+        setTexel(matBuffer, MAX_MATS, matCount, 3, em.ior, em.alphaTest, 0.f, 0.f);
+        setTexel(matBuffer, MAX_MATS, matCount, 4,
+                em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
 
         const int matIdx = matCount++;
         const int meshIdx = matIdx;
@@ -2367,11 +2406,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         rtMeshes.push_back(&m);
     });
     std::vector<PointLight*> pointLights;
-    scene.traverseType<PointLight>([&](PointLight& l) { pointLights.push_back(&l); });
+    scene.traverseType<PointLight>([&](PointLight& l) { if (l.visible) pointLights.push_back(&l); });
     std::vector<DirectionalLight*> dirLights;
-    scene.traverseType<DirectionalLight>([&](DirectionalLight& l) { dirLights.push_back(&l); });
+    scene.traverseType<DirectionalLight>([&](DirectionalLight& l) { if (l.visible) dirLights.push_back(&l); });
     std::vector<SpotLight*> spotLights;
-    scene.traverseType<SpotLight>([&](SpotLight& l) { spotLights.push_back(&l); });
+    scene.traverseType<SpotLight>([&](SpotLight& l) { if (l.visible) spotLights.push_back(&l); });
 
     // Detect topology change
     const bool topoChanged = (rtMeshes != d.prevMeshes);
