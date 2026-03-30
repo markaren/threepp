@@ -507,23 +507,6 @@ namespace threepp {
                     mat->side = Side::Double;
                 }
 
-                // Extensions
-                if (matDef.contains("extensions")) {
-                    const auto& ext = matDef["extensions"];
-
-                    // KHR_materials_transmission
-                    if (ext.contains("KHR_materials_transmission")) {
-                        const auto& tr = ext["KHR_materials_transmission"];
-                        mat->transmission = tr.value("transmissionFactor", 0.0f);
-                    }
-
-                    // KHR_materials_ior
-                    if (ext.contains("KHR_materials_ior")) {
-                        const auto& iorExt = ext["KHR_materials_ior"];
-                        mat->ior = iorExt.value("ior", 1.5f);
-                    }
-                }
-
                 materialCache[matIdx] = mat;
                 return mat;
             }
