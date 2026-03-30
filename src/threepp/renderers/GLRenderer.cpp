@@ -142,6 +142,8 @@ struct GLRenderer::Impl {
     gl::GLCubeMaps cubemaps;
     gl::GLBackground background;
 
+    std::unique_ptr<GLRenderTarget> _transmissionRenderTarget;
+
     std::unique_ptr<gl::GLBufferRenderer> bufferRenderer;
     std::unique_ptr<gl::GLIndexedBufferRenderer> indexedBufferRenderer;
 
@@ -288,9 +290,11 @@ struct GLRenderer::Impl {
         // render scene
 
         auto& opaqueObjects = currentRenderList->opaque;
+        auto& transmissiveObjects = currentRenderList->transmissive;
         auto& transparentObjects = currentRenderList->transparent;
         //
         if (!opaqueObjects.empty()) renderObjects(opaqueObjects, scene, camera);
+        if (!transmissiveObjects.empty()) renderTransmissiveObjects(opaqueObjects, transmissiveObjects, scene, camera);
         if (!transparentObjects.empty()) renderObjects(transparentObjects, scene, camera);
 
         //
@@ -578,6 +582,36 @@ struct GLRenderer::Impl {
         }
     }
 
+    void renderTransmissiveObjects(
+            const std::vector<gl::RenderItem*>& opaqueObjects,
+            const std::vector<gl::RenderItem*>& transmissiveObjects,
+            Object3D* scene, Camera* camera) {
+
+        if (!_transmissionRenderTarget) {
+
+            GLRenderTarget::Options options;
+            options.generateMipmaps = true;
+            options.minFilter = Filter::LinearMipmapLinear;
+            options.magFilter = Filter::Nearest;
+            options.wrapS = TextureWrapping::ClampToEdge;
+            options.wrapT = TextureWrapping::ClampToEdge;
+
+            _transmissionRenderTarget = GLRenderTarget::create(1024*2, 1024*2, options);
+        }
+
+        auto currentRenderTarget = _currentRenderTarget;
+        setRenderTarget(_transmissionRenderTarget.get(), 0, 0);
+        scope.clear(true, true, true);
+
+        renderObjects(opaqueObjects, scene, camera);
+
+        textures.updateRenderTargetMipmap(_transmissionRenderTarget.get());
+
+        setRenderTarget(currentRenderTarget, 0, 0);
+
+        renderObjects(transmissiveObjects, scene, camera);
+    }
+
     void renderObjects(const std::vector<gl::RenderItem*>& renderList, Object3D* scene, Camera* camera) {
 
         Material* overrideMaterial = nullptr;
@@ -752,7 +786,7 @@ struct GLRenderer::Impl {
         bool isMeshLambertMaterial = material->type() == "MeshLambertMaterial";
         bool isMeshToonMaterial = material->type() == "MeshToonMaterial";
         bool isMeshPhongMaterial = material->type() == "MeshPhongMaterial";
-        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial";
+        bool isMeshStandardMaterial = material->type() == "MeshStandardMaterial" || material->type() == "MeshPhysicalMaterial";
         bool isShadowMaterial = material->type() == "ShadowMaterial";
         bool isShaderMaterial = material->is<ShaderMaterial>();
         bool isEnvMap = material->is<MaterialWithEnvMap>() && material->as<MaterialWithEnvMap>()->envMap;
@@ -1010,7 +1044,7 @@ struct GLRenderer::Impl {
                 materials.refreshFogUniforms(m_uniforms, *fog);
             }
 
-            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height());
+            materials.refreshMaterialUniforms(m_uniforms, material, _pixelRatio, _size.height(), _transmissionRenderTarget.get());
 
             gl::GLUniforms::upload(materialProperties->uniformsList, m_uniforms, &textures);
         }

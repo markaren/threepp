@@ -27,8 +27,7 @@ namespace threepp {
           public MaterialWithVertexTangents,
           public MaterialWithRefractionRatio,
           public MaterialWithMorphTargets,
-          public MaterialWithDefines,
-          public MaterialWithTransmission {
+          public MaterialWithDefines {
 
     public:
         [[nodiscard]] std::string type() const override;

@@ -181,7 +181,30 @@ namespace threepp {
 
     struct MaterialWithThickness: virtual Material {
 
+        float thickness = 0;
         std::shared_ptr<Texture> thicknessMap;
+    };
+
+    struct MaterialWithClearcoat: virtual Material {
+
+        float clearcoat = 0;
+        std::shared_ptr<Texture> clearcoatMap;
+        float clearcoatRoughness = 0;
+        std::shared_ptr<Texture> clearcoatRoughnessMap;
+        Vector2 clearcoatNormalScale{1, 1};
+        std::shared_ptr<Texture> clearcoatNormalMap;
+    };
+
+    struct MaterialWithTransmission: virtual Material {
+
+        float transmission = 0;
+        std::shared_ptr<Texture> transmissionMap;
+    };
+
+    struct MaterialWithAttenuation: virtual Material {
+
+        float attenuationDistance = 0;
+        Color attenuationColor{1, 1, 1};
     };
 
     struct MaterialWithSheen: virtual Material {
@@ -226,15 +249,6 @@ namespace threepp {
 
         bool morphTargets = false;
         bool morphNormals = false;
-    };
-
-    struct MaterialWithTransmission: virtual Material {
-
-        float transmission{0.f}; // 0 = opaque, 1 = fully transmissive
-        float ior{1.5f};         // index of refraction
-
-        MaterialWithTransmission() = default;
-        MaterialWithTransmission(float transmission, float ior): transmission(transmission), ior(ior) {}
     };
 
 }// namespace threepp

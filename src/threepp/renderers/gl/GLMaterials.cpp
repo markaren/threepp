@@ -6,9 +6,11 @@
 #include "threepp/materials/MeshDepthMaterial.hpp"
 #include "threepp/materials/MeshDistanceMaterial.hpp"
 #include "threepp/materials/MeshMatcapMaterial.hpp"
+#include "threepp/materials/MeshPhysicalMaterial.hpp"
 #include "threepp/materials/MeshToonMaterial.hpp"
 #include "threepp/materials/ShaderMaterial.hpp"
 #include "threepp/materials/materials.hpp"
+#include "threepp/renderers/GLRenderTarget.hpp"
 #include "threepp/textures/CubeTexture.hpp"
 
 using namespace threepp;
@@ -265,6 +267,57 @@ struct GLMaterials::Impl {
         }
     }
 
+    void refreshUniformsPhysical(UniformMap& uniforms, MeshPhysicalMaterial* material, GLRenderTarget* transmissionRenderTarget) {
+
+        refreshUniformsStandard(uniforms, material);
+
+        uniforms.at("reflectivity").value<float>() = material->reflectivity;
+
+        uniforms.at("clearcoat").value<float>() = material->clearcoat;
+        uniforms.at("clearcoatRoughness").value<float>() = material->clearcoatRoughness;
+
+        if (material->sheen) {
+            uniforms.at("sheen").value<Color>().copy(*material->sheen);
+        }
+
+        if (material->clearcoatMap) {
+            uniforms.at("clearcoatMap").setValue(material->clearcoatMap.get());
+        }
+
+        if (material->clearcoatRoughnessMap) {
+            uniforms.at("clearcoatRoughnessMap").setValue(material->clearcoatRoughnessMap.get());
+        }
+
+        if (material->clearcoatNormalMap) {
+            uniforms.at("clearcoatNormalScale").value<Vector2>().copy(material->clearcoatNormalScale);
+            uniforms.at("clearcoatNormalMap").setValue(material->clearcoatNormalMap.get());
+
+            if (material->side == Side::Back) {
+                uniforms.at("clearcoatNormalScale").value<Vector2>().negate();
+            }
+        }
+
+        uniforms.at("transmission").value<float>() = material->transmission;
+
+        if (material->transmissionMap) {
+            uniforms.at("transmissionMap").setValue(material->transmissionMap.get());
+        }
+
+        if (material->transmission > 0.0f && transmissionRenderTarget) {
+            uniforms.at("transmissionSamplerMap").setValue(transmissionRenderTarget->texture.get());
+            uniforms.at("transmissionSamplerSize").value<Vector2>().set(static_cast<float>(transmissionRenderTarget->width), static_cast<float>(transmissionRenderTarget->height));
+        }
+
+        uniforms.at("thickness").value<float>() = material->thickness;
+
+        if (material->thicknessMap) {
+            uniforms.at("thicknessMap").setValue(material->thicknessMap.get());
+        }
+
+        uniforms.at("attenuationDistance").value<float>() = material->attenuationDistance;
+        uniforms.at("attenuationColor").value<Color>().copy(material->attenuationColor);
+    }
+
     void refreshUniformsMatcap(UniformMap& uniforms, MeshMatcapMaterial* material) {
 
         if (material->matcap) {
@@ -474,7 +527,7 @@ struct GLMaterials::Impl {
         }
     }
 
-    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height) {
+    void refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, GLRenderTarget* transmissionRenderTarget) {
 
         const auto type = material->type();
 
@@ -500,11 +553,17 @@ struct GLMaterials::Impl {
             refreshUniformsCommon(uniforms, m);
             refreshUniformsPhong(uniforms, m);
 
-        } else if (type == "MeshStandardMaterial") {
+        } else if (type == "MeshStandardMaterial" || type == "MeshPhysicalMaterial") {
 
             auto m = material->as<MeshStandardMaterial>();
             refreshUniformsCommon(uniforms, material);
-            refreshUniformsStandard(uniforms, m);
+
+            if (type == "MeshPhysicalMaterial") {
+                auto m = material->as<MeshPhysicalMaterial>();
+                refreshUniformsPhysical(uniforms, m, transmissionRenderTarget);
+            } else {
+                refreshUniformsStandard(uniforms, m);
+            }
 
         } else if (type == "MeshMatcapMaterial") {
 
@@ -559,9 +618,9 @@ void GLMaterials::refreshFogUniforms(UniformMap& uniforms, FogVariant& fog) {
     return pimpl_->refreshFogUniforms(uniforms, fog);
 }
 
-void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height) {
+void GLMaterials::refreshMaterialUniforms(UniformMap& uniforms, Material* material, float pixelRatio, int height, GLRenderTarget* transmissionRenderTarget) {
 
-    pimpl_->refreshMaterialUniforms(uniforms, material, pixelRatio, height);
+    pimpl_->refreshMaterialUniforms(uniforms, material, pixelRatio, height, transmissionRenderTarget);
 }
 
 GLMaterials::GLMaterials(GLProperties& properties)

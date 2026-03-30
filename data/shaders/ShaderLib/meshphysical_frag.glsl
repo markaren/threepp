@@ -83,6 +83,11 @@ void main() {
 	ReflectedLight reflectedLight = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) );
 	vec3 totalEmissiveRadiance = emissive;
 
+	#ifdef USE_TRANSMISSION
+		float totalTransmission = transmission;
+		float thicknessFactor = thickness;
+	#endif
+
 	#include <logdepthbuf_fragment>
 	#include <map_fragment>
 	#include <color_fragment>
@@ -121,4 +126,3 @@ void main() {
 	#include <dithering_fragment>
 
 }
-

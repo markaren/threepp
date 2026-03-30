@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -v \"//\")",
+      "Bash(find 'C:/Users/Lars Ivar Hatledal/Documents/dev/threepp/examples' -name water* -o -name webtide*)",
+      "Bash(cmake --build build --target wgpu_raytracer)",
+      "Bash(find . -type f \\\\\\(-name *wgpu*.cpp -o -name *wgpu*.hpp \\\\\\))",
+      "Bash(ls:*)",
+      "Bash(grep -r \"transmissionSamplerMap\\\\|transmissionSamplerSize\" . --include=*.cpp --include=*.hpp)",
+      "Bash(find . -name *MeshPhysical* -type f)",
+      "Bash(xargs grep:*)",
+      "Bash(xargs basename:*)",
+      "Bash(cd /c/Users/Lars Ivar Hatledal/Documents/dev/three.js)"
+    ]
+  }
+}
