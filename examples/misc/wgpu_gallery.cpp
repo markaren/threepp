@@ -46,6 +46,7 @@ namespace {
                 {"ior", 1.5f},
                 {"roughness", 0.0f},
                 {"metalness", 0.0f},
+                {"attenuationDistance", 2.0f},
         });
     }
 
@@ -75,24 +76,27 @@ namespace {
 
     auto makeRoom() {
         auto group = Group::create();
-        constexpr float W = 20.f; // width (x)
-        constexpr float H = 10.f; // height (y)
-        constexpr float D = 20.f; // depth (z)
+        constexpr float W = 20.f;// width (x)
+        constexpr float H = 10.f;// height (y)
+        constexpr float D = 20.f;// depth (z)
 
         // Floor
         auto floor = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.6f, 0.6f, 0.6f)));
         floor->rotation.x = -math::PI / 2.f;
+        floor->receiveShadow = true;
         group->add(floor);
 
         // Ceiling
         auto ceiling = Mesh::create(PlaneGeometry::create(W, D), matRoughDiffuse(Color(0.85f, 0.85f, 0.85f)));
         ceiling->rotation.x = math::PI / 2.f;
         ceiling->position.y = H;
+        ceiling->receiveShadow = true;
         group->add(ceiling);
 
         // Back wall
         auto back = Mesh::create(PlaneGeometry::create(W, H), matRoughDiffuse(Color(0.75f, 0.75f, 0.75f)));
         back->position.set(0.f, H / 2.f, -D / 2.f);
+        back->receiveShadow = true;
         group->add(back);
 
         // Solid left wall (shown when window is off)
@@ -101,6 +105,7 @@ namespace {
         leftSolid->rotation.y = math::PI / 2.f;
         leftSolid->position.set(-W / 2.f, H / 2.f, 0.f);
         leftSolid->visible = false;
+        leftSolid->receiveShadow = true;
         group->add(leftSolid);
 
         // Left wall with window opening (warm terracotta)
@@ -167,35 +172,10 @@ namespace {
                                   matRoughDiffuse(Color(0.3f, 0.4f, 0.55f)));
         right->rotation.y = -math::PI / 2.f;
         right->position.set(W / 2.f, H / 2.f, 0.f);
+        right->receiveShadow = true;
         group->add(right);
 
         return RoomResult{group, windowGroup, leftSolid};
-    }
-
-    // --- Emissive light panels ---
-
-    auto makeLightPanels() {
-        auto group = Group::create();
-
-        // Main warm ceiling panel
-        // auto main = Mesh::create(PlaneGeometry::create(4.f, 4.f), matEmissive(Color(1.0f, 0.95f, 0.85f), 6.0f));
-        // main->rotation.x = math::PI / 2.f;
-        // main->position.set(0.f, 9.98f, -2.f);
-        // group->add(main);
-
-        // // Small cool accent panel (left wall)
-        // auto accent1 = Mesh::create(PlaneGeometry::create(2.f, 1.5f), matEmissive(Color(0.4f, 0.6f, 1.0f), 4.0f));
-        // accent1->rotation.y = math::PI / 2.f;
-        // accent1->position.set(-9.98f, 7.f, 4.f);
-        // group->add(accent1);
-        //
-        // // Small warm accent panel (right wall)
-        // auto accent2 = Mesh::create(PlaneGeometry::create(2.f, 1.5f), matEmissive(Color(1.0f, 0.5f, 0.2f), 4.0f));
-        // accent2->rotation.y = -math::PI / 2.f;
-        // accent2->position.set(9.98f, 7.f, -4.f);
-        // group->add(accent2);
-
-        return group;
     }
 
     // --- Object pedestals (simple cylinders) ---
@@ -204,6 +184,8 @@ namespace {
         auto mesh = Mesh::create(CylinderGeometry::create(radius, radius, height, 32),
                                  matRoughDiffuse(Color(0.25f, 0.25f, 0.28f), 0.7f));
         mesh->position.set(x, height / 2.f, z);
+        mesh->castShadow = true;
+        mesh->receiveShadow = true;
         return mesh;
     }
 
@@ -232,6 +214,8 @@ namespace {
                 float x = -6.f + ix * 1.0f;
                 float z = -6.f + iz * 1.0f;
                 sphere->position.set(x, 0.35f, z);
+                sphere->castShadow = true;
+                sphere->receiveShadow = true;
                 group->add(sphere);
             }
         }
@@ -246,6 +230,7 @@ int main() {
                   {{"graphicsApi", GraphicsAPI::WebGPU}, {"vsync", false}});
 
     WgpuRenderer renderer(canvas);
+    renderer.shadowMap().enabled = true;
 
     WgpuPathTracer pathTracer(renderer, canvas.size());
     pathTracer.setEnvIntensity(0.0f);
@@ -262,7 +247,6 @@ int main() {
 
     auto [room, windowGroup, solidWall] = makeRoom();
     scene.add(room);
-    scene.add(makeLightPanels());
 
     // --- Hero objects on pedestals ---
 
@@ -271,6 +255,8 @@ int main() {
     scene.add(ped1);
     auto torusKnot = Mesh::create(TorusKnotGeometry::create(0.7f, 0.22f, 128, 32), matChrome());
     torusKnot->position.set(0.f, 1.4f, -4.f);
+    torusKnot->castShadow = true;
+    torusKnot->receiveShadow = true;
     scene.add(torusKnot);
 
     // Gold torus (near stormtrooper)
@@ -279,6 +265,8 @@ int main() {
     auto torus = Mesh::create(TorusGeometry::create(0.65f, 0.25f, 32, 48), matGold());
     torus->position.set(3.5f, 1.2f, -5.f);
     torus->rotation.x = 0.4f;
+    torus->castShadow = true;
+    torus->receiveShadow = true;
     scene.add(torus);
 
     // Copper icosahedron (right)
@@ -286,6 +274,8 @@ int main() {
     scene.add(ped3);
     auto ico = Mesh::create(IcosahedronGeometry::create(0.7f, 4), matCopper());
     ico->position.set(5.f, 1.3f, -1.f);
+    ico->castShadow = true;
+    ico->receiveShadow = true;
     scene.add(ico);
 
     // Glass sphere (front-left)
@@ -293,6 +283,8 @@ int main() {
     scene.add(ped4);
     auto glassBall = Mesh::create(SphereGeometry::create(0.6f, 48, 48), matGlass());
     glassBall->position.set(-3.f, 1.1f, 4.f);
+    glassBall->castShadow = true;
+    glassBall->receiveShadow = true;
     scene.add(glassBall);
 
     // Tinted glass sphere (front-right)
@@ -300,19 +292,31 @@ int main() {
     scene.add(ped5);
     auto tintedGlass = Mesh::create(SphereGeometry::create(0.6f, 48, 48), matGlass(Color(0.3f, 0.8f, 0.4f)));
     tintedGlass->position.set(3.f, 1.1f, 4.f);
+    tintedGlass->castShadow = true;
+    tintedGlass->receiveShadow = true;
     scene.add(tintedGlass);
 
     // Stormtrooper model (back-right)
     ModelLoader loader;
     auto trooper = loader.load(std::string(DATA_FOLDER) + "/models/collada/stormtrooper/stormtrooper.dae");
+    trooper->traverseType<Mesh>([&](Mesh& m) {
+        m.castShadow = true;
+        m.receiveShadow = true;
+    });
     trooper->position.set(6.f, 0.f, -6.f);
     trooper->rotation.y = -0.5f;
+
     scene.add(trooper);
 
     // Emissive orb (floating, back-left)
     auto emOrb = Mesh::create(SphereGeometry::create(0.4f, 32, 32), matEmissive(Color(0.2f, 1.0f, 0.6f), 4.0f));
     emOrb->position.set(-9.f, 0.5f, -9.f);
     scene.add(emOrb);
+
+    auto emPoint = PointLight::create(Color(0.2f, 1.0f, 0.6f), 1.0f);
+    emPoint->position.copy(emOrb->position);
+    emPoint->castShadow = true;
+    scene.add(emPoint);
 
     // text geom
     // FontLoader fontLoader;
@@ -336,11 +340,6 @@ int main() {
 
     // Sphere grid (roughness/metalness matrix)
     scene.add(makeSphereGrid());
-
-    // Point light for raytracer mode
-    auto light = PointLight::create(Color::white, 1.5f);
-    light->position.set(0.f, 9.f, 0.f);
-    // scene.add(light);
 
     // ---- Camera ----
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.1f, 100.f);
@@ -425,6 +424,9 @@ int main() {
 
     canvas.animate([&] {
         const float dt = clock.getDelta();
+
+        emPoint->visible = renderMode != 1;
+        emOrb->visible = !emPoint->visible;
 
         fpsAccum += dt;
         ++fpsFrames;
