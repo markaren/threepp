@@ -35,7 +35,7 @@ namespace threepp::shaders {
                 {"maxMipMapLevel", Uniform(0)}};
 
         UniformMap aomap{
-                {"aomap", Uniform()},
+                {"aoMap", Uniform()},
                 {"aoMapIntensity", Uniform(1.f)}};
 
         UniformMap lightmap{
