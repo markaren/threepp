@@ -40,17 +40,29 @@ using namespace threepp;
 // ---------------------------------------------------------------------------
 namespace {
 
-constexpr int MAX_TRIS = 131072;
-constexpr int MAX_MATS = 64;
-constexpr int MAX_BVH_NODES = 2 * MAX_TRIS - 1;
 constexpr int MAX_TEX_SLOTS = 64;
 constexpr int TILE_SIZE = 1024;
 constexpr int ATLAS_COLS = 8;  // tiles per row in atlas (8 × 1024 = 8192 ≤ GPU max)
 constexpr int TRI_TEX_HEIGHT = 8;
 constexpr int MAT_TEX_HEIGHT = 5;
 constexpr int TEX_PAGE_WIDTH = 8192;
-constexpr int TRI_TEX_PAGES = (MAX_TRIS + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
-constexpr int MAX_MESHES = 64;
+
+// Initial placeholder capacities — grown dynamically as scenes demand more.
+constexpr int INIT_TRI_CAP  = 1;
+constexpr int INIT_MAT_CAP  = 1;
+constexpr int INIT_MESH_CAP = 1;
+
+static int nextPow2(int v) {
+    if (v <= 0) return 1;
+    v--;
+    v |= v >> 1; v |= v >> 2; v |= v >> 4;
+    v |= v >> 8; v |= v >> 16;
+    return v + 1;
+}
+
+static int triTexPages(int triCap) {
+    return (triCap + TEX_PAGE_WIDTH - 1) / TEX_PAGE_WIDTH;
+}
 
 // ---------------------------------------------------------------------------
 // WGSL compute shader — path tracer + accumulator
@@ -1647,7 +1659,8 @@ static int buildGeometryBuffers(
         std::vector<float>& matBuffer,
         std::vector<float>& rawObjTriBuf,
         std::vector<float>& matrixBuf,
-        float emissiveScale) {
+        float emissiveScale,
+        int maxTris, int maxMats, int maxMeshes) {
     std::ranges::fill(triBuffer, 0.f);
     std::ranges::fill(matBuffer, 0.f);
     std::ranges::fill(rawObjTriBuf, 0.f);
@@ -1677,10 +1690,10 @@ static int buildGeometryBuffers(
     };
 
     for (auto& mesh : meshes) {
-        if (triCount >= MAX_TRIS || matCount >= MAX_MATS) break;
+        if (triCount >= maxTris || matCount >= maxMats) break;
 
         auto em = extractMaterial(mesh->material().get());
-        setTexel(matBuffer, MAX_MATS, matCount, 0,
+        setTexel(matBuffer, maxMats, matCount, 0,
                  em.albedo.r, em.albedo.g, em.albedo.b, em.shininess);
 
         float texSlot = -1.f;
@@ -1716,11 +1729,11 @@ static int buildGeometryBuffers(
                 }
             }
         }
-        setTexel(matBuffer, MAX_MATS, matCount, 1, texSlot, em.metalness, normalSlot, roughSlot);
-        setTexel(matBuffer, MAX_MATS, matCount, 2,
+        setTexel(matBuffer, maxMats, matCount, 1, texSlot, em.metalness, normalSlot, roughSlot);
+        setTexel(matBuffer, maxMats, matCount, 2,
                 em.emissive.r * emissiveScale, em.emissive.g * emissiveScale, em.emissive.b * emissiveScale, em.transmission);
-        setTexel(matBuffer, MAX_MATS, matCount, 3, em.ior, em.alphaTest, 0.f, 0.f);
-        setTexel(matBuffer, MAX_MATS, matCount, 4,
+        setTexel(matBuffer, maxMats, matCount, 3, em.ior, em.alphaTest, 0.f, 0.f);
+        setTexel(matBuffer, maxMats, matCount, 4,
                 em.attenuationColor.r, em.attenuationColor.g, em.attenuationColor.b, em.attenuationDistance);
 
         const int matIdx = matCount++;
@@ -1731,7 +1744,7 @@ static int buildGeometryBuffers(
         Matrix4 normalMat(world);
         normalMat.invert().transpose();
 
-        if (meshIdx < MAX_MESHES) {
+        if (meshIdx < maxMeshes) {
             float* mp = matrixBuf.data() + meshIdx * 32;
             std::memcpy(mp, world.elements.data(), 16 * sizeof(float));
             std::memcpy(mp + 16, normalMat.elements.data(), 16 * sizeof(float));
@@ -1773,7 +1786,7 @@ static int buildGeometryBuffers(
 
         const int nTris = idx ? static_cast<int>(idx->count()) / 3
                               : static_cast<int>(pos->count()) / 3;
-        for (int i = 0; i < nTris && triCount < MAX_TRIS; ++i) {
+        for (int i = 0; i < nTris && triCount < maxTris; ++i) {
             const int i0 = vi(i, 0), i1 = vi(i, 1), i2 = vi(i, 2);
             const Vector3 v0 = vert(i0), v1 = vert(i1), v2 = vert(i2);
             const Vector3 n0 = norm(i0), n1 = norm(i1), n2 = norm(i2);
@@ -1781,14 +1794,14 @@ static int buildGeometryBuffers(
             const auto [u1, v1uv] = uv(i1);
             const auto [u2, v2uv] = uv(i2);
 
-            setTexel(triBuffer, MAX_TRIS, triCount, 0, v0.x, v0.y, v0.z, static_cast<float>(matIdx));
-            setTexel(triBuffer, MAX_TRIS, triCount, 1, v1.x, v1.y, v1.z, 0.f);
-            setTexel(triBuffer, MAX_TRIS, triCount, 2, v2.x, v2.y, v2.z, 0.f);
-            setTexel(triBuffer, MAX_TRIS, triCount, 3, n0.x, n0.y, n0.z, 0.f);
-            setTexel(triBuffer, MAX_TRIS, triCount, 4, n1.x, n1.y, n1.z, 0.f);
-            setTexel(triBuffer, MAX_TRIS, triCount, 5, n2.x, n2.y, n2.z, 0.f);
-            setTexel(triBuffer, MAX_TRIS, triCount, 6, u0, v0uv, u1, v1uv);
-            setTexel(triBuffer, MAX_TRIS, triCount, 7, u2, v2uv, 0.f, 0.f);
+            setTexel(triBuffer, maxTris, triCount, 0, v0.x, v0.y, v0.z, static_cast<float>(matIdx));
+            setTexel(triBuffer, maxTris, triCount, 1, v1.x, v1.y, v1.z, 0.f);
+            setTexel(triBuffer, maxTris, triCount, 2, v2.x, v2.y, v2.z, 0.f);
+            setTexel(triBuffer, maxTris, triCount, 3, n0.x, n0.y, n0.z, 0.f);
+            setTexel(triBuffer, maxTris, triCount, 4, n1.x, n1.y, n1.z, 0.f);
+            setTexel(triBuffer, maxTris, triCount, 5, n2.x, n2.y, n2.z, 0.f);
+            setTexel(triBuffer, maxTris, triCount, 6, u0, v0uv, u1, v1uv);
+            setTexel(triBuffer, maxTris, triCount, 7, u2, v2uv, 0.f, 0.f);
 
             const Vector3 ov0 = objVert(i0), ov1 = objVert(i1), ov2 = objVert(i2);
             const Vector3 on0 = objNorm(i0), on1 = objNorm(i1), on2 = objNorm(i2);
@@ -1997,9 +2010,9 @@ static int pagedIdx(int ti, int row) {
     return ((ti / TEX_PAGE_WIDTH * TRI_TEX_HEIGHT + row) * TEX_PAGE_WIDTH + ti % TEX_PAGE_WIDTH) * 4;
 }
 
-static void packBvhNodeBuffer(const std::vector<BvhNode>& nodes, std::vector<float>& buf) {
+static void packBvhNodeBuffer(const std::vector<BvhNode>& nodes, std::vector<float>& buf, int bvhCapacity) {
     std::ranges::fill(buf, 0.f);
-    const int nc = std::min(static_cast<int>(nodes.size()), MAX_BVH_NODES);
+    const int nc = std::min(static_cast<int>(nodes.size()), bvhCapacity);
     for (int i = 0; i < nc; i++) {
         const auto& n = nodes[i];
         float* p = buf.data() + i * 12;
@@ -2094,6 +2107,12 @@ struct WgpuPathTracer::Impl {
     float ambientFactor_ = 0.03f;
     float movedPixelFC_ = 6.0f;
     float fireflyClamp_ = 10.0f;
+
+    // Dynamic capacity tracking — buffers grow as scenes demand more
+    int triCapacity_  = INIT_TRI_CAP;
+    int matCapacity_  = INIT_MAT_CAP;
+    int meshCapacity_ = INIT_MESH_CAP;
+    int bvhCapacity_  = 2 * INIT_TRI_CAP - 1;
     float pixelScale_ = 1.0f;
     int fullWidth_ = 0;   // unscaled window size
     int fullHeight_ = 0;
@@ -2174,6 +2193,11 @@ struct WgpuPathTracer::Impl {
         float emissiveTotalArea = 0.f;
         float emissiveTotalPower = 0.f;
         std::vector<Mesh*> meshes;  // snapshot of mesh list
+        // Capacities used for buffer sizing (next-power-of-2)
+        int triCapacity = 0;
+        int matCapacity = 0;
+        int meshCapacity = 0;
+        int bvhCapacity = 0;
     };
     std::future<AsyncBuildResult> asyncBuild_;
     bool buildPending_ = false;
@@ -2197,11 +2221,11 @@ struct WgpuPathTracer::Impl {
         : renderer(r),
           device(static_cast<WGPUDevice>(r.nativeDevice())),
           queue(static_cast<WGPUQueue>(r.nativeQueue())),
-          // Geometry textures
-          triTex(r, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * TRI_TEX_PAGES,
+          // Geometry textures (small placeholders — grown dynamically on first build)
+          triTex(r, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * triTexPages(INIT_TRI_CAP),
                  WgpuTexture::Format::RGBA32Float,
                  WgpuTexture::Storage | WgpuTexture::TextureBinding),
-          matTex(r, MAX_MATS, MAT_TEX_HEIGHT,
+          matTex(r, INIT_MAT_CAP, MAT_TEX_HEIGHT,
                  WgpuTexture::Format::RGBA32Float,
                  WgpuTexture::TextureBinding | WgpuTexture::CopyDst),
           texAtlasTex(r, 1u, 1u,
@@ -2242,18 +2266,18 @@ struct WgpuPathTracer::Impl {
           atrousPipeline(r, svgfAtrousWGSL, "svgf_atrous_main"),
           taaUniBuf(r, sizeof(TaaGpuUniforms)),
           atrousUniBuf(r, sizeof(AtrousGpuUniforms)),
-          // Storage buffers
-          bvhNodeBuf(r, static_cast<size_t>(MAX_BVH_NODES) * 12 * sizeof(float),
+          // Storage buffers (small placeholders — grown dynamically on first build)
+          bvhNodeBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * 12 * sizeof(float),
                      WgpuBuffer::Usage::Storage),
-          bvhCounterBuf(r, static_cast<size_t>(MAX_BVH_NODES) * sizeof(uint32_t),
+          bvhCounterBuf(r, static_cast<size_t>(2 * INIT_TRI_CAP - 1) * sizeof(uint32_t),
                         WgpuBuffer::Usage::Storage),
-          objTriBuf(r, static_cast<size_t>(MAX_TRIS) * 32 * sizeof(float),
+          objTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
-          matrixBuf(r, static_cast<size_t>(MAX_MESHES) * 32 * sizeof(float),
+          matrixBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
-          leafIndexBuf(r, static_cast<size_t>(MAX_TRIS) * sizeof(int),
+          leafIndexBuf(r, static_cast<size_t>(INIT_TRI_CAP) * sizeof(int),
                        WgpuBuffer::Usage::Storage),
-          emissiveTriBuf(r, static_cast<size_t>(MAX_TRIS) * 4 * sizeof(float),
+          emissiveTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 4 * sizeof(float),
                          WgpuBuffer::Usage::Storage),
           // Uniform buffers
           vtUniBuf(r, sizeof(VtGpuUniforms)),
@@ -2265,13 +2289,7 @@ struct WgpuPathTracer::Impl {
           rtPipeline(r, csWGSL, "rt_main"),
           // Display pipeline
           displayCam(-1.f, 1.f, 1.f, -1.f, 0.1f, 10.f),
-          // CPU buffers
-          triBuffer(TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * TRI_TEX_PAGES * 4, 0.f),
-          matBuffer(MAX_MATS * MAT_TEX_HEIGHT * 4, 0.f),
-          rawObjTriBuf(static_cast<size_t>(MAX_TRIS) * 32, 0.f),
-          matrixCpuBuf(static_cast<size_t>(MAX_MESHES) * 32, 0.f),
-          bvhNodeCpuBuf(static_cast<size_t>(MAX_BVH_NODES) * 12, 0.f),
-          bvhCounterZeros(MAX_BVH_NODES, 0u),
+          // CPU buffers — empty; sized dynamically by async build
           width_(w), height_(h),
           fullWidth_(w), fullHeight_(h) {
 
@@ -2510,17 +2528,35 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             r.atlasData = std::move(atlasData);
             r.atlasRows = atlasRows;
 
-            r.triBuffer.resize(TEX_PAGE_WIDTH * TRI_TEX_HEIGHT * TRI_TEX_PAGES * 4, 0.f);
-            r.matBuffer.resize(MAX_MATS * MAT_TEX_HEIGHT * 4, 0.f);
-            r.rawObjTriBuf.resize(static_cast<size_t>(MAX_TRIS) * 32, 0.f);
-            r.matrixCpuBuf.resize(static_cast<size_t>(MAX_MESHES) * 32, 0.f);
+            // Pre-count triangles and meshes to size buffers exactly
+            int totalTris = 0;
+            for (auto* mesh : meshes) {
+                auto* geo = mesh->geometry().get();
+                auto* idx = geo->getIndex();
+                auto* pos = geo->getAttribute<float>("position");
+                if (!pos) continue;
+                totalTris += idx ? static_cast<int>(idx->count()) / 3
+                                 : static_cast<int>(pos->count()) / 3;
+            }
+            const int matCount = static_cast<int>(meshes.size());
+            r.triCapacity  = nextPow2(std::max(totalTris, 1));
+            r.matCapacity  = nextPow2(std::max(matCount, 1));
+            r.meshCapacity = r.matCapacity;  // one material per mesh
+            r.bvhCapacity  = 2 * r.triCapacity - 1;
+
+            const int pages = triTexPages(r.triCapacity);
+            r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
+            r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
+            r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
+            r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
 
             r.triCount = buildGeometryBuffers(meshes, r.texSlotMap, r.triBuffer, r.matBuffer,
-                                               r.rawObjTriBuf, r.matrixCpuBuf, emissiveScale);
+                                               r.rawObjTriBuf, r.matrixCpuBuf, emissiveScale,
+                                               r.triCapacity, r.matCapacity, r.meshCapacity);
             buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
             r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
-            r.bvhNodeCpuBuf.resize(static_cast<size_t>(MAX_BVH_NODES) * 12, 0.f);
-            packBvhNodeBuffer(r.bvhNodes, r.bvhNodeCpuBuf);
+            r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * 12, 0.f);
+            packBvhNodeBuffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
 
             // Collect emissive triangles
             r.emissiveTriCount = 0;
@@ -2528,9 +2564,9 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             r.emissiveTotalPower = 0.f;
             for (int ti = 0; ti < r.triCount; ti++) {
                 const int matIdx = static_cast<int>(r.triBuffer[pagedIdx(ti, 0) + 3]);
-                const float er = r.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 0];
-                const float eg = r.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 1];
-                const float eb = r.matBuffer[(2 * MAX_MATS + matIdx) * 4 + 2];
+                const float er = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 0];
+                const float eg = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 1];
+                const float eb = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 2];
                 const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
                 if (luminance > 0.001f) {
                     const float* v0p = r.triBuffer.data() + pagedIdx(ti, 0);
@@ -2584,6 +2620,51 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         d.emissiveTotalArea_ = r.emissiveTotalArea;
         d.emissiveTotalPower_ = r.emissiveTotalPower;
 
+        // Grow GPU buffers when scene exceeds current capacity (same pattern as atlas)
+        if (r.triCapacity > d.triCapacity_) {
+            d.triCapacity_ = r.triCapacity;
+            const int pages = triTexPages(r.triCapacity);
+            d.triTex = WgpuTexture(d.renderer, TEX_PAGE_WIDTH, TRI_TEX_HEIGHT * pages,
+                                    WgpuTexture::Format::RGBA32Float,
+                                    WgpuTexture::Storage | WgpuTexture::TextureBinding);
+            d.objTriBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * 32 * sizeof(float),
+                                      WgpuBuffer::Usage::Storage);
+            d.leafIndexBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * sizeof(int),
+                                         WgpuBuffer::Usage::Storage);
+            d.emissiveTriBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.triCapacity) * 4 * sizeof(float),
+                                           WgpuBuffer::Usage::Storage);
+            d.vtPipeline.setStorageBufferRead(0, d.objTriBuf);
+            d.vtPipeline.setStorageTexture(2, d.triTex);
+            d.refitPipeline.setTexture(0, d.triTex);
+            d.refitPipeline.setStorageBufferRead(3, d.leafIndexBuf);
+            d.rtPipeline.setTexture(5, d.triTex);
+            d.rtPipeline.setStorageBufferRead(11, d.emissiveTriBuf);
+        }
+        if (r.bvhCapacity > d.bvhCapacity_) {
+            d.bvhCapacity_ = r.bvhCapacity;
+            d.bvhNodeBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * 12 * sizeof(float),
+                                       WgpuBuffer::Usage::Storage);
+            d.bvhCounterBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.bvhCapacity) * sizeof(uint32_t),
+                                          WgpuBuffer::Usage::Storage);
+            d.bvhCounterZeros.resize(r.bvhCapacity, 0u);
+            d.refitPipeline.setStorageBuffer(1, d.bvhNodeBuf);
+            d.refitPipeline.setStorageBuffer(2, d.bvhCounterBuf);
+            d.rtPipeline.setStorageBufferRead(3, d.bvhNodeBuf);
+        }
+        if (r.matCapacity > d.matCapacity_) {
+            d.matCapacity_ = r.matCapacity;
+            d.matTex = WgpuTexture(d.renderer, r.matCapacity, MAT_TEX_HEIGHT,
+                                    WgpuTexture::Format::RGBA32Float,
+                                    WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+            d.rtPipeline.setTexture(4, d.matTex);
+        }
+        if (r.meshCapacity > d.meshCapacity_) {
+            d.meshCapacity_ = r.meshCapacity;
+            d.matrixBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.meshCapacity) * 32 * sizeof(float),
+                                      WgpuBuffer::Usage::Storage);
+            d.vtPipeline.setStorageBufferRead(1, d.matrixBuf);
+        }
+
         // Upload atlas
         if (r.atlasRows != d.atlasRows_) {
             d.atlasRows_ = r.atlasRows;
@@ -2628,7 +2709,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         // Mesh count mismatch (shouldn't happen without topo change, but be safe)
         movedBits[0] = movedBits[1] = 0xFFFFFFFFu;
     } else {
-        for (size_t i = 0; i < rtMeshes.size() && i < static_cast<size_t>(MAX_MESHES); ++i) {
+        for (size_t i = 0; i < rtMeshes.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
             if (*rtMeshes[i]->matrixWorld != d.prevMeshMatrices[i]) {
                 anyMeshMoved = true;
                 if (i < 32u) movedBits[0] |= (1u << i);
@@ -2645,7 +2726,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             std::ranges::fill(d.matrixCpuBuf, 0.f);
             int mi = 0;
             for (auto* mesh : rtMeshes) {
-                if (mi >= MAX_MESHES) break;
+                if (mi >= d.meshCapacity_) break;
                 const auto& w = *mesh->matrixWorld;
                 Matrix4 nm(w);
                 nm.invert().transpose();
@@ -2655,7 +2736,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 ++mi;
             }
         }
-        d.matrixBuf.write(d.matrixCpuBuf.data(), static_cast<size_t>(MAX_MESHES) * 32 * sizeof(float));
+        d.matrixBuf.write(d.matrixCpuBuf.data(), static_cast<size_t>(d.meshCapacity_) * 32 * sizeof(float));
 
         VtGpuUniforms vtU{};
         vtU.triCount = static_cast<uint32_t>(d.triCount_);
