@@ -342,25 +342,6 @@ int main() {
     // Sphere grid (roughness/metalness matrix)
     scene.add(makeSphereGrid());
 
-    auto result = loader.load("C:\\Users\\Lars Ivar Hatledal\\Downloads\\gelatinous_cube.glb");
-    result->traverseType<Mesh>([&](Mesh& mesh) {
-        mesh.castShadow = true;
-        mesh.material()->alphaTest = 0.5f;
-        if (auto m = mesh.material()->as<MeshPhysicalMaterial>()) {
-            m->transmission = 1.f;
-            m->roughness = 0.1f;
-            m->ior = 1.0f;
-            m->emissiveIntensity = 0.00f;
-        }
-    });
-    result->scale *= 0.2f;
-
-    if (!result) {
-        std::cerr << "Failed to load model\n";
-        return 1;
-    }
-
-    scene.add(result);
 
     // ---- Camera ----
     PerspectiveCamera camera(50.f, canvas.aspect(), 0.1f, 100.f);
