@@ -14,6 +14,9 @@ namespace threepp {
     public:
         std::optional<Image> load(const std::filesystem::path& imagePath, int channels = 4, bool flipY = true);
         std::optional<Image> load(const std::vector<unsigned char>& data, int channels = 4, bool flipY = true);
+
+        /// Load an HDR image (.hdr format) as float data (RGBA float per pixel).
+        std::optional<Image> loadHDR(const std::filesystem::path& imagePath, int channels = 4, bool flipY = true);
     };
 
 }// namespace threepp

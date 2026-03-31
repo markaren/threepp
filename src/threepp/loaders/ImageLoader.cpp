@@ -75,3 +75,26 @@ std::optional<Image> ImageLoader::load(const std::vector<unsigned char>& data, i
             static_cast<unsigned int>(image.height),
             0};
 }
+
+std::optional<Image> ImageLoader::loadHDR(const std::filesystem::path& imagePath, int channels, bool flipY) {
+
+    if (!std::filesystem::exists(imagePath)) {
+        return std::nullopt;
+    }
+
+    stbi_set_flip_vertically_on_load(flipY);
+    int w, h;
+    float* pixels = stbi_loadf(imagePath.string().c_str(), &w, &h, nullptr, channels);
+    if (!pixels) {
+        return std::nullopt;
+    }
+
+    std::vector<float> data(pixels, pixels + (static_cast<size_t>(channels) * w * h));
+    stbi_image_free(pixels);
+
+    return Image{
+            std::move(data),
+            static_cast<unsigned int>(w),
+            static_cast<unsigned int>(h),
+            0};
+}
