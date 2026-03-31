@@ -1307,6 +1307,7 @@ struct TaaUniforms {
 @group(0) @binding(3) var taaHistIn: texture_2d<f32>;
 @group(0) @binding(4) var taaOut:    texture_storage_2d<rgba16float, write>;
 @group(0) @binding(5) var hitMeshTex: texture_2d<f32>;
+@group(0) @binding(6) var<storage, read> motionMats: array<mat4x4<f32>>;
 
 @compute @workgroup_size(8, 8)
 fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -1355,7 +1356,20 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
                             + taa.curCamRgt.xyz * (ndc.x * taa.tanHalfFov.x * aspect)
                             + taa.curCamUp.xyz  * (ndc.y * taa.tanHalfFov.x));
     let worldPos = taa.curCamOri.xyz + rayDir * curDepth;
-    let toPoint  = worldPos - taa.prevCamOri.xyz;
+
+    // For moved meshes: transform world pos by motion matrix (prevWorld * inverse(curWorld))
+    // to find where this surface point was in the previous frame.
+    let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
+    var prevWorldPos = worldPos;
+    if (meshIdx < 64u) {
+        let bit   = meshIdx & 31u;
+        let mbits = select(taa.movedMeshBits.x, taa.movedMeshBits.y, meshIdx >= 32u);
+        if (((mbits >> bit) & 1u) != 0u) {
+            prevWorldPos = (motionMats[meshIdx] * vec4<f32>(worldPos, 1.0)).xyz;
+        }
+    }
+
+    let toPoint  = prevWorldPos - taa.prevCamOri.xyz;
     let prevZ    = dot(toPoint, taa.prevCamFwd.xyz);
 
     var useHist = prevZ > 0.001;
@@ -1363,15 +1377,14 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let prevNdcY = dot(toPoint, taa.prevCamUp.xyz)  / (prevZ * taa.tanHalfFov.x);
     let prevPx   = vec2<f32>((prevNdcX + 1.0) * 0.5 * res.x - 0.5,
                               (1.0 - prevNdcY) * 0.5 * res.y - 0.5);
-    let prevPixel = vec2<i32>(i32(round(prevPx.x)), i32(round(prevPx.y)));
+    let prevPixel = vec2<i32>(i32(floor(prevPx.x)), i32(floor(prevPx.y)));
 
-    // Bounds check
-    useHist = useHist && prevPixel.x >= 0 && prevPixel.x < iRes.x
-                      && prevPixel.y >= 0 && prevPixel.y < iRes.y;
+    // Bounds check (need 2×2 footprint for bilinear)
+    useHist = useHist && prevPixel.x >= 0 && prevPixel.x + 1 < iRes.x
+                      && prevPixel.y >= 0 && prevPixel.y + 1 < iRes.y;
 
-    // Reduce history weight for moved meshes (but don't fully discard)
+    // Detect moved mesh (reuse meshIdx from reprojection above)
     var movedMesh = false;
-    let meshIdx = u32(textureLoad(hitMeshTex, pixel, 0).r);
     if (meshIdx < 64u) {
         let bit   = meshIdx & 31u;
         let mbits = select(taa.movedMeshBits.x, taa.movedMeshBits.y, meshIdx >= 32u);
@@ -1383,14 +1396,21 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var result = curColor;
     if (useHist) {
-        let histColor = textureLoad(taaHistIn, prevPixel, 0).xyz;
+        // Bilinear interpolation of history — avoids nearest-neighbor artifacts
+        let fx = fract(prevPx.x);
+        let fy = fract(prevPx.y);
+        let h00 = textureLoad(taaHistIn, prevPixel, 0).xyz;
+        let h10 = textureLoad(taaHistIn, prevPixel + vec2<i32>(1, 0), 0).xyz;
+        let h01 = textureLoad(taaHistIn, prevPixel + vec2<i32>(0, 1), 0).xyz;
+        let h11 = textureLoad(taaHistIn, prevPixel + vec2<i32>(1, 1), 0).xyz;
+        let histColor = mix(mix(h00, h10, fx), mix(h01, h11, fx), fy);
         let clamped   = clamp(histColor, cMin, cMax);
         // Blend: use more history early (noisy), more current once converged.
-        // For moved meshes, the reprojected history is unreliable, but neighborhood
-        // clamping constrains it to a plausible range. Use moderate history (alpha=0.4)
-        // to get some free temporal smoothing without ghosting.
+        // For moved meshes: pixelFC is always 0 (reset) so the normal formula gives alpha=1.0
+        // (ignore history). With motion vectors the history IS correctly reprojected, so
+        // override to blend ~20% current + 80% history for effective temporal accumulation.
         var alpha = clamp(1.0 / (curFC * 0.5 + 1.0), 0.1, 1.0);
-        if (movedMesh) { alpha = max(alpha, 0.4); }
+        if (movedMesh) { alpha = 0.2; }
         result = mix(clamped, curColor, alpha);
     }
 
@@ -2348,6 +2368,8 @@ struct WgpuPathTracer::Impl {
     WgpuBuffer bvhCounterBuf;
     WgpuBuffer objTriBuf;
     WgpuBuffer matrixBuf;
+    WgpuBuffer motionMatBuf;            // per-mesh motion matrices for TAA reprojection
+    std::vector<float> motionMatCpu;    // CPU staging: prevWorld * inverse(curWorld) per mesh
     WgpuBuffer leafIndexBuf;
 
     // Emissive triangle NEE
@@ -2510,6 +2532,8 @@ struct WgpuPathTracer::Impl {
                     WgpuBuffer::Usage::Storage),
           matrixBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 32 * sizeof(float),
                     WgpuBuffer::Usage::Storage),
+          motionMatBuf(r, static_cast<size_t>(INIT_MESH_CAP) * 16 * sizeof(float),
+                       WgpuBuffer::Usage::Storage),
           leafIndexBuf(r, static_cast<size_t>(INIT_TRI_CAP) * sizeof(int),
                        WgpuBuffer::Usage::Storage),
           emissiveTriBuf(r, static_cast<size_t>(INIT_TRI_CAP) * 4 * sizeof(float),
@@ -2565,6 +2589,7 @@ struct WgpuPathTracer::Impl {
 
         // TAA pipeline: uniform buffer is static binding
         taaPipeline.setUniformBuffer(0, taaUniBuf);
+        taaPipeline.setStorageBufferRead(6, motionMatBuf);
 
         // Spatial filter: uniform buffer + albedo are static bindings
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
@@ -3013,7 +3038,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.meshCapacity_ = r.meshCapacity;
             d.matrixBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.meshCapacity) * 32 * sizeof(float),
                                       WgpuBuffer::Usage::Storage);
+            d.motionMatBuf = WgpuBuffer(d.renderer, static_cast<size_t>(r.meshCapacity) * 16 * sizeof(float),
+                                         WgpuBuffer::Usage::Storage);
             d.vtPipeline.setStorageBufferRead(1, d.matrixBuf);
+            d.taaPipeline.setStorageBufferRead(6, d.motionMatBuf);
         }
 
         // Upload atlas
@@ -3072,6 +3100,22 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
     }
     // Note: camMoved resets all pixels via fc==0u in the shader; no movedBits needed for that.
+
+    // Compute per-mesh motion matrices: prevWorld * inverse(curWorld)
+    // Used by TAA to reproject pixels on moving objects to their previous-frame screen position.
+    d.motionMatCpu.resize(static_cast<size_t>(d.meshCapacity_) * 16, 0.f);
+    for (size_t i = 0; i < rtMeshes.size() && i < static_cast<size_t>(d.meshCapacity_); ++i) {
+        Matrix4 mot;  // identity by default
+        if (i < d.prevMeshMatrices.size()) {
+            Matrix4 curInv(*rtMeshes[i]->matrixWorld);
+            curInv.invert();
+            mot.multiplyMatrices(d.prevMeshMatrices[i], curInv);
+        }
+        // else: identity (new mesh, no previous frame)
+        std::memcpy(d.motionMatCpu.data() + i * 16, mot.elements.data(), 16 * sizeof(float));
+    }
+    d.motionMatBuf.write(d.motionMatCpu.data(), d.motionMatCpu.size() * sizeof(float));
+
     d.prevMeshMatrices.resize(rtMeshes.size());
     for (size_t i = 0; i < rtMeshes.size(); ++i)
         d.prevMeshMatrices[i] = *rtMeshes[i]->matrixWorld;
