@@ -239,7 +239,6 @@ int main() {
     pathTracer.setSamplesPerPixel(2);
     pathTracer.setDenoiserEnabled(false);
     pathTracer.setMaxBounces(5);
-    pathTracer.setFireflyClamp(0.9f);
     pathTracer.setMode(WgpuPathTracer::Mode::Raytracer);
 
     // ---- Scene ----
@@ -360,8 +359,6 @@ int main() {
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float ambientFactor = pathTracer.ambientFactor();
-    float fireflyClamp = pathTracer.fireflyClamp();
-
     float pixelScale = pathTracer.pixelScale();
     float fps = 0.f;
     float fpsAccum = 0.f;
@@ -407,8 +404,6 @@ int main() {
                 pathTracer.setMaxBounces(maxBounces);
             if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
                 pathTracer.setAmbientFactor(ambientFactor);
-            if (ImGui::SliderFloat("Firefly clamp", &fireflyClamp, 0.0f, 50.0f))
-                pathTracer.setFireflyClamp(fireflyClamp);
         }
 
         ImGui::End();

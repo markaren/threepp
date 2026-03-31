@@ -90,7 +90,7 @@ struct RtUniforms {
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale, y = envWidth, z = envHeight, w = hasEnvCDF
-    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = (unused), w = fireflyClamp
+    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
 };
 
@@ -800,7 +800,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             let envScale = select(rt.envIntensity.x, 1.0, i == 0);
             var envMisW = 1.0;
             // MIS: BRDF sampling hit the env — weight against env importance PDF
-            if (HAS_ENV_CDF && i > 0 && !afterTransmission && prevAlpha > 0.01) {
+            if (HAS_ENV_CDF && i > 0 && prevAlpha > 0.01) {
                 let pdf_env  = envImportancePdf(ray.dir);
                 let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                 envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
@@ -958,7 +958,7 @@ R"(
         }
 
         // --- Environment map NEE (importance-sampled) ---
-        if (HAS_ENV_CDF && !afterTransmission && h.shininess > 0.01 && i < 2) {
+        if (HAS_ENV_CDF && h.shininess > 0.01) {
             let envSample = sampleEnvImportance(seed);
             let envDir    = envSample.xyz;
             let envPdf    = envSample.w;
@@ -1042,7 +1042,9 @@ R"(
                 let absorbCoeff = -log(max(h.attenuationColor, vec3<f32>(1e-6))) / h.attenuationDist;
                 volAtten = exp(-absorbCoeff * h.t);
             }
-            throughput *= select(glassTint * volAtten, glassTint * volAtten * eta * eta, didRefract);
+            // Non-symmetry correction: BTDF includes (η_t/η_i)² = 1/η² to account
+            // for solid angle change at refractive interface.
+            throughput *= select(glassTint * volAtten, glassTint * volAtten / (eta * eta), didRefract);
             afterTransmission = true;
             ray.dir = wi_t;
             continue;
@@ -1072,12 +1074,6 @@ R"(
         afterTransmission = false;
         ray.origin = h.point + h.normal * 1e-3;
         ray.dir    = wi_b;
-    }
-    // Firefly clamping
-    let clampMax = rt.params.w;
-    if (clampMax > 0.0) {
-        let maxC = max(max(radiance.r, radiance.g), radiance.b);
-        if (maxC > clampMax) { radiance *= clampMax / maxC; }
     }
     return radiance;
 }
@@ -1129,11 +1125,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Stop accumulating once float16 precision is exhausted (~1024 frames)
     if (pixelFC < 1024.0) {
         let alpha   = 1.0 / (pixelFC + 1.0);
-        var blended = oldClean * (1.0 - alpha) + sampleClean * alpha;
-        let clampMax = rt.params.w;
-        if (clampMax > 0.0) {
-            blended = min(blended, vec3<f32>(clampMax));
-        }
+        let blended = oldClean * (1.0 - alpha) + sampleClean * alpha;
         textureStore(accumWrite, pixel, vec4<f32>(blended, pixelFC + 1.0));
     } else {
         textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
@@ -1641,7 +1633,7 @@ struct alignas(16) RtGpuUniforms {
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
     float    envIntensity[4];   // x = intensity, y = envWidth, z = envHeight, w = totalLumSum (0 = no CDF)
-    float    params[4];        // x = maxBounces, y = ambientFactor, z = (unused), w = fireflyClamp
+    float    params[4];        // x = maxBounces, y = ambientFactor
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
@@ -2348,7 +2340,6 @@ struct WgpuPathTracer::Impl {
     int maxBounces_ = 6;
     float exposure_ = 1.0f;
     float ambientFactor_ = 0.03f;
-    float fireflyClamp_ = 10.0f;
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
     int triCapacity_  = INIT_TRI_CAP;
@@ -3298,8 +3289,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
     u.params[0] = static_cast<float>(d.maxBounces_);
     u.params[1] = d.ambientFactor_;
-    u.params[2] = 0.f;  // unused
-    u.params[3] = d.fireflyClamp_;
+    u.params[2] = 0.f;
+    u.params[3] = 0.f;
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
 
@@ -3640,14 +3631,6 @@ void WgpuPathTracer::setAmbientFactor(float factor) {
 
 float WgpuPathTracer::ambientFactor() const {
     return pimpl_->ambientFactor_;
-}
-
-void WgpuPathTracer::setFireflyClamp(float clamp) {
-    pimpl_->fireflyClamp_ = clamp;
-}
-
-float WgpuPathTracer::fireflyClamp() const {
-    return pimpl_->fireflyClamp_;
 }
 
 void WgpuPathTracer::setDenoiserEnabled(bool enabled) {

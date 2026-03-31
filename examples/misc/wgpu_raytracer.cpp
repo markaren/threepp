@@ -126,7 +126,6 @@ int main() {
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float ambientFactor = pathTracer.ambientFactor();
-
     float fps = 0.f;
     float fpsAccum = 0.f;
     int fpsFrames = 0;

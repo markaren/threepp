@@ -65,10 +65,6 @@ namespace threepp {
         void setAmbientFactor(float factor);
         [[nodiscard]] float ambientFactor() const;
 
-        /// Max radiance clamp to suppress fireflies. Default: 10.0. Set 0 to disable.
-        void setFireflyClamp(float clamp);
-        [[nodiscard]] float fireflyClamp() const;
-
         /// Enable/disable the à-trous wavelet denoiser (path tracer mode only). Default: true.
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;
