@@ -1109,11 +1109,17 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var pixelFC  = prev.w;
 
     // Reset pixels whose primary ray hits a moved mesh.
+    let prevMeshIdx = u32(textureLoad(hitMeshRead, pixel, 0).r);
     if (primaryMeshIdx < 64u && isMeshMoved(i32(primaryMeshIdx))) {
         pixelFC = 0.0;
     }
-    // Shadow/bounce rays hit a moved mesh — reset so shadows refresh.
-    if (touchedMoved) { pixelFC = 0.0; }
+    // Moved mesh left this pixel (was covering it, now moved away) — flush stale color.
+    if (primaryMeshIdx != prevMeshIdx && prevMeshIdx < 64u && isMeshMoved(i32(prevMeshIdx))) {
+        pixelFC = 0.0;
+    }
+    // Secondary bounce hit a moved mesh — cap rather than reset so static
+    // surfaces can still converge while indirect lighting refreshes.
+    if (touchedMoved) { pixelFC = min(pixelFC, 3.0); }
     if (fc == 0u) { pixelFC = 0.0; }
 
     // NaN guard: reject corrupted samples to prevent permanent accumulation damage
@@ -1316,12 +1322,15 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    // Build 3×3 neighborhood color box for clamping
+    // Build 3×3 neighborhood color box for clamping (same mesh only)
+    let curMeshId = u32(textureLoad(hitMeshTex, pixel, 0).r);
     var cMin = curColor;
     var cMax = curColor;
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
             let sp = clamp(pixel + vec2<i32>(dx, dy), vec2<i32>(0), iRes - 1);
+            let nMeshId = u32(textureLoad(hitMeshTex, sp, 0).r);
+            if (nMeshId != curMeshId) { continue; }
             let nc = textureLoad(accumIn, sp, 0).xyz;
             cMin = min(cMin, nc);
             cMax = max(cMax, nc);
@@ -1398,14 +1407,17 @@ struct AtrousUni { stepSize: u32, _p0: u32, _p1: u32, _p2: u32, }
 @group(0) @binding(2) var colorOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var gBuf:     texture_2d<f32>;
 @group(0) @binding(4) var albedoBuf: texture_2d<f32>;
+@group(0) @binding(5) var hitMeshBuf: texture_2d<f32>;
 
 fn luminance_a(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
 }
 
 // Demodulate: divide out albedo to isolate irradiance (smooth signal).
+// Floor at 0.1 to prevent extreme amplification on dark surfaces (black gloves etc.)
+// where tiny color differences get magnified 100x+ and defeat the filter.
 fn demod(color: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
-    return color / max(albedo, vec3<f32>(0.001));
+    return color / max(albedo, vec3<f32>(0.1));
 }
 
 @compute @workgroup_size(8, 8)
@@ -1423,6 +1435,7 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let cNorm   = cGB.xyz;
     let cDepth  = cGB.w;
     let cAlbedo = textureLoad(albedoBuf, pixel, 0).xyz;
+    let cMeshId = u32(textureLoad(hitMeshBuf, pixel, 0).r);
 
     // Sky pixels: pass through
     if (cDepth < 1e-6) {
@@ -1452,6 +1465,10 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
             // Demodulate neighbor
             let sIrr = demod(sColor, sAlbedo);
+
+            // Mesh-ID edge-stopping: never blend across different objects
+            let sMeshId = u32(textureLoad(hitMeshBuf, sp, 0).r);
+            if (sMeshId != cMeshId) { continue; }
 
             // Normal edge-stopping
             let w_n = pow(max(0.0, dot(cNorm, sNorm)), 64.0);
@@ -3392,6 +3409,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.atrousPipeline.setTexture(1, *src);
             d.atrousPipeline.setStorageTexture(2, *dst);
             d.atrousPipeline.setTexture(3, *d.gBufPrev);
+            d.atrousPipeline.setTexture(5, *d.readHitMesh);
             d.atrousPipeline.dispatch(gx, gy);
             src = dst;
             std::swap(dst, aux);

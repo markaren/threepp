@@ -120,7 +120,6 @@ int main() {
     // ---- UI ----
     bool pathTracerOn = false;
     bool denoiserOn = pathTracer.denoiserEnabled();
-    bool lightMoving = false;
     bool animateBox = true;
     bool showEnclosingBox = true;
     bool raster = false;
@@ -156,7 +155,6 @@ int main() {
         if (!raster) ImGui::Text("Frames: %d", pathTracer.frameCount());
         ImGui::Separator();
 
-        ImGui::Checkbox("Moving light", &lightMoving);
         ImGui::Checkbox("AnimateBox", &animateBox);
         ImGui::Checkbox("EnclosingBox", &showEnclosingBox);
 
@@ -209,12 +207,6 @@ int main() {
         if (animateBox) {
             boxMesh->rotation.y += dt * 0.6f;
             boxMesh->rotation.x += dt * 0.3f;
-        }
-        if (lightMoving) {
-            pointLight->position.set(
-                    5.f * std::cos(elapsed * 0.6f),
-                    6.f + std::sin(elapsed * 0.3f),
-                    -2.f + 4.f * std::sin(elapsed * 0.6f));
         }
 
         controls.update();
