@@ -2724,6 +2724,8 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Collect visible, non-wireframe, non-line meshes and lights
     std::vector<Mesh*> rtMeshes;
+    bool hasEnclosingBox = false;
+    Color enclosingBoxColor;
     scene.traverseVisible([&](Object3D& o) {
         auto* m_ptr = dynamic_cast<Mesh*>(&o);
         if (!m_ptr) return;
@@ -2734,6 +2736,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         auto* mww = mat->as<MaterialWithWireframe>();
         if (mww && mww->wireframe) return;
         if (mat->is<LineBasicMaterial>()) return;
+        // Side::Back meshes (enclosing boxes) poison the BVH with scene-spanning
+        // triangles.  Exclude them and use their color as the ray-miss background.
+        if (mat->side == Side::Back) {
+            hasEnclosingBox = true;
+            if (auto* mc = mat->as<MaterialWithColor>()) enclosingBoxColor = mc->color;
+            return;
+        }
         rtMeshes.push_back(&m);
     });
     std::vector<PointLight*> pointLights;
@@ -3186,6 +3195,14 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                 d.shaderHasEnvCdf_ = false;
             }
         }
+    }
+    // Enclosing box overrides environment: use its color as solid-color miss background
+    if (hasEnclosingBox) {
+        u.envColor[0] = enclosingBoxColor.r;
+        u.envColor[1] = enclosingBoxColor.g;
+        u.envColor[2] = enclosingBoxColor.b;
+        u.envColor[3] = 1.f;  // solid color mode
+        d.envLumSum_ = 0.f;
     }
 #ifndef __EMSCRIPTEN__
     // Check if async CDF build finished — upload to GPU
