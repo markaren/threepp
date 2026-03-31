@@ -1453,36 +1453,8 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let demodBlend = smoothstep(0.05, 0.2, albedoLum);
     let cLum = mix(luminance_a(cColor), luminance_a(cIrr), demodBlend);
 
-    // Variance estimate from immediate 3×3 neighbors
-    var lumMean = 0.0;
-    var lumSqMean = 0.0;
-    var varN = 0.0;
-    for (var vy = -1; vy <= 1; vy++) {
-        for (var vx = -1; vx <= 1; vx++) {
-            let vp = clamp(pixel + vec2<i32>(vx, vy), vec2<i32>(0), res - 1);
-            if (u32(textureLoad(hitMeshBuf, vp, 0).r) != cMeshId) { continue; }
-            let vCol = textureLoad(colorIn, vp, 0).xyz;
-            let vAlb = textureLoad(albedoBuf, vp, 0).xyz;
-            let vAlbLum = luminance_a(vAlb);
-            let vDemod = smoothstep(0.05, 0.2, vAlbLum);
-            let vLum = mix(luminance_a(vCol), luminance_a(demod(vCol, vAlb)), vDemod);
-            lumMean   += vLum;
-            lumSqMean += vLum * vLum;
-            varN      += 1.0;
-        }
-    }
-    // Stable baseline sigma from frame count — always applied, prevents oscillation.
-    // Variance can only INCREASE sigma (more blur where noisy), never decrease it.
-    let baseSigma = 0.25 / sqrt(cFC + 1.0);
-    var lumSigma = baseSigma;
-    if (varN >= 5.0) {
-        lumMean   /= varN;
-        lumSqMean /= varN;
-        let localVar = max(0.0, lumSqMean - lumMean * lumMean);
-        let varSigma = sqrt(localVar) * 2.0 / sqrt(cFC + 1.0);
-        lumSigma = max(baseSigma, varSigma);
-    }
-    lumSigma = max(0.02, lumSigma);
+    // Luminance sigma: relaxed when noisy (low FC), tight when converged
+    let lumSigma = max(0.02, 0.25 / sqrt(cFC + 1.0));
 
     // 5×5 bilateral filter — tracks both demodulated irradiance and raw color
     let kw = array<f32, 5>(1.0/16.0, 4.0/16.0, 6.0/16.0, 4.0/16.0, 1.0/16.0);
@@ -3437,8 +3409,10 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         WgpuTexture* aux = &d.filteredB;
 
         // 5×5 kernel covers more area per pass, so fewer passes needed.
-        // Variance-based sigma makes the filter transparent when converged.
-        const int nPasses = (d.frameCount_ < 4.f) ? 3 : 2;
+        // Scale down as image converges: sigma shrinks, filter becomes transparent.
+        const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
+        const int nPasses = (d.frameCount_ < 4.f)                ? 3 :
+                            (d.frameCount_ < 32.f || hasMotion)   ? 2 : 1;
 
         for (int pass = 0; pass < nPasses; ++pass) {
             AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), {0u, 0u, 0u}};
