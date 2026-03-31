@@ -800,7 +800,7 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
             let envScale = select(rt.envIntensity.x, 1.0, i == 0);
             var envMisW = 1.0;
             // MIS: BRDF sampling hit the env — weight against env importance PDF
-            if (HAS_ENV_CDF && i > 0 && prevAlpha > 0.01) {
+            if (HAS_ENV_CDF && rt.envColor.w > 1.5 && i > 0 && prevAlpha > 0.01) {
                 let pdf_env  = envImportancePdf(ray.dir);
                 let pdf_brdf = brdfPdf(prevWo, normalize(ray.dir), prevNormal, prevAlpha, prevMetalness);
                 envMisW = pdf_brdf / max(pdf_brdf + pdf_env, 1e-8);
@@ -958,7 +958,7 @@ R"(
         }
 
         // --- Environment map NEE (importance-sampled) ---
-        if (HAS_ENV_CDF && h.shininess > 0.01) {
+        if (HAS_ENV_CDF && rt.envColor.w > 1.5 && h.shininess > 0.01 && i < 4) {
             let envSample = sampleEnvImportance(seed);
             let envDir    = envSample.xyz;
             let envPdf    = envSample.w;
@@ -1478,8 +1478,9 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
             // Spatial weight (separable Gaussian)
             let w_s = kw[dy + 2] * kw[dx + 2];
-            // Normal edge-stopping
-            let w_n = pow(max(0.0, dot(cNorm, sNorm)), 64.0);
+            // Normal edge-stopping: relaxed for noisy pixels (low FC), sharp when converged
+            let normPow = mix(16.0, 64.0, smoothstep(0.0, 8.0, cFC));
+            let w_n = pow(max(0.0, dot(cNorm, sNorm)), normPow);
             // Depth edge-stopping
             let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
             // Luminance edge-stopping: demod for bright surfaces, raw for dark
@@ -3371,8 +3372,11 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     d.rtRaycastPipeline.setStorageTexture(10, *d.gBufCur);
 
     // TAA + spatial denoiser (path tracer mode only)
+    // Skip entirely when fully converged — accumulation is already clean.
     WgpuTexture* displayTex = d.readAccum;
-    if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer) {
+    const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
+    const bool needsDenoise = d.frameCount_ < 64.f || hasMotion;
+    if (d.denoiserEnabled_ && d.mode_ == Mode::PathTracer && needsDenoise) {
         const uint32_t gx = (static_cast<uint32_t>(d.width_)  + 7u) / 8u;
         const uint32_t gy = (static_cast<uint32_t>(d.height_) + 7u) / 8u;
 
@@ -3410,7 +3414,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
         // 5×5 kernel covers more area per pass, so fewer passes needed.
         // Scale down as image converges: sigma shrinks, filter becomes transparent.
-        const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
         const int nPasses = (d.frameCount_ < 4.f)                ? 3 :
                             (d.frameCount_ < 32.f || hasMotion)   ? 2 : 1;
 
