@@ -244,6 +244,11 @@ namespace threepp::wgpu {
             }
         }
 
+        // Binding 38-39: transmission sampler map
+        if (features & ShaderFeatures::Transmission) {
+            addTexSamplerBindings(38, 39);
+        }
+
         return entries;
     }
 

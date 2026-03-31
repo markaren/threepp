@@ -50,6 +50,14 @@ MaterialParams extractMaterialParams(Material* rawMat, BufferGeometry* geometry)
         if (m->bumpMap) { p.bumpMap = m->bumpMap.get(); p.bumpScale = m->bumpScale; p.features |= ShaderFeatures::BumpMap; }
         if (m->displacementMap) { p.displacementMap = m->displacementMap.get(); p.displacementScale = m->displacementScale; p.features |= ShaderFeatures::DisplacementMap; }
         if (m->envMap) { p.envMap = m->envMap.get(); p.envMapIntensity = m->envMapIntensity; p.features |= ShaderFeatures::EnvMap; }
+        if (auto t = dynamic_cast<MeshPhysicalMaterial*>(rawMat)) {
+            p.transmission = t->transmission;
+            p.ior = t->ior;
+            p.thickness = t->thickness;
+            p.attenuationDistance = t->attenuationDistance;
+            p.attenuationColor = t->attenuationColor;
+            if (p.transmission > 0.0f) p.features |= ShaderFeatures::Transmission;
+        }
     } else if (auto m = dynamic_cast<MeshPhongMaterial*>(rawMat)) {
         p.features |= ShaderFeatures::Lighting | ShaderFeatures::Specular;
         p.diffuse = m->color;
@@ -200,6 +208,18 @@ void packMaterialUniforms(float* data, const MaterialParams& params,
         data[30] = cp.normal.z;
         data[31] = cp.constant;
     }
+
+    // transmissionParams (vec4, offset 32): transmission, ior, thickness, samplerWidth
+    data[32] = params.transmission;
+    data[33] = params.ior;
+    data[34] = params.thickness;
+    data[35] = ctx.transmissionTexW;
+
+    // attenuationParams (vec4, offset 36): color.rgb, distance
+    data[36] = params.attenuationColor.r;
+    data[37] = params.attenuationColor.g;
+    data[38] = params.attenuationColor.b;
+    data[39] = params.attenuationDistance;
 }
 
 }// namespace threepp::wgpu

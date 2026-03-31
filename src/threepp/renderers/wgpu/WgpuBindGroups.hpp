@@ -45,6 +45,8 @@ namespace threepp::wgpu {
         WGPUBuffer morphBuffer = nullptr;    size_t morphSize = 0;
         WGPUBuffer skinBuffer = nullptr;     size_t skinSize = 0;
         WGPUBuffer skinVertexBuffer = nullptr; size_t skinVertexSize = 0;
+        WGPUTextureView transmissionTexView = nullptr;
+        WGPUSampler transmissionSampler = nullptr;
     };
 
     class WgpuBindGroups {

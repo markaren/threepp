@@ -389,10 +389,13 @@ struct WgpuRenderer::Impl {
     // Also returns true when retainFramebuffer is active: routing through the
     // intermediate color texture gives us a COPY_SRC source for the retain copy,
     // since surface textures only carry RENDER_ATTACHMENT usage.
+    bool hasTransmissive_ = false;
+
     bool needsToneMapPass() const {
         return scope.toneMapping != ToneMapping::None ||
                scope.outputEncoding == Encoding::sRGB ||
-               retainFramebuffer;
+               retainFramebuffer ||
+               hasTransmissive_;
     }
 
     // Retained framebuffer for copyFramebufferToTexture support.
@@ -787,6 +790,49 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
         wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
         wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
         wgpuBindGroupRelease(bg);
+    }
+
+    // ── Transmission render target ──────────────────────────────────
+    // A mipmapped copy of the framebuffer after opaques, used by transmissive shaders.
+    WGPUTexture transmissionTex_ = nullptr;
+    WGPUTextureView transmissionTexView_ = nullptr;
+    WGPUSampler transmissionSampler_ = nullptr;
+    uint32_t transmissionTexW_ = 0, transmissionTexH_ = 0;
+
+    WGPUTextureFormat transmissionTexFmt_ = WGPUTextureFormat_Undefined;
+
+    void ensureTransmissionRT(uint32_t w, uint32_t h, WGPUTextureFormat fmt = WGPUTextureFormat_RGBA8Unorm) {
+        if (transmissionTex_ && transmissionTexW_ == w && transmissionTexH_ == h && transmissionTexFmt_ == fmt) return;
+        if (transmissionTexView_) { wgpuTextureViewRelease(transmissionTexView_); transmissionTexView_ = nullptr; }
+        if (transmissionTex_) { wgpuTextureRelease(transmissionTex_); transmissionTex_ = nullptr; }
+        if (transmissionSampler_) { wgpuSamplerRelease(transmissionSampler_); transmissionSampler_ = nullptr; }
+
+        uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2(static_cast<float>((std::max)(w, h))))) + 1u;
+
+        WGPUTextureDescriptor td{};
+        td.label = WGPUStringView{"transmission_rt", WGPU_STRLEN};
+        td.size = {w, h, 1};
+        td.mipLevelCount = mipLevels;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = fmt;
+        td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment;
+        transmissionTex_ = wgpuDeviceCreateTexture(device, &td);
+        transmissionTexView_ = wgpuTextureCreateView(transmissionTex_, nullptr);
+
+        WGPUSamplerDescriptor sd{};
+        sd.label = WGPUStringView{"transmission_samp", WGPU_STRLEN};
+        sd.magFilter = WGPUFilterMode_Linear;
+        sd.minFilter = WGPUFilterMode_Linear;
+        sd.mipmapFilter = WGPUMipmapFilterMode_Linear;
+        sd.addressModeU = WGPUAddressMode_ClampToEdge;
+        sd.addressModeV = WGPUAddressMode_ClampToEdge;
+        sd.maxAnisotropy = 1;
+        transmissionSampler_ = wgpuDeviceCreateSampler(device, &sd);
+
+        transmissionTexW_ = w;
+        transmissionTexH_ = h;
+        transmissionTexFmt_ = fmt;
     }
 
     // Shared quad geometry for rendering sprites (standard attributes, not interleaved)
@@ -1733,6 +1779,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             renderList_.finish();
         }
 
+        // Force intermediate RT when transmissive objects need a framebuffer copy
+        hasTransmissive_ = !renderList_.transmissive.empty();
+
         // Determine render target views
         WGPUTextureView colorView = nullptr;
         WGPUTextureView depthView = nullptr;
@@ -1934,6 +1983,93 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         // Render opaque objects (front-to-back, depth write on)
         for (auto* item : renderList_.opaque) {
             renderItem(pass, item, projectionMatrix, viewMatrix, camera, frameCtx);
+        }
+
+        // Transmissive objects: end pass, copy framebuffer, generate mipmaps, re-open pass
+        if (!renderList_.transmissive.empty()) {
+            wgpuRenderPassEncoderEnd(pass);
+            wgpuRenderPassEncoderRelease(pass);
+
+            // Copy from the intermediate RT (hasTransmissive_ forces needsToneMapPass,
+            // so toneMap_.colorTexture is always the active color target here).
+            WGPUTexture srcTex = toneMap_.colorTexture;
+
+            ensureTransmissionRT(attachW, attachH, surfaceFormat);
+
+            // Copy the opaque framebuffer to the transmission texture
+            WGPUTexelCopyTextureInfo src{};
+            src.texture = srcTex;
+            src.mipLevel = 0;
+            WGPUTexelCopyTextureInfo dst{};
+            dst.texture = transmissionTex_;
+            dst.mipLevel = 0;
+            WGPUExtent3D extent = {attachW, attachH, 1};
+            wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &extent);
+
+            // Submit the copy command
+            WGPUCommandBufferDescriptor cbDesc{};
+            WGPUCommandBuffer cb = wgpuCommandEncoderFinish(encoder, &cbDesc);
+            wgpuQueueSubmit(queue, 1, &cb);
+            wgpuCommandBufferRelease(cb);
+
+            // Generate mipmaps (submits its own command buffer)
+            {
+                uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2(static_cast<float>((std::max)(attachW, attachH))))) + 1u;
+                textures->mipmapGen().generate2D(transmissionTex_, attachW, attachH, mipLevels, surfaceFormat);
+            }
+
+            // Create a fresh encoder for the rest of the frame
+            WGPUCommandEncoderDescriptor encDesc{};
+            encDesc.label = WGPUStringView{"transmissive_enc", sizeof("transmissive_enc") - 1};
+            encoder = wgpuDeviceCreateCommandEncoder(device, &encDesc);
+            renderEncoder_ = encoder;
+
+            // Re-open render pass with Load ops to preserve existing content
+            WGPURenderPassColorAttachment colorAtt2{};
+            colorAtt2.view = colorView;
+            colorAtt2.resolveTarget = resolveView;
+            colorAtt2.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+            colorAtt2.loadOp = WGPULoadOp_Load;
+            colorAtt2.storeOp = WGPUStoreOp_Store;
+
+            WGPURenderPassDepthStencilAttachment depthAtt2{};
+            depthAtt2.view = depthView;
+            depthAtt2.depthLoadOp = WGPULoadOp_Load;
+            depthAtt2.depthStoreOp = WGPUStoreOp_Store;
+            depthAtt2.depthClearValue = 1.0f;
+
+            WGPURenderPassDescriptor passDesc2{};
+            passDesc2.label = WGPUStringView{"transmissive_pass", sizeof("transmissive_pass") - 1};
+            passDesc2.colorAttachmentCount = 1;
+            passDesc2.colorAttachments = &colorAtt2;
+            passDesc2.depthStencilAttachment = &depthAtt2;
+
+            pass = wgpuCommandEncoderBeginRenderPass(encoder, &passDesc2);
+
+            // Restore viewport and scissor
+            if (currentRenderTarget_ && !viewportExplicit_) {
+                auto& rtVp = currentRenderTarget_->viewport;
+                wgpuRenderPassEncoderSetViewport(pass, rtVp.x, rtVp.y, rtVp.z, rtVp.w, 0.0f, 1.0f);
+            } else {
+                float vw = (std::min)(viewport_.w, static_cast<float>(attachW));
+                float vh = (std::min)(viewport_.h, static_cast<float>(attachH));
+                wgpuRenderPassEncoderSetViewport(pass, viewport_.x, viewport_.y, vw, vh, 0.0f, 1.0f);
+            }
+            if (scissorTest_) {
+                uint32_t sw = (std::min)(scissor_.w, attachW);
+                uint32_t sh = (std::min)(scissor_.h, attachH);
+                wgpuRenderPassEncoderSetScissorRect(pass, scissor_.x, scissor_.y, sw, sh);
+            } else {
+                wgpuRenderPassEncoderSetScissorRect(pass, 0, 0, attachW, attachH);
+            }
+
+            // Set transmission sampler size in frame context for uniform packing
+            frameCtx.transmissionTexW = static_cast<float>(attachW);
+            frameCtx.transmissionTexH = static_cast<float>(attachH);
+
+            for (auto* item : renderList_.transmissive) {
+                renderItem(pass, item, projectionMatrix, viewMatrix, camera, frameCtx);
+            }
         }
 
         // Render transparent objects (back-to-front, depth write off)
@@ -2627,6 +2763,7 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             .morphBuffer = morphBuffer, .morphSize = morphBufSize,
             .skinBuffer = skinBuffer, .skinSize = skinBufSize,
             .skinVertexBuffer = skinVertexBuffer, .skinVertexSize = skinVertexBufSize,
+            .transmissionTexView = transmissionTexView_, .transmissionSampler = transmissionSampler_,
         };
         auto& entries = bindGroups->buildStandard(bgInputs);
 
@@ -2723,6 +2860,9 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
         }
         trackedInstancedMeshes_.clear();
 
+        if (transmissionTexView_)  { wgpuTextureViewRelease(transmissionTexView_);     transmissionTexView_ = nullptr; }
+        if (transmissionTex_)     { wgpuTextureRelease(transmissionTex_);             transmissionTex_ = nullptr; }
+        if (transmissionSampler_) { wgpuSamplerRelease(transmissionSampler_);         transmissionSampler_ = nullptr; }
         if (envBgTexView_)        { wgpuTextureViewRelease(envBgTexView_);            envBgTexView_ = nullptr; }
         if (envBgTex_)            { wgpuTextureRelease(envBgTex_);                    envBgTex_ = nullptr; }
         if (envBgPipeline_)       { wgpuRenderPipelineRelease(envBgPipeline_);       envBgPipeline_ = nullptr; }

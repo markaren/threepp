@@ -98,6 +98,12 @@ const std::vector<WGPUBindGroupEntry>& WgpuBindGroups::buildStandard(const BindG
         entries_.push_back(e);
     }
 
+    // Binding 38-39: transmission sampler map
+    if ((features & SF::Transmission) && inputs.transmissionTexView && inputs.transmissionSampler) {
+        { WGPUBindGroupEntry e{}; e.binding = 38; e.textureView = inputs.transmissionTexView; entries_.push_back(e); }
+        { WGPUBindGroupEntry e{}; e.binding = 39; e.sampler = inputs.transmissionSampler; entries_.push_back(e); }
+    }
+
     // Binding 34-35: skinning data buffers
     if (inputs.skinBuffer) {
         { WGPUBindGroupEntry e{}; e.binding = 34; e.buffer = inputs.skinBuffer; e.offset = 0; e.size = inputs.skinSize;

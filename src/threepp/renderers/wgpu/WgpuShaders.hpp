@@ -100,6 +100,9 @@ namespace threepp::wgpu {
         // MeshDepthMaterial (bit 40): maps depth (near→far) to brightness
         constexpr uint64_t DepthVis        = 1ULL << 40;
 
+        // Transmission (bit 41): screen-space refraction for transmissive materials
+        constexpr uint64_t Transmission    = 1ULL << 41;
+
         // Convenience: test if shader needs lighting calculations.
         inline bool isLit(uint64_t features) {
             return (features & (Lighting | Specular | PBR)) != 0;
@@ -119,8 +122,9 @@ namespace threepp::wgpu {
     // Transform: model(64) + view(64) + proj(64) + normalMatrix(48) + cameraPos(12) + pad(4) = 256
     constexpr size_t TRANSFORM_UNIFORM_SIZE = 256;
     // Material: diffuse(16) + specular(16) + roughnessMetalnessOpacity(16) + emissive(16)
-    //         + flags(16) + fogColor(16) + fogParams(16) + clipPlane(16) = 128
-    constexpr size_t MATERIAL_UNIFORM_SIZE = 128;
+    //         + flags(16) + fogColor(16) + fogParams(16) + clipPlane(16)
+    //         + transmissionParams(16) + attenuationParams(16) = 160
+    constexpr size_t MATERIAL_UNIFORM_SIZE = 160;
 
     struct LightLimits;
     struct ShadowLimits;

@@ -72,6 +72,7 @@ int main() {
     boxMesh->castShadow = true;
     sphere1->castShadow = true;
     sphere2->castShadow = true;
+    glassSphere->castShadow = true;
     floor->receiveShadow = true;
 
     ImageLoader imgLoader;

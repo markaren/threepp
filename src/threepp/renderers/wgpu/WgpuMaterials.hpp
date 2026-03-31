@@ -55,6 +55,12 @@ namespace threepp::wgpu {
         float aoMapIntensity = 1.0f;
         float bumpScale = 1.0f;
 
+        float transmission = 0.0f;
+        float ior = 1.5f;
+        float thickness = 0.0f;
+        float attenuationDistance = 0.0f;
+        Color attenuationColor{1, 1, 1};
+
         // True if this material is a ShaderMaterial with custom WGSL shaders
         bool isCustomShader = false;
         // True if this material should be skipped entirely (e.g. ShadowMaterial)
@@ -76,6 +82,8 @@ namespace threepp::wgpu {
         bool srgbOutput = false;
         bool localClippingEnabled = false;
         bool shadowActive = false;
+        float transmissionTexW = 0;
+        float transmissionTexH = 0;
     };
 
     // Extract material parameters and compute the base feature bitmask

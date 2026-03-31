@@ -108,6 +108,8 @@ struct MaterialUniforms {
     fogColor: vec4<f32>,
     fogParams: vec4<f32>,
     clipPlane: vec4<f32>,
+    transmissionParams: vec4<f32>,  // x=transmission, y=ior, z=thickness, w=samplerW
+    attenuationParams: vec4<f32>,   // xyz=attenuationColor, w=attenuationDistance
 };
 @group(0) @binding(1) var<uniform> material: MaterialUniforms;
 )";
@@ -181,6 +183,10 @@ struct MaterialUniforms {
     if (features & ShaderFeatures::EnvMap) {
         s << "@group(0) @binding(32) var t_envMap: texture_cube<f32>;\n";
         s << "@group(0) @binding(33) var s_envMap: sampler;\n";
+    }
+    if (features & ShaderFeatures::Transmission) {
+        s << "@group(0) @binding(38) var t_transmissionMap: texture_2d<f32>;\n";
+        s << "@group(0) @binding(39) var s_transmissionMap: sampler;\n";
     }
 
     if (features & ShaderFeatures::Instanced) {
@@ -740,6 +746,47 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) isFrontFacing: bool) -> @loc
         // LightMap
         if (features & ShaderFeatures::LightMap) {
             s << "    baseColor = baseColor + textureSample(t_lightMap, s_lightMap, in.uv).rgb;\n";
+        }
+
+        // Transmission: sample the opaque framebuffer copy through refraction
+        if (features & ShaderFeatures::Transmission) {
+            s << R"(    {
+        let transmission = material.transmissionParams.x;
+        let ior = material.transmissionParams.y;
+        let thicknessFactor = material.transmissionParams.z;
+        let samplerW = material.transmissionParams.w;
+        let attColor = material.attenuationParams.xyz;
+        let attDist = material.attenuationParams.w;
+
+        // Refraction ray through the volume (thickness in local space, scaled by model)
+        let refrDir = refract(-V, N, 1.0 / ior);
+        let modelScale = vec3<f32>(
+            length(transform.model[0].xyz),
+            length(transform.model[1].xyz),
+            length(transform.model[2].xyz));
+        let transmissionRay = normalize(refrDir) * thicknessFactor * modelScale;
+        let refractedPos = in.worldPos + transmissionRay;
+
+        // Project to screen space
+        let clipPos = transform.proj * transform.view * vec4<f32>(refractedPos, 1.0);
+        let refrUV = clipPos.xy / clipPos.w * 0.5 + 0.5;
+        let framebufferLod = log2(samplerW) * roughness * clamp(ior * 2.0 - 2.0, 0.0, 1.0);
+        var transmittedLight = textureSampleLevel(t_transmissionMap, s_transmissionMap, refrUV, framebufferLod).rgb;
+
+        // Beer's law volume attenuation
+        if (attDist > 0.0) {
+            let attCoeff = -log(max(attColor, vec3<f32>(1e-6))) / attDist;
+            transmittedLight = transmittedLight * exp(-attCoeff * length(transmissionRay));
+        }
+
+        // Fresnel
+        let NdotV_t = max(dot(N, V), 0.0);
+        let f0_t = pow((ior - 1.0) / (ior + 1.0), 2.0);
+        let fresnel_t = f0_t + (1.0 - f0_t) * pow(1.0 - NdotV_t, 5.0);
+        let transmissionFactor = transmission * (1.0 - fresnel_t);
+        baseColor = mix(baseColor, transmittedLight * material.diffuse.rgb, transmissionFactor);
+    }
+)";
         }
 
         // AO map

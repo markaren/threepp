@@ -47,6 +47,8 @@ namespace threepp::wgpu {
 
         [[nodiscard]] size_t count() const { return cache_.size(); }
 
+        WgpuMipmapGenerator& mipmapGen() { return mipmapGen_; }
+
     private:
         struct PendingMipmap {
             WGPUTexture texture;
