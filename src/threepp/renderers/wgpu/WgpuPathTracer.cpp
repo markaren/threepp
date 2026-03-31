@@ -88,7 +88,7 @@ struct RtUniforms {
     movedMeshBits: vec4<u32>,  // bit i = mesh i moved (words 0/1 cover meshes 0-63)
     envColor:      vec4<f32>,  // xyz = color/tint, w = mode: 0=sky gradient, 1=solid color, 2=equirect tex
     envIntensity:  vec4<f32>,  // x = intensity scale, y = envWidth, z = envHeight, w = hasEnvCDF
-    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = movedPixelFC, w = fireflyClamp
+    params:        vec4<f32>,  // x = maxBounces, y = ambientFactor, z = (unused), w = fireflyClamp
     emissiveInfo:  vec4<f32>,  // x = emissive triangle count, y = total emissive power
 };
 
@@ -110,6 +110,7 @@ struct BvhNodeGpu {
 @group(0) @binding(9)  var envTex:      texture_2d<f32>;
 @group(0) @binding(10) var gBufWrite:   texture_storage_2d<rgba16float, write>;
 @group(0) @binding(11) var<storage, read> emissiveTris: array<vec4<f32>>;  // per tri: (triIndex, area, 0, 0)
+@group(0) @binding(14) var albedoWrite: texture_storage_2d<rgba16float, write>;
 
 const TRI_PAGE_W:  i32 = 8192;
 const TRI_PAGE_H:  i32 = 8;
@@ -589,6 +590,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let centerHit = sceneHit(makeRay(fp + vec2<f32>(0.5, 0.5), res));
     let tVal = select(centerHit.t, 0.0, centerHit.t >= 1e20);
     textureStore(gBufWrite, pixel, vec4<f32>(vec3<f32>(0.0), tVal));
+    textureStore(albedoWrite, pixel, vec4<f32>(1.0, 1.0, 1.0, 1.0));
 }
 )";
 
@@ -770,10 +772,12 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
              primaryMeshIdx: ptr<function, u32>,
              primaryNormal:  ptr<function, vec3<f32>>,
              primaryDepth:   ptr<function, f32>,
+             primaryAlbedo:  ptr<function, vec3<f32>>,
              touchedMoved:   ptr<function, bool>) -> vec3<f32> {
     *primaryMeshIdx = 64u;
     *primaryNormal  = vec3<f32>(0.0);
     *primaryDepth   = 0.0;  // 0 = sky/no-hit sentinel for denoiser
+    *primaryAlbedo  = vec3<f32>(1.0);  // default white (sky/miss: no demodulation)
     *touchedMoved   = false;
     var ray        = ray_in;
     var throughput = vec3<f32>(1.0);
@@ -835,6 +839,8 @@ fn pathTrace(ray_in: Ray, seed: ptr<function, u32>,
 
         var albedo = h.albedo;
         if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
+
+        if (i == 0) { *primaryAlbedo = albedo; }
 
         let wo = normalize(-ray.dir);
 
@@ -1092,21 +1098,20 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var primaryMeshIdx: u32;
     var primaryNormal:  vec3<f32>;
     var primaryDepth:   f32;
+    var primaryAlbedo:  vec3<f32>;
     var touchedMoved:   bool;
-    var sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth, &touchedMoved);
+    var sample  = pathTrace(ray, &seed, &primaryMeshIdx, &primaryNormal, &primaryDepth, &primaryAlbedo, &touchedMoved);
 
     let prev     = textureLoad(accumRead, pixel, 0);
     let old      = prev.xyz;
     var pixelFC  = prev.w;
 
-    // Only reset pixels whose *current* primary ray hits a moved mesh.
-    var meshMoved = false;
-    if (primaryMeshIdx < 64u) {
-        meshMoved = isMeshMoved(i32(primaryMeshIdx));
+    // Reset pixels whose primary ray hits a moved mesh.
+    if (primaryMeshIdx < 64u && isMeshMoved(i32(primaryMeshIdx))) {
+        pixelFC = 0.0;
     }
-    if (meshMoved) { pixelFC = 0.0; }
-    // Shadow/bounce rays hit a moved mesh — partially reset so shadows refresh.
-    if (touchedMoved && !meshMoved) { pixelFC = min(pixelFC, rt.params.z); }
+    // Shadow/bounce rays hit a moved mesh — reset so shadows refresh.
+    if (touchedMoved) { pixelFC = 0.0; }
     if (fc == 0u) { pixelFC = 0.0; }
 
     // NaN guard: reject corrupted samples to prevent permanent accumulation damage
@@ -1126,6 +1131,7 @@ fn rt_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         textureStore(accumWrite, pixel, vec4<f32>(oldClean, pixelFC));
     }
     textureStore(hitMeshWrite, pixel, vec4<f32>(f32(primaryMeshIdx), 0.0, 0.0, 0.0));
+    textureStore(albedoWrite,  pixel, vec4<f32>(primaryAlbedo, 1.0));
     textureStore(gBufWrite,    pixel, vec4<f32>(primaryNormal, primaryDepth));
 }
 )";
@@ -1364,9 +1370,11 @@ fn taa_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let histColor = textureLoad(taaHistIn, prevPixel, 0).xyz;
         let clamped   = clamp(histColor, cMin, cMax);
         // Blend: use more history early (noisy), more current once converged.
-        // For moved meshes, bias toward current sample but still use some history.
+        // For moved meshes, the reprojected history is unreliable, but neighborhood
+        // clamping constrains it to a plausible range. Use moderate history (alpha=0.4)
+        // to get some free temporal smoothing without ghosting.
         var alpha = clamp(1.0 / (curFC * 0.5 + 1.0), 0.1, 1.0);
-        if (movedMesh) { alpha = max(alpha, 0.9); }
+        if (movedMesh) { alpha = max(alpha, 0.4); }
         result = mix(clamped, curColor, alpha);
     }
 
@@ -1387,9 +1395,15 @@ struct AtrousUni { stepSize: u32, _p0: u32, _p1: u32, _p2: u32, }
 @group(0) @binding(1) var colorIn:  texture_2d<f32>;
 @group(0) @binding(2) var colorOut: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var gBuf:     texture_2d<f32>;
+@group(0) @binding(4) var albedoBuf: texture_2d<f32>;
 
 fn luminance_a(c: vec3<f32>) -> f32 {
     return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+// Demodulate: divide out albedo to isolate irradiance (smooth signal).
+fn demod(color: vec3<f32>, albedo: vec3<f32>) -> vec3<f32> {
+    return color / max(albedo, vec3<f32>(0.001));
 }
 
 @compute @workgroup_size(8, 8)
@@ -1400,12 +1414,13 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let step = i32(uni.stepSize);
 
-    let cSamp  = textureLoad(colorIn, pixel, 0);
-    let cColor = cSamp.xyz;
-    let cFC    = cSamp.w;
-    let cGB    = textureLoad(gBuf, pixel, 0);
-    let cNorm  = cGB.xyz;
-    let cDepth = cGB.w;
+    let cSamp   = textureLoad(colorIn, pixel, 0);
+    let cColor  = cSamp.xyz;
+    let cFC     = cSamp.w;
+    let cGB     = textureLoad(gBuf, pixel, 0);
+    let cNorm   = cGB.xyz;
+    let cDepth  = cGB.w;
+    let cAlbedo = textureLoad(albedoBuf, pixel, 0).xyz;
 
     // Sky pixels: pass through
     if (cDepth < 1e-6) {
@@ -1413,38 +1428,47 @@ fn svgf_atrous_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    let cLum = luminance_a(cColor);
-    // lumSigma adapts to convergence: relaxed when noisy, tight when converged
-    let lumSigma = max(0.02, 0.3 / sqrt(cFC + 1.0));
+    // Demodulate center pixel: compare irradiance (smooth) not final color (textured)
+    let cIrr = demod(cColor, cAlbedo);
+    let cLum = luminance_a(cIrr);
 
-    // 3×3 bilateral filter with edge-preserving weights
-    var colorSum  = vec3<f32>(0.0);
+    // Luminance sigma on irradiance: relaxed for noisy pixels, tight as they converge
+    let lumSigma = max(0.02, 0.25 / sqrt(cFC + 1.0));
+
+    // 3×3 bilateral filter on demodulated irradiance
+    var irrSum    = vec3<f32>(0.0);
     var weightSum = 0.0;
 
     for (var dy = -1; dy <= 1; dy++) {
         for (var dx = -1; dx <= 1; dx++) {
-            let sp     = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
-            let sColor = textureLoad(colorIn, sp, 0).xyz;
-            let sGB    = textureLoad(gBuf, sp, 0);
-            let sNorm  = sGB.xyz;
-            let sDepth = sGB.w;
+            let sp      = clamp(pixel + vec2<i32>(dx, dy) * step, vec2<i32>(0), res - 1);
+            let sColor  = textureLoad(colorIn, sp, 0).xyz;
+            let sGB     = textureLoad(gBuf, sp, 0);
+            let sNorm   = sGB.xyz;
+            let sDepth  = sGB.w;
+            let sAlbedo = textureLoad(albedoBuf, sp, 0).xyz;
+
+            // Demodulate neighbor
+            let sIrr = demod(sColor, sAlbedo);
 
             // Normal edge-stopping
             let w_n = pow(max(0.0, dot(cNorm, sNorm)), 64.0);
             // Depth edge-stopping
             let w_d = exp(-abs(cDepth - sDepth) * 2.0 / (cDepth + 0.01));
-            // Luminance edge-stopping
-            let sLum = luminance_a(sColor);
+            // Luminance edge-stopping on irradiance (not final color)
+            let sLum = luminance_a(sIrr);
             let w_l  = exp(-(sLum - cLum) * (sLum - cLum) / (lumSigma * lumSigma + 1e-6));
 
             let w = w_n * w_d * w_l;
-            colorSum  += sColor * w;
+            irrSum    += sIrr * w;
             weightSum += w;
         }
     }
 
-    let filtered = select(cColor, colorSum / weightSum, weightSum > 1e-6);
-    textureStore(colorOut, pixel, vec4<f32>(filtered, cFC));
+    // Filter irradiance, then remodulate with center pixel's albedo
+    let filteredIrr = select(cIrr, irrSum / weightSum, weightSum > 1e-6);
+    let result = filteredIrr * cAlbedo;
+    textureStore(colorOut, pixel, vec4<f32>(result, cFC));
 }
 )";
 
@@ -1529,7 +1553,7 @@ fn fs_main(@builtin(position) fragPos: vec4<f32>) -> @location(0) vec4<f32> {
     let col = textureLoad(accumTex, px, 0).xyz;
     let t   = textureLoad(gBufTex,  px, 0).w;
     let exposure = transform.cameraPos.z;
-    // Background pixels (primary ray miss): just gamma-correct, no tone mapping.
+    // Background pixels: just gamma-correct, no tone mapping.
     // Geometry pixels: exposure + ACES tone mapping + gamma.
     var gc: vec3<f32>;
     if (t <= 0.0) {
@@ -1563,7 +1587,7 @@ struct alignas(16) RtGpuUniforms {
     uint32_t movedMeshBits[4];  // bit i = mesh i moved; words 0/1 = meshes 0–63
     float    envColor[4];       // xyz = color, w = mode (0=sky, 1=solid color, 2=equirect tex)
     float    envIntensity[4];   // x = intensity, y = envWidth, z = envHeight, w = totalLumSum (0 = no CDF)
-    float    params[4];        // x = maxBounces, y = ambientFactor, z = movedPixelFC, w = fireflyClamp
+    float    params[4];        // x = maxBounces, y = ambientFactor, z = (unused), w = fireflyClamp
     float    emissiveInfo[4]; // x = emissive tri count, y = total emissive area
 };
 static_assert(sizeof(RtGpuUniforms) == 512, "RtGpuUniforms must be 512 bytes");
@@ -2246,6 +2270,9 @@ struct WgpuPathTracer::Impl {
     WgpuTexture* gBufCur;       // current frame writes here
     WgpuTexture* gBufPrev;      // previous frame's G-buffer
 
+    // Albedo buffer (primary-hit albedo for demodulation/remodulation)
+    WgpuTexture albedoTex;
+
     // TAA history ping-pong
     WgpuTexture taaHistA;       // previous TAA output
     WgpuTexture taaHistB;
@@ -2267,7 +2294,6 @@ struct WgpuPathTracer::Impl {
     int maxBounces_ = 6;
     float exposure_ = 1.0f;
     float ambientFactor_ = 0.03f;
-    float movedPixelFC_ = 6.0f;
     float fireflyClamp_ = 10.0f;
 
     // Dynamic capacity tracking — buffers grow as scenes demand more
@@ -2422,6 +2448,9 @@ struct WgpuPathTracer::Impl {
           gBufB(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                 WgpuTexture::Format::RGBA16Float),
           gBufCur(&gBufA), gBufPrev(&gBufB),
+          // Albedo buffer for demodulation
+          albedoTex(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
+                    WgpuTexture::Format::RGBA16Float),
           // TAA history ping-pong
           taaHistA(r, static_cast<uint32_t>(w), static_cast<uint32_t>(h),
                    WgpuTexture::Format::RGBA16Float),
@@ -2488,6 +2517,7 @@ struct WgpuPathTracer::Impl {
         rtPipeline.setStorageBufferRead(11, emissiveTriBuf);
         rtPipeline.setTexture(12, envCdfTex);
         rtPipeline.setTexture(13, envMargTex);
+        rtPipeline.setStorageTexture(14, albedoTex);
 
         rtRaycastPipeline.setUniformBuffer(0, rtUniformBuf);
         rtRaycastPipeline.setStorageBufferRead(3, bvhNodeBuf);
@@ -2497,12 +2527,14 @@ struct WgpuPathTracer::Impl {
         rtRaycastPipeline.setTexture(9, envTexGpu);
         rtRaycastPipeline.setStorageTexture(10, *gBufCur);
         rtRaycastPipeline.setStorageBufferRead(11, emissiveTriBuf);
+        rtRaycastPipeline.setStorageTexture(14, albedoTex);
 
         // TAA pipeline: uniform buffer is static binding
         taaPipeline.setUniformBuffer(0, taaUniBuf);
 
-        // Spatial filter: uniform buffer is static binding
+        // Spatial filter: uniform buffer + albedo are static bindings
         atrousPipeline.setUniformBuffer(0, atrousUniBuf);
+        atrousPipeline.setTexture(4, albedoTex);
 
         // Zero-fill accumulators and SVGF textures
         {
@@ -2513,6 +2545,11 @@ struct WgpuPathTracer::Impl {
             gBufB.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistA.write(zeros.data(), zeros.size() * sizeof(float));
             taaHistB.write(zeros.data(), zeros.size() * sizeof(float));
+        }
+        // Init albedo to white (no demodulation effect until first frame writes real values)
+        {
+            std::vector<float> ones(w * h * 4, 1.f);
+            albedoTex.write(ones.data(), ones.size() * sizeof(float));
         }
         // Fill hitMesh textures with sentinel 64.0f (= "no hit")
         {
@@ -2620,6 +2657,8 @@ struct WgpuPathTracer::Impl {
         gBufCur  = &gBufA;
         gBufPrev = &gBufB;
 
+        albedoTex = WgpuTexture(renderer, uw, uh, fmt);
+
         taaHistA = WgpuTexture(renderer, uw, uh, fmt);
         taaHistB = WgpuTexture(renderer, uw, uh, fmt);
         taaHistRead  = &taaHistA;
@@ -2641,7 +2680,10 @@ struct WgpuPathTracer::Impl {
         hitMeshB.write(hitSentinel.data(), hitSentinel.size() * sizeof(float));
 
         rtPipeline.setStorageTexture(10, *gBufCur);
+        rtPipeline.setStorageTexture(14, albedoTex);
         rtRaycastPipeline.setStorageTexture(10, *gBufCur);
+        rtRaycastPipeline.setStorageTexture(14, albedoTex);
+        atrousPipeline.setTexture(4, albedoTex);
 
         frameCount_ = 0.f;
     }
@@ -3075,7 +3117,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
     u.params[0] = static_cast<float>(d.maxBounces_);
     u.params[1] = d.ambientFactor_;
-    u.params[2] = d.movedPixelFC_;
+    u.params[2] = 0.f;  // unused
     u.params[3] = d.fireflyClamp_;
     u.emissiveInfo[0] = static_cast<float>(d.emissiveTriCount_);
     u.emissiveInfo[1] = d.emissiveTotalPower_;
@@ -3208,10 +3250,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         WgpuTexture* dst = &d.filteredA;
         WgpuTexture* aux = &d.filteredB;
 
-        // More passes when noisy: early frames or when objects are moving.
+        // With albedo demodulation the filter operates on smooth irradiance,
+        // so more passes clean noise without blurring texture.
+        // Skip filtering entirely once converged — no need to blur a clean image.
         const bool hasMotion = (movedBits[0] | movedBits[1]) != 0u;
-        const int nPasses = (d.frameCount_ < 4.f || hasMotion) ? 3 :
-                            (d.frameCount_ < 20.f)             ? 2 : 1;
+        const int nPasses = (d.frameCount_ < 4.f || hasMotion) ? 4 :
+                            (d.frameCount_ < 16.f)             ? 2 : 0;
 
         for (int pass = 0; pass < nPasses; ++pass) {
             AtrousGpuUniforms au{static_cast<uint32_t>(1u << pass), {0u, 0u, 0u}};
@@ -3425,15 +3469,6 @@ void WgpuPathTracer::setFireflyClamp(float clamp) {
 float WgpuPathTracer::fireflyClamp() const {
     return pimpl_->fireflyClamp_;
 }
-
-void WgpuPathTracer::setMovedPixelFC(float fc) {
-    pimpl_->movedPixelFC_ = fc;
-}
-
-float WgpuPathTracer::movedPixelFC() const {
-    return pimpl_->movedPixelFC_;
-}
-
 
 void WgpuPathTracer::setDenoiserEnabled(bool enabled) {
     pimpl_->denoiserEnabled_ = enabled;

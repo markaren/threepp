@@ -127,7 +127,6 @@ int main() {
     int maxBounces = pathTracer.maxBounces();
     float exposure = pathTracer.exposure();
     float ambientFactor = pathTracer.ambientFactor();
-    float movedPixelFC = pathTracer.movedPixelFC();
 
     float fps = 0.f;
     float fpsAccum = 0.f;
@@ -173,8 +172,6 @@ int main() {
                 pathTracer.setMaxBounces(maxBounces);
             if (ImGui::SliderFloat("Ambient", &ambientFactor, 0.0f, 0.2f))
                 pathTracer.setAmbientFactor(ambientFactor);
-            if (ImGui::SliderFloat("Moved FC", &movedPixelFC, 0.0f, 20.0f))
-                pathTracer.setMovedPixelFC(movedPixelFC);
         }
 
         ImGui::End();

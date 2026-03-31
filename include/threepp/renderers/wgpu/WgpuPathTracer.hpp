@@ -69,11 +69,6 @@ namespace threepp {
         void setFireflyClamp(float clamp);
         [[nodiscard]] float fireflyClamp() const;
 
-        /// Per-pixel frame count cap when a shadow/bounce ray hits a moved mesh. Default: 6.
-        /// Lower values make shadows on static surfaces refresh faster after object movement.
-        void setMovedPixelFC(float fc);
-        [[nodiscard]] float movedPixelFC() const;
-
         /// Enable/disable the à-trous wavelet denoiser (path tracer mode only). Default: true.
         void setDenoiserEnabled(bool enabled);
         [[nodiscard]] bool denoiserEnabled() const;
