@@ -27,7 +27,9 @@
 #include <cmath>
 #include <iostream>
 #include <cstring>
+#ifndef __EMSCRIPTEN__
 #include <future>
+#endif
 #include <numeric>
 #include <unordered_map>
 #include <unordered_set>
@@ -2388,12 +2390,14 @@ struct WgpuPathTracer::Impl {
         int meshCapacity = 0;
         int bvhCapacity = 0;
     };
+#ifndef __EMSCRIPTEN__
     std::future<AsyncBuildResult> asyncBuild_;
     bool buildPending_ = false;
 
     // Async env CDF build
     std::future<EnvCdfResult> asyncEnvCdf_;
     bool envCdfPending_ = false;
+#endif
     bool shaderHasEnvCdf_ = false;  // tracks which shader variant is active
 
     // Frame state
@@ -2575,7 +2579,7 @@ struct WgpuPathTracer::Impl {
             WGPUShaderSourceWGSL wgslSrc{};
             wgslSrc.chain.sType = WGPUSType_ShaderSourceWGSL;
             wgslSrc.code = WGPUStringView{depthFillWGSL, WGPU_STRLEN};
-            smDesc.nextInChain = reinterpret_cast<const WGPUChainedStruct*>(&wgslSrc);
+            smDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&wgslSrc);
             depthFillShader_ = wgpuDeviceCreateShaderModule(device, &smDesc);
 
             WGPUBindGroupLayoutEntry bglEntries[2]{};
@@ -2742,12 +2746,88 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     // Detect topology change
     const bool topoChanged = (rtMeshes != d.prevMeshes);
 
-    // Kick off async build on background thread when topology changes
+    // Build scene data (BVH, geometry buffers, atlas, emissives) when topology changes.
+    // Native: async on background thread.  Emscripten: synchronous (no pthreads).
+    bool topoJustFinished = false;
+#ifdef __EMSCRIPTEN__
+    if (topoChanged) {
+        d.prevMeshes = rtMeshes;
+        auto meshes = rtMeshes;
+        float emissiveScale = d.emissiveScale_;
+
+        Impl::AsyncBuildResult r;
+        r.meshes = meshes;
+        r.texSlotMap.clear();
+        auto [atlasData, atlasRows] = buildAtlas(meshes, r.texSlotMap);
+        r.atlasData = std::move(atlasData);
+        r.atlasRows = atlasRows;
+
+        int totalTris = 0;
+        for (auto* mesh : meshes) {
+            auto* geo = mesh->geometry().get();
+            auto* idx = geo->getIndex();
+            auto* pos = geo->getAttribute<float>("position");
+            if (!pos) continue;
+            totalTris += idx ? static_cast<int>(idx->count()) / 3
+                             : static_cast<int>(pos->count()) / 3;
+        }
+        const int matCount = static_cast<int>(meshes.size());
+        r.triCapacity  = nextPow2(std::max(totalTris, 1));
+        r.matCapacity  = nextPow2(std::max(matCount, 1));
+        r.meshCapacity = r.matCapacity;
+        r.bvhCapacity  = 2 * r.triCapacity - 1;
+
+        const int pages = triTexPages(r.triCapacity);
+        r.triBuffer.resize(static_cast<size_t>(TEX_PAGE_WIDTH) * TRI_TEX_HEIGHT * pages * 4, 0.f);
+        r.matBuffer.resize(static_cast<size_t>(r.matCapacity) * MAT_TEX_HEIGHT * 4, 0.f);
+        r.rawObjTriBuf.resize(static_cast<size_t>(r.triCapacity) * 32, 0.f);
+        r.matrixCpuBuf.resize(static_cast<size_t>(r.meshCapacity) * 32, 0.f);
+
+        r.triCount = buildGeometryBuffers(meshes, r.texSlotMap, r.triBuffer, r.matBuffer,
+                                           r.rawObjTriBuf, r.matrixCpuBuf, emissiveScale,
+                                           r.triCapacity, r.matCapacity, r.meshCapacity);
+        buildBVH(r.triBuffer, r.triCount, r.bvhNodes, r.bvhIndices, r.leafIndices, r.rawObjTriBuf);
+        r.numBvhNodes = static_cast<int>(r.bvhNodes.size());
+        r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * 12, 0.f);
+        packBvhNodeBuffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
+
+        r.emissiveTriCount = 0;
+        r.emissiveTotalArea = 0.f;
+        r.emissiveTotalPower = 0.f;
+        for (int ti = 0; ti < r.triCount; ti++) {
+            const int matIdx = static_cast<int>(r.triBuffer[pagedIdx(ti, 0) + 3]);
+            const float er = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 0];
+            const float eg = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 1];
+            const float eb = r.matBuffer[(2 * r.matCapacity + matIdx) * 4 + 2];
+            const float luminance = 0.2126f * er + 0.7152f * eg + 0.0722f * eb;
+            if (luminance > 0.001f) {
+                const float* v0p = r.triBuffer.data() + pagedIdx(ti, 0);
+                const float* v1p = r.triBuffer.data() + pagedIdx(ti, 1);
+                const float* v2p = r.triBuffer.data() + pagedIdx(ti, 2);
+                Vector3 v0(v0p[0], v0p[1], v0p[2]);
+                Vector3 v1(v1p[0], v1p[1], v1p[2]);
+                Vector3 v2(v2p[0], v2p[1], v2p[2]);
+                Vector3 cross;
+                cross.crossVectors(v1 - v0, v2 - v0);
+                const float area = cross.length() * 0.5f;
+                if (area > 1e-8f) {
+                    const float power = area * luminance;
+                    r.emissiveTotalArea += area;
+                    r.emissiveTotalPower += power;
+                    r.emissiveTriCpu.push_back(static_cast<float>(ti));
+                    r.emissiveTriCpu.push_back(area);
+                    r.emissiveTriCpu.push_back(r.emissiveTotalPower);
+                    r.emissiveTriCpu.push_back(power);
+                    r.emissiveTriCount++;
+                }
+            }
+        }
+        topoJustFinished = true;
+#else
     if (topoChanged && !d.buildPending_) {
         d.buildPending_ = true;
         d.prevMeshes = rtMeshes;
 
-        // Capture what we need for the background thread (CPU-only work)
         auto meshes = rtMeshes;
         float emissiveScale = d.emissiveScale_;
         d.asyncBuild_ = std::async(std::launch::async, [meshes, emissiveScale]() {
@@ -2758,7 +2838,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             r.atlasData = std::move(atlasData);
             r.atlasRows = atlasRows;
 
-            // Pre-count triangles and meshes to size buffers exactly
             int totalTris = 0;
             for (auto* mesh : meshes) {
                 auto* geo = mesh->geometry().get();
@@ -2771,7 +2850,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             const int matCount = static_cast<int>(meshes.size());
             r.triCapacity  = nextPow2(std::max(totalTris, 1));
             r.matCapacity  = nextPow2(std::max(matCount, 1));
-            r.meshCapacity = r.matCapacity;  // one material per mesh
+            r.meshCapacity = r.matCapacity;
             r.bvhCapacity  = 2 * r.triCapacity - 1;
 
             const int pages = triTexPages(r.triCapacity);
@@ -2788,7 +2867,6 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             r.bvhNodeCpuBuf.resize(static_cast<size_t>(r.bvhCapacity) * 12, 0.f);
             packBvhNodeBuffer(r.bvhNodes, r.bvhNodeCpuBuf, r.bvhCapacity);
 
-            // Collect emissive triangles
             r.emissiveTriCount = 0;
             r.emissiveTotalArea = 0.f;
             r.emissiveTotalPower = 0.f;
@@ -2825,13 +2903,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
     }
 
     // Check if async build finished — upload results to GPU (must happen on main thread)
-    bool topoJustFinished = false;
     if (d.buildPending_ && d.asyncBuild_.valid() &&
         d.asyncBuild_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
 
         auto r = d.asyncBuild_.get();
         d.buildPending_ = false;
         topoJustFinished = true;
+#endif
 
         // Move CPU results into Impl
         d.texSlotMap = std::move(r.texSlotMap);
@@ -2923,10 +3001,12 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
         }
     }
 
+#ifndef __EMSCRIPTEN__
     // While building, skip RT dispatch — just return so the window stays responsive
     if (d.buildPending_) {
         return;
     }
+#endif
 
     scene.updateMatrixWorld();
 
@@ -3043,13 +3123,42 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                     d.rtPipeline.setTexture(9, d.envTexGpu);
                     d.rtRaycastPipeline.setTexture(9, d.envTexGpu);
 
-                    // Kick off CDF build on background thread.
-                    // envTex (Texture*) is kept alive by the scene, so we can reference its data directly.
+                    // Build env CDF for importance sampling.
+                    // Native: async on background thread.  Emscripten: synchronous.
                     int w = img.width, h = img.height;
+#ifdef __EMSCRIPTEN__
+                    EnvCdfResult cdf;
+                    if (isHdr) {
+                        const float* ptr = img.data<float>().data();
+                        std::vector<float> tmp(ptr, ptr + static_cast<size_t>(w) * h * 4);
+                        cdf = buildEnvCdf(tmp, w, h);
+                    } else {
+                        const unsigned char* ptr = img.data<unsigned char>().data();
+                        std::vector<unsigned char> tmp(ptr, ptr + static_cast<size_t>(w) * h * 4);
+                        cdf = buildEnvCdf(tmp, w, h);
+                    }
+                    d.envLumSum_ = cdf.totalSum;
+                    d.envCdfTex = WgpuTexture(d.renderer,
+                                              static_cast<uint32_t>(cdf.width),
+                                              static_cast<uint32_t>(cdf.height),
+                                              WgpuTexture::Format::R32Float,
+                                              WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+                    d.envCdfTex.write(cdf.conditional.data(), cdf.conditional.size() * sizeof(float));
+                    d.rtPipeline.setTexture(12, d.envCdfTex);
+                    d.envMargTex = WgpuTexture(d.renderer,
+                                               static_cast<uint32_t>(cdf.height), 1u,
+                                               WgpuTexture::Format::R32Float,
+                                               WgpuTexture::TextureBinding | WgpuTexture::CopyDst);
+                    d.envMargTex.write(cdf.marginal.data(), cdf.marginal.size() * sizeof(float));
+                    d.rtPipeline.setTexture(13, d.envMargTex);
+                    if (!d.shaderHasEnvCdf_) {
+                        d.rtPipeline.replaceShader(buildRtShader(true, true));
+                        d.shaderHasEnvCdf_ = true;
+                    }
+#else
                     if (isHdr) {
                         const float* ptr = img.data<float>().data();
                         d.asyncEnvCdf_ = std::async(std::launch::async, [ptr, w, h]() {
-                            // Wrap raw pointer in a lightweight span-like view
                             std::vector<float> tmp(ptr, ptr + static_cast<size_t>(w) * h * 4);
                             return buildEnvCdf(tmp, w, h);
                         });
@@ -3061,6 +3170,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
                         });
                     }
                     d.envCdfPending_ = true;
+#endif
                 }
                 d.prevEnvTex_ = envTex;
             }
@@ -3077,6 +3187,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             }
         }
     }
+#ifndef __EMSCRIPTEN__
     // Check if async CDF build finished — upload to GPU
     if (d.envCdfPending_ && d.asyncEnvCdf_.valid() &&
         d.asyncEnvCdf_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -3102,6 +3213,7 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
             d.shaderHasEnvCdf_ = true;
         }
     }
+#endif
 
     u.envIntensity[0] = d.envIntensity_;
     // Pass envmap dimensions and total luminance sum for importance sampling

@@ -662,6 +662,14 @@ struct ClearColor { color: vec4<f32> }
         queue = wgpuDeviceGetQueue(device);
 
         if (surface) {
+            // Query preferred surface format from capabilities
+            WGPUSurfaceCapabilities caps{};
+            wgpuSurfaceGetCapabilities(surface, adapter, &caps);
+            if (caps.formatCount > 0 && caps.formats) {
+                surfaceFormat = caps.formats[0];
+            }
+            wgpuSurfaceCapabilitiesFreeMembers(caps);
+
             configureSurface();
         }
 
@@ -855,7 +863,11 @@ struct ClearColor { color: vec4<f32> }
         config.usage = WGPUTextureUsage_RenderAttachment;
         config.width  = w;
         config.height = h;
+#ifdef __EMSCRIPTEN__
+        config.presentMode = WGPUPresentMode_Fifo;  // browser controls vsync via requestAnimationFrame
+#else
         config.presentMode = canvas.vsync() ? WGPUPresentMode_Fifo : WGPUPresentMode_Immediate;
+#endif
         config.alphaMode = WGPUCompositeAlphaMode_Auto;
         config.viewFormatCount = 0;
         config.viewFormats = nullptr;
