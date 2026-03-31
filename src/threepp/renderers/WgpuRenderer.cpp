@@ -583,6 +583,212 @@ struct ClearColor { color: vec4<f32> }
         wgpuBindGroupRelease(bg);
     }
 
+    // ── Environment-map background pipeline ──────────────────────────
+    WGPURenderPipeline envBgPipeline_ = nullptr;
+    WGPUPipelineLayout envBgPipelineLayout_ = nullptr;
+    WGPUBindGroupLayout envBgBGL_ = nullptr;
+    WGPUShaderModule envBgShader_ = nullptr;
+    WGPUTextureFormat envBgPipelineFormat_ = WGPUTextureFormat_Undefined;
+    uint32_t envBgPipelineSampleCount_ = 0;
+
+    void initEnvBgPipeline(WGPUTextureFormat colorFormat, uint32_t sampleCount) {
+        if (envBgPipeline_ && envBgPipelineFormat_ == colorFormat && envBgPipelineSampleCount_ == sampleCount) return;
+        if (envBgPipeline_) { wgpuRenderPipelineRelease(envBgPipeline_); envBgPipeline_ = nullptr; }
+        if (envBgPipelineLayout_) { wgpuPipelineLayoutRelease(envBgPipelineLayout_); envBgPipelineLayout_ = nullptr; }
+        if (envBgBGL_) { wgpuBindGroupLayoutRelease(envBgBGL_); envBgBGL_ = nullptr; }
+        if (envBgShader_) { wgpuShaderModuleRelease(envBgShader_); envBgShader_ = nullptr; }
+
+        const char* wgsl = R"(
+const PI = 3.141592653589793;
+struct EnvBgUniforms { invVP: mat4x4<f32> }
+@group(0) @binding(0) var<uniform> u: EnvBgUniforms;
+@group(0) @binding(1) var envTex: texture_2d<f32>;
+
+struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) ndc: vec2<f32> }
+
+@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    var p = array<vec2<f32>,3>(vec2<f32>(-1.,-1.),vec2<f32>(3.,-1.),vec2<f32>(-1.,3.));
+    var o: VsOut;
+    o.pos = vec4<f32>(p[vi], 1.0, 1.0);
+    o.ndc = p[vi];
+    return o;
+}
+@fragment fn fs_main(v: VsOut) -> @location(0) vec4<f32> {
+    let clip = vec4<f32>(v.ndc, 1.0, 1.0);
+    let world = u.invVP * clip;
+    let dir = normalize(world.xyz / world.w);
+    let phi = atan2(dir.z, dir.x);
+    let theta = asin(clamp(dir.y, -1.0, 1.0));
+    let uv = vec2<f32>(0.5 + phi / (2.0 * PI), 0.5 - theta / PI);
+    let sz = vec2<f32>(textureDimensions(envTex, 0));
+    let px = vec2<i32>(i32(uv.x * sz.x) % i32(sz.x),
+                       clamp(i32(uv.y * sz.y), 0, i32(sz.y) - 1));
+    return vec4<f32>(textureLoad(envTex, px, 0).rgb, 1.0);
+}
+)";
+        WGPUShaderSourceWGSL src{};
+        src.chain.sType = WGPUSType_ShaderSourceWGSL;
+        src.code = {.data = wgsl, .length = static_cast<size_t>(strlen(wgsl))};
+        WGPUShaderModuleDescriptor smd{};
+        smd.nextInChain = &src.chain;
+        envBgShader_ = wgpuDeviceCreateShaderModule(device, &smd);
+
+        // Bind group layout: uniform buffer + texture
+        WGPUBindGroupLayoutEntry entries[2]{};
+        entries[0].binding = 0;
+        entries[0].visibility = WGPUShaderStage_Vertex | WGPUShaderStage_Fragment;
+        entries[0].buffer.type = WGPUBufferBindingType_Uniform;
+        entries[0].buffer.minBindingSize = 64;
+        entries[1].binding = 1;
+        entries[1].visibility = WGPUShaderStage_Fragment;
+        entries[1].texture.sampleType = WGPUTextureSampleType_UnfilterableFloat;
+        entries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
+        WGPUBindGroupLayoutDescriptor bgld{};
+        bgld.entryCount = 2; bgld.entries = entries;
+        envBgBGL_ = wgpuDeviceCreateBindGroupLayout(device, &bgld);
+
+        WGPUPipelineLayoutDescriptor pld{};
+        pld.bindGroupLayoutCount = 1; pld.bindGroupLayouts = &envBgBGL_;
+        envBgPipelineLayout_ = wgpuDeviceCreatePipelineLayout(device, &pld);
+
+        WGPUColorTargetState ct{};
+        ct.format = colorFormat;
+        ct.writeMask = WGPUColorWriteMask_All;
+        auto fsEntry = WGPUStringView{"fs_main", sizeof("fs_main") - 1};
+        WGPUFragmentState fs{};
+        fs.module = envBgShader_; fs.entryPoint = fsEntry; fs.targetCount = 1; fs.targets = &ct;
+
+        WGPUDepthStencilState ds{};
+        ds.format = WGPUTextureFormat_Depth24Plus;
+        ds.depthWriteEnabled = WGPUOptionalBool_True;
+        ds.depthCompare = WGPUCompareFunction_Always;
+
+        WGPURenderPipelineDescriptor pd{};
+        pd.label = WGPUStringView{"env_bg_pipe", WGPU_STRLEN};
+        auto vsEntry = WGPUStringView{"vs_main", sizeof("vs_main") - 1};
+        pd.layout = envBgPipelineLayout_;
+        pd.vertex.module = envBgShader_; pd.vertex.entryPoint = vsEntry;
+        pd.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+        pd.depthStencil = &ds;
+        pd.multisample.count = sampleCount; pd.multisample.mask = 0xFFFFFFFF;
+        pd.fragment = &fs;
+        envBgPipeline_ = wgpuDeviceCreateRenderPipeline(device, &pd);
+        envBgPipelineFormat_ = colorFormat;
+        envBgPipelineSampleCount_ = sampleCount;
+    }
+
+    // Cached env background GPU texture (handles both HDR float and LDR byte data)
+    WGPUTexture envBgTex_ = nullptr;
+    WGPUTextureView envBgTexView_ = nullptr;
+    unsigned int envBgTexId_ = 0;
+    unsigned int envBgTexVer_ = 0;
+
+    void ensureEnvBgTexture(Texture* envTex) {
+        if (envBgTexView_ && envBgTexId_ == envTex->id && envBgTexVer_ == envTex->version()) return;
+
+        // Release old
+        if (envBgTexView_) { wgpuTextureViewRelease(envBgTexView_); envBgTexView_ = nullptr; }
+        if (envBgTex_) { wgpuTextureRelease(envBgTex_); envBgTex_ = nullptr; }
+
+        auto& img = envTex->image();
+        uint32_t w = img.width, h = img.height;
+        if (w == 0 || h == 0) return;
+
+        const void* srcData = nullptr;
+        size_t srcSize = 0;
+        std::vector<float> rgbaHDR;
+        std::vector<unsigned char> rgbaLDR;
+        WGPUTextureFormat fmt;
+        bool isHDR = false;
+
+        // Try float data first (HDR), then unsigned char (LDR)
+        try {
+            auto& fdata = img.data<float>();
+            if (fdata.empty()) return;
+            isHDR = true;
+            size_t pixels = static_cast<size_t>(w) * h;
+            if (fdata.size() == pixels * 4) {
+                srcData = fdata.data();
+                srcSize = fdata.size() * sizeof(float);
+            } else if (fdata.size() == pixels * 3) {
+                rgbaHDR.resize(pixels * 4);
+                for (size_t i = 0; i < pixels; i++) {
+                    rgbaHDR[i*4+0] = fdata[i*3+0];
+                    rgbaHDR[i*4+1] = fdata[i*3+1];
+                    rgbaHDR[i*4+2] = fdata[i*3+2];
+                    rgbaHDR[i*4+3] = 1.0f;
+                }
+                srcData = rgbaHDR.data();
+                srcSize = rgbaHDR.size() * sizeof(float);
+            } else return;
+            fmt = WGPUTextureFormat_RGBA32Float;
+        } catch (...) {
+            auto& bdata = img.data<unsigned char>();
+            if (bdata.empty()) return;
+            size_t pixels = static_cast<size_t>(w) * h;
+            int channels = (bdata.size() == pixels * 4) ? 4 : (bdata.size() == pixels * 3) ? 3 : 0;
+            if (!channels) return;
+            // Convert LDR to float RGBA so the pipeline format stays RGBA32Float
+            rgbaHDR.resize(pixels * 4);
+            for (size_t i = 0; i < pixels; i++) {
+                rgbaHDR[i*4+0] = static_cast<float>(bdata[i*channels+0]) / 255.0f;
+                rgbaHDR[i*4+1] = static_cast<float>(bdata[i*channels+1]) / 255.0f;
+                rgbaHDR[i*4+2] = static_cast<float>(bdata[i*channels+2]) / 255.0f;
+                rgbaHDR[i*4+3] = 1.0f;
+            }
+            srcData = rgbaHDR.data();
+            srcSize = rgbaHDR.size() * sizeof(float);
+            fmt = WGPUTextureFormat_RGBA32Float;
+        }
+
+        WGPUTextureDescriptor td{};
+        td.label = WGPUStringView{"env_bg_tex", WGPU_STRLEN};
+        td.size = {w, h, 1};
+        td.mipLevelCount = 1;
+        td.sampleCount = 1;
+        td.dimension = WGPUTextureDimension_2D;
+        td.format = fmt;
+        td.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+        envBgTex_ = wgpuDeviceCreateTexture(device, &td);
+        envBgTexView_ = wgpuTextureCreateView(envBgTex_, nullptr);
+
+        WGPUTexelCopyTextureInfo dst{};
+        dst.texture = envBgTex_;
+        WGPUTexelCopyBufferLayout layout{};
+        uint32_t bytesPerPixel = isHDR ? 16 : 4;
+        layout.bytesPerRow = w * bytesPerPixel;
+        layout.rowsPerImage = h;
+        WGPUExtent3D extent = {w, h, 1};
+        wgpuQueueWriteTexture(queue, &dst, srcData, srcSize, &layout, &extent);
+
+        envBgTexId_ = envTex->id;
+        envBgTexVer_ = envTex->version();
+    }
+
+    void drawEnvBackground(WGPURenderPassEncoder pass, const Matrix4& invVP,
+                           Texture* envTex, WGPUTextureFormat colorFormat, uint32_t sampleCount) {
+        initEnvBgPipeline(colorFormat, sampleCount);
+        if (!envBgPipeline_) return;
+
+        ensureEnvBgTexture(envTex);
+        if (!envBgTexView_) return;
+
+        constexpr auto kUsage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        WGPUBuffer ubuf = bufferPool->acquire(64, kUsage, invVP.elements.data());
+
+        WGPUBindGroupEntry bge[2]{};
+        bge[0].binding = 0; bge[0].buffer = ubuf; bge[0].size = 64;
+        bge[1].binding = 1; bge[1].textureView = envBgTexView_;
+        WGPUBindGroupDescriptor bgd{};
+        bgd.layout = envBgBGL_; bgd.entryCount = 2; bgd.entries = bge;
+        WGPUBindGroup bg = wgpuDeviceCreateBindGroup(device, &bgd);
+
+        wgpuRenderPassEncoderSetPipeline(pass, envBgPipeline_);
+        wgpuRenderPassEncoderSetBindGroup(pass, 0, bg, 0, nullptr);
+        wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+        wgpuBindGroupRelease(bg);
+    }
+
     // Shared quad geometry for rendering sprites (standard attributes, not interleaved)
     std::shared_ptr<BufferGeometry> spriteGeometry_;
 
@@ -1681,6 +1887,17 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
                                surfaceFormat, effectiveSampleCount_);
         }
 
+        // Draw environment map background (equirectangular) when available.
+        // Only on primary renders (shouldClearColor), not overlay passes.
+        if (shouldClearColor && sceneObj && sceneObj->environment) {
+            Matrix4 vp;
+            vp.multiplyMatrices(projectionMatrix, viewMatrix);
+            Matrix4 invVP;
+            invVP.copy(vp).invert();
+            drawEnvBackground(pass, invVP, sceneObj->environment.get(),
+                              surfaceFormat, effectiveSampleCount_);
+        }
+
         // Build per-frame rendering context
         wgpu::FrameContext frameCtx{};
         if (sceneObj && sceneObj->fog) {
@@ -2505,6 +2722,13 @@ struct VSOutput { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> 
             mesh->removeEventListener("dispose", onInstancedMeshDispose);
         }
         trackedInstancedMeshes_.clear();
+
+        if (envBgTexView_)        { wgpuTextureViewRelease(envBgTexView_);            envBgTexView_ = nullptr; }
+        if (envBgTex_)            { wgpuTextureRelease(envBgTex_);                    envBgTex_ = nullptr; }
+        if (envBgPipeline_)       { wgpuRenderPipelineRelease(envBgPipeline_);       envBgPipeline_ = nullptr; }
+        if (envBgPipelineLayout_) { wgpuPipelineLayoutRelease(envBgPipelineLayout_); envBgPipelineLayout_ = nullptr; }
+        if (envBgBGL_)            { wgpuBindGroupLayoutRelease(envBgBGL_);            envBgBGL_ = nullptr; }
+        if (envBgShader_)         { wgpuShaderModuleRelease(envBgShader_);            envBgShader_ = nullptr; }
 
         if (retainedFB) { wgpuTextureRelease(retainedFB); retainedFB = nullptr; }
         if (retainBlit_.pipeline)       { wgpuRenderPipelineRelease(retainBlit_.pipeline);       retainBlit_.pipeline = nullptr; }
