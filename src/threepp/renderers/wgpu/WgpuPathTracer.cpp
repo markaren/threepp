@@ -425,7 +425,11 @@ constexpr const char* csRaytraceWGSL = R"(
 fn shade(h: Hit, rd: vec3<f32>) -> vec3<f32> {
     var albedo = h.albedo;
     if (h.texSlot >= 0.0) { albedo = sampleAtlas(h.uv, h.texSlot); }
-    var col = albedo * rt.params.y;
+    // Ambient: use env light in normal direction when envmap is available, otherwise flat ambient
+    // Flat ambient, boosted by env average brightness when envmap is present
+    let envBoost = select(1.0, max(1.0, rt.envIntensity.x * 3.0), rt.envColor.w > 1.5);
+    var ambient = vec3<f32>(rt.params.y * envBoost);
+    var col = albedo * ambient;
     let count = i32(rt.lightCount.x);
     let wo_s = normalize(-rd);
     for (var li = 0; li < 4; li++) {
@@ -518,10 +522,11 @@ fn raytrace(ray: Ray) -> vec3<f32> {
     var col = shade(h0, ray.dir);
 
     // Specular mirror bounces (two levels, unrolled — deterministic, no seed needed).
-    if (h0.shininess < 0.5) {
+    if (h0.shininess < 0.05 || (h0.metalness > 0.5 && h0.shininess < 0.3)) {
         let F0_0   = mix(vec3<f32>(0.04), h0.albedo, h0.metalness);
         let NdotV0 = max(0.001, dot(h0.normal, normalize(-ray.dir)));
-        let k0     = schlick(NdotV0, F0_0) * max(0.0, 1.0 - h0.shininess * 2.0);
+        let roughFade = max(0.0, 1.0 - h0.shininess * 10.0);
+        let k0     = schlick(NdotV0, F0_0) * roughFade;
 
         var r1: Ray;
         r1.origin = h0.point + h0.normal * 1e-3;
@@ -974,8 +979,8 @@ R"(
             }
         }
 
-        // Flat ambient fallback — skip for transmissive surfaces and when env CDF is active
-        if (h.transmission < 0.5 && !HAS_ENV_CDF) {
+        // Flat ambient — skip for transmissive surfaces
+        if (h.transmission < 0.5) {
             radiance += throughput * albedo * rt.params.y;
         }
 
@@ -2673,10 +2678,13 @@ void WgpuPathTracer::render(Object3D& scene, Camera& camera) {
 
     // Collect visible, non-wireframe, non-line meshes and lights
     std::vector<Mesh*> rtMeshes;
-    scene.traverseType<Mesh>([&](Mesh& m) {
-        if (!m.visible) return;
+    scene.traverseVisible([&](Object3D& o) {
+        auto* m_ptr = dynamic_cast<Mesh*>(&o);
+        if (!m_ptr) return;
+        auto& m = *m_ptr;
         if (d.overlayLayer_ >= 0 && m.layers.isEnabled(static_cast<unsigned>(d.overlayLayer_))) return;
         auto* mat = m.material().get();
+        if (!mat->visible) return;
         auto* mww = mat->as<MaterialWithWireframe>();
         if (mww && mww->wireframe) return;
         if (mat->is<LineBasicMaterial>()) return;
